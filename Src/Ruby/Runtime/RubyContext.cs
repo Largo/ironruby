@@ -52,9 +52,10 @@ namespace IronRuby.Runtime {
         private static readonly Guid LanguageVendor_Microsoft = new Guid(-1723120188, -6423, 0x11d2, 0x90, 0x3f, 0, 0xc0, 0x4f, 0xa3, 2, 0xa1);
         private static int _RuntimeIdGenerator = 0;
 
-        // MRI compliance:
+        // MRI compliance: language level targeted by the prism front end.
+        // The bundled standard library is still the 1.9 snapshot.
         public string/*!*/ MriVersion { 
-            get { return "1.9.2"; } 
+            get { return "4.0.0"; } 
         }
 
         public string/*!*/ StandardLibraryVersion {
@@ -62,7 +63,7 @@ namespace IronRuby.Runtime {
         }
 
         public string/*!*/ MriReleaseDate {
-            get { return "2010-08-18"; }
+            get { return "2025-12-25"; }
         }
 
         public int MriPatchLevel {

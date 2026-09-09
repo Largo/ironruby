@@ -207,3 +207,6 @@ rescue Exception => e
 end
 
 
+
+# IronRuby: Ruby 4 compatibility layer (pattern matching support, modern core methods)
+require 'ruby4'

@@ -343,6 +343,28 @@ namespace IronRuby.Prism {
                 case Pm.DefinedNode defined:
                     return new IsDefinedExpression(Expr(defined.Value), span);
 
+                case Pm.CaseMatchNode caseMatch: return CaseMatch(caseMatch, span);
+                case Pm.MatchPredicateNode matchPredicate: {
+                    // value in pattern  =>  true/false
+                    Expression assign;
+                    var temp = NewTemp(Expr(matchPredicate.Value), span, out assign);
+                    return new BlockExpression(MakeStatements(new Expression[] {
+                        assign,
+                        new ConditionalExpression(PatternTest(matchPredicate.Pattern, temp, span),
+                            Literal.True(span), Literal.False(span), span)
+                    }), span);
+                }
+                case Pm.MatchRequiredNode matchRequired: {
+                    // value => pattern  =>  nil, raises NoMatchingPatternError on mismatch
+                    Expression assign;
+                    var temp = NewTemp(Expr(matchRequired.Value), span, out assign);
+                    return new BlockExpression(MakeStatements(new Expression[] {
+                        assign,
+                        new UnlessExpression(PatternTest(matchRequired.Pattern, temp, span),
+                            new Statements(RaiseNoMatchingPattern(temp, span)), null, span)
+                    }), span);
+                }
+
                 case Pm.BackReferenceReadNode backRef: {
                     switch (backRef.Name.TrimStart('$')) {
                         case "&": return new RegexMatchReference(0, span);
@@ -641,8 +663,25 @@ namespace IronRuby.Prism {
             }
 
             Expression receiver = node.Receiver != null ? Expr(node.Receiver) : null;
-            Arguments args = node.Arguments != null ? BuildArguments(node.Arguments) : null;
             Block block = OptionalBlock(node.Block);
+            Arguments args = null;
+            if (node.Arguments != null) {
+                var argsNode = (Pm.ArgumentsNode)node.Arguments;
+                var exprs = new List<Expression>();
+                foreach (var arg in argsNode.Arguments) {
+                    if (arg is Pm.ForwardingArgumentsNode) {
+                        // g(...) inside def f(...): splat the captured rest, forward the block
+                        var rest = CurrentScope.ResolveVariable(ForwardingRestName);
+                        var fwdBlock = CurrentScope.ResolveVariable(ForwardingBlockName);
+                        if (rest == null || fwdBlock == null) throw Unsupported(arg);
+                        exprs.Add(new SplattedArgument(rest));
+                        if (block == null) block = new BlockReference(fwdBlock, Span(arg));
+                    } else {
+                        exprs.Add(Argument(arg));
+                    }
+                }
+                args = new Arguments(exprs.ToArray());
+            }
             return new MethodCall(receiver, name, args, block, span);
         }
 
@@ -938,13 +977,19 @@ namespace IronRuby.Prism {
             if (node.Keywords.Length > 0 || node.KeywordRest is Pm.KeywordRestParameterNode) {
                 if (optional.Count > 0 || unsplat != null || node.Posts.Length > 0) throw Unsupported(node);
                 prologue = LowerKeywords(node, optional, span);
+            } else if (node.KeywordRest is Pm.ForwardingParameterNode) {
+                // def f(...) => def f(*?fwd?, &?fwdblk?); calls with `...` splat them back
+                if (unsplat != null) throw Unsupported(node.KeywordRest);
+                unsplat = CurrentScope.ResolveOrAddVariable(ForwardingRestName, Span(node.KeywordRest));
             } else if (node.KeywordRest != null && !(node.KeywordRest is Pm.NoKeywordsParameterNode)) {
-                throw Unsupported(node.KeywordRest); // `...` forwarding
+                throw Unsupported(node.KeywordRest);
             }
 
             LocalVariable blockParam = null;
             if (node.Block is Pm.BlockParameterNode block) {
                 blockParam = CurrentScope.ResolveOrAddVariable(block.Name ?? "?block?", Span(node.Block));
+            } else if (node.KeywordRest is Pm.ForwardingParameterNode) {
+                blockParam = CurrentScope.ResolveOrAddVariable(ForwardingBlockName, Span(node.KeywordRest));
             }
 
             return new Parameters(mandatory.ToArray(), leadingMandatoryCount,
@@ -1011,6 +1056,234 @@ namespace IronRuby.Prism {
             }
 
             return prologue;
+        }
+
+        // ---- pattern matching (case/in), lowered to tests + bindings ----
+
+        private const string ForwardingRestName = "?fwd?";
+        private const string ForwardingBlockName = "?fwdblk?";
+
+        private static Statements/*!*/ MakeStatements(params Expression[]/*!*/ statements) {
+            var result = new Statements();
+            foreach (var statement in statements) result.Add(statement);
+            return result;
+        }
+
+        private LocalVariable/*!*/ NewTemp(Expression/*!*/ value, SourceSpan span, out Expression/*!*/ assignment) {
+            var temp = CurrentScope.ResolveOrAddVariable("?pm" + _tempCounter++ + "?", span);
+            assignment = new SimpleAssignmentExpression(temp, value, null, span);
+            return temp;
+        }
+
+        private Expression/*!*/ RaiseNoMatchingPattern(Expression/*!*/ subject, SourceSpan span) {
+            return new MethodCall(null, "raise", new Arguments(new Expression[] {
+                new ConstantVariable("NoMatchingPatternError", span),
+                new MethodCall(subject, "inspect", null, span)
+            }), span);
+        }
+
+        private Expression/*!*/ CaseMatch(Pm.CaseMatchNode/*!*/ node, SourceSpan span) {
+            Expression assign;
+            var temp = NewTemp(Expr(node.Predicate), span, out assign);
+
+            var clauses = new List<ElseIfClause>();
+            Expression firstTest = null;
+            Statements firstBody = null;
+            foreach (var condition in node.Conditions) {
+                var inNode = (Pm.InNode)condition;
+                var test = PatternTest(inNode.Pattern, temp, Span(inNode));
+                var body = BuildStatements(inNode.Statements);
+                if (firstTest == null) {
+                    firstTest = test;
+                    firstBody = body;
+                } else {
+                    clauses.Add(new ElseIfClause(test, body, Span(inNode)));
+                }
+            }
+            if (node.ElseClause is Pm.ElseNode elseNode) {
+                clauses.Add(new ElseIfClause(null, BuildStatements(elseNode.Statements), Span(elseNode)));
+            } else {
+                clauses.Add(new ElseIfClause(null, new Statements(RaiseNoMatchingPattern(temp, span)), span));
+            }
+
+            var ifExpr = new IfExpression(firstTest, firstBody, clauses, span);
+            return new BlockExpression(MakeStatements(new Expression[] { assign, ifExpr }), span);
+        }
+
+        /// <summary>
+        /// Builds an expression that is truthy iff <paramref name="pattern"/> matches
+        /// <paramref name="subject"/> (a temp local), binding capture variables as a
+        /// side effect. Mirrors MRI semantics: === for value patterns,
+        /// deconstruct/deconstruct_keys for array/hash patterns.
+        /// </summary>
+        private Expression/*!*/ PatternTest(Pm.PmNode/*!*/ pattern, Expression/*!*/ subject, SourceSpan span) {
+            switch (pattern) {
+                case Pm.LocalVariableTargetNode target: {
+                    var local = CurrentScope.ResolveOrAddVariable(target.Name, Span(target));
+                    return BindTrue(local, subject, Span(target));
+                }
+                case Pm.CapturePatternNode capture: {
+                    var target = (Pm.LocalVariableTargetNode)capture.Target;
+                    var local = CurrentScope.ResolveOrAddVariable(target.Name, Span(target));
+                    return new AndExpression(PatternTest(capture.Value, subject, span),
+                        BindTrue(local, subject, Span(capture)), span);
+                }
+                case Pm.AlternationPatternNode alternation:
+                    return new OrExpression(PatternTest(alternation.Left, subject, span),
+                        PatternTest(alternation.Right, subject, span), span);
+                case Pm.PinnedVariableNode pinned:
+                    return CaseEqual(Expr(pinned.Variable), subject, Span(pinned));
+                case Pm.PinnedExpressionNode pinnedExpr:
+                    return CaseEqual(Expr(pinnedExpr.Expression), subject, Span(pinnedExpr));
+                case Pm.IfNode guard: {
+                    // `in pat if cond`: prism nests the pattern in the guard's statements
+                    var inner = ((Pm.StatementsNode)guard.Statements).Body[0];
+                    return new AndExpression(PatternTest(inner, subject, span), Expr(guard.Predicate), Span(guard));
+                }
+                case Pm.UnlessNode guard: {
+                    var inner = ((Pm.StatementsNode)guard.Statements).Body[0];
+                    return new AndExpression(PatternTest(inner, subject, span),
+                        new NotExpression(Expr(guard.Predicate), Span(guard)), Span(guard));
+                }
+                case Pm.ArrayPatternNode arrayPattern:
+                    return ArrayPattern(arrayPattern, subject, span);
+                case Pm.HashPatternNode hashPattern:
+                    return HashPattern(hashPattern, subject, span);
+                default:
+                    return CaseEqual(Expr(pattern), subject, span); // value pattern
+            }
+        }
+
+        private Expression/*!*/ BindTrue(LocalVariable/*!*/ local, Expression/*!*/ value, SourceSpan span) {
+            return new BlockExpression(MakeStatements(new Expression[] {
+                new SimpleAssignmentExpression(local, value, null, span),
+                Literal.True(span)
+            }), span);
+        }
+
+        private Expression/*!*/ CaseEqual(Expression/*!*/ pattern, Expression/*!*/ subject, SourceSpan span) {
+            return new MethodCall(pattern, "===", new Arguments(subject), span);
+        }
+
+        private static Expression/*!*/ AndAll(List<Expression>/*!*/ tests, SourceSpan span) {
+            Expression result = null;
+            foreach (var test in tests) {
+                result = result == null ? test : new AndExpression(result, test, span);
+            }
+            return result;
+        }
+
+        private Expression/*!*/ ArrayPattern(Pm.ArrayPatternNode/*!*/ node, Expression/*!*/ subject, SourceSpan span) {
+            var tests = new List<Expression>();
+            if (node.Constant != null) {
+                tests.Add(CaseEqual(Expr(node.Constant), subject, span));
+            }
+
+            // arr = Array === subj ? subj : (subj.respond_to?(:deconstruct) ? subj.deconstruct : nil)
+            Expression deconstructed = new ConditionalExpression(
+                CaseEqual(new ConstantVariable("Array", span), subject, span),
+                subject,
+                new ConditionalExpression(
+                    new MethodCall(subject, "respond_to?", new Arguments(new SymbolLiteral("deconstruct", _encoding, span)), span),
+                    new MethodCall(subject, "deconstruct", null, span),
+                    Literal.Nil(span), span),
+                span);
+            Expression arrAssign;
+            var arr = NewTemp(deconstructed, span, out arrAssign);
+            tests.Add(new BlockExpression(MakeStatements(new Expression[] { arrAssign, arr }), span));
+
+            int required = node.Requireds.Length + node.Posts.Length;
+            Expression lenAssign;
+            var len = NewTemp(new MethodCall(arr, "length", null, span), span, out lenAssign);
+            tests.Add(new BlockExpression(MakeStatements(new Expression[] { lenAssign, Literal.True(span) }), span));
+            tests.Add(new MethodCall(len, node.Rest != null ? ">=" : "==",
+                new Arguments(Literal.Integer(required, span)), span));
+
+            for (int i = 0; i < node.Requireds.Length; i++) {
+                tests.Add(ElementPattern(node.Requireds[i], arr, Literal.Integer(i, span), span));
+            }
+
+            if (node.Rest is Pm.SplatNode splat && splat.Expression != null) {
+                var restLocal = (LocalVariable)Target(splat.Expression);
+                // rest = arr[requireds, len - required]
+                var restValue = new MethodCall(arr, "[]", new Arguments(new Expression[] {
+                    Literal.Integer(node.Requireds.Length, span),
+                    new MethodCall(len, "-", new Arguments(Literal.Integer(required, span)), span)
+                }), span);
+                tests.Add(BindTrue(restLocal, restValue, span));
+            }
+
+            for (int i = 0; i < node.Posts.Length; i++) {
+                // index = len - postCount + i
+                var index = new MethodCall(len, "-", new Arguments(Literal.Integer(node.Posts.Length - i, span)), span);
+                tests.Add(ElementPattern(node.Posts[i], arr, index, span));
+            }
+
+            return AndAll(tests, span);
+        }
+
+        private Expression/*!*/ ElementPattern(Pm.PmNode/*!*/ pattern, LocalVariable/*!*/ arr, Expression/*!*/ index, SourceSpan span) {
+            Expression elemAssign;
+            var elem = NewTemp(new MethodCall(arr, "[]", new Arguments(index), span), span, out elemAssign);
+            return new BlockExpression(MakeStatements(new Expression[] {
+                elemAssign,
+                PatternTest(pattern, elem, span)
+            }), span);
+        }
+
+        private Expression/*!*/ HashPattern(Pm.HashPatternNode/*!*/ node, Expression/*!*/ subject, SourceSpan span) {
+            var tests = new List<Expression>();
+            if (node.Constant != null) {
+                tests.Add(CaseEqual(Expr(node.Constant), subject, span));
+            }
+
+            // h = Hash === subj ? subj : (subj.respond_to?(:deconstruct_keys) ? subj.deconstruct_keys(nil) : nil)
+            Expression deconstructed = new ConditionalExpression(
+                CaseEqual(new ConstantVariable("Hash", span), subject, span),
+                subject,
+                new ConditionalExpression(
+                    new MethodCall(subject, "respond_to?", new Arguments(new SymbolLiteral("deconstruct_keys", _encoding, span)), span),
+                    new MethodCall(subject, "deconstruct_keys", new Arguments(Literal.Nil(span)), span),
+                    Literal.Nil(span), span),
+                span);
+            Expression hashAssign;
+            var hash = NewTemp(deconstructed, span, out hashAssign);
+            tests.Add(new BlockExpression(MakeStatements(new Expression[] { hashAssign, hash }), span));
+
+            var knownKeys = new List<string>();
+            foreach (var element in node.Elements) {
+                var assoc = (Pm.AssocNode)element;
+                var key = (Pm.SymbolNode)assoc.Key;
+                knownKeys.Add(key.Unescaped);
+                var keySymbol = new SymbolLiteral(key.Unescaped, _encoding, Span(key));
+                tests.Add(new MethodCall(hash, "key?", new Arguments(keySymbol), span));
+
+                Pm.PmNode valuePattern = assoc.Value is Pm.ImplicitNode implicitValue ? implicitValue.Value : assoc.Value;
+                Expression valueAssign;
+                var value = NewTemp(new MethodCall(hash, "[]", new Arguments(new SymbolLiteral(key.Unescaped, _encoding, span)), span),
+                    span, out valueAssign);
+                tests.Add(new BlockExpression(MakeStatements(new Expression[] {
+                    valueAssign,
+                    PatternTest(valuePattern, value, span)
+                }), span));
+            }
+
+            if (node.Rest is Pm.AssocSplatNode restSplat && restSplat.Value != null) {
+                var restLocal = (LocalVariable)Target(restSplat.Value);
+                var restStatements = new List<Expression> {
+                    new SimpleAssignmentExpression(restLocal, new MethodCall(hash, "dup", null, span), null, span)
+                };
+                foreach (var key in knownKeys) {
+                    restStatements.Add(new MethodCall(restLocal, "delete",
+                        new Arguments(new SymbolLiteral(key, _encoding, span)), span));
+                }
+                restStatements.Add(Literal.True(span));
+                tests.Add(new BlockExpression(MakeStatements(restStatements.ToArray()), span));
+            } else if (node.Rest is Pm.NoKeywordsParameterNode) {
+                throw Unsupported(node.Rest); // {**nil} exact-match patterns
+            }
+
+            return AndAll(tests, span);
         }
 
         private static LeftValue/*!*/[]/*!*/ RemoveAt(LeftValue/*!*/[]/*!*/ values, int index) {

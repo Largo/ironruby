@@ -1,0 +1,170 @@
+# Ruby 4 compatibility layer for IronRuby's 1.9-era core library.
+# Pure Ruby, loaded from gem_prelude. Pattern-matching support classes plus
+# widely-used core methods added between Ruby 2.0 and 4.0.
+
+class NoMatchingPatternError < StandardError; end
+class NoMatchingPatternKeyError < NoMatchingPatternError; end
+class FrozenError < RuntimeError; end unless defined?(FrozenError)
+
+class Object
+  def then
+    yield self
+  end unless method_defined?(:then)
+  alias_method :yield_self, :then unless method_defined?(:yield_self)
+
+  def itself
+    self
+  end unless method_defined?(:itself)
+end
+
+module Kernel
+  private
+
+  def require_relative(path)
+    caller_path = caller.first.split(/:\d/, 2).first
+    require File.expand_path(path, File.dirname(caller_path))
+  end unless private_method_defined?(:require_relative)
+end
+
+module Enumerable
+  def filter_map
+    result = []
+    each { |x| v = yield(x); result << v if v }
+    result
+  end unless method_defined?(:filter_map)
+
+  def tally
+    result = Hash.new(0)
+    each { |x| result[x] += 1 }
+    result.default = nil
+    result
+  end unless method_defined?(:tally)
+
+  def sum(init = 0)
+    if block_given?
+      inject(init) { |acc, x| acc + yield(x) }
+    else
+      inject(init) { |acc, x| acc + x }
+    end
+  end unless method_defined?(:sum)
+
+  alias_method :filter, :select unless method_defined?(:filter)
+end
+
+class Array
+  def dig(key, *rest)
+    value = self[key]
+    return value if rest.empty? || value.nil?
+    value.dig(*rest)
+  end unless method_defined?(:dig)
+
+  def sum(init = 0)
+    inject(init) { |acc, x| block_given? ? acc + yield(x) : acc + x }
+  end unless method_defined?(:sum)
+
+  def intersect?(other)
+    !(self & other).empty?
+  end unless method_defined?(:intersect?)
+
+  def deconstruct
+    self
+  end unless method_defined?(:deconstruct)
+
+  alias_method :filter, :select unless method_defined?(:filter)
+  alias_method :filter!, :select! if method_defined?(:select!) && !method_defined?(:filter!)
+  alias_method :append, :push unless method_defined?(:append)
+  alias_method :prepend, :unshift unless method_defined?(:prepend)
+end
+
+class Hash
+  def dig(key, *rest)
+    value = self[key]
+    return value if rest.empty? || value.nil?
+    value.dig(*rest)
+  end unless method_defined?(:dig)
+
+  def transform_values
+    result = {}
+    each { |k, v| result[k] = yield(v) }
+    result
+  end unless method_defined?(:transform_values)
+
+  def transform_keys
+    result = {}
+    each { |k, v| result[yield(k)] = v }
+    result
+  end unless method_defined?(:transform_keys)
+
+  def slice(*keys)
+    result = {}
+    keys.each { |k| result[k] = self[k] if key?(k) }
+    result
+  end unless method_defined?(:slice)
+
+  def except(*keys)
+    result = dup
+    keys.each { |k| result.delete(k) }
+    result
+  end unless method_defined?(:except)
+
+  def deconstruct_keys(keys)
+    self
+  end unless method_defined?(:deconstruct_keys)
+
+  def compact
+    reject { |_, v| v.nil? }
+  end unless method_defined?(:compact)
+
+  alias_method :filter, :select unless method_defined?(:filter)
+end
+
+class String
+  def delete_prefix(prefix)
+    start_with?(prefix) ? self[prefix.length..-1] : dup
+  end unless method_defined?(:delete_prefix)
+
+  def delete_suffix(suffix)
+    end_with?(suffix) ? self[0...-suffix.length] : dup
+  end unless method_defined?(:delete_suffix)
+
+  alias_method :+@, :dup unless method_defined?(:+@)
+end
+
+class Integer
+  def digits(base = 10)
+    raise Math::DomainError, "out of domain" if negative?
+    return [0] if zero?
+    result = []
+    n = self
+    while n > 0
+      result << n % base
+      n /= base
+    end
+    result
+  end unless method_defined?(:digits)
+
+  def positive?
+    self > 0
+  end unless method_defined?(:positive?)
+
+  def negative?
+    self < 0
+  end unless method_defined?(:negative?)
+
+  def clamp(min, max = nil)
+    min, max = min.first, min.last if max.nil?
+    self < min ? min : (self > max ? max : self)
+  end unless method_defined?(:clamp)
+end
+
+class Struct
+  def deconstruct
+    to_a
+  end unless method_defined?(:deconstruct)
+
+  def deconstruct_keys(keys)
+    result = {}
+    members.each { |m| result[m] = self[m] }
+    result
+  end unless method_defined?(:deconstruct_keys)
+end

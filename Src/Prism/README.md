@@ -64,9 +64,13 @@ cd ../../../prism && ruby templates/template.rb && make shared
 
 ## Known limits / next steps
 
-- Pattern matching (`case/in`, `=>` matches) and `...` argument
-  forwarding raise clean NotSupportedException — they need either new
-  runtime support or a much larger lowering.
+- Pattern matching is lowered to ===/deconstruct tests with bindings:
+  case/in with guards, captures, array/hash/const patterns, pins,
+  alternations, standalone `=>` and `in`. Not yet: find patterns with
+  two splats (`[*, x, *]`), `{**nil}` exact-match patterns. The
+  NoMatchingPatternError message is shorter than MRI's.
+- `...` argument forwarding is lowered to `*?fwd?, &?fwdblk?` (keywords
+  ride along as the trailing hash, consistent with the kwargs lowering).
 - Keyword-argument lowering is restricted to signatures without optional
   positionals or `*rest` (where "trailing hash" and "keywords"
   coincide); unknown-keyword errors are not raised (permissive).
