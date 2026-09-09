@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -914,7 +914,10 @@ namespace IronRuby.Builtins {
             [RubyMethod("executable?")]
             [RubyMethod("executable_real?")]
             public static bool IsExecutable(FileSystemInfo/*!*/ self) {
-                // TODO: Fix
+                if (System.IO.Path.DirectorySeparatorChar == '/') {
+                    var mode = self.UnixFileMode;
+                    return (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
+                }
                 return self.Extension.Equals(".exe", StringComparison.OrdinalIgnoreCase);
             }
 

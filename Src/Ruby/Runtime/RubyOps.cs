@@ -594,7 +594,8 @@ namespace IronRuby.Runtime {
                 method.DeclaringModule.GetOrCreateSingletonClass().MethodAdded(body.Name);
             }
 
-            return null;
+            // Ruby 2.1+: def returns the method name as a symbol (enables `private def foo`)
+            return scope.RubyContext.CreateSymbol(body.Name, RubyEncoding.UTF8);
         }
 
         private static void SetMethod(RubyContext/*!*/ callerContext, RubyMethodInfo/*!*/ method) {

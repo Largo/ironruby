@@ -190,7 +190,10 @@ namespace IronRuby.Runtime {
         /// Breaks from the current block.
         /// </summary>
         public object Break(object returnValue) {
-            Debug.Assert(_proc.Converter != null);
+            // proc whose home frame is gone (e.g. Proc#call on an orphaned block):
+            if (_proc.Converter == null) {
+                throw RubyExceptions.CreateLocalJumpError("break from proc-closure");
+            }
 
             // unwind to proc converter:
             SetFlowControl(BlockReturnReason.Break, _proc.Converter, _proc.Kind);

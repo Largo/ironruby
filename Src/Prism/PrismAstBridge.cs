@@ -178,6 +178,13 @@ namespace IronRuby.Prism {
                     return HashExpression(hash.Elements, span);
                 case Pm.KeywordHashNode keywordHash:
                     return HashExpression(keywordHash.Elements, span);
+                case Pm.FlipFlopNode flipFlop: {
+                    var rangeExpr = new RangeExpression(
+                        flipFlop.Left != null ? Expr(flipFlop.Left) : Literal.Nil(span),
+                        flipFlop.Right != null ? Expr(flipFlop.Right) : Literal.Nil(span),
+                        HasFlag(flipFlop, Pm.RangeFlags.ExcludeEnd), span);
+                    return rangeExpr.ToCondition(CurrentScope);
+                }
                 case Pm.RangeNode range:
                     return new RangeExpression(
                         range.Left != null ? Expr(range.Left) : Literal.Nil(span),
@@ -464,16 +471,19 @@ namespace IronRuby.Prism {
                         forwardingSuper.Block != null ? BlockDef((Pm.BlockNode)forwardingSuper.Block) : null, span);
 
                 case Pm.ForNode forNode: {
+                    // index and collection belong to the outer scope; only the body is
+                    // parsed inside the padding scope (matches the legacy grammar)
+                    var target = Target(forNode.Index);
+                    var clv = target as CompoundLeftValue ?? new CompoundLeftValue(new[] { target });
+                    Parameters parameters = clv.HasUnsplattedValue
+                        ? new Parameters(RemoveAt(clv.LeftValues, clv.UnsplattedValueIndex), clv.UnsplattedValueIndex,
+                            null, clv.UnsplattedValue, null, SourceSpan.None)
+                        : new Parameters(clv.LeftValues, clv.LeftValues.Length, null, null, null, SourceSpan.None);
+                    var collection = Expr(forNode.Collection);
                     var forScope = new PaddingLexicalScope(CurrentScope);
                     _scopes.Push(forScope);
                     try {
-                        var target = Target(forNode.Index);
-                        var clv = target as CompoundLeftValue ?? new CompoundLeftValue(new[] { target });
-                        Parameters parameters = clv.HasUnsplattedValue
-                            ? new Parameters(RemoveAt(clv.LeftValues, clv.UnsplattedValueIndex), clv.UnsplattedValueIndex,
-                                null, clv.UnsplattedValue, null, SourceSpan.None)
-                            : new Parameters(clv.LeftValues, clv.LeftValues.Length, null, null, null, SourceSpan.None);
-                        return new ForLoopExpression(forScope, parameters, Expr(forNode.Collection),
+                        return new ForLoopExpression(forScope, parameters, collection,
                             BuildStatements(forNode.Statements), span);
                     } finally {
                         _scopes.Pop();

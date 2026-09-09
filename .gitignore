@@ -55,3 +55,6 @@ Util/References
 
 /NuGet.config
 *.bak
+mspec/
+spec/
+ir.sh

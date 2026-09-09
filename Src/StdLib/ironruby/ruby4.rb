@@ -184,3 +184,66 @@ module Kernel
     nil
   end
 end
+
+RUBY_ENGINE_VERSION = RUBY_VERSION unless defined?(RUBY_ENGINE_VERSION)
+RUBY_COPYRIGHT = "ironruby - Apache License, Version 2.0" unless defined?(RUBY_COPYRIGHT)
+RUBY_DESCRIPTION = "ironruby #{RUBY_VERSION} (.NET)" unless defined?(RUBY_DESCRIPTION)
+
+class File
+  def self.realpath(path, dir = nil)
+    expand_path(path, dir)
+  end unless respond_to?(:realpath)
+
+  def self.realdirpath(path, dir = nil)
+    expand_path(path, dir)
+  end unless respond_to?(:realdirpath)
+end
+
+module Kernel
+  private
+
+  def __dir__
+    File.dirname(File.expand_path(caller.first.split(/:\d/, 2).first))
+  end unless private_method_defined?(:__dir__)
+end
+
+class Hash
+  # approximation: default Object#eql? is identity, which covers typical uses
+  # (mspec keys caches by exception instances)
+  def compare_by_identity
+    self
+  end unless method_defined?(:compare_by_identity)
+
+  def compare_by_identity?
+    false
+  end unless method_defined?(:compare_by_identity?)
+end
+
+class Module
+  def deprecate_constant(*names)
+    names
+  end unless method_defined?(:deprecate_constant)
+
+  def private_constant(*names)
+    names
+  end unless method_defined?(:private_constant)
+
+  def public_constant(*names)
+    names
+  end unless method_defined?(:public_constant)
+end
+
+class Object
+  def singleton_class
+    class << self
+      self
+    end
+  end unless method_defined?(:singleton_class)
+end
+
+class Module
+  begin
+    public :remove_class_variable
+  rescue NameError
+  end
+end
