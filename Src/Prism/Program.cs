@@ -9,7 +9,30 @@ namespace IronRuby.Prism {
                 // execute a Ruby file with prism as the front end (legacy parser bypassed)
                 IronRuby.Runtime.RubyContext.AlternativeParser = PrismAstBridge.Parse;
                 var engine = IronRuby.Ruby.CreateEngine();
-                engine.Execute(File.ReadAllText(args[1]));
+                engine.CreateScriptSourceFromFile(System.IO.Path.GetFullPath(args[1])).Execute();
+                return 0;
+            }
+
+            if (args.Length == 2 && args[0] == "--sweep") {
+                // bridge-coverage sweep: try mapping every .rb under a directory, tally unsupported nodes
+                var files = Directory.GetFiles(args[1], "*.rb", SearchOption.AllDirectories);
+                int ok = 0, failed = 0;
+                var histogram = new System.Collections.Generic.Dictionary<string, int>();
+                foreach (var file in files) {
+                    try {
+                        PrismAstBridge.ParseText(File.ReadAllText(file), file);
+                        ok++;
+                    } catch (Exception e) {
+                        failed++;
+                        string key = e is NotSupportedException ? e.Message.Split('(')[0].Trim() : e.GetType().Name + ": " + e.Message;
+                        histogram.TryGetValue(key, out int n);
+                        histogram[key] = n + 1;
+                    }
+                }
+                Console.WriteLine($"{ok}/{files.Length} files bridged ({failed} failed)");
+                foreach (var kv in System.Linq.Enumerable.OrderByDescending(histogram, kv => kv.Value)) {
+                    Console.WriteLine($"{kv.Value,5}  {kv.Key}");
+                }
                 return 0;
             }
 

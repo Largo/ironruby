@@ -12,6 +12,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
     <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />
+    <ProjectReference Include="..\Prism\IronRuby.Prism.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>

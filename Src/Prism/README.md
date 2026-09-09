@@ -7,14 +7,21 @@ syntax handling from the same parser CRuby, JRuby and TruffleRuby use.
 
 ## Status
 
-- **The bridge works end-to-end**: `dotnet run -- --run file.rb` executes a
-  Ruby file with prism as the front end (`RubyContext.AlternativeParser`
-  hook), mapped by `PrismAstBridge` onto `IronRuby.Compiler.Ast` and
-  compiled by the unchanged AstGenerator/DLR pipeline. Classes,
-  inheritance, super, blocks, splat args, yield, interpolation, loops,
-  modules and singleton methods produce output identical to the legacy
-  parser. Unmapped node types raise a clean NotSupportedException naming
-  the prism node.
+- **`ir -X:UsePrism file.rb` works**: the console flag swaps the front end
+  for everything, including `require`d stdlib and `eval` (outer eval
+  locals are threaded via `RubyCompilerOptions.LocalNames` +
+  prism's VARIABLE_CALL flag).
+- **100% of the bundled 1.9 stdlib maps through the bridge**
+  (571/571 files in `ruby/1.9.1`, 39/39 in `ironruby/`; measure with
+  `IronRuby.Prism --sweep <dir>`). Coverage includes rescue/ensure/retry,
+  case/when, regexps (incl. named-capture writes), multiple/attribute/
+  index assignment and op-assigns, for loops, alias/undef, singleton
+  classes, BEGIN-less END blocks, string/symbol/xstring interpolation.
+- Stress programs (classes, super, blocks, splat, yield, ERB templating
+  via eval, OpenStruct, Time.parse, StringIO) produce byte-identical
+  output vs the legacy parser. Unmapped node types (pattern matching,
+  safe navigation, keyword args) raise a clean NotSupportedException
+  naming the prism node.
 - `PrismParser.ParseSerialized(source)` — prism's compact binary AST
   (the format JRuby/TruffleRuby load; `docs/serialization.md` in prism).
 - `PrismParser.ParseToJson(source)` — full AST as JSON (what the bridge
