@@ -520,7 +520,7 @@ puts x
 ");
             }, @"
 A
-nil
+bar
 C
 D
 F");

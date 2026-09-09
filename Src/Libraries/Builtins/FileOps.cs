@@ -276,8 +276,18 @@ namespace IronRuby.Builtins {
 
         internal static readonly object UmaskKey = new object();
 
+        private static bool IsUnixPlatform {
+            get { return System.IO.Path.DirectorySeparatorChar == '/'; }
+        }
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "umask")]
+        private static extern int NativeUmask(int mask);
+
         [RubyMethod("umask", RubyMethodAttributes.PublicSingleton)]
         public static int GetUmask(RubyClass/*!*/ self, [DefaultProtocol]int mask) {
+            if (IsUnixPlatform) {
+                return NativeUmask(mask);
+            }
             int result = (int)self.Context.GetOrCreateLibraryData(UmaskKey, () => 0);
             self.Context.TrySetLibraryData(UmaskKey, CalculateUmask(mask));
             return result;
@@ -285,6 +295,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("umask", RubyMethodAttributes.PublicSingleton)]
         public static int GetUmask(RubyClass/*!*/ self) {
+            if (IsUnixPlatform) {
+                int current = NativeUmask(0);
+                NativeUmask(current);
+                return current;
+            }
             return (int)self.Context.GetOrCreateLibraryData(UmaskKey, () => 0);
         }
 

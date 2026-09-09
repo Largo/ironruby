@@ -247,3 +247,27 @@ class Module
   rescue NameError
   end
 end
+
+module Process
+  def self.last_status
+    $?
+  end unless respond_to?(:last_status)
+end
+
+class Process::Status
+  def signaled?
+    false
+  end unless method_defined?(:signaled?)
+
+  def termsig
+    nil
+  end unless method_defined?(:termsig)
+
+  def stopsig
+    nil
+  end unless method_defined?(:stopsig)
+
+  def stopped?
+    false
+  end unless method_defined?(:stopped?)
+end

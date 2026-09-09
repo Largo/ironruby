@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -81,6 +81,13 @@ namespace IronRuby.Builtins {
             command = command.Trim(' ');
             if (command.Length == 0) {
                 throw RubyExceptions.CreateEINVAL(command);
+            }
+
+            if (System.IO.Path.DirectorySeparatorChar == '/') {
+                // Unix: single-string commands go through the shell, like MRI
+                executable = "/bin/sh";
+                arguments = "-c \"" + command.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
+                return;
             }
 
             // This seems to be quite complicated:
