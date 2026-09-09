@@ -7,6 +7,10 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="..\Ruby\Ruby.csproj" />
+    <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />
+  </ItemGroup>
+  <ItemGroup>
     <!-- built from ../../../prism with `ruby templates/template.rb && make shared` -->
     <Content Include="$(MSBuildThisFileDirectory)..\..\..\prism\build\libprism.so" Condition="Exists('$(MSBuildThisFileDirectory)..\..\..\prism\build\libprism.so')">
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>

@@ -7,10 +7,19 @@ syntax handling from the same parser CRuby, JRuby and TruffleRuby use.
 
 ## Status
 
+- **The bridge works end-to-end**: `dotnet run -- --run file.rb` executes a
+  Ruby file with prism as the front end (`RubyContext.AlternativeParser`
+  hook), mapped by `PrismAstBridge` onto `IronRuby.Compiler.Ast` and
+  compiled by the unchanged AstGenerator/DLR pipeline. Classes,
+  inheritance, super, blocks, splat args, yield, interpolation, loops,
+  modules and singleton methods produce output identical to the legacy
+  parser. Unmapped node types raise a clean NotSupportedException naming
+  the prism node.
 - `PrismParser.ParseSerialized(source)` — prism's compact binary AST
   (the format JRuby/TruffleRuby load; `docs/serialization.md` in prism).
-- `PrismParser.ParseToJson(source)` — full AST as JSON, easy to consume.
-- `dotnet run [file.rb]` dumps both for a quick look.
+- `PrismParser.ParseToJson(source)` — full AST as JSON (what the bridge
+  currently consumes).
+- `dotnet run -- --json file.rb` dumps the JSON AST.
 
 Build the native library first:
 

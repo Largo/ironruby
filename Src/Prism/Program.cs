@@ -5,6 +5,19 @@ using System.Text.Json;
 namespace IronRuby.Prism {
     internal static class Program {
         private static int Main(string[] args) {
+            if (args.Length == 2 && args[0] == "--run") {
+                // execute a Ruby file with prism as the front end (legacy parser bypassed)
+                IronRuby.Runtime.RubyContext.AlternativeParser = PrismAstBridge.Parse;
+                var engine = IronRuby.Ruby.CreateEngine();
+                engine.Execute(File.ReadAllText(args[1]));
+                return 0;
+            }
+
+            if (args.Length == 2 && args[0] == "--json") {
+                Console.WriteLine(PrismParser.ParseToJson(File.ReadAllText(args[1])));
+                return 0;
+            }
+
             string source = args.Length > 0 ? File.ReadAllText(args[0]) : "puts 1 + 2\n[1, 2, 3].each { |x| puts x * 2 }\n";
 
             byte[] serialized = PrismParser.ParseSerialized(source);

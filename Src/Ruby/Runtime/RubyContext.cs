@@ -2466,10 +2466,18 @@ namespace IronRuby.Runtime {
         private static readonly Dictionary<ExpressionType, int> _TransformationHistogram = new Dictionary<ExpressionType,int>();
 #endif
 
+        /// <summary>
+        /// Experimental: alternative front end (e.g. the Prism bridge). When non-null it replaces
+        /// the built-in parser for all source units.
+        /// </summary>
+        public static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> AlternativeParser;
+
         internal MSA.Expression<T> ParseSourceCode<T>(SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options, ErrorSink/*!*/ errorSink) {
             Debug.Assert(sourceUnit.LanguageContext == this);
 
-            SourceUnitTree ast = new Parser().Parse(sourceUnit, options, errorSink);
+            SourceUnitTree ast = (AlternativeParser != null)
+                ? AlternativeParser(sourceUnit, options, errorSink)
+                : new Parser().Parse(sourceUnit, options, errorSink);
 
             if (ast == null) {
                 return null;

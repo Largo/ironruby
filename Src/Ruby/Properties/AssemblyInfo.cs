@@ -49,6 +49,7 @@ using IronRuby.Runtime;
 [assembly: InternalsVisibleTo("IronRuby.Tests")]
 [assembly: InternalsVisibleTo("ClassInitGenerator")]
 #endif
+[assembly: InternalsVisibleTo("IronRuby.Prism")]
 
 
 [assembly: SecurityTransparent]
