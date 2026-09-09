@@ -1,16 +1,43 @@
 # IronRuby.Prism — CRuby's parser as an IronRuby front end
 
-Prototype binding of [ruby/prism](https://github.com/ruby/prism), the parser
-CRuby 3.4+ uses, via P/Invoke to `libprism.so`. Goal: retire the hand-ported
-1.9-era `Tokenizer.cs` + gppg `Parser.y` (~13k lines) and get modern Ruby
-syntax handling from the same parser CRuby, JRuby and TruffleRuby use.
+Binding of [ruby/prism](https://github.com/ruby/prism), the parser CRuby
+uses, via P/Invoke to `libprism.so`. Replaces the hand-ported 1.9-era
+`Tokenizer.cs` + gppg `Parser.y` front end with the same parser CRuby,
+JRuby and TruffleRuby use, targeting current (4.x-level) Ruby syntax.
+
+Architecture (the JRuby approach):
+
+1. `generate.rb` reads prism's `config.yml` and emits
+   `Generated/PrismNodes.Generated.cs` (152 typed node classes + flag
+   consts) and `Generated/PrismLoader.Generated.cs` (the per-node switch
+   of the binary deserializer). Re-run it when upgrading prism; the
+   loader validates the serialization version at runtime.
+2. `PrismLoader.cs` implements the primitives of prism's binary
+   serialization (varuint/varsint, constant pool, integers, locations)
+   per prism's `docs/serialization.md`.
+3. `PrismParser.cs` calls `pm_serialize_parse`, passing filepath, line
+   and outer-scope locals (for `eval`) through the serialized
+   `pm_options_t` data blob.
+4. `PrismAstBridge.cs` maps the typed nodes onto `IronRuby.Compiler.Ast`.
+   Modern syntax with no 1.9 AST equivalent is lowered: safe navigation
+   becomes a nil-guarded temp, keyword arguments become a trailing
+   optional hash plus a prologue (missing-keyword checks, defaults,
+   `**rest` extraction), `it`/numbered params become explicit block
+   params, `**` splats in literals/calls become `Hash#merge` chains,
+   `2r`/`2i` become `Rational`/`Complex` calls.
+5. Syntax errors from prism are reported through the DLR `ErrorSink`
+   like the legacy parser's.
 
 ## Status
 
 - **`ir -X:UsePrism file.rb` works**: the console flag swaps the front end
   for everything, including `require`d stdlib and `eval` (outer eval
-  locals are threaded via `RubyCompilerOptions.LocalNames` +
-  prism's VARIABLE_CALL flag).
+  locals are passed to prism as a scope via the options blob).
+- **Modern syntax runs**: keyword arguments (required/optional/`**rest`,
+  correct missing-keyword errors), safe navigation, endless methods,
+  hash shorthand `{x:}`, `it` and numbered block params, lambdas
+  (`->`, `.()`), `**` splats — verified byte-identical against CRuby 3.3
+  output (and `it` runs here even though CRuby 3.3 rejects it).
 - **100% of the bundled 1.9 stdlib maps through the bridge**
   (571/571 files in `ruby/1.9.1`, 39/39 in `ironruby/`; measure with
   `IronRuby.Prism --sweep <dir>`). Coverage includes rescue/ensure/retry,
@@ -35,22 +62,20 @@ git clone https://github.com/ruby/prism ../../../prism
 cd ../../../prism && ruby templates/template.rb && make shared
 ```
 
-## Integration plan
+## Known limits / next steps
 
-1. **Loader generation.** Prism describes every node type in `config.yml`
-   and generates its Java/JS bindings from ERB templates. Write a
-   `templates/csharp/` set (mirroring `templates/java/api/`) that emits a
-   C# deserializer for the binary format — no JSON hop, no per-node
-   hand-maintenance, auto-tracks prism releases.
-2. **AST bridge.** A visitor that maps prism nodes to the existing
-   `IronRuby.Compiler.Ast` node set consumed by `AstGenerator`. Ruby 1.9
-   constructs map 1:1; newer syntax (pattern matching, endless methods,
-   safe navigation) either lowers to existing nodes or reports a clean
-   "not supported yet" error — still a strict improvement over a parse
-   error from the 1.9 grammar.
-3. **Switchover.** `-X:UsePrism` flag selects the front end; the legacy
-   parser stays until the bridge passes IronRuby.Tests parser suites,
-   then becomes the fallback and eventually goes away.
+- Pattern matching (`case/in`, `=>` matches) and `...` argument
+  forwarding raise clean NotSupportedException — they need either new
+  runtime support or a much larger lowering.
+- Keyword-argument lowering is restricted to signatures without optional
+  positionals or `*rest` (where "trailing hash" and "keywords"
+  coincide); unknown-keyword errors are not raised (permissive).
+- String literals round-trip through UTF-16; binary string literals with
+  invalid UTF-8 may lose bytes (needs byte[]-based MutableString
+  literals).
+- Switchover plan: run the IronRuby.Tests parser suites under
+  `-X:UsePrism`, then flip the default and keep the legacy parser as
+  fallback.
 
 Line/column info: prism gives byte offsets + a line-offset table
 (`pm_parser_line_offsets`); IronRuby's `SourceSpan`s are built from the
