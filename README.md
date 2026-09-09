@@ -1,0 +1,97 @@
+# IronRuby, modernized
+
+A fork of [IronRuby](https://github.com/IronLanguages/ironruby) — Ruby on the .NET CLR —
+brought back to life: it **builds and runs on .NET 8**, and it parses Ruby with
+**[prism](https://github.com/ruby/prism), CRuby's own parser**, instead of the hand-ported
+Ruby 1.9 grammar it shipped with in 2011.
+
+```console
+$ ir -X:UsePrism -ISrc/StdLib/ironruby -ISrc/StdLib/ruby/1.9.1 script.rb
+```
+
+```ruby
+# all of this runs today
+case config
+in {db: {host: String => host, port: Integer => port}} then "#{host}:#{port}"
+in {db: {socket:}} then socket
+end
+
+def connect(host:, port: 5432, **opts) = Client.new(host, port, **opts)
+
+users&.filter_map { it.name if it.active? }
+```
+
+## What changed
+
+| | before | after |
+|---|---|---|
+| Runtime | .NET Framework 4 / Silverlight | **.NET 8** (Linux, macOS, Windows) |
+| Build | legacy msbuild, 12 configurations | SDK-style `dotnet build` |
+| Parser | hand-ported 1.9 grammar (~13k lines) | **prism** — the parser CRuby uses |
+| `RUBY_VERSION` | `1.9.2` | `4.0.0` |
+| Big integers | `Microsoft.Scripting.Math` | `System.Numerics` |
+
+## The prism front end
+
+Ruby source is parsed by `libprism.so` through P/Invoke, decoded from prism's binary
+serialization by a **generated** C# loader, and mapped onto IronRuby's existing AST — so the
+whole AstGenerator/DLR compilation pipeline works unchanged. This is the same architecture
+JRuby uses for its Java loader:
+
+```
+source ──▶ libprism ──▶ binary AST ──▶ PrismLoader ──▶ PrismAstBridge ──▶ IronRuby AST ──▶ DLR
+                     (pm_serialize_parse)  (generated)     (lowering)
+```
+
+`Src/Prism/generate.rb` reads prism's `config.yml` and emits 152 typed node classes plus the
+deserializer, so upgrading prism is: rebuild the native library, re-run the generator, fix
+what the compiler flags. The loader version-checks the serialization format at runtime.
+
+Modern syntax with no equivalent in the 1.9-era AST is **lowered** rather than rejected:
+
+- **pattern matching** → `===` / `deconstruct` / `deconstruct_keys` tests with capture bindings
+  (guards, find patterns, `**nil`, pins, alternations, `=>` and `in`)
+- **keyword arguments** → trailing optional hash + a prologue (missing-keyword `ArgumentError`,
+  defaults, `**rest`)
+- **safe navigation** → nil-guarded temporary
+- **`it` / `_1`** → explicit block parameters, **`...`** → `*rest, &block` forwarding
+
+See [`Src/Prism/README.md`](Src/Prism/README.md) for the details and the known gaps.
+
+## Status
+
+| suite | result |
+|---|---|
+| [ruby/spec](https://github.com/ruby/spec) `spec/language` (via mspec) | **1584 / 2153 pass (73.6%)**, no crashes |
+| IronRuby's own C# test suite | ~1470 pass, 22 known failures |
+| Bridging the bundled 1.9 stdlib | **571 / 571 files** |
+
+Honest about the rest: the **standard library is still the Ruby 1.9 snapshot** the fork shipped
+with, patched by a small compatibility prelude ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb))
+that adds pattern-matching support classes and widely-used core methods from Ruby 2.x–4.x.
+The syntax is current; the runtime and library are where the remaining work is —
+`defined?` edge cases, predefined globals, magic-comment encodings, lambda arity.
+
+## Building
+
+Requires the .NET SDK, plus Ruby and a C compiler to build prism.
+
+```console
+$ git clone https://github.com/IronLanguages/dlr ../dlr          # modern DLR, referenced as source
+$ git clone https://github.com/ruby/prism ../prism
+$ (cd ../prism && ruby templates/template.rb && make shared)     # libprism.so
+$ (cd Src/Prism && ruby generate.rb)                             # C# nodes + loader
+$ dotnet build Src/Console/Ruby.Console.csproj
+```
+
+Running the conformance suite:
+
+```console
+$ git clone https://github.com/ruby/spec && git clone https://github.com/ruby/mspec
+$ RUBY_EXE=./ir.sh ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
+```
+
+## License
+
+Apache License 2.0, as the original. See `Public/License.html`.
+The original content description is preserved in [`README.txt`](README.txt).

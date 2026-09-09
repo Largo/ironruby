@@ -57,4 +57,4 @@ Util/References
 *.bak
 mspec/
 spec/
-ir.sh
+rubyspec_temp/
