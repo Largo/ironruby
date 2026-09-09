@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -22,6 +22,7 @@ using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
+using Range = IronRuby.Builtins.Range;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Hosting;
 using System.Numerics;
@@ -3290,7 +3291,7 @@ false
                 return a ?? b ?? 3;
             }
 
-            public object[] Numerics(byte a, sbyte b, short c, ushort d, int e, uint f, long g, ulong h, BigInteger i, Complex64 j, Convertible1 k) {
+            public object[] Numerics(byte a, sbyte b, short c, ushort d, int e, uint f, long g, ulong h, BigInteger i, Complex j, Convertible1 k) {
                 return new object[] { a, b, c, d, e, f, g, h, i, j, k };
             }
 

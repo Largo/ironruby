@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -26,6 +26,7 @@ using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
 using IronRuby.Runtime;
+using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Tests {
     public class TokenizerTestDriver {

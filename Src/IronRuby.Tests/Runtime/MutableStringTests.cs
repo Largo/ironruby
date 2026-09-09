@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -965,15 +965,15 @@ namespace IronRuby.Tests {
                 var a = strs[i];
 
                 Action<string> test1 = (value) => {
-                    Assert(a.IndexOf(BinaryEncoding.Instance.GetBytes(value)) == s.IndexOf(value));
+                    Assert(a.IndexOf(BinaryEncoding.Instance.GetBytes(value)) == s.IndexOf(value, StringComparison.Ordinal));
                 };
 
                 Action<string, int> test2 = (value, start) => {
-                    Assert(a.IndexOf(BinaryEncoding.Instance.GetBytes(value), start) == s.IndexOf(value, start));
+                    Assert(a.IndexOf(BinaryEncoding.Instance.GetBytes(value), start) == s.IndexOf(value, start, StringComparison.Ordinal));
                 };
 
                 Action<string, int, int> test3 = (value, start, count) => {
-                    Assert(a.IndexOf(BinaryEncoding.Instance.GetBytes(value), start, count) == s.IndexOf(value, start, count));
+                    Assert(a.IndexOf(BinaryEncoding.Instance.GetBytes(value), start, count) == s.IndexOf(value, start, count, StringComparison.Ordinal));
                 };
 
                 test1("");
@@ -1032,15 +1032,18 @@ namespace IronRuby.Tests {
                 a.Remove(s.Length, 2);
 
                 Action<string> test1 = (value) => {
-                    Assert(a.LastIndexOf(BinaryEncoding.Instance.GetBytes(value)) == s.LastIndexOf(value));
+                    // .NET 5+ returns Length for empty-string LastIndexOf; MutableString keeps the legacy Length-1 convention
+                    int expected = value.Length == 0 ? s.Length - 1 : s.LastIndexOf(value, StringComparison.Ordinal);
+                    Assert(a.LastIndexOf(BinaryEncoding.Instance.GetBytes(value)) == expected);
                 };
 
                 Action<string, int> test2 = (value, start) => {
-                    Assert(a.LastIndexOf(BinaryEncoding.Instance.GetBytes(value), start) == s.LastIndexOf(value, start));
+                    Assert(a.LastIndexOf(BinaryEncoding.Instance.GetBytes(value), start) == s.LastIndexOf(value, start, StringComparison.Ordinal));
                 };
 
                 Action<string, int, int> test3 = (value, start, count) => {
-                    Assert(a.LastIndexOf(BinaryEncoding.Instance.GetBytes(value), start, count) == s.LastIndexOf(value, start, count));
+                    int expected = value.Length == 0 ? Math.Min(start, s.Length - 1) : s.LastIndexOf(value, start, count, StringComparison.Ordinal);
+                    Assert(a.LastIndexOf(BinaryEncoding.Instance.GetBytes(value), start, count) == expected);
                 };
 
                 test1("");

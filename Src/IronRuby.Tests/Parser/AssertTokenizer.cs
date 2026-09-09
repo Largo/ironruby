@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -23,6 +23,7 @@ using IronRuby.Runtime;
 using System.IO;
 using System.Text;
 using System.Collections.Generic;
+using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Tests {
     internal class AssertTokenizer {
