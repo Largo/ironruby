@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -127,7 +127,7 @@ namespace IronRuby.Runtime {
 #endif
             if (noAdaptiveCompilation) {
                 Delegate result = lambda.Compile();
-#if !WIN8
+#if NETFRAMEWORK
                 // DLR closures should not be used:
                 Debug.Assert(!(result.Target is Closure) || ((Closure)result.Target).Locals == null);
 #endif
@@ -154,7 +154,7 @@ namespace IronRuby.Runtime {
                 }
             }
 #endif
-            return CompilerHelpers.CompileToMethod(lambda, new CustomGenerator(), false);
+            return lambda.Compile();
         }
 #endif
     }

@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -28,7 +28,7 @@ using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.StandardLibrary.FileControl;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using IronRuby.Runtime.Calls;
 using System.Globalization;
 using IronRuby.Compiler;
@@ -603,10 +603,9 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         internal static string/*!*/ ConvertToHostString(ConversionStorage<MutableString>/*!*/ stringCast, object hostName) {
-            BigInteger bignum;
             if (hostName is int) {
                 return ConvertToHostString((int)hostName);
-            } else if (!ReferenceEquals(bignum = hostName as BigInteger, null)) {
+            } else if (hostName is BigInteger bignum) {
                 return ConvertToHostString(bignum);
             } else if (hostName != null) {
                 return ConvertToHostString(Protocols.CastToString(stringCast, hostName));
@@ -629,8 +628,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 return true;
             }
 
-            var bignum = value as BigInteger;
-            if ((object)bignum != null) {
+            if (value is BigInteger bignum) {
                 if (!bignum.AsInt32(out result)) {
                     throw RubyExceptions.CreateRangeError("bignum too big to convert into `long'");
                 }

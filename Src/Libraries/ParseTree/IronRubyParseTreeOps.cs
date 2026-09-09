@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -18,6 +18,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using IronRuby.Builtins;
+using Range = IronRuby.Builtins.Range;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
 using IronRuby.Runtime;

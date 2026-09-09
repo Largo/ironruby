@@ -28,7 +28,7 @@ using IronRuby.Compiler;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Utils;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 using Microsoft.Scripting.Runtime;

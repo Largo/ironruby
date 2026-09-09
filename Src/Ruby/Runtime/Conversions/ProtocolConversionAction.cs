@@ -30,7 +30,7 @@ using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Generation;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Runtime.Conversions {

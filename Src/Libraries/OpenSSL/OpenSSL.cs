@@ -22,7 +22,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Crypto = System.Security.Cryptography;
@@ -231,7 +231,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     j += 4;
                 }
 
-                return new BigInteger(1, transformed);
+                return BigIntegerCompat.Create(1, transformed);
             }
         }
 

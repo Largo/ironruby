@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -28,7 +28,7 @@ using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 
 namespace IronRuby.Builtins {
     public static class RubyEncoder {
@@ -229,7 +229,7 @@ namespace IronRuby.Builtins {
                 words[windex] |= (uint)w;
             }
             index += byteCount;
-            return new BigInteger(+1, words);
+            return BigIntegerCompat.Create(+1, words);
         }
 
         #endregion

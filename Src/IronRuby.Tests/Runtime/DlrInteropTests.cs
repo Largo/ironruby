@@ -28,7 +28,7 @@ using System.Dynamic;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Collections;

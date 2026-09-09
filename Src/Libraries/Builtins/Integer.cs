@@ -19,7 +19,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
@@ -554,11 +554,10 @@ namespace IronRuby.Builtins {
         public static object TryUnaryMinus(object obj) {
             if (obj is int) {
                 int i = (int)obj;
-                return (i != Int32.MinValue) ? ScriptingRuntimeHelpers.Int32ToObject(-i) : -BigInteger.Create(i);
+                return (i != Int32.MinValue) ? ScriptingRuntimeHelpers.Int32ToObject(-i) : -new BigInteger(i);
             }
 
-            BigInteger bignum = obj as BigInteger;
-            if ((object)bignum != null) {
+            if (obj is BigInteger bignum) {
                 return -bignum;
             }
 

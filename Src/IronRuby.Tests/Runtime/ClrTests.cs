@@ -24,7 +24,7 @@ using System.Runtime.InteropServices;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Hosting;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Actions;

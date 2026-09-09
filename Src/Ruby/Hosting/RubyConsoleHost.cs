@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -58,11 +58,8 @@ namespace IronRuby.Hosting {
                 PlatformAdaptationLayer platform = PlatformAdaptationLayer.Default;
                 string homeDir = RubyUtils.GetHomeDirectory(platform);
                 platform.SetEnvironmentVariable("HOME", homeDir);
-            } catch (System.Security.SecurityException e) {
+            } catch (System.Security.SecurityException) {
                 // Ignore EnvironmentPermission exception
-                if (e.PermissionType != typeof(System.Security.Permissions.EnvironmentPermission)) {
-                    throw;
-                }
             }
         }
     }

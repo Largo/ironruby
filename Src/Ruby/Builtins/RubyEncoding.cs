@@ -59,6 +59,18 @@ namespace IronRuby.Builtins {
         
         // TODO: how does MRI sort encodings?
 
+#if !NETFRAMEWORK
+        // must precede the encoding fields below: field initializers run in textual order
+        private static readonly bool _codePagesRegistered = RegisterCodePageProvider();
+
+        private static bool RegisterCodePageProvider() {
+            System.Text.Encoding.RegisterProvider(System.Text.CodePagesEncodingProvider.Instance);
+            // Ruby exposes UTF-7; .NET 5+ disables it unless this switch is set
+            AppContext.SetSwitch("System.Text.Encoding.EnableUnsafeUTF7Encoding", true);
+            return true;
+        }
+#endif
+
         public static readonly RubyEncoding/*!*/ Binary = new RubyEncoding(BinaryEncoding.Instance, BinaryEncoding.Instance, -4);
         public static readonly RubyEncoding/*!*/ UTF8 = new RubyEncoding(CreateEncoding(CodePageUTF8, false), CreateEncoding(CodePageUTF8, true), -3);
 

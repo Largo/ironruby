@@ -16,7 +16,7 @@
 using System;
 using System.Diagnostics;
 using Microsoft.Scripting.Utils;
-using Microsoft.Scripting.Math; 
+using System.Numerics; 
 
 namespace IronRuby.Compiler {
 
@@ -27,6 +27,13 @@ namespace IronRuby.Compiler {
         protected abstract int ReadDigit();
 
         protected UnsignedBigIntegerParser() {
+        }
+
+        private static BigInteger/*!*/ CreateFromWords(uint[]/*!*/ words) {
+            // words are little-endian; trailing zero byte keeps the result non-negative
+            byte[] bytes = new byte[words.Length * 4 + 1];
+            Buffer.BlockCopy(words, 0, bytes, 0, words.Length * 4);
+            return new BigInteger(bytes);
         }
 
         public BigInteger/*!*/ ParseBinary(int digitCount) {
@@ -72,7 +79,7 @@ namespace IronRuby.Compiler {
                 ReadOctalTriword(result, i, DigitsPerWord);
             }
 
-            return new BigInteger(+1, result);
+            return CreateFromWords(result);
         }
 
         private void ReadOctalTriword(uint[]/*!*/ result, int i, int digits) {
@@ -132,7 +139,7 @@ namespace IronRuby.Compiler {
                 count = MultiplyAdd(result, count, wordBase, ReadWord(digitsPerWord, @base));
             }
 
-            return new BigInteger(+1, result);
+            return CreateFromWords(result);
         }
 
         private int GetResultSize(int digitCount, uint @base) {
@@ -164,7 +171,7 @@ namespace IronRuby.Compiler {
                 result[i] = ReadBinaryWord(digitsPerWord, bitsPerDigit);
             }
 
-            return new BigInteger(+1, result);
+            return CreateFromWords(result);
         }
 
         // data = data * x + carry

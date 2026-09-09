@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -294,19 +294,14 @@ namespace IronRuby.Compiler.Generation {
             }
 
             if (_cctor != null) {
-                if (_dynamicSiteFactories.Count > 0) { 
-                    MethodBuilder createSitesImpl = _tb.DefineMethod(
-                        "<create_dynamic_sites>", MethodAttributes.Private | MethodAttributes.Static, typeof(void), ReflectionUtils.EmptyTypes
-                    );
-
+                if (_dynamicSiteFactories.Count > 0) {
                     _dynamicSiteFactories.Add(Expression.Empty());
                     var lambda = Expression.Lambda(Expression.Block(_dynamicSiteFactories));
-#if WIN8
-                    ((dynamic)lambda).CompileToMethod(createSitesImpl);
-#else
-                    lambda.CompileToMethod(createSitesImpl);
-#endif
-                    _cctor.EmitCall(createSitesImpl);
+                    // CompileToMethod is unavailable on .NET Core; compile lazily from the cctor
+                    // once the runtime type exists (see DynamicSiteFactories).
+                    _cctor.EmitInt(DynamicSiteFactories.Register(lambda));
+                    _cctor.Emit(OpCodes.Ldtoken, _tb);
+                    _cctor.EmitCall(typeof(DynamicSiteFactories).GetMethod(nameof(DynamicSiteFactories.RunFactory)));
 
                     _dynamicSiteFactories.Clear();
                 }

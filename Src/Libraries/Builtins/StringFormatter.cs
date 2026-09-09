@@ -20,7 +20,7 @@ using System.Globalization;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Text;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using IronRuby.Runtime;
 using SM = System.Math;
 using IronRuby.Runtime.Calls;
@@ -625,7 +625,7 @@ namespace IronRuby.Builtins {
                 isNegative = true;
 
             if (isNegative && unsigned) {
-                val = val is BigInteger ? CastToUnsignedBigInteger(val as BigInteger) : (object)(uint)(int)val;
+                val = val is BigInteger ? CastToUnsignedBigInteger((BigInteger)val) : (object)(uint)(int)val;
             }
 
             if (fPos && (_opts.SignChar || _opts.Space)) {
@@ -695,7 +695,7 @@ namespace IronRuby.Builtins {
 
         private StringBuilder/*!*/ AppendBase(object/*!*/ value, int bitsToShift, bool lowerCase) {
             if (value is BigInteger)
-                return AppendBaseBigInteger(value as BigInteger, bitsToShift, lowerCase);
+                return AppendBaseBigInteger((BigInteger)value, bitsToShift, lowerCase);
 
             StringBuilder/*!*/ result = new StringBuilder();
             bool isNegative = IsNegative(value);
@@ -747,7 +747,7 @@ namespace IronRuby.Builtins {
 
         private StringBuilder/*!*/ AppendBase2(object/*!*/ value, int radix, bool unsigned) {
             if (value is BigInteger)
-                return AppendBaseBigInteger(value as BigInteger, radix);
+                return AppendBaseBigInteger((BigInteger)value, radix);
 
             if (unsigned)
                 return AppendBaseInt((int)value, radix);
@@ -785,7 +785,7 @@ namespace IronRuby.Builtins {
                 data[j++] = word;
             }
 
-            return new BigInteger(1, data);
+            return BigIntegerCompat.Create(1, data);
         }
 
         private BigInteger/*!*/ CastToUnsignedBigInteger(BigInteger/*!*/ value) {
@@ -822,7 +822,7 @@ namespace IronRuby.Builtins {
 
         private object/*!*/ Negate(object/*!*/ value) {
             if (value is BigInteger)
-                return ((BigInteger)value).OnesComplement();
+                return ~((BigInteger)value);
             else
                 return -((int)value);
         }

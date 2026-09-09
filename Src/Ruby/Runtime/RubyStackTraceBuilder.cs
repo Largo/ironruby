@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -252,12 +252,7 @@ namespace IronRuby.Runtime {
         // TODO: partial trust
         private static bool DetectFileAccessPermissions() {
 #if FEATURE_FILESYSTEM
-            try {
-                new System.Security.Permissions.FileIOPermission(System.Security.Permissions.PermissionState.Unrestricted).Demand();
-                return true;
-            } catch (SecurityException) {
-                return false;
-            }
+            return true;
 #else
             return false;
 #endif

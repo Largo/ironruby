@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -378,7 +378,7 @@ namespace IronRuby.StandardLibrary.Win32API {
 #endif
 
             var il = dm.GetILGenerator();
-            var signature = SignatureHelper.GetMethodSigHelper(CallingConvention.Winapi, returnType);
+            var signature = SignatureHelper.GetMethodSigHelper(CallingConventions.Standard, returnType);
 
             // calli args:
             for (int i = 1; i < parameterTypes.Length; i++) {
@@ -410,19 +410,9 @@ namespace IronRuby.StandardLibrary.Win32API {
                 if (_dynamicModule == null) {
                     lock (_lock) {
                         if (_dynamicModule == null) {
-                            var attributes = new[] { 
-                                new CustomAttributeBuilder(typeof(UnverifiableCodeAttribute).GetConstructor(ReflectionUtils.EmptyTypes), new object[0]),
-                                //PermissionSet(SecurityAction.Demand, Unrestricted = true)
-                                new CustomAttributeBuilder(typeof(PermissionSetAttribute).GetConstructor(new Type[] { typeof(SecurityAction) }), 
-                                    new object[]{ SecurityAction.Demand },
-                                    new PropertyInfo[] { typeof(PermissionSetAttribute).GetProperty("Unrestricted") }, 
-                                    new object[] { true }
-                                )
-                            };
-
                             string name = typeof(Win32API).Namespace + ".DynamicAssembly";
-                            var assembly = AppDomain.CurrentDomain.DefineDynamicAssembly(new AssemblyName(name), AssemblyBuilderAccess.Run, attributes);
-                            assembly.DefineVersionInfoResource();
+                            var assembly = AssemblyBuilder.DefineDynamicAssembly(new AssemblyName(name), AssemblyBuilderAccess.Run);
+                            assembly.SetCustomAttribute(new CustomAttributeBuilder(typeof(UnverifiableCodeAttribute).GetConstructor(ReflectionUtils.EmptyTypes), new object[0]));
                             _dynamicModule = assembly.DefineDynamicModule(name);
                         }
                     }

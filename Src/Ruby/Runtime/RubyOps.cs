@@ -31,12 +31,13 @@ using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
 using System.Threading;
 using IronRuby.Builtins;
+using Range = IronRuby.Builtins.Range;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Generation;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Interpreter;
-using Microsoft.Scripting.Math;
+using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Compiler.Ast;
@@ -284,7 +285,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Proc/*!*/ DefineBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
-#if !WIN8
+#if NETFRAMEWORK
             // DLR closures should not be used:
             Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
 #endif
@@ -293,7 +294,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Proc/*!*/ DefineLambda(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher, object/*!*/ clrMethod) {
-#if !WIN8
+#if NETFRAMEWORK
             // DLR closures should not be used:
             Debug.Assert(!(((Delegate)clrMethod).Target is Closure) || ((Closure)((Delegate)clrMethod).Target).Locals == null);
 #endif
@@ -2173,8 +2174,7 @@ namespace IronRuby.Runtime {
                 return (int)obj;
             }
 
-            var bignum = obj as BigInteger;
-            if ((object)bignum != null) {
+            if (obj is BigInteger bignum) {
                 int fixnum;
                 if (bignum.AsInt32(out fixnum)) {
                     return fixnum;
@@ -2216,8 +2216,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt32((int)obj);
             }
 
-            var bignum = obj as BigInteger;
-            if ((object)bignum != null) {
+            if (obj is BigInteger bignum) {
                 return Converter.ToUInt32(bignum);
             }
 
@@ -2230,8 +2229,7 @@ namespace IronRuby.Runtime {
                 return (int)obj;
             }
 
-            var bignum = obj as BigInteger;
-            if ((object)bignum != null) {
+            if (obj is BigInteger bignum) {
                 return Converter.ToInt64(bignum);
             }
 
@@ -2244,8 +2242,7 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt64((int)obj);
             }
 
-            var bignum = obj as BigInteger;
-            if ((object)bignum != null) {
+            if (obj is BigInteger bignum) {
                 return Converter.ToUInt64(bignum);
             }
 
@@ -2258,8 +2255,7 @@ namespace IronRuby.Runtime {
                 return (int)obj;
             }
 
-            var bignum = obj as BigInteger;
-            if ((object)bignum != null) {
+            if (obj is BigInteger bignum) {
                 return bignum;
             }
 
@@ -2272,8 +2268,7 @@ namespace IronRuby.Runtime {
                 return new IntegerValue((int)obj);
             }
 
-            var bignum = obj as BigInteger;
-            if ((object)bignum != null) {
+            if (obj is BigInteger bignum) {
                 return new IntegerValue(bignum);
             }
 
