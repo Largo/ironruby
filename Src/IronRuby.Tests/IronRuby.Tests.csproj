@@ -8,9 +8,13 @@
     <NoWarn>$(NoWarn);SYSLIB0011</NoWarn>
   </PropertyGroup>
   <ItemGroup>
+    <RuntimeHostConfigurationOption Include="System.Text.Encoding.EnableUnsafeUTF7Encoding" Value="true" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
     <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />
     <ProjectReference Include="..\Libraries.Yaml\IronRuby.Libraries.Yaml.csproj" />
+    <ProjectReference Include="..\Prism\IronRuby.Prism.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>

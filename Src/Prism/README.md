@@ -65,10 +65,18 @@ cd ../../../prism && ruby templates/template.rb && make shared
 ## Known limits / next steps
 
 - Pattern matching is lowered to ===/deconstruct tests with bindings:
-  case/in with guards, captures, array/hash/const patterns, pins,
-  alternations, standalone `=>` and `in`. Not yet: find patterns with
-  two splats (`[*, x, *]`), `{**nil}` exact-match patterns. The
-  NoMatchingPatternError message is shorter than MRI's.
+  case/in with guards, captures, array/hash/const patterns, find
+  patterns (`[*, x, *]` via the __pm_find_index__ prelude helper),
+  `{**nil}` exact matches, pins, alternations, standalone `=>` and `in`.
+  The NoMatchingPatternError message is shorter than MRI's.
+- IronRuby.Tests can run under prism: `IR_USE_PRISM=1 IronRuby.Tests`.
+  Score: 52 distinct failures vs the 16-failure legacy baseline, out of
+  ~1470 tests. Roughly half the delta is prism being *correct for
+  Ruby 4* where the 1.9-era tests expect old behavior (retry/redo/break
+  outside rescue now SyntaxError, keywords in index assignment removed
+  in 3.4); the rest is niche (flip-flop state in the secondary test
+  mode, BEGIN hoisting, encoding magic comments, exact compile-error
+  counts, block-arity corner cases).
 - `...` argument forwarding is lowered to `*?fwd?, &?fwdblk?` (keywords
   ride along as the trailing hash, consistent with the kwargs lowering).
 - Keyword-argument lowering is restricted to signatures without optional

@@ -277,6 +277,11 @@ namespace IronRuby.Tests {
             List<string> args = new List<string>(arguments);
             string culture = Environment.GetEnvironmentVariable("IR_CULTURE");
 
+            if (Environment.GetEnvironmentVariable("IR_USE_PRISM") == "1") {
+                Console.WriteLine("Using prism front end");
+                IronRuby.Runtime.RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
+            }
+
             if (args.Contains("/partial")) {
                 // partial trust requires CAS + secondary AppDomains, neither exists on .NET Core
                 Console.Error.WriteLine("/partial (partial trust) is not supported on .NET Core");

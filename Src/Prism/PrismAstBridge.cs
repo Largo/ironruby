@@ -95,6 +95,11 @@ namespace IronRuby.Prism {
             return (node.Flags & flag) != 0;
         }
 
+        // regex literals become $_ matches, ranges become flip-flops, etc.
+        private Expression/*!*/ Condition(Pm.PmNode/*!*/ predicate) {
+            return Expr(predicate).ToCondition(CurrentScope);
+        }
+
         // ---- program / statements ----
 
         private SourceUnitTree/*!*/ Program(Pm.ProgramNode/*!*/ node, List<string> outerLocalNames) {
@@ -304,13 +309,13 @@ namespace IronRuby.Prism {
                     if (unless.ElseClause is Pm.ElseNode elseNode) {
                         elseClause = new ElseIfClause(null, BuildStatements(elseNode.Statements), Span(elseNode));
                     }
-                    return new UnlessExpression(Expr(unless.Predicate), BuildStatements(unless.Statements), elseClause, span);
+                    return new UnlessExpression(Condition(unless.Predicate), BuildStatements(unless.Statements), elseClause, span);
                 }
                 case Pm.WhileNode whileNode:
-                    return new WhileLoopExpression(Expr(whileNode.Predicate), true,
+                    return new WhileLoopExpression(Condition(whileNode.Predicate), true,
                         HasFlag(whileNode, Pm.LoopFlags.BeginModifier), BuildStatements(whileNode.Statements), span);
                 case Pm.UntilNode untilNode:
-                    return new WhileLoopExpression(Expr(untilNode.Predicate), false,
+                    return new WhileLoopExpression(Condition(untilNode.Predicate), false,
                         HasFlag(untilNode, Pm.LoopFlags.BeginModifier), BuildStatements(untilNode.Statements), span);
 
                 case Pm.AndNode and:
@@ -416,10 +421,12 @@ namespace IronRuby.Prism {
                 case Pm.ClassNode classNode: return Class(classNode, span);
                 case Pm.ModuleNode module: return Module(module, span);
                 case Pm.SingletonClassNode singleton: {
+                    // the singleton expression (class << expr) is evaluated in the outer scope
+                    var singletonExpr = Expr(singleton.Expression);
                     var scope = new TopLocalDefinitionLexicalScope(CurrentScope);
                     _scopes.Push(scope);
                     try {
-                        return new SingletonDefinition(scope, Expr(singleton.Expression), DefinitionBody(singleton.Body, span, null), span);
+                        return new SingletonDefinition(scope, singletonExpr, DefinitionBody(singleton.Body, span, null), span);
                     } finally {
                         _scopes.Pop();
                     }
@@ -572,13 +579,10 @@ namespace IronRuby.Prism {
                 case Pm.ConstantReadNode read:
                     return new ConstantVariable(read.Name, span);
                 case Pm.ConstantPathNode path when path.Name != null:
-                    return path.Parent != null
-                        ? new ConstantVariable(Expr(path.Parent), path.Name, span)
-                        : new ConstantVariable(path.Name, span);
+                    // null parent = ::Foo, explicitly bound to Object
+                    return new ConstantVariable(path.Parent != null ? Expr(path.Parent) : null, path.Name, span);
                 case Pm.ConstantPathTargetNode target when target.Name != null:
-                    return target.Parent != null
-                        ? new ConstantVariable(Expr(target.Parent), target.Name, span)
-                        : new ConstantVariable(target.Name, span);
+                    return new ConstantVariable(target.Parent != null ? Expr(target.Parent) : null, target.Name, span);
                 default:
                     throw Unsupported(node);
             }
@@ -589,7 +593,7 @@ namespace IronRuby.Prism {
             var subsequent = node.Subsequent;
             while (subsequent != null) {
                 if (subsequent is Pm.IfNode elseIf) {
-                    elseIfClauses.Add(new ElseIfClause(Expr(elseIf.Predicate), BuildStatements(elseIf.Statements), Span(elseIf)));
+                    elseIfClauses.Add(new ElseIfClause(Condition(elseIf.Predicate), BuildStatements(elseIf.Statements), Span(elseIf)));
                     subsequent = elseIf.Subsequent;
                 } else {
                     var elseNode = (Pm.ElseNode)subsequent;
@@ -597,7 +601,7 @@ namespace IronRuby.Prism {
                     break;
                 }
             }
-            return new IfExpression(Expr(node.Predicate), BuildStatements(node.Statements), elseIfClauses, span);
+            return new IfExpression(Condition(node.Predicate), BuildStatements(node.Statements), elseIfClauses, span);
         }
 
         private Expression/*!*/ HashExpression(Pm.PmNode[]/*!*/ elements, SourceSpan span) {
@@ -958,7 +962,9 @@ namespace IronRuby.Prism {
             if (node.Rest != null) {
                 var restSpan = Span(node.Rest);
                 if (node.Rest is Pm.ImplicitRestNode) {
-                    unsplat = CurrentScope.ResolveOrAddVariable(Symbols.RestArgsLocal, restSpan);
+                    // |a,| occurs only in blocks/lambdas (invalid in def); a placeholder
+                    // keeps MRI arity semantics
+                    unsplat = Placeholder.Singleton;
                 } else if (node.Rest is Pm.RestParameterNode restParam) {
                     unsplat = CurrentScope.ResolveOrAddVariable(restParam.Name ?? Symbols.RestArgsLocal, restSpan);
                 } else {
@@ -1138,7 +1144,7 @@ namespace IronRuby.Prism {
                 case Pm.IfNode guard: {
                     // `in pat if cond`: prism nests the pattern in the guard's statements
                     var inner = ((Pm.StatementsNode)guard.Statements).Body[0];
-                    return new AndExpression(PatternTest(inner, subject, span), Expr(guard.Predicate), Span(guard));
+                    return new AndExpression(PatternTest(inner, subject, span), Condition(guard.Predicate), Span(guard));
                 }
                 case Pm.UnlessNode guard: {
                     var inner = ((Pm.StatementsNode)guard.Statements).Body[0];
@@ -1149,6 +1155,8 @@ namespace IronRuby.Prism {
                     return ArrayPattern(arrayPattern, subject, span);
                 case Pm.HashPatternNode hashPattern:
                     return HashPattern(hashPattern, subject, span);
+                case Pm.FindPatternNode findPattern:
+                    return FindPattern(findPattern, subject, span);
                 default:
                     return CaseEqual(Expr(pattern), subject, span); // value pattern
             }
@@ -1280,10 +1288,120 @@ namespace IronRuby.Prism {
                 restStatements.Add(Literal.True(span));
                 tests.Add(new BlockExpression(MakeStatements(restStatements.ToArray()), span));
             } else if (node.Rest is Pm.NoKeywordsParameterNode) {
-                throw Unsupported(node.Rest); // {**nil} exact-match patterns
+                // {**nil}: no keys beyond the listed ones — (h.keys - [...]).empty?
+                var listed = new List<Expression>();
+                foreach (var key in knownKeys) listed.Add(new SymbolLiteral(key, _encoding, span));
+                tests.Add(new MethodCall(
+                    new MethodCall(new MethodCall(hash, "keys", null, span), "-",
+                        new Arguments(new ArrayConstructor(new Arguments(listed.ToArray()), span)), span),
+                    "empty?", null, span));
             }
 
             return AndAll(tests, span);
+        }
+
+        /// <summary>
+        /// [*pre, a, b, *post]: scans for the first index where the middle patterns
+        /// match via the __pm_find_index__ prelude helper, then binds the splats.
+        /// </summary>
+        private Expression/*!*/ FindPattern(Pm.FindPatternNode/*!*/ node, Expression/*!*/ subject, SourceSpan span) {
+            var tests = new List<Expression>();
+            if (node.Constant != null) {
+                tests.Add(CaseEqual(Expr(node.Constant), subject, span));
+            }
+
+            Expression deconstructed = new ConditionalExpression(
+                CaseEqual(new ConstantVariable("Array", span), subject, span),
+                subject,
+                new ConditionalExpression(
+                    new MethodCall(subject, "respond_to?", new Arguments(new SymbolLiteral("deconstruct", _encoding, span)), span),
+                    new MethodCall(subject, "deconstruct", null, span),
+                    Literal.Nil(span), span),
+                span);
+            Expression arrAssign;
+            var arr = NewTemp(deconstructed, span, out arrAssign);
+            tests.Add(new BlockExpression(MakeStatements(arrAssign, arr), span));
+
+            int count = node.Requireds.Length;
+            Expression lenAssign;
+            var len = NewTemp(new MethodCall(arr, "length", null, span), span, out lenAssign);
+            tests.Add(new BlockExpression(MakeStatements(lenAssign, Literal.True(span)), span));
+            tests.Add(new MethodCall(len, ">=", new Arguments(Literal.Integer(count, span)), span));
+
+            // captures inside the block must live in the enclosing scope
+            PreDeclareCaptures(node.Requireds);
+
+            var blockScope = new BlockLexicalScope(CurrentScope);
+            _scopes.Push(blockScope);
+            BlockDefinition probe;
+            try {
+                var index = CurrentScope.AddVariable("?pmi" + _tempCounter++ + "?", span);
+                var elementTests = new List<Expression>();
+                for (int i = 0; i < count; i++) {
+                    var position = new MethodCall(index, "+", new Arguments(Literal.Integer(i, span)), span);
+                    elementTests.Add(ElementPattern(node.Requireds[i], arr, position, span));
+                }
+                probe = new BlockDefinition(blockScope,
+                    new Parameters(new LeftValue[] { index }, 1, null, null, null, span),
+                    MakeStatements(AndAll(elementTests, span)), span);
+            } finally {
+                _scopes.Pop();
+            }
+
+            Expression idxAssign;
+            var idx = NewTemp(new MethodCall(null, "__pm_find_index__",
+                new Arguments(new Expression[] { arr, Literal.Integer(count, span) }), probe, span), span, out idxAssign);
+            tests.Add(new BlockExpression(MakeStatements(idxAssign, idx), span));
+
+            if (node.Left is Pm.SplatNode leftSplat && leftSplat.Expression != null) {
+                var pre = (LocalVariable)Target(leftSplat.Expression);
+                tests.Add(BindTrue(pre, new MethodCall(arr, "[]", new Arguments(new Expression[] {
+                    Literal.Integer(0, span), idx }), span), span));
+            }
+            if (node.Right is Pm.SplatNode rightSplat && rightSplat.Expression != null) {
+                var post = (LocalVariable)Target(rightSplat.Expression);
+                var start = new MethodCall(idx, "+", new Arguments(Literal.Integer(count, span)), span);
+                var length = new MethodCall(new MethodCall(len, "-", new Arguments(idx), span), "-",
+                    new Arguments(Literal.Integer(count, span)), span);
+                tests.Add(BindTrue(post, new MethodCall(arr, "[]",
+                    new Arguments(new Expression[] { start, length }), span), span));
+            }
+
+            return AndAll(tests, span);
+        }
+
+        private void PreDeclareCaptures(Pm.PmNode[]/*!*/ patterns) {
+            foreach (var pattern in patterns) PreDeclareCaptures(pattern);
+        }
+
+        private void PreDeclareCaptures(Pm.PmNode pattern) {
+            switch (pattern) {
+                case null: return;
+                case Pm.LocalVariableTargetNode target:
+                    CurrentScope.ResolveOrAddVariable(target.Name, Span(target));
+                    return;
+                case Pm.CapturePatternNode capture:
+                    PreDeclareCaptures(capture.Value);
+                    PreDeclareCaptures(capture.Target);
+                    return;
+                case Pm.ArrayPatternNode array:
+                    PreDeclareCaptures(array.Requireds);
+                    PreDeclareCaptures(array.Rest);
+                    PreDeclareCaptures(array.Posts);
+                    return;
+                case Pm.SplatNode splat:
+                    PreDeclareCaptures(splat.Expression);
+                    return;
+                case Pm.HashPatternNode hash:
+                    foreach (var element in hash.Elements) {
+                        if (element is Pm.AssocNode assoc) {
+                            PreDeclareCaptures(assoc.Value is Pm.ImplicitNode imp ? imp.Value : assoc.Value);
+                        }
+                    }
+                    return;
+                default:
+                    return;
+            }
         }
 
         private static LeftValue/*!*/[]/*!*/ RemoveAt(LeftValue/*!*/[]/*!*/ values, int index) {

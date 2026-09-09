@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -155,9 +155,12 @@ namespace IronRuby.Builtins {
             get { return Closed || _stream != null; }
         }
 
+        // On Unix MRI performs no end-of-line translation, in text mode or otherwise:
+        private static readonly bool _IsWindowsPlatform = System.IO.Path.DirectorySeparatorChar == '\\';
+
         public bool PreserveEndOfLines {
             get { 
-                return (_mode & IOMode.PreserveEndOfLines) != 0; 
+                return !_IsWindowsPlatform || (_mode & IOMode.PreserveEndOfLines) != 0; 
             }
             set {
                 if (value) {

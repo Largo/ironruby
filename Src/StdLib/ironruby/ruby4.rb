@@ -168,3 +168,19 @@ class Struct
     result
   end unless method_defined?(:deconstruct_keys)
 end
+
+module Kernel
+  private
+
+  # support for find patterns (`in [*pre, x, *post]`): returns the first index
+  # at which the probe block matches, or nil
+  def __pm_find_index__(arr, count)
+    max = arr.length - count
+    i = 0
+    while i <= max
+      return i if yield(i)
+      i += 1
+    end
+    nil
+  end
+end
