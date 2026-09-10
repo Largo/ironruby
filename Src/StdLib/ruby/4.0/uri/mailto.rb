@@ -49,7 +49,10 @@ module URI
     # ; RFC3986
     # unreserved   = ALPHA / DIGIT / "-" / "." / "_" / "~"
     # pct-encoded  = "%" HEXDIG HEXDIG
-    HEADER_REGEXP  = /\A(?<hfield>(?:%\h\h|[!$'-.0-;@-Z_a-z~])*=(?:%\h\h|[!$'-.0-;@-Z_a-z~])*)(?:&\g<hfield>)*\z/
+    # PATCHED in this fork: upstream writes the repeated field as (?:&\g<hfield>)*,
+    # and .NET's regex engine has no \g subexpression call. The reference is not
+    # recursive, so the group body is simply written out again.
+    HEADER_REGEXP  = /\A(?<hfield>(?:%\h\h|[!$'-.0-;@-Z_a-z~])*=(?:%\h\h|[!$'-.0-;@-Z_a-z~])*)(?:&(?:%\h\h|[!$'-.0-;@-Z_a-z~])*=(?:%\h\h|[!$'-.0-;@-Z_a-z~])*)*\z/
     # practical regexp for email address
     # https://html.spec.whatwg.org/multipage/input.html#valid-e-mail-address
     EMAIL_REGEXP = /\A[a-zA-Z0-9.!\#$%&'*+\/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*\z/

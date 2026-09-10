@@ -5,3 +5,11 @@ path are the working ones here:
   pathname.rb  - the Pathname class is pathname.so; 4.0's .rb is a stub
   erb.rb, erb/ - needs Binding#dup, which this runtime does not support
   yaml.rb      - delegates to psych.so; IronRuby has its own YAML library
+
+Patched in place (uri/common.rb reaches these through require_relative, so a
+shim elsewhere on the load path cannot shadow them):
+  uri/rfc3986_parser.rb - rewritten on top of RFC2396_Parser; the upstream
+                          regexp uses \g subexpression calls and possessive
+                          quantifiers, neither of which .NET regexes support
+  uri/mailto.rb         - one non-recursive \g<hfield> reference expanded
+                          inline, which is exactly equivalent

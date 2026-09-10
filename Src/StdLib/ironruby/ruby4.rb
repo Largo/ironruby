@@ -1144,3 +1144,34 @@ module ObjectSpace
     def delete(key); entry = @table.delete(key.object_id); entry && entry[1]; end
   end unless const_defined?(:WeakMap)
 end
+
+# Class.try_convert (1.9): the conversion protocol, returning nil instead of raising.
+class String
+  def self.try_convert(obj)
+    obj.respond_to?(:to_str) ? obj.to_str : nil
+  end unless respond_to?(:try_convert)
+end
+
+class Array
+  def self.try_convert(obj)
+    obj.respond_to?(:to_ary) ? obj.to_ary : nil
+  end unless respond_to?(:try_convert)
+end
+
+class Hash
+  def self.try_convert(obj)
+    obj.respond_to?(:to_hash) ? obj.to_hash : nil
+  end unless respond_to?(:try_convert)
+end
+
+class Integer
+  def self.try_convert(obj)
+    obj.respond_to?(:to_int) ? obj.to_int : nil
+  end unless respond_to?(:try_convert)
+end
+
+class IO
+  def self.try_convert(obj)
+    obj.respond_to?(:to_io) ? obj.to_io : nil
+  end unless respond_to?(:try_convert)
+end

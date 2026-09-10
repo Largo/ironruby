@@ -67,6 +67,7 @@ See [`Src/Prism/README.md`](Src/Prism/README.md) for the details and the known g
 | [ruby/spec](https://github.com/ruby/spec) `spec/language` (via mspec) | **2117 / 2682 pass (78.9%)** |
 | IronRuby's own C# test suite | ~1470 pass, 22 known failures |
 | Parsing the bundled standard libraries | **154 / 154** (Ruby 4.0) and **571 / 571** (1.9) |
+| Loading the Ruby 4.0 libraries | **24 / 24** |
 
 `spec/core` and `spec/library` have been measured for the first time and are in
 much rougher shape than the syntax suite — roughly 540 of 3417 core examples
