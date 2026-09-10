@@ -181,24 +181,34 @@ namespace IronRuby.Builtins {
             }
 
             IOMode result = IOMode.Default;
-            int i = mode.Length - 1;
+            bool plus = false, binary = false, text = false;
 
-            bool plus = (mode[i] == '+');
-            if (plus) {
-                i--;
+            // The access letter comes first; after it MRI accepts the b/t/+ flags in
+            // any order and tolerates repeats ("r+b" and "rb+" are both fine, so is
+            // "r++").  Only "b" and "t" conflict, since they contradict each other.
+            for (int i = 1; i < mode.Length; i++) {
+                switch (mode[i]) {
+                    case '+':
+                        plus = true;
+                        break;
+
+                    case 'b':
+                        if (text) throw IllegalMode(mode);
+                        binary = true;
+                        break;
+
+                    case 't':
+                        if (binary) throw IllegalMode(mode);
+                        text = true;
+                        break;
+
+                    default:
+                        throw IllegalMode(mode);
+                }
             }
 
-            if (i < 0) {
-                throw IllegalMode(mode);
-            }
-
-            if (mode[i] == 'b') {
+            if (binary) {
                 result |= IOMode.PreserveEndOfLines;
-                i--;
-            }
-
-            if (i != 0) {
-                throw IllegalMode(mode);
             }
 
             switch (mode[0]) {

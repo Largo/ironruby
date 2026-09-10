@@ -249,7 +249,11 @@ namespace IronRuby.Builtins {
         public static void WriteBase64(Stream/*!*/ stream, MutableString/*!*/ str, int bytesPerLine) {
             ContractUtils.RequiresNotNull(stream, "stream");
             ContractUtils.RequiresNotNull(str, "str");
-            ContractUtils.Requires(bytesPerLine > 2, "bytesPerLine");
+            ContractUtils.Requires(bytesPerLine > 2 || bytesPerLine == 0, "bytesPerLine");
+
+            // pack("m0") is one unbroken line with no trailing newline, which is what
+            // callers wanting a bare Base64 token (Digest#base64digest) need.
+            bool singleLine = bytesPerLine == 0;
 
             bytesPerLine = bytesPerLine - bytesPerLine % 3;
             int a, b, c;
@@ -269,14 +273,14 @@ namespace IronRuby.Builtins {
                 stream.WriteByte(table[c & 0x3f]);
                 lineLength += 3;
 
-                if (lineLength == bytesPerLine) {
+                if (!singleLine && lineLength == bytesPerLine) {
                     stream.WriteByte((byte)'\n');
                     lineLength = 0;
                 }
             }
 
             if (remainingBytes == 0) {
-                if (lineLength != 0) {
+                if (!singleLine && lineLength != 0) {
                     stream.WriteByte((byte)'\n');
                 }
                 return;
@@ -297,7 +301,9 @@ namespace IronRuby.Builtins {
                     break;
             }
             stream.WriteByte((byte)'=');
-            stream.WriteByte((byte)'\n');
+            if (!singleLine) {
+                stream.WriteByte((byte)'\n');
+            }
         }
         
         private static MutableString/*!*/ ReadBase64(MutableString/*!*/ data, ref int offset) {
@@ -1087,7 +1093,8 @@ namespace IronRuby.Builtins {
                                 throw RubyExceptions.CreateTypeConversionError("nil", "String");
                             }
                             WriteBase64(stream, ToMutableString(stringCast, stream, GetPackArg(self, i)),
-                                (directive.Count.HasValue && directive.Count.Value > 2) ? directive.Count.Value : 45
+                                // count 0 means a single unbroken line; 1 and 2 fall back to the default 45
+                                (directive.Count.HasValue && (directive.Count.Value > 2 || directive.Count.Value == 0)) ? directive.Count.Value : 45
                             );
                             count = 1;
                             break;

@@ -959,6 +959,12 @@ end
 
 # 1.9 returned Enumerators from these; Ruby 1.9.3+ returns Arrays.
 class String
+  # Ruby 2.4: the first element of #unpack, without building the whole array.
+  def unpack1(format, offset: 0)
+    # self[offset..] would be neater, but String#[] here rejects an endless range
+    (offset > 0 ? self[offset, bytesize - offset] : self).unpack(format).first
+  end unless method_defined?(:unpack1)
+
   unless "a".lines.is_a?(Array)
     alias_method :lines_enumerator, :lines
     alias_method :chars_enumerator, :chars

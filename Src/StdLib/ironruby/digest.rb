@@ -68,14 +68,13 @@ module Digest
     def inspect
       "#<#{self.class.name}: #{hexdigest}>"
     end
+
     def base64digest(str = nil)
-      # pack("m0") is documented to emit no line breaks; IronRuby's appends one,
-      # so strip it rather than depend on that being fixed.
-      [str ? digest(str) : digest].pack("m0").delete("\n")
+      [str ? digest(str) : digest].pack("m0")
     end
 
     def base64digest!
-      [digest!].pack("m0").delete("\n")
+      [digest!].pack("m0")
     end
   end
 
