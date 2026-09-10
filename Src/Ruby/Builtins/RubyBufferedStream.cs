@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -350,7 +350,9 @@ namespace IronRuby.Builtins {
                     buffer.Append(_stream, chunk);
                     bytesRead = buffer.GetByteCount() - done;
                     done += bytesRead;
-                } while (bytesRead == chunk);
+                    // read until the stream really ends: a short read is normal on a pipe,
+                    // where the child may not have written the rest yet
+                } while (bytesRead > 0);
             } else {
                 buffer.Append(_stream, remaining);
             }

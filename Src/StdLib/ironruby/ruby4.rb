@@ -271,3 +271,43 @@ class Process::Status
     false
   end unless method_defined?(:stopped?)
 end
+
+class << IO
+  # IO.popen(cmd, [mode,] opt) — the core method predates spawn options, so lower
+  # the redirection options we support onto the command line (the shell handles them).
+  alias_method :popen_without_options, :popen unless method_defined?(:popen_without_options)
+
+  def popen(command, mode = nil, options = nil, &block)
+    if mode.is_a?(Hash)
+      options = mode
+      mode = nil
+    end
+
+    if options
+      # brace-group so the redirect applies to the whole child, not just its last
+      # command (MRI redirects the process's fd, not a single command's)
+      if options[:err] == [:child, :out]
+        command = "{ #{command}\n} 2>&1"
+      end
+      if options[:out] == [:child, :err]
+        command = "{ #{command}\n} 1>&2"
+      end
+    end
+
+    if mode
+      popen_without_options(command, mode, &block)
+    else
+      popen_without_options(command, &block)
+    end
+  end
+end
+
+class File::Stat
+  def world_writable?
+    mode & 0002 == 0002 ? mode : nil
+  end unless method_defined?(:world_writable?)
+
+  def world_readable?
+    mode & 0004 == 0004 ? mode : nil
+  end unless method_defined?(:world_readable?)
+end

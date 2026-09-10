@@ -53,16 +53,30 @@ namespace IronRuby.Builtins {
             return CreateProcess(context, command, false, redirectOutput, false);
         }
 
+        private static bool IsUnixPlatform {
+            get { return System.IO.Path.DirectorySeparatorChar == '/'; }
+        }
+
         internal static Process/*!*/ CreateProcess(RubyContext/*!*/ context, MutableString/*!*/ command,
             bool redirectInput, bool redirectOutput, bool redirectErrorOutput) {
 
-            string fileName, arguments;
-            RubyProcess.GetExecutable(context.DomainManager.Platform, command.ToString(), out fileName, out arguments);
-            Utils.Log(String.Format("Starting: '{0}' with args: '{1}'", fileName, arguments), "PROCESS");
-
             var p = new Process();
-            p.StartInfo.FileName = fileName;
-            p.StartInfo.Arguments = arguments;
+
+            if (IsUnixPlatform) {
+                // Pass the shell command as a single verbatim argv entry: assigning
+                // StartInfo.Arguments would re-parse (and mangle) its quoting.
+                Utils.Log(String.Format("Starting: '/bin/sh -c' with command: '{0}'", command), "PROCESS");
+                p.StartInfo.FileName = "/bin/sh";
+                p.StartInfo.ArgumentList.Add("-c");
+                p.StartInfo.ArgumentList.Add(command.ToString());
+            } else {
+                string fileName, arguments;
+                RubyProcess.GetExecutable(context.DomainManager.Platform, command.ToString(), out fileName, out arguments);
+                Utils.Log(String.Format("Starting: '{0}' with args: '{1}'", fileName, arguments), "PROCESS");
+                p.StartInfo.FileName = fileName;
+                p.StartInfo.Arguments = arguments;
+            }
+
             p.StartInfo.UseShellExecute = false;
             p.StartInfo.RedirectStandardInput = redirectInput;
             p.StartInfo.RedirectStandardOutput = redirectOutput;
@@ -70,7 +84,7 @@ namespace IronRuby.Builtins {
             try {
                 p.Start();
             } catch (Exception e) {
-                throw RubyExceptions.CreateENOENT(fileName, e);
+                throw RubyExceptions.CreateENOENT(p.StartInfo.FileName, e);
             }
 
             context.ChildProcessExitStatus = new RubyProcess.Status(p);
@@ -81,13 +95,6 @@ namespace IronRuby.Builtins {
             command = command.Trim(' ');
             if (command.Length == 0) {
                 throw RubyExceptions.CreateEINVAL(command);
-            }
-
-            if (System.IO.Path.DirectorySeparatorChar == '/') {
-                // Unix: single-string commands go through the shell, like MRI
-                executable = "/bin/sh";
-                arguments = "-c \"" + command.Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"";
-                return;
             }
 
             // This seems to be quite complicated:

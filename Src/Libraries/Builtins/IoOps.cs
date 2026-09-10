@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -300,7 +300,23 @@ namespace IronRuby.Builtins {
         public static object OpenPipe(RubyContext/*!*/ context, BlockParam block, RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ command, [DefaultProtocol, Optional, NotNull]MutableString modeString) {
 
-            return TryInvokeOpenBlock(context, block, OpenPipe(context, self, command, modeString));
+            Process process;
+            RubyIO io = OpenPipe(context, command, IOModeEnum.Parse(modeString), out process);
+            if (block == null) {
+                return io;
+            }
+
+            try {
+                return TryInvokeOpenBlock(context, block, io);
+            } finally {
+                // MRI waits for the child when the block returns, so $? reports a finished
+                // process rather than one still running
+                try {
+                    process.WaitForExit();
+                } catch (SystemException) {
+                    // process already reaped
+                }
+            }
         }
 
         [RubyMethod("popen", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
@@ -314,10 +330,20 @@ namespace IronRuby.Builtins {
             MutableString/*!*/ command, 
             IOMode mode) {
 
+            Process unused;
+            return OpenPipe(context, command, mode, out unused);
+        }
+
+        internal static RubyIO/*!*/ OpenPipe(
+            RubyContext/*!*/ context, 
+            MutableString/*!*/ command, 
+            IOMode mode,
+            out Process/*!*/ process) {
+
             bool redirectStandardInput = mode.CanWrite();
             bool redirectStandardOutput = mode.CanRead();
 
-            Process process = RubyProcess.CreateProcess(context, command, redirectStandardInput, redirectStandardOutput, false);
+            process = RubyProcess.CreateProcess(context, command, redirectStandardInput, redirectStandardOutput, false);
 
             StreamReader reader = null;
             StreamWriter writer = null;
