@@ -691,3 +691,119 @@ unless defined?(Fiber)
     end
   end
 end
+
+# --- constants and core methods the 1.9 snapshot predates -------------------
+
+class Float
+  INFINITY = 1.0 / 0.0 unless const_defined?(:INFINITY)
+  NAN = 0.0 / 0.0 unless const_defined?(:NAN)
+  EPSILON = 2.220446049250313e-16 unless const_defined?(:EPSILON)
+  DIG = 15 unless const_defined?(:DIG)
+  MANT_DIG = 53 unless const_defined?(:MANT_DIG)
+end
+
+class Integer
+  MAX = 2**62 - 1 unless const_defined?(:MAX)
+end
+
+class KeyError < IndexError; end unless defined?(KeyError)
+class StopIteration < IndexError; end unless defined?(StopIteration)
+class UncaughtThrowError < ArgumentError; end unless defined?(UncaughtThrowError)
+class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
+
+class File
+  NULL = "/dev/null" unless const_defined?(:NULL)
+end
+
+module Errno
+  # The 1.9 snapshot only binds a subset; the specs need these by name.
+  {
+    "ENOTEMPTY" => 39, "EISDIR" => 21, "ENOTDIR" => 20, "ELOOP" => 40,
+    "ENAMETOOLONG" => 36, "EXDEV" => 18, "ESPIPE" => 29, "EROFS" => 30,
+    "EMFILE" => 24, "EAGAIN" => 11, "EWOULDBLOCK" => 11, "EINPROGRESS" => 115,
+  }.each do |name, errno|
+    next if const_defined?(name)
+    klass = Class.new(SystemCallError) do
+      define_method(:initialize) { |msg = nil| super(msg ? "#{name}: #{msg}" : name) }
+    end
+    klass.const_set(:Errno, errno)
+    const_set(name, klass)
+  end
+end
+
+class Array
+  def to_h
+    result = {}
+    each do |pair|
+      pair = yield(pair) if block_given?
+      unless pair.respond_to?(:to_ary) && pair.to_ary.size == 2
+        raise TypeError, "wrong element type #{pair.class} (expected array)"
+      end
+      k, v = pair.to_ary
+      result[k] = v
+    end
+    result
+  end unless method_defined?(:to_h)
+end
+
+class String
+  def b
+    dup.force_encoding("ASCII-8BIT")
+  end unless method_defined?(:b)
+
+  def match?(pattern, pos = 0)
+    # the bundled String#match takes no position argument
+    target = pos.zero? ? self : self[pos..-1]
+    return false if target.nil?
+    !target.match(pattern).nil?
+  end unless method_defined?(:match?)
+
+  def start_with?(*prefixes)
+    prefixes.any? { |p| p.is_a?(Regexp) ? !!(self =~ /\A(?:#{p.source})/) : self[0, p.length] == p }
+  end unless method_defined?(:start_with?)
+end
+
+class Hash
+  def key(value)
+    each { |k, v| return k if v == value }
+    nil
+  end unless method_defined?(:key)
+
+  def assoc(key)
+    key?(key) ? [key, self[key]] : nil
+  end unless method_defined?(:assoc)
+
+  def rassoc(value)
+    each { |k, v| return [k, v] if v == value }
+    nil
+  end unless method_defined?(:rassoc)
+
+  def to_h
+    return dup unless block_given?
+    result = {}
+    each { |k, v| nk, nv = yield(k, v); result[nk] = nv }
+    result
+  end unless method_defined?(:to_h)
+
+  def keep_if
+    delete_if { |k, v| !yield(k, v) }
+  end unless method_defined?(:keep_if)
+
+  def fetch_values(*keys)
+    keys.map { |k| block_given? ? (key?(k) ? self[k] : yield(k)) : fetch(k) }
+  end unless method_defined?(:fetch_values)
+end
+
+module GC
+  def self.count
+    0
+  end unless respond_to?(:count)
+
+  def self.stat(key = nil)
+    stats = { count: 0, heap_allocated_pages: 0, total_allocated_objects: 0 }
+    key ? stats[key] : stats
+  end unless respond_to?(:stat)
+end
+
+# Ruby 3.2 autoloads Set; the 1.9 snapshot requires an explicit require.
+autoload :Set, "set" unless defined?(Set)
