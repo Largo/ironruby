@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [modernize]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out IronRuby
+        uses: actions/checkout@v4
+        with:
+          path: ironruby
+
+      # The modern DLR is referenced as source projects from a sibling directory,
+      # and prism supplies the parser itself.
+      - name: Check out the DLR
+        uses: actions/checkout@v4
+        with:
+          repository: IronLanguages/dlr
+          path: dlr
+
+      - name: Check out prism
+        uses: actions/checkout@v4
+        with:
+          repository: ruby/prism
+          path: prism
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Build libprism
+        working-directory: prism
+        run: |
+          ruby templates/template.rb
+          make shared
+
+      - name: Generate the C# prism loader
+        working-directory: ironruby/Src/Prism
+        run: ruby generate.rb
+
+      - name: Build
+        working-directory: ironruby
+        run: dotnet build Src/Console/Ruby.Console.csproj
+
+      - name: Smoke test
+        working-directory: ironruby
+        run: |
+          ./ir.sh -e 'puts "#{RUBY_ENGINE} #{RUBY_VERSION} on #{RUBY_PLATFORM}"'
+          ./ir.sh -e 'case {a: 1} in {a: Integer => n} then puts "pattern matching: #{n}" end'
+
+      - name: Bridge the bundled standard library
+        working-directory: ironruby
+        run: |
+          dotnet build Src/Prism/IronRuby.Prism.csproj
+          Src/Prism/bin/Debug/net8.0/IronRuby.Prism --sweep Src/StdLib/ruby/1.9.1 | tee sweep.txt
+          grep -q '0 failed' sweep.txt
+
+      - name: IronRuby test suite
+        working-directory: ironruby
+        run: |
+          dotnet build Src/IronRuby.Tests/IronRuby.Tests.csproj
+          cd Src/IronRuby.Tests/bin/Debug/net8.0
+          ./IronRuby.Tests > results.txt 2>&1 || true
+          failures=$(grep -c '^> FAILED' results.txt || true)
+          echo "failure lines: $failures (baseline 22)"
+          test "$failures" -le 22
+
+  ruby-spec:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: ironruby
+      - uses: actions/checkout@v4
+        with:
+          repository: IronLanguages/dlr
+          path: dlr
+      - uses: actions/checkout@v4
+        with:
+          repository: ruby/prism
+          path: prism
+      - uses: actions/checkout@v4
+        with:
+          repository: ruby/spec
+          path: ironruby/spec
+      - uses: actions/checkout@v4
+        with:
+          repository: ruby/mspec
+          path: ironruby/mspec
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Build libprism
+        working-directory: prism
+        run: |
+          ruby templates/template.rb
+          make shared
+
+      - name: Build
+        working-directory: ironruby
+        run: |
+          ruby Src/Prism/generate.rb
+          dotnet build Src/Console/Ruby.Console.csproj
+
+      - name: Run the ruby/spec language suite
+        working-directory: ironruby
+        run: |
+          RUBY_EXE="$PWD/ir.sh" ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language \
+            2>&1 | tee spec.txt || true
+          tail -3 spec.txt
