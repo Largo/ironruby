@@ -1175,3 +1175,49 @@ class IO
     obj.respond_to?(:to_io) ? obj.to_io : nil
   end unless respond_to?(:try_convert)
 end
+
+# caller_locations (2.0) and the Location objects it yields. The runtime only
+# offers caller strings, so parse those: "path:lineno:in `label'".
+class Thread
+  class Backtrace
+    class Location
+      attr_reader :path, :lineno, :label
+
+      def initialize(path, lineno, label)
+        @path = path
+        @lineno = lineno
+        @label = label
+      end
+
+      def absolute_path
+        return nil if @path.nil? || @path.start_with?("(")
+        File.expand_path(@path) rescue @path
+      end
+
+      def base_label; @label; end
+
+      def to_s
+        @label ? "#{@path}:#{@lineno}:in `#{@label}'" : "#{@path}:#{@lineno}"
+      end
+
+      def inspect; to_s.inspect; end
+    end unless const_defined?(:Location)
+  end unless const_defined?(:Backtrace)
+end
+
+module Kernel
+  private
+
+  def caller_locations(start = 1, length = nil)
+    entries = caller(start + 1)
+    return nil if entries.nil?
+    entries = entries.first(length) if length
+    entries.map do |entry|
+      if (m = /\A(.*):(\d+)(?::in [`'](.*)')?\z/.match(entry))
+        Thread::Backtrace::Location.new(m[1], m[2].to_i, m[3])
+      else
+        Thread::Backtrace::Location.new(entry, 0, nil)
+      end
+    end
+  end unless private_method_defined?(:caller_locations)
+end
