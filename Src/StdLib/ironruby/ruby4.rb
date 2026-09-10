@@ -807,3 +807,84 @@ end
 
 # Ruby 3.2 autoloads Set; the 1.9 snapshot requires an explicit require.
 autoload :Set, "set" unless defined?(Set)
+
+# --- Enumerator: the block form and the methods 1.9 never had --------------
+# The core class only implements #each. Instances the runtime creates itself
+# (`[1,2].each` with no block) must keep working, so #initialize and #each
+# only divert when a generator block was supplied.
+class Enumerator
+  class Yielder
+    def initialize(&block)
+      @block = block
+    end
+
+    def yield(*args)
+      @block.call(*args)
+    end
+    alias_method :<<, :yield
+
+    def call(*args)
+      @block.call(*args)
+    end
+  end unless const_defined?(:Yielder)
+
+  unless method_defined?(:each_without_generator)
+    alias_method :each_without_generator, :each
+
+    def initialize(*args, &block)
+      if block
+        @generator = block
+      else
+        super
+      end
+    end
+
+    def each(&block)
+      return self unless block
+      if @generator
+        @generator.call(Yielder.new(&block))
+        self
+      else
+        each_without_generator(&block)
+      end
+    end
+  end
+
+  def with_index(offset = 0)
+    unless block_given?
+      # yield [value, index] pairs, lazily, via the generator form above
+      source = self
+      return Enumerator.new { |y|
+        n = offset
+        source.each { |*a| y << [a.size <= 1 ? a.first : a, n]; n += 1 }
+      }
+    end
+    i = offset
+    each do |*args|
+      value = args.size <= 1 ? args.first : args
+      result = yield(value, i)
+      i += 1
+      result
+    end
+  end unless method_defined?(:with_index)
+
+  def each_with_index(&block)
+    with_index(0, &block)
+  end unless method_defined?(:each_with_index)
+
+  def with_object(memo)
+    unless block_given?
+      source = self
+      return Enumerator.new { |y| source.each { |*a| y << [a.size <= 1 ? a.first : a, memo] } }
+    end
+    each do |*args|
+      yield(args.size <= 1 ? args.first : args, memo)
+    end
+    memo
+  end unless method_defined?(:with_object)
+  alias_method :each_with_object, :with_object unless method_defined?(:each_with_object)
+
+  def size
+    nil
+  end unless method_defined?(:size)
+end
