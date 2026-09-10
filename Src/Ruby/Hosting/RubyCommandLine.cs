@@ -66,6 +66,17 @@ namespace IronRuby.Hosting {
         }
 
         // overridden to set the default encoding to -KX
+        protected override int Run() {
+            // `ruby` with no -e and no script argument reads the program from stdin when
+            // stdin is redirected. Only a real terminal gets the interactive loop — and
+            // the banner that goes with it.
+            if (Options.Command == null && Options.FileName == null && System.Console.IsInputRedirected) {
+                return RunFile(CreateCommandSource(System.Console.In.ReadToEnd(), SourceCodeKind.File, "-"));
+            }
+
+            return base.Run();
+        }
+
         protected override int RunFile(string fileName) {
             return RunFile(Engine.CreateScriptSourceFromFile(RubyUtils.CanonicalizePath(fileName), GetSourceCodeEncoding()));
         }

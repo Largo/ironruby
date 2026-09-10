@@ -2834,6 +2834,11 @@ namespace IronRuby.Runtime {
             return _loader.GetLoadPathStrings();
         }
 
+        // Ruby 2.0+ reads source as UTF-8 unless told otherwise.
+        public override Encoding/*!*/ DefaultEncoding {
+            get { return RubyEncoding.UTF8.StrictEncoding; }
+        }
+
         public override SourceCodeReader/*!*/ GetSourceReader(Stream/*!*/ stream, Encoding/*!*/ defaultEncoding, string path) {
             ContractUtils.RequiresNotNull(stream, "stream");
             ContractUtils.RequiresNotNull(defaultEncoding, "defaultEncoding");
@@ -2875,7 +2880,10 @@ namespace IronRuby.Runtime {
 
             stream.Seek(initialPosition, SeekOrigin.Begin);
 
-            var encoding = rubyPreambleEncoding ?? preambleEncoding ?? defaultEncoding;
+            // Ruby 2.0 made UTF-8 the default source encoding; before that it was
+            // US-ASCII and a magic comment was required for anything else. A magic
+            // comment or a BOM still wins.
+            var encoding = rubyPreambleEncoding ?? preambleEncoding ?? RubyEncoding.UTF8.StrictEncoding;
             return new SourceCodeReader(new StreamReader(stream, encoding, false), encoding);
 #endif
         }
