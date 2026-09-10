@@ -951,3 +951,22 @@ class Hash
     end
   end
 end
+
+# Ruby 3.4 changed Hash#inspect from {:a=>1} to {a: 1}, quoting symbol keys
+# that are not simple identifiers, and spacing the rocket for other keys.
+class Hash
+  def inspect
+    return "{}" if empty?
+    body = map { |k, v|
+      if k.is_a?(Symbol)
+        name = k.to_s
+        key = name =~ /\A[A-Za-z_][A-Za-z0-9_]*[?!=]?\z/ ? name : name.inspect
+        "#{key}: #{v.inspect}"
+      else
+        "#{k.inspect} => #{v.inspect}"
+      end
+    }
+    "{" + body.join(", ") + "}"
+  end
+  alias_method :to_s, :inspect
+end

@@ -1131,9 +1131,20 @@ namespace IronRuby.Builtins {
         #region dump, inspect
 
         public static string/*!*/ GetQuotedStringRepresentation(MutableString/*!*/ self, bool isDump, char quote) {
-            // TODO: there is a subtle difference between dump and inspect in the way how Unicode escapes are formatted
+            // #dump always escapes non-ASCII. #inspect only does so when the characters
+            // cannot be represented in the output encoding; for a UTF-8 string it prints
+            // them as they are, which is what Ruby has done since 1.9 became 2.0.
+            // AppendRepresentation still forces escaping for binary strings.
+            // Only a UTF-8 string can be printed as-is: anything else has to stay escaped,
+            // or rendering it would try to encode characters the target code page cannot
+            // represent and throw.
+            var escape = MutableString.Escape.Special;
+            if (isDump || self.Encoding != RubyEncoding.UTF8) {
+                escape |= MutableString.Escape.NonAscii;
+            }
+
             return self.AppendRepresentation(
-                new StringBuilder().Append(quote), null, MutableString.Escape.NonAscii | MutableString.Escape.Special, quote
+                new StringBuilder().Append(quote), null, escape, quote
             ).Append(quote).ToString();
         }
 
