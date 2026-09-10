@@ -735,7 +735,15 @@ namespace IronRuby.Builtins {
                     Utils.Log(trace.ToString(), "THREAD");
 
                     if (_globalAbortOnException || info.AbortOnException) {
-                        throw;
+                        // MRI delivers the exception to the main thread here. That needs an
+                        // asynchronous raise, which on .NET Core would mean Thread.Abort and
+                        // throws PlatformNotSupportedException. Rethrowing instead is worse
+                        // than useless: this is a background thread, so an unhandled exception
+                        // terminates the process. Report it the way MRI reports an unhandled
+                        // thread exception and let #join re-raise it (info.Exception is set).
+                        Console.Error.WriteLine("#<Thread:0x{0:x8}> terminated with exception:",
+                            info.Thread.ManagedThreadId);
+                        Console.Error.WriteLine(e.Message);
                     }
                 }
             } finally {
