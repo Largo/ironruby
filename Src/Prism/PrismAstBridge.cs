@@ -178,9 +178,9 @@ namespace IronRuby.Prism {
                         Literal.Integer(0, span), Expr(imaginary.Numeric)
                     }), span);
                 case Pm.StringNode str:
-                    return new StringLiteral(str.Unescaped, _encoding, span);
+                    return new StringLiteral(LiteralValue(str.Unescaped), _encoding, span);
                 case Pm.SymbolNode symbol:
-                    return new SymbolLiteral(symbol.Unescaped, _encoding, span);
+                    return new SymbolLiteral(LiteralText(symbol.Unescaped), _encoding, span);
                 case Pm.TrueNode _: return Literal.True(span);
                 case Pm.FalseNode _: return Literal.False(span);
                 case Pm.NilNode _: return Literal.Nil(span);
@@ -223,7 +223,7 @@ namespace IronRuby.Prism {
                     return new StringConstructor(StringParts(interpSymbol.Parts), StringKind.Symbol, span);
                 case Pm.XStringNode xstr:
                     return new StringConstructor(
-                        new List<Expression> { new StringLiteral(xstr.Unescaped, _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(xstr.Unescaped), _encoding, span) },
                         StringKind.Command, span);
                 case Pm.InterpolatedXStringNode interpX:
                     return new StringConstructor(StringParts(interpX.Parts), StringKind.Command, span);
@@ -232,11 +232,11 @@ namespace IronRuby.Prism {
 
                 case Pm.RegularExpressionNode regex:
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(regex.Unescaped, _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped), _encoding, span) },
                         RegexOptions(regex), false, span);
                 case Pm.MatchLastLineNode matchLast:
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(matchLast.Unescaped, _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped), _encoding, span) },
                         RegexOptions(matchLast), true, span);
                 case Pm.InterpolatedRegularExpressionNode interpRegex:
                     return new RegularExpression(StringParts(interpRegex.Parts), RegexOptions(interpRegex), span);
@@ -545,7 +545,7 @@ namespace IronRuby.Prism {
                     return StatementsAsExpression(preExec.Statements, span);
 
                 case Pm.SourceFileNode sourceFile:
-                    return new StringLiteral(_path ?? sourceFile.Filepath, _encoding, span);
+                    return new StringLiteral(_path ?? LiteralText(sourceFile.Filepath), _encoding, span);
                 case Pm.SourceLineNode _:
                     return Literal.Integer(span.Start.Line, span);
                 case Pm.SourceEncodingNode _:
@@ -555,6 +555,31 @@ namespace IronRuby.Prism {
                     throw Unsupported(node);
             }
         }
+
+        /// <summary>
+        /// prism hands back raw bytes. StringLiteral accepts either a string or a byte[],
+        /// so keep the bytes whenever they are not valid UTF-8 — decoding those would
+        /// replace them with U+FFFD and silently corrupt binary literals like "\xE3\xB0".
+        /// </summary>
+        private object/*!*/ LiteralValue(byte[]/*!*/ bytes) {
+            try {
+                return _strictUtf8.GetString(bytes);
+            } catch (System.Text.DecoderFallbackException) {
+                return bytes;
+            }
+        }
+
+        private string/*!*/ LiteralText(byte[]/*!*/ bytes) {
+            // for places that can only hold a string (symbols, file names)
+            try {
+                return _strictUtf8.GetString(bytes);
+            } catch (System.Text.DecoderFallbackException) {
+                return System.Text.Encoding.Latin1.GetString(bytes);
+            }
+        }
+
+        private static readonly System.Text.Encoding _strictUtf8 =
+            new System.Text.UTF8Encoding(false, true);
 
         private Expression/*!*/ BigIntegerLiteral(BigInteger value, SourceSpan span) {
             if (value >= int.MinValue && value <= int.MaxValue) return Literal.Integer((int)value, span);
@@ -575,7 +600,7 @@ namespace IronRuby.Prism {
             foreach (var part in parts) {
                 switch (part) {
                     case Pm.StringNode str:
-                        result.Add(new StringLiteral(str.Unescaped, _encoding, Span(str)));
+                        result.Add(new StringLiteral(LiteralValue(str.Unescaped), _encoding, Span(str)));
                         break;
                     case Pm.EmbeddedStatementsNode embedded:
                         result.Add(StatementsAsExpression(embedded.Statements, Span(embedded)));
@@ -593,7 +618,7 @@ namespace IronRuby.Prism {
 
         private ConstructedSymbol Symbol(Pm.PmNode/*!*/ node) {
             switch (node) {
-                case Pm.SymbolNode symbol: return new ConstructedSymbol(symbol.Unescaped);
+                case Pm.SymbolNode symbol: return new ConstructedSymbol(LiteralText(symbol.Unescaped));
                 case Pm.InterpolatedSymbolNode interp:
                     return new ConstructedSymbol((StringConstructor)Expr(interp));
                 default: throw Unsupported(node);
@@ -1591,7 +1616,7 @@ namespace IronRuby.Prism {
 
             var knownKeys = new List<string>();
             foreach (var element in node.Elements) {
-                knownKeys.Add(((Pm.SymbolNode)((Pm.AssocNode)element).Key).Unescaped);
+                knownKeys.Add(LiteralText(((Pm.SymbolNode)((Pm.AssocNode)element).Key).Unescaped));
             }
 
             // MRI hands #deconstruct_keys the keys the pattern is interested in, or nil when a
@@ -1624,12 +1649,12 @@ namespace IronRuby.Prism {
             foreach (var element in node.Elements) {
                 var assoc = (Pm.AssocNode)element;
                 var key = (Pm.SymbolNode)assoc.Key;
-                var keySymbol = new SymbolLiteral(key.Unescaped, _encoding, Span(key));
+                var keySymbol = new SymbolLiteral(LiteralText(key.Unescaped), _encoding, Span(key));
                 tests.Add(new MethodCall(hash, "key?", new Arguments(keySymbol), span));
 
                 Pm.PmNode valuePattern = assoc.Value is Pm.ImplicitNode implicitValue ? implicitValue.Value : assoc.Value;
                 Expression valueAssign;
-                var value = NewTemp(new MethodCall(hash, "[]", new Arguments(new SymbolLiteral(key.Unescaped, _encoding, span)), span),
+                var value = NewTemp(new MethodCall(hash, "[]", new Arguments(new SymbolLiteral(LiteralText(key.Unescaped), _encoding, span)), span),
                     span, out valueAssign);
                 tests.Add(new BlockExpression(MakeStatements(new Expression[] {
                     valueAssign,

@@ -966,7 +966,7 @@ namespace IronRuby.Prism {
                         OpeningLoc = LoadLocation(),
                         ContentLoc = LoadLocation(),
                         ClosingLoc = LoadLocation(),
-                        Unescaped = LoadString(),
+                        Unescaped = LoadStringBytes(),
                     };
                 }
                 case 101: {
@@ -1201,7 +1201,7 @@ namespace IronRuby.Prism {
                         OpeningLoc = LoadLocation(),
                         ContentLoc = LoadLocation(),
                         ClosingLoc = LoadLocation(),
-                        Unescaped = LoadString(),
+                        Unescaped = LoadStringBytes(),
                     };
                 }
                 case 127: {
@@ -1299,7 +1299,7 @@ namespace IronRuby.Prism {
                     return new SourceFileNode {
                         NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
                         Flags = LoadVarUInt(),
-                        Filepath = LoadString(),
+                        Filepath = LoadStringBytes(),
                     };
                 }
                 case 139: {
@@ -1330,7 +1330,7 @@ namespace IronRuby.Prism {
                         OpeningLoc = LoadOptionalLocation(),
                         ContentLoc = LoadLocation(),
                         ClosingLoc = LoadOptionalLocation(),
-                        Unescaped = LoadString(),
+                        Unescaped = LoadStringBytes(),
                     };
                 }
                 case 143: {
@@ -1351,7 +1351,7 @@ namespace IronRuby.Prism {
                         OpeningLoc = LoadOptionalLocation(),
                         ValueLoc = LoadOptionalLocation(),
                         ClosingLoc = LoadOptionalLocation(),
-                        Unescaped = LoadString(),
+                        Unescaped = LoadStringBytes(),
                     };
                 }
                 case 145: {
@@ -1419,7 +1419,7 @@ namespace IronRuby.Prism {
                         OpeningLoc = LoadLocation(),
                         ContentLoc = LoadLocation(),
                         ClosingLoc = LoadLocation(),
-                        Unescaped = LoadString(),
+                        Unescaped = LoadStringBytes(),
                     };
                 }
                 case 152: {

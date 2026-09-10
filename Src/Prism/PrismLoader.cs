@@ -127,6 +127,19 @@ namespace IronRuby.Prism {
             return value;
         }
 
+        /// <summary>
+        /// prism's string fields hold raw bytes. Decoding them as UTF-16 here would
+        /// destroy byte sequences that are not valid UTF-8, which Ruby string literals
+        /// are perfectly entitled to contain ("\xE3\xB0").
+        /// </summary>
+        private byte[]/*!*/ LoadStringBytes() {
+            int length = (int)LoadVarUInt();
+            var result = new byte[length];
+            Buffer.BlockCopy(_buffer, _pos, result, 0, length);
+            _pos += length;
+            return result;
+        }
+
         private string/*!*/ LoadString() {
             int length = (int)LoadVarUInt();
             string result = Encoding.UTF8.GetString(_buffer, _pos, length);

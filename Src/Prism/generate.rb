@@ -23,7 +23,7 @@ def cs_type(field)
   when "node" then "PmNode"
   when "node?" then "PmNode"
   when "node[]" then "PmNode[]"
-  when "string" then "string"
+  when "string" then "byte[]"   # prism string fields are raw bytes
   when "constant" then "string"
   when "constant?" then "string"
   when "constant[]" then "string[]"
@@ -42,7 +42,7 @@ def cs_reader(field)
   when "node" then "LoadNode()"
   when "node?" then "LoadOptionalNode()"
   when "node[]" then "LoadNodeList()"
-  when "string" then "LoadString()"
+  when "string" then "LoadStringBytes()"
   when "constant" then "LoadConstant()"
   when "constant?" then "LoadOptionalConstant()"
   when "constant[]" then "LoadConstantList()"

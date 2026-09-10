@@ -759,7 +759,7 @@ namespace IronRuby.Prism.Ast {
         public PmLocation OpeningLoc;
         public PmLocation ContentLoc;
         public PmLocation ClosingLoc;
-        public string Unescaped;
+        public byte[] Unescaped;
     }
 
     public sealed class MatchPredicateNode : PmNode {
@@ -916,7 +916,7 @@ namespace IronRuby.Prism.Ast {
         public PmLocation OpeningLoc;
         public PmLocation ContentLoc;
         public PmLocation ClosingLoc;
-        public string Unescaped;
+        public byte[] Unescaped;
     }
 
     public sealed class RequiredKeywordParameterNode : PmNode {
@@ -978,7 +978,7 @@ namespace IronRuby.Prism.Ast {
     }
 
     public sealed class SourceFileNode : PmNode {
-        public string Filepath;
+        public byte[] Filepath;
     }
 
     public sealed class SourceLineNode : PmNode {
@@ -997,7 +997,7 @@ namespace IronRuby.Prism.Ast {
         public PmLocation? OpeningLoc;
         public PmLocation ContentLoc;
         public PmLocation? ClosingLoc;
-        public string Unescaped;
+        public byte[] Unescaped;
     }
 
     public sealed class SuperNode : PmNode {
@@ -1012,7 +1012,7 @@ namespace IronRuby.Prism.Ast {
         public PmLocation? OpeningLoc;
         public PmLocation? ValueLoc;
         public PmLocation? ClosingLoc;
-        public string Unescaped;
+        public byte[] Unescaped;
     }
 
     public sealed class TrueNode : PmNode {
@@ -1059,7 +1059,7 @@ namespace IronRuby.Prism.Ast {
         public PmLocation OpeningLoc;
         public PmLocation ContentLoc;
         public PmLocation ClosingLoc;
-        public string Unescaped;
+        public byte[] Unescaped;
     }
 
     public sealed class YieldNode : PmNode {
