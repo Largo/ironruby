@@ -73,31 +73,17 @@ namespace IronRuby.Runtime {
 
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
         internal static StackTrace GetClrStackTrace(Exception exception) {
-#if SILVERLIGHT
-            return exception != null ? new StackTrace(exception) : new StackTrace();
-#else
             return exception != null ? new StackTrace(exception, true) : new StackTrace(true);
-#endif
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
         private static string GetFileName(StackFrame/*!*/ frame) {
-#if SILVERLIGHT
-            return null;
-#else
             return frame.GetFileName();
-#endif
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
         private static string/*!*/ GetAssemblyName(Assembly/*!*/ assembly) {
-#if SILVERLIGHT
-            // TODO: the simple name might contain escaped characters
-            var fullName = assembly.FullName;
-            return fullName.Substring(0, fullName.IndexOf(','));
-#else
             return assembly.GetName().Name;
-#endif
         }
 
         private void InitializeInterpretedFrames() {

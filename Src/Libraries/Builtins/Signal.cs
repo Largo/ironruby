@@ -12,14 +12,13 @@
  *
  *
  * ***************************************************************************/
-#if !SILVERLIGHT // Signals dont make much sense in Silverlight as cross-process communication is not allowed
 
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
 
-    [RubyModule("Signal", BuildConfig="!SILVERLIGHT")]
+    [RubyModule("Signal")]
     public static class Signal {
         #region Private Instance & Singleton Methods
 
@@ -84,4 +83,3 @@ namespace IronRuby.Builtins {
         #endregion
     }
 }
-#endif

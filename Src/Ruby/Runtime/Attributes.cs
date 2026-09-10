@@ -30,7 +30,7 @@ namespace IronRuby.Runtime {
         /// Can be any string that is valid after a #if
         /// Default is to be available under all configurations
         /// 
-        /// typical usage: BuildConfig = "!SILVERLIGHT"
+        /// typical usage: 
         /// 
         /// TODO: is there a better way to do this?
         /// </summary>

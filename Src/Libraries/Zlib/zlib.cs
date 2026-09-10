@@ -13,9 +13,7 @@
  *
  * ***************************************************************************/
 
-#if !SILVERLIGHT
 using System.IO.Compression;
-#endif
 
 using System;
 using System.Collections.Generic;
@@ -107,13 +105,12 @@ namespace IronRuby.StandardLibrary.Zlib {
      
         #endregion
 
-#if !SILVERLIGHT
-        [RubyMethod("crc32", RubyMethodAttributes.PublicSingleton, BuildConfig = "!SILVERLIGHT")]
+        [RubyMethod("crc32", RubyMethodAttributes.PublicSingleton)]
         public static int GetCrc(RubyModule/*!*/ self) {
             return 0;
         }
 
-        [RubyMethod("crc32", RubyMethodAttributes.PublicSingleton, BuildConfig = "!SILVERLIGHT")]
+        [RubyMethod("crc32", RubyMethodAttributes.PublicSingleton)]
         public static object GetCrc(RubyModule/*!*/ self, [Optional, DefaultProtocol]MutableString str, [Optional]int initialCrc) {
             byte[] bytes;
             if (str == null) {
@@ -124,7 +121,6 @@ namespace IronRuby.StandardLibrary.Zlib {
             uint result = Deflate.ZDeflateStream.UpdateCrc(unchecked((uint)initialCrc), bytes, 0, bytes.Length);
             return Protocols.Normalize(result);
         }
-#endif
 
         #region ZStream class
 
@@ -901,10 +897,8 @@ namespace IronRuby.StandardLibrary.Zlib {
             public Error(string message) : this(message, null) { }
             public Error(string message, Exception inner) : base(message ?? "Error", inner) { }
 
-#if !SILVERLIGHT
             protected Error(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
                 : base(info, context) { }
-#endif
         }
 
         [RubyException("DataError"), Serializable]
@@ -913,10 +907,8 @@ namespace IronRuby.StandardLibrary.Zlib {
             public DataError(string message) : this(message, null) { }
             public DataError(string message, Exception inner) : base(message ?? "DataError", inner) { }
 
-#if !SILVERLIGHT
             protected DataError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
                 : base(info, context) { }
-#endif
         }
 
         [RubyException("BufError"), Serializable]
@@ -925,10 +917,8 @@ namespace IronRuby.StandardLibrary.Zlib {
             public BufError(string message) : this(message, null) { }
             public BufError(string message, Exception inner) : base(message ?? "BufError", inner) { }
 
-#if !SILVERLIGHT
             protected BufError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
                 : base(info, context) { }
-#endif
         }
 
         [RubyException("StreamError"), Serializable]
@@ -937,17 +927,14 @@ namespace IronRuby.StandardLibrary.Zlib {
             public StreamError(string message) : this(message, null) { }
             public StreamError(string message, Exception inner) : base(message ?? "StreamError", inner) { }
 
-#if !SILVERLIGHT
             protected StreamError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
                 : base(info, context) { }
-#endif
         }
 
         #endregion
 
         #region Deflate class
-#if !SILVERLIGHT
-        [RubyClass("Deflate", BuildConfig="!SILVERLIGHT")]
+        [RubyClass("Deflate")]
         public class Deflate : ZStream {
             /// <summary>
             /// Adds a 2 byte header, and a 4 byte adler checksum footer.
@@ -1105,12 +1092,10 @@ namespace IronRuby.StandardLibrary.Zlib {
                 return DeflateString(new Deflate(), str, FINISH);
             }
         }
-#endif
         #endregion
 
         #region GzipWriter class
-#if !SILVERLIGHT
-        [RubyClass("GzipWriter", BuildConfig="!SILVERLIGHT")]
+        [RubyClass("GzipWriter")]
         public class GzipWriter : GZipFile {
             private readonly GZipStream/*!*/ _gzipStream;
 
@@ -1278,7 +1263,6 @@ namespace IronRuby.StandardLibrary.Zlib {
                 return bytes.Length;
             }
         }
-#endif
         #endregion
     }
 }

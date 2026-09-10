@@ -31,18 +31,14 @@ class IRTest
     if options[:clr2]
       if options[:release]
         @config = "v2Release"
-        @sl_config = "Silverlight3Release"
       else
         @config = "v2Debug"
-        @sl_config = "Silverlight3Debug"
       end
     else
       if options[:release]
         @config = "Release"
-        @sl_config = "Silverlight4Release"
       else
         @config = "Debug"
-        @sl_config = "Silverlight4Debug"
       end
     end
     
@@ -91,8 +87,6 @@ class IRTest
         #:Tutorial         => shell_runner("#{dlr_path('Languages/Ruby/Samples/Tutorial/tutorial.bat')} #{dlr_path('Languages/Ruby/Samples/Tutorial/test/test_console.rb')}"),
       }
       
-      @all_tasks[:BuildSilverlight] = silverlight_build_runner unless options[:nocompile]
-    
       if not options[:minimum]
         @all_tasks.merge!({
           :ActionMailer   => utr_runner("action_mailer"),
@@ -104,7 +98,7 @@ class IRTest
       end
     
       @parallel_tasks = [
-         [:Smoke, :BuildSilverlight],
+         [:Smoke],
          [:RubySpec_A],
          [:RubySpec_B],
          [:RubySpec_C],
@@ -178,10 +172,6 @@ class IRTest
   def build_cmd(solution, build_config = @config, options = "")
     build_engine = @options[:mono] ? "xbuild" : "msbuild"
     "#{build_engine} /verbosity:minimal #{dlr_path("Solutions/#{solution}.sln")} /p:Configuration=#{q build_config} #{options}"
-  end
-  
-  def silverlight_build_runner
-    lambda { run_cmd build_cmd("Ruby", @sl_config) }
   end
   
   def on_windows

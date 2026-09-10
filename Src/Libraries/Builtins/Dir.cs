@@ -92,16 +92,12 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("chdir", RubyMethodAttributes.PublicSingleton)]
         public static object ChangeDirectory(BlockParam block, RubyClass/*!*/ self) {
-#if !SILVERLIGHT
             string defaultDirectory = RubyUtils.GetHomeDirectory(self.Context.Platform);
             if (defaultDirectory == null) {
                 throw RubyExceptions.CreateArgumentError("HOME / USERPROFILE not set");
             }
 
             return ChangeDirectory(self.Context.Platform, defaultDirectory, self.Context.EncodePath(defaultDirectory), block);
-#else
-            throw new InvalidOperationException();
-#endif
         }
 
         private static object ChangeDirectory(PlatformAdaptationLayer/*!*/ pal, string/*!*/ strDir, MutableString/*!*/ dir, BlockParam block) {

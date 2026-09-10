@@ -58,18 +58,14 @@ namespace IronRuby.Compiler.Generation {
                 DefineSerializer();
                 DefineDynamicObjectImplementation();
 
-#if !SILVERLIGHT // ICustomTypeDescriptor
                 DefineCustomTypeDescriptor();
-#endif
                 DefineRubyTypeImplementation();
             }
         }
 
         #region Constructors
 
-#if !SILVERLIGHT
         private static readonly Type/*!*/[]/*!*/ _deserializerSignature = new Type[] { typeof(SerializationInfo), typeof(StreamingContext) };
-#endif
         private static readonly Type/*!*/[]/*!*/ _exceptionMessageSignature = new Type[] { typeof(string) };
 
         private static bool IsAvailable(MethodBase/*!*/ method) {
@@ -104,13 +100,11 @@ namespace IronRuby.Compiler.Generation {
 
                 ParameterInfo[] baseParams = baseCtor.GetParameters();
 
-#if !SILVERLIGHT
                 if (baseParams.Length == 2 &&
                     baseParams[0].ParameterType == typeof(SerializationInfo) && baseParams[1].ParameterType == typeof(StreamingContext)) {
                     OverrideDeserializer(baseCtor);
                     continue;
                 }
-#endif
                 AddConstructor(ctors, MakeConstructor(baseCtor, baseParams));
             }
 
@@ -233,7 +227,6 @@ namespace IronRuby.Compiler.Generation {
             }
         }
 
-#if !SILVERLIGHT
         private void OverrideDeserializer(ConstructorInfo/*!*/ baseCtor) {
             // ctor(SerializationInfo! info, StreamingContext! context) : base(info, context) {
             //   RubyOps.DeserializeObject(out this._instanceData, out this._immediateClass, info);
@@ -255,7 +248,6 @@ namespace IronRuby.Compiler.Generation {
             il.EmitCall(Methods.DeserializeObject);
             il.Emit(OpCodes.Ret);
         }
-#endif
         #endregion
 
         #region "Built-in" Interfaces
@@ -394,7 +386,6 @@ namespace IronRuby.Compiler.Generation {
         }
         
         private void DefineSerializer() {
-#if !SILVERLIGHT
             ILGen il;
             _tb.AddInterfaceImplementation(typeof(ISerializable));
 
@@ -426,10 +417,8 @@ namespace IronRuby.Compiler.Generation {
             il.EmitLoadArg(1);
             il.EmitCall(Methods.SerializeObject);
             il.Emit(OpCodes.Ret);
-#endif
         }
 
-#if !SILVERLIGHT // ICustomTypeDescriptor
         private void DefineCustomTypeDescriptor() {
             _tb.AddInterfaceImplementation(typeof(ICustomTypeDescriptor));
 
@@ -455,7 +444,6 @@ namespace IronRuby.Compiler.Generation {
             il.EmitBoxing(m.ReturnType);
             il.Emit(OpCodes.Ret);
         }
-#endif
 
         #endregion
 

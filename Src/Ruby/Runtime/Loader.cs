@@ -352,7 +352,7 @@ namespace IronRuby.Runtime {
         
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
         private Assembly GetAssembly(string/*!*/ assemblyName, bool throwOnError, bool tryPartialName) {
-#if SILVERLIGHT || WIN8 || WP75
+#if WIN8 || WP75
             tryPartialName = false;
 #endif
             try {
@@ -367,7 +367,7 @@ namespace IronRuby.Runtime {
                 }
             }
 
-#if SILVERLIGHT || WIN8 || WP75
+#if WIN8 || WP75
             throw Assert.Unreachable;
 #else
 #pragma warning disable 618,612 // csc, gmcs
@@ -521,10 +521,8 @@ namespace IronRuby.Runtime {
             try {
                 Assembly assembly = Platform.LoadAssemblyFromPath(file.Path);
 
-#if !SILVERLIGHT
                 // TODO: this API is broken
                 if (AssemblyName.ReferenceMatchesDefinition(assemblyName, assembly.GetName())) 
-#endif
                 {
                     Utils.Log(String.Format("Assembly '{0}' loaded for '{1}'", assembly.FullName, fullName), "RESOLVE_ASSEMBLY");
                     DomainManager.LoadAssembly(assembly);
@@ -534,9 +532,7 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.CreateLoadError(e);
             }
 
-#if !SILVERLIGHT
             return null;
-#endif
         }
 
 #endif
@@ -692,14 +688,10 @@ namespace IronRuby.Runtime {
             Assert.NotNull(path);
             bool isAbsolutePath;
 
-#if SILVERLIGHT
-            {
-#else
             if (path.StartsWith("~/", StringComparison.Ordinal) || path.StartsWith("~\\", StringComparison.Ordinal)) {
                 path = RubyUtils.ExpandPath(_context.Platform, path);
                 isAbsolutePath = true;
             } else {
-#endif
                 try {
                     isAbsolutePath = Platform.IsAbsolutePath(path);
                 } catch (ArgumentException e) {

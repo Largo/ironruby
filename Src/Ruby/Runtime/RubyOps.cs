@@ -2470,7 +2470,6 @@ namespace IronRuby.Runtime {
             RubyOps.GetInstanceData(ref instanceData).IsUntrusted = untrusted;
         }
 
-#if !SILVERLIGHT // serialization
         [Emitted(UseReflection = true)] //RubyTypeBuilder
         public static void DeserializeObject(out RubyInstanceData/*!*/ instanceData, out RubyClass/*!*/ immediateClass, SerializationInfo/*!*/ info) {
             immediateClass = (RubyClass)info.GetValue(RubyUtils.SerializationInfoClassKey, typeof(RubyClass));
@@ -2500,7 +2499,6 @@ namespace IronRuby.Runtime {
                 }
             }
         }
-#endif
         #endregion
 
         #region Delegates, Events

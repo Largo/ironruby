@@ -30,10 +30,8 @@ namespace IronRuby.Builtins {
         public NoMemoryError(string message): this(message, null) { }
         public NoMemoryError(string message, Exception inner) : base(message ?? "NoMemoryError", inner) { }
 
-#if !SILVERLIGHT
         protected NoMemoryError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
             : base(info, context) { }
-#endif
     }
 
     [RubyException("EOFError"), Serializable]
@@ -42,10 +40,8 @@ namespace IronRuby.Builtins {
         public EOFError(string message): this(message, null) { }
         public EOFError(string message, Exception inner) : base(message ?? "EOFError", inner) { }
 
-#if !SILVERLIGHT
         protected EOFError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
             : base(info, context) { }
-#endif
     }
 
     [RubyException("FloatDomainError"), Serializable]
@@ -54,10 +50,8 @@ namespace IronRuby.Builtins {
         public FloatDomainError(string message) : this(message, null) { }
         public FloatDomainError(string message, Exception inner) : base(message ?? "FloatDomainError", inner) { }
 
-#if !SILVERLIGHT
         protected FloatDomainError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
             : base(info, context) { }
-#endif
     }
 
     [RubyException("ThreadError"), Serializable]
@@ -66,10 +60,8 @@ namespace IronRuby.Builtins {
         public ThreadError(string message): this(message, null) { }
         public ThreadError(string message, Exception inner) : base(message ?? "ThreadError", inner) { }
 
-#if !SILVERLIGHT
         protected ThreadError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
             : base(info, context) { }
-#endif
     }
 
     [RubyException("SystemExit", Extends = typeof(SystemExit))]
@@ -103,10 +95,8 @@ namespace IronRuby.Builtins {
         public SignalException(string message): this(message, null) { }
         public SignalException(string message, Exception inner) : base(message ?? "SignalException", inner) { }
 
-#if !SILVERLIGHT
         protected SignalException(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
             : base(info, context) { }
-#endif
     }
 
     [RubyException("Interrupt", Inherits = typeof(SignalException)), Serializable]
@@ -115,10 +105,8 @@ namespace IronRuby.Builtins {
         public Interrupt(string message): this(message, null) { }
         public Interrupt(string message, Exception inner) : base(message ?? "Interrupt", inner) { }
 
-#if !SILVERLIGHT
         protected Interrupt(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
             : base(info, context) { }
-#endif
     }
 
     [RubyException("LocalJumpError", Extends = typeof(LocalJumpError))]
@@ -189,29 +177,17 @@ namespace IronRuby.Builtins {
             // Exception.Data requires the value to be Serializable. We workaround this using an array
             // of size 1 since System.Array is serializable. This will allow the exception to be marshalled.
             // If the value cannot actually be marshalled, it will fail only if the value is later accessed.
-#if SILVERLIGHT
-            result.Data[typeof(NoMethodErrorOps)] = new object[1] { args };
-#else
             result.Data[typeof(NoMethodErrorOps)] = new ObjectHandle[1] { new ObjectHandle(args) };
-#endif
             return result;
         }
 
         [RubyMethod("args")]
         public static object GetArguments(MissingMethodException/*!*/ self) {
-#if SILVERLIGHT
-            object[] args = self.Data[typeof(NoMethodErrorOps)] as object[];
-            if (args == null) {
-                return null;
-            }
-            return args[0];
-#else
             ObjectHandle[] args = self.Data[typeof(NoMethodErrorOps)] as ObjectHandle[];
             if (args == null) {
                 return null;
             }
             return args[0].Unwrap();
-#endif
         }
     }
 
@@ -335,11 +311,7 @@ namespace IronRuby.Builtins {
             }
 
             var message = MutableString.CreateAscii("Unknown Error");
-#if SILVERLIGHT
-            ExternalException result = new ExternalException(RubyExceptions.MakeMessage(ref message, "Unknown Error"));
-#else
             ExternalException result = new ExternalException(RubyExceptions.MakeMessage(ref message, "Unknown Error"), errorCode);
-#endif
             RubyExceptionData.InitializeException(result, message);
             return result;
         }

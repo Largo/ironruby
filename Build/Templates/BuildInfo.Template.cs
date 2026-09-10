@@ -21,11 +21,4 @@ internal static class BuildInfo {{
 #else
         false;
 #endif
-
-    internal const bool IsSilverlight =
-#if SILVERLIGHT
-        true;
-#else
-        false;
-#endif
 }}

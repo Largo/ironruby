@@ -74,14 +74,6 @@ namespace IronRuby.Runtime {
 
         // IronRuby:
         public const string IronRubyInformationalVersion = "1.1.3";
-//#if !SILVERLIGHT
-//        public const string/*!*/ IronRubyVersionString = "1.1.3.0";
-//        public static readonly Version IronRubyVersion = new Version(1, 1, 3, 0);
-//#else
-//        public const string/*!*/ IronRubyVersionString = "1.1.1302.0";
-//        public static readonly Version IronRubyVersion = new Version(1, 1, 1302, 0);
-        
-//#endif
         internal const string/*!*/ IronRubyDisplayName = "IronRuby";
         internal const string/*!*/ IronRubyNames = "IronRuby;Ruby;rb";
         internal const string/*!*/ IronRubyFileExtensions = ".rb";
@@ -286,11 +278,9 @@ namespace IronRuby.Runtime {
         
         internal RubyClass ComObjectClass {
             get {
-#if !SILVERLIGHT // COM
                 if (_comObjectClass == null) {
                     GetOrCreateClass(TypeUtils.ComObjectType);
                 }
-#endif
                 return _comObjectClass;
             }
         }
@@ -552,7 +542,6 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("KCODE", Runtime.GlobalVariables.KCode);
             DefineGlobalVariableNoLock("-K", Runtime.GlobalVariables.KCode);
 
-#if !SILVERLIGHT
             DefineGlobalVariableNoLock("SAFE", Runtime.GlobalVariables.SafeLevel);
 
             try {
@@ -560,16 +549,13 @@ namespace IronRuby.Runtime {
             } catch (SecurityException) {
                 // nop
             }
-#endif
         }
 
-#if !SILVERLIGHT // process
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2122:DoNotIndirectlyExposeMethodsWithLinkDemands")]
         private void TrySetCurrentProcessVariables() {
             Process process = Process.GetCurrentProcess();
             DefineGlobalVariableNoLock(Symbols.CurrentProcessId, new ReadOnlyGlobalVariableInfo(process.Id));
         }
-#endif
 
         private void InitializeGlobalConstants() {
             Debug.Assert(_objectClass != null);
@@ -2637,7 +2623,6 @@ namespace IronRuby.Runtime {
         }
 
         public override void Shutdown() {
-#if !SILVERLIGHT
             _upTime.Stop();
 
             if (RubyOptions.Profile) {
@@ -2724,7 +2709,6 @@ namespace IronRuby.Runtime {
                     PerfTrack.DumpStats(output);
                 }
             }
-#endif
             _loader.SaveCompiledCode();
 
             ExecuteShutdownHandlers();
@@ -2844,9 +2828,6 @@ namespace IronRuby.Runtime {
             ContractUtils.RequiresNotNull(defaultEncoding, "defaultEncoding");
             ContractUtils.Requires(stream.CanRead && stream.CanSeek, "stream", "The stream must support seeking and reading");
 
-#if SILVERLIGHT
-            return base.GetSourceReader(stream, defaultEncoding, path);
-#else
             return GetSourceReader(stream, defaultEncoding);
         }
 
@@ -2885,7 +2866,6 @@ namespace IronRuby.Runtime {
             // comment or a BOM still wins.
             var encoding = rubyPreambleEncoding ?? preambleEncoding ?? RubyEncoding.UTF8.StrictEncoding;
             return new SourceCodeReader(new StreamReader(stream, encoding, false), encoding);
-#endif
         }
 
         /// <exception cref="ArgumentException">Unknown encoding.</exception>
@@ -2899,10 +2879,6 @@ namespace IronRuby.Runtime {
                 case "FILESYSTEM": return GetPathEncoding().StrictEncoding;
                 case "LOCALE": return _options.LocaleEncoding.StrictEncoding;
                 case "EXTERNAL": return _defaultExternalEncoding.StrictEncoding;
-#if SILVERLIGHT
-                case "UTF-8": return Encoding.UTF8;
-                default: throw new ArgumentException(String.Format("Unknown encoding: '{0}'", name));
-#else
                 // Mono doesn't recognize 'SJIS' encoding name:
                 case "SJIS": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
                 case "WINDOWS-31J": return Encoding.GetEncoding(932);
@@ -2931,7 +2907,6 @@ namespace IronRuby.Runtime {
                         }
                     }
                     return Encoding.GetEncoding(name);
-#endif
             }
         }
 
@@ -3006,11 +2981,9 @@ namespace IronRuby.Runtime {
             if (obj is IRubyDynamicMetaObjectProvider) {
                 return ArrayUtils.EmptyStrings;
             }
-#if !SILVERLIGHT // COM
             if (TypeUtils.IsComObject(obj)) {
                 return new List<string>(Microsoft.Scripting.ComInterop.ComBinder.GetDynamicMemberNames(obj));
             }
-#endif
             return GetMemberNames(obj);
         }
 

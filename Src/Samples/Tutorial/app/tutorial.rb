@@ -13,8 +13,6 @@
 #
 # ****************************************************************************
 
-SILVERLIGHT = false unless defined? SILVERLIGHT
-
 require "stringio"
 
 module Tutorial
@@ -186,18 +184,8 @@ module Tutorial
   end
 
   def self.all
-    all_files = [
-      'Tutorials/ironruby_tutorial.rb', 
-      'Tutorials/tryruby_tutorial.rb', 
-      'Tutorials/hosting_tutorial.rb']
-      
-    if SILVERLIGHT
-      all_files.each {|f| get_tutorial f }
-    else
-      Dir[File.expand_path("Tutorials/*_tutorial.rb", File.dirname(__FILE__))].each do |t|
-        self.get_tutorial t unless File.directory?(t)
-      end
-      abort("List of files need to be updated for Silverlight") unless @@tutorials.size == all_files.size or not ENV['DLR_ROOT']
+    Dir[File.expand_path("Tutorials/*_tutorial.rb", File.dirname(__FILE__))].each do |t|
+      self.get_tutorial t unless File.directory?(t)
     end
 
     @@tutorials
@@ -209,14 +197,8 @@ module Tutorial
       return @@tutorials.values.first
     end
     
-    if SILVERLIGHT
-      # TODO - On Silverlight, currently __FILE__ does not include the folders, and File.expand_path does not
-      # work either. As a workaround, we drop all folder names
-      path_key = File.basename(path)
-    else
-      path = File.expand_path path, File.dirname(__FILE__)
-      path_key = path
-    end
+    path = File.expand_path path, File.dirname(__FILE__)
+    path_key = path
 
     if not @@tutorials.has_key? path_key
       require path
@@ -394,7 +376,6 @@ class Object
       raise "Only one tutorial can be under creation at a time" if Thread.current[:tutorial]
       caller[0] =~ /\A(.*):[0-9]+/
       tutorial_file = $1
-      tutorial_file = File.basename(tutorial_file) if SILVERLIGHT # __FILE__ may not be the full required path
       t = Tutorial::Tutorial.new name, tutorial_file
       Thread.current[:tutorial] = t
 
@@ -441,42 +422,26 @@ class Object
     raise "Only one section can be under creation at a time" if Thread.current[:section]
     section = Tutorial::Section.new name
     Thread.current[:section] = section
-    Thread.current[:platform_match] = nil
 
     yield
 
-    if Thread.current[:platform_match] == nil or Thread.current[:platform_match]
-      Thread.current[:tutorial].sections << section
-    end
+    Thread.current[:tutorial].sections << section
     Thread.current[:section] = nil
   end
 
-  def silverlight(enabled = true)
-    if not Thread.current[:section]
-      raise "platform should only be used within a section definition"
-    end
-    Thread.current[:"platform_match#{Thread.current[:chapter] ? "_chapter" : nil}"] = (SILVERLIGHT == enabled)
-  end
-  
   def chapter name
     raise "Only one chapter can be under creation at a time" if Thread.current[:chapter]
     chapter = Tutorial::Chapter.new name
     Thread.current[:chapter] = chapter
-    Thread.current[:platform_match_chapter] = nil
 
     yield
 
-    if Thread.current[:platform_match_chapter] == nil or Thread.current[:platform_match_chapter]
-      Thread.current[:section].chapters << chapter
-    end
+    Thread.current[:section].chapters << chapter
     Thread.current[:chapter] = nil
   end
 
   def task(options, &success_evaluator)
     options = {}.merge(options)
-    if options.has_key?(:silverlight) and (options[:silverlight] != SILVERLIGHT)
-      return
-    end
 
     Thread.current[:chapter].tasks << Tutorial::Task.new(
       options[:title],

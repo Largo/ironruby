@@ -171,13 +171,11 @@ namespace IronRuby.Tests {
             return tokens;
         }        
 
-#if !SILVERLIGHT
         private static int domainId = 0;
 
         private static AppDomain CreateDomain() {
             return AppDomain.CreateDomain("RemoteScripts" + domainId++);
         }
-#endif
 
         [Flags]
         enum OutputFlags {
@@ -239,7 +237,6 @@ namespace IronRuby.Tests {
         }
 
         private string CompareOutput(Action f, string expectedOutput, OutputFlags flags) {
-#if !SILVERLIGHT
             StringBuilder builder = new StringBuilder();
 
             using (StringWriter output = new StringWriter(builder)) {
@@ -271,7 +268,6 @@ namespace IronRuby.Tests {
                 }
             }
 
-#endif
             return null;
         }
 

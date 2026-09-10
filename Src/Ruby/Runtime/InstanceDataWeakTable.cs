@@ -75,25 +75,16 @@ namespace IronRuby.Runtime {
 
         int _version, _cleanupVersion;
 
-#if SILVERLIGHT // GC
-        WeakReference _cleanupGC = new WeakReference(new object());
-#else
         int _cleanupGC = 0;
-#endif
 
         bool GarbageCollected() {
             // Determine if a GC has happened
 
             // WeakReferences can become zero only during the GC.
             bool garbage_collected;
-#if SILVERLIGHT // GC.CollectionCount
-            garbage_collected = !_cleanupGC.IsAlive;
-            if (garbage_collected) _cleanupGC = new WeakReference(new object());
-#else
             int currentGC = GC.CollectionCount(0);
             garbage_collected = currentGC != _cleanupGC;
             if (garbage_collected) _cleanupGC = currentGC;
-#endif
             return garbage_collected;
         }
 
@@ -180,12 +171,10 @@ namespace IronRuby.Runtime {
         private readonly AddDelegate/*!*/ _add;
 
         static InstanceDataWeakTable() {
-#if !SILVERLIGHT
             _TableType = typeof(object).Assembly.GetType("System.Runtime.CompilerServices.ConditionalWeakTable`2", false, false);
             if (_TableType != null) {
                 _TableType = _TableType.MakeGenericType(typeof(object), typeof(RubyInstanceData));
             } else
-#endif      
             _TableType = typeof(WeakTable<object, RubyInstanceData>);
 
             Utils.Log(_TableType.FullName, "WEAK_TABLE");

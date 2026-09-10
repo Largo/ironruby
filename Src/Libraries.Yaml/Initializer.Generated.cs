@@ -38,11 +38,11 @@ namespace IronRuby.StandardLibrary.Yaml {
             ExtendModule(typeof(IronRuby.Builtins.RubySymbol), 0x00000000, LoadIronRuby__Builtins__RubySymbol_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(IronRuby.Builtins.RubyTime), 0x00000000, LoadIronRuby__Builtins__RubyTime_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(IronRuby.Builtins.TrueClass), 0x00000000, LoadIronRuby__Builtins__TrueClass_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            ExtendModule(typeof(System.Numerics.BigInteger), 0x00000000, LoadMicrosoft__Scripting__Math__BigInteger_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(Microsoft.Scripting.Runtime.DynamicNull), 0x00000000, LoadMicrosoft__Scripting__Runtime__DynamicNull_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Double), 0x00000000, LoadSystem__Double_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Exception), 0x00000000, LoadSystem__Exception_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Int32), 0x00000000, LoadSystem__Int32_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendModule(typeof(System.Numerics.BigInteger), 0x00000000, LoadSystem__Numerics__BigInteger_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Object), 0x00000000, null, LoadSystem__Object_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyModule def5 = DefineGlobalModule("YAML", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml), 0x00000008, null, LoadYAML_Class, LoadYAML_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyModule def6 = DefineModule("YAML::BaseNode", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.BaseNode), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -232,19 +232,6 @@ namespace IronRuby.StandardLibrary.Yaml {
             
         }
         
-        private static void LoadMicrosoft__Scripting__Math__BigInteger_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "taguri", 0x11, 
-                0x00000001U, 
-                new Func<System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlBigIntegerOps.TagUri)
-            );
-            
-            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
-                0x00000003U, 
-                new Func<System.Numerics.BigInteger, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlBigIntegerOps.ToYaml)
-            );
-            
-        }
-        
         private static void LoadMicrosoft__Scripting__Runtime__DynamicNull_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "taguri", 0x11, 
                 0x00000000U, 
@@ -293,6 +280,19 @@ namespace IronRuby.StandardLibrary.Yaml {
             DefineLibraryMethod(module, "to_yaml_node", 0x12, 
                 0x00000002U, 
                 new Func<System.Int32, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlFixnumOps.ToYaml)
+            );
+            
+        }
+        
+        private static void LoadSystem__Numerics__BigInteger_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "taguri", 0x11, 
+                0x00000001U, 
+                new Func<System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlBigIntegerOps.TagUri)
+            );
+            
+            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
+                0x00000003U, 
+                new Func<System.Numerics.BigInteger, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlBigIntegerOps.ToYaml)
             );
             
         }

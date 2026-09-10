@@ -33,7 +33,7 @@ over, so a plain `dotnet build` of this project is enough to pick up your new
 D=Src/ClassInitGenerator/bin/Debug/net8.0
 
 dotnet $D/ClassInitGenerator.dll $D/IronRuby.Libraries.dll \
-  "/libraries:IronRuby.Builtins;IronRuby.StandardLibrary.Threading;IronRuby.StandardLibrary.Sockets;IronRuby.StandardLibrary.OpenSsl;IronRuby.StandardLibrary.Digest;IronRuby.StandardLibrary.Zlib;IronRuby.StandardLibrary.StringIO;IronRuby.StandardLibrary.StringScanner;IronRuby.StandardLibrary.Enumerator;IronRuby.StandardLibrary.FunctionControl;IronRuby.StandardLibrary.FileControl;IronRuby.StandardLibrary.BigDecimal;IronRuby.StandardLibrary.Iconv;IronRuby.StandardLibrary.ParseTree;IronRuby.StandardLibrary.Open3;IronRuby.StandardLibrary.Win32API" \
+  "/libraries:IronRuby.Builtins;IronRuby.StandardLibrary.Threading;IronRuby.StandardLibrary.Sockets;IronRuby.StandardLibrary.OpenSsl;IronRuby.StandardLibrary.Digest;IronRuby.StandardLibrary.Zlib;IronRuby.StandardLibrary.StringIO;IronRuby.StandardLibrary.StringScanner;IronRuby.StandardLibrary.Enumerator;IronRuby.StandardLibrary.FunctionControl;IronRuby.StandardLibrary.FileControl;IronRuby.StandardLibrary.BigDecimal;IronRuby.StandardLibrary.Iconv;IronRuby.StandardLibrary.ParseTree;IronRuby.StandardLibrary.Open3;IronRuby.StandardLibrary.Win32API;IronRuby.StandardLibrary.Json" \
   /out:Src/Libraries/Initializers.Generated.cs
 ```
 
@@ -80,12 +80,6 @@ diff --strip-trailing-cr /tmp/Initializers.Generated.cs Src/Libraries/Initialize
 A regeneration today is *not* byte-identical to what is checked in. All of the
 differences were understood and are benign:
 
-* **`#if !SILVERLIGHT` → `#if FEATURE_*`.** The checked-in files are stale: the
-  library sources were migrated to `BuildConfig = "FEATURE_FILESYSTEM"` etc.,
-  but the initializers were never regenerated (there was no working generator).
-  Every `FEATURE_*` symbol used is defined in `Directory.Build.props`, and
-  `!SILVERLIGHT` is unconditionally true in this build, so both forms compile
-  to the same code.
 * **Method ordering.** The generator sorts names with the default
   culture-sensitive `string.CompareTo`. .NET Framework used Windows NLS
   collation; .NET 8 on Linux uses ICU, which orders punctuation differently

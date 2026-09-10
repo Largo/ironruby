@@ -391,9 +391,9 @@ namespace IronRuby.Builtins {
             return info.GetKeys();
         }
 
-#if !SILVERLIGHT && !WP75
+#if !WP75
         #region priority, priority=
-        [RubyMethod("priority", BuildConfig = "!SILVERLIGHT")]
+        [RubyMethod("priority")]
         public static object Priority(Thread/*!*/ self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
             switch (self.Priority) {
@@ -412,7 +412,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("priority=", BuildConfig = "!SILVERLIGHT")]
+        [RubyMethod("priority=")]
         public static Thread Priority(Thread/*!*/ self, int priority) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
             if (priority <= -2)
@@ -513,16 +513,14 @@ namespace IronRuby.Builtins {
         // In many Ruby programs (eg the specs) this causes the thread to terminate, which is NOT the
         // expected behavior. This is tracked by Rubyforge bug # 21157
 
-#if !SILVERLIGHT
-        [RubyMethod("run", BuildConfig = "!SILVERLIGHT")]
-        [RubyMethod("wakeup", BuildConfig = "!SILVERLIGHT")]
+        [RubyMethod("run")]
+        [RubyMethod("wakeup")]
         public static Thread Run(Thread/*!*/ self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
             info.Run();
             return self;
         }
-#endif
 
         private static RubyThreadStatus GetStatus(Thread thread) {
             ThreadState state = thread.ThreadState;

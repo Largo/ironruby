@@ -348,7 +348,7 @@ namespace IronRuby.StandardLibrary.Sockets {
 
 #region Constants
 
-        [RubyModule("Constants", BuildConfig ="!SILVERLIGHT")]
+        [RubyModule("Constants")]
         public class SocketConstants {
 #region Address Family
 

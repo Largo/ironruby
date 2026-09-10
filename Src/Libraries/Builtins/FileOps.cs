@@ -1096,8 +1096,6 @@ namespace IronRuby.Builtins {
                 return (info == null) ? false : info.Length == 0;
             }
 
-            // cannot inherit from FileSystemInfo in Silverlight because the
-            // constructor is SecurityCritical
             internal class DeviceInfo : FileSystemInfo {
                 
                 private string/*!*/ _name;

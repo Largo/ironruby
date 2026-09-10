@@ -1751,7 +1751,7 @@ namespace IronRuby.Builtins {
                 byte[] b = new byte[4];
                 _RNGCryptoServiceProvider.GetBytes(b);
                 secureRandomNumber = ((int)b[0] << 24) | ((int)b[1] << 16) | ((int)b[2] << 8) | b[3];
-            } while (secureRandomNumber == 0); // GetNonZeroBytes does not exist in Silverlight
+            } while (secureRandomNumber == 0);
             return SeedRandomNumberGenerator(context, self, secureRandomNumber);
         }
 

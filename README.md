@@ -27,7 +27,7 @@ users&.filter_map { it.name if it.active? }
 
 | | before | after |
 |---|---|---|
-| Runtime | .NET Framework 4 / Silverlight | **.NET 8** (Linux, macOS, Windows) |
+| Runtime | .NET Framework 4 | **.NET 8** (Linux, macOS, Windows) |
 | Build | legacy msbuild, 12 configurations | SDK-style `dotnet build` |
 | Parser | hand-ported 1.9 grammar (~13k lines) | **prism** — the parser CRuby uses |
 | `RUBY_VERSION` | `1.9.2` | `4.0.0` |

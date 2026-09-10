@@ -34,7 +34,6 @@ namespace IronRuby.Builtins {
         public object End { get { return _end; } }
         public bool ExcludeEnd { get { return _excludeEnd; } }
 
-#if !SILVERLIGHT // SerializationInfo
         protected Range(SerializationInfo info, StreamingContext context) {
             _begin = info.GetValue("begin", typeof(object));
             _end = info.GetValue("end", typeof(object));
@@ -47,7 +46,6 @@ namespace IronRuby.Builtins {
             info.AddValue("end", _end);
             info.AddValue("excl", _excludeEnd);
         }
-#endif
 
         protected Range(Range/*!*/ range) {
             _begin = range._begin;

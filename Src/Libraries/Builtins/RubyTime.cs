@@ -34,28 +34,6 @@ namespace IronRuby.Builtins {
         
         #region Time Zones
 
-#if SILVERLIGHT
-        public TimeSpan GetCurrentZoneOffset() {
-            DateTime time = DateTime.Now;
-            return time.ToLocalTime() - time.ToUniversalTime();
-        }
-
-        public static string GetCurrentZoneName() {
-            return DateTime.Now.ToString("%K");
-        }
-
-        public bool GetCurrentDst(RubyContext/*!*/ context) { 
-            return _dateTime.IsDaylightSavingTime(); 
-        }
-
-        public static DateTime ToUniversalTime(DateTime dateTime) {
-            return dateTime.ToUniversalTime(); 
-        }
-
-        public static DateTime ToLocalTime(DateTime dateTime) {
-            return dateTime.ToLocalTime(); 
-        }
-#else
         internal static TimeZone/*!*/ _CurrentTimeZone;
         private static Regex _tzPattern;
 
@@ -192,7 +170,6 @@ namespace IronRuby.Builtins {
         public static DateTime ToLocalTime(DateTime dateTime) {
             return _CurrentTimeZone.ToLocalTime(dateTime);
         }
-#endif
 
         public DateTime ToUniversalTime() {
             return ToUniversalTime(_dateTime);
@@ -580,12 +557,10 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region times (deprecated)
-#if !SILVERLIGHT
-        [RubyMethod("times", RubyMethodAttributes.PublicSingleton, Compatibility = RubyCompatibility.Ruby186, BuildConfig = "!SILVERLIGHT")]
+        [RubyMethod("times", RubyMethodAttributes.PublicSingleton, Compatibility = RubyCompatibility.Ruby186)]
         public static RubyStruct/*!*/ Times(RubyClass/*!*/ self) {
             return RubyProcess.GetTimes(self);
         }
-#endif
         #endregion
 
         #region _dump, _load

@@ -25,7 +25,6 @@
 #     none          : Run with no driver ie. the test is disabled
 #     cruby         : Run with MRI
 #     ironm1        : Standard mode driver
-#     coreclr       : Silverlight driver
 #
 # all character !!lowercased!! (ctrl+u)
 #

@@ -94,12 +94,8 @@ namespace IronRuby.Hosting {
         }
 
         private ScriptSource/*!*/ CreateCommandSource(string/*!*/ command, SourceCodeKind kind, string/*!*/ sourceUnitId) {
-#if SILVERLIGHT
-            return Engine.CreateScriptSourceFromString(command, kind);
-#else
             var encoding = GetSourceCodeEncoding();
             return Engine.CreateScriptSource(new BinaryContentProvider(encoding.GetBytes(command)), sourceUnitId, encoding, kind);
-#endif
         }
 
         private Encoding/*!*/ GetSourceCodeEncoding() {

@@ -12,7 +12,6 @@
  *
  *
  * ***************************************************************************/
-#if !SILVERLIGHT
 
 using System.Runtime.InteropServices;
 using Microsoft.Scripting.Utils;
@@ -25,7 +24,7 @@ namespace IronRuby.Builtins {
     /// ARGF singleton trait.
     /// </summary>
     [RubyConstant("ARGF")]
-    [RubySingleton(BuildConfig = "!SILVERLIGHT"), Includes(typeof(Enumerable))]
+    [RubySingleton(), Includes(typeof(Enumerable))]
     public static class ArgFilesSingletonOps {
         #region to_i, fileno, to_s, to_a
         [RubyMethod("to_i")]
@@ -272,4 +271,3 @@ namespace IronRuby.Builtins {
 
     }
 }
-#endif

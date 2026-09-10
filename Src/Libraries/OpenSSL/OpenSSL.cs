@@ -71,15 +71,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 public static Digest/*!*/ Initialize(Digest/*!*/ self, [NotNull]MutableString/*!*/ algorithmName) {
                     Crypto.HMAC algorithm;
 
-#if SILVERLIGHT
-                    switch (algorithmName.ToString()) {
-                        case "SHA1": algorithm = new Crypto.HMACSHA1(); break;
-                        case "SHA256": algorithm = new Crypto.HMACSHA256(); break;
-                        default: algorithm = null; break;
-                    }
-#else
                     algorithm = Crypto.HMAC.Create("HMAC" + algorithmName.ConvertToString());
-#endif
 
                     if (algorithm == null) {
                         throw RubyExceptions.CreateRuntimeError("Unsupported digest algorithm ({0}).", algorithmName);
@@ -113,26 +105,18 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 //TODO: Properly disable this with BuildConfig
                 [RubyMethod("digest")]
                 public static MutableString/*!*/ BlankDigest(Digest/*!*/ self) {
-#if !SILVERLIGHT
                     // TODO: This support only SHA1, It should use self._algorithm but It is not
                     byte[] blank_data = Encoding.UTF8.GetBytes("");
                     byte[] hash = new SHA1CryptoServiceProvider().ComputeHash(blank_data);
                     return MutableString.CreateBinary(hash);
-#else
-            throw new NotSupportedException();
-#endif
                 }
 
                 //TODO: Properly disable with BuildConfig
                 [RubyMethod("hexdigest")]
                 public static MutableString/*!*/ BlankHexDigest(Digest/*!*/ self) {
-#if !SILVERLIGHT
                     byte[] blank_data = Encoding.UTF8.GetBytes("");
                     byte[] hash = new SHA1CryptoServiceProvider().ComputeHash(blank_data);
                     return MutableString.CreateAscii(BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant());
-#else
-            throw new NotSupportedException();
-#endif
                 }
             }
         }
@@ -255,12 +239,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 private X509Certificate/*!*/ _certificate;
 
                 private bool IsEmpty {
-#if SILVERLIGHT
-                    // TODO: ?
-                    get { return false; }
-#else
                     get { return _certificate.Handle == IntPtr.Zero; }
-#endif
                 }
 
                 [RubyConstructor]

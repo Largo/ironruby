@@ -602,7 +602,7 @@ namespace IronRuby.Builtins {
             return Array.IndexOf(_content, item, _start + startIndex, count);
         }
 
-#if !SILVERLIGHT && !WP75 // TODO: replace by linq
+#if !WP75
         public int FindIndex(Predicate<object> match) {
             return FindIndex(0, _count, match);
         }

@@ -891,13 +891,13 @@ namespace IronRuby.Runtime {
         public static void Log(string/*!*/ message, string/*!*/ category) {
 #if WIN8 || ANDROID || WP75
             Debug.WriteLine(category + ": " + message);
-#elif !SILVERLIGHT
+#else
             Debug.WriteLine((object)message, category);
 #endif
         }
 
         public static long DateTimeTicksFromStopwatch(long elapsedStopwatchTicks) {
-#if !SILVERLIGHT && !WP75
+#if !WP75
             if (Stopwatch.IsHighResolution) {
                 return (long)(((double)elapsedStopwatchTicks) * 10000000.0 / (double)Stopwatch.Frequency);
             }
@@ -921,15 +921,6 @@ namespace IronRuby.Runtime {
             return Char.ToLowerInvariant(c);
         }
 
-#if SILVERLIGHT
-        public static string/*!*/ ToUpperInvariant(this string/*!*/ str) {
-            return str.ToUpper(CultureInfo.InvariantCulture);
-        }
-
-        public static string/*!*/ ToLowerInvariant(this string/*!*/ str) {
-            return str.ToLower(CultureInfo.InvariantCulture);
-        }
-#endif
         internal static IEnumerable<Expression/*!*/>/*!*/ ToExpressions(this IEnumerable<DynamicMetaObject>/*!*/ metaObjects) {
             foreach (var metaObject in metaObjects) {
                 yield return metaObject != null ? metaObject.Expression : null;
@@ -1079,18 +1070,3 @@ namespace IronRuby.Runtime {
     }
 }
 
-#if SILVERLIGHT
-namespace System.Diagnostics {
-    internal struct Stopwatch {
-        public void Start() {
-        }
-
-        public void Stop() {
-        }
-
-        public static long GetTimestamp() {
-            return 0;
-        }
-    }
-}
-#endif

@@ -54,12 +54,7 @@ namespace IronRuby.Compiler.Generation {
         }
 
         private static bool CanOverrideMethod(MethodInfo/*!*/ mi) {
-#if !SILVERLIGHT
             return true;
-#else
-            // can only override the method if it is not SecurityCritical
-            return mi.GetCustomAttributes(typeof(System.Security.SecurityCriticalAttribute), false).Length == 0;
-#endif
         }
 
         protected abstract MethodInfo EventHelper();

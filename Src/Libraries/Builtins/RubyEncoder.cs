@@ -764,41 +764,11 @@ namespace IronRuby.Builtins {
         }
 
         private static double Int64BitsToDouble(long value) {
-#if SILVERLIGHT
-            ulong u = unchecked((ulong)value);
-            byte[] bytes = new byte[] { 
-                (byte)(u & 0xff),
-                (byte)((u >> 8) & 0xff), 
-                (byte)((u >> 16) & 0xff), 
-                (byte)((u >> 24) & 0xff), 
-                (byte)((u >> 32) & 0xff), 
-                (byte)((u >> 40) & 0xff), 
-                (byte)((u >> 48) & 0xff), 
-                (byte)(u >> 56),                 
-            };
-
-            return BitConverter.ToDouble(bytes, 0);
-#else
             return BitConverter.Int64BitsToDouble(value);
-#endif
         }
 
         private static long DoubleToInt64Bits(double value) {
-#if SILVERLIGHT
-            var bytes = BitConverter.GetBytes(value);
-            return unchecked((long)(
-                ((ulong)bytes[7] << 56) |
-                ((ulong)bytes[6] << 48) |
-                ((ulong)bytes[5] << 40) |
-                ((ulong)bytes[4] << 32) |
-                ((ulong)bytes[3] << 24) |
-                ((ulong)bytes[2] << 16) |
-                ((ulong)bytes[1] << 8) |
-                (ulong)bytes[0]
-            ));
-#else
             return BitConverter.DoubleToInt64Bits(value);
-#endif
         }
 
         private static double ReadDouble(MutableString/*!*/ data, ref int index, bool swap) {

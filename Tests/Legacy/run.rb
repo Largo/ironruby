@@ -94,9 +94,7 @@ applicable_drivers = []
 ARGV.each do |option|
     case option
     when /all/
-        applicable_drivers << Test::Iron_m2 << Test::Iron_m1 << Test::Iron_cc
-    when /coreclr/
-        applicable_drivers << Test::Iron_cc
+        applicable_drivers << Test::Iron_m2 << Test::Iron_m1
     when /fast|interpret/
         applicable_drivers << Test::Iron_m1
     when /compile/

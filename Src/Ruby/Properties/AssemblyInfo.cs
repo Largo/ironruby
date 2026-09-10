@@ -34,25 +34,17 @@ using IronRuby.Runtime;
 [assembly: CLSCompliant(true)]
 [assembly: Guid("ca75230d-3011-485d-b1db-dfe924b6c434")]
 
-//#if !SILVERLIGHT
-//[assembly: AssemblyVersion(RubyContext.IronRubyVersionString)]
-//[assembly: AssemblyFileVersion(RubyContext.IronRubyVersionString)]
-//#endif
 
-#if !SILVERLIGHT && !WP75
+#if !WP75
 [assembly: AllowPartiallyTrustedCallers]
 #endif
 
-#if SILVERLIGHT
-[assembly: InternalsVisibleTo("IronRuby.Tests")]
-#else
 [assembly: InternalsVisibleTo("IronRuby.Tests")]
 [assembly: InternalsVisibleTo("ClassInitGenerator")]
-#endif
 [assembly: InternalsVisibleTo("IronRuby.Prism")]
 
 
 [assembly: SecurityTransparent]
-#if !CLR2 && !SILVERLIGHT && !WIN8 && !ANDROID && !WP75
+#if !CLR2 && !WIN8 && !ANDROID && !WP75
 [assembly: SecurityRules(SecurityRuleSet.Level1)]
 #endif

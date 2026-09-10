@@ -29,7 +29,6 @@ module TestPath
   if get_environment_variable('DLR_ROOT')
     DLR_ROOT   = get_environment_variable('DLR_ROOT')
     TEST_DIR    = DLR_ROOT + "/Languages/Ruby/Tests"
-    CORECLR_ROOT  = DLR_ROOT + "/Util/Internal/Silverlight/x86ret"
     CRUBY_EXE     = get_environment_variable('RUBY18_EXE')
     
     DLR_BIN     = get_environment_variable('DLR_BIN')
@@ -148,27 +147,9 @@ module Test
     end 
   end 
   
-  class CoreClrDriver < BaseDriver
-    def initialize(redirect_error=true, append_to_log=true)
-      super("coreclr", redirect_error, append_to_log)
-    end 
-    
-    def run(f, logfile)
-      f = File.expand_path(f)
-      saved = Dir.pwd
-      Dir.chdir(TestPath::CORECLR_ROOT) do
-        cmd_line = "fxprun.exe thost.exe -fxprun_byname /nologo /lang:rb /run:#{f} /paths:#{File.dirname(f)} #{@append_to_log ? ">>" : ">"} #{logfile} #{@redirect_error ? "2>&1" : ""}"
-        @logger.append("cd /d #{TestPath::CORECLR_ROOT}", cmd_line)
-        system(cmd_line)
-        return $?.exitstatus
-      end
-    end
-  end
-  
   # const
   CRuby = CRubyDriver.new
   Iron_m1 = IronRubyDriver.new(1, 'ironm1')
   Iron_m2 = IronRubyDriver.new(2, 'ironm2')
   Iron_m3 = IronRubyDriver.new(3, 'ironm3')
-  Iron_cc = CoreClrDriver.new
 end 

@@ -34,9 +34,6 @@ using Microsoft.Scripting.Hosting.Providers;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 
-#if SILVERLIGHT
-[assembly: DynamicLanguageProvider(typeof(RubyContext), RubyContext.IronRubyDisplayName, RubyContext.IronRubyNames, RubyContext.IronRubyFileExtensions)]
-#endif
 
 namespace IronRuby {
     /// <summary>

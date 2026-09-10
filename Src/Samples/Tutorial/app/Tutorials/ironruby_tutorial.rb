@@ -13,11 +13,7 @@
 #
 # ****************************************************************************
 
-unless SILVERLIGHT
-  require File.dirname(__FILE__) + "/../tutorial"
-else
-  require 'tutorial'
-end
+require File.dirname(__FILE__) + "/../tutorial"
 
 module IronRubyTutorial
   def self.files_path
@@ -41,12 +37,8 @@ module IronRubyTutorial
   end
 
   def self.load_relative_path load_path
-	unless SILVERLIGHT
-      require 'pathname'
-      Pathname.new(load_path).relative_path_from(Pathname.new(Dir.pwd))
-    else
-      load_path
-    end
+    require 'pathname'
+    Pathname.new(load_path).relative_path_from(Pathname.new(Dir.pwd))
   end
   
   def self.load_prime_dll_relative_path
@@ -66,11 +58,7 @@ module IronRubyTutorial
   end
   
   def self.wpf_path
-    unless SILVERLIGHT
-      File.expand_path '../../wpf.rb', files_path
-    else
-      'wpf.rb'
-    end
+    File.expand_path '../../wpf.rb', files_path
   end
     
   def self.snoop_add_handler name, obj
@@ -405,10 +393,9 @@ tutorial "IronRuby tutorial" do
             task(:body => %{
                     Now load the XML file 'load.xml' by creating an instance of +XmlDocument+.
                 },
-                :silverlight => false,
                 :source_files => IronRubyTutorial.load_xml_path,
                 :code => [
-                    'd = XmlDocument.new', 
+                    'd = XmlDocument.new',
                     "d.load '#{IronRubyTutorial.load_xml_relative_path}'"]
                 ) { |iar| iar.bind.d.get_elements_by_tag_name("Puzzle").count == 1 }
 
@@ -420,35 +407,13 @@ tutorial "IronRuby tutorial" do
                         World
                         North America
                 },
-                :silverlight => false,
                 :code => [
-                    "n = d.select_nodes '//Puzzle/SavedGames/Game/@caption'", 
+                    "n = d.select_nodes '//Puzzle/SavedGames/Game/@caption'",
                     'n.each { |e| puts e.value }']
-                ) { |iar| /Seattle/ =~ iar.output }
-                
-            task(:body => %{
-                    Now load the XML file 'load.xml' by creating an instance of +XmlReader+.
-                },
-                :silverlight => true,
-                :source_files => IronRubyTutorial.load_xml_path,
-                :code => "r = XmlReader.create '#{IronRubyTutorial.load_xml_relative_path}'"
-                ) { |iar| iar.bind.r.kind_of? System::Xml::XmlReader }
-
-            task(:body => %{
-                    We can now query the document. Use the statements below to get output like:
-
-                        Seattle (default game)
-                        New York
-                        World
-                        North America
-                },
-                :silverlight => true,
-                :code => "puts r.item('caption') if r.name == 'Game' while r.read"
                 ) { |iar| /Seattle/ =~ iar.output }
         end
 
         chapter "Loading .NET libraries from a given path" do
-            silverlight false #having problems loading this in Silverlight from another thread
             introduction %{
 		Loading .NET libraries from a given path
             }
@@ -473,8 +438,6 @@ tutorial "IronRuby tutorial" do
     end
 
     section "Advanced IronRuby - Events and delegates" do
-
-        silverlight(false) # TODO - Need to find some Silverlight equivalent
 
         introduction %{
             The large part of the beauty of IronRuby lies within the dynamic-style development - modifying
@@ -597,8 +560,6 @@ tutorial "IronRuby tutorial" do
 
     section "Advanced IronRuby - Windows Forms" do
 
-        silverlight(false)
-        
         introduction %{
             Note that if you develop Windows applications interactively using <tt>ir.exe</tt> or +iirb+ from
             the <b>Command Prompt</b> console, IronRuby must be initialized specially for that purpose. <tt>ir.exe</tt>
@@ -731,8 +692,6 @@ tutorial "IronRuby tutorial" do
     end
 
     section "Advanced IronRuby - Windows Presentation Foundation" do
-
-        silverlight(false) # TODO - Since Silverlight is a subset of WPF, some form of this section should be enabled for Silverlight
 
         introduction %{
             Windows Presentation Foundation is a new UI framework with rich support for media (3D, video, etc)

@@ -967,9 +967,7 @@ namespace IronRuby.Runtime {
 
         private static readonly Type[] _ccTypes1 = new Type[] { typeof(RubyClass) };
         private static readonly Type[] _ccTypes2 = new Type[] { typeof(RubyContext) };
-#if !SILVERLIGHT // serialization
         private static readonly Type[] _serializableTypeSignature = new Type[] { typeof(SerializationInfo), typeof(StreamingContext) };
-#endif
 
         public static readonly string SerializationInfoClassKey = "#immediateClass";
 
@@ -979,14 +977,11 @@ namespace IronRuby.Runtime {
             Type baseType = theclass.GetUnderlyingSystemType();
             object obj;
             if (typeof(ISerializable).IsAssignableFrom(baseType)) {
-#if !SILVERLIGHT // serialization
                 BindingFlags bindingFlags = BindingFlags.NonPublic | BindingFlags.Public | BindingFlags.Instance;
                 ConstructorInfo ci = baseType.GetConstructor(bindingFlags, null, _serializableTypeSignature, null);
                 if (ci == null) {
-#endif
                 string message = String.Format("Class {0} does not have a valid deserializing constructor", baseType.FullName);
                     throw new NotSupportedException(message);
-#if !SILVERLIGHT // serialization
                 }
                 SerializationInfo info = new SerializationInfo(baseType, new FormatterConverter());
                 info.AddValue(SerializationInfoClassKey, theclass);
@@ -994,7 +989,6 @@ namespace IronRuby.Runtime {
                     info.AddValue(pair.Key, pair.Value);
                 }
                 obj = ci.Invoke(new object[2] { info, new StreamingContext(StreamingContextStates.Other, theclass) });
-#endif
             } else {
                 obj = CreateObject(theclass);
                 foreach (var pair in attributes) {

@@ -49,28 +49,10 @@ module GuiTutorial
         @window.tutorial_nav_OnMouseLeave.begin
       end
 
-      # Temporary guard for Moonlight since TreeView isn't working as expected
-      unless MOONLIGHT
-        if SILVERLIGHT
-          @window.chapters.items.clear
-          @current_tutorial.sections.each do |section|
-            tv_item = Wpf::TreeViewItem.new
-            tv_item.header = section
-            section.chapters.each do |chapter|
-              tv_item.items.add chapter
-            end
-            @window.chapters.items.add tv_item
-          end
-          @window.chapters.loaded do
-            Wpf::TreeViewExtensions.expand_all @window.chapters
-          end
-        else
-          @window.chapters.items_source = @current_tutorial.sections
-        end
+      @window.chapters.items_source = @current_tutorial.sections
 
-        @window.chapters.mouse_left_button_up do |t, e|
-          select_section_or_chapter t.selected_item
-        end
+      @window.chapters.mouse_left_button_up do |t, e|
+        select_section_or_chapter t.selected_item
       end
 
       @window.next_chapter.click do |t, e|
@@ -84,9 +66,9 @@ module GuiTutorial
     def select_section_or_chapter(item)
       return unless item
       case item
-      when ::Tutorial::Section: select_section item
-      when ::Tutorial::Chapter: select_chapter item
-      when Wpf::TreeViewItem:   select_section item.header
+      when ::Tutorial::Section then select_section item
+      when ::Tutorial::Chapter then select_chapter item
+      when Wpf::TreeViewItem then   select_section item.header
       else 
         raise "Unknown selection type: #{item}"
       end
@@ -292,7 +274,7 @@ module GuiTutorial
       end
 
       def xaml
-        design = File.dirname(__FILE__) + '/design/' + (SILVERLIGHT ? 'TutorialSL' : 'Tutorial')
+        design = File.dirname(__FILE__) + '/design/Tutorial'
         @step_xaml, @tut_xaml = ['Step', 'Tutorial'].map do |i|
           sx = sanitize_xaml(File.open(design + "/#{i}Control.xaml"){|f| f.read})
           sx.sub!(/<UserControl.*?>(.*?)<\/UserControl>/, '\1') if i == 'Step'
@@ -301,7 +283,7 @@ module GuiTutorial
         end
         
         sanitize_xaml(
-          File.open(design + "/Main#{SILVERLIGHT ? 'Page' : 'Window'}.xaml"){|f| f.read}.
+          File.open(design + "/MainWindow.xaml"){|f| f.read}.
                gsub(
                  /<local:TutorialPage.*?\/>/, 
                  File.open(design + "/TutorialPage.xaml"){|f| f.read}.
@@ -367,7 +349,7 @@ module GuiTutorial
       @window.repl_input.key_up do |target, event_args|
         if event_args.key == Key.enter && !Window.tutorial.handling_next_chapter
           Window.tutorial.process_result Window.repl.on_repl_input
-        elsif event_args.Key == (!SILVERLIGHT ? Key.System : Key.alt)
+        elsif event_args.Key == Key.System
           # This allows hitting Alt-Enter to automatically enter the code
           # It is useful during manual testing of a tutorial's content
           if @task.code.respond_to? :to_ary

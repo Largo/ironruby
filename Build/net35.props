@@ -3,7 +3,6 @@
   <PropertyGroup>
     <TargetFrameworkVersion>v3.5</TargetFrameworkVersion>
     <PlatformSymbols>CLR2</PlatformSymbols>
-    <IsSilverlight>false</IsSilverlight>
     <IsFullFramework>true</IsFullFramework>
     <FeatureCoreDlr>false</FeatureCoreDlr>
   </PropertyGroup>

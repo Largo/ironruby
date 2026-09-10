@@ -1,8 +1,6 @@
-REM Assumes Release, Silverlight3Release and Silverligh4Release binaries built.
+REM Assumes Release binaries built.
 
 set SRC_BIN=%DLR_ROOT%\Bin\Release
-set SRC_SL_BIN=%DLR_ROOT%\Bin\Silverlight4Release
-set SRC_WP_BIN=%DLR_ROOT%\Bin\Silverlight3Release
 
 set ZIPTEMPDIR=%TEMP%\ZipRelease
 :retry
@@ -32,45 +30,6 @@ copy %SRC_BIN%\irw64.exe bin
 copy %SRC_BIN%\IronRuby.dll bin
 copy %SRC_BIN%\IronRuby.Libraries.dll bin
 copy %SRC_BIN%\IronRuby.Libraries.Yaml.dll bin
-
-REM Silverlight
-
-mkdir Silverlight\bin
-pushd Silverlight\bin
-
-copy %SRC_SL_BIN%\Microsoft.Dynamic.dll .
-copy %SRC_SL_BIN%\Microsoft.Scripting.dll .
-copy %SRC_SL_BIN%\Microsoft.Scripting.Silverlight.dll .
-copy %SRC_BIN%\Chiron.exe .
-copy %SRC_BIN%\Chiron.exe.config .
-
-copy %SRC_SL_BIN%\IronRuby.dll .
-copy %SRC_SL_BIN%\IronRuby.Libraries.dll .
-copy %SRC_SL_BIN%\IronRuby.Libraries.Yaml.dll .
-
-copy %DLR_ROOT%\Util\Silverlight\SDK\4.0\System.Numerics.dll .
-popd
-
-mkdir Silverlight\script
-xcopy %DLR_ROOT%\Hosts\Silverlight\Public\script\* Silverlight\script
-
-mkdir Silverlight\script\templates\ruby
-xcopy /s %DLR_ROOT%\Hosts\Silverlight\Public\script\templates\ruby Silverlight\script\templates\ruby
-
-REM Windows Phone 7
-
-mkdir "Windows Phone 7"
-pushd "Windows Phone 7"
-
-copy %SRC_WP_BIN%\Microsoft.Dynamic.dll .
-copy %SRC_WP_BIN%\Microsoft.Scripting.dll .
-copy %SRC_WP_BIN%\Microsoft.Scripting.Core.dll .
-copy %SRC_WP_BIN%\Microsoft.Scripting.Silverlight.dll .
-copy %SRC_WP_BIN%\IronRuby.dll .
-copy %SRC_WP_BIN%\IronRuby.Libraries.dll .
-copy %SRC_WP_BIN%\IronRuby.Libraries.Yaml.dll .
-
-popd
 
 REM Misc
 

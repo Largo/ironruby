@@ -13,7 +13,7 @@ ir = "#{irbin}/ir.exe"
 raise "Could not find ir.exe" unless File.exist? ir
 IR = ir
 
-# TODO: Mono support -- (jimmysch) Moonlight only as Mono doesn't support WPF
+# TODO: Mono support -- Mono doesn't support WPF
 CSC="#{ENV['SystemRoot']}\\Microsoft.NET\\Framework\\v3.5\\csc.exe"
 CSC2="#{ENV['SystemRoot']}\\Microsoft.NET\\Framework\\v2.0.50727\\csc.exe"
 
@@ -24,24 +24,18 @@ if ENV["DLR_ROOT"]
   RUBY_STDLIBS = "#{root}/Languages/Ruby/StdLib/ruby/1.9.1"
   IRONRUBY_LIBS = "#{root}/Languages/Ruby/Libs"
   GEMS = "#{root}/External.LCA_RESTRICTED/Languages/Ruby/ruby-1.8.6p368/lib/ruby/gems/1.8/gems"
-
-  chiron = "#{root}/Bin/Debug/Chiron.exe"
-  chiron = "#{root}/Bin/Release/Chiron.exe" unless File.exist?(chiron)
-  raise "Could not find Chiron.exe. Do you have a build of Silverlight? If not, type 'bsd'" unless File.exist?(chiron)
-  CHIRON = chiron
 else
   BIN = irbin
   RUBY_STDLIBS = "#{irbin}/../lib/ruby/1.8"
   IRONRUBY_LIBS = RUBY_STDLIBS
   GEMS = "#{irbin}/../lib/IronRuby/gems/1.8/gems"
-  CHIRON = "#{irbin}/../silverlight/bin/Chiron.exe"
 
   if File.exist?("#{GEMS}/minitest-1.4.2")
     `#{BIN}/igem install minitest --version 1.4.2 --no-rdoc --no-ri`
   end
 end
 
-CLEAN.include("app.xap", "deploy","app/Libs","app/Tutorials/*_tutorial.generated.html", "dlr.js")
+CLEAN.include("app/Libs","app/Tutorials/*_tutorial.generated.html")
 CLOBBER.include("**/SplashScreen.dll","**/SplashScreen.g.resources","**/TutorialSamples.dll")
 
 namespace 'tutorial' do
@@ -54,26 +48,11 @@ namespace 'tutorial' do
       %w(stringio.rb bigdecimal.rb).each{|i| cp "#{IRONRUBY_LIBS}/#{i}", 'app/Libs' }
       cp_r "#{RUBY_STDLIBS}/rdoc", "app/Libs"
       cp_r "#{GEMS}/minitest-1.4.2", "app/Libs"
-      cp "#{File.dirname(CHIRON)}/dlr.js", '.'
     end
-  end
-
-  desc 'Preparing tutorial for deploying to ironruby.net/tutorial'
-  task :deploy => [:build, :generate_html] do
-    cd cwd do
-      `#{CHIRON} /s /d:app /z:app.xap`
-      rm_r 'deploy' if File.exist? 'deploy'
-      mkdir 'deploy'
-      %w(app.xap sl_tutorial.html console_tutorial.rb).each{|i| cp i, 'deploy'}
-      %w(test app).each{|i| cp_r i, 'deploy'}
-      Dir['app/Tutorials/*generated.html'].each{|i| cp i, 'deploy'}
-      cp "#{File.dirname(CHIRON)}/dlr.js", 'deploy'
-    end
-    puts "Deployment finished: see the 'deploy' directory"
   end
 
   desc 'Test the tutorial'
-  task :test => ['test:desktop', 'test:silverlight']
+  task :test => ['test:desktop']
 
   namespace 'test' do
     desc "Test the tutorial on the desktop"
@@ -81,11 +60,6 @@ namespace 'tutorial' do
       cd "#{cwd}/test" do
         puts `#{IR} test_console.rb`
       end
-    end
-    
-    desc "Test the tutorial in Silverlight"
-    task :silverlight => :build do
-      `#{CHIRON} /n /b:sl_tutorial.html?test`
     end
   end
 
@@ -115,11 +89,6 @@ namespace 'tutorial' do
   desc 'Run the tutorial as a desktop application'
   task :desktop  => ["wpf/Splashscreen.dll","app/Tutorials/ironruby_files/TutorialSamples.dll"] do
      cd(cwd){ `#{IR} wpf_tutorial.rb` }
-  end
-
-  desc 'Run the tutorial in the web browser'
-  task :silverlight => :build do
-     cd(cwd){ `#{CHIRON} /n /b:sl_tutorial.html` }
   end
 
 end

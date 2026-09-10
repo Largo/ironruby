@@ -13,18 +13,11 @@
 #
 # ****************************************************************************
 
-SILVERLIGHT = !System::Type.get_type('System.Windows.Browser.HtmlPage, System.Windows.Browser, Version=2.0.5.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e').nil? unless defined? SILVERLIGHT
-MOONLIGHT   = !System::Type.get_type('Mono.MoonException, System.Windows, Version=2.0.5.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e').nil? unless defined? MOONLIGHT
-
-if not SILVERLIGHT
-  # Reference the WPF assemblies
-  require 'system.xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089' 
-  require 'PresentationFramework, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'
-  require 'PresentationCore, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'
-  require 'windowsbase, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'
-else
-  require 'System.Xml, Version=2.0.5.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e'
-end
+# Reference the WPF assemblies
+require 'system.xml, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'
+require 'PresentationFramework, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'
+require 'PresentationCore, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'
+require 'windowsbase, Version=3.0.0.0, Culture=neutral, PublicKeyToken=31bf3856ad364e35'
 
 class System::Windows::FrameworkElement
   # Monkey-patch FrameworkElement to allow window.ChildName instead of window.FindName("ChildName")
@@ -70,50 +63,22 @@ class System::Windows::FrameworkElement
   end
 end
 
-if not SILVERLIGHT
-  class System::Windows::Controls::RichTextBox
-    def document=(value)
-      smflow = value.kind_of?(Wpf::SimpleMarkupFlow) ? value : Wpf::SimpleMarkupFlow.new(value)
-      self.Document = smflow.flow
-    end
+class System::Windows::Controls::RichTextBox
+  def document=(value)
+    smflow = value.kind_of?(Wpf::SimpleMarkupFlow) ? value : Wpf::SimpleMarkupFlow.new(value)
+    self.Document = smflow.flow
   end
 end
 
 class System::Windows::Controls::TextBox
   def document=(value)
-    if SILVERLIGHT
-      self.Text = ""
-      smflow = value.kind_of?(Wpf::SimpleMarkupFlow) ? value : Wpf::SimpleMarkupFlow.new(value)
-      smflow.flow.each {|i| self.inlines.add i }
-      self.TextWrapping = TextWrapping.Wrap # TODO : Move this to XAML
-    else
-      self.Text = value.flow
-    end
+    self.Text = value.flow
   end
 end
 
 class System::Windows::Controls::TextBlock
   def document=(value)
-    if SILVERLIGHT
-      self.Text = ""
-      smflow = value.kind_of?(Wpf::SimpleMarkupFlow) ? value : Wpf::SimpleMarkupFlow.new(value)
-      smflow.flow.each {|i| self.inlines.add i }
-      self.TextWrapping = TextWrapping.Wrap # TODO : Move this to XAML
-    else
-      self.Text = value.flow
-    end
-  end
-end
-
-if SILVERLIGHT
-  class System::Windows::Controls::ScrollViewer
-    def scroll_to_top
-      scroll_to_vertical_offset(0)
-    end
-
-    def scroll_to_bottom
-      scroll_to_vertical_offset(actual_height + scrollable_height)
-    end
+    self.Text = value.flow
   end
 end
 
@@ -123,15 +88,11 @@ class System::Windows::Markup::XamlReader
   end
 
   def self.load(xaml)
-    obj = if SILVERLIGHT
-      self.Load(xaml)
-    else
-      return raw_load(xaml) unless xaml.respond_to? :to_clr_string
-    
-      self.Load(
-        System::Xml::XmlReader.create(
-          System::IO::StringReader.new(xaml.to_clr_string)))
-    end
+    return raw_load(xaml) unless xaml.respond_to? :to_clr_string
+
+    obj = self.Load(
+      System::Xml::XmlReader.create(
+        System::IO::StringReader.new(xaml.to_clr_string)))
     yield obj if block_given?
     obj
   end
@@ -180,21 +141,11 @@ class Module
   end
 end
 
-if SILVERLIGHT
-  class System::Windows::DependencyObject
-    def begin_invoke &block
-      require 'System.Core, Version=2.0.5.0, Culture=neutral, PublicKeyToken=7cec85d7bea7798e'
-      dispatch_callback = System::Action[0].new block
-      self.dispatcher.begin_invoke dispatch_callback
-    end
-  end
-else
-  class System::Windows::Threading::DispatcherObject
-    def begin_invoke &block
-      require "system.core, Version=3.5.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
-      dispatch_callback = System::Action[0].new block
-      self.dispatcher.begin_invoke System::Windows::Threading::DispatcherPriority.Normal, dispatch_callback
-    end
+class System::Windows::Threading::DispatcherObject
+  def begin_invoke &block
+    require "system.core, Version=3.5.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089"
+    dispatch_callback = System::Action[0].new block
+    self.dispatcher.begin_invoke System::Windows::Threading::DispatcherPriority.Normal, dispatch_callback
   end
 end
 
@@ -358,7 +309,7 @@ module Wpf
       end
     end
 
-    # Returns an array of Inline object on Silverlight, or a WPF FlowDocument object otherwise
+    # Returns a WPF FlowDocument object
     attr_accessor :flow
 
     def add_paragraph(item, bold = true, font_family = nil)
@@ -366,22 +317,13 @@ module Wpf
         item = SimpleMarkupFlow.create_run item.to_str, bold, font_family
       end
 
-      if SILVERLIGHT
-        if item.respond_to? :to_ary
-          @flow += item
-        else
-          @flow << item
-        end
-        @flow << LineBreak.new
+      para = Paragraph.new
+      if item.respond_to? :to_ary
+        items.each {|i| para.inlines.add i }
       else
-        para = Paragraph.new
-        if item.respond_to? :to_ary
-          items.each {|i| para.inlines.add i }
-        else
-          para.inlines.add item
-        end
-        @flow.blocks.add para
+        para.inlines.add item
       end
+      @flow.blocks.add para
     end
     
     def self.create_run(text, bold = false, font_family = nil, font_style = nil)
@@ -400,7 +342,7 @@ module Wpf
       @@hyperlink_mask = SM::Attribute.bitmap_for :HYPERLINK
       @@tidylink_mask = SM::Attribute.bitmap_for :TIDYLINK
 
-      @flow = SILVERLIGHT ? [] : FlowDocument.new
+      @flow = FlowDocument.new
       @attributes = []
     end
     
@@ -410,14 +352,9 @@ module Wpf
 
     def accept_paragraph(am, fragment)
       inlines = convert_flow(am.flow(fragment.txt))
-      if SILVERLIGHT
-        @flow += inlines
-        @flow << LineBreak.new
-      else
-        paragraph = Paragraph.new
-        inlines.each {|i| paragraph.inlines.add i }
-        @flow.blocks.add paragraph
-      end
+      paragraph = Paragraph.new
+      inlines.each {|i| paragraph.inlines.add i }
+      @flow.blocks.add paragraph
     end
 
     def convert_flow(flow)
@@ -474,29 +411,22 @@ module Wpf
     end
 
     def accept_list_start(am, fragment)
-      @list = System::Windows::Documents::List.new if not SILVERLIGHT
+      @list = System::Windows::Documents::List.new
     end
 
-    def accept_list_end(am, fragment)      
-      @flow.blocks.add @list if not SILVERLIGHT
+    def accept_list_end(am, fragment)
+      @flow.blocks.add @list
     end
 
     def accept_list_item(am, fragment)
       inlines = convert_flow(am.flow(fragment.txt))
-      if SILVERLIGHT
-        run = SimpleMarkupFlow.create_run "o  ", true
-        inlines.unshift run
-        add_paragraph inlines
-      else
-        paragraph = Paragraph.new
-        inlines.each {|i| paragraph.inlines.add i }
-        list_item = ListItem.new paragraph
-        @list.list_items.add list_item
-      end
+      paragraph = Paragraph.new
+      inlines.each {|i| paragraph.inlines.add i }
+      list_item = ListItem.new paragraph
+      @list.list_items.add list_item
     end
 
     def accept_blank_line(am, fragment)
-      @flow << LineBreak.new if SILVERLIGHT
     end
 
     def accept_rule(am, fragment)
@@ -514,11 +444,7 @@ module Wpf
 
     def handle_special_HYPERLINK(special, inlines)
       run = SimpleMarkupFlow.create_run special.text
-      if SILVERLIGHT
-        inlines << run
-      else
-        inlines << Hyperlink.new(run)
-      end
+      inlines << Hyperlink.new(run)
     end
 
     def handle_special_TIDYLINK(special, inlines)
@@ -532,15 +458,10 @@ module Wpf
       label = $1
       url   = $2
 
-      if SILVERLIGHT
-        run = SimpleMarkupFlow.create_run "#{label} (#{url})"
-        inlines << run
-      else
-        run = SimpleMarkupFlow.create_run label
-        hyperlink = Hyperlink.new run
-        hyperlink.NavigateUri = System::Uri.new url
-        inlines << hyperlink
-      end
+      run = SimpleMarkupFlow.create_run label
+      hyperlink = Hyperlink.new run
+      hyperlink.NavigateUri = System::Uri.new url
+      inlines << hyperlink
     end
   end
 end

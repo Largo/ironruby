@@ -365,23 +365,9 @@ tutorial "IronRuby Hosting tutorial" do
                     If you do hosting from another application, you will need to use a similar
                     config file.
                  },
-                 :silverlight => false,
                  :code => [
                     "setup = ScriptRuntimeSetup.read_configuration",
                     "runtime = ScriptRuntime.new setup"]
-                ) { |iar| iar.bind.runtime }
-
-            task(:body => %{
-                    To be able to host a language in Silverlight, you need to include the language assemblies 
-                    in the XAP file and then create a +ScriptRuntime+ configured with information about 
-                    that language.
-                 },
-                :silverlight => true,
-                :code => [
-                    'ls = IronPython::Hosting::Python.create_language_setup nil',
-                    'srs = ScriptRuntimeSetup.new',
-                    'srs.language_setups.add ls',
-                    'runtime = ScriptRuntime.new srs']
                 ) { |iar| iar.bind.runtime }
 
             task(:body => %{

@@ -38,7 +38,7 @@ namespace IronRuby.Hosting {
         private RubyEncoding _defaultEncoding;
         private bool _disableRubyGems;
 
-#if DEBUG && !SILVERLIGHT
+#if DEBUG
         private ConsoleTraceListener _debugListener;
 
         private sealed class CustomTraceFilter : TraceFilter {
@@ -203,7 +203,7 @@ namespace IronRuby.Hosting {
 
                 #endregion
 
-#if DEBUG && !SILVERLIGHT
+#if DEBUG
                 case "-DT*":
                     SetTraceFilter(String.Empty, false);
                     break;
@@ -321,7 +321,6 @@ namespace IronRuby.Hosting {
                 _loadPaths.InsertRange(0, existingSearchPaths);
             }
 
-#if !SILVERLIGHT
             try {
                 string rubylib = Environment.GetEnvironmentVariable("RUBYLIB");
                 if (rubylib != null) {
@@ -330,7 +329,6 @@ namespace IronRuby.Hosting {
             } catch (SecurityException) {
                 // nop
             }
-#endif
             LanguageSetup.Options["SearchPaths"] = _loadPaths;
 
             if (!_disableRubyGems) {
@@ -341,13 +339,9 @@ namespace IronRuby.Hosting {
 
             LanguageSetup.Options["DefaultEncoding"] = _defaultEncoding;                        
             LanguageSetup.Options["LocaleEncoding"] = _defaultEncoding ??
-#if SILVERLIGHT
-                RubyEncoding.UTF8;
-#else
                 RubyEncoding.GetRubyEncoding(Console.InputEncoding);
-#endif
 
-#if DEBUG && !SILVERLIGHT
+#if DEBUG
             // Can be set to nl-BE, ja-JP, etc
             string culture = Environment.GetEnvironmentVariable("IR_CULTURE");
             if (culture != null) {
@@ -377,9 +371,7 @@ namespace IronRuby.Hosting {
                 { "-h[elp]",                     "Display usage" },
              // { "-i[extension]",               "edit ARGV files in place (make backup if extension supplied)" },
                 { "-Idirectory",                 "specify $LOAD_PATH directory (may be used more than once)" },
-#if !SILVERLIGHT
                 { "-Kkcode",                     "specifies KANJI (Japanese) code-set" },
-#endif
              // { "-l",                          "enable line ending processing" },
              // { "-n",                          "assume 'while gets(); ... end' loop around your script" },
              // { "-p",                          "assume loop like -n but print line also like sed" },
@@ -405,10 +397,8 @@ namespace IronRuby.Hosting {
                 { "-X:ShowClrExceptions",        "display CLS Exception information" },
                 { "-X:RemoteRuntimeChannel",     "remote console channel" }, 
              // { "-X:AutoIndent",               "Enable auto-indenting in the REPL loop" },
-#if !SILVERLIGHT
              // { "-X:TabCompletion",            "Enable TabCompletion mode" },
              // { "-X:ColorfulConsole",          "Enable ColorfulConsole" },
-#endif
 
 #if DEBUG
                 { "-DT",                         "disables tracing of specified events [debug only]" },

@@ -15,26 +15,20 @@
 
 require 'stringio'
 
-SILVERLIGHT = false unless defined?(SILVERLIGHT)
-
-if not SILVERLIGHT
-  $: << File.expand_path(File.dirname(__FILE__) + '/..')
-  $: << File.expand_path(File.dirname(__FILE__) + '/../app')
-end
+$: << File.expand_path(File.dirname(__FILE__) + '/..')
+$: << File.expand_path(File.dirname(__FILE__) + '/../app')
 
 require 'tutorial'
 require 'console_tutorial'
 
-if not SILVERLIGHT
-  require 'rubygems'
-  require 'minitest/spec'
-  require 'fileutils'
-  require 'html_tutorial'
+require 'rubygems'
+require 'minitest/spec'
+require 'fileutils'
+require 'html_tutorial'
 
-  MiniTest::Unit.autorun # tests will run using at_exit
-  
-  TUTORIAL_ROOT = File.expand_path("..", File.dirname(File.expand_path(__FILE__, FileUtils.pwd)))
-end
+MiniTest::Unit.autorun # tests will run using at_exit
+
+TUTORIAL_ROOT = File.expand_path("..", File.dirname(File.expand_path(__FILE__, FileUtils.pwd)))
 
 class MiniTest::Unit::TestCase
   def self.test_order
@@ -44,7 +38,7 @@ end
 
 def get_standard_tutorial(file_name)
   path = "app/Tutorials/#{file_name}"
-  path = File.expand_path(path, TUTORIAL_ROOT) if not SILVERLIGHT     
+  path = File.expand_path(path, TUTORIAL_ROOT)
   Tutorial.get_tutorial path
 end
 
@@ -162,13 +156,11 @@ describe "TryRubyTutorial" do
   TutorialTests.create_tests self, 'tryruby_tutorial.rb'
 end
 
-if not SILVERLIGHT
-  describe "HtmlGeneratorTests" do
-    it "basically works" do
-      tutorial = get_standard_tutorial('tryruby_tutorial.rb')
-      html_tutorial = HtmlTutorial.new tutorial
-      html = html_tutorial.generate_html
-      assert_match %r{<h2>Table of Contents</h2>}, html
-    end
+describe "HtmlGeneratorTests" do
+  it "basically works" do
+    tutorial = get_standard_tutorial('tryruby_tutorial.rb')
+    html_tutorial = HtmlTutorial.new tutorial
+    html = html_tutorial.generate_html
+    assert_match %r{<h2>Table of Contents</h2>}, html
   end
 end

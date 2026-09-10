@@ -44,42 +44,40 @@ namespace IronRuby.StandardLibrary.Digest {
         #endregion
 
         // TODO: MRI doesn't define MD5 constant here, it implements const_missing
-#if !SILVERLIGHT
-        [RubyClass("MD5", BuildConfig = "!SILVERLIGHT")]
+        [RubyClass("MD5")]
         public class MD5 : Base {
             public MD5()
                 : base(System.Security.Cryptography.MD5.Create()) {
             }
         }
 
-        [RubyClass("SHA1", BuildConfig = "!SILVERLIGHT")]
+        [RubyClass("SHA1")]
         public class SHA1 : Base {
             public SHA1()
                 : base(System.Security.Cryptography.SHA1.Create()) {
             }
         }
 
-        [RubyClass("SHA256", BuildConfig = "!SILVERLIGHT")]
+        [RubyClass("SHA256")]
         public class SHA256 : Base {
             public SHA256()
                 : base(System.Security.Cryptography.SHA256.Create()) {
             }
         }
 
-        [RubyClass("SHA384", BuildConfig = "!SILVERLIGHT")]
+        [RubyClass("SHA384")]
         public class SHA384 : Base {
             public SHA384()
                 : base(System.Security.Cryptography.SHA384.Create()) {
             }
         }
 
-        [RubyClass("SHA512", BuildConfig = "!SILVERLIGHT")]
+        [RubyClass("SHA512")]
         public class SHA512 : Base {
             public SHA512()
                 : base(System.Security.Cryptography.SHA512.Create()) {
             }
         }
-#endif
 
         [RubyClass("Base")]
         public class Base : Class {

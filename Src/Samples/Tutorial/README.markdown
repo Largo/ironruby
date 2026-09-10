@@ -25,10 +25,6 @@ On the desktop:
 
     tutorial.bat
 
-On Silverlight:
-
-    tutorial-sl.bat
-
 Running the app interactively
 -----------------------------
 
@@ -44,15 +40,9 @@ Launch ir.exe:
 Running the tests
 -----------------
 
-Both desktop and Silverlight:
-
     tutorial-test.bat
 
-Just desktop:
+or
 
     rake tutorial:test:desktop
-
-Just Silverlight:
-
-    rake tutorial:test:silverlight
 
