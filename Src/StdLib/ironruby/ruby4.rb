@@ -706,8 +706,12 @@ class Integer
   MAX = 2**62 - 1 unless const_defined?(:MAX)
 end
 
-class KeyError < IndexError; end unless defined?(KeyError)
-class StopIteration < IndexError; end unless defined?(StopIteration)
+# CRuby has KeyError < IndexError and StopIteration < IndexError, but IndexError
+# maps to the sealed System::IndexOutOfRangeException here, so it cannot be
+# subclassed. StandardError is the closest base that actually instantiates;
+# the cost is that `rescue IndexError` will not catch these.
+class KeyError < StandardError; end unless defined?(KeyError)
+class StopIteration < StandardError; end unless defined?(StopIteration)
 class UncaughtThrowError < ArgumentError; end unless defined?(UncaughtThrowError)
 class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
 
@@ -907,6 +911,43 @@ module Comparable
       false
     ensure
       stack.pop
+    end
+  end
+end
+
+# 1.9 returned Enumerators from these; Ruby 1.9.3+ returns Arrays.
+class String
+  unless "a".lines.is_a?(Array)
+    alias_method :lines_enumerator, :lines
+    alias_method :chars_enumerator, :chars
+    alias_method :bytes_enumerator, :bytes
+
+    def lines(*args, &block)
+      return lines_enumerator(*args, &block) if block
+      lines_enumerator(*args).to_a
+    end
+
+    def chars(&block)
+      return chars_enumerator(&block) if block
+      chars_enumerator.to_a
+    end
+
+    def bytes(&block)
+      return bytes_enumerator(&block) if block
+      bytes_enumerator.to_a
+    end
+  end
+end
+
+class Hash
+  # the core raises IndexError; Ruby 1.9 introduced KeyError for this
+  unless (begin; {}.fetch(:missing); rescue KeyError; true; rescue IndexError; false; end)
+    alias_method :fetch_raising_index_error, :fetch
+
+    def fetch(key, *default, &block)
+      return fetch_raising_index_error(key, *default, &block) if !default.empty? || block
+      return self[key] if key?(key)
+      raise KeyError, "key not found: #{key.inspect}"
     end
   end
 end

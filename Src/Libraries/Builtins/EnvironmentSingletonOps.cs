@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -33,8 +33,21 @@ namespace IronRuby.Builtins {
             return MutableString.Create((string)value ?? "", context.GetPathEncoding()).Freeze();
         }
 
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "setenv")]
+        private static extern int NativeSetEnv(string name, string value, int overwrite);
+
         private static void SetEnvironmentVariable(RubyContext/*!*/ context, string/*!*/ name, string value) {
-            context.DomainManager.Platform.SetEnvironmentVariable(name, value);
+            // Environment.SetEnvironmentVariable deletes the variable when handed "",
+            // so the platform layer reaches for a native call to set an empty value — but
+            // it only knows the Windows one, and P/Invoking kernel32 on Unix throws
+            // DllNotFoundException. setenv(3) is the Unix equivalent and makes child
+            // processes see the empty variable. Reading it back through ENV still yields
+            // nil, because .NET keeps its own managed copy that cannot hold an empty value.
+            if (value != null && value.Length == 0 && System.IO.Path.DirectorySeparatorChar == '/') {
+                NativeSetEnv(name, value, 1);
+            } else {
+                context.DomainManager.Platform.SetEnvironmentVariable(name, value);
+            }
 #if !SILVERLIGHT && !WIN8 && !WP75
             if (name == "TZ") {
                 TimeZone zone;
