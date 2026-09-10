@@ -51,10 +51,11 @@ namespace IronRuby.Prism {
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
             SourceUnit sourceUnit, ErrorSink errorSink) {
 
-            var bridge = new PrismAstBridge(code, path, RubyEncoding.UTF8);
+            PrismParseResult result = PrismParser.Parse(code, path, 1, outerLocalNames);
+
+            var bridge = new PrismAstBridge(code, path, ResolveEncoding(result.EncodingName, sourceUnit));
             bridge._sourceUnit = sourceUnit;
             bridge._errorSink = errorSink;
-            PrismParseResult result = PrismParser.Parse(code, path, 1, outerLocalNames);
 
             if (result.Errors.Count > 0) {
                 if (errorSink != null && sourceUnit != null) {
@@ -69,6 +70,40 @@ namespace IronRuby.Prism {
             }
 
             return bridge.Program((Pm.ProgramNode)result.Root, outerLocalNames);
+        }
+
+        /// <summary>
+        /// prism reports the encoding it settled on for the source — from a magic
+        /// comment, a BOM, or the UTF-8 default — and every literal has to carry it.
+        /// Tagging everything UTF-8 makes a `# encoding: binary` file produce
+        /// UTF-8 strings that compare unequal to the ASCII-8BIT ones the runtime
+        /// returns, which is what made almost all of spec/library/digest fail: the
+        /// bytes matched, the encodings did not.
+        /// </summary>
+        private static RubyEncoding/*!*/ ResolveEncoding(string name, SourceUnit sourceUnit) {
+            if (String.IsNullOrEmpty(name)) {
+                return RubyEncoding.UTF8;
+            }
+
+            switch (name.ToUpperInvariant()) {
+                case "UTF-8": return RubyEncoding.UTF8;
+                case "BINARY":
+                case "ASCII-8BIT": return RubyEncoding.Binary;
+                case "US-ASCII":
+                case "ASCII": return RubyEncoding.Ascii;
+            }
+
+            // anything else needs the context's name table (aliases, code pages)
+            var context = (sourceUnit != null) ? sourceUnit.LanguageContext as RubyContext : null;
+            if (context != null) {
+                try {
+                    return context.GetRubyEncoding(name);
+                } catch (Exception) {
+                    // prism accepted the name, so keep the tree rather than failing
+                    // the parse over an encoding we cannot map onto a .NET code page
+                }
+            }
+            return RubyEncoding.UTF8;
         }
 
         // ---- helpers ----

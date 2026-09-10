@@ -10231,9 +10231,24 @@ namespace IronRuby.StandardLibrary.Digest {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Digest.Digest.Base, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Digest.Digest.Base>(IronRuby.StandardLibrary.Digest.Digest.Base.Update)
             );
             
+            DefineLibraryMethod(module, "block_length", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Digest.Digest.Base, System.Int32>(IronRuby.StandardLibrary.Digest.Digest.Base.BlockLength)
+            );
+            
+            DefineLibraryMethod(module, "digest_length", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Digest.Digest.Base, System.Int32>(IronRuby.StandardLibrary.Digest.Digest.Base.DigestLength)
+            );
+            
             DefineLibraryMethod(module, "finish", 0x12, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Digest.Digest.Base, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Digest.Digest.Base.Finish)
+            );
+            
+            DefineLibraryMethod(module, "initialize_copy", 0x12, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Digest.Digest.Base, IronRuby.StandardLibrary.Digest.Digest.Base, IronRuby.StandardLibrary.Digest.Digest.Base>(IronRuby.StandardLibrary.Digest.Digest.Base.InitializeCopy)
             );
             
             DefineLibraryMethod(module, "reset", 0x11, 

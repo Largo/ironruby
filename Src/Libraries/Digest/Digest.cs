@@ -47,53 +47,82 @@ namespace IronRuby.StandardLibrary.Digest {
         [RubyClass("MD5")]
         public class MD5 : Base {
             public MD5()
-                : base(System.Security.Cryptography.MD5.Create()) {
+                : base(System.Security.Cryptography.MD5.Create(), 64) {
             }
         }
 
         [RubyClass("SHA1")]
         public class SHA1 : Base {
             public SHA1()
-                : base(System.Security.Cryptography.SHA1.Create()) {
+                : base(System.Security.Cryptography.SHA1.Create(), 64) {
             }
         }
 
         [RubyClass("SHA256")]
         public class SHA256 : Base {
             public SHA256()
-                : base(System.Security.Cryptography.SHA256.Create()) {
+                : base(System.Security.Cryptography.SHA256.Create(), 64) {
             }
         }
 
         [RubyClass("SHA384")]
         public class SHA384 : Base {
             public SHA384()
-                : base(System.Security.Cryptography.SHA384.Create()) {
+                : base(System.Security.Cryptography.SHA384.Create(), 128) {
             }
         }
 
         [RubyClass("SHA512")]
         public class SHA512 : Base {
             public SHA512()
-                : base(System.Security.Cryptography.SHA512.Create()) {
+                : base(System.Security.Cryptography.SHA512.Create(), 128) {
             }
         }
 
         [RubyClass("Base")]
         public class Base : Class {
             private readonly HashAlgorithm/*!*/ _algorithm;
+            private readonly int _blockLength;
             private MutableString/*!*/ _buffer;
 
-            protected Base(HashAlgorithm/*!*/ algorithm) {
+            protected Base(HashAlgorithm/*!*/ algorithm, int blockLength) {
                 Assert.NotNull(algorithm);
                 _algorithm = algorithm;
+                _blockLength = blockLength;
                 _buffer = MutableString.CreateBinary();
+            }
+
+            /// <summary>
+            /// The hash function's internal block size in bytes. .NET's HashAlgorithm
+            /// exposes the output size (HashSize) but not this, so each subclass passes
+            /// it in: 64 for MD5/SHA-1/SHA-256, 128 for the 64-bit SHA-2 variants.
+            /// </summary>
+            [RubyMethod("block_length")]
+            public static int BlockLength(Base/*!*/ self) {
+                return self._blockLength;
+            }
+
+            [RubyMethod("digest_length")]
+            public static int DigestLength(Base/*!*/ self) {
+                return self._algorithm.HashSize / 8;
             }
 
             [RubyMethod("<<")]
             [RubyMethod("update")]
             public static Base/*!*/ Update(RubyContext/*!*/ context, Base/*!*/ self, MutableString str) {
                 self._buffer.Append(str);
+                return self;
+            }
+
+            /// <summary>
+            /// The accumulated input lives in a private CLR field, which object copying
+            /// does not carry across -- so without this, the clone that Digest::Instance#digest
+            /// makes to snapshot the state started out empty and every no-argument
+            /// digest/hexdigest returned the digest of "".
+            /// </summary>
+            [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
+            public static Base/*!*/ InitializeCopy(Base/*!*/ self, [NotNull]Base/*!*/ other) {
+                self._buffer = other._buffer.Clone();
                 return self;
             }
 
@@ -121,8 +150,10 @@ namespace IronRuby.StandardLibrary.Digest {
                 CallSiteStorage<Func<CallSite, object, MutableString, object>>/*!*/ digestStorage,
                 RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
 
-                // TODO: new?
-                var allocateSite = allocateStorage.GetCallSite("allocate", 0);
+                // "new", not "allocate": MRI's Digest::Class.digest constructs the
+                // object properly, and subclasses written in Ruby (Digest::SHA2 wraps
+                // a SHA256/384/512 instance) do their real setup in #initialize.
+                var allocateSite = allocateStorage.GetCallSite("new", 0);
                 object obj = allocateSite.Target(allocateSite, self);
 
                 // TODO: check obj
@@ -191,13 +222,17 @@ namespace IronRuby.StandardLibrary.Digest {
                 CallSiteStorage<Func<CallSite, object, object>>/*!*/ resetStorage,
                 object self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
 
+                // MRI resets before updating as well as after: digest(str) is the digest
+                // of str alone, not of whatever had already been fed in plus str.
+                var reset = resetStorage.GetCallSite("reset", 0);
+                reset.Target(reset, self);
+
                 var update = updateStorage.GetCallSite("update", 1);
                 update.Target(update, self, str);
 
                 var finish = finishStorage.GetCallSite("finish", 0);
                 object value = finish.Target(finish, self);
 
-                var reset = resetStorage.GetCallSite("reset", 0);
                 reset.Target(reset, self);
 
                 // TODO: cast?

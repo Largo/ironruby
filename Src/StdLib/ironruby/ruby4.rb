@@ -197,6 +197,48 @@ class File
   def self.realdirpath(path, dir = nil)
     expand_path(path, dir)
   end unless respond_to?(:realdirpath)
+
+  # IO.write/File.write and friends arrived in 1.9; the C# IO library only has
+  # the instance-level operations.  offset nil means truncate, an integer seeks
+  # first and leaves the rest of the file intact, matching IO.write.
+  def self.write(name, string, offset = nil, **opts)
+    # "rb+" not "r+b": IronRuby's mode parser only accepts the letter before the
+    # plus, though CRuby takes either order.
+    mode = offset ? "rb+" : (opts[:mode] || "w")
+    open(name, mode) do |io|
+      io.seek(offset) if offset
+      io.write(string)
+    end
+  end unless respond_to?(:write)
+
+  def self.binwrite(name, string, offset = nil)
+    write(name, string, offset, mode: "wb")
+  end unless respond_to?(:binwrite)
+
+  def self.binread(name, length = nil, offset = 0)
+    open(name, "rb") do |io|
+      io.seek(offset) if offset && offset > 0
+      length ? io.read(length) : io.read
+    end
+  end unless respond_to?(:binread)
+
+  def self.empty?(name)
+    size(name) == 0
+  end unless respond_to?(:empty?)
+end
+
+class IO
+  def self.write(name, string, offset = nil, **opts)
+    File.write(name, string, offset, **opts)
+  end unless respond_to?(:write)
+
+  def self.binwrite(name, string, offset = nil)
+    File.binwrite(name, string, offset)
+  end unless respond_to?(:binwrite)
+
+  def self.binread(name, length = nil, offset = 0)
+    File.binread(name, length, offset)
+  end unless respond_to?(:binread)
 end
 
 module Kernel
