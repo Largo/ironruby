@@ -64,9 +64,13 @@ See [`Src/Prism/README.md`](Src/Prism/README.md) for the details and the known g
 
 | suite | result |
 |---|---|
-| [ruby/spec](https://github.com/ruby/spec) `spec/language` (via mspec) | **2031 / 2680 pass (75.8%)** |
+| [ruby/spec](https://github.com/ruby/spec) `spec/language` (via mspec) | **2117 / 2682 pass (78.9%)** |
 | IronRuby's own C# test suite | ~1470 pass, 22 known failures |
 | Bridging the bundled 1.9 stdlib | **571 / 571 files** |
+
+`spec/core` and `spec/library` have been measured for the first time and are in
+much rougher shape than the syntax suite — roughly 540 of 3417 core examples
+passing across the 22 directories measured so far. That is where the work is now.
 
 Honest about the rest: the **standard library is still the Ruby 1.9 snapshot** the fork shipped
 with, patched by a small compatibility prelude ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb))
