@@ -970,3 +970,42 @@ class Hash
   end
   alias_method :to_s, :inspect
 end
+
+# Mutex/Queue/SizedQueue/ConditionVariable needed `require "thread"` in 1.9; they
+# have been built in since 2.0. Ruby 2.x also re-homed them under Thread.
+require "thread" unless Object.const_defined?(:Mutex)
+
+class Thread
+  %i[Mutex Queue SizedQueue ConditionVariable].each do |name|
+    next if const_defined?(name)
+    const_set(name, Object.const_get(name)) if Object.const_defined?(name)
+  end
+end
+
+class Regexp
+  def match?(str, pos = 0)
+    return false if str.nil?
+    !match(pos.zero? ? str : str.to_s[pos..-1].to_s).nil?
+  end unless method_defined?(:match?)
+end
+
+class Symbol
+  def match?(pattern)
+    !to_s.match(pattern).nil?
+  end unless method_defined?(:match?)
+
+  def start_with?(*prefixes)
+    to_s.start_with?(*prefixes)
+  end unless method_defined?(:start_with?)
+
+  def end_with?(*suffixes)
+    to_s.end_with?(*suffixes)
+  end unless method_defined?(:end_with?)
+end
+
+class String
+  # Ruby 2.3: -"str" returns a frozen (deduplicated) string, +"str" an unfrozen one.
+  def -@
+    frozen? ? self : dup.freeze
+  end unless method_defined?(:-@)
+end
