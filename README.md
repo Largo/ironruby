@@ -1,5 +1,7 @@
 # IronRuby, modernized
 
+[![CI](https://github.com/Largo/ironruby/actions/workflows/ci.yml/badge.svg?branch=modernize)](https://github.com/Largo/ironruby/actions/workflows/ci.yml)
+
 A fork of [IronRuby](https://github.com/IronLanguages/ironruby) — Ruby on the .NET CLR —
 brought back to life: it **builds and runs on .NET 8**, and it parses Ruby with
 **[prism](https://github.com/ruby/prism), CRuby's own parser**, instead of the hand-ported
