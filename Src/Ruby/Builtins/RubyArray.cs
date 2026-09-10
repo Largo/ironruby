@@ -602,7 +602,6 @@ namespace IronRuby.Builtins {
             return Array.IndexOf(_content, item, _start + startIndex, count);
         }
 
-#if !WP75
         public int FindIndex(Predicate<object> match) {
             return FindIndex(0, _count, match);
         }
@@ -614,7 +613,6 @@ namespace IronRuby.Builtins {
         public int FindIndex(int startIndex, int count, Predicate<object>/*!*/ match) {
             return Array.FindIndex(_content, _start + startIndex, count, match);
         }
-#endif
 
         public bool Contains(object item) {
             return IndexOf(item) >= 0;

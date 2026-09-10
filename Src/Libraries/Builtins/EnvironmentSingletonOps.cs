@@ -48,7 +48,6 @@ namespace IronRuby.Builtins {
             } else {
                 context.DomainManager.Platform.SetEnvironmentVariable(name, value);
             }
-#if !WIN8 && !WP75
             if (name == "TZ") {
                 TimeZone zone;
                 if (RubyTime.TryParseTimeZone(value, out zone)) {
@@ -61,7 +60,6 @@ namespace IronRuby.Builtins {
                     ));
                 }
             }
-#endif
         }
 
         #region Public Instance Methods

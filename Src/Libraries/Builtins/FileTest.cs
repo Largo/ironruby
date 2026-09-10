@@ -14,9 +14,6 @@
  * ***************************************************************************/
 #if FEATURE_FILESYSTEM
 
-#if CLR2
-using Microsoft.Scripting.Utils;
-#endif
 
 using System;
 using System.IO;

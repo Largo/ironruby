@@ -310,7 +310,6 @@ IronRuby.globals.z = IronRuby.globals.x + FooBar
 ");
             Assert(Runtime.Globals.GetVariable<int>("z") == 3);
 
-#if !CLR2
             dynamic scope = Engine.CreateScope();
             Engine.Execute(@"def foo; 1; end", scope);
 
@@ -319,7 +318,6 @@ IronRuby.globals.z = IronRuby.globals.x + FooBar
 
             object value = scope.foo();
             Assert((int)value == 1);
-#endif
         }
 
         public void RubyHosting5() {

@@ -29,10 +29,8 @@ using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Actions;
-#if !CLR2
 using BigInt = System.Numerics.BigInteger;
 using System.Reflection.Emit;
-#endif
 
 namespace IronRuby.Tests {
     public partial class Tests {
@@ -3534,15 +3532,10 @@ end
 
 p C.foo(E.new) rescue p $!
 ", 
-#if CLR2
-"#<TypeError: can't convert E into System::Collections::Generic::IEnumerable[Object]>"
-#else
 "3"
-#endif
 );
         }
 
-#if !CLR2
         public void ClrBigIntegerV4() {
             Context.ObjectClass.SetConstant("BI", new BigInt(100000000000));
             TestOutput(@"
@@ -3555,7 +3548,6 @@ p 1000000000000 / BI
 10
 ");
         }
-#endif
 
         #endregion
     }

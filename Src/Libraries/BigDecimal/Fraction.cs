@@ -385,12 +385,6 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return 0;
         }
 
-#if WIN8 || WP75
-        public static int DivRem(int a, int b, out int result) {
-            result = a % b;
-            return (a / b);
-        }
-#endif
 
         /// <summary>
         /// Limits the precision of the given Fraction.
@@ -441,11 +435,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             int lastWordIndex;
             uint lastDigit;
 
-#if WIN8 || WP75
-            secondLastWordIndex = DivRem(digits - 1, BASE_FIG, out secondLastDigitIndex);
-#else
             secondLastWordIndex = Math.DivRem(digits - 1, BASE_FIG, out secondLastDigitIndex);
-#endif
             if (secondLastDigitIndex == BASE_FIG-1) {
                 lastWordIndex = secondLastWordIndex+1;
                 lastDigitIndex = 0;

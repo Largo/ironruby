@@ -546,13 +546,11 @@ end
             // Ruby attributes are invoked directly via SetMember/GetMember:
             AreEqual(MySetMemberBinder.Invoke(ruby_array_list, "ruby_attribute", 123), 123);
             AreEqual(MyGetMemberBinder.Invoke(ruby_array_list, "ruby_attribute"), 123);
-#if !CLR2
             List<object> result = new List<object>();
             foreach (object item in (dynamic)ruby_array_list) {
                 result.Add(item);
             }
             Assert(result.Count == 2 && (int)result[0] == 100 && (int)result[1] == 200);
-#endif
         }
 
         public void Dlr_MethodMissing() {
@@ -730,13 +728,11 @@ Number.new(100)
             AreEqual(MyUnaryOperationBinder.Invoke(ExpressionType.Increment, one_hundred), 100 + 1);
             AreEqual(MyUnaryOperationBinder.Invoke(ExpressionType.Decrement, one_hundred), 100 - 1);
 
-#if !CLR2
             dynamic number = one_hundred;
             number--;
             Assert(number == 99);
             number++;
             Assert(number == 100);
-#endif
         }
 
         public void Dlr_Comparable() {
@@ -779,13 +775,11 @@ RubyEquatable.new(100)
             AreEqual(MyBinaryOperationBinder.Invoke(ExpressionType.Equal, equatable, 101), false);
             AreEqual(MyBinaryOperationBinder.Invoke(ExpressionType.NotEqual, equatable, 100), false);
             AreEqual(MyBinaryOperationBinder.Invoke(ExpressionType.NotEqual, equatable, 101), true);
-#if CLR4
             dynamic dynamicEquatable = equatable;
             Assert((bool)(dynamicEquatable == 100));
             Assert(!(bool)(dynamicEquatable == 101));
             Assert(!(bool)(dynamicEquatable != 100));
             Assert((bool)(dynamicEquatable != 101));
-#endif
         }
 
         public void Dlr_RubyObjects() {
@@ -802,13 +796,11 @@ scope.ruby_method = method(:inc)
 scope.ruby_proc = proc { |a| a + 2 } 
 ", scope);
 
-#if !CLR2
             dynamic s = scope;
             AreEqual(s.ruby_array[0], 100);
             AreEqual(s.ruby_hash[1], 3);
             AreEqual(s.ruby_method(1), 2);
             AreEqual(s.ruby_proc(1), 3);
-#endif
             object method = scope.GetVariable("ruby_method");
             AreEqual(MyInvokeBinder.Invoke(method, 1), 2);
 

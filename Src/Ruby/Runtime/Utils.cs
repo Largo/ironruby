@@ -889,19 +889,13 @@ namespace IronRuby.Runtime {
 
         [Conditional("DEBUG")]
         public static void Log(string/*!*/ message, string/*!*/ category) {
-#if WIN8 || ANDROID || WP75
-            Debug.WriteLine(category + ": " + message);
-#else
             Debug.WriteLine((object)message, category);
-#endif
         }
 
         public static long DateTimeTicksFromStopwatch(long elapsedStopwatchTicks) {
-#if !WP75
             if (Stopwatch.IsHighResolution) {
                 return (long)(((double)elapsedStopwatchTicks) * 10000000.0 / (double)Stopwatch.Frequency);
             }
-#endif
             return elapsedStopwatchTicks;
         }
 

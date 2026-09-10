@@ -389,9 +389,7 @@ namespace IronRuby.Builtins {
             RubyArray result;
 
             if (read == null && write == null && error == null) {
-#if !WIN8
                 Thread.Sleep(timeout);
-#endif
                 return null;
             }
 
@@ -399,11 +397,7 @@ namespace IronRuby.Builtins {
                 handles = GetWaitHandles(context, read, write, error);
                 int index;
                 try {
-#if WIN8 || WP75
-                    index = WaitHandle.WaitAny(handles, timeout);
-#else
                     index = WaitHandle.WaitAny(handles, timeout, false);
-#endif
                     if (index == WaitHandle.WaitTimeout) {
                         return null;
                     }
@@ -433,11 +427,7 @@ namespace IronRuby.Builtins {
             RubyArray result = new RubyArray();
             if (ioObjects != null) {
                 for (int i = 0; i < ioObjects.Count; i++) {
-#if WIN8 || WP75
-                    if (handleIndex == signaling || handles[handleIndex].WaitOne(0)) {
-#else
                     if (handleIndex == signaling || handles[handleIndex].WaitOne(0, false)) {
-#endif
                         result.Add(ioObjects[i]);
                     }
                     handleIndex++;
@@ -618,9 +608,8 @@ namespace IronRuby.Builtins {
 
         #region isatty
 
-#if !WIN8 && !WP75
-        [RubyMethod("isatty", BuildConfig = "!WIN8 && !WP75")]
-        [RubyMethod("tty?", BuildConfig = "!WIN8 && !WP75")]
+        [RubyMethod("isatty")]
+        [RubyMethod("tty?")]
         public static bool IsAtty(RubyIO/*!*/ self) {
             ConsoleStreamType? console = self.ConsoleStreamType;
             if (console == null) {
@@ -668,7 +657,6 @@ namespace IronRuby.Builtins {
 
         [DllImport ("libc")]
         private static extern int isatty(int desc);
-#endif
 
         #endregion
 

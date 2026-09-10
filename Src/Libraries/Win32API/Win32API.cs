@@ -15,7 +15,6 @@
 // debug only:
 // #define USE_SNIPPETS
 
-#if !WIN8 && !ANDROID && !WP75
 #if FEATURE_CORE_DLR
 using System.Linq.Expressions;
 #else
@@ -52,7 +51,7 @@ namespace IronRuby.StandardLibrary.Win32API {
     using AstExpressions = ReadOnlyCollectionBuilder<Expression>;
     using AstUtils = Microsoft.Scripting.Ast.Utils;
 
-    [RubyClass("Win32API", BuildConfig = "!WIN8 && !ANDROID")]
+    [RubyClass("Win32API")]
     public class Win32API : RubyObject {
         private enum ArgType : byte {
             // ignored
@@ -425,4 +424,3 @@ namespace IronRuby.StandardLibrary.Win32API {
 #endregion
     }
 }
-#endif

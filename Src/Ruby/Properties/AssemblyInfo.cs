@@ -35,9 +35,7 @@ using IronRuby.Runtime;
 [assembly: Guid("ca75230d-3011-485d-b1db-dfe924b6c434")]
 
 
-#if !WP75
 [assembly: AllowPartiallyTrustedCallers]
-#endif
 
 [assembly: InternalsVisibleTo("IronRuby.Tests")]
 [assembly: InternalsVisibleTo("ClassInitGenerator")]
@@ -45,6 +43,4 @@ using IronRuby.Runtime;
 
 
 [assembly: SecurityTransparent]
-#if !CLR2 && !WIN8 && !ANDROID && !WP75
 [assembly: SecurityRules(SecurityRuleSet.Level1)]
-#endif

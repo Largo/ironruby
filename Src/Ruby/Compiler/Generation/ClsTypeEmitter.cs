@@ -312,11 +312,7 @@ namespace IronRuby.Compiler.Generation {
             return new ILGen(il);
         }
 
-#if WIN8 // TODO: what is ReservedMask?
-        protected const MethodAttributes MethodAttributesToEraseInOveride = MethodAttributes.Abstract | (MethodAttributes)0xD000;
-#else
         protected const MethodAttributes MethodAttributesToEraseInOveride = MethodAttributes.Abstract | MethodAttributes.ReservedMask;
-#endif
 
         protected ILGen DefineMethodOverride(MethodAttributes extra, MethodInfo decl, out MethodBuilder impl) {
             impl = ReflectionUtils.DefineMethodOverride(_tb, extra, decl);

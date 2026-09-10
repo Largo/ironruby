@@ -90,11 +90,7 @@ internal sealed class ReflectionCacheGenerator : Generator {
 
             WriteLicenseStatement(writer);
 
-            _output.WriteLine("#if !CLR2");
             _output.WriteLine("using System.Linq.Expressions;");
-            _output.WriteLine("#else");
-            _output.WriteLine("using Microsoft.Scripting.Ast;");
-            _output.WriteLine("#endif");
             _output.WriteLine();
 
             _output.WriteLine("using System.Reflection;");

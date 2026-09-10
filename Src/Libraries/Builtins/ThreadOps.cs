@@ -391,7 +391,6 @@ namespace IronRuby.Builtins {
             return info.GetKeys();
         }
 
-#if !WP75
         #region priority, priority=
         [RubyMethod("priority")]
         public static object Priority(Thread/*!*/ self) {
@@ -429,7 +428,6 @@ namespace IronRuby.Builtins {
             return self;
         }
         #endregion
-#endif
         #region raise, fail
 
 #if FEATURE_EXCEPTION_STATE

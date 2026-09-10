@@ -18,46 +18,6 @@ using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using System.Runtime.InteropServices;
 
-#if WIN8
-namespace System {
-    [Serializable]
-    public class SystemException : Exception {
-        public SystemException() : this(null, null) { }
-        public SystemException(string message) : this(message, null) { }
-        public SystemException(string message, Exception inner) : base(message, inner) { }
-#if FEATURE_SERIALIZATION
-        protected SystemException(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
-    }
-
-    [Serializable]
-    public class MissingMethodException : MissingMemberException {
-        public MissingMethodException() : this(null, null) { }
-        public MissingMethodException(string message) : this(message, null) { }
-        public MissingMethodException(string message, Exception inner) : base(message, inner) { }
-#if FEATURE_SERIALIZATION
-        protected MissingMethodException(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
-    }
-}
-
-namespace System.Runtime.InteropServices {
-    [Serializable]
-    public class ExternalException : Exception {
-        public virtual int ErrorCode { get { return 0; } }
-
-        public ExternalException() : this(null, null) { }
-        public ExternalException(string message) : this(message, null) { }
-        public ExternalException(string message, Exception inner) : base(message, inner) { }
-#if FEATURE_SERIALIZATION
-        protected ExternalException(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
-    }
-}
-#endif
 
 namespace IronRuby.Builtins {
     [Serializable]

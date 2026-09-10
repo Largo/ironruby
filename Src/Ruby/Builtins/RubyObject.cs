@@ -67,11 +67,6 @@ namespace IronRuby.Builtins {
         #region ToString, Equals, GetHashCode
 
         public override string/*!*/ ToString() {
-#if DEBUG && CLR2
-            if (RubyBinder._DumpingExpression) {
-                return RubyUtils.ObjectBaseToMutableString(this).ToString();
-            }
-#endif
             var site = _immediateClass.ToStringSite;
             object toStringResult = site.Target(site, this);
             if (ReferenceEquals(toStringResult, RubyOps.ForwardToBase)) {

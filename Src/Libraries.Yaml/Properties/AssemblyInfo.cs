@@ -26,9 +26,5 @@ using IronRuby.Runtime;
 [assembly: SecurityTransparent]
 
 
-#if !WIN8 && !ANDROID && !WP75
 [assembly: AllowPartiallyTrustedCallers]
-#if !CLR2
 [assembly: SecurityRules(SecurityRuleSet.Level1)]
-#endif
-#endif

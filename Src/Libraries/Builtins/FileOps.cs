@@ -427,11 +427,7 @@ namespace IronRuby.Builtins {
                 return MutableString.CreateMutable(path.Encoding).Append((char)path.GetLastChar()).TaintBy(path);
             }
 
-#if WIN8 || WP75
-            bool isWindows = true;
-#else
             bool isWindows = Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX;
-#endif
             if (isWindows) {
                 string first = parts[0];
                 if (strPath.Length >= 2 && IsDirectorySeparator(strPath[0]) && IsDirectorySeparator(strPath[1])) {
@@ -456,11 +452,7 @@ namespace IronRuby.Builtins {
                 return MutableString.CreateMutable(last, path.Encoding);
             }
 
-#if WIN8
-            StringComparison comparison = StringComparison.OrdinalIgnoreCase;
-#else
             StringComparison comparison = Environment.OSVersion.Platform == PlatformID.Unix ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
-#endif
             int matchLength = last.Length;
 
             if (suffix != null) {

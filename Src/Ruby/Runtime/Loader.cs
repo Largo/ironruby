@@ -352,9 +352,6 @@ namespace IronRuby.Runtime {
         
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
         private Assembly GetAssembly(string/*!*/ assemblyName, bool throwOnError, bool tryPartialName) {
-#if WIN8 || WP75
-            tryPartialName = false;
-#endif
             try {
                 return Platform.LoadAssembly(assemblyName);
             } catch (Exception e) {
@@ -367,9 +364,6 @@ namespace IronRuby.Runtime {
                 }
             }
 
-#if WIN8 || WP75
-            throw Assert.Unreachable;
-#else
 #pragma warning disable 618,612 // csc, gmcs
             Assembly assembly;
             try { 
@@ -386,7 +380,6 @@ namespace IronRuby.Runtime {
             }
 #pragma warning restore 618,612
             return assembly;
-#endif
         }
         
         private bool LoadAssembly(Assembly/*!*/ assembly, string typeName, bool throwOnError) {

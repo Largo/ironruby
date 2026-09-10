@@ -1158,11 +1158,7 @@ namespace IronRuby.Runtime {
                 basePath + "/" + path;
         }
 
-#if WIN8
-        public static char DirectorySeparatorChar = '\\';
-#else
         public static char DirectorySeparatorChar = Path.DirectorySeparatorChar;
-#endif
 
         // TODO: virtualize via PAL
         public static bool FileSystemUsesDriveLetters { 
