@@ -325,3 +325,369 @@ class Array
     end
   end
 end
+
+# --------------------------------------------------------------------------
+# Module reflection: the `inherit` flag added in 1.9
+# --------------------------------------------------------------------------
+
+class Module
+  # `mod.method_defined?(name, inherit = true)`. The bundled core only accepts
+  # one argument, so wrap it: inherit == true keeps the old behaviour, and
+  # inherit == false restricts the lookup to methods defined directly on `mod`
+  # (instance_methods(false) returns the public *and* protected ones, which is
+  # exactly the set method_defined? reports).
+  unless (begin; Module.method_defined?(:name, true); true; rescue ArgumentError; false; end)
+    alias_method :method_defined_without_inherit?, :method_defined?
+
+    def method_defined?(name, inherit = true)
+      return method_defined_without_inherit?(name) if inherit
+      instance_methods(false).include?(name.to_sym)
+    end
+  end
+
+  unless (begin; Module.public_method_defined?(:name, true); true; rescue ArgumentError; false; end)
+    alias_method :public_method_defined_without_inherit?, :public_method_defined?
+
+    def public_method_defined?(name, inherit = true)
+      return public_method_defined_without_inherit?(name) if inherit
+      public_instance_methods(false).include?(name.to_sym)
+    end
+  end
+
+  unless (begin; Module.private_method_defined?(:name, true); true; rescue ArgumentError; false; end)
+    alias_method :private_method_defined_without_inherit?, :private_method_defined?
+
+    def private_method_defined?(name, inherit = true)
+      return private_method_defined_without_inherit?(name) if inherit
+      private_instance_methods(false).include?(name.to_sym)
+    end
+  end
+
+  unless (begin; Module.protected_method_defined?(:name, true); true; rescue ArgumentError; false; end)
+    alias_method :protected_method_defined_without_inherit?, :protected_method_defined?
+
+    def protected_method_defined?(name, inherit = true)
+      return protected_method_defined_without_inherit?(name) if inherit
+      protected_instance_methods(false).include?(name.to_sym)
+    end
+  end
+
+  unless (begin; Module.const_defined?(:Module, true); true; rescue ArgumentError; false; end)
+    alias_method :const_defined_without_inherit?, :const_defined?
+
+    def const_defined?(name, inherit = true)
+      return const_defined_without_inherit?(name) if inherit
+      constants(false).include?(name.to_s.to_sym)
+    end
+  end
+
+  unless (begin; Module.const_get(:Module, true); true; rescue ArgumentError; false; end)
+    alias_method :const_get_without_inherit, :const_get
+
+    def const_get(name, inherit = true)
+      return const_get_without_inherit(name) if inherit
+      sym = name.to_s.to_sym
+      unless constants(false).include?(sym)
+        raise NameError, "uninitialized constant #{self}::#{sym}"
+      end
+      const_get_without_inherit(name)
+    end
+  end
+end
+
+# --------------------------------------------------------------------------
+# Object#remove_instance_variable became public in 1.9
+# --------------------------------------------------------------------------
+
+class Object
+  begin
+    public :remove_instance_variable
+  rescue NameError
+  end
+end
+
+# --------------------------------------------------------------------------
+# TRUE / FALSE / NIL were removed in Ruby 3.0
+# --------------------------------------------------------------------------
+
+[:TRUE, :FALSE, :NIL].each do |__name__|
+  begin
+    Object.send(:remove_const, __name__) if Object.const_defined?(__name__)
+  rescue NameError
+  end
+end
+
+# --------------------------------------------------------------------------
+# The Warning module (2.0 for #warn, 2.7 for the category switches)
+# --------------------------------------------------------------------------
+
+module Warning
+  CATEGORIES = [
+    :deprecated, :experimental, :performance, :strict_unused_block
+  ] unless defined?(CATEGORIES)
+
+  @categories = { :deprecated => false, :experimental => true,
+                  :performance => false, :strict_unused_block => false }
+
+  # NB: Module#[] already exists in IronRuby (CLR generic instantiation), so the
+  # guard has to look at Warning's own singleton methods, not respond_to?.
+  unless singleton_methods(false).include?(:[])
+    def self.[](category)
+      unless CATEGORIES.include?(category)
+        raise ArgumentError, "unknown category: #{category}"
+      end
+      @categories[category] ? true : false
+    end
+  end
+
+  unless singleton_methods(false).include?(:[]=)
+    def self.[]=(category, flag)
+      unless CATEGORIES.include?(category)
+        raise ArgumentError, "unknown category: #{category}"
+      end
+      @categories[category] = flag
+      flag
+    end
+  end
+
+  # Warning.warn is the single hook every Kernel#warn call funnels through in
+  # CRuby; user code overrides it to filter or redirect warnings.
+  def warn(message, *rest)
+    $stderr.write(message)
+    nil
+  end unless method_defined?(:warn)
+
+  extend self
+end
+
+# --------------------------------------------------------------------------
+# Encoding constants
+#
+# CRuby defines a constant for every encoding name and alias; the bundled core
+# only defines a handful. Reproduce CRuby's set_encoding_const() naming rules
+# over the names the runtime actually knows about.
+# --------------------------------------------------------------------------
+
+class Encoding
+  __seen__ = {}
+  constants(false).each { |__c__| __seen__[__c__.to_s] = true }
+
+  __add__ = lambda do |__name__|
+    next if __name__ =~ /\A[0-9]/
+    __enc__ = begin
+                Encoding.find(__name__)
+              rescue StandardError
+                nil
+              end
+    next unless __enc__.is_a?(Encoding)
+
+    __consts__ = []
+    __consts__ << __name__ if __name__ =~ /\A[A-Z][A-Za-z0-9_]*\z/
+    __custom__ = __name__.gsub(/[^A-Za-z0-9]/, '_')
+    if __consts__.empty? || __custom__ =~ /[a-z]/
+      __consts__ << __custom__ if __custom__ =~ /[A-Z]/
+      __consts__ << __custom__.upcase if __custom__ =~ /[a-z]/
+    end
+
+    __consts__.each do |__c__|
+      next unless __c__ =~ /\A[A-Z][A-Za-z0-9_]*\z/
+      next if __seen__[__c__]
+      __seen__[__c__] = true
+      begin
+        const_set(__c__, __enc__)
+      rescue StandardError
+      end
+    end
+  end
+
+  begin
+    Encoding.name_list.each { |__n__| __add__.call(__n__) }
+  rescue StandardError
+  end
+
+  # Names CRuby knows that are missing from (or spelled differently in) the
+  # runtime's own name list. Unsupported ones are silently skipped.
+  %w[
+    ISO-8859-1 ISO-8859-2 ISO-8859-3 ISO-8859-4 ISO-8859-5 ISO-8859-6
+    ISO-8859-7 ISO-8859-8 ISO-8859-9 ISO-8859-10 ISO-8859-11 ISO-8859-13
+    ISO-8859-14 ISO-8859-15 ISO-8859-16
+    Windows-31J Windows-874
+    Windows-1250 Windows-1251 Windows-1252 Windows-1253 Windows-1254
+    Windows-1255 Windows-1256 Windows-1257 Windows-1258
+    CP437 CP737 CP775 CP850 CP852 CP855 CP857 CP860 CP861 CP862 CP863
+    CP864 CP865 CP866 CP869 CP932 CP936 CP949 CP950 CP1252
+    IBM437 IBM737 IBM775 IBM852 IBM857 IBM861 IBM862 IBM866 IBM869
+    KOI8-R KOI8-U GB18030 GBK Big5 EUC-JP EUC-KR EUC-CN
+    macRoman macCentEuro macCroatian macCyrillic macGreek macIceland
+    macRomania macThai macTurkish macUkraine
+    ASCII-8BIT BINARY US-ASCII UTF-8 UTF-16 UTF-32 UTF-16BE UTF-16LE
+    UTF-32BE UTF-32LE Shift_JIS SJIS
+  ].each { |__n__| __add__.call(__n__) }
+end
+
+# --------------------------------------------------------------------------
+# $LOAD_PATH.resolve_feature_path (2.5)
+# --------------------------------------------------------------------------
+
+if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array) &&
+   !$LOAD_PATH.respond_to?(:resolve_feature_path)
+  def $LOAD_PATH.resolve_feature_path(feature)
+    feature = feature.to_str if !feature.is_a?(String) && feature.respond_to?(:to_str)
+    raise TypeError, "no implicit conversion into String" unless feature.is_a?(String)
+
+    rb_exts = ['.rb']
+    so_exts = ['.so', '.dll', '.dylib', '.bundle']
+
+    check = lambda do |path|
+      so_exts.each do |ext|
+        return [:so, path] if path.end_with?(ext) && File.file?(path)
+      end
+      return [:rb, path] if path.end_with?('.rb') && File.file?(path)
+      rb_exts.each do |ext|
+        return [:rb, path + ext] if File.file?(path + ext)
+      end
+      so_exts.each do |ext|
+        return [:so, path + ext] if File.file?(path + ext)
+      end
+      nil
+    end
+
+    if feature =~ /\A(?:[\/~]|\.\.?\/|[a-zA-Z]:[\/\\])/
+      return check.call(File.expand_path(feature))
+    end
+
+    each do |dir|
+      next unless dir.is_a?(String)
+      found = check.call(File.expand_path(feature, dir))
+      return found if found
+    end
+    nil
+  end
+end
+
+# `.` has not been on the default load path since 1.9.2.
+$LOAD_PATH.delete('.') if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array)
+
+# --------------------------------------------------------------------------
+# Object#clone(freeze:) (2.4)
+# --------------------------------------------------------------------------
+
+class Object
+  unless (begin; Object.new.clone(:freeze => nil); true; rescue ArgumentError; false; end)
+    alias_method :clone_without_options, :clone
+
+    # `clone(freeze: nil)` is the default (copy the frozen state), `freeze: true`
+    # always freezes, `freeze: false` never does. The runtime's #clone always
+    # copies the frozen flag and there is no way to thaw an object from Ruby, so
+    # `freeze: false` on an already-frozen receiver falls back to #dup, which
+    # differs from #clone only in that it does not carry over the singleton
+    # class.
+    def clone(opts = nil)
+      freeze_opt = nil
+      if opts.is_a?(Hash)
+        extra = opts.keys - [:freeze]
+        unless extra.empty?
+          raise ArgumentError, "unknown keyword: #{extra.first.inspect}"
+        end
+        freeze_opt = opts[:freeze]
+        unless freeze_opt.nil? || freeze_opt == true || freeze_opt == false
+          raise ArgumentError,
+                "unexpected value for freeze: #{freeze_opt.class}"
+        end
+      elsif !opts.nil?
+        raise TypeError, "no implicit conversion of #{opts.class} into Hash"
+      end
+
+      if freeze_opt == false && frozen?
+        dup
+      elsif freeze_opt == true
+        copy = clone_without_options
+        copy.freeze
+        copy
+      else
+        clone_without_options
+      end
+    end
+  end
+end
+
+# --------------------------------------------------------------------------
+# Fiber
+#
+# Backed by a thread plus a two-way handshake, so only one of the two ever runs
+# at a time. Close enough for control flow, thread/fiber-local variables and
+# per-fiber $! / $@; it is not a real coroutine, so Thread.current inside the
+# block is the fiber's own thread and #transfer is deliberately not provided.
+# --------------------------------------------------------------------------
+
+class FiberError < StandardError; end unless defined?(FiberError)
+
+unless defined?(Fiber)
+  class Fiber
+    def initialize(*args, &block)
+      unless block
+        raise ArgumentError, "tried to create a Fiber without a block"
+      end
+      require 'thread' unless defined?(::Queue)
+      @block = block
+      @to_fiber = ::Queue.new
+      @to_caller = ::Queue.new
+      @alive = true
+      @resuming = false
+      @thread = nil
+    end
+
+    def alive?
+      @alive
+    end
+
+    def resume(*args)
+      raise FiberError, "attempt to resume a terminated fiber" unless @alive
+      raise FiberError, "attempt to resume the current fiber" if @resuming
+      @resuming = true
+      start unless @thread
+      @to_fiber.push(args)
+      kind, value = @to_caller.pop
+      @resuming = false
+      raise value if kind == :error
+      value
+    end
+
+    def self.yield(*args)
+      fiber = Thread.current[:__ruby4_fiber__]
+      raise FiberError, "can't yield from root fiber" unless fiber
+      fiber.__suspend__(args)
+    end
+
+    # internal: called on the fiber's own thread
+    def __suspend__(args)
+      @to_caller.push([:yield, args.size <= 1 ? args.first : args])
+      resumed = @to_fiber.pop
+      resumed.size <= 1 ? resumed.first : resumed
+    end
+
+    # internal: called on the fiber's own thread
+    def __finish__(kind, value)
+      @alive = false
+      @to_caller.push([kind, value])
+    end
+
+    private
+
+    def start
+      fiber = self
+      block = @block
+      inbox = @to_fiber
+      @thread = Thread.new do
+        Thread.current[:__ruby4_fiber__] = fiber
+        first = inbox.pop
+        begin
+          result = block.call(*first)
+          fiber.__finish__(:return, result)
+        rescue Exception => e
+          fiber.__finish__(:error, e)
+        end
+      end
+    end
+  end
+end

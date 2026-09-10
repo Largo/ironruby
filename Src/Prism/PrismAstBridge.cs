@@ -24,6 +24,11 @@ namespace IronRuby.Prism {
         private readonly RubyEncoding/*!*/ _encoding;
         private readonly Stack<LexicalScope>/*!*/ _scopes = new Stack<LexicalScope>();
         private int _tempCounter;
+        private SourceUnit _sourceUnit;
+        private ErrorSink _errorSink;
+        // case/in subject temp -> { value, "already computed" flag } holding its #deconstruct result
+        private readonly Dictionary<LocalVariable, LocalVariable[]>/*!*/ _deconstructCache =
+            new Dictionary<LocalVariable, LocalVariable[]>();
 
         private PrismAstBridge(string/*!*/ source, string path, RubyEncoding/*!*/ encoding) {
             _source = source;
@@ -47,6 +52,8 @@ namespace IronRuby.Prism {
             SourceUnit sourceUnit, ErrorSink errorSink) {
 
             var bridge = new PrismAstBridge(code, path, RubyEncoding.UTF8);
+            bridge._sourceUnit = sourceUnit;
+            bridge._errorSink = errorSink;
             PrismParseResult result = PrismParser.Parse(code, path, 1, outerLocalNames);
 
             if (result.Errors.Count > 0) {
@@ -114,13 +121,32 @@ namespace IronRuby.Prism {
         private Statements/*!*/ BuildStatements(Pm.PmNode statementsNode) {
             var result = new Statements();
             if (statementsNode is Pm.StatementsNode statements) {
-                foreach (var statement in statements.Body) {
-                    result.Add(Expr(statement));
+                var body = statements.Body;
+                for (int i = 0; i < body.Length; i++) {
+                    result.Add((i < body.Length - 1) ? VoidStatement(body[i]) : Expr(body[i]));
                 }
             } else if (statementsNode != null) {
                 result.Add(Expr(statementsNode));
             }
             return result;
+        }
+
+        /// <summary>
+        /// A statement whose value is discarded. CRuby compiles `defined?(...)` away entirely in
+        /// that position -- the operand is never evaluated -- and warns about it, so do the same.
+        /// </summary>
+        private Expression/*!*/ VoidStatement(Pm.PmNode/*!*/ node) {
+            var span = Span(node);
+            if (!(Unparen(node) is Pm.DefinedNode defined)) {
+                return Expr(node);
+            }
+            // still map the operand: it may introduce locals the rest of the scope refers to
+            Expr(defined.Value);
+            if (_errorSink != null && _sourceUnit != null) {
+                _errorSink.Add(_sourceUnit, "possibly useless use of defined? in void context", span,
+                    Errors.RuntimeVerboseWarning, Severity.Warning);
+            }
+            return Literal.Nil(span);
         }
 
         private Expression/*!*/ StatementsAsExpression(Pm.PmNode statementsNode, SourceSpan span) {
@@ -353,7 +379,7 @@ namespace IronRuby.Prism {
                         Span(rescueMod.RescueExpression), span);
 
                 case Pm.DefinedNode defined:
-                    return new IsDefinedExpression(Expr(defined.Value), span);
+                    return Defined(defined.Value, span);
 
                 case Pm.CaseMatchNode caseMatch: return CaseMatch(caseMatch, span);
                 case Pm.MatchPredicateNode matchPredicate: {
@@ -599,6 +625,136 @@ namespace IronRuby.Prism {
                 default:
                     throw Unsupported(node);
             }
+        }
+
+        // ---- defined? ----
+
+        // `defined?((x))` classifies like `defined?(x)` in CRuby, but `defined?((a; b))`
+        // is just an "expression", so only a single-statement body is unwrapped.
+        private static Pm.PmNode/*!*/ Unparen(Pm.PmNode/*!*/ node) {
+            while (true) {
+                Pm.PmNode body;
+                if (node is Pm.ParenthesesNode parens) {
+                    body = parens.Body;
+                } else if (node is Pm.StatementsNode) {
+                    body = node;
+                } else {
+                    return node;
+                }
+
+                var statements = body as Pm.StatementsNode;
+                if (statements == null || statements.Body.Length != 1) return node;
+                node = statements.Body[0];
+            }
+        }
+
+        // defined? answers with a frozen String in CRuby; IsDefinedExpression builds a mutable one.
+        private Expression/*!*/ Freeze(Expression/*!*/ value, SourceSpan span) {
+            return new MethodCall(value, "freeze", null, span);
+        }
+
+        private Expression/*!*/ FrozenString(string/*!*/ text, SourceSpan span) {
+            return Freeze(new StringLiteral(text, RubyEncoding.Binary, span), span);
+        }
+
+        // <test> ? "<category>".freeze : nil -- used where IsDefinedExpression would report
+        // the wrong category for the node the construct was lowered to.
+        private Expression/*!*/ DefinedAs(Expression/*!*/ test, string/*!*/ category, SourceSpan span) {
+            return new ConditionalExpression(test, FrozenString(category, span), Literal.Nil(span), span);
+        }
+
+        private Expression/*!*/ Defined(Pm.PmNode/*!*/ value, SourceSpan span) {
+            var node = Unparen(value);
+
+            switch (node) {
+                // Since 3.4 every op-assignment answers "assignment" no matter what the target is.
+                // `x ||= v` lowers to a SimpleAssignmentExpression whose "||" operation makes the
+                // 1.9 AST report "expression" instead.
+                case Pm.LocalVariableOrWriteNode _:
+                case Pm.LocalVariableAndWriteNode _:
+                case Pm.InstanceVariableOrWriteNode _:
+                case Pm.InstanceVariableAndWriteNode _:
+                case Pm.ClassVariableOrWriteNode _:
+                case Pm.ClassVariableAndWriteNode _:
+                case Pm.GlobalVariableOrWriteNode _:
+                case Pm.GlobalVariableAndWriteNode _:
+                case Pm.ConstantOrWriteNode _:
+                case Pm.ConstantAndWriteNode _:
+                case Pm.ConstantPathOrWriteNode _:
+                case Pm.ConstantPathAndWriteNode _:
+                case Pm.IndexOrWriteNode _:
+                case Pm.IndexAndWriteNode _:
+                case Pm.CallOrWriteNode _:
+                case Pm.CallAndWriteNode _:
+                    return DefinedAs(new IsDefinedExpression(Expr(node), span), "assignment", span);
+
+                // 1.8 answered with the variable's own name ($&, $1, ...); 1.9+ says "global-variable"
+                case Pm.BackReferenceReadNode _:
+                case Pm.NumberedReferenceReadNode _:
+                    return DefinedAs(new IsDefinedExpression(Expr(node), span), "global-variable", span);
+
+                // an array literal is only defined if every element is
+                case Pm.ArrayNode array:
+                    return DefinedAs(ElementsDefined(array, span), "expression", span);
+
+                // `a.x = v` and `a[i] = v` are the x= / []= methods, not assignments; they lower
+                // to a SimpleAssignmentExpression, which would report "assignment"
+                case Pm.CallNode attributeWrite
+                    when attributeWrite.Receiver != null
+                        && HasFlag(attributeWrite, Pm.CallNodeFlags.AttributeWrite)
+                        && !HasFlag(attributeWrite, Pm.CallNodeFlags.SafeNavigation):
+                    return GuardedDefined(attributeWrite.Receiver,
+                        new IsDefinedExpression(
+                            new MethodCall(Expr(attributeWrite.Receiver), attributeWrite.Name, null, span), span),
+                        span);
+
+                case Pm.CallNode call when call.Receiver != null:
+                    return GuardedDefined(call.Receiver, new IsDefinedExpression(Expr(node), span), span);
+
+                case Pm.ConstantPathNode path when path.Parent != null:
+                    return GuardedDefined(path.Parent, new IsDefinedExpression(Expr(node), span), span);
+
+                default:
+                    return Freeze(new IsDefinedExpression(Expr(node), span), span);
+            }
+        }
+
+        // CRuby requires the receiver of a call (and the qualifier of a constant path) to be
+        // defined before it evaluates it, so `!$never_assigned` is nil rather than "method".
+        // MethodCall/ConstantVariable only guard against the receiver *raising*.
+        private Expression/*!*/ GuardedDefined(Pm.PmNode/*!*/ receiver, Expression/*!*/ defined, SourceSpan span) {
+            var result = Freeze(defined, span);
+            var guard = DefinednessGuard(receiver, span);
+            return guard == null ? result : new ConditionalExpression(guard, result, Literal.Nil(span), span);
+        }
+
+        // A test for "reading this receiver is defined", or null when reading it either always
+        // is, or can only fail by raising -- which the lowered node already handles.
+        private Expression DefinednessGuard(Pm.PmNode/*!*/ receiver, SourceSpan span) {
+            var node = Unparen(receiver);
+            switch (node) {
+                case Pm.GlobalVariableReadNode _:
+                case Pm.InstanceVariableReadNode _:
+                case Pm.ClassVariableReadNode _:
+                case Pm.BackReferenceReadNode _:
+                case Pm.NumberedReferenceReadNode _:
+                case Pm.ConstantReadNode _:
+                case Pm.ConstantPathNode _:
+                    return new IsDefinedExpression(Expr(node), span);
+                default:
+                    return null;
+            }
+        }
+
+        private Expression/*!*/ ElementsDefined(Pm.ArrayNode/*!*/ node, SourceSpan span) {
+            Expression result = null;
+            foreach (var element in node.Elements) {
+                var value = element is Pm.SplatNode splat ? splat.Expression : element;
+                if (value == null) continue;
+                var test = new IsDefinedExpression(Expr(Unparen(value)), Span(value));
+                result = (result == null) ? (Expression)test : new AndExpression(result, test, span);
+            }
+            return result ?? (Expression)Literal.True(span);
         }
 
         private Expression/*!*/ If(Pm.IfNode/*!*/ node, SourceSpan span) {
@@ -1227,6 +1383,51 @@ namespace IronRuby.Prism {
             return temp;
         }
 
+        private Expression/*!*/ RaiseError(string/*!*/ className, string/*!*/ message, SourceSpan span) {
+            return new MethodCall(null, "raise", new Arguments(new Expression[] {
+                new ConstantVariable(className, span),
+                new StringLiteral(message, _encoding, span)
+            }), span);
+        }
+
+        /// <summary>
+        /// `subject.deconstruct`, reusing the value already computed for the enclosing `case/in`
+        /// if there is one. MRI calls #deconstruct once per case statement, not once per clause.
+        /// </summary>
+        private Expression/*!*/ DeconstructCall(Expression/*!*/ subject, SourceSpan span) {
+            var call = new MethodCall(subject, "deconstruct", null, span);
+
+            LocalVariable[] cache;
+            var local = subject as LocalVariable;
+            if (local == null || !_deconstructCache.TryGetValue(local, out cache)) {
+                return call;
+            }
+            return new ConditionalExpression(cache[1], cache[0],
+                new BlockExpression(MakeStatements(
+                    new SimpleAssignmentExpression(cache[1], Literal.True(span), null, span),
+                    new SimpleAssignmentExpression(cache[0], call, null, span)), span),
+                span);
+        }
+
+        /// <summary>
+        /// Appends the tests that turn <paramref name="subject"/> into the Array an array/find
+        /// pattern matches against, and returns the temp holding it. Unlike a plain
+        /// `Array === subject` shortcut this always goes through #deconstruct, which objects
+        /// (including Arrays with a singleton #deconstruct) are allowed to override.
+        /// </summary>
+        private LocalVariable/*!*/ DeconstructToArray(Expression/*!*/ subject, List<Expression>/*!*/ tests, SourceSpan span) {
+            tests.Add(new MethodCall(subject, "respond_to?",
+                new Arguments(new SymbolLiteral("deconstruct", _encoding, span)), span));
+
+            Expression arrAssign;
+            var arr = NewTemp(DeconstructCall(subject, span), span, out arrAssign);
+            tests.Add(new BlockExpression(MakeStatements(arrAssign, Literal.True(span)), span));
+            tests.Add(new OrExpression(
+                CaseEqual(new ConstantVariable("Array", span), arr, span),
+                RaiseError("TypeError", "deconstruct must return Array", span), span));
+            return arr;
+        }
+
         private Expression/*!*/ RaiseNoMatchingPattern(Expression/*!*/ subject, SourceSpan span) {
             return new MethodCall(null, "raise", new Arguments(new Expression[] {
                 new ConstantVariable("NoMatchingPatternError", span),
@@ -1237,6 +1438,13 @@ namespace IronRuby.Prism {
         private Expression/*!*/ CaseMatch(Pm.CaseMatchNode/*!*/ node, SourceSpan span) {
             Expression assign;
             var temp = NewTemp(Expr(node.Predicate), span, out assign);
+
+            // #deconstruct is called at most once per `case`, however many `in` clauses look at it
+            var cachedValue = CurrentScope.ResolveOrAddVariable("?pmd" + _tempCounter++ + "?", span);
+            var cachedFlag = CurrentScope.ResolveOrAddVariable("?pmd" + _tempCounter++ + "?", span);
+            // reset on every entry: the temps outlive one iteration of an enclosing loop
+            var resetCache = new SimpleAssignmentExpression(cachedFlag, Literal.False(span), null, span);
+            _deconstructCache[temp] = new[] { cachedValue, cachedFlag };
 
             var clauses = new List<ElseIfClause>();
             Expression firstTest = null;
@@ -1258,8 +1466,9 @@ namespace IronRuby.Prism {
                 clauses.Add(new ElseIfClause(null, new Statements(RaiseNoMatchingPattern(temp, span)), span));
             }
 
+            _deconstructCache.Remove(temp);
             var ifExpr = new IfExpression(firstTest, firstBody, clauses, span);
-            return new BlockExpression(MakeStatements(new Expression[] { assign, ifExpr }), span);
+            return new BlockExpression(MakeStatements(new Expression[] { assign, resetCache, ifExpr }), span);
         }
 
         /// <summary>
@@ -1333,18 +1542,7 @@ namespace IronRuby.Prism {
                 tests.Add(CaseEqual(Expr(node.Constant), subject, span));
             }
 
-            // arr = Array === subj ? subj : (subj.respond_to?(:deconstruct) ? subj.deconstruct : nil)
-            Expression deconstructed = new ConditionalExpression(
-                CaseEqual(new ConstantVariable("Array", span), subject, span),
-                subject,
-                new ConditionalExpression(
-                    new MethodCall(subject, "respond_to?", new Arguments(new SymbolLiteral("deconstruct", _encoding, span)), span),
-                    new MethodCall(subject, "deconstruct", null, span),
-                    Literal.Nil(span), span),
-                span);
-            Expression arrAssign;
-            var arr = NewTemp(deconstructed, span, out arrAssign);
-            tests.Add(new BlockExpression(MakeStatements(new Expression[] { arrAssign, arr }), span));
+            var arr = DeconstructToArray(subject, tests, span);
 
             int required = node.Requireds.Length + node.Posts.Length;
             Expression lenAssign;
@@ -1391,24 +1589,41 @@ namespace IronRuby.Prism {
                 tests.Add(CaseEqual(Expr(node.Constant), subject, span));
             }
 
-            // h = Hash === subj ? subj : (subj.respond_to?(:deconstruct_keys) ? subj.deconstruct_keys(nil) : nil)
-            Expression deconstructed = new ConditionalExpression(
-                CaseEqual(new ConstantVariable("Hash", span), subject, span),
-                subject,
-                new ConditionalExpression(
-                    new MethodCall(subject, "respond_to?", new Arguments(new SymbolLiteral("deconstruct_keys", _encoding, span)), span),
-                    new MethodCall(subject, "deconstruct_keys", new Arguments(Literal.Nil(span)), span),
-                    Literal.Nil(span), span),
-                span);
-            Expression hashAssign;
-            var hash = NewTemp(deconstructed, span, out hashAssign);
-            tests.Add(new BlockExpression(MakeStatements(new Expression[] { hashAssign, hash }), span));
-
             var knownKeys = new List<string>();
+            foreach (var element in node.Elements) {
+                knownKeys.Add(((Pm.SymbolNode)((Pm.AssocNode)element).Key).Unescaped);
+            }
+
+            // MRI hands #deconstruct_keys the keys the pattern is interested in, or nil when a
+            // named **rest means the pattern needs every key.
+            Expression keyList;
+            if (node.Rest is Pm.AssocSplatNode named && named.Value != null) {
+                keyList = Literal.Nil(span);
+            } else {
+                var symbols = new List<Expression>();
+                foreach (var key in knownKeys) symbols.Add(new SymbolLiteral(key, _encoding, span));
+                keyList = new ArrayConstructor(new Arguments(symbols.ToArray()), span);
+            }
+
+            tests.Add(new MethodCall(subject, "respond_to?",
+                new Arguments(new SymbolLiteral("deconstruct_keys", _encoding, span)), span));
+
+            Expression hashAssign;
+            var hash = NewTemp(new MethodCall(subject, "deconstruct_keys", new Arguments(keyList), span),
+                span, out hashAssign);
+            tests.Add(new BlockExpression(MakeStatements(hashAssign, Literal.True(span)), span));
+            tests.Add(new OrExpression(
+                CaseEqual(new ConstantVariable("Hash", span), hash, span),
+                RaiseError("TypeError", "deconstruct_keys must return Hash", span), span));
+
+            // `in {}` is the one hash pattern that demands an empty hash
+            if (node.Elements.Length == 0 && node.Rest == null) {
+                tests.Add(new MethodCall(hash, "empty?", null, span));
+            }
+
             foreach (var element in node.Elements) {
                 var assoc = (Pm.AssocNode)element;
                 var key = (Pm.SymbolNode)assoc.Key;
-                knownKeys.Add(key.Unescaped);
                 var keySymbol = new SymbolLiteral(key.Unescaped, _encoding, Span(key));
                 tests.Add(new MethodCall(hash, "key?", new Arguments(keySymbol), span));
 
@@ -1456,17 +1671,7 @@ namespace IronRuby.Prism {
                 tests.Add(CaseEqual(Expr(node.Constant), subject, span));
             }
 
-            Expression deconstructed = new ConditionalExpression(
-                CaseEqual(new ConstantVariable("Array", span), subject, span),
-                subject,
-                new ConditionalExpression(
-                    new MethodCall(subject, "respond_to?", new Arguments(new SymbolLiteral("deconstruct", _encoding, span)), span),
-                    new MethodCall(subject, "deconstruct", null, span),
-                    Literal.Nil(span), span),
-                span);
-            Expression arrAssign;
-            var arr = NewTemp(deconstructed, span, out arrAssign);
-            tests.Add(new BlockExpression(MakeStatements(arrAssign, arr), span));
+            var arr = DeconstructToArray(subject, tests, span);
 
             int count = node.Requireds.Length;
             Expression lenAssign;
