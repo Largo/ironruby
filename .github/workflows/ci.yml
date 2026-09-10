@@ -86,7 +86,15 @@ jobs:
           ./IronRuby.Tests > results.txt 2>&1 || true
           failures=$(grep -c '^> FAILED' results.txt || true)
           echo "failure lines: $failures (baseline 22)"
-          test "$failures" -le 22
+          if [ "$failures" -gt 22 ]; then
+            echo "::group::failing tests"
+            grep -oE '^> FAILED: .*' results.txt | sort | uniq -c | sort -rn
+            echo "::endgroup::"
+            echo "::group::first failures in detail"
+            sed -n '/^ *1)/,/^ *8)/p' results.txt
+            echo "::endgroup::"
+            exit 1
+          fi
 
   ruby-spec:
     runs-on: ubuntu-latest

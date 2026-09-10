@@ -1,4 +1,4 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -328,15 +328,17 @@ SUB
             s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(utf8, RubyEncoding.Binary), true, sq).ToString();
             Assert(s == @"'\xF0\x92\x8D\x85'");
 
+            // #inspect prints characters the encoding can represent (Ruby >= 2.0);
+            // only #dump escapes them all.
             s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(utf8, RubyEncoding.UTF8), false, sq).ToString();
-            Assert(s == @"'\u{12345}'");
+            Assert(s == sq + utf16 + sq);
 
             s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(utf8, RubyEncoding.UTF8), true, sq).ToString();
             Assert(s == @"'\u{12345}'");
 
             // incomplete character:
             s = MutableStringOps.GetQuotedStringRepresentation(MutableString.Create("\ud808\udf45\ud808", RubyEncoding.UTF8), false, sq).ToString();
-            Assert(s == @"'\u{12345}\u{d808}'");
+            Assert(s == sq + utf16 + @"\u{d808}" + sq);
             
             s = MutableStringOps.GetQuotedStringRepresentation(MutableString.CreateBinary(sjisWide, sjisEncoding), false, sq).ToString();
             Assert(s == @"'\x82\xA0'");
