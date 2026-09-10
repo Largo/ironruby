@@ -139,7 +139,8 @@ namespace IronRuby.Hosting {
             }
 
             if (arg.StartsWith("-C", StringComparison.Ordinal)) {
-                ConsoleOptions.ChangeDirectory = arg.Substring(2);
+                // -Cdir and -C dir are both valid, as for -r above
+                ConsoleOptions.ChangeDirectory = (arg == "-C") ? PopNextArg() : arg.Substring(2);
                 return;
             }
 

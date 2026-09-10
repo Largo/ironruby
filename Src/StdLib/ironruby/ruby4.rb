@@ -888,3 +888,25 @@ class Enumerator
     nil
   end unless method_defined?(:size)
 end
+
+# Comparable#== calls <=>, and the default Kernel#<=> is defined in terms of
+# ==, so two objects that define neither recurse forever and overflow the
+# stack. CRuby breaks the cycle with rb_exec_recursive_paired; do the same.
+module Comparable
+  def ==(other)
+    return true if equal?(other)
+
+    stack = (Thread.current[:__comparable_eq__] ||= [])
+    pair = [object_id, other.object_id]
+    return false if stack.include?(pair)
+
+    stack.push(pair)
+    begin
+      (self <=> other) == 0
+    rescue StandardError
+      false
+    ensure
+      stack.pop
+    end
+  end
+end
