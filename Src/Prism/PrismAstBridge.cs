@@ -443,7 +443,7 @@ namespace IronRuby.Prism {
                     _scopes.Push(scope);
                     try {
                         Statements prologue;
-                        var parameters = BlockParameters(lambda.Parameters, out prologue);
+                        var parameters = BlockParameters(lambda.Parameters, false, out prologue);
                         var body = BlockBody(lambda.Body, span, prologue);
                         return new LambdaDefinition(new BlockDefinition(scope, parameters, body, span));
                     } finally {
@@ -462,10 +462,13 @@ namespace IronRuby.Prism {
                 case Pm.YieldNode yield:
                     return new YieldCall(yield.Arguments != null ? BuildArguments(yield.Arguments) : null, span);
 
-                case Pm.SuperNode super:
-                    return new SuperCall(
-                        super.Arguments != null ? BuildArguments(super.Arguments) : new Arguments(),
-                        OptionalBlock(super.Block), span);
+                case Pm.SuperNode super: {
+                    Block superBlock = OptionalBlock(super.Block);
+                    var superArgs = super.Arguments != null
+                        ? BuildArguments(super.Arguments, ref superBlock)
+                        : new Arguments();
+                    return new SuperCall(superArgs, superBlock, span);
+                }
                 case Pm.ForwardingSuperNode forwardingSuper:
                     return new SuperCall(null,
                         forwardingSuper.Block != null ? BlockDef((Pm.BlockNode)forwardingSuper.Block) : null, span);
@@ -678,24 +681,7 @@ namespace IronRuby.Prism {
 
             Expression receiver = node.Receiver != null ? Expr(node.Receiver) : null;
             Block block = OptionalBlock(node.Block);
-            Arguments args = null;
-            if (node.Arguments != null) {
-                var argsNode = (Pm.ArgumentsNode)node.Arguments;
-                var exprs = new List<Expression>();
-                foreach (var arg in argsNode.Arguments) {
-                    if (arg is Pm.ForwardingArgumentsNode) {
-                        // g(...) inside def f(...): splat the captured rest, forward the block
-                        var rest = CurrentScope.ResolveVariable(ForwardingRestName);
-                        var fwdBlock = CurrentScope.ResolveVariable(ForwardingBlockName);
-                        if (rest == null || fwdBlock == null) throw Unsupported(arg);
-                        exprs.Add(new SplattedArgument(rest));
-                        if (block == null) block = new BlockReference(fwdBlock, Span(arg));
-                    } else {
-                        exprs.Add(Argument(arg));
-                    }
-                }
-                args = new Arguments(exprs.ToArray());
-            }
+            Arguments args = node.Arguments != null ? BuildArguments(node.Arguments, ref block) : null;
             return new MethodCall(receiver, name, args, block, span);
         }
 
@@ -715,6 +701,12 @@ namespace IronRuby.Prism {
                 case Pm.BlockNode blockNode: return BlockDef(blockNode);
                 case Pm.BlockArgumentNode blockArg when blockArg.Expression != null:
                     return new BlockReference(Expr(blockArg.Expression), Span(blockArg));
+                case Pm.BlockArgumentNode anonymous: {
+                    // `f(&)` forwards the anonymous block parameter of the enclosing `def f(&)`
+                    var blockLocal = CurrentScope.ResolveVariable("?block?");
+                    if (blockLocal == null) throw Unsupported(anonymous);
+                    return new BlockReference(blockLocal, Span(anonymous));
+                }
                 default: throw Unsupported(block);
             }
         }
@@ -728,10 +720,29 @@ namespace IronRuby.Prism {
         }
 
         private Arguments/*!*/ BuildArguments(Pm.PmNode argumentsNode) {
+            Block ignored = null;
+            return BuildArguments(argumentsNode, ref ignored);
+        }
+
+        /// <summary>
+        /// Builds the argument list, expanding `...` forwarding into the hidden rest local
+        /// (and, when the caller passes no block of its own, the hidden block local).
+        /// </summary>
+        private Arguments/*!*/ BuildArguments(Pm.PmNode argumentsNode, ref Block block) {
             if (argumentsNode == null) return new Arguments();
             var exprs = new List<Expression>();
             foreach (var arg in ((Pm.ArgumentsNode)argumentsNode).Arguments) {
-                exprs.Add(Argument(arg));
+                if (arg is Pm.ForwardingArgumentsNode) {
+                    var rest = CurrentScope.ResolveVariable(ForwardingRestName);
+                    var fwdBlock = CurrentScope.ResolveVariable(ForwardingBlockName);
+                    if (rest == null) throw Unsupported(arg);
+                    exprs.Add(new SplattedArgument(rest));
+                    if (block == null && fwdBlock != null) {
+                        block = new BlockReference(fwdBlock, Span(arg));
+                    }
+                } else {
+                    exprs.Add(Argument(arg));
+                }
             }
             return new Arguments(exprs.ToArray());
         }
@@ -862,14 +873,14 @@ namespace IronRuby.Prism {
             _scopes.Push(scope);
             try {
                 Statements prologue;
-                var parameters = BlockParameters(node.Parameters, out prologue);
+                var parameters = BlockParameters(node.Parameters, true, out prologue);
                 return new BlockDefinition(scope, parameters, BlockBody(node.Body, span, prologue), span);
             } finally {
                 _scopes.Pop();
             }
         }
 
-        private Parameters BlockParameters(Pm.PmNode parametersNode, out Statements prologue) {
+        private Parameters BlockParameters(Pm.PmNode parametersNode, bool autoSplat, out Statements prologue) {
             prologue = null;
             switch (parametersNode) {
                 case null:
@@ -879,20 +890,20 @@ namespace IronRuby.Prism {
                         CurrentScope.ResolveOrAddVariable(((Pm.BlockLocalVariableNode)blockLocal).Name, Span(blockLocal));
                     }
                     return blockParams.Parameters != null
-                        ? BuildParameters((Pm.ParametersNode)blockParams.Parameters, out prologue)
+                        ? BuildParameters((Pm.ParametersNode)blockParams.Parameters, autoSplat, out prologue)
                         : null;
                 }
                 case Pm.NumberedParametersNode numbered: {
                     var span = Span(numbered);
                     var mandatory = new LeftValue[numbered.Maximum];
                     for (int i = 0; i < numbered.Maximum; i++) {
-                        mandatory[i] = CurrentScope.ResolveOrAddVariable("_" + (i + 1), span);
+                        mandatory[i] = DefineParameter("_" + (i + 1), span);
                     }
                     return new Parameters(mandatory, mandatory.Length, null, null, null, span);
                 }
                 case Pm.ItParametersNode it: {
                     var span = Span(it);
-                    var mandatory = new LeftValue[] { CurrentScope.ResolveOrAddVariable("it", span) };
+                    var mandatory = new LeftValue[] { DefineParameter("it", span) };
                     return new Parameters(mandatory, 1, null, null, null, span);
                 }
                 default:
@@ -908,7 +919,7 @@ namespace IronRuby.Prism {
                 Statements prologue = null;
                 Parameters parameters = Parameters.Empty;
                 if (node.Parameters != null) {
-                    parameters = BuildParameters((Pm.ParametersNode)node.Parameters, out prologue);
+                    parameters = BuildParameters((Pm.ParametersNode)node.Parameters, false, out prologue);
                 }
                 var body = DefinitionBody(node.Body, span, prologue);
                 return new MethodDefinition(scope, target, node.Name, parameters, body, span);
@@ -942,7 +953,7 @@ namespace IronRuby.Prism {
 
         // ---- parameters (including keyword-argument lowering) ----
 
-        private Parameters/*!*/ BuildParameters(Pm.ParametersNode/*!*/ node, out Statements prologue) {
+        private Parameters/*!*/ BuildParameters(Pm.ParametersNode/*!*/ node, bool autoSplat, out Statements prologue) {
             var span = Span(node);
             prologue = null;
 
@@ -950,7 +961,7 @@ namespace IronRuby.Prism {
             foreach (var required in node.Requireds) {
                 switch (required) {
                     case Pm.RequiredParameterNode requiredParam:
-                        mandatory.Add(CurrentScope.ResolveOrAddVariable(requiredParam.Name, Span(required)));
+                        mandatory.Add(DefineParameter(requiredParam.Name, Span(required)));
                         break;
                     case Pm.MultiTargetNode multi:
                         mandatory.Add(CompoundTarget(multi.Lefts, multi.Rest, multi.Rights));
@@ -964,7 +975,7 @@ namespace IronRuby.Prism {
             var optional = new List<SimpleAssignmentExpression>();
             foreach (var opt in node.Optionals) {
                 var optParam = (Pm.OptionalParameterNode)opt;
-                var lhs = CurrentScope.ResolveOrAddVariable(optParam.Name, Span(opt));
+                var lhs = DefineParameter(optParam.Name, Span(opt));
                 optional.Add(new SimpleAssignmentExpression(lhs, Expr(optParam.Value), null, Span(opt)));
             }
 
@@ -976,7 +987,7 @@ namespace IronRuby.Prism {
                     // keeps MRI arity semantics
                     unsplat = Placeholder.Singleton;
                 } else if (node.Rest is Pm.RestParameterNode restParam) {
-                    unsplat = CurrentScope.ResolveOrAddVariable(restParam.Name ?? Symbols.RestArgsLocal, restSpan);
+                    unsplat = DefineParameter(restParam.Name ?? Symbols.RestArgsLocal, restSpan);
                 } else {
                     throw Unsupported(node.Rest);
                 }
@@ -984,32 +995,138 @@ namespace IronRuby.Prism {
 
             foreach (var post in node.Posts) {
                 if (!(post is Pm.RequiredParameterNode postParam)) throw Unsupported(post);
-                mandatory.Add(CurrentScope.ResolveOrAddVariable(postParam.Name, Span(post)));
+                mandatory.Add(DefineParameter(postParam.Name, Span(post)));
             }
 
-            // keyword arguments: lowered onto a trailing optional hash parameter.
-            // Restricted to signatures without optional positionals or rest params,
-            // where "trailing hash" and "keywords" coincide.
+            // keyword arguments: with only mandatory positionals a trailing optional hash
+            // is equivalent, so use that (it keeps arity and Method#parameters sane).
+            // Anything richer needs positional binding done by hand, because keywords do
+            // not have their own calling-convention slot here.
             if (node.Keywords.Length > 0 || node.KeywordRest is Pm.KeywordRestParameterNode) {
-                if (optional.Count > 0 || unsplat != null || node.Posts.Length > 0) throw Unsupported(node);
+                if (optional.Count > 0 || unsplat != null || node.Posts.Length > 0) {
+                    return LowerGeneralParameters(node, autoSplat, span, out prologue);
+                }
                 prologue = LowerKeywords(node, optional, span);
             } else if (node.KeywordRest is Pm.ForwardingParameterNode) {
                 // def f(...) => def f(*?fwd?, &?fwdblk?); calls with `...` splat them back
                 if (unsplat != null) throw Unsupported(node.KeywordRest);
-                unsplat = CurrentScope.ResolveOrAddVariable(ForwardingRestName, Span(node.KeywordRest));
+                unsplat = DefineParameter(ForwardingRestName, Span(node.KeywordRest));
             } else if (node.KeywordRest != null && !(node.KeywordRest is Pm.NoKeywordsParameterNode)) {
                 throw Unsupported(node.KeywordRest);
             }
 
             LocalVariable blockParam = null;
             if (node.Block is Pm.BlockParameterNode block) {
-                blockParam = CurrentScope.ResolveOrAddVariable(block.Name ?? "?block?", Span(node.Block));
+                blockParam = DefineParameter(block.Name ?? "?block?", Span(node.Block));
             } else if (node.KeywordRest is Pm.ForwardingParameterNode) {
-                blockParam = CurrentScope.ResolveOrAddVariable(ForwardingBlockName, Span(node.KeywordRest));
+                blockParam = DefineParameter(ForwardingBlockName, Span(node.KeywordRest));
             }
 
             return new Parameters(mandatory.ToArray(), leadingMandatoryCount,
                 optional.Count > 0 ? optional.ToArray() : null, unsplat, blockParam, span);
+        }
+
+        /// <summary>
+        /// Signatures mixing keywords with optional/rest/post positionals are lowered to a
+        /// single splat whose contents the prologue binds by hand:
+        ///
+        ///   def m(a, b = 5, *c, d, e: 2, **k)
+        ///     =&gt; def m(*?args?)
+        ///        ?args? = ?args?[0] if <auto-splat, blocks only>
+        ///        ?kw?   = Hash === ?args?.last ? ?args?.pop : {}
+        ///        a = ?args?.shift
+        ///        b = ?args?.size &gt; 1 ? ?args?.shift : 5     # 1 = number of posts
+        ///        c = ?args?.shift(?args?.size - 1)
+        ///        d = ?args?.shift
+        ///        e, k from ?kw?
+        ///
+        /// Execution semantics match MRI; arity and Method#parameters do not.
+        /// </summary>
+        private Parameters/*!*/ LowerGeneralParameters(Pm.ParametersNode/*!*/ node, bool autoSplat, SourceSpan span, out Statements prologue) {
+            var args = DefineParameter("?args?", span);
+            var statements = new Statements();
+            int postCount = node.Posts.Length;
+
+            var kwVar = CurrentScope.AddVariable("?kw?", span);
+
+            // A trailing Hash is how a keyword call arrives here, since keywords have no
+            // calling-convention slot of their own. But when a block auto-splats a single
+            // Array argument no keywords were passed, so the Hash stays positional
+            // (Ruby 3 keyword separation).
+            var popKeywords = new SimpleAssignmentExpression(kwVar,
+                new ConditionalExpression(
+                    CaseEqual(new ConstantVariable("Hash", span),
+                        new MethodCall(args, "last", null, span), span),
+                    new MethodCall(args, "pop", null, span),
+                    new HashConstructor(new Maplet[0], span), span),
+                null, span);
+
+            int formalCount = node.Requireds.Length + node.Optionals.Length + postCount + (node.Rest != null ? 1 : 0);
+            if (autoSplat && formalCount > 1) {
+                statements.Add(new IfExpression(
+                    new AndExpression(
+                        new MethodCall(new MethodCall(args, "size", null, span), "==",
+                            new Arguments(Literal.Integer(1, span)), span),
+                        CaseEqual(new ConstantVariable("Array", span),
+                            new MethodCall(args, "[]", new Arguments(Literal.Integer(0, span)), span), span),
+                        span),
+                    MakeStatements(
+                        new SimpleAssignmentExpression(args,
+                            new MethodCall(args, "[]", new Arguments(Literal.Integer(0, span)), span), null, span),
+                        new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], span), null, span)),
+                    new List<ElseIfClause> { new ElseIfClause(null, MakeStatements(popKeywords), span) },
+                    span));
+            } else {
+                statements.Add(popKeywords);
+            }
+
+            foreach (var required in node.Requireds) {
+                statements.Add(new SimpleAssignmentExpression(Target(required),
+                    new MethodCall(args, "shift", null, span), null, span));
+            }
+
+            foreach (var opt in node.Optionals) {
+                var optParam = (Pm.OptionalParameterNode)opt;
+                var local = CurrentScope.ResolveOrAddVariable(optParam.Name, Span(opt));
+                statements.Add(new SimpleAssignmentExpression(local,
+                    new ConditionalExpression(
+                        new MethodCall(new MethodCall(args, "size", null, span), ">",
+                            new Arguments(Literal.Integer(postCount, span)), span),
+                        new MethodCall(args, "shift", null, span),
+                        Expr(optParam.Value), span),
+                    null, span));
+            }
+
+            if (node.Rest is Pm.RestParameterNode rest && rest.Name != null) {
+                var local = CurrentScope.ResolveOrAddVariable(rest.Name, Span(node.Rest));
+                statements.Add(new SimpleAssignmentExpression(local,
+                    new MethodCall(args, "shift", new Arguments(
+                        new MethodCall(new MethodCall(args, "size", null, span), "-",
+                            new Arguments(Literal.Integer(postCount, span)), span)), span),
+                    null, span));
+            } else if (node.Rest != null && postCount > 0) {
+                // anonymous rest still has to consume what the posts do not take
+                statements.Add(new MethodCall(args, "shift", new Arguments(
+                    new MethodCall(new MethodCall(args, "size", null, span), "-",
+                        new Arguments(Literal.Integer(postCount, span)), span)), span));
+            }
+
+            foreach (var post in node.Posts) {
+                statements.Add(new SimpleAssignmentExpression(Target(post),
+                    new MethodCall(args, "shift", null, span), null, span));
+            }
+
+            foreach (var statement in BindKeywordsFrom(node, kwVar)) {
+                statements.Add(statement);
+            }
+
+            prologue = statements;
+
+            LocalVariable blockParam = null;
+            if (node.Block is Pm.BlockParameterNode block) {
+                blockParam = DefineParameter(block.Name ?? "?block?", Span(node.Block));
+            }
+            return new Parameters(LeftValue.EmptyArray, 0, null, args, blockParam, span);
         }
 
         /// <summary>
@@ -1020,7 +1137,7 @@ namespace IronRuby.Prism {
         ///   rest = ?kw?.dup ; rest.delete(:j) ; rest.delete(:k)
         /// </summary>
         private Statements/*!*/ LowerKeywords(Pm.ParametersNode/*!*/ node, List<SimpleAssignmentExpression>/*!*/ optional, SourceSpan span) {
-            var kwVar = CurrentScope.ResolveOrAddVariable("?kw?", span);
+            var kwVar = CurrentScope.AddVariable("?kw?", span);
             optional.Add(new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], span), null, span));
 
             var prologue = new Statements();
@@ -1029,6 +1146,19 @@ namespace IronRuby.Prism {
             prologue.Add(new SimpleAssignmentExpression(kwVar,
                 new HashConstructor(new Maplet[0], span), "||", span));
 
+            foreach (var statement in BindKeywordsFrom(node, kwVar)) {
+                prologue.Add(statement);
+            }
+            return prologue;
+        }
+
+        /// <summary>
+        /// Binds each declared keyword parameter (and **rest) out of the hash the caller
+        /// passed, raising ArgumentError for missing required keywords like MRI does.
+        /// </summary>
+        private List<Expression>/*!*/ BindKeywordsFrom(Pm.ParametersNode/*!*/ node, LocalVariable/*!*/ kwVar) {
+            var span = Span(node);
+            var prologue = new List<Expression>();
             var names = new List<string>();
 
             foreach (var keyword in node.Keywords) {
@@ -1078,6 +1208,7 @@ namespace IronRuby.Prism {
 
             return prologue;
         }
+
 
         // ---- pattern matching (case/in), lowered to tests + bindings ----
 
@@ -1417,6 +1548,22 @@ namespace IronRuby.Prism {
                 default:
                     return;
             }
+        }
+
+        /// <summary>
+        /// Defines a parameter in the current scope. Unlike ResolveOrAddVariable this never
+        /// reaches into an enclosing scope, which would make one LocalVariable a formal
+        /// parameter of two different scopes (mirrors Parser.DefineParameter).
+        /// </summary>
+        private LocalVariable/*!*/ DefineParameter(string/*!*/ name, SourceSpan span) {
+            LocalVariable existing;
+            if (CurrentScope.TryGetValue(name, out existing)) {
+                // Duplicate parameter names are legal for `_`. Each occurrence still needs
+                // its own slot (one LocalVariable cannot hold two closure indices), so give
+                // the repeats hidden names; reads of `_` see the first one, as in MRI.
+                return CurrentScope.AddVariable("?dup" + _tempCounter++ + "?", span);
+            }
+            return CurrentScope.AddVariable(name, span);
         }
 
         private static LeftValue/*!*/[]/*!*/ RemoveAt(LeftValue/*!*/[]/*!*/ values, int index) {

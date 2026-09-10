@@ -62,7 +62,7 @@ See [`Src/Prism/README.md`](Src/Prism/README.md) for the details and the known g
 
 | suite | result |
 |---|---|
-| [ruby/spec](https://github.com/ruby/spec) `spec/language` (via mspec) | **1645 / 2169 pass (75.8%)**, no crashes |
+| [ruby/spec](https://github.com/ruby/spec) `spec/language` (via mspec) | **2031 / 2680 pass (75.8%)** |
 | IronRuby's own C# test suite | ~1470 pass, 22 known failures |
 | Bridging the bundled 1.9 stdlib | **571 / 571 files** |
 
@@ -70,9 +70,10 @@ Honest about the rest: the **standard library is still the Ruby 1.9 snapshot** t
 with, patched by a small compatibility prelude ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb))
 that adds pattern-matching support classes and widely-used core methods from Ruby 2.x–4.x.
 The syntax is current; the runtime and library are where the remaining work is. The largest
-single gap: **optional block/lambda parameters** (`->(x = 1) {}`) are not implemented in the
-block dispatcher — a limitation inherited from IronRuby, which also blocks keyword arguments
-in lambdas. After that: `defined?` edge cases, predefined globals, magic-comment encodings.
+single gap: the block dispatcher has no notion of **optional block parameters**, so
+`->(x = 1) {}` reaches its body with `x` unset rather than defaulted (arity is right, and a
+supplied argument binds correctly). After that: `defined?` edge cases, predefined globals,
+and magic-comment encodings.
 
 ## Building
 

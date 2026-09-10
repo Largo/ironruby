@@ -194,6 +194,8 @@ namespace IronRuby.Compiler {
             return new TopStaticLexicalScope(outer);
         }
 
+        private int _duplicateParameterCount;
+
         private LocalVariable/*!*/ DefineParameter(string/*!*/ name, SourceSpan location) {
             // we are in a method or a block:
             Debug.Assert(CurrentScope.IsTop && !(CurrentScope is TopStaticLexicalScope) || CurrentScope is BlockLexicalScope);
@@ -202,8 +204,11 @@ namespace IronRuby.Compiler {
             if (CurrentScope.TryGetValue(name, out variable)) {
                 if (name != "_") {
                     _tokenizer.ReportError(Errors.DuplicateParameterName);
+                    return variable;
                 }
-                return variable;
+                // `_` may repeat; each occurrence needs its own slot since a LocalVariable
+                // can only hold one closure index. Reads of `_` bind to the first one.
+                return CurrentScope.AddVariable("?dup" + _duplicateParameterCount++ + "?", location);
             }
 
             return CurrentScope.AddVariable(name, location);

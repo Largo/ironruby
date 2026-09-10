@@ -311,3 +311,17 @@ class File::Stat
     mode & 0004 == 0004 ? mode : nil
   end unless method_defined?(:world_readable?)
 end
+
+class Array
+  # 1.9 added the count form of shift; the bundled core only has the no-arg one
+  unless (begin; [1].shift(1); true; rescue ArgumentError; false; end)
+    alias_method :shift_without_count, :shift
+
+    def shift(count = nil)
+      return shift_without_count if count.nil?
+      taken = self[0, count] || []
+      self[0, count] = []
+      taken
+    end
+  end
+end

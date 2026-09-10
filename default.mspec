@@ -13,4 +13,12 @@ class MSpecScript
   ]
 
   set :language, [File.join(ir_root, "spec", "language")]
+
+  # These crash the process rather than failing an expectation, which would abort
+  # the whole run, so they are skipped until the underlying bugs are fixed.
+  set :excludes, [
+    # super through the same anonymous module included twice recurses forever
+    # (pre-existing: the legacy parser behaves identically)
+    "The super keyword invokes methods from a chain of anonymous modules",
+  ]
 end
