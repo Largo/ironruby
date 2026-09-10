@@ -1024,6 +1024,11 @@ namespace IronRuby.Prism {
             optional.Add(new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], span), null, span));
 
             var prologue = new Statements();
+            // blocks and lambdas pass nil for parameters the caller omitted, so the
+            // optional-parameter default above does not fire for them
+            prologue.Add(new SimpleAssignmentExpression(kwVar,
+                new HashConstructor(new Maplet[0], span), "||", span));
+
             var names = new List<string>();
 
             foreach (var keyword in node.Keywords) {

@@ -190,6 +190,11 @@ namespace IronRuby.Runtime {
         /// Breaks from the current block.
         /// </summary>
         public object Break(object returnValue) {
+            // break in a lambda returns from the lambda, like return does (see RubyOps.BlockReturn):
+            if (CallerKind == BlockCallerKind.Call && _proc.Kind == ProcKind.Lambda) {
+                return returnValue;
+            }
+
             // proc whose home frame is gone (e.g. Proc#call on an orphaned block):
             if (_proc.Converter == null) {
                 throw RubyExceptions.CreateLocalJumpError("break from proc-closure");
