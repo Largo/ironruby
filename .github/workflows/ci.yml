@@ -54,8 +54,22 @@ jobs:
       - name: Smoke test
         working-directory: ironruby
         run: |
-          ./ir.sh -e 'puts "#{RUBY_ENGINE} #{RUBY_VERSION} on #{RUBY_PLATFORM}"'
-          ./ir.sh -e 'case {a: 1} in {a: Integer => n} then puts "pattern matching: #{n}" end'
+          cat > /tmp/smoke.rb <<'RUBY'
+          puts "#{RUBY_ENGINE} #{RUBY_VERSION} on #{RUBY_PLATFORM}"
+
+          case {name: "prism", version: 1}
+          in {name: String => name, version: Integer => v}
+            puts "pattern matching: #{name} v#{v}"
+          end
+
+          def greet(name:, greeting: "Hello") = "#{greeting}, #{name}!"
+          puts greet(name: "world")
+
+          puts [1, 2, 3].filter_map { it * 10 if it.odd? }.inspect
+          puts (nil&.length).inspect
+          puts (2**100).to_s.length
+          RUBY
+          ./ir.sh /tmp/smoke.rb
 
       - name: Bridge the bundled standard library
         working-directory: ironruby
