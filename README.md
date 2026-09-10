@@ -66,15 +66,18 @@ See [`Src/Prism/README.md`](Src/Prism/README.md) for the details and the known g
 |---|---|
 | [ruby/spec](https://github.com/ruby/spec) `spec/language` (via mspec) | **2117 / 2682 pass (78.9%)** |
 | IronRuby's own C# test suite | ~1470 pass, 22 known failures |
-| Bridging the bundled 1.9 stdlib | **571 / 571 files** |
+| Parsing the bundled standard libraries | **154 / 154** (Ruby 4.0) and **571 / 571** (1.9) |
 
 `spec/core` and `spec/library` have been measured for the first time and are in
 much rougher shape than the syntax suite — roughly 540 of 3417 core examples
 passing across the 22 directories measured so far. That is where the work is now.
 
-Honest about the rest: the **standard library is still the Ruby 1.9 snapshot** the fork shipped
-with, patched by a small compatibility prelude ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb))
-that adds pattern-matching support classes and widely-used core methods from Ruby 2.x–4.x.
+The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0` and comes first on the
+load path; the 1.9 tree sits behind it for the libraries 4.0 gemified or implements as C
+extensions. A compatibility prelude
+([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
+natively — `Process.clock_gettime`, `Random`, `ObjectSpace::WeakMap`, `ruby2_keywords`,
+pattern-matching support classes and core methods from Ruby 2.x-4.x.
 The syntax is current; the runtime and library are where the remaining work is. The largest
 single gap: the block dispatcher has no notion of **optional block parameters**, so
 `->(x = 1) {}` reaches its body with `x` unset rather than defaulted (arity is right, and a

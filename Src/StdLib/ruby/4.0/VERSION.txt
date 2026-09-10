@@ -1,0 +1,7 @@
+
+Removed from the vendored copy because MRI implements them as C extensions
+(or on top of one), so the 1.9 pure-Ruby versions behind them on the load
+path are the working ones here:
+  pathname.rb  - the Pathname class is pathname.so; 4.0's .rb is a stub
+  erb.rb, erb/ - needs Binding#dup, which this runtime does not support
+  yaml.rb      - delegates to psych.so; IronRuby has its own YAML library

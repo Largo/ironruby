@@ -71,12 +71,14 @@ jobs:
           RUBY
           ./ir.sh /tmp/smoke.rb
 
-      - name: Bridge the bundled standard library
+      - name: Bridge the bundled standard libraries
         working-directory: ironruby
         run: |
           dotnet build Src/Prism/IronRuby.Prism.csproj
-          Src/Prism/bin/Debug/net8.0/IronRuby.Prism --sweep Src/StdLib/ruby/1.9.1 | tee sweep.txt
-          grep -q '0 failed' sweep.txt
+          Src/Prism/bin/Debug/net8.0/IronRuby.Prism --sweep Src/StdLib/ruby/4.0 | tee sweep40.txt
+          grep -q '0 failed' sweep40.txt
+          Src/Prism/bin/Debug/net8.0/IronRuby.Prism --sweep Src/StdLib/ruby/1.9.1 | tee sweep19.txt
+          grep -q '0 failed' sweep19.txt
 
       - name: IronRuby test suite
         working-directory: ironruby

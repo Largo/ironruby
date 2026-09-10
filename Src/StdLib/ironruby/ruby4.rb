@@ -1009,3 +1009,138 @@ class String
     frozen? ? self : dup.freeze
   end unless method_defined?(:-@)
 end
+
+# --- pieces the Ruby 4.0 standard library expects --------------------------
+
+# ruby2_keywords (2.7) flags a method/proc so a trailing Hash keeps its
+# "these were keywords" marking when delegated. Keywords are lowered onto a
+# trailing Hash here anyway, so recording the flag is all that is needed.
+class Module
+  def ruby2_keywords(*names)
+    names
+  end unless private_method_defined?(:ruby2_keywords) || method_defined?(:ruby2_keywords)
+  private :ruby2_keywords rescue nil
+end
+
+class Proc
+  def ruby2_keywords
+    self
+  end unless method_defined?(:ruby2_keywords)
+end
+
+module Kernel
+  private
+
+  def ruby2_keywords(*names)
+    names
+  end unless private_method_defined?(:ruby2_keywords)
+end
+
+module Process
+  CLOCK_REALTIME = :CLOCK_REALTIME unless const_defined?(:CLOCK_REALTIME)
+  CLOCK_MONOTONIC = :CLOCK_MONOTONIC unless const_defined?(:CLOCK_MONOTONIC)
+  CLOCK_PROCESS_CPUTIME_ID = :CLOCK_PROCESS_CPUTIME_ID unless const_defined?(:CLOCK_PROCESS_CPUTIME_ID)
+
+  unless respond_to?(:clock_gettime)
+    # .NET's Stopwatch is the monotonic source; Time.now covers the wall clock.
+    def self.clock_gettime(clock_id = CLOCK_MONOTONIC, unit = :float_second)
+      seconds =
+        case clock_id
+        when CLOCK_REALTIME then Time.now.to_f
+        else System::Diagnostics::Stopwatch.get_timestamp.to_f / System::Diagnostics::Stopwatch.frequency.to_f
+        end
+
+      case unit
+      when :float_second then seconds
+      when :float_millisecond then seconds * 1_000.0
+      when :float_microsecond then seconds * 1_000_000.0
+      when :second then seconds.to_i
+      when :millisecond then (seconds * 1_000).to_i
+      when :microsecond then (seconds * 1_000_000).to_i
+      when :nanosecond then (seconds * 1_000_000_000).to_i
+      else seconds
+      end
+    end
+  end
+end
+
+# Random (1.9.2) — the runtime only exposes Kernel#rand/srand.
+unless defined?(Random)
+  class Random
+    def initialize(seed = Random.new_seed)
+      @seed = seed
+      @native = System::Random.new(seed.hash & 0x7fffffff)
+    end
+
+    attr_reader :seed
+
+    def rand(limit = nil)
+      case limit
+      when nil then @native.next_double
+      when Range
+        span = limit.end - limit.begin
+        span = span.to_i + (limit.exclude_end? ? 0 : 1)
+        limit.begin + @native.next(span)
+      when Float then @native.next_double * limit
+      else @native.next(limit.to_i)
+      end
+    end
+
+    def bytes(count)
+      buffer = System::Array[System::Byte].new(count)
+      @native.next_bytes(buffer)
+      buffer.to_a.pack("C*")
+    end
+
+    def self.new_seed
+      Time.now.to_f.hash ^ object_id
+    end
+
+    def self.rand(limit = nil)
+      (@default ||= new).rand(limit)
+    end
+
+    def self.bytes(count)
+      (@default ||= new).bytes(count)
+    end
+
+    def self.srand(number = new_seed)
+      previous = @seed_value
+      @seed_value = number
+      @default = new(number)
+      previous || 0
+    end
+  end
+end
+
+class Random
+  # Real entropy from the OS. /dev/urandom is the same source MRI uses on Unix;
+  # the System.Security.Cryptography assembly is not loadable from here.
+  def self.urandom(count)
+    File.open("/dev/urandom", "rb") { |f| f.read(count) }
+  end unless respond_to?(:urandom)
+end
+
+module ObjectSpace
+  # A real weak map needs runtime support; this keeps strong references, which
+  # is safe (entries merely outlive what MRI would collect) but not weak.
+  class WeakMap
+    include Enumerable
+
+    def initialize
+      @table = {}
+    end
+
+    def [](key); @table[key.object_id] && @table[key.object_id][1]; end
+    def []=(key, value); @table[key.object_id] = [key, value]; end
+    def key?(key); @table.key?(key.object_id); end
+    alias_method :member?, :key?
+    alias_method :include?, :key?
+    def each; @table.each_value { |(k, v)| yield(k, v) }; self; end
+    def keys; @table.values.map { |(k, _)| k }; end
+    def values; @table.values.map { |(_, v)| v }; end
+    def size; @table.size; end
+    alias_method :length, :size
+    def delete(key); entry = @table.delete(key.object_id); entry && entry[1]; end
+  end unless const_defined?(:WeakMap)
+end
