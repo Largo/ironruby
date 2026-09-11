@@ -198,7 +198,31 @@ namespace IronRuby.Builtins {
             internal void Sleep() {
                 try {
                     _isSleeping = true;
-                    _runSignal.WaitOne();
+                    try {
+                        _runSignal.WaitOne();
+                    } catch (ThreadInterruptedException) {
+                        // Thread#kill / Thread#raise nudged us: deliver the parked exception. If there is none
+                        // the interrupt was spurious and the sleep simply ends (MRI's sleep is also allowed to
+                        // return early).
+                        RubyUtils.TranslateThreadInterrupt();
+                    }
+                } finally {
+                    _isSleeping = false;
+                }
+            }
+
+            /// <summary>
+            /// Same as Sleep() but with a timeout; returns true if the full timeout elapsed.
+            /// </summary>
+            internal bool Sleep(int milliseconds) {
+                try {
+                    _isSleeping = true;
+                    try {
+                        return _runSignal.WaitOne(milliseconds);
+                    } catch (ThreadInterruptedException) {
+                        RubyUtils.TranslateThreadInterrupt();
+                        return false;
+                    }
                 } finally {
                     _isSleeping = false;
                 }
@@ -322,7 +346,14 @@ namespace IronRuby.Builtins {
         public static Thread/*!*/ Join(Thread/*!*/ self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
 
-            self.Join();
+            while (true) {
+                try {
+                    self.Join();
+                    break;
+                } catch (ThreadInterruptedException) {
+                    RubyUtils.TranslateThreadInterrupt();
+                }
+            }
 
             Exception threadException = RubyThreadInfo.FromThread(self).Exception;
             if (threadException != null) {
@@ -339,7 +370,16 @@ namespace IronRuby.Builtins {
             if (!(self.ThreadState == ThreadState.AbortRequested || self.ThreadState == ThreadState.Aborted)) {
                 double ms = seconds * 1000;
                 int timeout = (ms < Int32.MinValue || ms > Int32.MaxValue) ? Timeout.Infinite : (int)ms;
-                if (!self.Join(timeout)) {
+                bool joined;
+                while (true) {
+                    try {
+                        joined = self.Join(timeout);
+                        break;
+                    } catch (ThreadInterruptedException) {
+                        RubyUtils.TranslateThreadInterrupt();
+                    }
+                }
+                if (!joined) {
                     return null;
                 }
             }
@@ -358,6 +398,11 @@ namespace IronRuby.Builtins {
         public static Thread Kill(Thread/*!*/ self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
+
+            if (!self.IsAlive) {
+                return self;
+            }
+
             if (GetStatus(self) == RubyThreadStatus.Sleeping && info.ExitRequested) {
                 // Thread must be sleeping in an ensure clause. Wake up the thread and allow ensure clause to complete
                 info.Run();
@@ -365,6 +410,11 @@ namespace IronRuby.Builtins {
             }
 
             info.ExitRequested = true;
+            if (self == Thread.CurrentThread) {
+                // No need for the asynchronous machinery - just start unwinding.
+                throw new RubyUtils.ThreadExitSignal();
+            }
+
             RubyUtils.ExitThread(self);
             return self;
         }
@@ -692,6 +742,9 @@ namespace IronRuby.Builtins {
             info.Group = group;
 
             try {
+                // Thread#kill / Thread#raise may have been called before the thread got a chance to run.
+                RubyUtils.CheckAsyncException();
+
                 object threadResult;
                 // TODO: break/returns might throw LocalJumpError if the RFC that was created for startRoutine is not active anymore:
                 if (startRoutine.Yield(args, out threadResult) && startRoutine.Returning(threadResult, out threadResult)) {
@@ -701,14 +754,23 @@ namespace IronRuby.Builtins {
             } catch (MethodUnwinder) {
                 info.Exception = new ThreadError("return can't jump across threads");
             } catch (Exception e) {
-                if (info.ExitRequested) {
-                    // Note that "e" may not be ThreadAbortException at this point If an exception was raised from a finally block,
-                    // we will get that here instead
+                if (e is ThreadInterruptedException) {
+                    // We nudge a thread with Thread.Interrupt to deliver Thread#kill / Thread#raise. If the
+                    // interrupt reached a wait we do not wrap, translate it here.
+                    Exception pending = RubyUtils.GetPendingAsyncException(Thread.CurrentThread);
+                    if (pending != null) {
+                        e = pending;
+                    }
+                }
+
+                if (RubyUtils.IsRubyThreadExit(e) || info.ExitRequested) {
+                    // Note that "e" may not be the exit signal at this point: if an exception was raised from a
+                    // finally block, we get that here instead.
                     Utils.Log(String.Format("Thread {0} exited.", info.Thread.ManagedThreadId), "THREAD");
-                    info.Result = false;
-#if FEATURE_EXCEPTION_STATE
-                    Thread.ResetAbort();
-#endif
+                    info.Result = null;
+                    if (!RubyUtils.IsRubyThreadExit(e) && !(e is ThreadInterruptedException)) {
+                        info.Exception = RubyUtils.GetVisibleException(e);
+                    }
                 } else {
                     e = RubyUtils.GetVisibleException(e);
                     RubyExceptionData.ActiveExceptionHandled(e);
@@ -757,6 +819,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("pass", RubyMethodAttributes.PublicSingleton)]
         public static void Yield(object self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+            // Thread.pass is a safe point for a pending Thread#kill / Thread#raise.
+            RubyUtils.CheckAsyncException();
             Thread.Sleep(0);
         }
 
@@ -773,6 +837,18 @@ namespace IronRuby.Builtins {
             // TODO: MRI throws an exception if you try to stop the main thread
             RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.Sleep();
+        }
+
+        /// <summary>
+        /// Kernel#sleep(n). Uses the same signal as Thread.stop so that Thread#run/#wakeup ends the sleep early
+        /// (MRI behavior) and so that Thread#kill/#raise can interrupt it. Returns the number of seconds slept.
+        /// </summary>
+        internal static int DoSleep(int milliseconds) {
+            RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+            RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
+            long start = Environment.TickCount64;
+            info.Sleep(milliseconds);
+            return (int)Math.Round((Environment.TickCount64 - start) / 1000.0);
         }
 
         [RubyMethod("stop?", RubyMethodAttributes.PublicInstance)]
