@@ -212,6 +212,16 @@ namespace IronRuby.Builtins {
             _defaultType = def;
         }
 
+        internal static TzFile TryLoadFile(string/*!*/ path) {
+            try {
+                return File.Exists(path) ? Parse(File.ReadAllBytes(path)) : null;
+            } catch (IOException) {
+            } catch (UnauthorizedAccessException) {
+            } catch (ArgumentException) {
+            }
+            return null;
+        }
+
         /// <summary>Returns null if the zone has no zoneinfo file (e.g. on Windows, or a synthetic zone).</summary>
         internal static TzFile TryLoad(string id) {
             if (String.IsNullOrEmpty(id) || id.IndexOf("..", StringComparison.Ordinal) >= 0 || Path.IsPathRooted(id)) {
@@ -360,6 +370,10 @@ namespace IronRuby.Builtins {
             return (type < _offsets.Length) ? type : _defaultType;
         }
 
+        internal int GetOffset(long unixSeconds) {
+            return _offsets[FindType(unixSeconds)];
+        }
+
         internal string GetAbbreviation(long unixSeconds) {
             string result = _abbreviations[FindType(unixSeconds)];
             return String.IsNullOrEmpty(result) ? null : result;
@@ -367,6 +381,81 @@ namespace IronRuby.Builtins {
 
         internal bool IsDaylightSavingTime(long unixSeconds) {
             return _isDst[FindType(unixSeconds)];
+        }
+    }
+}
+
+namespace IronRuby.Builtins {
+
+    /// <summary>
+    /// A time zone as Ruby sees it. Backed by the zoneinfo file when one exists, because that
+    /// carries the DST transitions and the POSIX abbreviations that Ruby reports; otherwise a
+    /// plain fixed offset parsed out of a POSIX TZ string.
+    /// </summary>
+    public sealed class RubyTimeZone {
+        private readonly TzFile _file;          // null for a fixed-offset zone
+        private readonly long _fixedOffset;     // seconds east of UTC
+        private readonly string/*!*/ _name;
+
+        public static readonly RubyTimeZone/*!*/ Utc = new RubyTimeZone(null, 0, "UTC");
+
+        private RubyTimeZone(TzFile file, long fixedOffset, string/*!*/ name) {
+            _file = file;
+            _fixedOffset = fixedOffset;
+            _name = name;
+        }
+
+        internal static RubyTimeZone/*!*/ MakeFixed(long offsetSeconds, string/*!*/ name) {
+            return new RubyTimeZone(null, offsetSeconds, name);
+        }
+
+        internal static RubyTimeZone FromId(string/*!*/ id) {
+            TzFile file = TzFile.TryLoad(id);
+            return (file != null) ? new RubyTimeZone(file, 0, id) : null;
+        }
+
+        /// <summary>The machine's zone, used when TZ is unset.</summary>
+        internal static RubyTimeZone/*!*/ Machine() {
+            TzFile file = TzFile.TryLoadFile("/etc/localtime");
+            if (file != null) {
+                return new RubyTimeZone(file, 0, System.TimeZoneInfo.Local.Id);
+            }
+            var local = System.TimeZoneInfo.Local;
+            return MakeFixed((long)local.BaseUtcOffset.TotalSeconds, local.StandardName);
+        }
+
+        internal long GetOffset(long unixSeconds) {
+            return (_file != null) ? _file.GetOffset(unixSeconds) : _fixedOffset;
+        }
+
+        /// <summary>
+        /// The offset that applies to a wall-clock reading. Two passes, because the offset
+        /// itself is what turns the reading into the instant it must be looked up by.
+        /// </summary>
+        internal long GetOffsetForWallClock(long wallSeconds) {
+            if (_file == null) {
+                return _fixedOffset;
+            }
+            long guess = _file.GetOffset(wallSeconds);
+            return _file.GetOffset(wallSeconds - guess);
+        }
+
+        internal string/*!*/ GetAbbreviation(long unixSeconds) {
+            if (_file != null) {
+                string result = _file.GetAbbreviation(unixSeconds);
+                if (result != null) {
+                    return result;
+                }
+            }
+            return _name;
+        }
+
+        internal bool IsDaylightSavingTime(long unixSeconds) {
+            return _file != null && _file.IsDaylightSavingTime(unixSeconds);
+        }
+
+        internal string/*!*/ Name {
+            get { return _name; }
         }
     }
 }

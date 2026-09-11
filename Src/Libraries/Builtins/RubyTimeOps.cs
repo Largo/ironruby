@@ -364,7 +364,12 @@ namespace IronRuby.Builtins {
             }
 
             var utcView = new RubyTime(instant.Seconds, ExactNum.Zero, RubyTimeZoneKind.Utc, ExactNum.Zero);
-            long localSeconds = ZoneResultToSeconds(context, Invoke(context, ref _utcToLocalSite, "utc_to_local", zoneObject, utcView));
+            object mapped = Invoke(context, ref _utcToLocalSite, "utc_to_local", zoneObject, utcView);
+
+            RubyTime mappedTime = mapped as RubyTime;
+            long localSeconds = (mappedTime != null)
+                ? mappedTime.Seconds + mappedTime.UtcOffsetSeconds
+                : ZoneResultToSeconds(context, mapped);
 
             long offsetSeconds = localSeconds - instant.Seconds;
             if (offsetSeconds <= -86400 || offsetSeconds >= 86400) {
@@ -492,6 +497,11 @@ namespace IronRuby.Builtins {
                 return NowInternal(context, owner, inZone);
             }
 
+            // Ruby 3.2's Time.new("2020-12-24T15:56:17Z")
+            if (args.Length == 1 && args[0] is MutableString) {
+                return ParseTimeString(context, owner, (MutableString)args[0], inZone, options);
+            }
+
             if (args.Length > 7) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..7)", args.Length);
             }
@@ -515,6 +525,73 @@ namespace IronRuby.Builtins {
             int hour = (args.Length > 3 && args[3] != null) ? ToIntComponent(context, args[3]) : 0;
             int minute = (args.Length > 4 && args[4] != null) ? ToIntComponent(context, args[4]) : 0;
             ExactNum second = (args.Length > 5 && args[5] != null) ? ToExactComponent(context, args[5]) : ExactNum.Zero;
+
+            return AssembleTime(context, year, month, day, hour, minute, second, kind, offset, zoneObject, true);
+        }
+
+        private static readonly Regex/*!*/ _isoPattern = new Regex(
+            @"^(?<y>\d{4,})(-(?<mon>\d{2})(-(?<d>\d{2})([T ](?<h>\d{2}):(?<min>\d{2}):(?<s>\d{2})(\.(?<frac>\d+))?)?)?)?" +
+            @"( ?(?<off>Z|[+-]\d{2}(:?\d{2}(:?\d{2})?)?))?$", RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// Time.new with a single String argument. Every message the specs check for is
+        /// allowed to be the generic "can't parse:" form, so the failure modes are not
+        /// distinguished the way MRI's hand-written scanner does.
+        /// </summary>
+        private static RubyTime/*!*/ ParseTimeString(RubyContext/*!*/ context, RubyClass owner, MutableString/*!*/ str,
+            object inZone, IDictionary<object, object> options) {
+
+            if (!str.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("time string should have ASCII compatible encoding");
+            }
+
+            string text = str.ConvertToString();
+            Match m = _isoPattern.Match(text);
+            if (!m.Success || (m.Groups["mon"].Success && !m.Groups["h"].Success)) {
+                throw RubyExceptions.CreateArgumentError("can't parse: {0}", context.Inspect(str).ToString());
+            }
+
+            int precision = 9;
+            bool precisionGiven;
+            object precisionValue = GetOption(options, "precision", out precisionGiven);
+            if (precisionGiven) {
+                if (precisionValue == null) {
+                    precision = -1;
+                } else if (precisionValue is MutableString) {
+                    throw RubyExceptions.CreateTypeError("no implicit conversion of String into Integer");
+                } else {
+                    precision = ToIntComponent(context, precisionValue);
+                }
+            }
+
+            int year = Int32.Parse(m.Groups["y"].Value, CultureInfo.InvariantCulture);
+            int month = m.Groups["mon"].Success ? Int32.Parse(m.Groups["mon"].Value, CultureInfo.InvariantCulture) : 1;
+            int day = m.Groups["d"].Success ? Int32.Parse(m.Groups["d"].Value, CultureInfo.InvariantCulture) : 1;
+            int hour = m.Groups["h"].Success ? Int32.Parse(m.Groups["h"].Value, CultureInfo.InvariantCulture) : 0;
+            int minute = m.Groups["min"].Success ? Int32.Parse(m.Groups["min"].Value, CultureInfo.InvariantCulture) : 0;
+
+            ExactNum second = m.Groups["s"].Success
+                ? ExactNum.FromInteger(Int32.Parse(m.Groups["s"].Value, CultureInfo.InvariantCulture))
+                : ExactNum.Zero;
+
+            if (m.Groups["frac"].Success) {
+                string digits = m.Groups["frac"].Value;
+                if (precision >= 0 && digits.Length > precision) {
+                    digits = digits.Substring(0, precision);
+                }
+                if (digits.Length != 0) {
+                    second = second + ExactNum.Make(BigInteger.Parse(digits, CultureInfo.InvariantCulture),
+                        BigInteger.Pow(new BigInteger(10), digits.Length));
+                }
+            }
+
+            object zone = m.Groups["off"].Success
+                ? MutableString.CreateAscii(m.Groups["off"].Value)
+                : inZone;
+
+            ExactNum offset;
+            object zoneObject;
+            RubyTimeZoneKind kind = ResolveZone(context, owner, zone, out offset, out zoneObject);
 
             return AssembleTime(context, year, month, day, hour, minute, second, kind, offset, zoneObject, true);
         }
@@ -607,8 +684,7 @@ namespace IronRuby.Builtins {
                     break;
 
                 default: {
-                        DateTime wall = RubyTime.ToDateTimeClamped(wallSeconds, DateTimeKind.Unspecified);
-                        long zoneOffset = (long)RubyTime._CurrentTimeZone.GetUtcOffset(DateTime.SpecifyKind(wall, DateTimeKind.Unspecified)).TotalSeconds;
+                        long zoneOffset = RubyTime._CurrentTimeZone.GetOffsetForWallClock(wallSeconds);
                         utcExact = wallExact - ExactNum.FromInteger(zoneOffset);
                         break;
                     }

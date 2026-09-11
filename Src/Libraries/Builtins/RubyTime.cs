@@ -60,7 +60,7 @@ namespace IronRuby.Builtins {
 
         #region Time Zones
 
-        internal static TimeZoneInfo/*!*/ _CurrentTimeZone;
+        internal static RubyTimeZone/*!*/ _CurrentTimeZone;
         private static Regex _tzPattern;
 
         static RubyTime() {
@@ -70,18 +70,19 @@ namespace IronRuby.Builtins {
             } catch (SecurityException) {
                 tz = null;
             }
-            TimeZoneInfo zone;
+            RubyTimeZone zone;
             RubyTime.TryParseTimeZone(tz, out zone);
-            RubyTime._CurrentTimeZone = zone ?? TimeZoneInfo.Local;
+            RubyTime._CurrentTimeZone = zone ?? RubyTimeZone.Machine();
         }
 
         /// <summary>
         /// Accepts both Olson database names ("Europe/Amsterdam") and the POSIX TZ form
-        /// mspec's with_timezone produces ("PST8:00:00", "JST-9").
+        /// mspec's with_timezone produces ("PST8:00:00", "JST-9"). Returns false for a
+        /// specification we cannot make sense of, which Ruby answers with UTC.
         /// </summary>
-        public static bool TryParseTimeZone(string timeZoneEnvSpec, out TimeZoneInfo timeZone) {
+        public static bool TryParseTimeZone(string timeZoneEnvSpec, out RubyTimeZone timeZone) {
             if (String.IsNullOrEmpty(timeZoneEnvSpec)) {
-                timeZone = TimeZoneInfo.Local;
+                timeZone = RubyTimeZone.Machine();
                 return true;
             }
 
@@ -90,14 +91,9 @@ namespace IronRuby.Builtins {
                 id = id.Substring(1);
             }
 
-            try {
-                timeZone = TimeZoneInfo.FindSystemTimeZoneById(id);
+            timeZone = RubyTimeZone.FromId(id);
+            if (timeZone != null) {
                 return true;
-            } catch (TimeZoneNotFoundException) {
-            } catch (InvalidTimeZoneException) {
-            } catch (ArgumentException) {
-            } catch (System.Security.SecurityException) {
-            } catch (IOException) {
             }
 
             if (_tzPattern == null) {
@@ -118,56 +114,22 @@ namespace IronRuby.Builtins {
 
             int h = Int32.Parse(match.Groups["sh"].Value, CultureInfo.InvariantCulture);
             int m = match.Groups["sm"].Success ? Int32.Parse(match.Groups["sm"].Value, CultureInfo.InvariantCulture) : 0;
-            int s = match.Groups["ss"].Success ? Int32.Parse(match.Groups["ss"].Value, CultureInfo.InvariantCulture) : 0;
+            int sec = match.Groups["ss"].Success ? Int32.Parse(match.Groups["ss"].Value, CultureInfo.InvariantCulture) : 0;
 
             // The POSIX convention is reversed: the value is what must be added to local time to get UTC.
-            long totalSeconds = (long)h * 3600 + m * 60 + s;
+            long totalSeconds = (long)h * 3600 + m * 60 + sec;
             if (match.Groups["sign"].Value == "-") {
                 totalSeconds = -totalSeconds;
             }
             totalSeconds = -totalSeconds;
 
-            if (totalSeconds <= -14 * 3600 || totalSeconds >= 14 * 3600 || totalSeconds % 60 != 0) {
-                // TimeZoneInfo only accepts whole-minute offsets within +-14 hours.
+            if (totalSeconds <= -24 * 3600 || totalSeconds >= 24 * 3600) {
                 timeZone = null;
                 return false;
             }
 
-            string name = match.Groups["std"].Value;
-            try {
-                timeZone = TimeZoneInfo.CreateCustomTimeZone(timeZoneEnvSpec, TimeSpan.FromSeconds(totalSeconds), name, name);
-                return true;
-            } catch (ArgumentException) {
-                timeZone = null;
-                return false;
-            }
-        }
-
-        internal static string GetZoneAbbreviation(TimeZoneInfo/*!*/ zone, long unixSeconds) {
-            TzFile file = TzFile.TryLoad(zone.Id);
-            if (file != null) {
-                string abbreviation = file.GetAbbreviation(unixSeconds);
-                if (abbreviation != null) {
-                    return abbreviation;
-                }
-            }
-            return IsZoneDaylightSavingTime(zone, unixSeconds) ? zone.DaylightName : zone.StandardName;
-        }
-
-        internal static bool IsZoneDaylightSavingTime(TimeZoneInfo/*!*/ zone, long unixSeconds) {
-            TzFile file = TzFile.TryLoad(zone.Id);
-            if (file != null) {
-                return file.IsDaylightSavingTime(unixSeconds);
-            }
-            try {
-                return zone.IsDaylightSavingTime(new DateTimeOffset(ToDateTimeClamped(unixSeconds, DateTimeKind.Utc)));
-            } catch (ArgumentException) {
-                return false;
-            }
-        }
-
-        internal static long GetZoneOffsetSeconds(TimeZoneInfo/*!*/ zone, long unixSeconds) {
-            return (long)zone.GetUtcOffset(new DateTimeOffset(ToDateTimeClamped(unixSeconds, DateTimeKind.Utc))).TotalSeconds;
+            timeZone = RubyTimeZone.MakeFixed(totalSeconds, match.Groups["std"].Value);
+            return true;
         }
 
         public TimeSpan GetCurrentZoneOffset() {
@@ -175,7 +137,7 @@ namespace IronRuby.Builtins {
         }
 
         public static string GetCurrentZoneName() {
-            return GetZoneAbbreviation(_CurrentTimeZone, (long)(DateTime.UtcNow - Epoch).TotalSeconds);
+            return _CurrentTimeZone.GetAbbreviation((long)(DateTime.UtcNow - Epoch).TotalSeconds);
         }
 
         public bool GetCurrentDst(RubyContext/*!*/ context) {
@@ -186,8 +148,7 @@ namespace IronRuby.Builtins {
             if (dateTime.Kind == DateTimeKind.Utc) {
                 return dateTime;
             }
-            long seconds = SecondsFromDateTimeTicks(dateTime.Ticks);
-            long offset = (long)_CurrentTimeZone.GetUtcOffset(DateTime.SpecifyKind(dateTime, DateTimeKind.Unspecified)).TotalSeconds;
+            long offset = _CurrentTimeZone.GetOffsetForWallClock(SecondsFromDateTimeTicks(dateTime.Ticks));
             return DateTime.SpecifyKind(dateTime.AddTicks(-offset * TicksPerSecond), DateTimeKind.Utc);
         }
 
@@ -195,8 +156,7 @@ namespace IronRuby.Builtins {
             if (dateTime.Kind == DateTimeKind.Local) {
                 return dateTime;
             }
-            long seconds = SecondsFromDateTimeTicks(dateTime.Ticks);
-            long offset = GetZoneOffsetSeconds(_CurrentTimeZone, seconds);
+            long offset = _CurrentTimeZone.GetOffset(SecondsFromDateTimeTicks(dateTime.Ticks));
             return DateTime.SpecifyKind(dateTime.AddTicks(offset * TicksPerSecond), DateTimeKind.Local);
         }
 
@@ -205,7 +165,7 @@ namespace IronRuby.Builtins {
         }
 
         public DateTime ToLocalTime() {
-            long offset = GetZoneOffsetSeconds(_CurrentTimeZone, _seconds);
+            long offset = _CurrentTimeZone.GetOffset(_seconds);
             return ToDateTimeClamped(_seconds + offset, _subsec, DateTimeKind.Local);
         }
 
@@ -222,6 +182,13 @@ namespace IronRuby.Builtins {
         private RubyTimeZoneKind _zoneKind;
         private ExactNum _fixedOffset;      // seconds, only meaningful when _zoneKind == FixedOffset
         private object _zoneObject;         // user supplied timezone object, if any
+
+        // Resolved once, when the Time first becomes a local time: Ruby keeps the zone a Time
+        // was built in even if TZ changes afterwards (localtime_spec "does nothing if already
+        // in a local time zone").
+        private long _localOffset;
+        private string _localZoneName;
+        private bool _localDst;
 
         #endregion
 
@@ -245,6 +212,17 @@ namespace IronRuby.Builtins {
             _subsec = subsec;
             _zoneKind = zoneKind;
             _fixedOffset = fixedOffset;
+            ResolveLocalZone();
+        }
+
+        private void ResolveLocalZone() {
+            if (_zoneKind != RubyTimeZoneKind.Local) {
+                return;
+            }
+            var zone = _CurrentTimeZone;
+            _localOffset = zone.GetOffset(_seconds);
+            _localZoneName = zone.GetAbbreviation(_seconds);
+            _localDst = zone.IsDaylightSavingTime(_seconds);
         }
 
         internal static RubyTime/*!*/ FromExactSeconds(ExactNum secondsSinceEpoch, RubyTimeZoneKind kind, ExactNum fixedOffset) {
@@ -273,12 +251,13 @@ namespace IronRuby.Builtins {
                 _zoneKind = RubyTimeZoneKind.Utc;
             } else {
                 // A wall-clock reading in the current zone.
-                long offset = (long)_CurrentTimeZone.GetUtcOffset(DateTime.SpecifyKind(dateTime, DateTimeKind.Unspecified)).TotalSeconds;
+                long offset = _CurrentTimeZone.GetOffsetForWallClock(seconds);
                 _seconds = seconds - offset;
                 _zoneKind = RubyTimeZoneKind.Local;
             }
             _subsec = (rest == 0) ? ExactNum.Zero : ExactNum.Make(rest, TicksPerSecondBig);
             _fixedOffset = ExactNum.Zero;
+            ResolveLocalZone();
         }
 
         internal void CopyFrom(RubyTime/*!*/ other) {
@@ -287,6 +266,9 @@ namespace IronRuby.Builtins {
             _zoneKind = other._zoneKind;
             _fixedOffset = other._fixedOffset;
             _zoneObject = other._zoneObject;
+            _localOffset = other._localOffset;
+            _localZoneName = other._localZoneName;
+            _localDst = other._localDst;
         }
 
         internal RubyTime/*!*/ WithZone(RubyTimeZoneKind kind, ExactNum fixedOffset, object zoneObject) {
@@ -426,7 +408,7 @@ namespace IronRuby.Builtins {
                 switch (_zoneKind) {
                     case RubyTimeZoneKind.Utc: return ExactNum.Zero;
                     case RubyTimeZoneKind.FixedOffset: return _fixedOffset;
-                    default: return ExactNum.FromInteger(GetZoneOffsetSeconds(_CurrentTimeZone, _seconds));
+                    default: return ExactNum.FromInteger(_localOffset);
                 }
             }
         }
@@ -436,7 +418,7 @@ namespace IronRuby.Builtins {
         }
 
         public bool IsDaylightSavingTime {
-            get { return _zoneKind == RubyTimeZoneKind.Local && IsZoneDaylightSavingTime(_CurrentTimeZone, _seconds); }
+            get { return _zoneKind == RubyTimeZoneKind.Local && _localDst; }
         }
 
         /// <summary>The instant, in UTC.</summary>
@@ -592,7 +574,7 @@ namespace IronRuby.Builtins {
             switch (_zoneKind) {
                 case RubyTimeZoneKind.Utc: return "UTC";
                 case RubyTimeZoneKind.FixedOffset: return null;
-                default: return GetZoneAbbreviation(_CurrentTimeZone, _seconds);
+                default: return _localZoneName;
             }
         }
 

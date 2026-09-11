@@ -101,6 +101,11 @@ namespace IronRuby.Builtins {
                     }
                 }
 
+                while (i < format.Length && format[i] == ':' && modifiers.Colons < 3) {
+                    modifiers.Colons++;
+                    i++;
+                }
+
                 if (i >= format.Length) {
                     result.Append(format.Substring(start));
                     return;
