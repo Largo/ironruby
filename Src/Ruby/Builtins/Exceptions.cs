@@ -170,6 +170,19 @@ namespace IronRuby.Builtins {
         protected UndefinedConversionError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
             : base(info, context) { }
 #endif
+
+        /// <summary>The encoding the failing conversion stage read from. May be null.</summary>
+        [NonSerialized]
+        private RubyEncoding _sourceEncoding, _destinationEncoding;
+
+        [NonSerialized]
+        private byte[] _errorCharBytes;
+
+        public RubyEncoding SourceEncoding { get { return _sourceEncoding; } set { _sourceEncoding = value; } }
+        public RubyEncoding DestinationEncoding { get { return _destinationEncoding; } set { _destinationEncoding = value; } }
+
+        /// <summary>The character that could not be represented, in the bytes of the stage's source encoding.</summary>
+        public byte[] ErrorCharBytes { get { return _errorCharBytes; } set { _errorCharBytes = value; } }
     }
 
     [Serializable]
@@ -182,6 +195,27 @@ namespace IronRuby.Builtins {
         protected InvalidByteSequenceError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
             : base(info, context) { }
 #endif
+
+        [NonSerialized]
+        private RubyEncoding _sourceEncoding, _destinationEncoding;
+
+        [NonSerialized]
+        private byte[] _errorBytes, _readAgainBytes;
+
+        [NonSerialized]
+        private bool _incompleteInput;
+
+        public RubyEncoding SourceEncoding { get { return _sourceEncoding; } set { _sourceEncoding = value; } }
+        public RubyEncoding DestinationEncoding { get { return _destinationEncoding; } set { _destinationEncoding = value; } }
+
+        /// <summary>The bytes that were rejected.</summary>
+        public byte[] ErrorBytes { get { return _errorBytes; } set { _errorBytes = value; } }
+
+        /// <summary>The bytes that should be read again after the error.</summary>
+        public byte[] ReadAgainBytes { get { return _readAgainBytes; } set { _readAgainBytes = value; } }
+
+        /// <summary>True if the input ended in the middle of a character rather than being invalid.</summary>
+        public bool IncompleteInput { get { return _incompleteInput; } set { _incompleteInput = value; } }
     }
 
     [Serializable]

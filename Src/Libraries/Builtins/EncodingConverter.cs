@@ -24,6 +24,8 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;

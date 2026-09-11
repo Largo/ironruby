@@ -26,7 +26,7 @@ using System.Globalization;
 
 namespace IronRuby.Builtins {
     [RubyClass("Encoding", Extends = typeof(RubyEncoding), Inherits = typeof(Object), BuildConfig = "FEATURE_ENCODING")]
-    public static class RubyEncodingOps {
+    public static partial class RubyEncodingOps {
         #region Exceptions
 
         [RubyException("CompatibilityError", Extends = typeof(EncodingCompatibilityError))]
@@ -35,10 +35,72 @@ namespace IronRuby.Builtins {
 
         [RubyException("UndefinedConversionError", Extends = typeof(UndefinedConversionError))]
         public static class UndefinedConversionErrorOps {
+            [RubyMethod("source_encoding")]
+            public static RubyEncoding GetSourceEncoding(UndefinedConversionError/*!*/ self) {
+                return self.SourceEncoding;
+            }
+
+            [RubyMethod("destination_encoding")]
+            public static RubyEncoding GetDestinationEncoding(UndefinedConversionError/*!*/ self) {
+                return self.DestinationEncoding;
+            }
+
+            [RubyMethod("source_encoding_name")]
+            public static MutableString GetSourceEncodingName(UndefinedConversionError/*!*/ self) {
+                return self.SourceEncoding != null ? MutableString.CreateAscii(self.SourceEncoding.Name) : null;
+            }
+
+            [RubyMethod("destination_encoding_name")]
+            public static MutableString GetDestinationEncodingName(UndefinedConversionError/*!*/ self) {
+                return self.DestinationEncoding != null ? MutableString.CreateAscii(self.DestinationEncoding.Name) : null;
+            }
+
+            [RubyMethod("error_char")]
+            public static MutableString GetErrorChar(UndefinedConversionError/*!*/ self) {
+                var bytes = self.ErrorCharBytes;
+                if (bytes == null) {
+                    return null;
+                }
+                return MutableString.CreateBinary(bytes, self.SourceEncoding ?? RubyEncoding.Binary);
+            }
         }
 
         [RubyException("InvalidByteSequenceError", Extends = typeof(InvalidByteSequenceError))]
         public static class InvalidByteSequenceErrorOps {
+            [RubyMethod("source_encoding")]
+            public static RubyEncoding GetSourceEncoding(InvalidByteSequenceError/*!*/ self) {
+                return self.SourceEncoding;
+            }
+
+            [RubyMethod("destination_encoding")]
+            public static RubyEncoding GetDestinationEncoding(InvalidByteSequenceError/*!*/ self) {
+                return self.DestinationEncoding;
+            }
+
+            [RubyMethod("source_encoding_name")]
+            public static MutableString GetSourceEncodingName(InvalidByteSequenceError/*!*/ self) {
+                return self.SourceEncoding != null ? MutableString.CreateAscii(self.SourceEncoding.Name) : null;
+            }
+
+            [RubyMethod("destination_encoding_name")]
+            public static MutableString GetDestinationEncodingName(InvalidByteSequenceError/*!*/ self) {
+                return self.DestinationEncoding != null ? MutableString.CreateAscii(self.DestinationEncoding.Name) : null;
+            }
+
+            [RubyMethod("error_bytes")]
+            public static MutableString GetErrorBytes(InvalidByteSequenceError/*!*/ self) {
+                return self.ErrorBytes != null ? MutableString.CreateBinary(self.ErrorBytes) : null;
+            }
+
+            [RubyMethod("readagain_bytes")]
+            public static MutableString GetReadAgainBytes(InvalidByteSequenceError/*!*/ self) {
+                return self.ReadAgainBytes != null ? MutableString.CreateBinary(self.ReadAgainBytes) : null;
+            }
+
+            [RubyMethod("incomplete_input?")]
+            public static bool IsIncompleteInput(InvalidByteSequenceError/*!*/ self) {
+                return self.IncompleteInput;
+            }
         }
 
         [RubyException("ConverterNotFoundError", Extends = typeof(ConverterNotFoundError))]
