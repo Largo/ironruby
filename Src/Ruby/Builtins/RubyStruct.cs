@@ -51,10 +51,8 @@ namespace IronRuby.Builtins {
                 _names = ArrayUtils.Copy(names);
                 _nameIndices = new Dictionary<string, int>(names.Length);
                 for (int i = 0; i < names.Length; i++) {
-                    string name = names[i];
-                    if (!Tokenizer.IsVariableName(name)) {
-                        throw RubyExceptions.CreateNameError(String.Format("invalid attribute name `{0}'", name));
-                    }
+                    // Any symbol is a legal member name; only the ones that are also legal method
+                    // names get accessor methods (see AddClassMembers).
 
                     // overwrites duplicates:
                     _nameIndices[names[i]] = i;
@@ -160,6 +158,8 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < structMembers.Length; i++) {
                 string getter = structMembers[i];
 
+                // any symbol is a legal member name; the accessors are defined for all of them,
+                // even when the resulting name is not writable as a literal method call
                 cls.AddMethod(context, getter, new RubyCustomMethodInfo(CreateGetter(i), RubyMemberFlags.Public, cls));
                 cls.AddMethod(context, getter + '=', new RubyCustomMethodInfo(CreateSetter(i), RubyMemberFlags.Public, cls));
             }
@@ -250,6 +250,9 @@ namespace IronRuby.Builtins {
 
         [Emitted]
         public static object SetValue(RubyStruct/*!*/ self, int index, object value) {
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenError();
+            }
             return self._data[index] = value;
         }
 
@@ -282,12 +285,24 @@ namespace IronRuby.Builtins {
 
         public object this[string name] {
             get { return _data[GetIndex(name)]; }
-            set { _data[GetIndex(name)] = value; }
+            set {
+                RequireNotFrozen();
+                _data[GetIndex(name)] = value;
+            }
         }
 
         public object this[int index] {
             get { return _data[index]; }
-            set { _data[index] = value; }
+            set {
+                RequireNotFrozen();
+                _data[index] = value;
+            }
+        }
+
+        private void RequireNotFrozen() {
+            if (IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenError();
+            }
         }
 
         public int ItemCount {

@@ -221,15 +221,23 @@ namespace IronRuby.Builtins {
             RubyContext context = self.ImmediateClass.Context;
 
             using (IDisposable handle = RubyUtils.InfiniteInspectTracker.TrackObject(self)) {
-                // #<struct Struct::Foo name=nil, val=nil>
+                // #<struct Struct::Foo name=nil, val=nil>, or #<struct name=nil> when the class
+                // (or an enclosing module) is anonymous. The name is read off the class rather
+                // than dispatched to #name, which Ruby does not call here.
                 var result = MutableString.CreateMutable(RubyEncoding.Binary);
                 result.Append("#<struct ");
-                result.Append(context.Inspect(context.GetClassOf(self)));
+                string className = context.GetClassOf(self).GetName(context);
+                bool anonymous = String.IsNullOrEmpty(className) || className.StartsWith("#<") || className.StartsWith("::");
+                if (!anonymous) {
+                    result.Append(className);
+                }
 
                 if (handle == null) {
                     return result.Append(":...>");
                 }
-                result.Append(' ');
+                if (!anonymous) {
+                    result.Append(' ');
+                }
 
                 object[] data = self.Values;
                 var members = self.GetNames();

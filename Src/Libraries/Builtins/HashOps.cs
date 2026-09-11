@@ -85,11 +85,17 @@ namespace IronRuby.Builtins {
         public static Hash/*!*/ CreateSubclass(ConversionStorage<IList>/*!*/ toAry, RubyClass/*!*/ self, [NotNull]IList/*!*/ list) {
             Hash result = Hash.CreateInstance(self);
             var toArySite = toAry.GetSite(TryConvertToArrayAction.Make(toAry.Context));
-            foreach (object item in list) {
+            for (int i = 0; i < list.Count; i++) {
+                object item = list[i];
                 IList pair = toArySite.Target(toArySite, item);
-                if (pair != null && pair.Count >= 1 && pair.Count <= 2) {
-                    RubyUtils.SetHashElement(self.Context, result, pair[0], (pair.Count == 2) ? pair[1] : null);
+                if (pair == null) {
+                    throw RubyExceptions.CreateArgumentError("wrong element type {0} at {1} (expected array)",
+                        item == null ? "nil" : self.Context.GetClassDisplayName(item), i);
                 }
+                if (pair.Count < 1 || pair.Count > 2) {
+                    throw RubyExceptions.CreateArgumentError("invalid number of elements ({0} for 1..2)", pair.Count);
+                }
+                RubyUtils.SetHashElement(self.Context, result, pair[0], (pair.Count == 2) ? pair[1] : null);
             }
             return result;
         }
@@ -115,6 +121,9 @@ namespace IronRuby.Builtins {
         public static Hash/*!*/ Initialize(Hash/*!*/ self) {
             Assert.NotNull(self);
             self.RequireNotFrozen();
+            // re-initializing resets the default value and the default proc
+            self.DefaultProc = null;
+            self.DefaultValue = null;
             return self;
         }
 
@@ -192,6 +201,16 @@ namespace IronRuby.Builtins {
         public static Proc GetDefaultProc(Hash/*!*/ self) {
             return self.DefaultProc;
         }
+
+        [RubyMethod("compare_by_identity")]
+        public static Hash/*!*/ CompareByIdentity(Hash/*!*/ self) {
+            return self.CompareByIdentity();
+        }
+
+        [RubyMethod("compare_by_identity?")]
+        public static bool ComparesByIdentity(Hash/*!*/ self) {
+            return self.ComparesByIdentity;
+        }
         
         [RubyMethod("replace")]
         public static Hash/*!*/ Replace(RubyContext/*!*/ context, Hash/*!*/ self, [DefaultProtocol, NotNull]IDictionary<object,object>/*!*/ other) {
@@ -204,6 +223,8 @@ namespace IronRuby.Builtins {
             if (otherHash != null) {
                 self.DefaultValue = otherHash.DefaultValue;
                 self.DefaultProc = otherHash.DefaultProc;
+                // #replace takes over the argument's compare_by_identity flag, in both directions
+                self.SetComparesByIdentity(otherHash.ComparesByIdentity, context.EqualityComparer);
             }
             return IDictionaryOps.ReplaceData(self, other);
         }

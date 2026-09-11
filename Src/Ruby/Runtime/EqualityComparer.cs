@@ -58,7 +58,9 @@ namespace IronRuby.Runtime {
                 return y is int && (int)x == (int)y;
             }
 
-            return RubyOps.IsTrue(_eqlSite.Target(_eqlSite, x, y));
+            // Dictionary<,> calls this as Equals(storedKey, probeKey); Ruby dispatches eql? on the
+            // key being looked up, so the arguments are swapped here.
+            return RubyOps.IsTrue(_eqlSite.Target(_eqlSite, y, x));
         }
 
         int IEqualityComparer<object>.GetHashCode(object obj) {
