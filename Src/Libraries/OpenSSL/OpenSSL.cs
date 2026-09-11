@@ -44,114 +44,251 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         [RubyConstant]
         public const string VERSION = "1.0.0";
 
-        [RubyModule("Digest")]
-        public static class DigestFactory {
+        /// <summary>
+        /// OpenSSL::Digest wraps one of the message digests OpenSSL's EVP layer exposes.
+        /// The .NET equivalent is IncrementalHash, which supports the same
+        /// update/finish/reset lifecycle.
+        /// </summary>
+        [RubyClass("Digest")]
+        public class Digest {
+            private string/*!*/ _name = "SHA1";
+            private Crypto.IncrementalHash _hash;
 
-            // TODO: constants:
-            // SHA224,MDC2,DSS1,SHA512,SHA1,MD5,DSS,SHA384,SHA,MD4,SHA256,DigestError,RIPEMD160,MD2
+            public Digest() {
+                _hash = Crypto.IncrementalHash.CreateHash(Crypto.HashAlgorithmName.SHA1);
+            }
 
-            [RubyClass("Digest")]
-            public class Digest {
-                private Crypto.HMAC _algorithm;
+            internal string/*!*/ AlgorithmName {
+                get { return _name; }
+            }
 
-                public Crypto.HMAC Algorithm {
-                    get { return _algorithm; }
-                }
-
-                protected Digest() {
-                }
-
-                [RubyConstructor]
-                public static Digest/*!*/ CreateDigest(RubyClass/*!*/ self, [NotNull]MutableString/*!*/ algorithmName) {
-                    return Initialize(new Digest(), algorithmName);
-                }
-
-                // Reinitialization. Not called when a factory/non-default ctor is called.
-                [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-                public static Digest/*!*/ Initialize(Digest/*!*/ self, [NotNull]MutableString/*!*/ algorithmName) {
-                    Crypto.HMAC algorithm;
-
-                    algorithm = Crypto.HMAC.Create("HMAC" + algorithmName.ConvertToString());
-
-                    if (algorithm == null) {
-                        throw RubyExceptions.CreateRuntimeError("Unsupported digest algorithm ({0}).", algorithmName);
-                    }
-
-                    self._algorithm = algorithm;
-                    return self;
-                }
-
-                // new(string) -> digest
-
-                [RubyMethod("reset")]
-                public static Digest/*!*/ Reset(Digest/*!*/ self) {
-                    self._algorithm.Clear();
-                    return self;
-                }
-
-                // update(string) -> aString
-                // finish -> aString
-
-                [RubyMethod("name")]
-                public static MutableString/*!*/ Name(Digest/*!*/ self) {
-                    return MutableString.CreateAscii(self._algorithm.HashName);
-                }
-
-                [RubyMethod("digest_size")]
-                public static int Seed(Digest/*!*/ self) {
-                    return self._algorithm.OutputBlockSize;
-                }
-
-                //TODO: Properly disable this with BuildConfig
-                [RubyMethod("digest")]
-                public static MutableString/*!*/ BlankDigest(Digest/*!*/ self) {
-                    // TODO: This support only SHA1, It should use self._algorithm but It is not
-                    byte[] blank_data = Encoding.UTF8.GetBytes("");
-                    byte[] hash = new SHA1CryptoServiceProvider().ComputeHash(blank_data);
-                    return MutableString.CreateBinary(hash);
-                }
-
-                //TODO: Properly disable with BuildConfig
-                [RubyMethod("hexdigest")]
-                public static MutableString/*!*/ BlankHexDigest(Digest/*!*/ self) {
-                    byte[] blank_data = Encoding.UTF8.GetBytes("");
-                    byte[] hash = new SHA1CryptoServiceProvider().ComputeHash(blank_data);
-                    return MutableString.CreateAscii(BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant());
+            /// <summary>
+            /// OpenSSL accepts any of its own spellings of a digest name ("sha1", "SHA-1", ...)
+            /// and reports back the canonical one.
+            /// </summary>
+            internal static string CanonicalizeName(string/*!*/ name) {
+                switch (name.ToUpperInvariant().Replace("-", "")) {
+                    case "MD5": return "MD5";
+                    case "SHA":
+                    case "SHA1": return "SHA1";
+                    case "SHA256": return "SHA256";
+                    case "SHA384": return "SHA384";
+                    case "SHA512": return "SHA512";
+                    default: return null;
                 }
             }
+
+            internal static Crypto.HashAlgorithmName ToHashAlgorithmName(string/*!*/ canonicalName) {
+                switch (canonicalName) {
+                    case "MD5": return Crypto.HashAlgorithmName.MD5;
+                    case "SHA1": return Crypto.HashAlgorithmName.SHA1;
+                    case "SHA256": return Crypto.HashAlgorithmName.SHA256;
+                    case "SHA384": return Crypto.HashAlgorithmName.SHA384;
+                    default: return Crypto.HashAlgorithmName.SHA512;
+                }
+            }
+
+            internal static int DigestLengthOf(string/*!*/ canonicalName) {
+                switch (canonicalName) {
+                    case "MD5": return 16;
+                    case "SHA1": return 20;
+                    case "SHA256": return 32;
+                    case "SHA384": return 48;
+                    default: return 64;
+                }
+            }
+
+            internal static int BlockLengthOf(string/*!*/ canonicalName) {
+                return (canonicalName == "SHA384" || canonicalName == "SHA512") ? 128 : 64;
+            }
+
+            private static string/*!*/ ResolveName(RubyContext/*!*/ context, object algorithm) {
+                var str = algorithm as MutableString;
+                if (str != null) {
+                    string canonical = CanonicalizeName(str.ConvertToString());
+                    if (canonical == null) {
+                        throw new OpenSSLError(MutableString.CreateMutable(
+                            "Unsupported digest algorithm (" + str.ConvertToString() + ").", RubyEncoding.UTF8
+                        ));
+                    }
+                    return canonical;
+                }
+
+                var digest = algorithm as Digest;
+                if (digest != null) {
+                    // the state of the argument is deliberately not copied, matching OpenSSL
+                    return digest._name;
+                }
+
+                throw RubyExceptions.CreateTypeConversionError(context.GetClassDisplayName(algorithm), "String");
+            }
+
+            [RubyConstructor]
+            public static Digest/*!*/ CreateDigest(RubyContext/*!*/ context, RubyClass/*!*/ self, object algorithm, [Optional]object data) {
+                return Initialize(context, new Digest(), algorithm, data);
+            }
+
+            // Reinitialization. Not called when a factory/non-default ctor is called.
+            [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+            public static Digest/*!*/ Initialize(RubyContext/*!*/ context, Digest/*!*/ self, object algorithm, [Optional]object data) {
+                self._name = ResolveName(context, algorithm);
+                self._hash = Crypto.IncrementalHash.CreateHash(ToHashAlgorithmName(self._name));
+
+                if (data != null && data != System.Reflection.Missing.Value) {
+                    Update(context, self, data);
+                }
+                return self;
+            }
+
+            [RubyMethod("reset")]
+            public static Digest/*!*/ Reset(Digest/*!*/ self) {
+                // IncrementalHash resets itself when the current hash is retrieved
+                self._hash.GetHashAndReset();
+                return self;
+            }
+
+            [RubyMethod("update")]
+            [RubyMethod("<<")]
+            public static Digest/*!*/ Update(RubyContext/*!*/ context, Digest/*!*/ self, object data) {
+                var str = data as MutableString;
+                if (str == null) {
+                    throw RubyExceptions.CreateTypeConversionError(context.GetClassDisplayName(data), "String");
+                }
+                self._hash.AppendData(str.ConvertToBytes());
+                return self;
+            }
+
+            [RubyMethod("name")]
+            public static MutableString/*!*/ Name(Digest/*!*/ self) {
+                return MutableString.CreateAscii(self._name);
+            }
+
+            [RubyMethod("digest_length")]
+            [RubyMethod("digest_size")]
+            public static int DigestLength(Digest/*!*/ self) {
+                return DigestLengthOf(self._name);
+            }
+
+            [RubyMethod("block_length")]
+            public static int BlockLength(Digest/*!*/ self) {
+                return BlockLengthOf(self._name);
+            }
+
+            /// <summary>
+            /// Finishes the running digest without losing it: IncrementalHash can only
+            /// finish-and-reset, so the accumulated bytes are replayed afterwards.
+            /// </summary>
+            internal static byte[]/*!*/ Finish(Digest/*!*/ self) {
+                return self._hash.GetCurrentHash();
+            }
+
+            [RubyMethod("digest")]
+            public static MutableString/*!*/ GetDigest(Digest/*!*/ self) {
+                return MutableString.CreateBinary(Finish(self));
+            }
+
+            [RubyMethod("digest")]
+            public static MutableString/*!*/ GetDigest(RubyContext/*!*/ context, Digest/*!*/ self, [NotNull]MutableString/*!*/ data) {
+                Reset(self);
+                Update(context, self, data);
+                var result = MutableString.CreateBinary(Finish(self));
+                Reset(self);
+                return result;
+            }
+
+            [RubyMethod("hexdigest")]
+            public static MutableString/*!*/ HexDigest(Digest/*!*/ self) {
+                return MutableString.CreateAscii(ToHex(Finish(self)));
+            }
+
+            [RubyMethod("hexdigest")]
+            public static MutableString/*!*/ HexDigest(RubyContext/*!*/ context, Digest/*!*/ self, [NotNull]MutableString/*!*/ data) {
+                return MutableString.CreateAscii(ToHex(GetDigest(context, self, data).ConvertToBytes()));
+            }
+
+            [RubyMethod("base64digest")]
+            public static MutableString/*!*/ Base64Digest(Digest/*!*/ self) {
+                return MutableString.CreateAscii(Convert.ToBase64String(Finish(self)));
+            }
+
+            [RubyMethod("base64digest")]
+            public static MutableString/*!*/ Base64Digest(RubyContext/*!*/ context, Digest/*!*/ self, [NotNull]MutableString/*!*/ data) {
+                return MutableString.CreateAscii(Convert.ToBase64String(GetDigest(context, self, data).ConvertToBytes()));
+            }
+
+            [RubyMethod("==")]
+            public static bool Equal(RubyContext/*!*/ context, Digest/*!*/ self, [NotNull]Digest/*!*/ other) {
+                return self._name == other._name && ToHex(Finish(self)) == ToHex(Finish(other));
+            }
+
+            internal static byte[]/*!*/ ComputeHash(string/*!*/ canonicalName, byte[]/*!*/ data) {
+                using (var hash = Crypto.IncrementalHash.CreateHash(ToHashAlgorithmName(canonicalName))) {
+                    hash.AppendData(data);
+                    return hash.GetHashAndReset();
+                }
+            }
+
+            internal static string/*!*/ ToHex(byte[]/*!*/ bytes) {
+                var sb = new StringBuilder(bytes.Length * 2);
+                for (int i = 0; i < bytes.Length; i++) {
+                    sb.Append(bytes[i].ToString("x2", CultureInfo.InvariantCulture));
+                }
+                return sb.ToString();
+            }
+
+            #region singleton digest/hexdigest/base64digest
+
+            [RubyMethod("digest", RubyMethodAttributes.PublicSingleton)]
+            public static MutableString/*!*/ Digest_(RubyContext/*!*/ context, RubyClass/*!*/ self,
+                object algorithm, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
+
+                return MutableString.CreateBinary(ComputeHash(ResolveName(context, algorithm), data.ConvertToBytes()));
+            }
+
+            [RubyMethod("hexdigest", RubyMethodAttributes.PublicSingleton)]
+            public static MutableString/*!*/ HexDigest_(RubyContext/*!*/ context, RubyClass/*!*/ self,
+                object algorithm, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
+
+                return MutableString.CreateAscii(ToHex(ComputeHash(ResolveName(context, algorithm), data.ConvertToBytes())));
+            }
+
+            [RubyMethod("base64digest", RubyMethodAttributes.PublicSingleton)]
+            public static MutableString/*!*/ Base64Digest_(RubyContext/*!*/ context, RubyClass/*!*/ self,
+                object algorithm, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
+
+                return MutableString.CreateAscii(Convert.ToBase64String(ComputeHash(ResolveName(context, algorithm), data.ConvertToBytes())));
+            }
+
+            #endregion
         }
 
         [RubyClass("HMAC")]
         public class HMAC {
 
-            internal static byte[] Digest(DigestFactory.Digest digest, MutableString key, MutableString data) {
-                // TODO: does MRI really modify the digest object?
-                digest.Algorithm.Key = key.ConvertToBytes();
-                byte[] hash = digest.Algorithm.ComputeHash(data.ConvertToBytes());
-                return hash;
+            internal static byte[]/*!*/ Compute(Digest/*!*/ digest, MutableString/*!*/ key, MutableString/*!*/ data) {
+                byte[] keyBytes = key.ConvertToBytes();
+                using (var hmac = Crypto.IncrementalHash.CreateHMAC(Digest.ToHashAlgorithmName(digest.AlgorithmName), keyBytes)) {
+                    hmac.AppendData(data.ConvertToBytes());
+                    return hmac.GetHashAndReset();
+                }
             }
 
             [RubyMethod("hexdigest", RubyMethodAttributes.PublicSingleton)]
             public static MutableString/*!*/ HexDigest(RubyClass/*!*/ self,
-                [NotNull]DigestFactory.Digest/*!*/ digest,
-                [NotNull]MutableString/*!*/ key,
-                [NotNull]MutableString/*!*/ data) {
+                [NotNull]Digest/*!*/ digest,
+                [DefaultProtocol, NotNull]MutableString/*!*/ key,
+                [DefaultProtocol, NotNull]MutableString/*!*/ data) {
 
-                byte[] hash = Digest(digest, key, data);
-
-                // TODO (opt):
-                return MutableString.CreateAscii(BitConverter.ToString(hash).Replace("-", "").ToLowerInvariant());
+                return MutableString.CreateAscii(Digest.ToHex(Compute(digest, key, data)));
             }
 
             [RubyMethod("digest", RubyMethodAttributes.PublicSingleton)]
-            public static MutableString/*!*/ Digest(RubyClass/*!*/ self,
-                [NotNull]DigestFactory.Digest/*!*/ digest,
-                [NotNull]MutableString/*!*/ key,
-                [NotNull]MutableString/*!*/ data) {
+            public static MutableString/*!*/ Digest_(RubyClass/*!*/ self,
+                [NotNull]Digest/*!*/ digest,
+                [DefaultProtocol, NotNull]MutableString/*!*/ key,
+                [DefaultProtocol, NotNull]MutableString/*!*/ data) {
 
-                byte[] hash = Digest(digest, key, data);
-
-                return MutableString.CreateBinary(hash);
+                return MutableString.CreateBinary(Compute(digest, key, data));
             }
 
             // HMAC.new(key, digest) -> hmac
@@ -160,6 +297,90 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             // hexdigest -> aString
             // reset -> self
         }
+
+        /// <summary>
+        /// OpenSSL::KDF. The keyword handling and argument coercion live in the Ruby
+        /// half (Src/StdLib/ironruby/openssl.rb); these are the raw primitives.
+        /// </summary>
+        [RubyModule("KDF")]
+        public static class KDF {
+
+            [RubyMethod("__pbkdf2_hmac__", RubyMethodAttributes.PublicSingleton)]
+            public static MutableString/*!*/ Pbkdf2Hmac(RubyModule/*!*/ self,
+                [DefaultProtocol, NotNull]MutableString/*!*/ pass,
+                [DefaultProtocol, NotNull]MutableString/*!*/ salt,
+                [DefaultProtocol]int iterations,
+                [DefaultProtocol]int length,
+                [DefaultProtocol, NotNull]MutableString/*!*/ hash) {
+
+                string canonical = Digest.CanonicalizeName(hash.ConvertToString());
+                if (canonical == null) {
+                    throw new OpenSSLError(MutableString.CreateMutable(
+                        "Unsupported digest algorithm (" + hash.ConvertToString() + ").", RubyEncoding.UTF8
+                    ));
+                }
+                if (length == 0) {
+                    return MutableString.CreateBinary(new byte[0]);
+                }
+                if (iterations <= 0) {
+                    throw new KDFError(MutableString.CreateAscii("PKCS5_PBKDF2_HMAC: invalid iteration count"));
+                }
+
+                byte[] derived = Crypto.Rfc2898DeriveBytes.Pbkdf2(
+                    pass.ConvertToBytes(), salt.ConvertToBytes(), iterations, Digest.ToHashAlgorithmName(canonical), length
+                );
+                return MutableString.CreateBinary(derived);
+            }
+
+            [RubyMethod("__scrypt__", RubyMethodAttributes.PublicSingleton)]
+            public static MutableString/*!*/ Scrypt(RubyModule/*!*/ self,
+                [DefaultProtocol, NotNull]MutableString/*!*/ pass,
+                [DefaultProtocol, NotNull]MutableString/*!*/ salt,
+                [DefaultProtocol]int N,
+                [DefaultProtocol]int r,
+                [DefaultProtocol]int p,
+                [DefaultProtocol]int length) {
+
+                if (length == 0) {
+                    return MutableString.CreateBinary(new byte[0]);
+                }
+                if (N < 2 || (N & (N - 1)) != 0) {
+                    throw new KDFError(MutableString.CreateAscii("EVP_PBE_scrypt: Invalid N parameter"));
+                }
+                if (r < 1 || p < 1) {
+                    throw new KDFError(MutableString.CreateAscii("EVP_PBE_scrypt: Invalid parameters"));
+                }
+                return MutableString.CreateBinary(
+                    ScryptImpl.DeriveKey(pass.ConvertToBytes(), salt.ConvertToBytes(), N, r, p, length)
+                );
+            }
+        }
+
+        [RubyClass("KDFError"), Serializable]
+        public class KDFError : OpenSSLError {
+            private const string/*!*/ M = "KDF error";
+
+            public KDFError() : this(null, null) { }
+            public KDFError(string message) : this(message, null) { }
+            public KDFError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
+            public KDFError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
+        }
+
+        #region secure_compare
+
+        [RubyMethod("fixed_length_secure_compare", RubyMethodAttributes.PublicSingleton)]
+        public static bool FixedLengthSecureCompare(RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ a, [DefaultProtocol, NotNull]MutableString/*!*/ b) {
+
+            byte[] x = a.ConvertToBytes();
+            byte[] y = b.ConvertToBytes();
+            if (x.Length != y.Length) {
+                throw RubyExceptions.CreateArgumentError("inputs must be of equal length");
+            }
+            return Crypto.CryptographicOperations.FixedTimeEquals(x, y);
+        }
+
+        #endregion
 
         [RubyModule("Random")]
         public static class RandomModule {

@@ -239,6 +239,41 @@ class IO
   def self.binread(name, length = nil, offset = 0)
     File.binread(name, length, offset)
   end unless respond_to?(:binread)
+
+  # Ruby 2.3 gave the non-blocking IO primitives an `exception: false`
+  # keyword: instead of raising IO::WaitReadable / IO::WaitWritable / EOFError
+  # they return :wait_readable / :wait_writable / nil.  net/protocol drives its
+  # read buffer through this form.
+  unless method_defined?(:__read_nonblock_raising__)
+    alias_method :__read_nonblock_raising__, :read_nonblock
+
+    def read_nonblock(len, buf = nil, exception: true)
+      begin
+        result = buf.nil? ? __read_nonblock_raising__(len) : __read_nonblock_raising__(len, buf)
+      rescue IO::WaitReadable
+        raise if exception
+        return :wait_readable
+      rescue EOFError
+        raise if exception
+        return nil
+      end
+      result
+    end
+  end
+
+  unless method_defined?(:__write_nonblock_raising__)
+    alias_method :__write_nonblock_raising__, :write_nonblock
+
+    def write_nonblock(buf, exception: true)
+      begin
+        result = __write_nonblock_raising__(buf)
+      rescue IO::WaitWritable
+        raise if exception
+        return :wait_writable
+      end
+      result
+    end
+  end
 end
 
 module Kernel
