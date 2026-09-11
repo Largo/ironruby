@@ -697,80 +697,468 @@ end
 # --------------------------------------------------------------------------
 # Fiber
 #
-# Backed by a thread plus a two-way handshake, so only one of the two ever runs
-# at a time. Close enough for control flow, thread/fiber-local variables and
-# per-fiber $! / $@; it is not a real coroutine, so Thread.current inside the
-# block is the fiber's own thread and #transfer is deliberately not provided.
+# .NET has no coroutines, so every Fiber is backed by a dedicated thread plus a
+# one-slot mailbox. Thread.new marks CLR threads IsBackground, so an abandoned
+# fiber can never keep the process alive. Exactly one fiber of a group ever
+# runs: switching means "post to the target's mailbox, then block on my own",
+# which is the SemaphoreSlim handshake spelled with Queue (Queue is a
+# Monitor-based blocking queue here, so the wait is a real kernel wait).
+#
+# resume / Fiber.yield / transfer / kill / raise / storage / scheduler follow
+# MRI, including the rule that a fiber which was entered by #transfer returns,
+# when it terminates, to the deepest fiber of the root's resume chain.
+#
+# A killed fiber unwinds with Kernel#throw rather than an exception, so ensure
+# clauses run but "rescue Exception" does not see it - what MRI guarantees.
+#
+# Known gap: a fiber that is suspended and then dropped keeps one *background*
+# thread parked on its mailbox until the process exits. MRI reclaims the fiber
+# stack at GC; we cannot, because the running thread must hold the Fiber object
+# strongly for Fiber.current. Nothing leaks past process exit and nothing
+# deadlocks, but long-running programs that abandon many fibers pay a thread.
 # --------------------------------------------------------------------------
 
 class FiberError < StandardError; end unless defined?(FiberError)
 
 unless defined?(Fiber)
   class Fiber
-    def initialize(*args, &block)
-      unless block
-        raise ArgumentError, "tried to create a Fiber without a block"
-      end
-      require 'thread' unless defined?(::Queue)
-      @block = block
-      @to_fiber = ::Queue.new
-      @to_caller = ::Queue.new
-      @alive = true
-      @resuming = false
-      @thread = nil
+    # Kernel#throw tag used to unwind a killed fiber.
+    KILL_TAG = :__ironruby_fiber_kill__
+
+    SCHEDULER_METHODS = [:block, :unblock, :kernel_sleep, :io_wait]
+
+    # ---- helpers ---------------------------------------------------------
+
+    def self.__err__(cls, msg)
+      ::Kernel.raise(cls, msg)
     end
+
+    def self.__mailbox__
+      require 'thread' unless defined?(::Queue)
+      ::Queue.new
+    end
+
+    # Storage keys are Symbols; anything with #to_str (but not #to_sym) is
+    # converted, which is what MRI does.
+    def self.__check_key__(key)
+      return key if key.is_a?(::Symbol)
+      if key.respond_to?(:to_str)
+        str = key.to_str
+        return str.to_sym if str.is_a?(::String)
+      end
+      __err__(::TypeError, "wrong argument type #{key.class} (expected Symbol)")
+    end
+
+    def self.__make_exception__(args)
+      if args.empty?
+        cur = $!
+        return cur if cur
+        return ::RuntimeError.new("")
+      end
+      first = args[0]
+      if first.is_a?(::String)
+        ::RuntimeError.new(first)
+      elsif args.size >= 2
+        exc = first.exception(args[1])
+        exc.set_backtrace(args[2]) if args.size >= 3 && args[2]
+        exc
+      else
+        first.exception
+      end
+    end
+
+    def self.__init_storage__(storage, parent)
+      case storage
+      when true
+        inherited = parent.__storage_raw__
+        inherited ? inherited.dup : nil
+      when nil
+        nil
+      when ::Hash
+        __err__(::FrozenError, "can't modify frozen Hash") if storage.frozen?
+        copy = {}
+        storage.each { |k, v| copy[__check_key__(k)] = v }
+        copy
+      else
+        __err__(::TypeError, "storage must be a hash")
+      end
+    end
+
+    # ---- the root fiber of a thread --------------------------------------
+
+    def self.current
+      Thread.current[:__ir_fiber_current__] || __root__
+    end
+
+    def self.__root__
+      t = Thread.current
+      f = t[:__ir_fiber_root__]
+      unless f
+        f = allocate
+        f.__init_root__
+        t[:__ir_fiber_root__] = f
+        t[:__ir_fiber_current__] = f
+      end
+      f
+    end
+
+    def __init_root__
+      @mailbox     = Fiber.__mailbox__
+      @status      = :resumed
+      @alive       = true
+      @root        = true
+      @blocking    = true
+      @prev        = nil
+      @resuming    = nil
+      @transferred = false
+      @killing     = false
+      @yielded     = false
+      @storage     = nil
+      @location    = nil
+      @scheduler   = nil
+      @thread      = Thread.current
+      @root_fiber  = self
+      self
+    end
+
+    # ---- construction ----------------------------------------------------
+
+    def initialize(blocking: false, storage: true, &block)
+      Fiber.__err__(::ArgumentError, "tried to create Proc object without a block") unless block
+      cur          = Fiber.current
+      @block       = block
+      @blocking    = blocking ? true : false
+      @storage     = Fiber.__init_storage__(storage, cur)
+      @mailbox     = Fiber.__mailbox__
+      @status      = :created
+      @alive       = true
+      @root        = false
+      @prev        = nil
+      @resuming    = nil
+      @transferred = false
+      @killing     = false
+      @yielded     = false
+      @thread      = nil
+      @scheduler   = nil
+      @root_fiber  = cur.__root_fiber__
+      loc          = (block.source_location rescue nil)
+      @location    = loc ? "#{loc[0]}:#{loc[1]}" : nil
+    end
+
+    # ---- internal accessors (used across fibers of the same group) --------
+
+    def __root_fiber__; @root_fiber; end
+    def __thread__; @thread; end
+    def __storage_raw__; @storage; end
+    def __resuming__; @resuming; end
+    def __set_resuming__(f); @resuming = f; end
+    def __set_status__(s); @status = s; end
+    def __set_blocking__(b); @blocking = b; end
+    def __set_transferred__; @transferred = true; end
+    def __post__(msg); @mailbox.push(msg); end
+    def __scheduler_get__; @scheduler; end
+    def __scheduler_set__(s); @scheduler = s; end
+
+    def __storage_store__(key, value)
+      # MRI deletes the entry rather than storing a nil
+      if value.nil?
+        @storage.delete(key) if @storage
+      else
+        @storage ||= {}
+        @storage[key] = value
+      end
+      value
+    end
+
+    # ---- public API ------------------------------------------------------
 
     def alive?
       @alive
     end
 
+    def blocking?
+      @blocking
+    end
+
+    def inspect
+      state = case @status
+              when :created    then "created"
+              when :suspended  then "suspended"
+              when :terminated then "terminated"
+              else                  "resumed"
+              end
+      id = "%016x" % (object_id.abs << 1)
+      @location ? "#<Fiber:0x#{id} #{@location} (#{state})>" : "#<Fiber:0x#{id} (#{state})>"
+    end
+
+    alias_method :to_s, :inspect
+
+    def storage
+      unless Fiber.current.equal?(self)
+        Fiber.__err__(::ArgumentError, "Fiber storage can only be accessed from the Fiber it belongs to")
+      end
+      (@storage || {}).dup
+    end
+
+    def storage=(hash)
+      unless Fiber.current.equal?(self)
+        Fiber.__err__(::ArgumentError, "Fiber storage can only be accessed from the Fiber it belongs to")
+      end
+      @storage = Fiber.__init_storage__(hash, self)
+      hash
+    end
+
+    # A fiber may only be driven from the thread that owns its group; otherwise
+    # the handoff would post to a mailbox nobody is waiting on and deadlock.
+    def __check_thread__(cur)
+      unless cur.__root_fiber__.equal?(@root_fiber)
+        Fiber.__err__(::FiberError, "fiber called across threads")
+      end
+    end
+
     def resume(*args)
-      raise FiberError, "attempt to resume a terminated fiber" unless @alive
-      raise FiberError, "attempt to resume the current fiber" if @resuming
-      @resuming = true
-      start unless @thread
-      @to_fiber.push(args)
-      kind, value = @to_caller.pop
-      @resuming = false
-      raise value if kind == :error
+      cur = Fiber.current
+      Fiber.__err__(::FiberError, "attempt to resume the current fiber") if cur.equal?(self)
+      __check_thread__(cur)
+      Fiber.__err__(::FiberError, "attempt to resume a terminated fiber") unless @alive
+      Fiber.__err__(::FiberError, "double resume") if @prev
+      Fiber.__err__(::FiberError, "attempt to resume a resuming fiber") if @resuming
+      @prev = cur
+      cur.__set_resuming__(self)
+      Fiber.__switch__(cur, self, [:resume, args])
+    end
+
+    def transfer(*args)
+      cur = Fiber.current
+      return nil if cur.equal?(self)
+      __check_thread__(cur)
+      Fiber.__err__(::FiberError, "attempt to transfer to a resuming fiber") if @resuming || @yielded
+      Fiber.__err__(::FiberError, "dead fiber called") unless @alive
+      cur.__set_transferred__
+      Fiber.__switch__(cur, self, [:transfer, args])
+    end
+
+    def kill
+      cur = Fiber.current
+      return self unless @alive
+      @killing = true
+
+      if cur.equal?(self)
+        throw(KILL_TAG) unless @root
+        return self
+      end
+
+      __check_thread__(cur)
+
+      unless @thread
+        # never entered: there is no stack to unwind and no ensure to run
+        @alive = false
+        @status = :terminated
+        return self
+      end
+
+      # An ancestor that is busy resuming somebody cannot be unwound now; the
+      # throw happens as soon as control comes back to it (MRI does the same).
+      return self if @resuming
+
+      __adopt__(cur)
+      Fiber.__switch__(cur, self, [:kill])
+      self
+    end
+
+    # Makes `cur` the fiber control returns to when we finish - unless somebody
+    # is already waiting for us, in which case that fiber keeps the claim and
+    # `cur` is the one that gets suspended for good.
+    def __adopt__(cur)
+      if @prev.nil?
+        @prev = cur
+        cur.__set_resuming__(self)
+      end
+    end
+
+    def raise(*args)
+      cur = Fiber.current
+      exc = Fiber.__make_exception__(args)
+      ::Kernel.raise(exc) if cur.equal?(self)
+      __check_thread__(cur)
+      Fiber.__err__(::FiberError, "attempt to resume a terminated fiber") unless @alive
+      Fiber.__err__(::FiberError, "cannot raise exception on unborn fiber") unless @thread
+      __adopt__(cur)
+      Fiber.__switch__(cur, self, [:raise, exc])
+    end
+
+    # ---- class methods ---------------------------------------------------
+
+    def self.yield(*args)
+      current.__yield__(args)
+    end
+
+    def self.blocking?
+      current.blocking? ? 1 : false
+    end
+
+    def self.blocking
+      f = current
+      was = f.blocking?
+      f.__set_blocking__(true)
+      begin
+        yield f
+      ensure
+        f.__set_blocking__(was)
+      end
+    end
+
+    def self.[](key)
+      k = __check_key__(key)
+      s = current.__storage_raw__
+      s ? s[k] : nil
+    end
+
+    def self.[]=(key, value)
+      current.__storage_store__(__check_key__(key), value)
       value
     end
 
-    def self.yield(*args)
-      fiber = Thread.current[:__ruby4_fiber__]
-      raise FiberError, "can't yield from root fiber" unless fiber
-      fiber.__suspend__(args)
+    def self.scheduler
+      current.__root_fiber__.__scheduler_get__
     end
 
-    # internal: called on the fiber's own thread
-    def __suspend__(args)
-      @to_caller.push([:yield, args.size <= 1 ? args.first : args])
-      resumed = @to_fiber.pop
-      resumed.size <= 1 ? resumed.first : resumed
-    end
-
-    # internal: called on the fiber's own thread
-    def __finish__(kind, value)
-      @alive = false
-      @to_caller.push([kind, value])
-    end
-
-    private
-
-    def start
-      fiber = self
-      block = @block
-      inbox = @to_fiber
-      @thread = Thread.new do
-        Thread.current[:__ruby4_fiber__] = fiber
-        first = inbox.pop
-        begin
-          result = block.call(*first)
-          fiber.__finish__(:return, result)
-        rescue Exception => e
-          fiber.__finish__(:error, e)
+    def self.set_scheduler(scheduler)
+      unless scheduler.nil?
+        SCHEDULER_METHODS.each do |m|
+          unless scheduler.respond_to?(m)
+            __err__(::ArgumentError, "Scheduler must implement ##{m}")
+          end
         end
       end
+      current.__root_fiber__.__scheduler_set__(scheduler)
+      scheduler
+    end
+
+    def self.current_scheduler
+      current.blocking? ? nil : scheduler
+    end
+
+    def self.schedule(*args, &block)
+      s = scheduler
+      __err__(::RuntimeError, "No scheduler is available!") unless s
+      s.fiber(*args, &block)
+    end
+
+    # ---- the switch ------------------------------------------------------
+
+    # Hands control from `cur` to `target` and blocks until control comes back.
+    def self.__switch__(cur, target, msg)
+      cur.__set_status__(:suspended)
+      target.__start__
+      target.__post__(msg)
+      cur.__act__(cur.__await__)
+    end
+
+    def __start__
+      return self if @thread
+      fiber = self
+      owner = @root_fiber.__thread__
+      @thread = Thread.new do
+        Thread.current[:__ir_fiber_current__] = fiber
+        # Ruby ownership (Mutex, deadlock detection) is per thread, not per fiber
+        Thread.__set_fiber_owner__(owner) if owner
+        fiber.__run__
+      end
+      self
+    end
+
+    def __await__
+      msg = @mailbox.pop
+      @status = :resumed
+      msg
+    end
+
+    # Acts on a message that just arrived for the fiber we are running on.
+    def __act__(msg)
+      throw(KILL_TAG) if @killing && !@root
+      case msg[0]
+      when :kill
+        @killing = true
+        throw(KILL_TAG) unless @root
+        nil
+      when :raise, :error
+        ::Kernel.raise(msg[1])
+      when :resume, :transfer
+        args = msg[1]
+        args.size <= 1 ? args.first : args
+      else
+        msg[1]
+      end
+    end
+
+    def __yield__(args)
+      throw(KILL_TAG) if @killing
+      target = @prev
+      if @root || target.nil?
+        Fiber.__err__(::FiberError, "attempt to yield on a not resumed fiber")
+      end
+      @prev = nil
+      target.__set_resuming__(nil)
+      @status = :suspended
+      @yielded = true
+      target.__post__([:yield, args.size <= 1 ? args.first : args])
+      msg = __await__
+      @yielded = false
+      __act__(msg)
+    end
+
+    # Runs on the fiber's own thread.
+    def __run__
+      msg = __await__
+      result = nil
+      error = nil
+      handed_back = false
+      begin
+        catch(KILL_TAG) do
+          begin
+            case msg[0]
+            when :resume, :transfer
+              result = @block.call(*msg[1])
+            else
+              __act__(msg)
+            end
+          rescue ::Exception => e
+            error = e
+          end
+        end
+        __finish__(error ? [:error, error] : [:return, result])
+        handed_back = true
+      ensure
+        unless handed_back
+          # `return` or `break` out of the fiber block unwinds with something
+          # `rescue Exception` cannot see. Hand control back anyway - dropping
+          # it here would park the resuming fiber forever.
+          begin
+            __finish__([:error, ::LocalJumpError.new("unexpected return")])
+          rescue ::Exception
+          end
+        end
+      end
+    end
+
+    # Runs on the fiber's own thread, as the last thing it does.
+    def __finish__(msg)
+      @alive = false
+      @status = :terminated
+      target = @prev
+      if target
+        @prev = nil
+        target.__set_resuming__(nil)
+      else
+        # Entered by #transfer: MRI returns to the deepest fiber of the root
+        # fiber's resume chain, not to the root itself.
+        target = @root_fiber
+        while (nested = target.__resuming__)
+          target = nested
+        end
+      end
+      target.__post__(msg)
     end
   end
 end
