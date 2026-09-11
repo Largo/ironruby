@@ -1,11 +1,11 @@
-﻿/* ****************************************************************************
+/* ****************************************************************************
  *
- * Copyright (c) Microsoft Corporation. 
+ * Copyright (c) Microsoft Corporation.
  *
- * This source code is subject to terms and conditions of the Apache License, Version 2.0. A 
- * copy of the license can be found in the License.html file at the root of this distribution. If 
- * you cannot locate the  Apache License, Version 2.0, please send an email to 
- * ironruby@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the  Apache License, Version 2.0, please send an email to
+ * ironruby@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
  * by the terms of the Apache License, Version 2.0.
  *
  * You must not remove this notice, or any other, from this software.
@@ -13,70 +13,88 @@
  *
  * ***************************************************************************/
 
+using System;
+using System.Collections.Generic;
 using System.Threading;
-using Microsoft.Scripting.Runtime;
+using IronRuby.Builtins;
 using IronRuby.Runtime;
+using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.StandardLibrary.Threading {
+    /// <summary>
+    /// Thread::ConditionVariable. Built on the same per-thread sleep signal as Thread.stop, exactly like
+    /// MRI: that is what makes Thread#run and Thread#wakeup end a #wait (a Monitor condition could not
+    /// be woken that way), and it gives #signal the FIFO order the specs require. The old implementation
+    /// used an AutoResetEvent plus a 1ms sleep per waiter in #broadcast and lost wakeups.
+    /// </summary>
     [RubyClass("ConditionVariable")]
     public class RubyConditionVariable {
-        private RubyMutex _mutex;
-        private readonly AutoResetEvent _signal = new AutoResetEvent(false);
-        private readonly object _lock = new object();
-        private int _waits;
+        private readonly object/*!*/ _lock = new object();
+        private readonly LinkedList<IronRuby.Builtins.ThreadOps.RubyThreadInfo>/*!*/ _waiters = new LinkedList<IronRuby.Builtins.ThreadOps.RubyThreadInfo>();
 
         public RubyConditionVariable() {
         }
 
         [RubyMethod("signal")]
         public static RubyConditionVariable/*!*/ Signal(RubyConditionVariable/*!*/ self) {
-            RubyMutex m = self._mutex;
-            if (m != null) {
-                self._signal.Set();
+            IronRuby.Builtins.ThreadOps.RubyThreadInfo first = null;
+            lock (self._lock) {
+                if (self._waiters.Count > 0) {
+                    first = self._waiters.First.Value;
+                    self._waiters.RemoveFirst();
+                }
+            }
+            if (first != null) {
+                first.Wake();
             }
             return self;
         }
 
         [RubyMethod("broadcast")]
         public static RubyConditionVariable/*!*/ Broadcast(RubyConditionVariable/*!*/ self) {
-            RubyMutex m = self._mutex;
-            if (m != null) {
-                lock (self._lock) {
-                    int waits = self._waits;
-                    for (int i = 0; i < waits; i++) {
-                        self._signal.Set();
-#if FEATURE_THREAD
-                        //
-                        // WARNING
-                        //
-                        // There is no guarantee that every call to the Set method will release a waiting thread.
-                        // If two calls are too close together, so that the second call occurs before a thread 
-                        // has been released, only one thread is released. 
-                        // We add a sleep to increase the chance that all waiting threads will be released.
-                        //
-                        Thread.CurrentThread.Join(1);
-#endif
-                    }
-                }
+            IronRuby.Builtins.ThreadOps.RubyThreadInfo[] all;
+            lock (self._lock) {
+                all = new IronRuby.Builtins.ThreadOps.RubyThreadInfo[self._waiters.Count];
+                self._waiters.CopyTo(all, 0);
+                self._waiters.Clear();
+            }
+            foreach (var waiter in all) {
+                waiter.Wake();
             }
             return self;
         }
 
         [RubyMethod("wait")]
         public static RubyConditionVariable/*!*/ Wait(RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex) {
-            self._mutex = mutex;
-            RubyMutex.Unlock(mutex);
-            lock (self._lock) { self._waits++; }
-
-            self._signal.WaitOne();
-
-            lock (self._lock) { self._waits--; }
-            RubyMutex.Lock(mutex);
-            return self;
+            return Wait(self, mutex, null);
         }
 
-        // TODO:
-        // "marshal_load" 
-        // "marshal_dump"
+        [RubyMethod("wait")]
+        public static RubyConditionVariable/*!*/ Wait(RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex, object timeout) {
+            int ms = RubyQueue.GetTimeoutMilliseconds(timeout);
+
+            var info = IronRuby.Builtins.ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
+            LinkedListNode<IronRuby.Builtins.ThreadOps.RubyThreadInfo> node;
+            lock (self._lock) {
+                node = self._waiters.AddLast(info);
+            }
+
+            RubyMutex.Unlock(mutex);
+            try {
+                if (ms < 0) {
+                    info.Sleep();
+                } else {
+                    info.Sleep(ms);
+                }
+            } finally {
+                lock (self._lock) {
+                    if (node.List != null) {
+                        self._waiters.Remove(node);
+                    }
+                }
+                RubyMutex.Lock(mutex);
+            }
+            return self;
+        }
     }
 }

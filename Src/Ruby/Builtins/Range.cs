@@ -85,17 +85,20 @@ namespace IronRuby.Builtins {
 
             // Range tests whether the items can be compared, and uses that to determine if the range is valid
             // Only a non-existent <=> method or a result of nil seems to trigger the exception.
-            object compareResult;
+            // A nil end (endless range, 2.6) or nil begin (beginless range, 2.7) skips the test.
+            if (begin != null && end != null) {
+                object compareResult;
 
-            var site = comparisonStorage.GetCallSite("<=>");
-            try {
-                compareResult = site.Target(site, begin, end);
-            } catch (Exception) {
-                compareResult = null;
-            }
+                var site = comparisonStorage.GetCallSite("<=>");
+                try {
+                    compareResult = site.Target(site, begin, end);
+                } catch (Exception) {
+                    compareResult = null;
+                }
 
-            if (compareResult == null) {
-                throw RubyExceptions.CreateArgumentError("bad value for range");
+                if (compareResult == null) {
+                    throw RubyExceptions.CreateArgumentError("bad value for range");
+                }
             }
 
             _begin = begin;

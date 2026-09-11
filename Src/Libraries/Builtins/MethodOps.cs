@@ -23,9 +23,9 @@ namespace IronRuby.Builtins {
     [RubyClass("Method", Extends = typeof(RubyMethod))]
     public static class MethodOps {
         [RubyMethod("==")]
+        [RubyMethod("eql?")]
         public static bool Equal(RubyMethod/*!*/ self, [NotNull]RubyMethod/*!*/ other) {
-            // TODO: method with changed visibility, define_methods, module_functions, aliases:
-            return ReferenceEquals(self.Target, other.Target) && ReferenceEquals(self.Info, other.Info);
+            return ReferenceEquals(self.Target, other.Target) && self.Info.IsEquivalentTo(other.Info);
         }
 
         [RubyMethod("==")]

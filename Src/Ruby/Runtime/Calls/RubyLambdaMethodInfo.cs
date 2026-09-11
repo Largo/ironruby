@@ -60,6 +60,14 @@ namespace IronRuby.Runtime.Calls {
             get { return _id; }
         }
 
+        public override bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
+            if (ReferenceEquals(this, other)) {
+                return true;
+            }
+            var info = other as RubyLambdaMethodInfo;
+            return info != null && info._id == _id;
+        }
+
         public string/*!*/ DefinitionName {
             get { return _definitionName; }
         }

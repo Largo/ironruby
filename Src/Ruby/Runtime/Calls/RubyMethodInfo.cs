@@ -59,6 +59,15 @@ namespace IronRuby.Runtime.Calls {
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
             return new RubyMethodInfo(_body, _declaringScope, module, flags);
         }
+
+        public override bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
+            if (ReferenceEquals(this, other)) {
+                return true;
+            }
+            // `alias` and visibility changes copy the info but share the body.
+            var info = other as RubyMethodInfo;
+            return info != null && ReferenceEquals(_body, info._body);
+        }
         
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
             return parameterTypes.Length >= Parameters.Mandatory.Length

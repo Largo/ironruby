@@ -1200,8 +1200,7 @@ namespace IronRuby.Builtins {
             }
 
             long ms = seconds * 1000;
-            Thread.Sleep(ms > Int32.MaxValue ? Timeout.Infinite : (int)ms);
-            return seconds;
+            return ThreadOps.DoSleep(ms > Int32.MaxValue ? Timeout.Infinite : (int)ms);
         }
 
         [RubyMethod("sleep", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_THREAD")]
@@ -1212,8 +1211,7 @@ namespace IronRuby.Builtins {
             }
 
             double ms = seconds * 1000;
-            Thread.Sleep(ms > Int32.MaxValue ? Timeout.Infinite : (int)ms);
-            return (int)seconds;
+            return ThreadOps.DoSleep(ms > Int32.MaxValue ? Timeout.Infinite : (int)ms);
         }
 #endif
 

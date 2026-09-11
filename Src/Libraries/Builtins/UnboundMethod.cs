@@ -51,8 +51,9 @@ namespace IronRuby.Builtins {
         #region Public Instance Methods
 
         [RubyMethod("==")]
+        [RubyMethod("eql?")]
         public static bool Equal(UnboundMethod/*!*/ self, [NotNull]UnboundMethod/*!*/ other) {
-            return ReferenceEquals(self.Info, other.Info);
+            return self.Info.IsEquivalentTo(other.Info);
         }
 
         [RubyMethod("==")]

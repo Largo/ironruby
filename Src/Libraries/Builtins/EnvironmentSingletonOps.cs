@@ -49,15 +49,12 @@ namespace IronRuby.Builtins {
                 context.DomainManager.Platform.SetEnvironmentVariable(name, value);
             }
             if (name == "TZ") {
-                TimeZone zone;
+                RubyTimeZone zone;
                 if (RubyTime.TryParseTimeZone(value, out zone)) {
                     RubyTime._CurrentTimeZone = zone;
                 } else {
-                    context.ReportWarning(String.Format(CultureInfo.InvariantCulture,
-                        "`{0}' is not a valid time zone specification; using the current time zone `{1}'", 
-                        value, 
-                        RubyTime._CurrentTimeZone.StandardName
-                    ));
+                    // Ruby falls back to UTC for a TZ setting it cannot parse.
+                    RubyTime._CurrentTimeZone = RubyTimeZone.Utc;
                 }
             }
         }

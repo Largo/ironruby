@@ -822,7 +822,10 @@ namespace IronRuby.Runtime {
 
         public static object SetHashElement(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ obj, object key, object value) {
             MutableString str = key as MutableString;
-            if (str != null) {
+            Hash hash = obj as Hash;
+            // an identity hash stores the string object it was given, it must not copy it;
+            // neither is there a reason to copy an already frozen string
+            if (str != null && !str.IsFrozen && (hash == null || !hash.ComparesByIdentity)) {
                 key = str.Duplicate(context, false, str.Clone()).Freeze();
             } else {
                 key = CustomStringDictionary.NullToObj(key);
@@ -1067,61 +1070,119 @@ namespace IronRuby.Runtime {
 #if FEATURE_THREAD
 #if FEATURE_EXCEPTION_STATE
         /// <summary>
-        /// Thread#raise is implemented on top of System.Threading.Thread.ThreadAbort, and squirreling
-        /// the Ruby exception expected by the use in ThreadAbortException.ExceptionState.
+        /// Control-flow exception used to unwind a thread that was killed with Thread#kill / #exit / #terminate.
+        /// Deriving from StackUnwinder makes RubyOps.CanRescue skip it, so - exactly like in MRI - a killed
+        /// thread cannot be caught by "rescue Exception" and does not touch $!, while ensure clauses (which
+        /// compile to CLR finally blocks) still run.
         /// </summary>
-        private class AsyncExceptionMarker {
-            internal Exception Exception { get; set; }
-            internal AsyncExceptionMarker(Exception e) {
-                this.Exception = e;
-            }
+        public sealed class ThreadExitSignal : StackUnwinder {
+            public ThreadExitSignal() : base(null) { }
         }
+
+        // Thread#raise and Thread#kill used to be implemented with System.Threading.Thread.Abort, which throws
+        // PlatformNotSupportedException on .NET Core (and took the whole process down via Thread.ResetAbort).
+        // There is no way to inject an exception into another thread on this runtime, so delivery is cooperative:
+        // the exception is parked here and the target thread is nudged with Thread.Interrupt, which does work on
+        // .NET Core and unblocks any managed wait (Monitor.Wait, WaitHandle.WaitOne, Thread.Sleep, Thread.Join).
+        // The blocking primitives that IronRuby itself uses translate ThreadInterruptedException into the parked
+        // exception; every other safe point calls CheckAsyncException. A thread that is spinning in pure Ruby code
+        // without ever blocking cannot be interrupted - see the comment on CheckAsyncException.
+        private static readonly Dictionary<int, Exception> _pendingAsyncExceptions = new Dictionary<int, Exception>();
 
         public static void RaiseAsyncException(Thread thread, Exception e) {
-            thread.Abort(new AsyncExceptionMarker(e));
-        }
+            if (thread == Thread.CurrentThread) {
+                throw e;
+            }
 
-        // TODO: This is redundant with ThreadOps.RubyThreadInfo.ExitRequested. However, we cannot access that
-        // from here as it is in a separate assembly.
-        private class ThreadExitMarker {
+            lock (_pendingAsyncExceptions) {
+                _pendingAsyncExceptions[thread.ManagedThreadId] = e;
+            }
+
+            try {
+                thread.Interrupt();
+            } catch (PlatformNotSupportedException) {
+                // nothing else we can do; the exception stays parked until the thread reaches a safe point
+            } catch (ThreadStateException) {
+            }
         }
 
         public static void ExitThread(Thread/*!*/ thread) {
-            thread.Abort(new ThreadExitMarker());
+            RaiseAsyncException(thread, new ThreadExitSignal());
+        }
+
+        // IronRuby runs every Fiber on its own CLR thread, but Ruby semantics say that all fibers of a
+        // thread share that thread's identity for Mutex ownership and for deadlock detection. A fiber
+        // thread records the thread that owns its fiber group here.
+        [ThreadStatic]
+        private static Thread _fiberOwnerThread;
+
+        /// <summary>
+        /// The thread Ruby considers "current" for ownership purposes: the fiber group's owner if we are
+        /// running inside a fiber, otherwise the CLR thread itself.
+        /// </summary>
+        public static Thread/*!*/ CurrentRubyThread {
+            get { return _fiberOwnerThread ?? Thread.CurrentThread; }
+        }
+
+        public static void SetFiberOwnerThread(Thread thread) {
+            _fiberOwnerThread = thread;
         }
 
         /// <summary>
-        /// Thread#exit is implemented by calling Thread.Abort. However, we need to distinguish a call to Thread#exit
-        /// from a raw call to Thread.Abort.
-        /// 
-        /// Note that if a finally block raises an exception while an Abort is pending, that exception can be propagated instead of a ThreadAbortException.
+        /// Removes and returns the asynchronous exception parked for the given thread, if any.
         /// </summary>
-        public static bool IsRubyThreadExit(Exception e) {
-            ThreadAbortException tae = e as ThreadAbortException;
-            if (tae != null) {
-                if (tae.ExceptionState is ThreadExitMarker) {
-                    return true;
+        public static Exception GetPendingAsyncException(Thread/*!*/ thread) {
+            lock (_pendingAsyncExceptions) {
+                Exception e;
+                int key = thread.ManagedThreadId;
+                if (_pendingAsyncExceptions.TryGetValue(key, out e)) {
+                    _pendingAsyncExceptions.Remove(key);
+                    return e;
                 }
             }
-            return false;
+            return null;
+        }
+
+        public static bool HasPendingAsyncException(Thread/*!*/ thread) {
+            lock (_pendingAsyncExceptions) {
+                return _pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId);
+            }
+        }
+
+        /// <summary>
+        /// A safe point: throws the asynchronous exception parked for the current thread, if there is one.
+        /// Called from the blocking primitives and from Thread.pass. Ruby code that neither blocks nor calls
+        /// one of those runs to completion even if it was killed - unlike MRI, where the check happens at
+        /// every VM instruction. That difference is not fixable without a check in the interpreter loop.
+        /// </summary>
+        public static void CheckAsyncException() {
+            Exception e = GetPendingAsyncException(Thread.CurrentThread);
+            if (e != null) {
+                throw e;
+            }
+        }
+
+        /// <summary>
+        /// Called from a catch (ThreadInterruptedException) around a blocking wait: if the interrupt was our
+        /// doing, the parked exception is thrown instead. Otherwise the wait is simply resumed by the caller.
+        /// </summary>
+        public static void TranslateThreadInterrupt() {
+            CheckAsyncException();
+        }
+
+        public static bool IsRubyThreadExit(Exception e) {
+            return e is ThreadExitSignal;
         }
 
         /// <summary>
         /// Can return null for Thread#kill
         /// </summary>
         public static Exception GetVisibleException(Exception e) {
-            ThreadAbortException tae = e as ThreadAbortException;
-            if (tae != null) {
-                if (IsRubyThreadExit(e)) {
-                    return null;
-                }
-                AsyncExceptionMarker asyncExceptionMarker = tae.ExceptionState as AsyncExceptionMarker;
-                if (asyncExceptionMarker != null) {
-                    return asyncExceptionMarker.Exception;
-                }
+            if (e is ThreadExitSignal) {
+                return null;
             }
             return e;
-        }   
+        }
 #else
         public static Exception GetVisibleException(Exception e) { return e; }
 

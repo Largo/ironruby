@@ -51,11 +51,38 @@ module Enumerable
   alias_method :filter, :select unless method_defined?(:filter)
 end
 
+module Kernel
+  private
+
+  # shared tail of Array#dig / Hash#dig / Struct#dig: CRuby raises TypeError,
+  # not NoMethodError, when an intermediate element has no #dig
+  def __dig_step__(value, rest)
+    return value if rest.empty? || value.nil?
+    unless value.respond_to?(:dig)
+      raise TypeError, "#{value.class} does not have #dig method"
+    end
+    value.dig(*rest)
+  end
+
+  # shared by Hash#to_h and Struct#to_h: validate the [key, value] pair a block
+  # returned. Only #to_ary is honoured, never #to_a.
+  def __to_h_pair__(pair)
+    unless pair.is_a?(Array)
+      pair = pair.to_ary if pair.respond_to?(:to_ary)
+    end
+    unless pair.is_a?(Array)
+      raise TypeError, "wrong element type #{pair.class} (expected array)"
+    end
+    unless pair.size == 2
+      raise ArgumentError, "element has wrong array length (expected 2, was #{pair.size})"
+    end
+    pair
+  end
+end
+
 class Array
   def dig(key, *rest)
-    value = self[key]
-    return value if rest.empty? || value.nil?
-    value.dig(*rest)
+    __dig_step__(self[key], rest)
   end unless method_defined?(:dig)
 
   def sum(init = 0)
@@ -78,22 +105,77 @@ end
 
 class Hash
   def dig(key, *rest)
-    value = self[key]
-    return value if rest.empty? || value.nil?
-    value.dig(*rest)
+    __dig_step__(self[key], rest)
   end unless method_defined?(:dig)
 
-  def transform_values
-    result = {}
-    each { |k, v| result[k] = yield(v) }
+  def transform_values(&block)
+    return to_enum(:transform_values) unless block
+    result = __result_hash__
+    each { |k, v| result[k] = block.call(v) }
     result
   end unless method_defined?(:transform_values)
 
-  def transform_keys
+  def transform_values!(&block)
+    return to_enum(:transform_values!) unless block
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    keys.each { |k| self[k] = block.call(self[k]) }
+    self
+  end unless method_defined?(:transform_values!)
+
+  # transform_keys(hash = nil) { |key| ... } - the hash argument (3.0) wins over
+  # the block for the keys it contains.
+  def transform_keys(*args, &block)
+    mapping = __key_mapping__(args)
+    return to_enum(:transform_keys) if mapping.nil? && block.nil?
+    # CRuby drops the compare_by_identity flag here (but keeps it in #transform_values)
     result = {}
-    each { |k, v| result[yield(k)] = v }
+    each do |k, v|
+      nk = if mapping && mapping.key?(k)
+             mapping[k]
+           elsif block
+             block.call(k)
+           else
+             k
+           end
+      result[nk] = v
+    end
     result
   end unless method_defined?(:transform_keys)
+
+  def transform_keys!(*args, &block)
+    mapping = __key_mapping__(args)
+    return to_enum(:transform_keys!) if mapping.nil? && block.nil?
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    # CRuby semantics: walk a snapshot of the pairs, deleting the old key only
+    # if it has not already been produced as a new key (so `break` leaves the
+    # already-processed prefix rewritten and the rest untouched).
+    new_keys = {}
+    to_a.each do |k, v|
+      nk = if mapping && mapping.key?(k)
+             mapping[k]
+           elsif block
+             block.call(k)
+           else
+             k
+           end
+      delete(k) unless new_keys.key?(k)
+      self[nk] = v
+      new_keys[nk] = nil
+    end
+    self
+  end unless method_defined?(:transform_keys!)
+
+  private def __key_mapping__(args)
+    if args.size > 1
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    end
+    return nil if args.empty?
+    mapping = args[0]
+    return mapping if mapping.is_a?(Hash)
+    mapping = mapping.to_hash if mapping.respond_to?(:to_hash)
+    return mapping if mapping.is_a?(Hash)
+    raise TypeError, "no implicit conversion of #{args[0].nil? ? 'nil' : args[0].class} into Hash"
+  end
 
   def slice(*keys)
     result = {}
@@ -101,8 +183,11 @@ class Hash
     result
   end unless method_defined?(:slice)
 
+  # #except builds a plain Hash: CRuby does not carry the default value or the
+  # default proc over to the result.
   def except(*keys)
-    result = dup
+    result = __result_hash__
+    each { |k, v| result[k] = v }
     keys.each { |k| result.delete(k) }
     result
   end unless method_defined?(:except)
@@ -111,8 +196,11 @@ class Hash
     self
   end unless method_defined?(:deconstruct_keys)
 
+  # unlike #reject, #compact keeps the default value and the default proc
   def compact
-    reject { |_, v| v.nil? }
+    result = dup
+    result.delete_if { |_, v| v.nil? }
+    result
   end unless method_defined?(:compact)
 
   alias_method :filter, :select unless method_defined?(:filter)
@@ -128,6 +216,46 @@ class String
   end unless method_defined?(:delete_suffix)
 
   alias_method :+@, :dup unless method_defined?(:+@)
+end
+
+module Comparable
+  # Comparable#clamp (2.4; range form 2.4, beginless/endless 2.7).
+  def clamp(*args)
+    case args.size
+    when 1
+      range = args[0]
+      unless range.is_a?(Range)
+        raise TypeError, "wrong argument type #{range.class} (expected Range)"
+      end
+      min, max = range.begin, range.end
+      if range.exclude_end? && !max.nil?
+        raise ArgumentError, "cannot clamp with an exclusive range"
+      end
+    when 2
+      min, max = args
+    else
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)"
+    end
+
+    unless min.nil? || max.nil?
+      c = (min <=> max)
+      if c.nil? || c > 0
+        raise ArgumentError, "min argument must be less than or equal to max argument"
+      end
+    end
+
+    unless min.nil?
+      c = (self <=> min)
+      raise ArgumentError, "comparison of #{self.class} with #{min.inspect} failed" if c.nil?
+      return min if c < 0
+    end
+    unless max.nil?
+      c = (self <=> max)
+      raise ArgumentError, "comparison of #{self.class} with #{max.inspect} failed" if c.nil?
+      return max if c > 0
+    end
+    self
+  end unless method_defined?(:clamp)
 end
 
 class Integer
@@ -151,10 +279,6 @@ class Integer
     self < 0
   end unless method_defined?(:negative?)
 
-  def clamp(min, max = nil)
-    min, max = min.first, min.last if max.nil?
-    self < min ? min : (self > max ? max : self)
-  end unless method_defined?(:clamp)
 end
 
 class Struct
@@ -285,8 +409,6 @@ module Kernel
 end
 
 class Hash
-  # approximation: default Object#eql? is identity, which covers typical uses
-  # (mspec keys caches by exception instances)
   def compare_by_identity
     self
   end unless method_defined?(:compare_by_identity)
@@ -294,6 +416,12 @@ class Hash
   def compare_by_identity?
     false
   end unless method_defined?(:compare_by_identity?)
+
+  # a fresh result hash for the non-mutating combinators, carrying the
+  # compare_by_identity flag over the way CRuby does
+  private def __result_hash__
+    compare_by_identity? ? {}.compare_by_identity : {}
+  end
 end
 
 class Module
@@ -697,80 +825,468 @@ end
 # --------------------------------------------------------------------------
 # Fiber
 #
-# Backed by a thread plus a two-way handshake, so only one of the two ever runs
-# at a time. Close enough for control flow, thread/fiber-local variables and
-# per-fiber $! / $@; it is not a real coroutine, so Thread.current inside the
-# block is the fiber's own thread and #transfer is deliberately not provided.
+# .NET has no coroutines, so every Fiber is backed by a dedicated thread plus a
+# one-slot mailbox. Thread.new marks CLR threads IsBackground, so an abandoned
+# fiber can never keep the process alive. Exactly one fiber of a group ever
+# runs: switching means "post to the target's mailbox, then block on my own",
+# which is the SemaphoreSlim handshake spelled with Queue (Queue is a
+# Monitor-based blocking queue here, so the wait is a real kernel wait).
+#
+# resume / Fiber.yield / transfer / kill / raise / storage / scheduler follow
+# MRI, including the rule that a fiber which was entered by #transfer returns,
+# when it terminates, to the deepest fiber of the root's resume chain.
+#
+# A killed fiber unwinds with Kernel#throw rather than an exception, so ensure
+# clauses run but "rescue Exception" does not see it - what MRI guarantees.
+#
+# Known gap: a fiber that is suspended and then dropped keeps one *background*
+# thread parked on its mailbox until the process exits. MRI reclaims the fiber
+# stack at GC; we cannot, because the running thread must hold the Fiber object
+# strongly for Fiber.current. Nothing leaks past process exit and nothing
+# deadlocks, but long-running programs that abandon many fibers pay a thread.
 # --------------------------------------------------------------------------
 
 class FiberError < StandardError; end unless defined?(FiberError)
 
 unless defined?(Fiber)
   class Fiber
-    def initialize(*args, &block)
-      unless block
-        raise ArgumentError, "tried to create a Fiber without a block"
-      end
-      require 'thread' unless defined?(::Queue)
-      @block = block
-      @to_fiber = ::Queue.new
-      @to_caller = ::Queue.new
-      @alive = true
-      @resuming = false
-      @thread = nil
+    # Kernel#throw tag used to unwind a killed fiber.
+    KILL_TAG = :__ironruby_fiber_kill__
+
+    SCHEDULER_METHODS = [:block, :unblock, :kernel_sleep, :io_wait]
+
+    # ---- helpers ---------------------------------------------------------
+
+    def self.__err__(cls, msg)
+      ::Kernel.raise(cls, msg)
     end
+
+    def self.__mailbox__
+      require 'thread' unless defined?(::Queue)
+      ::Queue.new
+    end
+
+    # Storage keys are Symbols; anything with #to_str (but not #to_sym) is
+    # converted, which is what MRI does.
+    def self.__check_key__(key)
+      return key if key.is_a?(::Symbol)
+      if key.respond_to?(:to_str)
+        str = key.to_str
+        return str.to_sym if str.is_a?(::String)
+      end
+      __err__(::TypeError, "wrong argument type #{key.class} (expected Symbol)")
+    end
+
+    def self.__make_exception__(args)
+      if args.empty?
+        cur = $!
+        return cur if cur
+        return ::RuntimeError.new("")
+      end
+      first = args[0]
+      if first.is_a?(::String)
+        ::RuntimeError.new(first)
+      elsif args.size >= 2
+        exc = first.exception(args[1])
+        exc.set_backtrace(args[2]) if args.size >= 3 && args[2]
+        exc
+      else
+        first.exception
+      end
+    end
+
+    def self.__init_storage__(storage, parent)
+      case storage
+      when true
+        inherited = parent.__storage_raw__
+        inherited ? inherited.dup : nil
+      when nil
+        nil
+      when ::Hash
+        __err__(::FrozenError, "can't modify frozen Hash") if storage.frozen?
+        copy = {}
+        storage.each { |k, v| copy[__check_key__(k)] = v }
+        copy
+      else
+        __err__(::TypeError, "storage must be a hash")
+      end
+    end
+
+    # ---- the root fiber of a thread --------------------------------------
+
+    def self.current
+      Thread.current[:__ir_fiber_current__] || __root__
+    end
+
+    def self.__root__
+      t = Thread.current
+      f = t[:__ir_fiber_root__]
+      unless f
+        f = allocate
+        f.__init_root__
+        t[:__ir_fiber_root__] = f
+        t[:__ir_fiber_current__] = f
+      end
+      f
+    end
+
+    def __init_root__
+      @mailbox     = Fiber.__mailbox__
+      @status      = :resumed
+      @alive       = true
+      @root        = true
+      @blocking    = true
+      @prev        = nil
+      @resuming    = nil
+      @transferred = false
+      @killing     = false
+      @yielded     = false
+      @storage     = nil
+      @location    = nil
+      @scheduler   = nil
+      @thread      = Thread.current
+      @root_fiber  = self
+      self
+    end
+
+    # ---- construction ----------------------------------------------------
+
+    def initialize(blocking: false, storage: true, &block)
+      Fiber.__err__(::ArgumentError, "tried to create Proc object without a block") unless block
+      cur          = Fiber.current
+      @block       = block
+      @blocking    = blocking ? true : false
+      @storage     = Fiber.__init_storage__(storage, cur)
+      @mailbox     = Fiber.__mailbox__
+      @status      = :created
+      @alive       = true
+      @root        = false
+      @prev        = nil
+      @resuming    = nil
+      @transferred = false
+      @killing     = false
+      @yielded     = false
+      @thread      = nil
+      @scheduler   = nil
+      @root_fiber  = cur.__root_fiber__
+      loc          = (block.source_location rescue nil)
+      @location    = loc ? "#{loc[0]}:#{loc[1]}" : nil
+    end
+
+    # ---- internal accessors (used across fibers of the same group) --------
+
+    def __root_fiber__; @root_fiber; end
+    def __thread__; @thread; end
+    def __storage_raw__; @storage; end
+    def __resuming__; @resuming; end
+    def __set_resuming__(f); @resuming = f; end
+    def __set_status__(s); @status = s; end
+    def __set_blocking__(b); @blocking = b; end
+    def __set_transferred__; @transferred = true; end
+    def __post__(msg); @mailbox.push(msg); end
+    def __scheduler_get__; @scheduler; end
+    def __scheduler_set__(s); @scheduler = s; end
+
+    def __storage_store__(key, value)
+      # MRI deletes the entry rather than storing a nil
+      if value.nil?
+        @storage.delete(key) if @storage
+      else
+        @storage ||= {}
+        @storage[key] = value
+      end
+      value
+    end
+
+    # ---- public API ------------------------------------------------------
 
     def alive?
       @alive
     end
 
+    def blocking?
+      @blocking
+    end
+
+    def inspect
+      state = case @status
+              when :created    then "created"
+              when :suspended  then "suspended"
+              when :terminated then "terminated"
+              else                  "resumed"
+              end
+      id = "%016x" % (object_id.abs << 1)
+      @location ? "#<Fiber:0x#{id} #{@location} (#{state})>" : "#<Fiber:0x#{id} (#{state})>"
+    end
+
+    alias_method :to_s, :inspect
+
+    def storage
+      unless Fiber.current.equal?(self)
+        Fiber.__err__(::ArgumentError, "Fiber storage can only be accessed from the Fiber it belongs to")
+      end
+      (@storage || {}).dup
+    end
+
+    def storage=(hash)
+      unless Fiber.current.equal?(self)
+        Fiber.__err__(::ArgumentError, "Fiber storage can only be accessed from the Fiber it belongs to")
+      end
+      @storage = Fiber.__init_storage__(hash, self)
+      hash
+    end
+
+    # A fiber may only be driven from the thread that owns its group; otherwise
+    # the handoff would post to a mailbox nobody is waiting on and deadlock.
+    def __check_thread__(cur)
+      unless cur.__root_fiber__.equal?(@root_fiber)
+        Fiber.__err__(::FiberError, "fiber called across threads")
+      end
+    end
+
     def resume(*args)
-      raise FiberError, "attempt to resume a terminated fiber" unless @alive
-      raise FiberError, "attempt to resume the current fiber" if @resuming
-      @resuming = true
-      start unless @thread
-      @to_fiber.push(args)
-      kind, value = @to_caller.pop
-      @resuming = false
-      raise value if kind == :error
+      cur = Fiber.current
+      Fiber.__err__(::FiberError, "attempt to resume the current fiber") if cur.equal?(self)
+      __check_thread__(cur)
+      Fiber.__err__(::FiberError, "attempt to resume a terminated fiber") unless @alive
+      Fiber.__err__(::FiberError, "double resume") if @prev
+      Fiber.__err__(::FiberError, "attempt to resume a resuming fiber") if @resuming
+      @prev = cur
+      cur.__set_resuming__(self)
+      Fiber.__switch__(cur, self, [:resume, args])
+    end
+
+    def transfer(*args)
+      cur = Fiber.current
+      return nil if cur.equal?(self)
+      __check_thread__(cur)
+      Fiber.__err__(::FiberError, "attempt to transfer to a resuming fiber") if @resuming || @yielded
+      Fiber.__err__(::FiberError, "dead fiber called") unless @alive
+      cur.__set_transferred__
+      Fiber.__switch__(cur, self, [:transfer, args])
+    end
+
+    def kill
+      cur = Fiber.current
+      return self unless @alive
+      @killing = true
+
+      if cur.equal?(self)
+        throw(KILL_TAG) unless @root
+        return self
+      end
+
+      __check_thread__(cur)
+
+      unless @thread
+        # never entered: there is no stack to unwind and no ensure to run
+        @alive = false
+        @status = :terminated
+        return self
+      end
+
+      # An ancestor that is busy resuming somebody cannot be unwound now; the
+      # throw happens as soon as control comes back to it (MRI does the same).
+      return self if @resuming
+
+      __adopt__(cur)
+      Fiber.__switch__(cur, self, [:kill])
+      self
+    end
+
+    # Makes `cur` the fiber control returns to when we finish - unless somebody
+    # is already waiting for us, in which case that fiber keeps the claim and
+    # `cur` is the one that gets suspended for good.
+    def __adopt__(cur)
+      if @prev.nil?
+        @prev = cur
+        cur.__set_resuming__(self)
+      end
+    end
+
+    def raise(*args)
+      cur = Fiber.current
+      exc = Fiber.__make_exception__(args)
+      ::Kernel.raise(exc) if cur.equal?(self)
+      __check_thread__(cur)
+      Fiber.__err__(::FiberError, "attempt to resume a terminated fiber") unless @alive
+      Fiber.__err__(::FiberError, "cannot raise exception on unborn fiber") unless @thread
+      __adopt__(cur)
+      Fiber.__switch__(cur, self, [:raise, exc])
+    end
+
+    # ---- class methods ---------------------------------------------------
+
+    def self.yield(*args)
+      current.__yield__(args)
+    end
+
+    def self.blocking?
+      current.blocking? ? 1 : false
+    end
+
+    def self.blocking
+      f = current
+      was = f.blocking?
+      f.__set_blocking__(true)
+      begin
+        yield f
+      ensure
+        f.__set_blocking__(was)
+      end
+    end
+
+    def self.[](key)
+      k = __check_key__(key)
+      s = current.__storage_raw__
+      s ? s[k] : nil
+    end
+
+    def self.[]=(key, value)
+      current.__storage_store__(__check_key__(key), value)
       value
     end
 
-    def self.yield(*args)
-      fiber = Thread.current[:__ruby4_fiber__]
-      raise FiberError, "can't yield from root fiber" unless fiber
-      fiber.__suspend__(args)
+    def self.scheduler
+      current.__root_fiber__.__scheduler_get__
     end
 
-    # internal: called on the fiber's own thread
-    def __suspend__(args)
-      @to_caller.push([:yield, args.size <= 1 ? args.first : args])
-      resumed = @to_fiber.pop
-      resumed.size <= 1 ? resumed.first : resumed
-    end
-
-    # internal: called on the fiber's own thread
-    def __finish__(kind, value)
-      @alive = false
-      @to_caller.push([kind, value])
-    end
-
-    private
-
-    def start
-      fiber = self
-      block = @block
-      inbox = @to_fiber
-      @thread = Thread.new do
-        Thread.current[:__ruby4_fiber__] = fiber
-        first = inbox.pop
-        begin
-          result = block.call(*first)
-          fiber.__finish__(:return, result)
-        rescue Exception => e
-          fiber.__finish__(:error, e)
+    def self.set_scheduler(scheduler)
+      unless scheduler.nil?
+        SCHEDULER_METHODS.each do |m|
+          unless scheduler.respond_to?(m)
+            __err__(::ArgumentError, "Scheduler must implement ##{m}")
+          end
         end
       end
+      current.__root_fiber__.__scheduler_set__(scheduler)
+      scheduler
+    end
+
+    def self.current_scheduler
+      current.blocking? ? nil : scheduler
+    end
+
+    def self.schedule(*args, &block)
+      s = scheduler
+      __err__(::RuntimeError, "No scheduler is available!") unless s
+      s.fiber(*args, &block)
+    end
+
+    # ---- the switch ------------------------------------------------------
+
+    # Hands control from `cur` to `target` and blocks until control comes back.
+    def self.__switch__(cur, target, msg)
+      cur.__set_status__(:suspended)
+      target.__start__
+      target.__post__(msg)
+      cur.__act__(cur.__await__)
+    end
+
+    def __start__
+      return self if @thread
+      fiber = self
+      owner = @root_fiber.__thread__
+      @thread = Thread.new do
+        Thread.current[:__ir_fiber_current__] = fiber
+        # Ruby ownership (Mutex, deadlock detection) is per thread, not per fiber
+        Thread.__set_fiber_owner__(owner) if owner
+        fiber.__run__
+      end
+      self
+    end
+
+    def __await__
+      msg = @mailbox.pop
+      @status = :resumed
+      msg
+    end
+
+    # Acts on a message that just arrived for the fiber we are running on.
+    def __act__(msg)
+      throw(KILL_TAG) if @killing && !@root
+      case msg[0]
+      when :kill
+        @killing = true
+        throw(KILL_TAG) unless @root
+        nil
+      when :raise, :error
+        ::Kernel.raise(msg[1])
+      when :resume, :transfer
+        args = msg[1]
+        args.size <= 1 ? args.first : args
+      else
+        msg[1]
+      end
+    end
+
+    def __yield__(args)
+      throw(KILL_TAG) if @killing
+      target = @prev
+      if @root || target.nil?
+        Fiber.__err__(::FiberError, "attempt to yield on a not resumed fiber")
+      end
+      @prev = nil
+      target.__set_resuming__(nil)
+      @status = :suspended
+      @yielded = true
+      target.__post__([:yield, args.size <= 1 ? args.first : args])
+      msg = __await__
+      @yielded = false
+      __act__(msg)
+    end
+
+    # Runs on the fiber's own thread.
+    def __run__
+      msg = __await__
+      result = nil
+      error = nil
+      handed_back = false
+      begin
+        catch(KILL_TAG) do
+          begin
+            case msg[0]
+            when :resume, :transfer
+              result = @block.call(*msg[1])
+            else
+              __act__(msg)
+            end
+          rescue ::Exception => e
+            error = e
+          end
+        end
+        __finish__(error ? [:error, error] : [:return, result])
+        handed_back = true
+      ensure
+        unless handed_back
+          # `return` or `break` out of the fiber block unwinds with something
+          # `rescue Exception` cannot see. Hand control back anyway - dropping
+          # it here would park the resuming fiber forever.
+          begin
+            __finish__([:error, ::LocalJumpError.new("unexpected return")])
+          rescue ::Exception
+          end
+        end
+      end
+    end
+
+    # Runs on the fiber's own thread, as the last thing it does.
+    def __finish__(msg)
+      @alive = false
+      @status = :terminated
+      target = @prev
+      if target
+        @prev = nil
+        target.__set_resuming__(nil)
+      else
+        # Entered by #transfer: MRI returns to the deepest fiber of the root
+        # fiber's resume chain, not to the root itself.
+        target = @root_fiber
+        while (nested = target.__resuming__)
+          target = nested
+        end
+      end
+      target.__post__(msg)
     end
   end
 end
@@ -1168,10 +1684,22 @@ class Hash
     nil
   end unless method_defined?(:rassoc)
 
-  def to_h
-    return dup unless block_given?
+  def to_h(&block)
+    unless block
+      # CRuby returns self for a plain Hash, and for a subclass a plain Hash that
+      # keeps the default value / default proc / compare_by_identity flag.
+      return self if instance_of?(Hash)
+      result = __result_hash__
+      each { |k, v| result[k] = v }
+      if default_proc
+        result.default_proc = default_proc
+      else
+        result.default = default
+      end
+      return result
+    end
     result = {}
-    each { |k, v| nk, nv = yield(k, v); result[nk] = nv }
+    each { |k, v| pair = __to_h_pair__(block.call(k, v)); result[pair[0]] = pair[1] }
     result
   end unless method_defined?(:to_h)
 
@@ -1292,9 +1820,14 @@ module Comparable
 
     stack.push(pair)
     begin
-      (self <=> other) == 0
-    rescue StandardError
-      false
+      # Ruby 2.3 stopped rescuing StandardError here: whatever <=> raises goes
+      # through, and a result that is not a number raises ArgumentError.
+      result = (self <=> other)
+      return false if result.nil?
+      unless result.is_a?(Numeric)
+        raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      end
+      result == 0
     ensure
       stack.pop
     end
@@ -1339,7 +1872,7 @@ class Hash
     def fetch(key, *default, &block)
       return fetch_raising_index_error(key, *default, &block) if !default.empty? || block
       return self[key] if key?(key)
-      raise KeyError, "key not found: #{key.inspect}"
+      raise KeyError.new("key not found: #{key.inspect}", receiver: self, key: key)
     end
   end
 end
@@ -1349,16 +1882,24 @@ end
 class Hash
   def inspect
     return "{}" if empty?
-    body = map { |k, v|
-      if k.is_a?(Symbol)
-        name = k.to_s
-        key = name =~ /\A[A-Za-z_][A-Za-z0-9_]*[?!=]?\z/ ? name : name.inspect
-        "#{key}: #{v.inspect}"
-      else
-        "#{k.inspect} => #{v.inspect}"
-      end
-    }
-    "{" + body.join(", ") + "}"
+    stack = (Thread.current[:__hash_inspect__] ||= [])
+    return "{...}" if stack.any? { |seen| seen.equal?(self) }
+    stack.push(self)
+    begin
+      body = map { |k, v|
+        if k.is_a?(Symbol)
+          name = k.to_s
+          # `a=` is not a valid label, so it has to be quoted
+          key = name =~ /\A[A-Za-z_][A-Za-z0-9_]*[?!]?\z/ ? name : name.inspect
+          "#{key}: #{v.inspect}"
+        else
+          "#{k.inspect} => #{v.inspect}"
+        end
+      }
+      "{" + body.join(", ") + "}"
+    ensure
+      stack.pop
+    end
   end
   alias_method :to_s, :inspect
 end
@@ -1612,4 +2153,477 @@ module Kernel
       end
     end
   end unless private_method_defined?(:caller_locations)
+end
+
+# --- Hash: pieces of the 2.x-4.0 surface the 1.9 core never had ------------
+
+class Hash
+  private def __hash_operand__(other)
+    return other if other.is_a?(Hash)
+    if other.respond_to?(:to_hash)
+      converted = other.to_hash
+      return converted if converted.is_a?(Hash)
+    end
+    raise TypeError, "no implicit conversion of #{other.nil? ? 'nil' : other.class} into Hash"
+  end
+
+  # true if every pair of `sub` is present in `sup` (values compared with ==)
+  private def __hash_subset__(sub, sup)
+    sub.each { |k, v| return false unless sup.key?(k) && sup[k] == v }
+    true
+  end
+
+  def <(other)
+    other = __hash_operand__(other)
+    size < other.size && __hash_subset__(self, other)
+  end unless method_defined?(:<)
+
+  def <=(other)
+    other = __hash_operand__(other)
+    size <= other.size && __hash_subset__(self, other)
+  end unless method_defined?(:<=)
+
+  def >(other)
+    other = __hash_operand__(other)
+    size > other.size && __hash_subset__(other, self)
+  end unless method_defined?(:>)
+
+  def >=(other)
+    other = __hash_operand__(other)
+    size >= other.size && __hash_subset__(other, self)
+  end unless method_defined?(:>=)
+
+  # Hash#to_proc (2.3) is a lambda, so its arity is enforced.
+  def to_proc
+    hash = self
+    ->(key) { hash[key] }
+  end unless method_defined?(:to_proc)
+
+  def compact!
+    reject! { |_, v| v.nil? }
+  end unless method_defined?(:compact!)
+
+  def select!(&block)
+    return to_enum(:select!) unless block
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    before = size
+    keep_if(&block)
+    size == before ? nil : self
+  end unless method_defined?(:select!)
+
+  def default_proc=(proc)
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    self.DefaultValue = nil
+    if proc.nil?
+      self.DefaultProc = nil
+      return nil
+    end
+    unless proc.is_a?(Proc)
+      converted = proc.respond_to?(:to_proc) ? proc.to_proc : nil
+      unless converted.is_a?(Proc)
+        raise TypeError, "no implicit conversion of #{proc.class} into Proc"
+      end
+      proc = converted
+    end
+    if proc.lambda? && proc.arity != 2 && proc.arity >= 0
+      raise TypeError, "default_proc takes two arguments (2 for #{proc.arity})"
+    end
+    self.DefaultProc = proc
+    proc
+  end unless method_defined?(:default_proc=)
+
+  # Hash#merge/#merge! take any number of hashes since 2.6 (zero included).
+  alias_method :__merge_one__, :merge
+  alias_method :__update_one__, :merge!
+
+  def merge(*others, &block)
+    result = dup
+    others.each { |other| result.__update_one__(other, &block) }
+    result
+  end
+
+  def merge!(*others, &block)
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    others.each { |other| __update_one__(other, &block) }
+    self
+  end
+  alias_method :update, :merge!
+
+  # CRuby's #filter/#filter! are genuine aliases of #select/#select!, and
+  # Hash#select is not Enumerable#select, so re-alias them here.
+  alias_method :filter, :select
+  alias_method :filter!, :select!
+
+  # #delete_if / #keep_if / #reject / #reject! return an Enumerator when called
+  # without a block; the 1.9 core raised LocalJumpError instead.
+  alias_method :__delete_if_block__, :delete_if
+  def delete_if(&block)
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen? && block
+    return to_enum(:delete_if) unless block
+    __delete_if_block__(&block)
+  end
+
+  def keep_if(&block)
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen? && block
+    return to_enum(:keep_if) unless block
+    delete_if { |k, v| !block.call(k, v) }
+  end
+
+  alias_method :__reject_bang_block__, :reject!
+  def reject!(&block)
+    return to_enum(:reject!) unless block
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    __reject_bang_block__(&block)
+  end
+
+  # CRuby's #reject returns a plain Hash: neither the default value nor the
+  # default proc carries over.
+  def reject(&block)
+    return to_enum(:reject) unless block
+    result = __result_hash__
+    each { |k, v| result[k] = v unless block.call(k, v) }
+    result
+  end
+
+  # Hash#shift returns nil on an empty hash since 3.0 - it no longer consults
+  # the default value or the default proc.
+  def shift
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    return nil if empty?
+    key = keys.first
+    [key, delete(key)]
+  end
+
+  # #assoc / #rassoc compare with ==, and stop at the first match (which matters
+  # for an identity hash holding several equal-but-distinct keys).
+  def assoc(key)
+    each { |k, v| return [k, v] if k == key }
+    nil
+  end
+
+  def rassoc(value)
+    each { |k, v| return [k, v] if v == value }
+    nil
+  end
+
+  # #slice must not go through an overridden #[].
+  def slice(*wanted)
+    snapshot = __result_hash__
+    each { |k, v| snapshot[k] = v }
+    result = __result_hash__
+    wanted.each { |k| result[k] = snapshot[k] if snapshot.key?(k) }
+    result
+  end
+
+  # Hash#eql? (and the value comparison Hash#== performs) - compares sizes,
+  # then looks each key up with eql?/hash semantics and compares values with
+  # #eql?. Pairs already on the comparison stack count as equal so that
+  # mutually recursive hashes terminate.
+  def eql?(other)
+    return true if equal?(other)
+    return false unless other.is_a?(Hash)
+    return false if size != other.size
+    pairs = (Thread.current[:__hash_eql_pairs__] ||= [])
+    entry = [object_id, other.object_id]
+    return true if pairs.include?(entry)
+    pairs.push(entry)
+    begin
+      each do |k, v|
+        return false unless other.key?(k)
+        return false unless v.eql?(other[k])
+      end
+      true
+    ensure
+      pairs.pop
+    end
+  end
+
+  # Order-independent #hash. Like CRuby, a hash that (directly or indirectly)
+  # contains itself hashes to one fixed value, which is what keeps
+  # `h.hash == {x: h}.hash` true for `h = {}; h[:x] = h`.
+  private def __recursive_hash_value__
+    0x48415348
+  end
+
+  # 32-bit avalanche, so that XOR-ing the per-pair hashes together (which is what
+  # makes #hash order-independent) cannot cancel out equal values.
+  private def __mix32__(value)
+    value &= 0xFFFFFFFF
+    value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
+    value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
+    value ^ (value >> 16)
+  end
+
+  private def __hash_digest__
+    result = __mix32__(size)
+    each { |k, v| result ^= __mix32__([k, v].hash) }
+    result
+  end
+
+  def hash
+    stack = Thread.current[:__hash_hash_stack__]
+    if stack
+      throw stack if stack.any? { |o| o.equal?(self) }
+      stack.push(self)
+      begin
+        __hash_digest__
+      ensure
+        stack.pop
+      end
+    else
+      stack = [self]
+      Thread.current[:__hash_hash_stack__] = stack
+      begin
+        boxed = catch(stack) { [__hash_digest__] }
+        boxed.is_a?(Array) ? boxed[0] : __recursive_hash_value__
+      ensure
+        Thread.current[:__hash_hash_stack__] = nil
+      end
+    end
+  end
+end
+
+# Hash.ruby2_keywords_hash / .ruby2_keywords_hash? (2.7). Keyword arguments are
+# lowered onto a trailing Hash in this implementation, so the flag is only ever
+# informational; it is stored as a hidden instance variable.
+class << Hash
+  # the core's try_convert reports a different error and does not accept a nil
+  # result from #to_hash
+  def try_convert(object)
+    return object if object.is_a?(Hash)
+    return nil unless object.respond_to?(:to_hash)
+    converted = object.to_hash
+    return nil if converted.nil?
+    unless converted.is_a?(Hash)
+      raise TypeError, "can't convert #{object.class} into Hash (#{object.class}#to_hash gives #{converted.class})"
+    end
+    converted
+  end
+
+  def ruby2_keywords_hash?(hash)
+    unless hash.is_a?(Hash)
+      raise TypeError, "wrong argument type #{hash.class} (expected Hash)"
+    end
+    hash.instance_variable_defined?(:@__ruby2_keywords__) &&
+      !!hash.instance_variable_get(:@__ruby2_keywords__)
+  end unless respond_to?(:ruby2_keywords_hash?)
+
+  def ruby2_keywords_hash(hash)
+    unless hash.is_a?(Hash)
+      raise TypeError, "wrong argument type #{hash.class} (expected Hash)"
+    end
+    copy = hash.dup
+    copy.instance_variable_set(:@__ruby2_keywords__, true)
+    copy
+  end unless respond_to?(:ruby2_keywords_hash)
+end
+
+# KeyError gained #receiver and #key in 2.5; Hash#fetch and friends set them.
+class KeyError
+  def initialize(message = nil, receiver: nil, key: nil)
+    @__receiver = receiver
+    @__key = key
+    super(message)
+  end
+
+  def receiver
+    raise ArgumentError, "no receiver is available" if @__receiver.nil?
+    @__receiver
+  end
+
+  def key
+    raise ArgumentError, "no key is available" if @__key.nil?
+    @__key
+  end
+end
+
+class Hash
+  def fetch_values(*keys, &block)
+    keys.map do |k|
+      if key?(k)
+        self[k]
+      elsif block
+        block.call(k)
+      else
+        raise KeyError.new("key not found: #{k.inspect}", receiver: self, key: k)
+      end
+    end
+  end
+end
+
+# --- Struct: the modern surface -------------------------------------------
+
+class Struct
+  def to_h(&block)
+    result = {}
+    if block
+      each_pair { |k, v| pair = __to_h_pair__(block.call(k, v)); result[pair[0]] = pair[1] }
+    else
+      members.each_with_index { |m, i| result[m] = self[i] }
+    end
+    result
+  end unless method_defined?(:to_h)
+
+  def dig(key, *rest)
+    value = begin
+      self[key]
+    rescue NameError, IndexError
+      nil
+    end
+    __dig_step__(value, rest)
+  end unless method_defined?(:dig)
+
+  # index of `name` in members, or nil; mirrors CRuby's struct_pos
+  private def __struct_pos__(name)
+    if name.is_a?(Symbol) || name.is_a?(String)
+      members.index(name.to_sym)
+    else
+      unless name.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{name.class} into Integer"
+      end
+      i = name.to_int
+      unless i.is_a?(Integer)
+        raise TypeError, "can't convert #{name.class} into Integer (#{name.class}#to_int gives #{i.class})"
+      end
+      i += size if i < 0
+      (i >= 0 && i < size) ? i : nil
+    end
+  end
+
+  def deconstruct_keys(keys)
+    return to_h if keys.nil?
+    unless keys.is_a?(Array)
+      raise TypeError, "wrong argument type #{keys.class} (expected Array or nil)"
+    end
+    return {} if size < keys.size
+    result = {}
+    keys.each do |key|
+      index = __struct_pos__(key)
+      return result if index.nil?
+      result[key] = self[index]
+    end
+    result
+  end
+
+  def values_at(*args)
+    values = to_a
+    count = values.size
+    result = []
+    args.each do |arg|
+      if arg.is_a?(Range)
+        first = arg.begin
+        first = first.nil? ? 0 : first.to_int
+        first += count if first < 0
+        raise RangeError, "#{arg} out of range" if first < 0
+        last = arg.end
+        if last.nil?
+          last = count - 1
+        else
+          last = last.to_int
+          last += count if last < 0
+          last -= 1 if arg.exclude_end?
+        end
+        i = first
+        while i <= last
+          result << (i < count ? values[i] : nil)
+          i += 1
+        end
+      else
+        unless arg.respond_to?(:to_int)
+          raise TypeError, "no implicit conversion of #{arg.class} into Integer"
+        end
+        index = arg.to_int
+        normalized = index < 0 ? index + count : index
+        if normalized < 0
+          raise IndexError, "offset #{index} too small for struct(size:#{count})"
+        end
+        if normalized >= count
+          raise IndexError, "offset #{index} too large for struct(size:#{count})"
+        end
+        result << values[normalized]
+      end
+    end
+    result
+  end
+
+  # #each / #each_pair / #select return an Enumerator when no block is given.
+  alias_method :__struct_each__, :each
+  def each(&block)
+    return to_enum(:each) unless block
+    __struct_each__(&block)
+  end
+
+  # each_pair yields one [name, value] array, so that a single-parameter block
+  # receives the pair rather than just the name
+  def each_pair(&block)
+    return to_enum(:each_pair) unless block
+    names = self.class.members
+    names.each_with_index { |name, i| block.call([name, self[i]]) }
+    self
+  end
+
+  alias_method :deconstruct, :to_a
+  alias_method :filter, :select
+end
+
+# Struct.new(..., keyword_init: true) (2.5) and StructClass#keyword_init? (3.1).
+class << Struct
+  alias_method :__struct_new__, :new
+
+  def new(*args, &block)
+    keyword_init = nil
+    if args.last.is_a?(Hash)
+      options = args.pop
+      unless (options.keys - [:keyword_init]).empty?
+        # CRuby would go on to use the Hash as a member name
+        raise TypeError, "no implicit conversion of Hash into Symbol"
+      end
+      value = options[:keyword_init]
+      keyword_init = value.nil? ? value : !!value
+    end
+
+    names = args.reject { |a| a.is_a?(String) && a =~ /\A[A-Z]/ }
+    seen = {}
+    names.each do |name|
+      key = name.respond_to?(:to_sym) ? name.to_sym : name
+      raise ArgumentError, "duplicate member: #{key}" if seen.key?(key)
+      seen[key] = true
+    end
+
+    klass = args.empty? ? __struct_new__(nil) : __struct_new__(*args)
+    klass.instance_variable_set(:@__keyword_init__, keyword_init)
+    # only classes created by Struct.new answer #keyword_init?, not every Struct subclass
+    klass.define_singleton_method(:keyword_init?) { @__keyword_init__ }
+    klass.module_eval(&block) if block
+    klass
+  end
+end
+
+class Struct
+  alias_method :__struct_initialize__, :initialize
+
+  def initialize(*args)
+    # self.class.members, not members: a struct may have a member called "members"
+    names = self.class.members
+    keyword_init = self.class.respond_to?(:keyword_init?) ? self.class.keyword_init? : nil
+    args.pop if args.size > 0 && args.last.is_a?(Hash) && args.last.empty? && !keyword_init
+
+    if keyword_init
+      unless args.size <= 1 && (args.empty? || args[0].is_a?(Hash))
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)"
+      end
+      given = args[0] || {}
+      unknown = given.keys - names
+      unless unknown.empty?
+        raise ArgumentError, "unknown keywords: #{unknown.join(', ')}"
+      end
+      __struct_initialize__(*names.map { |name| given[name] })
+    else
+      # pad with nil so that a partial re-initialize clears the remaining members
+      values = args.dup
+      values.concat([nil] * (names.size - values.size)) if values.size < names.size
+      __struct_initialize__(*values)
+    end
+  end
+  private :initialize
 end

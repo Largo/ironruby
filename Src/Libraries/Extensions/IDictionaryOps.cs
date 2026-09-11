@@ -90,6 +90,16 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
+            // Two non-empty hashes that differ in their compare_by_identity flag are never equal
+            // (empty ones still are) - see rb_hash_equal.
+            if (self.Count != 0) {
+                var selfHash = self as Hash;
+                var otherHash = other as Hash;
+                if (selfHash != null && otherHash != null && selfHash.ComparesByIdentity != otherHash.ComparesByIdentity) {
+                    return false;
+                }
+            }
+
             using (IDisposable handleSelf = _EqualsTracker.TrackObject(self), handleOther = _EqualsTracker.TrackObject(other)) {
                 if (handleSelf == null && handleOther == null) {
                     // both dictionaries went recursive:
@@ -497,6 +507,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("select")]
         public static object Select(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             Hash result = new Hash(context);
+            var selfHash = self as Hash;
+            if (selfHash != null && selfHash.ComparesByIdentity) {
+                result.CompareByIdentity();
+            }
 
             foreach (var pair in CopyKeyValuePairs(self)) {
                 object blockResult;

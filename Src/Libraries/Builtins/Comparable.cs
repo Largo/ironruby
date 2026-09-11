@@ -64,23 +64,20 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("==")]
-        public static bool Equal(BinaryOpStorage/*!*/ compareStorage, object self, object other) {
+        public static bool Equal(ComparisonStorage/*!*/ comparisonStorage, object self, object other) {
             if (self == other) {
                 return true;
             }
 
-            // calls method_missing:
-            var compare = compareStorage.GetCallSite("<=>");
-
-            object compareResult;
-            try {
-                compareResult = compare.Target(compare, self, other);
-            } catch (SystemException) {
-                // catches StandardError (like rescue)
+            // Ruby 2.3 stopped rescuing StandardError here: whatever <=> raises goes through,
+            // a nil result is false and a non-numeric result raises (via the comparison below).
+            var compare = comparisonStorage.CompareSite;
+            object compareResult = compare.Target(compare, self, other);
+            if (compareResult == null) {
                 return false;
             }
 
-            return compareResult is int && (int)compareResult == 0;
+            return Protocols.ConvertCompareResult(comparisonStorage, compareResult) == 0;
         }
     }
 }
