@@ -213,9 +213,9 @@ namespace IronRuby.Prism {
                         Literal.Integer(0, span), Expr(imaginary.Numeric)
                     }), span);
                 case Pm.StringNode str:
-                    return new StringLiteral(LiteralValue(str.Unescaped), _encoding, span);
+                    return new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str), span);
                 case Pm.SymbolNode symbol:
-                    return new SymbolLiteral(LiteralText(symbol.Unescaped), _encoding, span);
+                    return new SymbolLiteral(LiteralText(symbol.Unescaped), SymbolEncoding(symbol), span);
                 case Pm.TrueNode _: return Literal.True(span);
                 case Pm.FalseNode _: return Literal.False(span);
                 case Pm.NilNode _: return Literal.Nil(span);
@@ -258,7 +258,7 @@ namespace IronRuby.Prism {
                     return new StringConstructor(StringParts(interpSymbol.Parts), StringKind.Symbol, span);
                 case Pm.XStringNode xstr:
                     return new StringConstructor(
-                        new List<Expression> { new StringLiteral(LiteralValue(xstr.Unescaped), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(xstr.Unescaped, LiteralEncoding(xstr)), LiteralEncoding(xstr), span) },
                         StringKind.Command, span);
                 case Pm.InterpolatedXStringNode interpX:
                     return new StringConstructor(StringParts(interpX.Parts), StringKind.Command, span);
@@ -267,11 +267,11 @@ namespace IronRuby.Prism {
 
                 case Pm.RegularExpressionNode regex:
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped, _encoding), _encoding, span) },
                         RegexOptions(regex), false, span);
                 case Pm.MatchLastLineNode matchLast:
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped, _encoding), _encoding, span) },
                         RegexOptions(matchLast), true, span);
                 case Pm.InterpolatedRegularExpressionNode interpRegex:
                     return new RegularExpression(StringParts(interpRegex.Parts), RegexOptions(interpRegex), span);
@@ -596,7 +596,19 @@ namespace IronRuby.Prism {
         /// so keep the bytes whenever they are not valid UTF-8 — decoding those would
         /// replace them with U+FFFD and silently corrupt binary literals like "\xE3\xB0".
         /// </summary>
-        private object/*!*/ LiteralValue(byte[]/*!*/ bytes) {
+        private object/*!*/ LiteralValue(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding) {
+            // A character representation is only lossless if the characters encode back to the
+            // same bytes under the literal's own encoding. That holds for UTF-8 and for pure
+            // ASCII; anything else (e.g. "\xE9\xA1\xB6" in a binary file, which happens to be
+            // valid UTF-8) has to stay a byte string.
+            if (encoding != RubyEncoding.UTF8) {
+                foreach (byte b in bytes) {
+                    if (b >= 0x80) {
+                        return bytes;
+                    }
+                }
+            }
+
             try {
                 return _strictUtf8.GetString(bytes);
             } catch (System.Text.DecoderFallbackException) {
@@ -615,6 +627,35 @@ namespace IronRuby.Prism {
 
         private static readonly System.Text.Encoding _strictUtf8 =
             new System.Text.UTF8Encoding(false, true);
+
+        // pm_string_flags / pm_symbol_flags (node-specific flags start at bit 2)
+        private const uint PmForcedUtf8Encoding = 4;
+        private const uint PmForcedBinaryEncoding = 8;
+        private const uint PmSymbolForcedUsAsciiEncoding = 16;
+
+        /// <summary>
+        /// The encoding of a string/symbol literal. Normally it is the source encoding, but a
+        /// literal that contains a \u escape is UTF-8 whatever the file says, and one that
+        /// contains a \x byte above 0x7f in a US-ASCII file is binary. prism has already worked
+        /// this out and reports it in the node flags; CRuby uses exactly the same rule.
+        /// </summary>
+        private RubyEncoding/*!*/ LiteralEncoding(Pm.PmNode/*!*/ node) {
+            uint flags = node.Flags;
+            if ((flags & PmForcedUtf8Encoding) != 0) {
+                return RubyEncoding.UTF8;
+            }
+            if ((flags & PmForcedBinaryEncoding) != 0) {
+                return RubyEncoding.Binary;
+            }
+            return _encoding;
+        }
+
+        private RubyEncoding/*!*/ SymbolEncoding(Pm.PmNode/*!*/ node) {
+            if ((node.Flags & PmSymbolForcedUsAsciiEncoding) != 0) {
+                return RubyEncoding.Ascii;
+            }
+            return LiteralEncoding(node);
+        }
 
         private Expression/*!*/ BigIntegerLiteral(BigInteger value, SourceSpan span) {
             if (value >= int.MinValue && value <= int.MaxValue) return Literal.Integer((int)value, span);
@@ -635,7 +676,7 @@ namespace IronRuby.Prism {
             foreach (var part in parts) {
                 switch (part) {
                     case Pm.StringNode str:
-                        result.Add(new StringLiteral(LiteralValue(str.Unescaped), _encoding, Span(str)));
+                        result.Add(new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str), Span(str)));
                         break;
                     case Pm.EmbeddedStatementsNode embedded:
                         result.Add(StatementsAsExpression(embedded.Statements, Span(embedded)));
