@@ -8846,14 +8846,14 @@ namespace IronRuby.Builtins {
                 0x00000002U, 0x00000004U, 0x00000000U, 
                 new Func<System.Threading.Thread, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.ThreadOps.GetElement), 
                 new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.ThreadOps.GetElement), 
-                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetElement)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetElement)
             );
             
             DefineLibraryMethod(module, "[]=", 0x51, 
                 0x00000002U, 0x00000004U, 0x00000000U, 
                 new Func<System.Threading.Thread, IronRuby.Builtins.RubySymbol, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetElement), 
                 new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetElement), 
-                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetElement)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetElement)
             );
             
             DefineLibraryMethod(module, "abort_on_exception", 0x51, 
@@ -8878,8 +8878,8 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "fetch", 0x51, 
                 0x00000000U, 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Threading.Thread, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.Fetch), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Threading.Thread, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.Fetch)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Threading.Thread, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.Fetch), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Threading.Thread, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.Fetch)
             );
             
             DefineLibraryMethod(module, "group", 0x51, 
@@ -8902,7 +8902,7 @@ namespace IronRuby.Builtins {
                 0x00000002U, 0x00000004U, 0x00000000U, 
                 new Func<System.Threading.Thread, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.ThreadOps.HasKey), 
                 new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.ThreadOps.HasKey), 
-                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.HasKey)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.HasKey)
             );
             
             DefineLibraryMethod(module, "keys", 0x51, 
@@ -8974,17 +8974,17 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "thread_variable_get", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetThreadVariable)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetThreadVariable)
             );
             
             DefineLibraryMethod(module, "thread_variable_set", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetThreadVariable)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetThreadVariable)
             );
             
             DefineLibraryMethod(module, "thread_variable?", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.HasThreadVariable)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.HasThreadVariable)
             );
             
             DefineLibraryMethod(module, "thread_variables", 0x51, 

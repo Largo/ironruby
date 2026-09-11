@@ -290,12 +290,29 @@ namespace IronRuby.Builtins {
         //  declared public instance methods:
 
         private static Exception MakeKeyTypeException(RubyContext/*!*/ context, object key) {
-            if (key == null) {
-                return RubyExceptions.CreateTypeError("nil is not a symbol");
-            } else {
-                // MRI calls RubyUtils.InspectObject, but this should be good enought as an error message:
-                return RubyExceptions.CreateArgumentError("{0} is not a symbol", context.GetClassOf(key).Name);
+            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(key).ToString());
+        }
+
+        /// <summary>
+        /// Thread-local keys are Symbols; a String is interned and anything else is given a chance to
+        /// convert itself with #to_str (but never #to_sym, which MRI is explicit about).
+        /// </summary>
+        private static RubySymbol/*!*/ ToKey(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, object key) {
+            RubySymbol symbol = key as RubySymbol;
+            if (symbol != null) {
+                return symbol;
             }
+
+            MutableString str = key as MutableString;
+            if (str == null && key != null) {
+                str = Protocols.TryCastToString(toStr, key);
+            }
+
+            if (str == null) {
+                throw MakeKeyTypeException(context, key);
+            }
+
+            return context.CreateSymbol(str);
         }
 
         [RubyMethod("[]")]
@@ -310,8 +327,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("[]")]
-        public static object GetElement(RubyContext/*!*/ context, Thread/*!*/ self, object key) {
-            throw MakeKeyTypeException(context, key);
+        public static object GetElement(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, Thread/*!*/ self, object key) {
+            return GetElement(self, ToKey(toStr, context, key));
         }
 
         [RubyMethod("[]=")]
@@ -327,8 +344,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("[]=")]
-        public static object SetElement(RubyContext/*!*/ context, Thread/*!*/ self, object key, object value) {
-            throw MakeKeyTypeException(context, key);
+        public static object SetElement(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, Thread/*!*/ self, object key, object value) {
+            return SetElement(self, ToKey(toStr, context, key), value);
         }
 
         [RubyMethod("abort_on_exception")]
@@ -487,8 +504,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("key?")]
-        public static object HasKey(RubyContext/*!*/ context, Thread/*!*/ self, object key) {
-            throw MakeKeyTypeException(context, key);
+        public static object HasKey(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, Thread/*!*/ self, object key) {
+            return HasKey(self, ToKey(toStr, context, key));
         }
 
         [RubyMethod("keys")]
@@ -952,19 +969,19 @@ namespace IronRuby.Builtins {
         #region thread variables
 
         [RubyMethod("thread_variable_get")]
-        public static object GetThreadVariable(RubyContext/*!*/ context, Thread/*!*/ self, object key) {
-            return RubyThreadInfo.FromThread(self).GetThreadVariable(ToVariableKey(context, key));
+        public static object GetThreadVariable(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, Thread/*!*/ self, object key) {
+            return RubyThreadInfo.FromThread(self).GetThreadVariable(ToKey(toStr, context, key));
         }
 
         [RubyMethod("thread_variable_set")]
-        public static object SetThreadVariable(RubyContext/*!*/ context, Thread/*!*/ self, object key, object value) {
-            RubyThreadInfo.FromThread(self).SetThreadVariable(ToVariableKey(context, key), value);
+        public static object SetThreadVariable(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, Thread/*!*/ self, object key, object value) {
+            RubyThreadInfo.FromThread(self).SetThreadVariable(ToKey(toStr, context, key), value);
             return value;
         }
 
         [RubyMethod("thread_variable?")]
-        public static bool HasThreadVariable(RubyContext/*!*/ context, Thread/*!*/ self, object key) {
-            return RubyThreadInfo.FromThread(self).HasThreadVariable(ToVariableKey(context, key));
+        public static bool HasThreadVariable(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, Thread/*!*/ self, object key) {
+            return RubyThreadInfo.FromThread(self).HasThreadVariable(ToKey(toStr, context, key));
         }
 
         [RubyMethod("thread_variables")]
@@ -972,36 +989,24 @@ namespace IronRuby.Builtins {
             return RubyThreadInfo.FromThread(self).GetThreadVariableKeys();
         }
 
-        private static RubySymbol/*!*/ ToVariableKey(RubyContext/*!*/ context, object key) {
-            RubySymbol symbol = key as RubySymbol;
-            if (symbol != null) {
-                return symbol;
-            }
-            MutableString str = key as MutableString;
-            if (str != null) {
-                return context.CreateSymbol(str);
-            }
-            throw MakeKeyTypeException(context, key);
-        }
-
         #endregion
 
         #region fetch
 
         [RubyMethod("fetch")]
-        public static object Fetch(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key) {
-            return FetchInternal(context, block, self, key, true, null);
+        public static object Fetch(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key) {
+            return FetchInternal(toStr, context, block, self, key, true, null);
         }
 
         [RubyMethod("fetch")]
-        public static object Fetch(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key, object defaultValue) {
-            return FetchInternal(context, block, self, key, false, defaultValue);
+        public static object Fetch(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key, object defaultValue) {
+            return FetchInternal(toStr, context, block, self, key, false, defaultValue);
         }
 
-        private static object FetchInternal(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key,
-            bool noDefault, object defaultValue) {
+        private static object FetchInternal(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context,
+            BlockParam block, Thread/*!*/ self, object key, bool noDefault, object defaultValue) {
 
-            RubySymbol symbol = ToVariableKey(context, key);
+            RubySymbol symbol = ToKey(toStr, context, key);
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
             if (info.HasKey(symbol)) {
                 return info[symbol];
