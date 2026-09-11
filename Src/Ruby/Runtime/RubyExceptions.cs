@@ -45,7 +45,9 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateObjectFrozenError() {
-            return CreateRuntimeError("can't modify frozen object");
+            // MRI raises FrozenError here, not RuntimeError. FrozenError derives from
+            // RuntimeError, so existing `rescue RuntimeError` handlers still catch it.
+            return new FrozenError("can't modify frozen object");
         }
 
         public static Exception/*!*/ CreateTypeConversionError(string/*!*/ fromType, string/*!*/ toType) {

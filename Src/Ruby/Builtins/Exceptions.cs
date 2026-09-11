@@ -242,6 +242,27 @@ namespace IronRuby.Builtins {
 #endif
     }
 
+    /// <summary>
+    /// Raised when a frozen object is modified. MRI made this a subclass of RuntimeError
+    /// in 2.5, so `rescue RuntimeError` still catches it.
+    ///
+    /// The type has to live here in Src/Ruby rather than in Src/Libraries: the core
+    /// assembly cannot reference the library one, and RubyExceptions.CreateObjectFrozenError
+    /// is in the core. The *registration* is the usual one-liner in
+    /// Src/Libraries/Builtins/Exceptions.cs, following EBADF/EEXIST/RuntimeError.
+    /// </summary>
+    [Serializable]
+    public class FrozenError : RuntimeError {
+        public FrozenError() : this(null, null) { }
+        public FrozenError(string message) : this(message, null) { }
+        public FrozenError(string message, Exception inner) : base(message, inner) { }
+
+#if FEATURE_SERIALIZATION
+        protected FrozenError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+            : base(info, context) { }
+#endif
+    }
+
     [Serializable]
     public class SyntaxError : ScriptError {
         private readonly string _file;

@@ -221,6 +221,10 @@ namespace IronRuby.Builtins {
     public static class RuntimeErrorOps {
     }
 
+    [RubyException("FrozenError", Extends = typeof(FrozenError), Inherits = typeof(RuntimeError))]
+    public static class FrozenErrorOps {
+    }
+
     // special one:
     [RubyException("SystemCallError", Extends = typeof(ExternalException), Inherits = typeof(SystemException))]
     public static class SystemCallErrorOps {

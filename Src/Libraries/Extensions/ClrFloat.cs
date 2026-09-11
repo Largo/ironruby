@@ -825,7 +825,36 @@ namespace IronRuby.Builtins {
         /// This is the basis for the tests in <code>Comparable</code>.
         /// </remarks>
         [RubyMethod("<=>")]
-        public static object Compare(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, double self, object other) {
+        public static object Compare(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage,
+            RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ infiniteStorage,
+            ConversionStorage<int>/*!*/ fixnumCast, double self, object other) {
+
+            if (Double.IsNaN(self)) {
+                return null;
+            }
+
+            // MRI's flo_cmp takes this branch before coercing: when self is infinite and
+            // the operand can report its own infinitude, the two are compared as infinities
+            // rather than through #coerce. Date::Infinity relies on it -- Date::JULIAN is
+            // -Float::INFINITY, and without this `Date::JULIAN <=> Date::Infinity.new(-1)`
+            // coerces and answers -1 where MRI answers 0.
+            if (Double.IsInfinity(self) && Protocols.RespondTo(respondToStorage, other, "infinite?")) {
+                var site = infiniteStorage.GetCallSite("infinite?", 0);
+                object infinite = site.Target(site, other);
+
+                if (Protocols.IsTrue(infinite)) {
+                    // other is infinite too; its #infinite? gives the sign.
+                    int otherSign = Protocols.CastToFixnum(fixnumCast, infinite);
+                    if (self > 0.0) {
+                        return ScriptingRuntimeHelpers.Int32ToObject(otherSign > 0 ? 0 : +1);
+                    }
+                    return ScriptingRuntimeHelpers.Int32ToObject(otherSign < 0 ? 0 : -1);
+                }
+
+                // other is finite, so an infinite self is strictly greater or smaller.
+                return ScriptingRuntimeHelpers.Int32ToObject(self > 0.0 ? +1 : -1);
+            }
+
             return Protocols.CoerceAndCompare(coercionStorage, comparisonStorage, self, other);
         }
 
