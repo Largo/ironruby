@@ -762,18 +762,35 @@ class File
 end
 
 module Errno
-  # The 1.9 snapshot only binds a subset; the specs need these by name.
+  # Linux errno numbers. Two jobs here: bind the names the 1.9 snapshot never
+  # bound, and give the C#-registered classes their Errno constant -- those are
+  # CLR-backed and carry no number, so Errno::ENOENT::Errno used to resolve up
+  # to the Errno module itself instead of 2.
   {
-    "ENOTEMPTY" => 39, "EISDIR" => 21, "ENOTDIR" => 20, "ELOOP" => 40,
-    "ENAMETOOLONG" => 36, "EXDEV" => 18, "ESPIPE" => 29, "EROFS" => 30,
-    "EMFILE" => 24, "EAGAIN" => 11, "EWOULDBLOCK" => 11, "EINPROGRESS" => 115,
+    "EPERM" => 1, "ENOENT" => 2, "ESRCH" => 3, "EINTR" => 4, "EIO" => 5,
+    "ENXIO" => 6, "E2BIG" => 7, "ENOEXEC" => 8, "EBADF" => 9, "ECHILD" => 10,
+    "EAGAIN" => 11, "EWOULDBLOCK" => 11, "ENOMEM" => 12, "EACCES" => 13,
+    "EFAULT" => 14, "EBUSY" => 16, "EEXIST" => 17, "EXDEV" => 18,
+    "ENODEV" => 19, "ENOTDIR" => 20, "EISDIR" => 21, "EINVAL" => 22,
+    "ENFILE" => 23, "EMFILE" => 24, "ENOTTY" => 25, "EFBIG" => 27,
+    "ENOSPC" => 28, "ESPIPE" => 29, "EROFS" => 30, "EMLINK" => 31,
+    "EPIPE" => 32, "EDOM" => 33, "ERANGE" => 34, "ENAMETOOLONG" => 36,
+    "ENOTEMPTY" => 39, "ELOOP" => 40, "EADDRINUSE" => 98, "ECONNABORTED" => 103,
+    "ECONNRESET" => 104, "ENOTCONN" => 107, "ECONNREFUSED" => 111,
+    "EHOSTDOWN" => 112, "EINPROGRESS" => 115,
   }.each do |name, errno|
-    next if const_defined?(name)
-    klass = Class.new(SystemCallError) do
-      define_method(:initialize) { |msg = nil| super(msg ? "#{name}: #{msg}" : name) }
+    if const_defined?(name)
+      klass = const_get(name)
+      # const_defined? without the second argument would find the enclosing
+      # Errno module through the lexical scope, so restrict it to this class.
+      klass.const_set(:Errno, errno) unless klass.const_defined?(:Errno, false)
+    else
+      klass = Class.new(SystemCallError) do
+        define_method(:initialize) { |msg = nil| super(msg ? "#{name}: #{msg}" : name) }
+      end
+      klass.const_set(:Errno, errno)
+      const_set(name, klass)
     end
-    klass.const_set(:Errno, errno)
-    const_set(name, klass)
   end
 end
 

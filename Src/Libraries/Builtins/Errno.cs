@@ -137,6 +137,16 @@ namespace IronRuby.Builtins {
 #endif
         }
 
+        [RubyClass("EISDIR", Extends = typeof(DirectoryIsError), Inherits = typeof(ExternalException))]
+        public class DirectoryIsErrorOps {
+            [RubyConstructor]
+            public static DirectoryIsError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
+                var result = new DirectoryIsError(RubyExceptions.MakeMessage(ref message, "Is a directory"));
+                RubyExceptionData.InitializeException(result, message);
+                return result;
+            }
+        }
+
         [RubyClass("EEXIST", Extends=typeof(ExistError), Inherits=typeof(ExternalException))]
         public class ExistErrorOps {
             [RubyConstructor]

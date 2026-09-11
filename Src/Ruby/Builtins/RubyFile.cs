@@ -86,6 +86,14 @@ namespace IronRuby.Builtins {
                     } else {
                         throw;
                     }
+                } catch (UnauthorizedAccessException) {
+                    // .NET reports opening a directory as an access violation; MRI
+                    // distinguishes it, so only a genuine one stays EACCES (which is
+                    // what UnauthorizedAccessException already maps to).
+                    if (context.DomainManager.Platform.DirectoryExists(path)) {
+                        throw RubyExceptions.CreateEISDIR(path);
+                    }
+                    throw;
                 } catch (ArgumentException e) {
                     throw RubyExceptions.CreateEINVAL(e.Message, e);
                 }

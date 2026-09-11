@@ -349,6 +349,11 @@ namespace IronRuby.Runtime {
             return new UnauthorizedAccessException();
         }
 
+        /// <summary>The constructor already prefixes "Is a directory - ", so pass only the path.</summary>
+        public static Exception/*!*/ CreateEISDIR(string/*!*/ path) {
+            return new DirectoryIsError(path);
+        }
+
         #endregion
     }
 }

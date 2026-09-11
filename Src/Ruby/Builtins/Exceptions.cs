@@ -285,6 +285,26 @@ namespace IronRuby.Builtins {
 #endif
     }
 
+    /// <summary>
+    /// Backs Errno::EISDIR. .NET has no "is a directory" exception -- opening a
+    /// directory throws UnauthorizedAccessException, which maps to EACCES -- so the
+    /// runtime needs a type of its own to raise. Registered in Errno.cs.
+    /// </summary>
+    [Serializable]
+    public class DirectoryIsError : ExternalException {
+        private const string/*!*/ M = "Is a directory";
+
+        public DirectoryIsError() : this(null, null) { }
+        public DirectoryIsError(string message) : this(message, null) { }
+        public DirectoryIsError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
+        public DirectoryIsError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
+
+#if FEATURE_SERIALIZATION
+        protected DirectoryIsError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+            : base(info, context) { }
+#endif
+    }
+
     [Serializable]
     public class ExecFormatError : ExternalException {
         private const string/*!*/ M = "Exec format error";
