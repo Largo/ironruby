@@ -150,6 +150,13 @@ namespace IronRuby.Builtins {
         [RubyConstant("BIG5")]
         public static readonly RubyEncoding Big5 = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageBig5);
 
+        [RubyConstant("ISO2022_JP")]
+        [RubyConstant("ISO_2022_JP")]
+        public static readonly RubyEncoding ISO_2022_JP = RubyEncoding.GetRubyEncoding(50220);
+
+        [RubyConstant]
+        public static readonly RubyEncoding CP50221 = RubyEncoding.GetRubyEncoding(50221);
+
         // TODO:
         // ...
 
@@ -199,7 +206,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("dummy?")]
         public static bool IsDummy(RubyEncoding/*!*/ self) {
-            return false;
+            return self.IsDummy;
         }
 
         [RubyMethod("ascii_compatible?")]
@@ -315,7 +322,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]
         public static RubyEncoding GetCompatible(RubyClass/*!*/ self, [NotNull]RubyEncoding/*!*/ encoding, [NotNull]MutableString/*!*/ str) {
-            return str.GetCompatibleEncoding(encoding);
+            // argument order matters: the Encoding object is the first operand here
+            return MutableString.GetCompatibleEncoding(null, encoding, str, str.Encoding);
         }
 
         [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]

@@ -1006,9 +1006,12 @@ namespace IronRuby.Builtins {
             SetBuiltinConstant(module, "Big5", IronRuby.Builtins.RubyEncodingOps.Big5);
             SetBuiltinConstant(module, "BIG5", IronRuby.Builtins.RubyEncodingOps.Big5);
             SetBuiltinConstant(module, "BINARY", IronRuby.Builtins.RubyEncodingOps.BINARY);
+            SetBuiltinConstant(module, "CP50221", IronRuby.Builtins.RubyEncodingOps.CP50221);
             SetBuiltinConstant(module, "EUC_JP", IronRuby.Builtins.RubyEncodingOps.EUC_JP);
+            SetBuiltinConstant(module, "ISO_2022_JP", IronRuby.Builtins.RubyEncodingOps.ISO_2022_JP);
             SetBuiltinConstant(module, "ISO_8859_15", IronRuby.Builtins.RubyEncodingOps.ISO_8859_15);
             SetBuiltinConstant(module, "ISO_8859_9", IronRuby.Builtins.RubyEncodingOps.ISO_8859_9);
+            SetBuiltinConstant(module, "ISO2022_JP", IronRuby.Builtins.RubyEncodingOps.ISO_2022_JP);
             SetBuiltinConstant(module, "ISO8859_15", IronRuby.Builtins.RubyEncodingOps.ISO_8859_15);
             SetBuiltinConstant(module, "ISO8859_9", IronRuby.Builtins.RubyEncodingOps.ISO_8859_9);
             SetBuiltinConstant(module, "KOI8_R", IronRuby.Builtins.RubyEncodingOps.KOI8_R);

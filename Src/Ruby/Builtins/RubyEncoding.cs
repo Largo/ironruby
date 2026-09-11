@@ -377,6 +377,13 @@ namespace IronRuby.Builtins {
                 return true;
             }
 
+            // A stateful encoding is never ASCII compatible even though it happens to encode the
+            // ASCII repertoire as itself: an ASCII byte only means that character when the escape
+            // state says so. Ruby calls these "dummy" encodings.
+            if (IsDummyEncoding(encoding.CodePage)) {
+                return false;
+            }
+
             switch (encoding.CodePage) {
                 case 437: // OEM United States
                 case 708: // Arabic (ASMO 708)
@@ -450,11 +457,6 @@ namespace IronRuby.Builtins {
                 case 28603: // Estonian (ISO)
                 case 28605: // Latin 9 (ISO)
                 case 38598: // Hebrew (ISO-Logical)
-                case 50220: // Japanese (JIS)
-                case 50221: // Japanese (JIS-Allow 1 byte Kana)
-                case 50222: // Japanese (JIS-Allow 1 byte Kana - SO/SI)
-                case 50225: // Korean (ISO)
-                case 50227: // Chinese Simplified (ISO-2022)
                 case 51932: // Japanese (EUC)
                 case 51936: // Chinese Simplified (EUC)
                 case 51949: // Korean (EUC)
@@ -479,6 +481,31 @@ namespace IronRuby.Builtins {
         }
 
         private static string _AllAscii;
+
+        /// <summary>
+        /// Ruby's "dummy" encodings: stateful encodings that Ruby knows the name of but cannot
+        /// operate on character by character. They are never ASCII compatible, because an ASCII
+        /// byte in the middle of such a stream does not necessarily mean that character.
+        /// </summary>
+        public static bool IsDummyEncoding(int codepage) {
+            switch (codepage) {
+                case 50220: // ISO-2022-JP
+                case 50221: // CP50221 (ISO-2022-JP allowing 1-byte kana)
+                case 50222: // CP50222 (ISO-2022-JP, SO/SI)
+                case 50225: // ISO-2022-KR
+                case 50227: // ISO-2022-CN
+                case 52936: // HZ-GB-2312
+                case CodePageUTF7:
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        public bool IsDummy {
+            get { return IsDummyEncoding(CodePage); }
+        }
 
         private static bool IsAsciiIdentityFallback(Encoding/*!*/ encoding) {
             if (_AllAscii == null) {

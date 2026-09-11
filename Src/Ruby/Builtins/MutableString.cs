@@ -435,24 +435,70 @@ namespace IronRuby.Builtins {
         /// Returns a <c>null</c> reference otherwise.
         /// </summary>
         public RubyEncoding GetCompatibleEncoding(MutableString/*!*/ other) {
-            return GetCompatibleEncoding(other.Encoding) ?? (other.IsAscii() ? _encoding : null);
+            return GetCompatibleEncoding(this, _encoding, other, other.Encoding);
         }
 
         public RubyEncoding GetCompatibleEncoding(RubyEncoding/*!*/ encoding) {
-            return GetCompatibleEncoding(_encoding, encoding) ?? (IsAscii() ? encoding : null);
+            return GetCompatibleEncoding(this, _encoding, null, encoding);
         }
 
         public static RubyEncoding GetCompatibleEncoding(RubyEncoding/*!*/ encoding1, RubyEncoding/*!*/ encoding2) {
+            return GetCompatibleEncoding(null, encoding1, null, encoding2);
+        }
+
+        /// <summary>
+        /// MRI's rb_enc_compatible / enc_compatible_latter. A null string means "an object that
+        /// merely carries an encoding" (an Encoding object, a Regexp, ...) rather than a String;
+        /// MRI treats those differently, which is why the two are passed separately.
+        /// </summary>
+        public static RubyEncoding GetCompatibleEncoding(MutableString str1, RubyEncoding/*!*/ encoding1,
+            MutableString str2, RubyEncoding/*!*/ encoding2) {
+
             if (encoding1 == encoding2) {
                 return encoding1;
             }
 
-            if (encoding1 == RubyEncoding.Ascii) {
-                return encoding2;
-            } 
-            
-            if (encoding2 == RubyEncoding.Ascii) {
+            if (str2 != null && str2.IsEmpty) {
                 return encoding1;
+            }
+
+            if (str1 != null && str2 != null && str1.IsEmpty) {
+                return (encoding1.IsAsciiIdentity && str2.IsAscii()) ? encoding1 : encoding2;
+            }
+
+            if (!encoding1.IsAsciiIdentity || !encoding2.IsAsciiIdentity) {
+                return null;
+            }
+
+            // objects whose encoding is the encoding of their contents
+            if (str2 == null && encoding2 == RubyEncoding.Ascii) {
+                return encoding1;
+            }
+            if (str1 == null && encoding1 == RubyEncoding.Ascii) {
+                return encoding2;
+            }
+
+            // MRI swaps the two operands so that the String is first, but deliberately does not
+            // swap enc1/enc2 along with them.
+            if (str1 == null) {
+                str1 = str2;
+                str2 = null;
+            }
+
+            if (str1 != null) {
+                bool ascii1 = str1.IsAscii();
+                if (str2 != null) {
+                    bool ascii2 = str2.IsAscii();
+                    if (ascii1 != ascii2) {
+                        return ascii1 ? encoding2 : encoding1;
+                    }
+                    if (ascii2) {
+                        return encoding1;
+                    }
+                }
+                if (ascii1) {
+                    return encoding2;
+                }
             }
 
             return null;
