@@ -220,7 +220,16 @@ namespace IronRuby.Builtins {
         [RubyMethod("chmod")]
         public static int Chmod(RubyFile/*!*/ self, [DefaultProtocol]int permission) {
             self.RequireInitialized();
-            // TODO:
+            if (Posix.IsAvailable) {
+                int fd = GetNativeFileDescriptor(self);
+                int errno;
+                if (fd >= 0) {
+                    if (Posix.FChmod(fd, permission, out errno) != 0) {
+                        throw Posix.Error(errno, self.Path);
+                    }
+                    return 0;
+                }
+            }
             if (self.Path == null) {
                 throw new NotSupportedException("TODO: cannot chmod for files without path");
             }
@@ -229,13 +238,29 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("chmod", RubyMethodAttributes.PublicSingleton)]
-        public static int Chmod(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, [DefaultProtocol]int permission, object path) {
-            Chmod(self.Context.DecodePath(Protocols.CastToPath(toPath, path)), permission);
-            return 1;
+        public static int Chmod(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, [DefaultProtocol]int permission, params object[]/*!*/ paths) {
+            foreach (var path in paths) {
+                Chmod(self.Context.DecodePath(Protocols.CastToPath(toPath, path)), permission);
+            }
+            return paths.Length;
+        }
+
+        [RubyMethod("lchmod", RubyMethodAttributes.PublicSingleton)]
+        public static int LChmod(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, [DefaultProtocol]int permission, params object[]/*!*/ paths) {
+            // Linux has no lchmod(2): the permission bits of a symbolic link are
+            // meaningless there, so there is nothing correct to do.
+            throw new IronRuby.Builtins.NotImplementedError("lchmod() function is unimplemented on this machine");
         }
 
         internal static void Chmod(string/*!*/ path, int permission) {
 #if FEATURE_FILESYSTEM
+            if (Posix.IsAvailable) {
+                int errno;
+                if (Posix.Chmod(path, permission, out errno) != 0) {
+                    throw Posix.Error(errno, path);
+                }
+                return;
+            }
             FileAttributes oldAttributes = File.GetAttributes(path);
             if ((permission & WriteModeMask) == 0) {
                 File.SetAttributes(path, oldAttributes | FileAttributes.ReadOnly);
@@ -245,34 +270,69 @@ namespace IronRuby.Builtins {
 #endif
         }
 
-        [RubyMethod("chown")]
-        public static int ChangeOwner(RubyFile/*!*/ self, [DefaultProtocol]int owner, [DefaultProtocol]int group) {
-            return 0;
+        private static int ToUidGid(RubyContext/*!*/ context, object value, bool owner) {
+            if (value == null) {
+                return -1;
+            }
+            if (value is int) {
+                return (int)value;
+            }
+            throw RubyExceptions.CreateUnexpectedTypeError(context, value, "Integer");
         }
 
         [RubyMethod("chown")]
         public static int ChangeOwner(RubyContext/*!*/ context, RubyFile/*!*/ self, object owner, object group) {
-            if ((owner == null || owner is int) && (group == null || group is int)) {
-                return 0;
-            }
-            throw RubyExceptions.CreateUnexpectedTypeError(context, owner, "Fixnum");
-        }
+            self.RequireInitialized();
+            int uid = ToUidGid(context, owner, true);
+            int gid = ToUidGid(context, group, false);
 
-        [RubyMethod("chown", RubyMethodAttributes.PublicSingleton)]
-        public static int ChangeOwner(RubyClass/*!*/ self, [DefaultProtocol]int owner, [DefaultProtocol]int group, [DefaultProtocol, NotNull]MutableString/*!*/ path) {
+            if (Posix.IsAvailable) {
+                int fd = GetNativeFileDescriptor(self);
+                int errno;
+                if (fd >= 0) {
+                    if (Posix.FChown(fd, uid, gid, out errno) != 0) {
+                        throw Posix.Error(errno, self.Path);
+                    }
+                }
+            }
             return 0;
         }
 
         [RubyMethod("chown", RubyMethodAttributes.PublicSingleton)]
-        public static int ChangeOwner(RubyContext/*!*/ context, RubyClass/*!*/ self, object owner, object group, [DefaultProtocol, NotNull]MutableString/*!*/ path) {
-            if ((owner == null || owner is int) && (group == null || group is int)) {
-                return 0;
-            }
-            throw RubyExceptions.CreateUnexpectedTypeError(context, owner, "Fixnum");
+        public static int ChangeOwner(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object owner, object group,
+            params object[]/*!*/ paths) {
+
+            return ChangeOwner(toPath, self, owner, group, paths, true);
         }
 
-        //lchmod
-        //lchown
+        [RubyMethod("lchown", RubyMethodAttributes.PublicSingleton)]
+        public static int LChangeOwner(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object owner, object group,
+            params object[]/*!*/ paths) {
+
+            return ChangeOwner(toPath, self, owner, group, paths, false);
+        }
+
+        private static int ChangeOwner(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object owner, object group,
+            object[]/*!*/ paths, bool followLinks) {
+
+            var context = self.Context;
+            int uid = ToUidGid(context, owner, true);
+            int gid = ToUidGid(context, group, false);
+
+            foreach (var path in paths) {
+                string strPath = context.DecodePath(Protocols.CastToPath(toPath, path));
+                if (Posix.IsAvailable) {
+                    int errno;
+                    int rc = followLinks ? Posix.Chown(strPath, uid, gid, out errno) : Posix.LChown(strPath, uid, gid, out errno);
+                    if (rc != 0) {
+                        throw Posix.Error(errno, strPath);
+                    }
+                } else if (!Exists(context, Protocols.CastToPath(toPath, path))) {
+                    throw RubyExceptions.CreateENOENT("No such file or directory - {0}", strPath);
+                }
+            }
+            return paths.Length;
+        }
 
         internal static readonly object UmaskKey = new object();
 
@@ -662,24 +722,204 @@ namespace IronRuby.Builtins {
         #region flock, readlink, link, symlink
 
 #if FEATURE_FILESYSTEM
-        //flock
+        /// <summary>
+        /// IronRuby's "file descriptor" is an index into a per-context table, not
+        /// an OS descriptor, so syscalls that need a real fd have to dig the
+        /// handle out of the underlying FileStream.
+        /// </summary>
+        internal static int GetNativeFileDescriptor(RubyIO/*!*/ io) {
+            var stream = io.GetStream().BaseStream;
+            var fs = stream as FileStream;
+            if (fs == null) {
+                return -1;
+            }
+            return (int)fs.SafeFileHandle.DangerousGetHandle();
+        }
+
+        [RubyMethod("flock", BuildConfig = "FEATURE_FILESYSTEM")]
+        public static object FileLock(RubyFile/*!*/ self, [DefaultProtocol]int operation) {
+            self.RequireInitialized();
+            if (!Posix.IsAvailable) {
+                throw new IronRuby.Builtins.NotImplementedError("flock() function is unimplemented on this machine");
+            }
+
+            int fd = GetNativeFileDescriptor(self);
+            if (fd < 0) {
+                throw RubyExceptions.CreateEBADF();
+            }
+
+            int errno;
+            if (Posix.Flock(fd, operation, out errno) != 0) {
+                // LOCK_NB on a locked file reports "would block" rather than raising
+                if (errno == 11 /*EWOULDBLOCK/EAGAIN*/) {
+                    return false;
+                }
+                throw Posix.Error(errno, self.Path);
+            }
+            return 0;
+        }
 
         [RubyMethod("readlink", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        public static bool Readlink(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
-            throw new IronRuby.Builtins.NotImplementedError("readlink() function is unimplemented on this machine");
+        public static MutableString/*!*/ Readlink(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
+            string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
+            if (!Posix.IsAvailable) {
+                throw new IronRuby.Builtins.NotImplementedError("readlink() function is unimplemented on this machine");
+            }
+
+            int errno;
+            string target = Posix.ReadLink(strPath, out errno);
+            if (target == null) {
+                throw Posix.Error(errno, strPath);
+            }
+            return self.Context.EncodePath(target);
         }
 
         [RubyMethod("link", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static int Link(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object oldPath, object newPath) {
-            Protocols.CastToPath(toPath, oldPath);
-            Protocols.CastToPath(toPath, newPath);
-            throw new IronRuby.Builtins.NotImplementedError("link not implemented");
+            string strOld = self.Context.DecodePath(Protocols.CastToPath(toPath, oldPath));
+            string strNew = self.Context.DecodePath(Protocols.CastToPath(toPath, newPath));
+            if (!Posix.IsAvailable) {
+                throw new IronRuby.Builtins.NotImplementedError("link() function is unimplemented on this machine");
+            }
+
+            int errno;
+            if (Posix.Link(strOld, strNew, out errno) != 0) {
+                throw Posix.Error(errno, errno == Posix.EEXIST ? strOld + " or " + strNew : strOld);
+            }
+            return 0;
         }
 
         [RubyMethod("symlink", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        public static object SymLink(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ path) {
-            throw new NotImplementedError("symlnk() function is unimplemented on this machine");
+        public static int SymLink(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object oldPath, object newPath) {
+            string strOld = self.Context.DecodePath(Protocols.CastToPath(toPath, oldPath));
+            string strNew = self.Context.DecodePath(Protocols.CastToPath(toPath, newPath));
+            if (!Posix.IsAvailable) {
+                throw new IronRuby.Builtins.NotImplementedError("symlink() function is unimplemented on this machine");
+            }
+
+            int errno;
+            if (Posix.Symlink(strOld, strNew, out errno) != 0) {
+                throw Posix.Error(errno, errno == Posix.EEXIST ? strOld + " or " + strNew : strNew);
+            }
+            return 0;
         }
+
+        [RubyMethod("mkfifo", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static int MakeFifo(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+            [DefaultParameterValue(0666)]int mode) {
+
+            string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
+            if (!Posix.IsAvailable) {
+                throw new IronRuby.Builtins.NotImplementedError("mkfifo() function is unimplemented on this machine");
+            }
+
+            int errno;
+            if (Posix.MkFifo(strPath, mode, out errno) != 0) {
+                throw Posix.Error(errno, strPath);
+            }
+            return 0;
+        }
+
+        #region realpath, realdirpath
+
+        /// <summary>
+        /// Resolves ".", ".." and every symbolic link in <paramref name="path"/>.
+        /// When <paramref name="strict"/> the whole path must exist (realpath);
+        /// otherwise only everything but the last component must (realdirpath).
+        /// </summary>
+        private static string/*!*/ ResolvePath(RubyContext/*!*/ context, string/*!*/ path, string basedir, bool strict) {
+            string absolute = RubyUtils.ExpandPath(context.Platform, path, basedir ?? context.Platform.CurrentDirectory, false);
+
+            var components = new List<string>();
+            foreach (var part in absolute.Split('/')) {
+                if (part.Length == 0 || part == ".") {
+                    continue;
+                }
+                if (part == "..") {
+                    if (components.Count > 0) {
+                        components.RemoveAt(components.Count - 1);
+                    }
+                    continue;
+                }
+                components.Add(part);
+            }
+
+            string resolved = "";
+            for (int i = 0; i < components.Count; i++) {
+                bool last = i == components.Count - 1;
+                string candidate = resolved + "/" + components[i];
+
+                int links = 0;
+                while (true) {
+                    Posix.StatData data;
+                    int errno;
+                    if (!Posix.TryStat(candidate, false, out data, out errno)) {
+                        if (last && !strict && errno == Posix.ENOENT) {
+                            break;
+                        }
+                        throw Posix.Error(errno, candidate);
+                    }
+
+                    if (data.FileType != Posix.S_IFLNK) {
+                        if (!last && data.FileType != Posix.S_IFDIR) {
+                            throw Posix.Error(Posix.ENOTDIR, candidate);
+                        }
+                        break;
+                    }
+
+                    if (++links > 32) {
+                        throw Posix.Error(Posix.ELOOP, candidate);
+                    }
+
+                    string target = Posix.ReadLink(candidate, out errno);
+                    if (target == null) {
+                        throw Posix.Error(errno, candidate);
+                    }
+
+                    if (target.StartsWith("/", StringComparison.Ordinal)) {
+                        candidate = ResolvePath(context, target, null, strict || !last);
+                        break;
+                    }
+                    candidate = ResolvePath(context, target, resolved.Length == 0 ? "/" : resolved, strict || !last);
+                    break;
+                }
+
+                resolved = candidate;
+            }
+
+            return resolved.Length == 0 ? "/" : resolved;
+        }
+
+        [RubyMethod("realpath", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static MutableString/*!*/ RealPath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+            [Optional]object basedir) {
+
+            return RealPath(toPath, self, path, basedir, true);
+        }
+
+        [RubyMethod("realdirpath", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static MutableString/*!*/ RealDirPath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+            [Optional]object basedir) {
+
+            return RealPath(toPath, self, path, basedir, false);
+        }
+
+        private static MutableString/*!*/ RealPath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+            object basedir, bool strict) {
+
+            string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
+            string strBase = (basedir == Missing.Value || basedir == null)
+                ? null
+                : self.Context.DecodePath(Protocols.CastToPath(toPath, basedir));
+
+            if (!Posix.IsAvailable) {
+                return ExpandPath(toPath, self, path, basedir == Missing.Value ? null : basedir);
+            }
+
+            return self.Context.EncodePath(ResolvePath(self.Context, strPath, strBase, strict));
+        }
+
+        #endregion
 #endif
         #endregion
 
@@ -717,31 +957,61 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("utime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        public static int UpdateTimes(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, [NotNull]RubyTime/*!*/ accessTime, [NotNull]RubyTime/*!*/ modifiedTime,
-            object path) {
-
-            string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
-            FileInfo info = new FileInfo(strPath);
-            if (!info.Exists) {
-                throw RubyExceptions.CreateENOENT("No such file or directory - {0}", strPath);
-            }
-            info.LastAccessTimeUtc = accessTime.ToUniversalTime();
-            info.LastWriteTimeUtc = modifiedTime.ToUniversalTime();
-            return 1;
-        }
-
-        [RubyMethod("utime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static int UpdateTimes(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object accessTime, object modifiedTime,
             params object[]/*!*/ paths) {
 
-            RubyTime atime = MakeTime(self.Context, accessTime);
-            RubyTime mtime = MakeTime(self.Context, modifiedTime);
+            return UpdateTimes(toPath, self, accessTime, modifiedTime, paths, true);
+        }
 
-            foreach (MutableString path in paths) {
-                UpdateTimes(toPath, self, atime, mtime, path);
+        [RubyMethod("lutime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static int UpdateLinkTimes(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object accessTime, object modifiedTime,
+            params object[]/*!*/ paths) {
+
+            return UpdateTimes(toPath, self, accessTime, modifiedTime, paths, false);
+        }
+
+        private static int UpdateTimes(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object accessTime, object modifiedTime,
+            object[]/*!*/ paths, bool followLinks) {
+
+            var context = self.Context;
+            RubyTime atime = MakeTime(context, accessTime);
+            RubyTime mtime = MakeTime(context, modifiedTime);
+
+            foreach (var path in paths) {
+                string strPath = context.DecodePath(Protocols.CastToPath(toPath, path));
+
+                if (Posix.IsAvailable) {
+                    long[] times = new long[4];
+                    SplitTime(atime, out times[0], out times[1]);
+                    SplitTime(mtime, out times[2], out times[3]);
+
+                    int errno;
+                    if (Posix.UTimes(strPath, times, followLinks, out errno) != 0) {
+                        throw Posix.Error(errno, strPath);
+                    }
+                    continue;
+                }
+
+                FileInfo info = new FileInfo(strPath);
+                if (!info.Exists) {
+                    throw RubyExceptions.CreateENOENT("No such file or directory - {0}", strPath);
+                }
+                info.LastAccessTimeUtc = atime.ToUniversalTime();
+                info.LastWriteTimeUtc = mtime.ToUniversalTime();
             }
 
             return paths.Length;
+        }
+
+        private static void SplitTime(RubyTime/*!*/ time, out long seconds, out long nanoseconds) {
+            long ticks = time.TicksSinceEpoch;
+            seconds = ticks / TimeSpan.TicksPerSecond;
+            long rest = ticks % TimeSpan.TicksPerSecond;
+            if (rest < 0) {
+                seconds -= 1;
+                rest += TimeSpan.TicksPerSecond;
+            }
+            nanoseconds = rest * 100;
         }
 #endif
         private static RubyTime MakeTime(RubyContext/*!*/ context, object obj) {
@@ -750,9 +1020,9 @@ namespace IronRuby.Builtins {
             } else if (obj is RubyTime) {
                 return (RubyTime)obj;
             } else if (obj is int) {
-                return new RubyTime(RubyTime.Epoch.AddSeconds((int)obj));
+                return new RubyTime(RubyTime.ToLocalTime(RubyTime.Epoch.AddSeconds((int)obj)));
             } else if (obj is double) {
-                return new RubyTime(RubyTime.Epoch.AddSeconds((double)obj));
+                return new RubyTime(RubyTime.ToLocalTime(RubyTime.Epoch.AddSeconds((double)obj)));
             } else {
                 string name = context.GetClassOf(obj).Name;
                 throw RubyExceptions.CreateTypeConversionError(name, "time");
@@ -766,19 +1036,39 @@ namespace IronRuby.Builtins {
 #if FEATURE_FILESYSTEM
         [RubyMethod("ftype", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static MutableString FileType(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
-            return RubyStatOps.FileType(RubyStatOps.Create(self.Context, Protocols.CastToPath(toPath, path)));
+            // ftype reports on the link itself, not on its target
+            return RubyStatOps.FileType(RubyStatOps.Create(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path)), false));
         }
 
-        [RubyMethod("lstat", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         [RubyMethod("stat", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static FileSystemInfo/*!*/ Stat(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             return RubyStatOps.Create(self.Context, Protocols.CastToPath(toPath, path));
+        }
+
+        [RubyMethod("lstat", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static FileSystemInfo/*!*/ LStat(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
+            return RubyStatOps.Create(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path)), false);
         }
 
         [RubyMethod("lstat", BuildConfig = "FEATURE_FILESYSTEM")]
         [RubyMethod("stat", BuildConfig = "FEATURE_FILESYSTEM")]
         public static FileSystemInfo Stat(RubyFile/*!*/ self) {
             return RubyStatOps.Create(self);
+        }
+
+        [RubyMethod("birthtime", BuildConfig = "FEATURE_FILESYSTEM")]
+        public static RubyTime BirthTime(RubyContext/*!*/ context, RubyFile/*!*/ self) {
+            return RubyStatOps.BirthTime(RubyStatOps.Create(self));
+        }
+
+        [RubyMethod("birthtime", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static RubyTime BirthTime(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
+            return RubyStatOps.BirthTime(RubyStatOps.Create(self.Context, Protocols.CastToPath(toPath, path)));
+        }
+
+        [RubyMethod("size", BuildConfig = "FEATURE_FILESYSTEM")]
+        public static object FileSize(RubyFile/*!*/ self) {
+            return RubyStatOps.Size(RubyStatOps.Create(self));
         }
 #endif
         [RubyMethod("inspect")]
@@ -805,18 +1095,51 @@ namespace IronRuby.Builtins {
 #if FEATURE_FILESYSTEM
 
         /// <summary>
+        /// A File::Stat backed by a real statx(2) result. Off Unix (or if libc
+        /// is unavailable) File::Stat keeps using bare FileInfo/DirectoryInfo
+        /// and the legacy approximations below.
+        /// </summary>
+        internal sealed class StatInfo : FileSystemInfo {
+            internal readonly Posix.StatData Data;
+
+            internal StatInfo(string/*!*/ path, Posix.StatData/*!*/ data) {
+                Data = data;
+                OriginalPath = path;
+                FullPath = path;
+            }
+
+            public override bool Exists {
+                get { return true; }
+            }
+
+            public override string/*!*/ Name {
+                get { return System.IO.Path.GetFileName(FullPath); }
+            }
+
+            public override void Delete() {
+                File.Delete(FullPath);
+            }
+        }
+
+        /// <summary>
         /// Stat
         /// </summary>
         [RubyClass("Stat", Extends = typeof(FileSystemInfo), Inherits = typeof(object), BuildConfig = "FEATURE_FILESYSTEM"), Includes(typeof(Comparable))]
         public class RubyStatOps {
 
-            // TODO: should work for IO and files w/o paths:
             internal static FileSystemInfo/*!*/ Create(RubyFile/*!*/ file) {
                 file.RequireInitialized();
-                if (file.Path == null) {
-                    throw new NotSupportedException("TODO: cannot get file info for files without path");
+                if (file.Path != null) {
+                    return Create(file.Context, file.Path);
                 }
-                return Create(file.Context, file.Path);
+
+                // a file opened from a descriptor has no path; fstat it
+                Posix.StatData data;
+                int errno;
+                if (Posix.TryFStat(file.GetFileDescriptor(), out data, out errno)) {
+                    return new StatInfo("", data);
+                }
+                throw new NotSupportedException("cannot get file info for files without path");
             }
 
             internal static FileSystemInfo/*!*/ Create(RubyContext/*!*/ context, MutableString/*!*/ path) {
@@ -824,29 +1147,57 @@ namespace IronRuby.Builtins {
             }
 
             internal static FileSystemInfo/*!*/ Create(RubyContext/*!*/ context, string/*!*/ path) {
+                return Create(context, path, true);
+            }
+
+            internal static FileSystemInfo/*!*/ Create(RubyContext/*!*/ context, string/*!*/ path, bool followLinks) {
                 FileSystemInfo fsi;
-                if (TryCreate(context, path, out fsi)) {
+                int errno;
+                if (TryCreate(context, path, followLinks, out fsi, out errno)) {
                     return fsi;
-                } else {
-                    throw RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
                 }
+                throw Posix.Error(errno == 0 ? Posix.ENOENT : errno, path);
             }
 
             internal static bool TryCreate(RubyContext/*!*/ context, string/*!*/ path, out FileSystemInfo result) {
-                PlatformAdaptationLayer pal = context.Platform;
+                int errno;
+                return TryCreate(context, path, true, out result, out errno);
+            }
+
+            internal static bool TryCreate(RubyContext/*!*/ context, string/*!*/ path, bool followLinks, out FileSystemInfo result, out int errno) {
                 result = null;
+                errno = 0;
+
+                if (Posix.IsAvailable) {
+                    Posix.StatData data;
+                    if (Posix.TryStat(path, followLinks, out data, out errno)) {
+                        result = new StatInfo(path, data);
+                        return true;
+                    }
+                    if (errno == 0) {
+                        errno = Posix.ENOENT;
+                    }
+                    return false;
+                }
+
+                PlatformAdaptationLayer pal = context.Platform;
                 if (pal.FileExists(path)) {
-                    result = new FileInfo(path);                    
+                    result = new FileInfo(path);
                 } else if (pal.DirectoryExists(path)) {
                     result = new DirectoryInfo(path);
                 } else if (path.ToUpperInvariant().Equals(NUL_VALUE)) {
                     result = new DeviceInfo(NUL_VALUE);
                 } else {
+                    errno = Posix.ENOENT;
                     return false;
                 }
                 return true;
             }
 
+            private static Posix.StatData D(FileSystemInfo/*!*/ self) {
+                var si = self as StatInfo;
+                return si != null ? si.Data : null;
+            }
 
             [RubyConstructor]
             public static FileSystemInfo/*!*/ Create(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
@@ -855,6 +1206,12 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("<=>")]
             public static int Compare(FileSystemInfo/*!*/ self, [NotNull]FileSystemInfo/*!*/ other) {
+                var a = D(self);
+                var b = D(other);
+                if (a != null && b != null) {
+                    int c = a.MTimeSec.CompareTo(b.MTimeSec);
+                    return c != 0 ? c : a.MTimeNsec.CompareTo(b.MTimeNsec);
+                }
                 return self.LastWriteTime.CompareTo(other.LastWriteTime);
             }
 
@@ -864,63 +1221,175 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
+            internal static RubyTime/*!*/ MakeTime(long seconds, long nanoseconds) {
+                var utc = RubyTime.Epoch.AddSeconds(seconds).AddTicks(nanoseconds / 100);
+                return new RubyTime(RubyTime.ToLocalTime(utc));
+            }
+
             [RubyMethod("atime")]
             public static RubyTime/*!*/ AccessTime(FileSystemInfo/*!*/ self) {
-                return new RubyTime(self.LastAccessTime);
+                var d = D(self);
+                return d != null ? MakeTime(d.ATimeSec, d.ATimeNsec) : new RubyTime(self.LastAccessTime);
             }
 
-            [RubyMethod("blksize")]
-            public static object BlockSize(FileSystemInfo/*!*/ self) {
-                return null;
-            }
-
-            [RubyMethod("blockdev?")]
-            public static bool IsBlockDevice(FileSystemInfo/*!*/ self) {
-                return false;
-            }
-
-            [RubyMethod("blocks")]
-            public static object Blocks(FileSystemInfo/*!*/ self) {
-                return null;
-            }
-
-            [RubyMethod("chardev?")]
-            public static bool IsCharDevice(FileSystemInfo/*!*/ self) {
-                return false;
+            [RubyMethod("mtime")]
+            public static RubyTime/*!*/ ModifiedTime(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? MakeTime(d.MTimeSec, d.MTimeNsec) : new RubyTime(self.LastWriteTime);
             }
 
             [RubyMethod("ctime")]
             public static RubyTime/*!*/ CreateTime(FileSystemInfo/*!*/ self) {
-                return new RubyTime(self.CreationTime);
+                var d = D(self);
+                return d != null ? MakeTime(d.CTimeSec, d.CTimeNsec) : new RubyTime(self.CreationTime);
+            }
+
+            [RubyMethod("birthtime")]
+            public static RubyTime/*!*/ BirthTime(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                if (d == null) {
+                    return new RubyTime(self.CreationTime);
+                }
+                if (!d.HasBirthTime) {
+                    throw new IronRuby.Builtins.NotImplementedError("birthtime() function is unimplemented on this filesystem");
+                }
+                return MakeTime(d.BTimeSec, d.BTimeNsec);
+            }
+
+            [RubyMethod("blksize")]
+            public static object BlockSize(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? (object)d.BlockSize : null;
+            }
+
+            [RubyMethod("blocks")]
+            public static object Blocks(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? (object)Protocols.Normalize(d.Blocks) : null;
+            }
+
+            [RubyMethod("blockdev?")]
+            public static bool IsBlockDevice(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null && d.FileType == Posix.S_IFBLK;
+            }
+
+            [RubyMethod("chardev?")]
+            public static bool IsCharDevice(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null && d.FileType == Posix.S_IFCHR;
             }
 
             [RubyMethod("dev")]
-            [RubyMethod("rdev")]
             public static object DeviceId(FileSystemInfo/*!*/ self) {
-                // TODO: Map to drive letter?
-                return 3;
+                var d = D(self);
+                return d != null ? Protocols.Normalize(d.Dev) : (object)3;
+            }
+
+            [RubyMethod("rdev")]
+            public static object RDeviceId(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? Protocols.Normalize(d.Rdev) : (object)3;
             }
 
             [RubyMethod("dev_major")]
-            [RubyMethod("rdev_major")]
             public static object DeviceIdMajor(FileSystemInfo/*!*/ self) {
-                return null;
+                var d = D(self);
+                return d != null ? (object)d.DevMajor : null;
             }
 
             [RubyMethod("dev_minor")]
-            [RubyMethod("rdev_minor")]
             public static object DeviceIdMinor(FileSystemInfo/*!*/ self) {
-                return null;
+                var d = D(self);
+                return d != null ? (object)d.DevMinor : null;
+            }
+
+            [RubyMethod("rdev_major")]
+            public static object RDeviceIdMajor(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? (object)d.RdevMajor : null;
+            }
+
+            [RubyMethod("rdev_minor")]
+            public static object RDeviceIdMinor(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? (object)d.RdevMinor : null;
             }
 
             [RubyMethod("directory?")]
             public static bool IsDirectory(FileSystemInfo/*!*/ self) {
-                return (self is DirectoryInfo);
+                var d = D(self);
+                return d != null ? d.FileType == Posix.S_IFDIR : (self is DirectoryInfo);
+            }
+
+            [RubyMethod("file?")]
+            public static bool IsFile(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? d.FileType == Posix.S_IFREG : (self is FileInfo);
+            }
+
+            [RubyMethod("pipe?")]
+            public static bool IsPipe(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null && d.FileType == Posix.S_IFIFO;
+            }
+
+            [RubyMethod("socket?")]
+            public static bool IsSocket(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null && d.FileType == Posix.S_IFSOCK;
+            }
+
+            [RubyMethod("symlink?")]
+            public static bool IsSymLink(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null && d.FileType == Posix.S_IFLNK;
+            }
+
+            [RubyMethod("ftype")]
+            public static MutableString/*!*/ FileType(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                if (d == null) {
+                    return MutableString.CreateAscii(IsFile(self) ? "file" : "directory");
+                }
+                switch (d.FileType) {
+                    case Posix.S_IFREG: return MutableString.CreateAscii("file");
+                    case Posix.S_IFDIR: return MutableString.CreateAscii("directory");
+                    case Posix.S_IFCHR: return MutableString.CreateAscii("characterSpecial");
+                    case Posix.S_IFBLK: return MutableString.CreateAscii("blockSpecial");
+                    case Posix.S_IFIFO: return MutableString.CreateAscii("fifo");
+                    case Posix.S_IFLNK: return MutableString.CreateAscii("link");
+                    case Posix.S_IFSOCK: return MutableString.CreateAscii("socket");
+                    default: return MutableString.CreateAscii("unknown");
+                }
+            }
+
+            #region permission predicates
+
+            private static bool ModeAccess(Posix.StatData/*!*/ d, int bit, bool real) {
+                int uid = real ? Posix.GetUid() : Posix.GetEUid();
+                if (uid == 0) {
+                    // root bypasses read/write; execute still needs some x bit
+                    return bit != Posix.X_OK || (d.Mode & 0111) != 0;
+                }
+
+                int shift;
+                if (d.Uid == uid) {
+                    shift = 6;
+                } else if (d.Gid == (real ? Posix.GetGid() : Posix.GetEGid()) || Array.IndexOf(Posix.GetGroups(), d.Gid) >= 0) {
+                    shift = 3;
+                } else {
+                    shift = 0;
+                }
+                return (d.Mode & (bit << shift)) != 0;
             }
 
             [RubyMethod("executable?")]
-            [RubyMethod("executable_real?")]
             public static bool IsExecutable(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                if (d != null) {
+                    return ModeAccess(d, Posix.X_OK, false);
+                }
                 if (System.IO.Path.DirectorySeparatorChar == '/') {
                     var mode = self.UnixFileMode;
                     return (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
@@ -928,48 +1397,190 @@ namespace IronRuby.Builtins {
                 return self.Extension.Equals(".exe", StringComparison.OrdinalIgnoreCase);
             }
 
-            [RubyMethod("identical?")]
-            public static bool AreIdentical(RubyContext/*!*/ context, FileSystemInfo/*!*/ self, [NotNull]FileSystemInfo/*!*/ other) {
-                // TODO: links
-                return self.Exists && other.Exists && context.Platform.PathComparer.Compare(self.FullName, other.FullName) == 0;
+            [RubyMethod("executable_real?")]
+            public static bool IsExecutableReal(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? ModeAccess(d, Posix.X_OK, true) : IsExecutable(self);
             }
 
-            [RubyMethod("file?")]
-            public static bool IsFile(FileSystemInfo/*!*/ self) {
-                return self is FileInfo;
+            [RubyMethod("readable?")]
+            public static bool IsReadable(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? ModeAccess(d, Posix.R_OK, false) : true;
             }
 
-            [RubyMethod("ftype")]
-            public static MutableString FileType(FileSystemInfo/*!*/ self) {
-                return MutableString.CreateAscii(IsFile(self) ? "file" : "directory");
+            [RubyMethod("readable_real?")]
+            public static bool IsReadableReal(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? ModeAccess(d, Posix.R_OK, true) : true;
             }
 
-            [RubyMethod("gid")]
-            public static int GroupId(FileSystemInfo/*!*/ self) {
-                return 0;
+            [RubyMethod("writable?")]
+            public static bool IsWritable(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? ModeAccess(d, Posix.W_OK, false) : ((self.Attributes & FileAttributes.ReadOnly) == 0);
+            }
+
+            [RubyMethod("writable_real?")]
+            public static bool IsWritableReal(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? ModeAccess(d, Posix.W_OK, true) : IsWritable(self);
+            }
+
+            [RubyMethod("world_readable?")]
+            public static object IsWorldReadable(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                if (d == null || (d.Mode & 04) == 0) {
+                    return null;
+                }
+                return d.Mode & 07777;
+            }
+
+            [RubyMethod("world_writable?")]
+            public static object IsWorldWritable(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                if (d == null || (d.Mode & 02) == 0) {
+                    return null;
+                }
+                return d.Mode & 07777;
+            }
+
+            [RubyMethod("owned?")]
+            public static bool IsUserOwned(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? d.Uid == Posix.GetEUid() : true;
             }
 
             [RubyMethod("grpowned?")]
             public static bool IsGroupOwned(FileSystemInfo/*!*/ self) {
-                return false;
+                var d = D(self);
+                if (d == null) {
+                    return false;
+                }
+                return d.Gid == Posix.GetEGid() || Array.IndexOf(Posix.GetGroups(), d.Gid) >= 0;
             }
-            
+
+            [RubyMethod("setgid?")]
+            public static bool IsSetGid(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null && (d.Mode & Posix.S_ISGID) != 0;
+            }
+
+            [RubyMethod("setuid?")]
+            public static bool IsSetUid(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null && (d.Mode & Posix.S_ISUID) != 0;
+            }
+
+            [RubyMethod("sticky?")]
+            public static object IsSticky(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? (object)((d.Mode & Posix.S_ISVTX) != 0) : null;
+            }
+
+            #endregion
+
+            [RubyMethod("identical?")]
+            public static bool AreIdentical(RubyContext/*!*/ context, FileSystemInfo/*!*/ self, [NotNull]FileSystemInfo/*!*/ other) {
+                var a = D(self);
+                var b = D(other);
+                if (a != null && b != null) {
+                    return a.Dev == b.Dev && a.Ino == b.Ino;
+                }
+                return self.Exists && other.Exists && context.Platform.PathComparer.Compare(self.FullName, other.FullName) == 0;
+            }
+
+            [RubyMethod("gid")]
+            public static int GroupId(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? d.Gid : 0;
+            }
+
+            [RubyMethod("uid")]
+            public static int UserId(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? d.Uid : 0;
+            }
+
             [RubyMethod("ino")]
-            public static int Inode(FileSystemInfo/*!*/ self) {
-                return 0;
+            public static object Inode(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? Protocols.Normalize(d.Ino) : (object)0;
+            }
+
+            [RubyMethod("nlink")]
+            public static int NumberOfLinks(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? d.Nlink : 1;
+            }
+
+            [RubyMethod("mode")]
+            public static int Mode(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                if (d != null) {
+                    return d.Mode;
+                }
+                int mode = (self is FileInfo) ? 0x8000 : 0x4000;
+                mode |= 0x100; // S_IREAD;
+                if ((self.Attributes & FileAttributes.ReadOnly) == 0) {
+                    mode |= 0x80; // S_IWRITE;
+                }
+                return mode;
+            }
+
+            [RubyMethod("size")]
+            public static object Size(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                if (d != null) {
+                    return Protocols.Normalize(d.Size);
+                }
+                if (self is DeviceInfo) {
+                    return 0;
+                }
+                FileInfo info = (self as FileInfo);
+                return (info == null) ? 0 : (object)Protocols.Normalize(info.Length);
+            }
+
+            [RubyMethod("size?")]
+            public static object NullableSize(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                if (d != null) {
+                    return d.Size == 0 ? null : Protocols.Normalize(d.Size);
+                }
+                if (self is DeviceInfo) {
+                    return 0;
+                }
+                FileInfo info = (self as FileInfo);
+                if (info == null) {
+                    return null;
+                }
+                return (info.Length == 0) ? null : (object)(int)info.Length;
+            }
+
+            [RubyMethod("zero?")]
+            public static bool IsZeroLength(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                if (d != null) {
+                    return d.FileType != Posix.S_IFDIR && d.Size == 0;
+                }
+                if (self is DeviceInfo) {
+                    return true;
+                }
+                FileInfo info = (self as FileInfo);
+                return (info == null) ? false : info.Length == 0;
             }
 
             [RubyMethod("inspect")]
             public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, FileSystemInfo/*!*/ self) {
-               return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture, 
-                    "#<File::Stat dev={0}, ino={1}, mode={2}, nlink={3}, uid={4}, gid={5}, rdev={6}, size={7}, blksize={8}, blocks={9}, atime={10}, mtime={11}, ctime={12}",
-                    context.Inspect(DeviceId(self)),
+               return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture,
+                    "#<File::Stat dev={0}, ino={1}, mode={2}, nlink={3}, uid={4}, gid={5}, rdev={6}, size={7}, blksize={8}, blocks={9}, atime={10}, mtime={11}, ctime={12}>",
+                    FormatDev(DeviceId(self)),
                     context.Inspect(Inode(self)),
-                    context.Inspect(Mode(self)),
+                    FormatMode(Mode(self)),
                     context.Inspect(NumberOfLinks(self)),
                     context.Inspect(UserId(self)),
                     context.Inspect(GroupId(self)),
-                    context.Inspect(DeviceId(self)),
+                    FormatDev(RDeviceId(self)),
                     context.Inspect(Size(self)),
                     context.Inspect(BlockSize(self)),
                     context.Inspect(Blocks(self)),
@@ -979,117 +1590,16 @@ namespace IronRuby.Builtins {
                 ));
             }
 
-            [RubyMethod("mode")]
-            public static int Mode(FileSystemInfo/*!*/ self) {
-                int mode = (self is FileInfo) ? 0x8000 : 0x4000;
-                mode |= 0x100; // S_IREAD;
-                if ((self.Attributes & FileAttributes.ReadOnly) == 0) {
-                    mode |= 0x80; // S_IWRITE;
-                }
-                return mode;
+            private static string FormatDev(object dev) {
+                return dev is int ? "0x" + ((int)dev).ToString("x") : dev.ToString();
             }
 
-            [RubyMethod("mtime")]
-            public static RubyTime/*!*/ ModifiedTime(FileSystemInfo/*!*/ self) {
-                return new RubyTime(self.LastWriteTime);
-            }
-
-            [RubyMethod("nlink")]
-            public static int NumberOfLinks(FileSystemInfo/*!*/ self) {
-                return 1;
-            }
-
-            [RubyMethod("owned?")]
-            public static bool IsUserOwned(FileSystemInfo/*!*/ self) {
-                return true;
-            }
-
-            [RubyMethod("pipe?")]
-            public static bool IsPipe(FileSystemInfo/*!*/ self) {
-                return false;
-            }
-
-            [RubyMethod("readable?")]
-            [RubyMethod("readable_real?")]
-            public static bool IsReadable(FileSystemInfo/*!*/ self) {
-                // TODO: Security, including identifying that we're impersonating another principal
-                // ie. System.Security.AccessControl control = info.GetAccessControl();
-                return true;
-            }
-
-            [RubyMethod("setgid?")]
-            public static bool IsSetGid(FileSystemInfo/*!*/ self) {
-                return false;
-            }
-
-            [RubyMethod("setuid?")]
-            public static bool IsSetUid(FileSystemInfo/*!*/ self) {
-                return false;
-            }
-
-            [RubyMethod("size")]
-            public static int Size(FileSystemInfo/*!*/ self) {
-                if (self is DeviceInfo) {
-                    return 0;
-                }
-
-                FileInfo info = (self as FileInfo);
-                return (info == null) ? 0 : (int)info.Length;
-            }
-
-            [RubyMethod("size?")]
-            public static object NullableSize(FileSystemInfo/*!*/ self) {
-                if (self is DeviceInfo) {
-                    return 0;
-                }
-
-                FileInfo info = (self as FileInfo);
-                if (info == null) {
-                    return null;
-                }
-                return (info.Length == 0) ? null : (object)(int)info.Length;
-            }
-
-            [RubyMethod("socket?")]
-            public static bool IsSocket(FileSystemInfo/*!*/ self) {
-                return false;
-            }
-
-            [RubyMethod("sticky?")]
-            public static object IsSticky(FileSystemInfo/*!*/ self) {
-                return null;
-            }
-
-            [RubyMethod("symlink?")]
-            public static bool IsSymLink(FileSystemInfo/*!*/ self) {
-                return false;
-            }
-
-            [RubyMethod("uid")]
-            public static int UserId(FileSystemInfo/*!*/ self) {
-                return 0;
-            }
-
-            [RubyMethod("writable?")]
-            [RubyMethod("writable_real?")]
-            public static bool IsWritable(FileSystemInfo/*!*/ self) {
-                // TODO: Security, including identifying that we're impersonating another principal
-                // ie. System.Security.AccessControl control = info.GetAccessControl();
-                return ((self.Attributes & FileAttributes.ReadOnly) == 0);
-            }
-
-            [RubyMethod("zero?")]
-            public static bool IsZeroLength(FileSystemInfo/*!*/ self) {
-                if (self is DeviceInfo) {
-                    return true;
-                }
-
-                FileInfo info = (self as FileInfo);
-                return (info == null) ? false : info.Length == 0;
+            private static string FormatMode(int mode) {
+                return "0" + Convert.ToString(mode, 8);
             }
 
             internal class DeviceInfo : FileSystemInfo {
-                
+
                 private string/*!*/ _name;
 
                 internal DeviceInfo(string/*!*/ name) {
@@ -1132,9 +1642,13 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("executable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("executable_real?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static bool IsExecutable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsExecutable(toPath, self, path);
+        }
+
+        [RubyMethod("executable_real?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static bool IsExecutableReal(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return FileTest.IsExecutableReal(toPath, self, path);
         }
 
         [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
@@ -1169,9 +1683,13 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("readable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("readable_real?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static bool IsReadable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsReadable(toPath, self, path);
+        }
+
+        [RubyMethod("readable_real?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static bool IsReadableReal(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return FileTest.IsReadableReal(toPath, self, path);
         }
 
         [RubyMethod("setgid?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
@@ -1185,7 +1703,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("size", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        public static int Size(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+        public static object Size(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.Size(toPath, self, path);
         }
 
@@ -1210,11 +1728,26 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("writable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("writable_real?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static bool IsWritable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsWritable(toPath, self, path);
         }
 
+        [RubyMethod("writable_real?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static bool IsWritableReal(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return FileTest.IsWritableReal(toPath, self, path);
+        }
+
+        [RubyMethod("world_readable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static object IsWorldReadable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return FileTest.IsWorldReadable(toPath, self, path);
+        }
+
+        [RubyMethod("world_writable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static object IsWorldWritable(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return FileTest.IsWorldWritable(toPath, self, path);
+        }
+
+        [RubyMethod("empty?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         [RubyMethod("zero?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static bool IsZeroLength(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.IsZeroLength(toPath, self, path);
