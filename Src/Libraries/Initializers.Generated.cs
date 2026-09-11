@@ -2655,8 +2655,9 @@ namespace IronRuby.Builtins {
         
         private static void LoadInteger_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "ceil", 0x51, 
-                0x00000000U, 
-                new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Ceil)
             );
             
             DefineLibraryMethod(module, "chr", 0x51, 
@@ -2682,8 +2683,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "floor", 0x51, 
-                0x00000000U, 
-                new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Floor)
             );
             
             DefineLibraryMethod(module, "gcd", 0x51, 
@@ -2746,8 +2748,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "round", 0x51, 
-                0x00000000U, 
-                new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Round)
             );
             
             DefineLibraryMethod(module, "succ", 0x51, 
@@ -2778,8 +2781,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "truncate", 0x51, 
-                0x00000000U, 
-                new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Truncate)
             );
             
             DefineLibraryMethod(module, "upto", 0x51, 
@@ -3501,8 +3505,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "ceil", 0x51, 
-                0x00000000U, 
-                new Func<System.Double, System.Object>(IronRuby.Builtins.ClrFloat.Ceil)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Double, System.Object>(IronRuby.Builtins.ClrFloat.Ceil), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Double, System.Object, System.Object>(IronRuby.Builtins.ClrFloat.Ceil)
             );
             
             DefineLibraryMethod(module, "coerce", 0x51, 
@@ -3524,8 +3529,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "floor", 0x51, 
-                0x00000000U, 
-                new Func<System.Double, System.Object>(IronRuby.Builtins.ClrFloat.Floor)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Double, System.Object>(IronRuby.Builtins.ClrFloat.Floor), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Double, System.Object, System.Object>(IronRuby.Builtins.ClrFloat.Floor)
             );
             
             DefineLibraryMethod(module, "hash", 0x51, 
@@ -3552,8 +3558,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "round", 0x51, 
-                0x00000000U, 
-                new Func<System.Double, System.Object>(IronRuby.Builtins.ClrFloat.Round)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Double, System.Object>(IronRuby.Builtins.ClrFloat.Round), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Double, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrFloat.Round)
             );
             
             DefineLibraryMethod(module, "to_f", 0x51, 
@@ -3577,8 +3584,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "truncate", 0x51, 
-                0x00000000U, 
-                new Func<System.Double, System.Object>(IronRuby.Builtins.ClrFloat.ToInt)
+                0x00000000U, 0x00000000U, 
+                new Func<System.Double, System.Object>(IronRuby.Builtins.ClrFloat.ToInt), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Double, System.Object, System.Object>(IronRuby.Builtins.ClrFloat.Truncate)
             );
             
             DefineLibraryMethod(module, "zero?", 0x51, 

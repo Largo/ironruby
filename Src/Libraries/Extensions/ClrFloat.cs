@@ -14,9 +14,13 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
 using System.Numerics;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Generation;
 
 namespace IronRuby.Builtins {
@@ -430,6 +434,15 @@ namespace IronRuby.Builtins {
             return CastToInteger(ceil);
         }
 
+        /// <summary>
+        /// Returns self rounded up to a multiple of 10**(-ndigits), or a Float with
+        /// ndigits digits after the decimal point when ndigits is positive.
+        /// </summary>
+        [RubyMethod("ceil")]
+        public static object Ceil(ConversionStorage<IntegerValue>/*!*/ integerCast, double self, object ndigits) {
+            return Scale(integerCast, self, ndigits, RoundDirection.Ceiling);
+        }
+
         #endregion
 
         #region floor
@@ -449,6 +462,15 @@ namespace IronRuby.Builtins {
             return CastToInteger(floor);
         }
 
+        /// <summary>
+        /// Returns self rounded down to a multiple of 10**(-ndigits), or a Float with
+        /// ndigits digits after the decimal point when ndigits is positive.
+        /// </summary>
+        [RubyMethod("floor")]
+        public static object Floor(ConversionStorage<IntegerValue>/*!*/ integerCast, double self, object ndigits) {
+            return Scale(integerCast, self, ndigits, RoundDirection.Flooring);
+        }
+
         #endregion
 
         #region to_i, to_int, truncate
@@ -463,6 +485,15 @@ namespace IronRuby.Builtins {
             } else {
                 return Ceil(self);
             }
+        }
+
+        /// <summary>
+        /// Returns self truncated towards zero to a multiple of 10**(-ndigits), or a Float with
+        /// ndigits digits after the decimal point when ndigits is positive.
+        /// </summary>
+        [RubyMethod("truncate")]
+        public static object Truncate(ConversionStorage<IntegerValue>/*!*/ integerCast, double self, object ndigits) {
+            return Scale(integerCast, self, ndigits, RoundDirection.Truncating);
         }
 
         #endregion
@@ -516,9 +547,141 @@ namespace IronRuby.Builtins {
         /// </example>
         [RubyMethod("round")]
         public static object Round(double self) {
-            if (self > 0) { return Floor(self + 0.5); }
-            if (self < 0) { return Ceil(self - 0.5); }
-            return 0;
+            return RoundToPrecision(self, 0, NumericRounding.Half.Up);
+        }
+
+        /// <summary>
+        /// Rounds self to an optionally given precision, honouring the <c>half:</c> option.
+        /// A positive precision yields a Float, zero or negative yields an Integer.
+        /// </summary>
+        [RubyMethod("round")]
+        public static object Round(ConversionStorage<IntegerValue>/*!*/ integerCast, double self,
+            object ndigits, [Optional]object options) {
+
+            var opts = options as IDictionary<object, object>;
+            if (opts == null && options == Missing.Value) {
+                // round(half: :up) - the only argument is the options hash
+                opts = ndigits as IDictionary<object, object>;
+                if (opts != null) {
+                    ndigits = Missing.Value;
+                }
+            }
+
+            NumericRounding.Half half = NumericRounding.GetHalfOption(integerCast.Context, opts);
+            int nd = (ndigits == Missing.Value) ? 0 : NumericRounding.GetNDigits(integerCast, ndigits);
+            return RoundToPrecision(self, nd, half);
+        }
+
+        private static object RoundToPrecision(double self, int ndigits, NumericRounding.Half half) {
+            if (self == 0.0) {
+                // preserves -0.0 for a positive precision, like MRI
+                return ndigits > 0 ? (object)self : ScriptingRuntimeHelpers.Int32ToObject(0);
+            }
+
+            if (ndigits > 0) {
+                if (Double.IsNaN(self) || Double.IsInfinity(self)) {
+                    return self;
+                }
+                if (NumericRounding.RoundOverflows(self, ndigits)) {
+                    return self;
+                }
+                if (NumericRounding.RoundUnderflows(self, ndigits)) {
+                    return 0.0;
+                }
+
+                double f = System.Math.Pow(10, ndigits);
+                if (Double.IsInfinity(f)) {
+                    return self;
+                }
+
+                double x = NumericRounding.RoundHalf(self, f, half);
+                if (Double.IsNaN(x) || Double.IsInfinity(x)) {
+                    return self;
+                }
+                return x / f;
+            }
+
+            if (ndigits == 0) {
+                return CastToInteger(NumericRounding.RoundHalf(self, 1.0, half));
+            }
+
+            // A negative precision always produces an Integer, so the exceptional values raise.
+            if (Double.IsNaN(self)) {
+                throw new FloatDomainError("NaN");
+            }
+            if (Double.IsPositiveInfinity(self)) {
+                throw new FloatDomainError("Infinity");
+            }
+            if (Double.IsNegativeInfinity(self)) {
+                throw new FloatDomainError("-Infinity");
+            }
+
+            return NumericRounding.RoundInteger(ToBigInteger(System.Math.Truncate(self)), ndigits, half);
+        }
+
+        private enum RoundDirection {
+            Flooring,
+            Ceiling,
+            Truncating
+        }
+
+        private static object Scale(ConversionStorage<IntegerValue>/*!*/ integerCast, double self, object ndigits, RoundDirection direction) {
+            int nd = NumericRounding.GetNDigits(integerCast, ndigits);
+
+            if (self == 0.0) {
+                return nd > 0 ? (object)self : ScriptingRuntimeHelpers.Int32ToObject(0);
+            }
+
+            if (nd > 0) {
+                if (Double.IsNaN(self) || Double.IsInfinity(self)) {
+                    return self;
+                }
+                if (NumericRounding.RoundOverflows(self, nd)) {
+                    return self;
+                }
+
+                double f = System.Math.Pow(10, nd);
+                if (Double.IsInfinity(f)) {
+                    return self;
+                }
+
+                double x = self * f;
+                if (Double.IsInfinity(x)) {
+                    return self;
+                }
+
+                switch (direction) {
+                    case RoundDirection.Flooring: x = System.Math.Floor(x); break;
+                    case RoundDirection.Ceiling: x = System.Math.Ceiling(x); break;
+                    default: x = System.Math.Truncate(x); break;
+                }
+                return x / f;
+            }
+
+            double integral;
+            switch (direction) {
+                case RoundDirection.Flooring: integral = System.Math.Floor(self); break;
+                case RoundDirection.Ceiling: integral = System.Math.Ceiling(self); break;
+                default: integral = System.Math.Truncate(self); break;
+            }
+
+            // raises FloatDomainError for NaN / +-Infinity:
+            object value = CastToInteger(integral);
+            if (nd == 0) {
+                return value;
+            }
+
+            BigInteger big = (value is int) ? new BigInteger((int)value) : (BigInteger)value;
+            switch (direction) {
+                case RoundDirection.Flooring: return NumericRounding.FloorInteger(big, nd);
+                case RoundDirection.Ceiling: return NumericRounding.CeilInteger(big, nd);
+                default: return NumericRounding.TruncateInteger(big, nd);
+            }
+        }
+
+        private static BigInteger ToBigInteger(double integralValue) {
+            object value = CastToInteger(integralValue);
+            return (value is int) ? new BigInteger((int)value) : (BigInteger)value;
         }
 
         #endregion
