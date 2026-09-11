@@ -227,10 +227,20 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public override string/*!*/ ToString() {
-            return 
+            return
                 IsHidden ? "<hidden>" :
                 IsUndefined ? "<undefined>" :
                 (GetType().Name + " " + _flags.ToString() + " (" + _declaringModule.Name + ")");
+        }
+
+        /// <summary>
+        /// True if this member and <paramref name="other"/> are two names for the same method body.
+        /// Method/UnboundMethod#== uses this: Ruby considers `alias` and library methods registered
+        /// under several names (`length`/`size`, `map`/`collect`, ...) to be the same method, but each
+        /// of them gets its own RubyMemberInfo instance here.
+        /// </summary>
+        public virtual bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
+            return ReferenceEquals(this, other);
         }
 
         /// <summary>

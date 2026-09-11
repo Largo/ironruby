@@ -76,6 +76,30 @@ namespace IronRuby.Runtime.Calls {
             return ArrayUtils.ToArray(MethodBases, (o) => (MemberInfo)o.ReflectionInfo);
         }
 
+        public override bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
+            if (ReferenceEquals(this, other)) {
+                return true;
+            }
+            // Library methods registered under several names (e.g. [RubyMethod("length")]
+            // [RubyMethod("size")] on one C# method) get one info each, but wrap the same
+            // CLR method(s).
+            var group = other as RubyMethodGroupBase;
+            if (group == null || group.GetType() != GetType()) {
+                return false;
+            }
+            var mine = MethodBases;
+            var theirs = group.MethodBases;
+            if (mine.Length != theirs.Length) {
+                return false;
+            }
+            for (int i = 0; i < mine.Length; i++) {
+                if (!Equals(mine[i].ReflectionInfo, theirs[i].ReflectionInfo)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
         internal abstract SelfCallConvention CallConvention { get; }
         internal abstract bool ImplicitProtocolConversions { get; }
 

@@ -2919,6 +2919,16 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object, System.Object>(IronRuby.Builtins.HashOps.GetElement)
             );
             
+            DefineLibraryMethod(module, "compare_by_identity", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.Hash, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.CompareByIdentity)
+            );
+            
+            DefineLibraryMethod(module, "compare_by_identity?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.Hash, System.Boolean>(IronRuby.Builtins.HashOps.ComparesByIdentity)
+            );
+            
             DefineLibraryMethod(module, "default", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Hash, System.Object>(IronRuby.Builtins.HashOps.GetDefaultValue), 
@@ -5721,6 +5731,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetClrMembers)
             );
             
+            DefineLibraryMethod(module, "eql?", 0x51, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod, System.Boolean>(IronRuby.Builtins.MethodOps.Equal)
+            );
+            
             DefineLibraryMethod(module, "of", 0x51, 
                 0x80000004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, System.Object[], IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.MethodOps.BindGenericParameters)
@@ -7704,6 +7719,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.SymbolOps.GetEncoding)
             );
             
+            DefineLibraryMethod(module, "eql?", 0x51, 
+                0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubySymbol, System.Boolean>(IronRuby.Builtins.SymbolOps.Eql), 
+                new Func<IronRuby.Builtins.RubySymbol, System.Object, System.Boolean>(IronRuby.Builtins.SymbolOps.Eql)
+            );
+            
             DefineLibraryMethod(module, "id2name", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString>(IronRuby.Builtins.SymbolOps.ToString)
@@ -9366,6 +9387,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "clr_members", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.UnboundMethod.GetClrMembers)
+            );
+            
+            DefineLibraryMethod(module, "eql?", 0x51, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod, System.Boolean>(IronRuby.Builtins.UnboundMethod.Equal)
             );
             
             DefineLibraryMethod(module, "of", 0x51, 

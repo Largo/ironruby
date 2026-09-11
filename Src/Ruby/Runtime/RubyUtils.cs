@@ -822,7 +822,9 @@ namespace IronRuby.Runtime {
 
         public static object SetHashElement(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ obj, object key, object value) {
             MutableString str = key as MutableString;
-            if (str != null) {
+            Hash hash = obj as Hash;
+            // an identity hash stores the string object it was given, it must not copy it
+            if (str != null && (hash == null || !hash.ComparesByIdentity)) {
                 key = str.Duplicate(context, false, str.Clone()).Freeze();
             } else {
                 key = CustomStringDictionary.NullToObj(key);

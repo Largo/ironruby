@@ -178,6 +178,19 @@ namespace IronRuby.Builtins {
             return false;
         }
 
+        // RubySymbol.Equals(object) still treats an equal MutableString as equal (1.8 interop
+        // legacy), which would make :a.eql?("a") true and let a String find a Symbol key in a
+        // Hash. Ruby's eql? is strict about the type.
+        [RubyMethod("eql?")]
+        public static bool Eql(RubySymbol/*!*/ self, [NotNull]RubySymbol/*!*/ other) {
+            return self.Equals(other);
+        }
+
+        [RubyMethod("eql?")]
+        public static bool Eql(RubySymbol/*!*/ self, object other) {
+            return false;
+        }
+
         [RubyMethod("casecmp")]
         public static int Casecmp(RubySymbol/*!*/ self, [NotNull]RubySymbol/*!*/ other) {
             return MutableStringOps.Casecmp(self.String, other.String);

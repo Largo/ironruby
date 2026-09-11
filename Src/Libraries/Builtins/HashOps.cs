@@ -192,6 +192,16 @@ namespace IronRuby.Builtins {
         public static Proc GetDefaultProc(Hash/*!*/ self) {
             return self.DefaultProc;
         }
+
+        [RubyMethod("compare_by_identity")]
+        public static Hash/*!*/ CompareByIdentity(Hash/*!*/ self) {
+            return self.CompareByIdentity();
+        }
+
+        [RubyMethod("compare_by_identity?")]
+        public static bool ComparesByIdentity(Hash/*!*/ self) {
+            return self.ComparesByIdentity;
+        }
         
         [RubyMethod("replace")]
         public static Hash/*!*/ Replace(RubyContext/*!*/ context, Hash/*!*/ self, [DefaultProtocol, NotNull]IDictionary<object,object>/*!*/ other) {

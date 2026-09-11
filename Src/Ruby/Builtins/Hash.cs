@@ -13,7 +13,10 @@
  *
  * ***************************************************************************/
 
+using System;
 using System.Collections.Generic;
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
@@ -38,6 +41,77 @@ namespace IronRuby.Builtins {
         private const uint IsFrozenFlag = 1;
         private const uint IsTaintedFlag = 2;
         private const uint IsUntrustedFlag = 4;
+
+        // Hash#compare_by_identity has to swap the comparer of an *existing* dictionary, which
+        // Dictionary<,> offers no API for; the field is patched directly and the entries rehashed.
+        private static readonly FieldInfo _DictionaryComparerField =
+            typeof(Dictionary<object, object>).GetField("_comparer", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        private bool _comparesByIdentity;
+
+        /// <summary>
+        /// True if Hash#compare_by_identity has been called on this hash.
+        /// </summary>
+        public bool ComparesByIdentity {
+            get { return _comparesByIdentity; }
+        }
+
+        /// <summary>
+        /// Switches the hash over to identity comparison and rehashes the existing entries.
+        /// </summary>
+        public Hash/*!*/ CompareByIdentity() {
+            RequireNotFrozen();
+            if (_comparesByIdentity) {
+                return this;
+            }
+            if (_DictionaryComparerField == null) {
+                throw new NotSupportedException("Hash#compare_by_identity is not available: Dictionary<,> layout changed");
+            }
+
+            var entries = new KeyValuePair<object, object>[Count];
+            ((ICollection<KeyValuePair<object, object>>)this).CopyTo(entries, 0);
+            Clear();
+            _DictionaryComparerField.SetValue(this, IdentityComparer.Instance);
+            _comparesByIdentity = true;
+            foreach (var entry in entries) {
+                this[entry.Key] = entry.Value;
+            }
+            return this;
+        }
+
+        /// <summary>
+        /// #equal? semantics without ever dispatching to Ruby. Immediate values still compare by
+        /// value, matching CRuby, where they have no separate identity.
+        /// </summary>
+        internal sealed class IdentityComparer : IEqualityComparer<object> {
+            internal static readonly IdentityComparer/*!*/ Instance = new IdentityComparer();
+
+            private IdentityComparer() {
+            }
+
+            bool IEqualityComparer<object>.Equals(object x, object y) {
+                if (ReferenceEquals(x, y)) {
+                    return true;
+                }
+                if (x is int) {
+                    return y is int && (int)x == (int)y;
+                }
+                if (x is bool) {
+                    return y is bool && (bool)x == (bool)y;
+                }
+                return false;
+            }
+
+            int IEqualityComparer<object>.GetHashCode(object obj) {
+                if (obj is int) {
+                    return (int)obj;
+                }
+                if (obj is bool) {
+                    return (bool)obj ? 1 : 0;
+                }
+                return RuntimeHelpers.GetHashCode(obj);
+            }
+        }
 
         public Proc DefaultProc { 
             get { return _defaultProc; } 
@@ -87,6 +161,7 @@ namespace IronRuby.Builtins {
             : base(hash, hash.Comparer) {
             _defaultProc = hash._defaultProc;
             _defaultValue = hash.DefaultValue;
+            _comparesByIdentity = hash._comparesByIdentity;
         }
 
         /// <summary>
@@ -102,7 +177,7 @@ namespace IronRuby.Builtins {
         /// Preserves the class of the Hash.
         /// </summary>
         protected virtual Hash/*!*/ CreateInstance() {
-            return new Hash(Comparer);
+            return new Hash(Comparer) { _comparesByIdentity = _comparesByIdentity };
         }
 
         object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
