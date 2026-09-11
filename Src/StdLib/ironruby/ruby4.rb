@@ -325,6 +325,12 @@ class << IO
       mode = nil
     end
 
+    if command.is_a?(Array)
+      # IO.popen(["cmd", "arg", ...]) -- no shell is involved in MRI, so quote every
+      # word before handing it to the shell the core popen does use.
+      command = command.map { |word| "'" + word.to_s.gsub("'", %q{'\\\\''}) + "'" }.join(' ')
+    end
+
     if options
       # brace-group so the redirect applies to the whole child, not just its last
       # command (MRI redirects the process's fd, not a single command's)
@@ -757,8 +763,48 @@ class StopIteration < StandardError; end unless defined?(StopIteration)
 class UncaughtThrowError < ArgumentError; end unless defined?(UncaughtThrowError)
 class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
 
-class File
-  NULL = "/dev/null" unless const_defined?(:NULL)
+class IO
+  # Ruby defines NULL on IO; File inherits it. Defining it on File alone left
+  # IO::NULL undefined, which several specs and helpers reference.
+  NULL = "/dev/null" unless const_defined?(:NULL, false)
+end
+
+class << Dir
+  # Dir.home / Dir.children / Dir.each_child / Dir.empty? postdate the 1.9 core.
+  def home(user = nil)
+    if user.nil?
+      dir = ENV['HOME']
+      unless dir
+        require 'etc'
+        pw = (Etc.getpwuid(Process.uid) rescue nil)
+        dir = pw && pw.dir
+      end
+      raise ArgumentError, "couldn't find HOME environment -- expanding `~'" unless dir
+      return dir.dup
+    end
+
+    raise TypeError, "no implicit conversion of #{user.class} into String" unless user.is_a?(String)
+    require 'etc'
+    pw = (Etc.getpwnam(user) rescue nil)
+    raise ArgumentError, "user #{user} doesn't exist" unless pw
+    pw.dir.dup
+  end unless respond_to?(:home)
+
+  def children(path, *args)
+    entries(path, *args) - %w[. ..]
+  end unless respond_to?(:children)
+
+  def each_child(path, *args, &block)
+    return children(path, *args).each unless block
+    children(path, *args).each(&block)
+    nil
+  end unless respond_to?(:each_child)
+
+  def empty?(path)
+    # File.stat rather than File.directory? so that a missing path is an ENOENT
+    return false unless File.stat(path).directory?
+    entries(path).size <= 2
+  end unless respond_to?(:empty?)
 end
 
 module Errno

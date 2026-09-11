@@ -1140,7 +1140,14 @@ namespace IronRuby.Runtime {
 
         #region Paths
 
+        // '\' is only a path separator on Windows. On Unix it is an ordinary character in a
+        // file name, and rewriting it silently loses files: mspec's own rm_r expands the path
+        // first, so a fixture called "special/\a" was never found, never deleted, and every
+        // later `before :all` that recreated the fixture tree then failed on a non-empty dir.
         public static MutableString CanonicalizePath(MutableString path) {
+            if (!FileSystemUsesDriveLetters) {
+                return path;
+            }
             for (int i = 0; i < path.Length; i++) {
                 if (path.GetChar(i) == '\\')
                     path.SetChar(i, '/');
@@ -1149,7 +1156,7 @@ namespace IronRuby.Runtime {
         }
 
         public static String CanonicalizePath(string path) {
-            return path.Replace('\\', '/');
+            return FileSystemUsesDriveLetters ? path.Replace('\\', '/') : path;
         }
 
         public static String CombinePaths(string basePath, string path) {
@@ -1371,7 +1378,7 @@ namespace IronRuby.Runtime {
             if (expandHome) {
                 int length = path.Length;
                 if (length > 0 && path[0] == '~') {
-                    if (length == 1 || (path[1] == '/' || path[1] == '\\')) {
+                    if (length == 1 || path[1] == '/' || (FileSystemUsesDriveLetters && path[1] == '\\')) {
                         string homeDirectory = platform.GetEnvironmentVariable("HOME");
                         if (homeDirectory == null) {
                             throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
