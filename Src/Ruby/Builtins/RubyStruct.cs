@@ -250,6 +250,9 @@ namespace IronRuby.Builtins {
 
         [Emitted]
         public static object SetValue(RubyStruct/*!*/ self, int index, object value) {
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenError();
+            }
             return self._data[index] = value;
         }
 
