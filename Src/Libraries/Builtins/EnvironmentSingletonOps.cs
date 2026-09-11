@@ -49,7 +49,7 @@ namespace IronRuby.Builtins {
                 context.DomainManager.Platform.SetEnvironmentVariable(name, value);
             }
             if (name == "TZ") {
-                TimeZone zone;
+                TimeZoneInfo zone;
                 if (RubyTime.TryParseTimeZone(value, out zone)) {
                     RubyTime._CurrentTimeZone = zone;
                 } else {

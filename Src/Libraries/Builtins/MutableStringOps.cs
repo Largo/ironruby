@@ -2642,6 +2642,49 @@ namespace IronRuby.Builtins {
             return ClrString.ToDouble(self.ConvertToString());
         }
 
+        private static readonly System.Text.RegularExpressions.Regex/*!*/ _rationalPattern =
+            new System.Text.RegularExpressions.Regex(@"\A\s*(?<sign>[+-]?)(?<int>[\d_]*)(\.(?<frac>[\d_]+))?(\s*/\s*(?<den>[\d_]+))?",
+                System.Text.RegularExpressions.RegexOptions.CultureInvariant);
+
+        /// <summary>
+        /// String#to_r: parses a leading rational literal ("3", "0.3", "1/3", "-1.5/2") and
+        /// returns (0/1) when nothing parses. Trailing garbage is ignored.
+        /// </summary>
+        [RubyMethod("to_r")]
+        public static object ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational,
+            RubyScope/*!*/ scope, MutableString/*!*/ self) {
+
+            var match = _rationalPattern.Match(self.ConvertToString());
+
+            BigInteger numerator = BigInteger.Zero;
+            BigInteger denominator = BigInteger.One;
+
+            if (match.Success) {
+                string digits = match.Groups["int"].Value.Replace("_", "");
+                string fraction = match.Groups["frac"].Success ? match.Groups["frac"].Value.Replace("_", "") : "";
+
+                if (digits.Length != 0 || fraction.Length != 0) {
+                    numerator = BigInteger.Parse((digits.Length != 0 ? digits : "0") + fraction, System.Globalization.CultureInfo.InvariantCulture);
+                    denominator = BigInteger.Pow(new BigInteger(10), fraction.Length);
+
+                    if (match.Groups["den"].Success) {
+                        string den = match.Groups["den"].Value.Replace("_", "");
+                        BigInteger d = BigInteger.Parse(den, System.Globalization.CultureInfo.InvariantCulture);
+                        if (d.IsZero) {
+                            throw new DivideByZeroException("divided by 0");
+                        }
+                        denominator *= d;
+                    }
+
+                    if (match.Groups["sign"].Value == "-") {
+                        numerator = -numerator;
+                    }
+                }
+            }
+
+            return RubyTimeOps.MakeRational(toRational, scope, ExactNum.Make(numerator, denominator));
+        }
+
         [RubyMethod("to_s")]
         [RubyMethod("to_str")]
         public static MutableString/*!*/ ToS(MutableString/*!*/ self) {

@@ -177,7 +177,8 @@ namespace IronRuby.Builtins {
             DefineGlobalClass("ThreadGroup", typeof(IronRuby.Builtins.ThreadGroup), 0x0000000F, Context.ObjectClass, LoadThreadGroup_Instance, null, LoadThreadGroup_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
             #endif
             DefineGlobalClass("Time", typeof(IronRuby.Builtins.RubyTime), 0x00000007, Context.ObjectClass, LoadTime_Instance, LoadTime_Class, null, new IronRuby.Builtins.RubyModule[] {def64}, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Create)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Create), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Create)
             );
             Context.TrueClass = DefineGlobalClass("TrueClass", typeof(IronRuby.Builtins.TrueClass), 0x0000000F, Context.ObjectClass, LoadTrueClass_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalClass("UnboundMethod", typeof(IronRuby.Builtins.UnboundMethod), 0x0000000F, Context.ObjectClass, LoadUnboundMethod_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -7459,6 +7460,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.MutableStringOps.ToInteger)
             );
             
+            DefineLibraryMethod(module, "to_r", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.ToRational)
+            );
+            
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ToS)
@@ -9040,33 +9046,39 @@ namespace IronRuby.Builtins {
         #endif
         
         private static void LoadTime_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "_dump", 0x51, 
+            DefineLibraryMethod(module, "_dump", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyTimeOps.Dump)
             );
             
             DefineLibraryMethod(module, "-", 0x51, 
-                0x00010000U, 0x00000002U, 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, System.Double, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.SubtractSeconds), 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime, System.Double>(IronRuby.Builtins.RubyTimeOps.SubtractTime), 
-                new Func<IronRuby.Builtins.RubyTime, System.DateTime, System.Double>(IronRuby.Builtins.RubyTimeOps.SubtractTime)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, System.Object>(IronRuby.Builtins.RubyTimeOps.Subtract)
             );
             
             DefineLibraryMethod(module, "+", 0x51, 
-                0x00010000U, 0x00000002U, 
-                new Func<IronRuby.Builtins.RubyTime, System.Double, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.AddSeconds), 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.AddSeconds)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.AddSeconds)
             );
             
             DefineLibraryMethod(module, "<=>", 0x51, 
-                0x00000002U, 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime, System.Int32>(IronRuby.Builtins.RubyTimeOps.CompareTo), 
-                new Func<IronRuby.Builtins.RubyTime, System.Object, System.Object>(IronRuby.Builtins.RubyTimeOps.CompareSeconds)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, System.Object>(IronRuby.Builtins.RubyTimeOps.CompareTo)
+            );
+            
+            DefineLibraryMethod(module, "==", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Object, System.Boolean>(IronRuby.Builtins.RubyTimeOps.Equal)
             );
             
             DefineLibraryMethod(module, "asctime", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyTimeOps.CTime)
+            );
+            
+            DefineLibraryMethod(module, "ceil", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Ceil)
             );
             
             DefineLibraryMethod(module, "ctime", 0x51, 
@@ -9079,15 +9091,29 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyTime, System.Int32>(IronRuby.Builtins.RubyTimeOps.Day)
             );
             
+            DefineLibraryMethod(module, "deconstruct_keys", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyTime, System.Object, IronRuby.Builtins.Hash>(IronRuby.Builtins.RubyTimeOps.DeconstructKeys)
+            );
+            
             DefineLibraryMethod(module, "dst?", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.IsDst)
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsDst)
             );
             
             DefineLibraryMethod(module, "eql?", 0x51, 
-                0x00000002U, 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.Eql), 
+                0x00000000U, 
                 new Func<IronRuby.Builtins.RubyTime, System.Object, System.Boolean>(IronRuby.Builtins.RubyTimeOps.Eql)
+            );
+            
+            DefineLibraryMethod(module, "floor", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Floor)
+            );
+            
+            DefineLibraryMethod(module, "friday?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsFriday)
             );
             
             DefineLibraryMethod(module, "getgm", 0x51, 
@@ -9097,7 +9123,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "getlocal", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.ToLocalTime)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.GetLocal)
             );
             
             DefineLibraryMethod(module, "getutc", 0x51, 
@@ -9107,12 +9133,12 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "gmt_offset", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.Offset)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.Offset)
             );
             
             DefineLibraryMethod(module, "gmt?", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsUts)
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsUtc)
             );
             
             DefineLibraryMethod(module, "gmtime", 0x51, 
@@ -9122,7 +9148,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "gmtoff", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.Offset)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.Offset)
             );
             
             DefineLibraryMethod(module, "hash", 0x51, 
@@ -9136,8 +9162,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "initialize", 0x52, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Reinitialize)
+                0x00000000U, 0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Reinitialize), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Reinitialize)
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
@@ -9147,17 +9174,17 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "inspect", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyTimeOps.ToString)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyTimeOps.Inspect)
             );
             
             DefineLibraryMethod(module, "isdst", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.IsDst)
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsDst)
             );
             
             DefineLibraryMethod(module, "localtime", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.ToLocalTime)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.SwitchToLocalTime)
             );
             
             DefineLibraryMethod(module, "mday", 0x51, 
@@ -9175,9 +9202,29 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyTime, System.Int32>(IronRuby.Builtins.RubyTimeOps.Month)
             );
             
+            DefineLibraryMethod(module, "monday?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsMonday)
+            );
+            
             DefineLibraryMethod(module, "month", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyTime, System.Int32>(IronRuby.Builtins.RubyTimeOps.Month)
+            );
+            
+            DefineLibraryMethod(module, "nsec", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Int32>(IronRuby.Builtins.RubyTimeOps.GetNanoSeconds)
+            );
+            
+            DefineLibraryMethod(module, "round", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Round)
+            );
+            
+            DefineLibraryMethod(module, "saturday?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsSaturday)
             );
             
             DefineLibraryMethod(module, "sec", 0x51, 
@@ -9190,9 +9237,24 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyTimeOps.FormatTime)
             );
             
+            DefineLibraryMethod(module, "subsec", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.GetSubsec)
+            );
+            
             DefineLibraryMethod(module, "succ", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.SuccessiveSecond)
+            );
+            
+            DefineLibraryMethod(module, "sunday?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsSunday)
+            );
+            
+            DefineLibraryMethod(module, "thursday?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsThursday)
             );
             
             DefineLibraryMethod(module, "to_a", 0x51, 
@@ -9210,9 +9272,24 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.ToSeconds)
             );
             
+            DefineLibraryMethod(module, "to_r", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.ToRational)
+            );
+            
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyTimeOps.ToString)
+            );
+            
+            DefineLibraryMethod(module, "tuesday?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsTuesday)
+            );
+            
+            DefineLibraryMethod(module, "tv_nsec", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Int32>(IronRuby.Builtins.RubyTimeOps.GetNanoSeconds)
             );
             
             DefineLibraryMethod(module, "tv_sec", 0x51, 
@@ -9237,17 +9314,22 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "utc_offset", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.Offset)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.Offset)
             );
             
             DefineLibraryMethod(module, "utc?", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsUts)
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsUtc)
             );
             
             DefineLibraryMethod(module, "wday", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyTime, System.Int32>(IronRuby.Builtins.RubyTimeOps.DayOfWeek)
+            );
+            
+            DefineLibraryMethod(module, "wednesday?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsWednesday)
             );
             
             DefineLibraryMethod(module, "yday", 0x51, 
@@ -9262,56 +9344,45 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "zone", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyTimeOps.GetZone)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.GetZone)
             );
             
         }
         
         private static void LoadTime_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "_load", 0x61, 
+            DefineLibraryMethod(module, "_load", 0x62, 
                 0x00000004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Load)
             );
             
             DefineLibraryMethod(module, "at", 0x61, 
-                0x00000002U, 0x00000000U, 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Create), 
-                new Func<IronRuby.Builtins.RubyClass, System.Double, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Create), 
-                new Func<IronRuby.Builtins.RubyClass, System.Int32, System.Int32, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Create)
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.At)
             );
             
             DefineLibraryMethod(module, "gm", 0x61, 
-                0x00000000U, 0x80000000U, 
-                new Func<System.Object, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateGmtTime), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateGmtTime)
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateGmtTime)
             );
             
             DefineLibraryMethod(module, "local", 0x61, 
-                0x00000000U, 0x80000000U, 
-                new Func<System.Object, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateLocalTime), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateLocalTime)
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateLocalTime)
             );
             
             DefineLibraryMethod(module, "mktime", 0x61, 
-                0x00000000U, 0x80000000U, 
-                new Func<System.Object, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateLocalTime), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateLocalTime)
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateLocalTime)
             );
             
             DefineLibraryMethod(module, "now", 0x61, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Now)
-            );
-            
-            DefineLibraryMethod(module, "times", 0xba0061, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyStruct>(IronRuby.Builtins.RubyTimeOps.Times)
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Now)
             );
             
             DefineLibraryMethod(module, "utc", 0x61, 
-                0x00000000U, 0x80000000U, 
-                new Func<System.Object, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, System.Int32, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateGmtTime), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateGmtTime)
+                0x80000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateGmtTime)
             );
             
         }
