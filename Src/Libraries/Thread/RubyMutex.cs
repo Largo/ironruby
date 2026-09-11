@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
@@ -32,7 +33,15 @@ namespace IronRuby.StandardLibrary.Threading {
     [RubyClass("Mutex")]
     public class RubyMutex {
         private readonly object/*!*/ _syncRoot = new object();
+        // The Ruby thread that holds the lock (the fiber group's owner) ...
         private Thread _owner;
+        // ... and the CLR thread that actually took it. Ruby reports #owned? per *fiber* even though
+        // deadlock detection is per thread, and a fiber is a CLR thread here.
+        private Thread _ownerFiber;
+
+        // Every locked mutex is registered so that a thread's locks can be released when it dies,
+        // which is what MRI does.
+        private static readonly HashSet<RubyMutex>/*!*/ _lockedMutexes = new HashSet<RubyMutex>();
 
         public RubyMutex() {
         }
@@ -53,7 +62,7 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("owned?")]
         public static bool IsOwned(RubyMutex/*!*/ self) {
             lock (self._syncRoot) {
-                return self._owner == CurrentOwner;
+                return self._ownerFiber == Thread.CurrentThread;
             }
         }
 
@@ -63,7 +72,7 @@ namespace IronRuby.StandardLibrary.Threading {
                 if (self._owner != null) {
                     return false;
                 }
-                self._owner = CurrentOwner;
+                self.Acquire();
                 return true;
             }
         }
@@ -88,7 +97,42 @@ namespace IronRuby.StandardLibrary.Threading {
                         RubyUtils.TranslateThreadInterrupt();
                     }
                 }
-                self._owner = me;
+                self.Acquire();
+            }
+        }
+
+        private void Acquire() {
+            _owner = CurrentOwner;
+            _ownerFiber = Thread.CurrentThread;
+            lock (_lockedMutexes) {
+                _lockedMutexes.Add(this);
+            }
+        }
+
+        private void Release() {
+            _owner = null;
+            _ownerFiber = null;
+            lock (_lockedMutexes) {
+                _lockedMutexes.Remove(this);
+            }
+            Monitor.PulseAll(_syncRoot);
+        }
+
+        /// <summary>
+        /// Called when a Ruby thread terminates: MRI releases every mutex the thread still holds.
+        /// </summary>
+        public static void ReleaseLocksOf(Thread/*!*/ thread) {
+            RubyMutex[] held;
+            lock (_lockedMutexes) {
+                held = new RubyMutex[_lockedMutexes.Count];
+                _lockedMutexes.CopyTo(held);
+            }
+            foreach (RubyMutex m in held) {
+                lock (m._syncRoot) {
+                    if (m._owner == thread || m._ownerFiber == thread) {
+                        m.Release();
+                    }
+                }
             }
         }
 
@@ -98,8 +142,7 @@ namespace IronRuby.StandardLibrary.Threading {
                 if (self._owner != CurrentOwner) {
                     return false;
                 }
-                self._owner = null;
-                Monitor.PulseAll(self._syncRoot);
+                self.Release();
                 return true;
             }
         }
@@ -113,8 +156,7 @@ namespace IronRuby.StandardLibrary.Threading {
                 if (self._owner != CurrentOwner) {
                     throw new ThreadError("Attempt to unlock a mutex which is locked by another thread");
                 }
-                self._owner = null;
-                Monitor.PulseAll(self._syncRoot);
+                self.Release();
             }
             return self;
         }

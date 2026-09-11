@@ -70,7 +70,7 @@ namespace IronRuby.Builtins {
             Aborted
         }
 
-        internal class RubyThreadInfo {
+        public class RubyThreadInfo {
             private static readonly Dictionary<int, RubyThreadInfo> _mapping = new Dictionary<int, RubyThreadInfo>();
             private readonly Dictionary<RubySymbol, object> _threadLocalStorage;
             private ThreadGroup _group;
@@ -273,6 +273,14 @@ namespace IronRuby.Builtins {
                 if (_isSleeping) {
                     _runSignal.Set();
                 }
+            }
+
+            /// <summary>
+            /// Like Run(), but signals even if the thread has not reached its wait yet. ConditionVariable
+            /// registers a waiter before it releases the mutex, so a #signal can arrive first.
+            /// </summary>
+            internal void Wake() {
+                _runSignal.Set();
             }
         }
 
@@ -857,6 +865,9 @@ namespace IronRuby.Builtins {
                     }
                 }
             } finally {
+                // MRI releases every mutex a thread still holds when it dies.
+                IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(Thread.CurrentThread);
+
                 // Its not a good idea to terminate a thread which has set Thread.critical=true, but its hard to predict
                 // which thread will be scheduled next, even with green threads. However, ConditionVariable.create_timer 
                 // in monitor.rb explicitly does "Thread.critical=true; other_thread.raise" before exiting, and expects
