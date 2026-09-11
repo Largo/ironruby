@@ -39,6 +39,7 @@ namespace IronRuby.Builtins {
     [RubyClass("Thread", Extends = typeof(Thread), Inherits = typeof(object), BuildConfig = "FEATURE_THREAD")]
     public static class ThreadOps {
         static bool _globalAbortOnException;
+        static bool _globalReportOnException = true;
 
         /// <summary>
         /// The ThreadState enumeration is a flag, and multiple values could be set simultaneously. Also,
@@ -157,6 +158,46 @@ namespace IronRuby.Builtins {
             internal object Result { get; set; }
             internal bool CreatedFromRuby { get; set; }
             internal bool ExitRequested { get; set; }
+            internal MutableString Name { get; set; }
+            internal bool ReportOnException { get; set; }
+
+            // Thread#[] is fiber-local in MRI (and, since every fiber is its own CLR thread here, the
+            // dictionary above already is); Thread#thread_variable_get is thread-local, so it needs
+            // storage of its own.
+            private readonly Dictionary<RubySymbol, object> _threadVariables = new Dictionary<RubySymbol, object>();
+
+            internal object GetThreadVariable(RubySymbol/*!*/ key) {
+                lock (_threadVariables) {
+                    object result;
+                    return _threadVariables.TryGetValue(key, out result) ? result : null;
+                }
+            }
+
+            internal void SetThreadVariable(RubySymbol/*!*/ key, object value) {
+                lock (_threadVariables) {
+                    if (value == null) {
+                        _threadVariables.Remove(key);
+                    } else {
+                        _threadVariables[key] = value;
+                    }
+                }
+            }
+
+            internal bool HasThreadVariable(RubySymbol/*!*/ key) {
+                lock (_threadVariables) {
+                    return _threadVariables.ContainsKey(key);
+                }
+            }
+
+            internal RubyArray/*!*/ GetThreadVariableKeys() {
+                lock (_threadVariables) {
+                    RubyArray result = new RubyArray(_threadVariables.Count);
+                    foreach (RubySymbol key in _threadVariables.Keys) {
+                        result.Add(key);
+                    }
+                    return result;
+                }
+            }
             
             internal bool Blocked {
                 get {
@@ -316,6 +357,13 @@ namespace IronRuby.Builtins {
             result.Append(context.GetClassDisplayName(self));
             result.Append(':');
             RubyUtils.AppendFormatHexObjectId(result, RubyUtils.GetObjectId(context, self));
+
+            MutableString name = RubyThreadInfo.FromThread(self).Name;
+            if (name != null) {
+                result.Append('@');
+                result.Append(name);
+            }
+
             result.Append(' ');
 
             RubyThreadStatus status = GetStatus(self);
@@ -793,15 +841,19 @@ namespace IronRuby.Builtins {
                     Utils.Log(trace.ToString(), "THREAD");
 
                     if (_globalAbortOnException || info.AbortOnException) {
-                        // MRI delivers the exception to the main thread here. That needs an
-                        // asynchronous raise, which on .NET Core would mean Thread.Abort and
-                        // throws PlatformNotSupportedException. Rethrowing instead is worse
-                        // than useless: this is a background thread, so an unhandled exception
-                        // terminates the process. Report it the way MRI reports an unhandled
-                        // thread exception and let #join re-raise it (info.Exception is set).
+                        // MRI re-raises the exception on the main thread. Never rethrow it here:
+                        // this is a background thread, and an unhandled exception on one takes the
+                        // whole process down. Park it for the main thread instead - it is delivered
+                        // at the main thread's next blocking point, and #join still re-raises it
+                        // because info.Exception is set.
                         Console.Error.WriteLine("#<Thread:0x{0:x8}> terminated with exception:",
                             info.Thread.ManagedThreadId);
                         Console.Error.WriteLine(e.Message);
+
+                        Thread mainThread = context.MainThread;
+                        if (mainThread != null && mainThread != Thread.CurrentThread) {
+                            RubyUtils.RaiseAsyncException(mainThread, e);
+                        }
                     }
                 }
             } finally {
@@ -849,6 +901,156 @@ namespace IronRuby.Builtins {
             long start = Environment.TickCount64;
             info.Sleep(milliseconds);
             return (int)Math.Round((Environment.TickCount64 - start) / 1000.0);
+        }
+
+        /// <summary>Kernel#sleep(n) exposed to the threading library (Mutex#sleep).</summary>
+        public static int SleepForLibrary(int milliseconds) {
+            return DoSleep(milliseconds);
+        }
+
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ ToS(RubyContext/*!*/ context, Thread/*!*/ self) {
+            return Inspect(context, self);
+        }
+
+        #region name, name=
+
+        [RubyMethod("name")]
+        public static MutableString GetName(Thread/*!*/ self) {
+            return RubyThreadInfo.FromThread(self).Name;
+        }
+
+        [RubyMethod("name=")]
+        public static object SetName(Thread/*!*/ self, [DefaultProtocol]MutableString name) {
+            if (name != null && name.IndexOf((byte)0) >= 0) {
+                throw RubyExceptions.CreateArgumentError("string contains null byte");
+            }
+            RubyThreadInfo.FromThread(self).Name = name;
+            if (name != null) {
+                try {
+                    self.Name = name.ToString();
+                } catch (InvalidOperationException) {
+                    // the CLR only lets a thread be named once
+                }
+            }
+            return name;
+        }
+
+        #endregion
+
+        #region thread variables
+
+        [RubyMethod("thread_variable_get")]
+        public static object GetThreadVariable(RubyContext/*!*/ context, Thread/*!*/ self, object key) {
+            return RubyThreadInfo.FromThread(self).GetThreadVariable(ToVariableKey(context, key));
+        }
+
+        [RubyMethod("thread_variable_set")]
+        public static object SetThreadVariable(RubyContext/*!*/ context, Thread/*!*/ self, object key, object value) {
+            RubyThreadInfo.FromThread(self).SetThreadVariable(ToVariableKey(context, key), value);
+            return value;
+        }
+
+        [RubyMethod("thread_variable?")]
+        public static bool HasThreadVariable(RubyContext/*!*/ context, Thread/*!*/ self, object key) {
+            return RubyThreadInfo.FromThread(self).HasThreadVariable(ToVariableKey(context, key));
+        }
+
+        [RubyMethod("thread_variables")]
+        public static RubyArray/*!*/ GetThreadVariables(Thread/*!*/ self) {
+            return RubyThreadInfo.FromThread(self).GetThreadVariableKeys();
+        }
+
+        private static RubySymbol/*!*/ ToVariableKey(RubyContext/*!*/ context, object key) {
+            RubySymbol symbol = key as RubySymbol;
+            if (symbol != null) {
+                return symbol;
+            }
+            MutableString str = key as MutableString;
+            if (str != null) {
+                return context.CreateSymbol(str);
+            }
+            throw MakeKeyTypeException(context, key);
+        }
+
+        #endregion
+
+        #region fetch
+
+        [RubyMethod("fetch")]
+        public static object Fetch(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key) {
+            return FetchInternal(context, block, self, key, true, null);
+        }
+
+        [RubyMethod("fetch")]
+        public static object Fetch(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key, object defaultValue) {
+            return FetchInternal(context, block, self, key, false, defaultValue);
+        }
+
+        private static object FetchInternal(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key,
+            bool noDefault, object defaultValue) {
+
+            RubySymbol symbol = ToVariableKey(context, key);
+            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
+            if (info.HasKey(symbol)) {
+                return info[symbol];
+            }
+
+            if (block != null) {
+                object result;
+                block.Yield(key, out result);
+                return result;
+            }
+
+            if (!noDefault) {
+                return defaultValue;
+            }
+
+            throw RubyExceptions.CreateIndexError("key not found: {0}", context.Inspect(key).ToString());
+        }
+
+        #endregion
+
+        #region report_on_exception
+
+        [RubyMethod("report_on_exception")]
+        public static object ReportOnException(Thread/*!*/ self) {
+            return RubyThreadInfo.FromThread(self).ReportOnException;
+        }
+
+        [RubyMethod("report_on_exception=")]
+        public static object ReportOnException(Thread/*!*/ self, object value) {
+            RubyThreadInfo.FromThread(self).ReportOnException = RubyOps.IsTrue(value);
+            return value;
+        }
+
+        [RubyMethod("report_on_exception", RubyMethodAttributes.PublicSingleton)]
+        public static object GlobalReportOnException(object self) {
+            return _globalReportOnException;
+        }
+
+        [RubyMethod("report_on_exception=", RubyMethodAttributes.PublicSingleton)]
+        public static object GlobalReportOnException(object self, object value) {
+            _globalReportOnException = RubyOps.IsTrue(value);
+            return value;
+        }
+
+        #endregion
+
+        [RubyMethod("exit", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("kill", RubyMethodAttributes.PublicSingleton)]
+        public static Thread/*!*/ KillThread(object self, [NotNull]Thread/*!*/ thread) {
+            return Kill(thread);
+        }
+
+        /// <summary>
+        /// Called by the Fiber implementation: a fiber runs on its own CLR thread but has to count as the
+        /// thread that owns its fiber group wherever Ruby ownership semantics apply (Mutex, mostly).
+        /// </summary>
+        [RubyMethod("__set_fiber_owner__", RubyMethodAttributes.PublicSingleton)]
+        public static object SetFiberOwner(object self, [NotNull]Thread/*!*/ owner) {
+            RubyUtils.SetFiberOwnerThread(owner);
+            return owner;
         }
 
         [RubyMethod("stop?", RubyMethodAttributes.PublicInstance)]

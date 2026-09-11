@@ -64,6 +64,16 @@ namespace IronRuby.Builtins {
             : base(info, context) { }
     }
 
+    [RubyException("ClosedQueueError"), Serializable]
+    public class ClosedQueueError : SystemException {
+        public ClosedQueueError() : this(null, null) { }
+        public ClosedQueueError(string message): this(message, null) { }
+        public ClosedQueueError(string message, Exception inner) : base(message ?? "ClosedQueueError", inner) { }
+
+        protected ClosedQueueError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
+            : base(info, context) { }
+    }
+
     [RubyException("SystemExit", Extends = typeof(SystemExit))]
     public class SystemExitOps : Exception {
         [RubyMethod("status")]

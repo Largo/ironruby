@@ -848,6 +848,7 @@ unless defined?(Fiber)
     # ---- internal accessors (used across fibers of the same group) --------
 
     def __root_fiber__; @root_fiber; end
+    def __thread__; @thread; end
     def __storage_raw__; @storage; end
     def __resuming__; @resuming; end
     def __set_resuming__(f); @resuming = f; end
@@ -1057,8 +1058,11 @@ unless defined?(Fiber)
     def __start__
       return self if @thread
       fiber = self
+      owner = @root_fiber.__thread__
       @thread = Thread.new do
         Thread.current[:__ir_fiber_current__] = fiber
+        # Ruby ownership (Mutex, deadlock detection) is per thread, not per fiber
+        Thread.__set_fiber_owner__(owner) if owner
         fiber.__run__
       end
       self

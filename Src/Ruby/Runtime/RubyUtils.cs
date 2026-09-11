@@ -1107,6 +1107,24 @@ namespace IronRuby.Runtime {
             RaiseAsyncException(thread, new ThreadExitSignal());
         }
 
+        // IronRuby runs every Fiber on its own CLR thread, but Ruby semantics say that all fibers of a
+        // thread share that thread's identity for Mutex ownership and for deadlock detection. A fiber
+        // thread records the thread that owns its fiber group here.
+        [ThreadStatic]
+        private static Thread _fiberOwnerThread;
+
+        /// <summary>
+        /// The thread Ruby considers "current" for ownership purposes: the fiber group's owner if we are
+        /// running inside a fiber, otherwise the CLR thread itself.
+        /// </summary>
+        public static Thread/*!*/ CurrentRubyThread {
+            get { return _fiberOwnerThread ?? Thread.CurrentThread; }
+        }
+
+        public static void SetFiberOwnerThread(Thread thread) {
+            _fiberOwnerThread = thread;
+        }
+
         /// <summary>
         /// Removes and returns the asynchronous exception parked for the given thread, if any.
         /// </summary>
