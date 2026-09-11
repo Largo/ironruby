@@ -531,7 +531,7 @@ namespace IronRuby.Builtins {
 
         private static readonly Regex/*!*/ _isoPattern = new Regex(
             @"^(?<y>\d{4,})(-(?<mon>\d{2})(-(?<d>\d{2})([T ](?<h>\d{2}):(?<min>\d{2}):(?<s>\d{2})(\.(?<frac>\d+))?)?)?)?" +
-            @"( ?(?<off>Z|[+-]\d{2}(:?\d{2}(:?\d{2})?)?))?$", RegexOptions.CultureInvariant);
+            @"( ?(?<off>Z|[+-]\d{2}(:?\d{2}(:?\d{2})?)?))?\z", RegexOptions.CultureInvariant);
 
         /// <summary>
         /// Time.new with a single String argument. Every message the specs check for is
@@ -1051,7 +1051,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("getlocal")]
         public static RubyTime/*!*/ GetLocal(RubyContext/*!*/ context, RubyTime/*!*/ self, [Optional]object zone) {
             if (zone == Missing.Value || zone == null) {
-                return self.WithZone(RubyTimeZoneKind.Local, ExactNum.Zero, null);
+                var local = self.WithZone(RubyTimeZoneKind.Local, ExactNum.Zero, null);
+                // Already local: keep the zone it was made in rather than re-resolving against TZ.
+                local.InheritLocalZone(self);
+                return local;
             }
 
             ExactNum offset;
@@ -1252,6 +1255,7 @@ namespace IronRuby.Builtins {
             var time = RubyTime.FromExactSeconds(result, self.ZoneKind,
                 self.ZoneKind == RubyTimeZoneKind.FixedOffset ? self.UtcOffsetExact : ExactNum.Zero);
             time.ZoneObject = self.ZoneObject;
+            time.InheritLocalZone(self);
             return time;
         }
 

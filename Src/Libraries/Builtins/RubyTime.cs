@@ -271,6 +271,18 @@ namespace IronRuby.Builtins {
             _localDst = other._localDst;
         }
 
+        /// <summary>
+        /// Keeps the zone another local Time already resolved. Time#round and friends return
+        /// a Time in the receiver's zone, not in whatever TZ happens to be set now.
+        /// </summary>
+        internal void InheritLocalZone(RubyTime/*!*/ other) {
+            if (_zoneKind == RubyTimeZoneKind.Local && other._zoneKind == RubyTimeZoneKind.Local) {
+                _localOffset = other._localOffset;
+                _localZoneName = other._localZoneName;
+                _localDst = other._localDst;
+            }
+        }
+
         internal RubyTime/*!*/ WithZone(RubyTimeZoneKind kind, ExactNum fixedOffset, object zoneObject) {
             return new RubyTime(_seconds, _subsec, kind, fixedOffset) { _zoneObject = zoneObject };
         }

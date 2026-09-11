@@ -35,12 +35,22 @@ namespace IronRuby.Builtins {
         };
 
         private struct Modifiers {
-            public bool NoPadding;
-            public char Pad;        // '\0' when the directive's default applies
+            public bool SawMinus;   // '-' appeared anywhere; %z reads it as RFC 3339's unknown offset
+            public char Pad;        // the last of '-' / '_' / '0'; '\0' if none was given
             public bool Upcase;
             public bool Swapcase;
             public int Colons;
             public int Width;
+
+            // '-' is sticky for text and numbers: once seen, no padding at all.
+            public bool NoPadding {
+                get { return SawMinus; }
+            }
+
+            /// <summary>The pad character to use, given the directive's own default.</summary>
+            public char PadChar(char defaultPad) {
+                return (Pad == '_') ? ' ' : (Pad == '0') ? '0' : defaultPad;
+            }
         }
 
         private const int MaxRecursionDepth = 8;
@@ -71,19 +81,11 @@ namespace IronRuby.Builtins {
                 bool reading = true;
                 while (i < format.Length && reading) {
                     switch (format[i]) {
-                        case '-': modifiers.NoPadding = true; i++; break;
-                        case '_': modifiers.Pad = ' '; i++; break;
+                        case '-': modifiers.SawMinus = true; modifiers.Pad = '-'; i++; break;
+                        case '_': modifiers.Pad = '_'; i++; break;
                         case '0': modifiers.Pad = '0'; i++; break;
                         case '^': modifiers.Upcase = true; i++; break;
                         case '#': modifiers.Swapcase = true; i++; break;
-                        case ':':
-                            if (modifiers.Colons >= 3) {
-                                reading = false;
-                            } else {
-                                modifiers.Colons++;
-                                i++;
-                            }
-                            break;
                         default:
                             reading = false;
                             break;
@@ -125,12 +127,16 @@ namespace IronRuby.Builtins {
         }
 
         private static string FormatDirective(RubyContext/*!*/ context, RubyTime/*!*/ time, char directive, Modifiers modifiers, int width, int depth) {
+            if (modifiers.Colons > 0 && directive != 'z') {
+                return null;
+            }
+
             RubyTime.Fields t = time.GetFields();
 
             switch (directive) {
-                case '%': return "%";
-                case 'n': return "\n";
-                case 't': return "\t";
+                case '%': return Text("%", modifiers, width);
+                case 'n': return Text("\n", modifiers, width);
+                case 't': return Text("\t", modifiers, width);
 
                 case 'a': return Text(DayNamesAbbreviated[t.DayOfWeek], modifiers, width);
                 case 'A': return Text(DayNames[t.DayOfWeek], modifiers, width);
@@ -185,7 +191,6 @@ namespace IronRuby.Builtins {
                 case 'T':
                 case 'X': return Compound(context, time, "%H:%M:%S", modifiers, depth);
                 case 'v': return Compound(context, time, "%e-%^b-%Y", modifiers, depth);
-                case '+': return Compound(context, time, "%a %b %e %H:%M:%S %Z %Y", modifiers, depth);
 
                 default: return null;
             }
@@ -195,11 +200,12 @@ namespace IronRuby.Builtins {
             MutableString buffer = MutableString.CreateMutable(RubyEncoding.Binary);
             Format(context, buffer, time, format, depth + 1);
 
-            Modifiers caseOnly = new Modifiers();
-            caseOnly.Width = -1;
-            caseOnly.Upcase = modifiers.Upcase;
-            caseOnly.Swapcase = modifiers.Swapcase;
-            return Text(buffer.ToString(), caseOnly, -1);
+            // The compound directives take the case and padding flags but ignore '-'.
+            Modifiers inherited = new Modifiers();
+            inherited.Width = modifiers.Width;
+            inherited.Upcase = modifiers.Upcase;
+            inherited.Pad = (modifiers.Pad == '_' || modifiers.Pad == '0') ? modifiers.Pad : '\0';
+            return Text(buffer.ToString(), inherited, modifiers.Width);
         }
 
         /// <summary>
@@ -210,7 +216,7 @@ namespace IronRuby.Builtins {
             System.Numerics.BigInteger rounded = time.UtcOffsetExact.Round();
             long total = (long)rounded;
 
-            bool negative = total < 0 || (modifiers.NoPadding && time.IsUtc);
+            bool negative = total < 0 || (modifiers.SawMinus && time.IsUtc);
             long abs = Math.Abs(total);
             long h = abs / 3600;
             long m = (abs / 60) % 60;
@@ -222,7 +228,7 @@ namespace IronRuby.Builtins {
                 tail += separator + sec.ToString("D2", CultureInfo.InvariantCulture);
             }
 
-            char pad = (modifiers.Pad == '\0') ? '0' : modifiers.Pad;
+            char pad = modifiers.PadChar('0');
             string sign = negative ? "-" : "+";
             string hours = h.ToString(CultureInfo.InvariantCulture);
 
@@ -230,7 +236,7 @@ namespace IronRuby.Builtins {
                 int target = Math.Max(2, width - 1 - tail.Length);
                 return sign + hours.PadLeft(target, '0') + tail;
             }
-            return (sign + hours + tail).PadLeft(Math.Max(width, 0), ' ');
+            return (sign + hours + tail).PadLeft(Math.Max(width, 3 + tail.Length), ' ');
         }
 
         /// <summary>ISO-8601 week-based year and week number, for %G/%g/%V.</summary>
@@ -276,37 +282,36 @@ namespace IronRuby.Builtins {
             if (modifiers.Upcase) {
                 value = value.ToUpperInvariant();
             } else if (modifiers.Swapcase) {
-                value = Swapcase(value);
+                value = ChangeCase(value);
             }
             if (modifiers.NoPadding) {
                 return value;
             }
-            char pad = (modifiers.Pad == '\0') ? ' ' : modifiers.Pad;
+            char pad = modifiers.PadChar(' ');
             if (width > value.Length) {
                 value = value.PadLeft(width, pad);
             }
             return value;
         }
 
-        private static string/*!*/ Swapcase(string/*!*/ value) {
-            StringBuilder builder = new StringBuilder(value.Length);
+        /// <summary>
+        /// The '#' flag. MRI upcases unless the text is already entirely upper case,
+        /// in which case it downcases; it is not a per-character swap.
+        /// </summary>
+        private static string/*!*/ ChangeCase(string/*!*/ value) {
             foreach (char c in value) {
-                if (Char.IsUpper(c)) {
-                    builder.Append(Char.ToLowerInvariant(c));
-                } else if (Char.IsLower(c)) {
-                    builder.Append(Char.ToUpperInvariant(c));
-                } else {
-                    builder.Append(c);
+                if (Char.IsLower(c)) {
+                    return value.ToUpperInvariant();
                 }
             }
-            return builder.ToString();
+            return value.ToLowerInvariant();
         }
 
         private static string/*!*/ Number(long value, Modifiers modifiers, int width, int defaultWidth, char defaultPad) {
             string digits = Math.Abs(value).ToString(CultureInfo.InvariantCulture);
             string sign = (value < 0) ? "-" : "";
 
-            char pad = (modifiers.Pad == '\0') ? defaultPad : modifiers.Pad;
+            char pad = modifiers.PadChar(defaultPad);
 
             int target = (width >= 0) ? width : defaultWidth;
             if (modifiers.NoPadding) {
