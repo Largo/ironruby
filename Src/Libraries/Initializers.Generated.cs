@@ -843,7 +843,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "==", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.Comparable.Equal)
+                new Func<IronRuby.Runtime.ComparisonStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.Comparable.Equal)
             );
             
             DefineLibraryMethod(module, ">", 0x51, 

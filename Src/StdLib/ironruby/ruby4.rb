@@ -110,14 +110,14 @@ class Hash
 
   def transform_values(&block)
     return to_enum(:transform_values) unless block
-    result = {}
+    result = __result_hash__
     each { |k, v| result[k] = block.call(v) }
     result
   end unless method_defined?(:transform_values)
 
   def transform_values!(&block)
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
     return to_enum(:transform_values!) unless block
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
     keys.each { |k| self[k] = block.call(self[k]) }
     self
   end unless method_defined?(:transform_values!)
@@ -127,6 +127,7 @@ class Hash
   def transform_keys(*args, &block)
     mapping = __key_mapping__(args)
     return to_enum(:transform_keys) if mapping.nil? && block.nil?
+    # CRuby drops the compare_by_identity flag here (but keeps it in #transform_values)
     result = {}
     each do |k, v|
       nk = if mapping && mapping.key?(k)
@@ -142,9 +143,9 @@ class Hash
   end unless method_defined?(:transform_keys)
 
   def transform_keys!(*args, &block)
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
     mapping = __key_mapping__(args)
     return to_enum(:transform_keys!) if mapping.nil? && block.nil?
+    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
     # CRuby semantics: walk a snapshot of the pairs, deleting the old key only
     # if it has not already been produced as a new key (so `break` leaves the
     # already-processed prefix rewritten and the rest untouched).
@@ -173,7 +174,7 @@ class Hash
     return mapping if mapping.is_a?(Hash)
     mapping = mapping.to_hash if mapping.respond_to?(:to_hash)
     return mapping if mapping.is_a?(Hash)
-    raise TypeError, "no implicit conversion of #{args[0].class} into Hash"
+    raise TypeError, "no implicit conversion of #{args[0].nil? ? 'nil' : args[0].class} into Hash"
   end
 
   def slice(*keys)
@@ -1297,10 +1298,16 @@ class Hash
 
   def to_h(&block)
     unless block
-      # CRuby returns self for a plain Hash, a new plain Hash for a subclass.
+      # CRuby returns self for a plain Hash, and for a subclass a plain Hash that
+      # keeps the default value / default proc / compare_by_identity flag.
       return self if instance_of?(Hash)
-      result = {}
+      result = __result_hash__
       each { |k, v| result[k] = v }
+      if default_proc
+        result.default_proc = default_proc
+      else
+        result.default = default
+      end
       return result
     end
     result = {}
@@ -1425,9 +1432,14 @@ module Comparable
 
     stack.push(pair)
     begin
-      (self <=> other) == 0
-    rescue StandardError
-      false
+      # Ruby 2.3 stopped rescuing StandardError here: whatever <=> raises goes
+      # through, and a result that is not a number raises ArgumentError.
+      result = (self <=> other)
+      return false if result.nil?
+      unless result.is_a?(Numeric)
+        raise ArgumentError, "comparison of #{self.class} with #{other.class} failed"
+      end
+      result == 0
     ensure
       stack.pop
     end
@@ -1482,16 +1494,24 @@ end
 class Hash
   def inspect
     return "{}" if empty?
-    body = map { |k, v|
-      if k.is_a?(Symbol)
-        name = k.to_s
-        key = name =~ /\A[A-Za-z_][A-Za-z0-9_]*[?!=]?\z/ ? name : name.inspect
-        "#{key}: #{v.inspect}"
-      else
-        "#{k.inspect} => #{v.inspect}"
-      end
-    }
-    "{" + body.join(", ") + "}"
+    stack = (Thread.current[:__hash_inspect__] ||= [])
+    return "{...}" if stack.any? { |seen| seen.equal?(self) }
+    stack.push(self)
+    begin
+      body = map { |k, v|
+        if k.is_a?(Symbol)
+          name = k.to_s
+          # `a=` is not a valid label, so it has to be quoted
+          key = name =~ /\A[A-Za-z_][A-Za-z0-9_]*[?!]?\z/ ? name : name.inspect
+          "#{key}: #{v.inspect}"
+        else
+          "#{k.inspect} => #{v.inspect}"
+        end
+      }
+      "{" + body.join(", ") + "}"
+    ensure
+      stack.pop
+    end
   end
   alias_method :to_s, :inspect
 end
@@ -1756,7 +1776,7 @@ class Hash
       converted = other.to_hash
       return converted if converted.is_a?(Hash)
     end
-    raise TypeError, "no implicit conversion of #{other.class} into Hash"
+    raise TypeError, "no implicit conversion of #{other.nil? ? 'nil' : other.class} into Hash"
   end
 
   # true if every pair of `sub` is present in `sup` (values compared with ==)
@@ -1805,6 +1825,7 @@ class Hash
 
   def default_proc=(proc)
     raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    self.DefaultValue = nil
     if proc.nil?
       self.DefaultProc = nil
       return nil
@@ -1883,6 +1904,18 @@ class Hash
     return nil if empty?
     key = keys.first
     [key, delete(key)]
+  end
+
+  # #assoc / #rassoc compare with ==, and stop at the first match (which matters
+  # for an identity hash holding several equal-but-distinct keys).
+  def assoc(key)
+    each { |k, v| return [k, v] if k == key }
+    nil
+  end
+
+  def rassoc(value)
+    each { |k, v| return [k, v] if v == value }
+    nil
   end
 
   # #slice must not go through an overridden #[].
@@ -1966,6 +1999,19 @@ end
 # lowered onto a trailing Hash in this implementation, so the flag is only ever
 # informational; it is stored as a hidden instance variable.
 class << Hash
+  # the core's try_convert reports a different error and does not accept a nil
+  # result from #to_hash
+  def try_convert(object)
+    return object if object.is_a?(Hash)
+    return nil unless object.respond_to?(:to_hash)
+    converted = object.to_hash
+    return nil if converted.nil?
+    unless converted.is_a?(Hash)
+      raise TypeError, "can't convert #{object.class} into Hash (#{object.class}#to_hash gives #{converted.class})"
+    end
+    converted
+  end
+
   def ruby2_keywords_hash?(hash)
     unless hash.is_a?(Hash)
       raise TypeError, "wrong argument type #{hash.class} (expected Hash)"
@@ -2119,10 +2165,13 @@ class Struct
     __struct_each__(&block)
   end
 
-  alias_method :__struct_each_pair__, :each_pair
+  # each_pair yields one [name, value] array, so that a single-parameter block
+  # receives the pair rather than just the name
   def each_pair(&block)
     return to_enum(:each_pair) unless block
-    __struct_each_pair__(&block)
+    names = self.class.members
+    names.each_with_index { |name, i| block.call([name, self[i]]) }
+    self
   end
 
   alias_method :deconstruct, :to_a
@@ -2137,11 +2186,12 @@ class << Struct
     keyword_init = nil
     if args.last.is_a?(Hash)
       options = args.pop
-      unknown = options.keys - [:keyword_init]
-      unless unknown.empty?
-        raise ArgumentError, "unknown keyword: #{unknown.first.inspect}"
+      unless (options.keys - [:keyword_init]).empty?
+        # CRuby would go on to use the Hash as a member name
+        raise TypeError, "no implicit conversion of Hash into Symbol"
       end
-      keyword_init = options[:keyword_init]
+      value = options[:keyword_init]
+      keyword_init = value.nil? ? value : !!value
     end
 
     names = args.reject { |a| a.is_a?(String) && a =~ /\A[A-Z]/ }
@@ -2154,12 +2204,10 @@ class << Struct
 
     klass = args.empty? ? __struct_new__(nil) : __struct_new__(*args)
     klass.instance_variable_set(:@__keyword_init__, keyword_init)
+    # only classes created by Struct.new answer #keyword_init?, not every Struct subclass
+    klass.define_singleton_method(:keyword_init?) { @__keyword_init__ }
     klass.module_eval(&block) if block
     klass
-  end
-
-  def keyword_init?
-    instance_variable_defined?(:@__keyword_init__) ? instance_variable_get(:@__keyword_init__) : nil
   end
 end
 
@@ -2167,6 +2215,8 @@ class Struct
   alias_method :__struct_initialize__, :initialize
 
   def initialize(*args)
+    # self.class.members, not members: a struct may have a member called "members"
+    names = self.class.members
     keyword_init = self.class.respond_to?(:keyword_init?) ? self.class.keyword_init? : nil
     args.pop if args.size > 0 && args.last.is_a?(Hash) && args.last.empty? && !keyword_init
 
@@ -2175,16 +2225,15 @@ class Struct
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)"
       end
       given = args[0] || {}
-      names = members
       unknown = given.keys - names
       unless unknown.empty?
-        raise ArgumentError, "unknown keywords: #{unknown.map(&:inspect).join(', ')}"
+        raise ArgumentError, "unknown keywords: #{unknown.join(', ')}"
       end
       __struct_initialize__(*names.map { |name| given[name] })
     else
       # pad with nil so that a partial re-initialize clears the remaining members
       values = args.dup
-      values.concat([nil] * (members.size - values.size)) if values.size < members.size
+      values.concat([nil] * (names.size - values.size)) if values.size < names.size
       __struct_initialize__(*values)
     end
   end

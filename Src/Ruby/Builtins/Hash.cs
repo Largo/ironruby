@@ -60,19 +60,28 @@ namespace IronRuby.Builtins {
         /// Switches the hash over to identity comparison and rehashes the existing entries.
         /// </summary>
         public Hash/*!*/ CompareByIdentity() {
+            return SetComparesByIdentity(true, null);
+        }
+
+        /// <summary>
+        /// Turns identity comparison on or off. <paramref name="defaultComparer"/> is only needed when
+        /// turning it off (Hash#replace with a non-identity argument is the only caller that does).
+        /// </summary>
+        public Hash/*!*/ SetComparesByIdentity(bool value, IEqualityComparer<object> defaultComparer) {
             RequireNotFrozen();
-            if (_comparesByIdentity) {
+            if (_comparesByIdentity == value) {
                 return this;
             }
-            if (_DictionaryComparerField == null) {
+            IEqualityComparer<object> comparer = value ? IdentityComparer.Instance : defaultComparer;
+            if (comparer == null || _DictionaryComparerField == null) {
                 throw new NotSupportedException("Hash#compare_by_identity is not available: Dictionary<,> layout changed");
             }
 
             var entries = new KeyValuePair<object, object>[Count];
             ((ICollection<KeyValuePair<object, object>>)this).CopyTo(entries, 0);
             Clear();
-            _DictionaryComparerField.SetValue(this, IdentityComparer.Instance);
-            _comparesByIdentity = true;
+            _DictionaryComparerField.SetValue(this, comparer);
+            _comparesByIdentity = value;
             foreach (var entry in entries) {
                 this[entry.Key] = entry.Value;
             }
