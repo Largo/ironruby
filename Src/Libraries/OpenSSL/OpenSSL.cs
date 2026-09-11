@@ -35,14 +35,17 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         // Config,HMACError,PKCS12,Random,OPENSSL_VERSION,PKCS7,BN,ConfigError,PKey,Engine,BNError,Netscape,OCSP
         // OpenSSLError,CipherError,SSL,VERSION,X509,ASN1,OPENSSL_VERSION_NUMBER,Cipher
 
+        // The algorithms below come from System.Security.Cryptography, not from
+        // libcrypto, but ruby/spec (and real code) gates features on these two
+        // constants, so they report the feature level actually implemented.
         [RubyConstant]
-        public const string OPENSSL_VERSION = "OpenSSL 0.9.8d 28 Sep 2006";
+        public const string OPENSSL_VERSION = "OpenSSL 3.0.0 (IronRuby, System.Security.Cryptography)";
 
         [RubyConstant]
-        public const double OPENSSL_VERSION_NUMBER = 9470031;
+        public const int OPENSSL_VERSION_NUMBER = 0x30000000;
 
         [RubyConstant]
-        public const string VERSION = "1.0.0";
+        public const string VERSION = "3.2.0";
 
         /// <summary>
         /// OpenSSL::Digest wraps one of the message digests OpenSSL's EVP layer exposes.
@@ -124,18 +127,20 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             }
 
             [RubyConstructor]
-            public static Digest/*!*/ CreateDigest(RubyContext/*!*/ context, RubyClass/*!*/ self, object algorithm, [Optional]object data) {
+            public static Digest/*!*/ CreateDigest(RubyContext/*!*/ context, RubyClass/*!*/ self, object algorithm,
+                [DefaultProtocol, Optional]MutableString data) {
                 return Initialize(context, new Digest(), algorithm, data);
             }
 
             // Reinitialization. Not called when a factory/non-default ctor is called.
             [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-            public static Digest/*!*/ Initialize(RubyContext/*!*/ context, Digest/*!*/ self, object algorithm, [Optional]object data) {
+            public static Digest/*!*/ Initialize(RubyContext/*!*/ context, Digest/*!*/ self, object algorithm,
+                [DefaultProtocol, Optional]MutableString data) {
                 self._name = ResolveName(context, algorithm);
                 self._hash = Crypto.IncrementalHash.CreateHash(ToHashAlgorithmName(self._name));
 
-                if (data != null && data != System.Reflection.Missing.Value) {
-                    Update(context, self, data);
+                if (data != null) {
+                    Update(self, data);
                 }
                 return self;
             }
@@ -149,12 +154,8 @@ namespace IronRuby.StandardLibrary.OpenSsl {
 
             [RubyMethod("update")]
             [RubyMethod("<<")]
-            public static Digest/*!*/ Update(RubyContext/*!*/ context, Digest/*!*/ self, object data) {
-                var str = data as MutableString;
-                if (str == null) {
-                    throw RubyExceptions.CreateTypeConversionError(context.GetClassDisplayName(data), "String");
-                }
-                self._hash.AppendData(str.ConvertToBytes());
+            public static Digest/*!*/ Update(Digest/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
+                self._hash.AppendData(data.ConvertToBytes());
                 return self;
             }
 
@@ -190,7 +191,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             [RubyMethod("digest")]
             public static MutableString/*!*/ GetDigest(RubyContext/*!*/ context, Digest/*!*/ self, [NotNull]MutableString/*!*/ data) {
                 Reset(self);
-                Update(context, self, data);
+                Update(self, data);
                 var result = MutableString.CreateBinary(Finish(self));
                 Reset(self);
                 return result;

@@ -9931,7 +9931,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             #endif
             #if FEATURE_CRYPTOGRAPHY
             IronRuby.Builtins.RubyClass def3 = DefineClass("OpenSSL::Digest", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest), 0x00000008, classRef0, LoadOpenSSL__Digest_Instance, LoadOpenSSL__Digest_Class, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest.CreateDigest)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest.CreateDigest)
             );
             #endif
             #if FEATURE_CRYPTOGRAPHY
@@ -10057,8 +10057,8 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         #if FEATURE_CRYPTOGRAPHY
         private static void LoadOpenSSL__Digest_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "<<", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest, System.Object, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest.Update)
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest.Update)
             );
             
             DefineLibraryMethod(module, "==", 0x11, 
@@ -10100,8 +10100,8 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             );
             
             DefineLibraryMethod(module, "initialize", 0x12, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest, System.Object, System.Object, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest.Initialize)
+                0x00040000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest, System.Object, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest.Initialize)
             );
             
             DefineLibraryMethod(module, "name", 0x11, 
@@ -10115,8 +10115,8 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             );
             
             DefineLibraryMethod(module, "update", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest, System.Object, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest.Update)
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.Digest.Update)
             );
             
         }

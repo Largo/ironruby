@@ -144,10 +144,34 @@ namespace IronRuby.Builtins {
             return RubyFileOps.RubyStatOps.IsSticky(RubyFileOps.RubyStatOps.Create(self.Context, Protocols.CastToPath(toPath, path)));
         }
 
+        /// <summary>
+        /// File.symlink? / FileTest.symlink?.  Unlike the other predicates this
+        /// must answer false - not raise ENOENT - for a path that does not
+        /// exist, and it must not follow the link (a dangling symlink is still
+        /// a symlink).  RubyStatOps.Create does neither, so this goes straight
+        /// to FileSystemInfo.LinkTarget.
+        /// </summary>
         [RubyMethod("symlink?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("symlink?", RubyMethodAttributes.PrivateInstance)]
         public static bool IsSymLink(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return RubyFileOps.RubyStatOps.IsSymLink(RubyFileOps.RubyStatOps.Create(self.Context, Protocols.CastToPath(toPath, path)));
+            string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
+            if (String.IsNullOrEmpty(strPath)) {
+                return false;
+            }
+            try {
+                if (Directory.Exists(strPath)) {
+                    return new DirectoryInfo(strPath).LinkTarget != null;
+                }
+                // Covers both regular files and dangling symlinks: FileInfo
+                // reports LinkTarget for a link whose target is gone.
+                return new FileInfo(strPath).LinkTarget != null;
+            } catch (ArgumentException) {
+                return false;
+            } catch (IOException) {
+                return false;
+            } catch (UnauthorizedAccessException) {
+                return false;
+            }
         }
 
         [RubyMethod("writable?", RubyMethodAttributes.PublicSingleton)]
