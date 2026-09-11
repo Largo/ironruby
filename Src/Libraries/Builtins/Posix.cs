@@ -30,6 +30,7 @@ namespace IronRuby.Builtins {
         internal const int EPERM = 1;
         internal const int ENOENT = 2;
         internal const int EBADF = 9;
+        internal const int EWOULDBLOCK = 11;  // == EAGAIN on Linux
         internal const int EACCES = 13;
         internal const int EEXIST = 17;
         internal const int EXDEV = 18;
@@ -40,6 +41,15 @@ namespace IronRuby.Builtins {
         internal const int ELOOP = 40;
         internal const int ENAMETOOLONG = 36;
         internal const int EOPNOTSUPP = 95;
+
+        #endregion
+
+        #region flock(2) operations
+
+        internal const int LOCK_SH = 1;
+        internal const int LOCK_EX = 2;
+        internal const int LOCK_NB = 4;
+        internal const int LOCK_UN = 8;
 
         #endregion
 
@@ -448,6 +458,10 @@ namespace IronRuby.Builtins {
                 case EISDIR: return IronRuby.Runtime.RubyExceptions.CreateEISDIR(path ?? "");
                 case EBADF: return IronRuby.Runtime.RubyExceptions.CreateEBADF();
                 case EXDEV: return new Errno.ImproperLinkError(path);
+                case EPERM: return new Errno.OperationNotPermittedError(path);
+                case ELOOP: return new Errno.TooManySymbolicLinksError(path);
+                case ENOTEMPTY: return new Errno.DirectoryNotEmptyError(path);
+                case ENAMETOOLONG: return new Errno.NameTooLongError(path);
                 default:
                     return IronRuby.Runtime.RubyExceptions.CreateSystemCallError("{0}", ErrorMessage(errno) + suffix);
             }

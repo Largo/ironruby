@@ -749,14 +749,25 @@ namespace IronRuby.Builtins {
             }
 
             int errno;
-            if (Posix.Flock(fd, operation, out errno) != 0) {
-                // LOCK_NB on a locked file reports "would block" rather than raising
-                if (errno == 11 /*EWOULDBLOCK/EAGAIN*/) {
+            bool nonBlocking = (operation & Posix.LOCK_NB) != 0;
+
+            // A blocking flock(2) is issued as poll + sleep rather than as one blocking call:
+            // a thread parked inside a P/Invoke is reported as running by the CLR and cannot
+            // be woken, so Thread#status would never say "sleep" and Thread#kill would never
+            // land. MRI's flock is interruptible, so this is also the closer behaviour.
+            while (true) {
+                if (Posix.Flock(fd, operation | Posix.LOCK_NB, out errno) == 0) {
+                    return 0;
+                }
+                if (errno != Posix.EWOULDBLOCK) {
+                    throw Posix.Error(errno, self.Path);
+                }
+                if (nonBlocking) {
+                    // LOCK_NB on a locked file reports "would block" rather than raising
                     return false;
                 }
-                throw Posix.Error(errno, self.Path);
+                System.Threading.Thread.Sleep(10);
             }
-            return 0;
         }
 
         [RubyMethod("readlink", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
@@ -828,6 +839,13 @@ namespace IronRuby.Builtins {
         /// otherwise only everything but the last component must (realdirpath).
         /// </summary>
         private static string/*!*/ ResolvePath(RubyContext/*!*/ context, string/*!*/ path, string basedir, bool strict) {
+            int links = 0;
+            return ResolvePath(context, path, basedir, strict, ref links);
+        }
+
+        // The symlink budget is shared across the whole resolution, not reset per component:
+        // a link that points at itself ("a" -> "a") otherwise recurses until the stack dies.
+        private static string/*!*/ ResolvePath(RubyContext/*!*/ context, string/*!*/ path, string basedir, bool strict, ref int links) {
             string absolute = RubyUtils.ExpandPath(context.Platform, path, basedir ?? context.Platform.CurrentDirectory, false);
 
             var components = new List<string>();
@@ -849,7 +867,6 @@ namespace IronRuby.Builtins {
                 bool last = i == components.Count - 1;
                 string candidate = resolved + "/" + components[i];
 
-                int links = 0;
                 while (true) {
                     Posix.StatData data;
                     int errno;
@@ -877,10 +894,10 @@ namespace IronRuby.Builtins {
                     }
 
                     if (target.StartsWith("/", StringComparison.Ordinal)) {
-                        candidate = ResolvePath(context, target, null, strict || !last);
+                        candidate = ResolvePath(context, target, null, strict || !last, ref links);
                         break;
                     }
-                    candidate = ResolvePath(context, target, resolved.Length == 0 ? "/" : resolved, strict || !last);
+                    candidate = ResolvePath(context, target, resolved.Length == 0 ? "/" : resolved, strict || !last, ref links);
                     break;
                 }
 
@@ -1251,7 +1268,10 @@ namespace IronRuby.Builtins {
                     return new RubyTime(self.CreationTime);
                 }
                 if (!d.HasBirthTime) {
-                    throw new IronRuby.Builtins.NotImplementedError("birthtime() function is unimplemented on this filesystem");
+                    // MRI says "birthtime() function is unimplemented" when the OS has no
+                    // statx at all, and "birthtime is unimplemented" when statx answered but
+                    // the filesystem does not track it. We only reach here in the latter case.
+                    throw new IronRuby.Builtins.NotImplementedError("birthtime is unimplemented on this filesystem");
                 }
                 return MakeTime(d.BTimeSec, d.BTimeNsec);
             }

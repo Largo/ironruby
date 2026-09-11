@@ -8,6 +8,10 @@
   <ItemGroup>
     <!-- Ruby exposes UTF-7; must be set before any encoding is used (AppContext latches early in a console host) -->
     <RuntimeHostConfigurationOption Include="System.Text.Encoding.EnableUnsafeUTF7Encoding" Value="true" />
+    <!-- On Unix, .NET emulates FileShare with flock(2). Ruby's open(2) takes no lock, and
+         the emulation collides with a real File#flock: a second process cannot even open a
+         file this process has LOCK_EX'd. Turn the emulation off. -->
+    <RuntimeHostConfigurationOption Include="System.IO.DisableFileLocking" Value="true" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />

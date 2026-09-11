@@ -388,12 +388,17 @@ namespace IronRuby.Builtins {
 
         // abort
         // detach
-        // egid
+
+        [RubyMethod("egid", RubyMethodAttributes.PublicSingleton)]
+        public static int EffectiveGroupId(RubyModule/*!*/ self) {
+            return Posix.GetEGid();
+        }
+
         // egid=
 
         [RubyMethod("euid", RubyMethodAttributes.PublicSingleton)]
         public static int EffectiveUserId(RubyModule/*!*/ self) {
-            return 0; // always 0 on Windows?
+            return Posix.GetEUid();
         }
 
         // euid=
@@ -403,9 +408,24 @@ namespace IronRuby.Builtins {
         // getpgid
         // getpriority
         // getrlimit
-        // gid
+
+        [RubyMethod("gid", RubyMethodAttributes.PublicSingleton)]
+        public static int GroupId(RubyModule/*!*/ self) {
+            return Posix.GetGid();
+        }
+
         // gid=
-        // groups
+
+        [RubyMethod("groups", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ Groups(RubyModule/*!*/ self) {
+            var groups = Posix.GetGroups();
+            var result = new RubyArray(groups.Length);
+            foreach (int gid in groups) {
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject(gid));
+            }
+            return result;
+        }
+
         // groups=
         // initgroups
 
@@ -459,7 +479,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("uid", RubyMethodAttributes.PublicSingleton)]
         public static int UserId(RubyModule/*!*/ self) {
-            return 0; // always 0 on Windows?
+            return Posix.GetUid();
         }
 
         [RubyMethod("uid=", RubyMethodAttributes.PublicSingleton)]
