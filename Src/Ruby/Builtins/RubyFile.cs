@@ -63,7 +63,8 @@ namespace IronRuby.Builtins {
             }
 
             if (String.IsNullOrEmpty(path)) {
-                throw RubyExceptions.CreateEINVAL();
+                // MRI treats the empty path as a missing file, not a bad argument.
+                throw RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
             }
 
             Stream stream;

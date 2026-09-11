@@ -10221,7 +10221,7 @@ namespace IronRuby.StandardLibrary.Digest {
             );
             
             DefineLibraryMethod(module, "hexencode", 0x21, 
-                0x00000002U, 
+                0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Digest.Digest.HexEncode)
             );
             

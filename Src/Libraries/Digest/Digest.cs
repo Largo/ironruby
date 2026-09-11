@@ -36,9 +36,8 @@ namespace IronRuby.StandardLibrary.Digest {
         }
 
         [RubyMethod("hexencode", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ HexEncode(RubyModule/*!*/ self, [NotNull]MutableString/*!*/ str) {
-            // TODO:
-            throw new NotImplementedException();
+        public static MutableString/*!*/ HexEncode(RubyModule/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
+            return Class.HexEncode(str);
         }
 
         #endregion
