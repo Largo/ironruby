@@ -285,12 +285,24 @@ namespace IronRuby.Builtins {
 
         public object this[string name] {
             get { return _data[GetIndex(name)]; }
-            set { _data[GetIndex(name)] = value; }
+            set {
+                RequireNotFrozen();
+                _data[GetIndex(name)] = value;
+            }
         }
 
         public object this[int index] {
             get { return _data[index]; }
-            set { _data[index] = value; }
+            set {
+                RequireNotFrozen();
+                _data[index] = value;
+            }
+        }
+
+        private void RequireNotFrozen() {
+            if (IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenError();
+            }
         }
 
         public int ItemCount {
