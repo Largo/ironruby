@@ -945,7 +945,10 @@ namespace IronRuby.Builtins {
                 return null;
             }));
 
-            if (items == null) {
+            // An empty collection has nothing to cycle over: MRI returns nil immediately.
+            // Without this the iterations == Int32.MaxValue branch below spins forever,
+            // since the inner foreach never runs and never breaks out.
+            if (items == null || items.Count == 0) {
                 return result;
             }
 

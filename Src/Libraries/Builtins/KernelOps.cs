@@ -767,11 +767,24 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region send, TODO: 1.9: public_send
+        #region send, public_send
 
         [RubyMethod("send")]
+        [RubyMethod("public_send")]
         public static object SendMessage(RubyScope/*!*/ scope, object self) {
             throw RubyExceptions.CreateArgumentError("no method name given");
+        }
+
+        // public_send differs from send only in visibility: the call site does not
+        // pretend self is implicit, so private and protected methods are not found.
+        [RubyMethod("public_send")]
+        public static object PublicSendMessage(RubyScope/*!*/ scope, BlockParam block, object self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName, params object[]/*!*/ args) {
+
+            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>(
+                methodName, new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
+            );
+            return site.Target(site, scope, self, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
         }
 
         // ARGS: 0

@@ -1012,10 +1012,17 @@ namespace IronRuby.Builtins {
         public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, [DefaultParameterValue(0)]int start) {
             start = Math.Max(0, NormalizeIndex(self, start));
 
-            for (int i = start; i < self.Count; i++) {
+            // MRI fixes the end of the range before it starts yielding, so a block that appends to
+            // the array doesn't extend the loop forever, and it stops early if the block shrank it.
+            int end = self.Count;
+
+            for (int i = start; i < end; i++) {
                 object result;
                 if (block.Yield(i, out result)) {
                     return result;
+                }
+                if (i >= self.Count) {
+                    break;
                 }
                 self[i] = result;
             }

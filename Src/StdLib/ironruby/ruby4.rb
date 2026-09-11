@@ -239,6 +239,41 @@ class IO
   def self.binread(name, length = nil, offset = 0)
     File.binread(name, length, offset)
   end unless respond_to?(:binread)
+
+  # Ruby 2.3 gave the non-blocking IO primitives an `exception: false`
+  # keyword: instead of raising IO::WaitReadable / IO::WaitWritable / EOFError
+  # they return :wait_readable / :wait_writable / nil.  net/protocol drives its
+  # read buffer through this form.
+  unless method_defined?(:__read_nonblock_raising__)
+    alias_method :__read_nonblock_raising__, :read_nonblock
+
+    def read_nonblock(len, buf = nil, exception: true)
+      begin
+        result = buf.nil? ? __read_nonblock_raising__(len) : __read_nonblock_raising__(len, buf)
+      rescue IO::WaitReadable
+        raise if exception
+        return :wait_readable
+      rescue EOFError
+        raise if exception
+        return nil
+      end
+      result
+    end
+  end
+
+  unless method_defined?(:__write_nonblock_raising__)
+    alias_method :__write_nonblock_raising__, :write_nonblock
+
+    def write_nonblock(buf, exception: true)
+      begin
+        result = __write_nonblock_raising__(buf)
+      rescue IO::WaitWritable
+        raise if exception
+        return :wait_writable
+      end
+      result
+    end
+  end
 end
 
 module Kernel
@@ -323,6 +358,12 @@ class << IO
     if mode.is_a?(Hash)
       options = mode
       mode = nil
+    end
+
+    if command.is_a?(Array)
+      # IO.popen(["cmd", "arg", ...]) -- no shell is involved in MRI, so quote every
+      # word before handing it to the shell the core popen does use.
+      command = command.map { |word| "'" + word.to_s.gsub("'", %q{'\\\\''}) + "'" }.join(' ')
     end
 
     if options
@@ -748,6 +789,252 @@ class Integer
   MAX = 2**62 - 1 unless const_defined?(:MAX)
 end
 
+# Float#round / Integer#round only take zero arguments in the 1.9 snapshot.
+# The ndigits form is what Matrix#round, Rational#round and a great deal of
+# ordinary code use.
+class Float
+  unless instance_method(:round).arity == -1
+    alias_method :__ir_round__, :round
+
+    def round(ndigits = 0)
+      n = ndigits.to_int
+      return __ir_round__ if n == 0
+      return self unless finite?
+      if n > 0
+        return self if n > 17
+        s = 10.0**n
+        f = (self * s).__ir_round__.to_f
+        # CRuby corrects for the binary representation error here (float.c,
+        # round_half_up), which is why 2.675.round(2) is 2.68 and not 2.67.
+        if self > 0
+          f += 1 if (f + 0.5) / s <= self
+        elsif self < 0
+          f -= 1 if (f - 0.5) / s >= self
+        end
+        f / s
+      else
+        s = 10.0**(-n)
+        f = (self / s).__ir_round__.to_f
+        if self > 0
+          f += 1 if (f + 0.5) * s <= self
+        elsif self < 0
+          f -= 1 if (f - 0.5) * s >= self
+        end
+        (f * s).to_i
+      end
+    end
+  end
+
+  def truncate(ndigits = 0)
+    n = ndigits.to_int
+    return to_i if n == 0
+    if n > 0
+      s = 10.0**n
+      (self * s).to_i / s
+    else
+      s = 10**(-n)
+      (to_i / s) * s
+    end
+  end unless instance_method(:truncate).arity == -1
+end
+
+class Integer
+  unless instance_method(:round).arity == -1
+    alias_method :__ir_round__, :round
+
+    def round(ndigits = 0)
+      n = ndigits.to_int
+      return self if n >= 0
+      s = 10**(-n)
+      half = s / 2
+      q, r = abs.divmod(s)
+      q += 1 if r >= half
+      self < 0 ? -(q * s) : q * s
+    end
+  end
+
+  def truncate(ndigits = 0)
+    n = ndigits.to_int
+    return self if n >= 0
+    s = 10**(-n)
+    (self / s) * s
+  end unless instance_method(:truncate).arity == -1
+
+  def floor(ndigits = 0)
+    n = ndigits.to_int
+    return self if n >= 0
+    s = 10**(-n)
+    (to_f / s).floor * s
+  end unless instance_method(:floor).arity == -1
+
+  def ceil(ndigits = 0)
+    n = ndigits.to_int
+    return self if n >= 0
+    s = 10**(-n)
+    (to_f / s).ceil * s
+  end unless instance_method(:ceil).arity == -1
+end
+
+if defined?(Rational) && Rational.instance_method(:round).arity == 0
+  class Rational
+    alias_method :__ir_round__, :round
+
+    def round(ndigits = 0)
+      n = ndigits.to_int
+      return __ir_round__ if n == 0
+      if n > 0
+        s = 10**n
+        Rational((self * s).__ir_round__, s)
+      else
+        s = 10**(-n)
+        (self / s).__ir_round__ * s
+      end
+    end
+  end
+end
+
+module Kernel
+  # The built-in warn takes exactly one message and no keywords; 2.5 added
+  # multiple messages plus uplevel:, and 3.0 added category:.
+  if private_method_defined?(:warn) && instance_method(:warn).arity == 1
+    alias_method :__ir_warn__, :warn
+    private :__ir_warn__
+
+    def warn(*messages, **options)
+      return nil if messages.empty?
+      uplevel = options[:uplevel]
+      if uplevel
+        # IronRuby's Kernel#caller only takes the start argument.
+        location = (caller(uplevel.to_i + 1) || [])[0]
+        prefix = location ? "#{location}: warning: " : nil
+      end
+      text = messages.map { |m| s = m.to_s; s.end_with?("\n") ? s : s + "\n" }.join
+      text = "#{prefix}#{text}" if prefix
+      # The built-in always appends a newline of its own, so drop the last one.
+      text = text[0...-1] if text.end_with?("\n")
+      __ir_warn__(text)
+      nil
+    end
+    module_function :warn
+  end
+end
+
+class String
+  # Byte-oriented slicing.  Done over a binary copy so that the indices really
+  # are byte indices, then tagged back with the receiver's encoding the way
+  # rb_str_byteslice does.
+  def byteslice(*args)
+    binary = dup
+    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
+    result = binary[*args]
+    return nil if result.nil?
+    result.force_encoding(encoding) if result.respond_to?(:force_encoding)
+    result
+  end unless method_defined?(:byteslice)
+
+  def byteindex(needle, offset = 0)
+    binary = dup
+    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
+    needle = needle.dup
+    needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
+    binary.index(needle, offset)
+  end unless method_defined?(:byteindex)
+end
+
+# The complex-number half of Numeric.  IronRuby's Complex has these, but the
+# real numerics never got them, so anything written against the Numeric
+# protocol (Matrix, Vector, rationalisation code) breaks on a plain Integer.
+class Numeric
+  def real?
+    true
+  end unless method_defined?(:real?)
+
+  def real
+    self
+  end unless method_defined?(:real)
+
+  def imaginary
+    0
+  end unless method_defined?(:imaginary)
+  alias_method :imag, :imaginary unless method_defined?(:imag)
+
+  def conjugate
+    self
+  end unless method_defined?(:conjugate)
+  alias_method :conj, :conjugate unless method_defined?(:conj)
+
+  def abs2
+    self * self
+  end unless method_defined?(:abs2)
+
+  def rectangular
+    [self, 0]
+  end unless method_defined?(:rectangular)
+  alias_method :rect, :rectangular unless method_defined?(:rect)
+
+  def arg
+    self < 0 ? Math::PI : 0
+  end unless method_defined?(:arg)
+  alias_method :angle, :arg unless method_defined?(:angle)
+  alias_method :phase, :arg unless method_defined?(:phase)
+
+  def polar
+    [abs, arg]
+  end unless method_defined?(:polar)
+
+  def finite?
+    true
+  end unless method_defined?(:finite?)
+
+  def infinite?
+    nil
+  end unless method_defined?(:infinite?)
+
+  def positive?
+    self > 0
+  end unless method_defined?(:positive?)
+
+  def negative?
+    self < 0
+  end unless method_defined?(:negative?)
+
+  def clamp(min, max = nil)
+    if max.nil? && min.kind_of?(Range)
+      lo, hi = min.begin, min.end
+    else
+      lo, hi = min, max
+    end
+    return lo if lo && self < lo
+    return hi if hi && self > hi
+    self
+  end unless method_defined?(:clamp)
+end
+
+# Defined unconditionally: Complex inherits the Numeric versions just added
+# above, so method_defined? would report them as already present.
+class Complex
+  def real?
+    false
+  end
+
+  def imaginary
+    imag
+  end unless instance_methods(false).include?(:imaginary)
+
+  def finite?
+    real.finite? && imag.finite?
+  end
+
+  def infinite?
+    (real.infinite? || imag.infinite?) ? 1 : nil
+  end
+
+  def rectangular
+    [real, imag]
+  end
+  alias_method :rect, :rectangular
+end
+
 # CRuby has KeyError < IndexError and StopIteration < IndexError, but IndexError
 # maps to the sealed System::IndexOutOfRangeException here, so it cannot be
 # subclassed. StandardError is the closest base that actually instantiates;
@@ -757,8 +1044,48 @@ class StopIteration < StandardError; end unless defined?(StopIteration)
 class UncaughtThrowError < ArgumentError; end unless defined?(UncaughtThrowError)
 class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
 
-class File
-  NULL = "/dev/null" unless const_defined?(:NULL)
+class IO
+  # Ruby defines NULL on IO; File inherits it. Defining it on File alone left
+  # IO::NULL undefined, which several specs and helpers reference.
+  NULL = "/dev/null" unless const_defined?(:NULL, false)
+end
+
+class << Dir
+  # Dir.home / Dir.children / Dir.each_child / Dir.empty? postdate the 1.9 core.
+  def home(user = nil)
+    if user.nil?
+      dir = ENV['HOME']
+      unless dir
+        require 'etc'
+        pw = (Etc.getpwuid(Process.uid) rescue nil)
+        dir = pw && pw.dir
+      end
+      raise ArgumentError, "couldn't find HOME environment -- expanding `~'" unless dir
+      return dir.dup
+    end
+
+    raise TypeError, "no implicit conversion of #{user.class} into String" unless user.is_a?(String)
+    require 'etc'
+    pw = (Etc.getpwnam(user) rescue nil)
+    raise ArgumentError, "user #{user} doesn't exist" unless pw
+    pw.dir.dup
+  end unless respond_to?(:home)
+
+  def children(path, *args)
+    entries(path, *args) - %w[. ..]
+  end unless respond_to?(:children)
+
+  def each_child(path, *args, &block)
+    return children(path, *args).each unless block
+    children(path, *args).each(&block)
+    nil
+  end unless respond_to?(:each_child)
+
+  def empty?(path)
+    # File.stat rather than File.directory? so that a missing path is an ENOENT
+    return false unless File.stat(path).directory?
+    entries(path).size <= 2
+  end unless respond_to?(:empty?)
 end
 
 module Errno

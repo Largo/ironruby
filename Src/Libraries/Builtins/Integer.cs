@@ -14,11 +14,13 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using System.Numerics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -85,6 +87,62 @@ namespace IronRuby.Builtins {
         [RubyMethod("truncate")]
         public static object ToInteger(object/*!*/ self) {
             return self;
+        }
+
+        /// <summary>
+        /// Rounds self to a multiple of 10**(-ndigits). A non-negative ndigits returns self.
+        /// Accepts the <c>half:</c> option (:up, :down or :even).
+        /// </summary>
+        [RubyMethod("round")]
+        public static object Round(ConversionStorage<IntegerValue>/*!*/ integerCast, object/*!*/ self,
+            object ndigits, [Optional]object options) {
+
+            var opts = options as IDictionary<object, object>;
+            if (opts == null && options == Missing.Value) {
+                // round(half: :up) - the only argument is the options hash
+                opts = ndigits as IDictionary<object, object>;
+                if (opts != null) {
+                    ndigits = Missing.Value;
+                }
+            }
+
+            NumericRounding.Half half = NumericRounding.GetHalfOption(integerCast.Context, opts);
+            int nd = (ndigits == Missing.Value) ? 0 : NumericRounding.GetNDigits(integerCast, ndigits);
+            if (nd >= 0) {
+                return self;
+            }
+            return NumericRounding.RoundInteger(ToBigInteger(self), nd, half);
+        }
+
+        /// <summary>Rounds self down to a multiple of 10**(-ndigits).</summary>
+        [RubyMethod("floor")]
+        public static object Floor(ConversionStorage<IntegerValue>/*!*/ integerCast, object/*!*/ self, object ndigits) {
+            int nd = NumericRounding.GetNDigits(integerCast, ndigits);
+            return (nd >= 0) ? self : NumericRounding.FloorInteger(ToBigInteger(self), nd);
+        }
+
+        /// <summary>Rounds self up to a multiple of 10**(-ndigits).</summary>
+        [RubyMethod("ceil")]
+        public static object Ceil(ConversionStorage<IntegerValue>/*!*/ integerCast, object/*!*/ self, object ndigits) {
+            int nd = NumericRounding.GetNDigits(integerCast, ndigits);
+            return (nd >= 0) ? self : NumericRounding.CeilInteger(ToBigInteger(self), nd);
+        }
+
+        /// <summary>Truncates self towards zero to a multiple of 10**(-ndigits).</summary>
+        [RubyMethod("truncate")]
+        public static object Truncate(ConversionStorage<IntegerValue>/*!*/ integerCast, object/*!*/ self, object ndigits) {
+            int nd = NumericRounding.GetNDigits(integerCast, ndigits);
+            return (nd >= 0) ? self : NumericRounding.TruncateInteger(ToBigInteger(self), nd);
+        }
+
+        private static BigInteger ToBigInteger(object/*!*/ self) {
+            if (self is int) {
+                return new BigInteger((int)self);
+            }
+            if (self is BigInteger) {
+                return (BigInteger)self;
+            }
+            throw RubyExceptions.CreateTypeError("can't convert {0} into Integer", self == null ? "nil" : self.GetType().Name);
         }
 
         #endregion

@@ -177,6 +177,66 @@ namespace IronRuby.Builtins {
             }
         }
 
+        [RubyClass("EPERM"), Serializable]
+        public class OperationNotPermittedError : ExternalException {
+            private const string/*!*/ M = "Operation not permitted";
+
+            public OperationNotPermittedError() : this(null, null) { }
+            public OperationNotPermittedError(string message) : this(message, null) { }
+            public OperationNotPermittedError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
+            public OperationNotPermittedError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
+
+#if FEATURE_SERIALIZATION
+            protected OperationNotPermittedError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+                : base(info, context) { }
+#endif
+        }
+
+        [RubyClass("ELOOP"), Serializable]
+        public class TooManySymbolicLinksError : ExternalException {
+            private const string/*!*/ M = "Too many levels of symbolic links";
+
+            public TooManySymbolicLinksError() : this(null, null) { }
+            public TooManySymbolicLinksError(string message) : this(message, null) { }
+            public TooManySymbolicLinksError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
+            public TooManySymbolicLinksError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
+
+#if FEATURE_SERIALIZATION
+            protected TooManySymbolicLinksError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+                : base(info, context) { }
+#endif
+        }
+
+        [RubyClass("ENOTEMPTY"), Serializable]
+        public class DirectoryNotEmptyError : ExternalException {
+            private const string/*!*/ M = "Directory not empty";
+
+            public DirectoryNotEmptyError() : this(null, null) { }
+            public DirectoryNotEmptyError(string message) : this(message, null) { }
+            public DirectoryNotEmptyError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
+            public DirectoryNotEmptyError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
+
+#if FEATURE_SERIALIZATION
+            protected DirectoryNotEmptyError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+                : base(info, context) { }
+#endif
+        }
+
+        [RubyClass("ENAMETOOLONG"), Serializable]
+        public class NameTooLongError : ExternalException {
+            private const string/*!*/ M = "File name too long";
+
+            public NameTooLongError() : this(null, null) { }
+            public NameTooLongError(string message) : this(message, null) { }
+            public NameTooLongError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
+            public NameTooLongError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
+
+#if FEATURE_SERIALIZATION
+            protected NameTooLongError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+                : base(info, context) { }
+#endif
+        }
+
         [RubyClass("EPIPE"), Serializable]
         public class PipeError : ExternalException {
             private const string/*!*/ M = "Broken pipe";

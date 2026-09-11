@@ -215,8 +215,25 @@ namespace IronRuby.Builtins {
     [RubyException("SystemCallError", Extends = typeof(ExternalException), Inherits = typeof(SystemException))]
     public static class SystemCallErrorOps {
         [RubyMethod("errno")]
-        public static int Errno(ExternalException/*!*/ self) {
-            return self.ErrorCode;
+        public static object Errno(RubyContext/*!*/ context, object/*!*/ self) {
+            // `self` is deliberately `object`: several Errno classes are declared to inherit
+            // from SystemCallError at the Ruby level but are backed by a CLR type that is not
+            // an ExternalException (Errno::ENOENT is a FileNotFoundException), so typing the
+            // parameter as ExternalException made #errno a TypeError on exactly those.
+            //
+            // The CLR-backed Errno classes also carry no errno at all -- ErrorCode is then the
+            // generic COM HRESULT 0x80004005. Every Errno class does have its number in an
+            // Errno constant (see Src/StdLib/ironruby/ruby4.rb), so prefer that. A plain
+            // SystemCallError has no number, and MRI answers nil there.
+            object number;
+            if (context.GetClassOf(self).TryGetConstant(null, "Errno", out number) && number is int) {
+                return number;
+            }
+            var external = self as ExternalException;
+            if (external != null && external.ErrorCode != unchecked((int)0x80004005)) {
+                return external.ErrorCode;
+            }
+            return null;
         }
         
         [RubyConstructor]
