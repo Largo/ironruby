@@ -257,7 +257,15 @@ namespace IronRuby.Tests {
                 Assert(a.KnowsSurrogates); 
                 Assert(a.HasSurrogates());
 
-                a.Replace(2, 2, MutableString.CreateAscii("xx"));  // abxx 
+                // The replacement is built in the same encoding as the target.
+                // It used to be CreateAscii, which worked only because
+                // GetCompatibleEncoding treated every encoding as
+                // ASCII-compatible. MRI does not: UTF-32/UTF-16/UTF-7 are not
+                // ASCII-compatible, and splicing US-ASCII into them raises
+                // Encoding::CompatibilityError (verified against CRuby 3.3.8).
+                // This test is about surrogate bookkeeping, so keep it on a
+                // compatible operand rather than assert the old bug.
+                a.Replace(2, 2, MutableString.Create("xx", e));    // abxx
                 Assert(!a.KnowsSurrogates);
                 Assert(!a.HasSurrogates());
 

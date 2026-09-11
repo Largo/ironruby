@@ -55,6 +55,12 @@ Util/References
 
 /NuGet.config
 *.bak
-mspec/
-spec/
-rubyspec_temp/
+# Anchored and without a trailing slash on purpose: a trailing slash matches
+# only directories, so an agent worktree's `spec` -> ... symlink was NOT
+# ignored, got committed, and a later merge replaced the real checkout with it.
+/mspec
+/spec
+/rubyspec_temp/
+
+# Agent worktrees and local session state
+/.claude/
