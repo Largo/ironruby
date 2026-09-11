@@ -213,9 +213,9 @@ namespace IronRuby.Prism {
                         Literal.Integer(0, span), Expr(imaginary.Numeric)
                     }), span);
                 case Pm.StringNode str:
-                    return new StringLiteral(LiteralValue(str.Unescaped), _encoding, span);
+                    return new StringLiteral(LiteralValue(str.Unescaped), LiteralEncoding(str), span);
                 case Pm.SymbolNode symbol:
-                    return new SymbolLiteral(LiteralText(symbol.Unescaped), _encoding, span);
+                    return new SymbolLiteral(LiteralText(symbol.Unescaped), SymbolEncoding(symbol), span);
                 case Pm.TrueNode _: return Literal.True(span);
                 case Pm.FalseNode _: return Literal.False(span);
                 case Pm.NilNode _: return Literal.Nil(span);
@@ -258,7 +258,7 @@ namespace IronRuby.Prism {
                     return new StringConstructor(StringParts(interpSymbol.Parts), StringKind.Symbol, span);
                 case Pm.XStringNode xstr:
                     return new StringConstructor(
-                        new List<Expression> { new StringLiteral(LiteralValue(xstr.Unescaped), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(xstr.Unescaped), LiteralEncoding(xstr), span) },
                         StringKind.Command, span);
                 case Pm.InterpolatedXStringNode interpX:
                     return new StringConstructor(StringParts(interpX.Parts), StringKind.Command, span);
@@ -616,6 +616,35 @@ namespace IronRuby.Prism {
         private static readonly System.Text.Encoding _strictUtf8 =
             new System.Text.UTF8Encoding(false, true);
 
+        // pm_string_flags / pm_symbol_flags (node-specific flags start at bit 2)
+        private const uint PmForcedUtf8Encoding = 4;
+        private const uint PmForcedBinaryEncoding = 8;
+        private const uint PmSymbolForcedUsAsciiEncoding = 16;
+
+        /// <summary>
+        /// The encoding of a string/symbol literal. Normally it is the source encoding, but a
+        /// literal that contains a \u escape is UTF-8 whatever the file says, and one that
+        /// contains a \x byte above 0x7f in a US-ASCII file is binary. prism has already worked
+        /// this out and reports it in the node flags; CRuby uses exactly the same rule.
+        /// </summary>
+        private RubyEncoding/*!*/ LiteralEncoding(Pm.PmNode/*!*/ node) {
+            uint flags = node.Flags;
+            if ((flags & PmForcedUtf8Encoding) != 0) {
+                return RubyEncoding.UTF8;
+            }
+            if ((flags & PmForcedBinaryEncoding) != 0) {
+                return RubyEncoding.Binary;
+            }
+            return _encoding;
+        }
+
+        private RubyEncoding/*!*/ SymbolEncoding(Pm.PmNode/*!*/ node) {
+            if ((node.Flags & PmSymbolForcedUsAsciiEncoding) != 0) {
+                return RubyEncoding.Ascii;
+            }
+            return LiteralEncoding(node);
+        }
+
         private Expression/*!*/ BigIntegerLiteral(BigInteger value, SourceSpan span) {
             if (value >= int.MinValue && value <= int.MaxValue) return Literal.Integer((int)value, span);
             return Literal.BigInteger(value, span);
@@ -635,7 +664,7 @@ namespace IronRuby.Prism {
             foreach (var part in parts) {
                 switch (part) {
                     case Pm.StringNode str:
-                        result.Add(new StringLiteral(LiteralValue(str.Unescaped), _encoding, Span(str)));
+                        result.Add(new StringLiteral(LiteralValue(str.Unescaped), LiteralEncoding(str), Span(str)));
                         break;
                     case Pm.EmbeddedStatementsNode embedded:
                         result.Add(StatementsAsExpression(embedded.Statements, Span(embedded)));

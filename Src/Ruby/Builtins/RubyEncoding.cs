@@ -199,6 +199,54 @@ namespace IronRuby.Builtins {
 
                 case 50220: return "ISO-2022-JP";
                 case 50222: return "CP50222";
+
+                // .NET reports IANA "WebName"s, which are lower case. Ruby spells most of
+                // these differently; Encoding#name and every error message that embeds an
+                // encoding name have to match Ruby exactly.
+                case 28591: return "ISO-8859-1";
+                case 28592: return "ISO-8859-2";
+                case 28593: return "ISO-8859-3";
+                case 28594: return "ISO-8859-4";
+                case 28595: return "ISO-8859-5";
+                case 28596: return "ISO-8859-6";
+                case 28597: return "ISO-8859-7";
+                case 28598: return "ISO-8859-8";
+                case 28599: return "ISO-8859-9";
+                case 28603: return "ISO-8859-13";
+                case 28605: return "ISO-8859-15";
+
+                case RubyEncoding.CodePageBig5: return "Big5";
+                case 936: return "GB2312";
+
+                case 20866: return "KOI8-R";
+                case 21866: return "KOI8-U";
+
+                case 1250: return "Windows-1250";
+                case 1251: return "Windows-1251";
+                case 1252: return "Windows-1252";
+                case 1253: return "Windows-1253";
+                case 1254: return "Windows-1254";
+                case 1255: return "Windows-1255";
+                case 1256: return "Windows-1256";
+                case 1257: return "Windows-1257";
+                case 1258: return "Windows-1258";
+                case 874: return "Windows-874";
+
+                case 37: return "IBM037";
+                case 437: return "IBM437";
+                case 737: return "IBM737";
+                case 775: return "IBM775";
+                case 850: return "CP850";
+                case 852: return "IBM852";
+                case 855: return "IBM855";
+                case 857: return "IBM857";
+                case 860: return "IBM860";
+                case 861: return "IBM861";
+                case 863: return "IBM863";
+                case 864: return "IBM864";
+                case 865: return "IBM865";
+                case 866: return "IBM866";
+                case 869: return "IBM869";
 #endif
                 default: return null;
             }
