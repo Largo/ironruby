@@ -9143,7 +9143,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "gmtime", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.SwitchToUtc)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.SwitchToUtc)
             );
             
             DefineLibraryMethod(module, "gmtoff", 0x51, 
@@ -9180,6 +9180,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "isdst", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsDst)
+            );
+            
+            DefineLibraryMethod(module, "iso8601", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyTimeOps.XmlSchema)
             );
             
             DefineLibraryMethod(module, "localtime", 0x51, 
@@ -9309,7 +9314,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "utc", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.SwitchToUtc)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.SwitchToUtc)
             );
             
             DefineLibraryMethod(module, "utc_offset", 0x51, 
@@ -9330,6 +9335,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "wednesday?", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsWednesday)
+            );
+            
+            DefineLibraryMethod(module, "xmlschema", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyTime, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyTimeOps.XmlSchema)
             );
             
             DefineLibraryMethod(module, "yday", 0x51, 

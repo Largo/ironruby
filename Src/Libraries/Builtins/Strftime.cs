@@ -12,6 +12,7 @@ using System.Globalization;
 using System.Numerics;
 using System.Text;
 using IronRuby.Runtime;
+using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
 
@@ -33,22 +34,18 @@ namespace IronRuby.Builtins {
             "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"
         };
 
-        [Flags]
-        private enum Modifiers {
-            None = 0,
-            NoPadding = 1,
-            SpacePadding = 2,
-            ZeroPadding = 4,
-            Upcase = 8,
-            Swapcase = 16,
-            Colons1 = 32,
-            Colons2 = 64,
-            Colons3 = 128,
+        private struct Modifiers {
+            public bool NoPadding;
+            public char Pad;        // '\0' when the directive's default applies
+            public bool Upcase;
+            public bool Swapcase;
+            public int Colons;
+            public int Width;
         }
 
         private const int MaxRecursionDepth = 8;
 
-        internal static void Format(MutableString/*!*/ result, RubyTime/*!*/ time, string/*!*/ format, int depth) {
+        internal static void Format(RubyContext/*!*/ context, MutableString/*!*/ result, RubyTime/*!*/ time, string/*!*/ format, int depth) {
             if (depth > MaxRecursionDepth) {
                 return;
             }
@@ -69,24 +66,22 @@ namespace IronRuby.Builtins {
                     break;
                 }
 
-                Modifiers modifiers = Modifiers.None;
+                Modifiers modifiers = new Modifiers();
+                modifiers.Width = -1;
                 bool reading = true;
                 while (i < format.Length && reading) {
                     switch (format[i]) {
-                        case '-': modifiers |= Modifiers.NoPadding; i++; break;
-                        case '_': modifiers |= Modifiers.SpacePadding; i++; break;
-                        case '0': modifiers |= Modifiers.ZeroPadding; i++; break;
-                        case '^': modifiers |= Modifiers.Upcase; i++; break;
-                        case '#': modifiers |= Modifiers.Swapcase; i++; break;
+                        case '-': modifiers.NoPadding = true; i++; break;
+                        case '_': modifiers.Pad = ' '; i++; break;
+                        case '0': modifiers.Pad = '0'; i++; break;
+                        case '^': modifiers.Upcase = true; i++; break;
+                        case '#': modifiers.Swapcase = true; i++; break;
                         case ':':
-                            if ((modifiers & Modifiers.Colons3) != 0) {
+                            if (modifiers.Colons >= 3) {
                                 reading = false;
-                            } else if ((modifiers & Modifiers.Colons2) != 0) {
-                                modifiers = (modifiers & ~Modifiers.Colons2) | Modifiers.Colons3; i++;
-                            } else if ((modifiers & Modifiers.Colons1) != 0) {
-                                modifiers = (modifiers & ~Modifiers.Colons1) | Modifiers.Colons2; i++;
                             } else {
-                                modifiers |= Modifiers.Colons1; i++;
+                                modifiers.Colons++;
+                                i++;
                             }
                             break;
                         default:
@@ -95,14 +90,14 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                int width = -1;
                 int widthStart = i;
                 while (i < format.Length && format[i] >= '0' && format[i] <= '9') {
                     i++;
                 }
                 if (i > widthStart) {
-                    if (!Int32.TryParse(format.Substring(widthStart, i - widthStart), NumberStyles.None, CultureInfo.InvariantCulture, out width)) {
-                        width = -1;
+                    int width;
+                    if (Int32.TryParse(format.Substring(widthStart, i - widthStart), NumberStyles.None, CultureInfo.InvariantCulture, out width)) {
+                        modifiers.Width = width;
                     }
                 }
 
@@ -114,7 +109,7 @@ namespace IronRuby.Builtins {
                 char directive = format[i];
                 i++;
 
-                string piece = FormatDirective(time, directive, modifiers, width, depth);
+                string piece = FormatDirective(context, time, directive, modifiers, modifiers.Width, depth);
                 if (piece == null) {
                     // Unknown directive: Ruby copies the whole thing through verbatim.
                     result.Append(format.Substring(start, i - start));
@@ -124,7 +119,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private static string FormatDirective(RubyTime/*!*/ time, char directive, Modifiers modifiers, int width, int depth) {
+        private static string FormatDirective(RubyContext/*!*/ context, RubyTime/*!*/ time, char directive, Modifiers modifiers, int width, int depth) {
             RubyTime.Fields t = time.GetFields();
 
             switch (directive) {
@@ -139,7 +134,7 @@ namespace IronRuby.Builtins {
                 case 'B': return Text(MonthNames[t.Month - 1], modifiers, width);
 
                 case 'p': return Text(t.Hour < 12 ? "AM" : "PM", modifiers, width);
-                case 'P': return Text(t.Hour < 12 ? "am" : "pm", modifiers | Modifiers.Swapcase, width);
+                case 'P': return Text(t.Hour < 12 ? "am" : "pm", modifiers, width);
 
                 case 'C': return Number(FloorDiv(t.Year, 100), modifiers, width, 2, '0');
                 case 'd': return Number(t.Day, modifiers, width, 2, '0');
@@ -169,37 +164,68 @@ namespace IronRuby.Builtins {
                 case 'L': return Fraction(time, (width < 0) ? 3 : width);
                 case 'N': return Fraction(time, (width < 0) ? 9 : width);
 
-                case 'z': return Text(time.FormatUtcOffset(
-                    (modifiers & (Modifiers.Colons1 | Modifiers.Colons2 | Modifiers.Colons3)) != 0,
-                    (modifiers & (Modifiers.Colons2 | Modifiers.Colons3)) != 0), modifiers, width);
+                case 'z': return FormatOffset(time, modifiers, width);
 
                 case 'Z': {
-                        string name = time.GetZoneName();
-                        if (name == null) {
-                            name = time.FormatUtcOffset(true, false);
-                        }
-                        return Text(name, modifiers, width);
+                        string name = RubyTimeOps.GetZoneAbbreviation(context, time);
+                        return Text(name ?? "", modifiers, width);
                     }
 
-                case 'c': return Compound(time, "%a %b %e %H:%M:%S %Y", modifiers, depth);
+                case 'c': return Compound(context, time, "%a %b %e %H:%M:%S %Y", modifiers, depth);
                 case 'D':
-                case 'x': return Compound(time, "%m/%d/%y", modifiers, depth);
-                case 'F': return Compound(time, "%Y-%m-%d", modifiers, depth);
-                case 'r': return Compound(time, "%I:%M:%S %p", modifiers, depth);
-                case 'R': return Compound(time, "%H:%M", modifiers, depth);
+                case 'x': return Compound(context, time, "%m/%d/%y", modifiers, depth);
+                case 'F': return Compound(context, time, "%Y-%m-%d", modifiers, depth);
+                case 'r': return Compound(context, time, "%I:%M:%S %p", modifiers, depth);
+                case 'R': return Compound(context, time, "%H:%M", modifiers, depth);
                 case 'T':
-                case 'X': return Compound(time, "%H:%M:%S", modifiers, depth);
-                case 'v': return Compound(time, "%e-%^b-%4Y", modifiers, depth);
-                case '+': return Compound(time, "%a %b %e %H:%M:%S %Z %Y", modifiers, depth);
+                case 'X': return Compound(context, time, "%H:%M:%S", modifiers, depth);
+                case 'v': return Compound(context, time, "%e-%^b-%Y", modifiers, depth);
+                case '+': return Compound(context, time, "%a %b %e %H:%M:%S %Z %Y", modifiers, depth);
 
                 default: return null;
             }
         }
 
-        private static string/*!*/ Compound(RubyTime/*!*/ time, string/*!*/ format, Modifiers modifiers, int depth) {
+        private static string/*!*/ Compound(RubyContext/*!*/ context, RubyTime/*!*/ time, string/*!*/ format, Modifiers modifiers, int depth) {
             MutableString buffer = MutableString.CreateMutable(RubyEncoding.Binary);
-            Format(buffer, time, format, depth + 1);
-            return Text(buffer.ToString(), modifiers & (Modifiers.Upcase | Modifiers.Swapcase), -1);
+            Format(context, buffer, time, format, depth + 1);
+
+            Modifiers caseOnly = new Modifiers();
+            caseOnly.Width = -1;
+            caseOnly.Upcase = modifiers.Upcase;
+            caseOnly.Swapcase = modifiers.Swapcase;
+            return Text(buffer.ToString(), caseOnly, -1);
+        }
+
+        /// <summary>
+        /// %z. The hours field absorbs any requested width; with space padding the fill goes
+        /// in front of the sign instead. A '-' flag on a UTC time asks for RFC 3339's "-0000".
+        /// </summary>
+        private static string/*!*/ FormatOffset(RubyTime/*!*/ time, Modifiers modifiers, int width) {
+            System.Numerics.BigInteger rounded = time.UtcOffsetExact.Round();
+            long total = (long)rounded;
+
+            bool negative = total < 0 || (modifiers.NoPadding && time.IsUtc);
+            long abs = Math.Abs(total);
+            long h = abs / 3600;
+            long m = (abs / 60) % 60;
+            long sec = abs % 60;
+
+            string separator = (modifiers.Colons > 0) ? ":" : "";
+            string tail = separator + m.ToString("D2", CultureInfo.InvariantCulture);
+            if (modifiers.Colons >= 2 || (modifiers.Colons == 0 && sec != 0)) {
+                tail += separator + sec.ToString("D2", CultureInfo.InvariantCulture);
+            }
+
+            char pad = (modifiers.Pad == '\0') ? '0' : modifiers.Pad;
+            string sign = negative ? "-" : "+";
+            string hours = h.ToString(CultureInfo.InvariantCulture);
+
+            if (pad == '0') {
+                int target = Math.Max(2, width - 1 - tail.Length);
+                return sign + hours.PadLeft(target, '0') + tail;
+            }
+            return (sign + hours + tail).PadLeft(Math.Max(width, 0), ' ');
         }
 
         /// <summary>ISO-8601 week-based year and week number, for %G/%g/%V.</summary>
@@ -242,13 +268,17 @@ namespace IronRuby.Builtins {
         }
 
         private static string/*!*/ Text(string/*!*/ value, Modifiers modifiers, int width) {
-            if ((modifiers & Modifiers.Upcase) != 0) {
+            if (modifiers.Upcase) {
                 value = value.ToUpperInvariant();
-            } else if ((modifiers & Modifiers.Swapcase) != 0) {
+            } else if (modifiers.Swapcase) {
                 value = Swapcase(value);
             }
+            if (modifiers.NoPadding) {
+                return value;
+            }
+            char pad = (modifiers.Pad == '\0') ? ' ' : modifiers.Pad;
             if (width > value.Length) {
-                value = value.PadLeft(width, ' ');
+                value = value.PadLeft(width, pad);
             }
             return value;
         }
@@ -271,15 +301,10 @@ namespace IronRuby.Builtins {
             string digits = Math.Abs(value).ToString(CultureInfo.InvariantCulture);
             string sign = (value < 0) ? "-" : "";
 
-            char pad = defaultPad;
-            if ((modifiers & Modifiers.ZeroPadding) != 0) {
-                pad = '0';
-            } else if ((modifiers & Modifiers.SpacePadding) != 0) {
-                pad = ' ';
-            }
+            char pad = (modifiers.Pad == '\0') ? defaultPad : modifiers.Pad;
 
             int target = (width >= 0) ? width : defaultWidth;
-            if ((modifiers & Modifiers.NoPadding) != 0 && width < 0) {
+            if (modifiers.NoPadding) {
                 target = 0;
             }
 
