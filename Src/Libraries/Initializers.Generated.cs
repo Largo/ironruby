@@ -117,7 +117,7 @@ namespace IronRuby.Builtins {
             #endif
             #if FEATURE_ENCODING && FEATURE_ENCODING
             IronRuby.Builtins.RubyClass def36 = DefineClass("Encoding::Converter", typeof(IronRuby.Builtins.RubyEncodingOps.RubyConverter), 0x0000000F, Context.ObjectClass, LoadEncoding__Converter_Instance, LoadEncoding__Converter_Class, LoadEncoding__Converter_Constants, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyEncodingOps.RubyConverter>(IronRuby.Builtins.RubyEncodingOps.RubyConverter.Create)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyEncodingOps.RubyConverter>(IronRuby.Builtins.RubyEncodingOps.RubyConverter.Create)
             );
             #endif
             DefineGlobalClass("Enumerator", typeof(IronRuby.Builtins.Enumerator), 0x0000000F, Context.ObjectClass, LoadEnumerator_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def50}, 
@@ -1189,8 +1189,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "primitive_convert", 0x51, 
-                0x00000010U, 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyEncodingOps.RubyConverter, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyEncodingOps.RubyConverter.PrimitiveConvert)
+                0x00000020U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyEncodingOps.RubyConverter, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyEncodingOps.RubyConverter.PrimitiveConvert)
             );
             
             DefineLibraryMethod(module, "primitive_errinfo", 0x51, 
@@ -1231,7 +1231,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "search_convpath", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyEncodingOps.RubyConverter.SearchConvPath)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyEncodingOps.RubyConverter.SearchConvPath)
             );
             
         }

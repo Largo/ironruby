@@ -213,7 +213,7 @@ namespace IronRuby.Prism {
                         Literal.Integer(0, span), Expr(imaginary.Numeric)
                     }), span);
                 case Pm.StringNode str:
-                    return new StringLiteral(LiteralValue(str.Unescaped), LiteralEncoding(str), span);
+                    return new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str), span);
                 case Pm.SymbolNode symbol:
                     return new SymbolLiteral(LiteralText(symbol.Unescaped), SymbolEncoding(symbol), span);
                 case Pm.TrueNode _: return Literal.True(span);
@@ -258,7 +258,7 @@ namespace IronRuby.Prism {
                     return new StringConstructor(StringParts(interpSymbol.Parts), StringKind.Symbol, span);
                 case Pm.XStringNode xstr:
                     return new StringConstructor(
-                        new List<Expression> { new StringLiteral(LiteralValue(xstr.Unescaped), LiteralEncoding(xstr), span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(xstr.Unescaped, LiteralEncoding(xstr)), LiteralEncoding(xstr), span) },
                         StringKind.Command, span);
                 case Pm.InterpolatedXStringNode interpX:
                     return new StringConstructor(StringParts(interpX.Parts), StringKind.Command, span);
@@ -267,11 +267,11 @@ namespace IronRuby.Prism {
 
                 case Pm.RegularExpressionNode regex:
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped, _encoding), _encoding, span) },
                         RegexOptions(regex), false, span);
                 case Pm.MatchLastLineNode matchLast:
                     return new RegularExpression(
-                        new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped), _encoding, span) },
+                        new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped, _encoding), _encoding, span) },
                         RegexOptions(matchLast), true, span);
                 case Pm.InterpolatedRegularExpressionNode interpRegex:
                     return new RegularExpression(StringParts(interpRegex.Parts), RegexOptions(interpRegex), span);
@@ -596,7 +596,19 @@ namespace IronRuby.Prism {
         /// so keep the bytes whenever they are not valid UTF-8 — decoding those would
         /// replace them with U+FFFD and silently corrupt binary literals like "\xE3\xB0".
         /// </summary>
-        private object/*!*/ LiteralValue(byte[]/*!*/ bytes) {
+        private object/*!*/ LiteralValue(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding) {
+            // A character representation is only lossless if the characters encode back to the
+            // same bytes under the literal's own encoding. That holds for UTF-8 and for pure
+            // ASCII; anything else (e.g. "\xE9\xA1\xB6" in a binary file, which happens to be
+            // valid UTF-8) has to stay a byte string.
+            if (encoding != RubyEncoding.UTF8) {
+                foreach (byte b in bytes) {
+                    if (b >= 0x80) {
+                        return bytes;
+                    }
+                }
+            }
+
             try {
                 return _strictUtf8.GetString(bytes);
             } catch (System.Text.DecoderFallbackException) {
@@ -664,7 +676,7 @@ namespace IronRuby.Prism {
             foreach (var part in parts) {
                 switch (part) {
                     case Pm.StringNode str:
-                        result.Add(new StringLiteral(LiteralValue(str.Unescaped), LiteralEncoding(str), Span(str)));
+                        result.Add(new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str), Span(str)));
                         break;
                     case Pm.EmbeddedStatementsNode embedded:
                         result.Add(StatementsAsExpression(embedded.Statements, Span(embedded)));

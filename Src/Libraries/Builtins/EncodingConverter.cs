@@ -28,6 +28,7 @@ using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Conversions;
 using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
@@ -795,7 +796,8 @@ namespace IronRuby.Builtins {
             /// Turns the trailing argument (an Integer flag word or an options Hash) into CRuby's
             /// flags. The replacement, if the Hash specifies one, comes back separately.
             /// </summary>
-            private static int ParseOptions(object options, out object replacement) {
+            private static int ParseOptions(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+                object options, out object replacement) {
                 replacement = null;
                 if (options == null || options == Missing.Value) {
                     return 0;
@@ -806,6 +808,12 @@ namespace IronRuby.Builtins {
                 }
 
                 var hash = options as IDictionary<object, object>;
+                if (hash == null) {
+                    // CRuby's ** applies #to_hash at the call site; do it here so that objects
+                    // that only respond to #to_hash are accepted.
+                    var site = toHash.GetSite(TryConvertToHashAction.Make(toHash.Context));
+                    hash = site.Target(site, options);
+                }
                 if (hash == null) {
                     throw RubyExceptions.CreateTypeError("no implicit conversion into Hash");
                 }
@@ -894,13 +902,14 @@ namespace IronRuby.Builtins {
             #region Ruby methods
 
             [RubyConstructor]
-            public static RubyConverter/*!*/ Create(ConversionStorage<MutableString>/*!*/ toStr, RubyClass/*!*/ self,
+            public static RubyConverter/*!*/ Create(ConversionStorage<MutableString>/*!*/ toStr,
+                ConversionStorage<IDictionary<object, object>>/*!*/ toHash, RubyClass/*!*/ self,
                 object source, object destination, [Optional]object options) {
 
                 var path = SearchPath(ToEncoding(toStr, source), ToEncoding(toStr, destination));
 
                 object replacement;
-                int flags = ParseOptions(options, out replacement);
+                int flags = ParseOptions(toHash, options, out replacement);
 
                 var result = new RubyConverter(path, flags);
                 if (replacement != null && replacement != DefaultReplacementMarker) {
@@ -910,12 +919,13 @@ namespace IronRuby.Builtins {
             }
 
             [RubyMethod("search_convpath", RubyMethodAttributes.PublicSingleton)]
-            public static RubyArray/*!*/ SearchConvPath(ConversionStorage<MutableString>/*!*/ toStr, RubyClass/*!*/ self,
+            public static RubyArray/*!*/ SearchConvPath(ConversionStorage<MutableString>/*!*/ toStr,
+                ConversionStorage<IDictionary<object, object>>/*!*/ toHash, RubyClass/*!*/ self,
                 object source, object destination, [Optional]object options) {
 
                 var path = SearchPath(ToEncoding(toStr, source), ToEncoding(toStr, destination));
                 object replacement;
-                int flags = ParseOptions(options, out replacement);
+                int flags = ParseOptions(toHash, options, out replacement);
                 return MakeConvPath(path, flags);
             }
 
@@ -974,6 +984,7 @@ namespace IronRuby.Builtins {
             [RubyMethod("primitive_convert")]
             public static object PrimitiveConvert(
                 ConversionStorage<int>/*!*/ toInt,
+                ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
                 RubyContext/*!*/ context,
                 RubyConverter/*!*/ self,
                 MutableString source,
@@ -985,7 +996,7 @@ namespace IronRuby.Builtins {
                 int? offset = ToOptionalInt(toInt, byteOffset);
                 int? limit = ToOptionalInt(toInt, byteLimit);
                 object replacement;
-                int flags = ParseOptions(options, out replacement);
+                int flags = ParseOptions(toHash, options, out replacement);
 
                 return context.CreateAsciiSymbol(self.PrimitiveConvert(source, destination, offset, limit, flags));
             }

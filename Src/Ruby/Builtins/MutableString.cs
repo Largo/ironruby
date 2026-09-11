@@ -489,7 +489,11 @@ namespace IronRuby.Builtins {
             bool isAscii = IsAscii();
             Mutate();
 
-            if (isAscii) {
+            // An all-ASCII character representation only keeps its bytes if both the old and the
+            // new encoding encode ASCII as itself. "ab" in UTF-16LE is 4 bytes, so forcing a
+            // character-based "ab" to UTF-16LE without switching to bytes first would invent two
+            // NUL bytes (and forcing a UTF-16LE string to UTF-8 would drop them).
+            if (isAscii && _encoding.IsAsciiIdentity && newEncoding.IsAsciiIdentity) {
                 SetEncoding(newEncoding);
             } else {
                 SwitchToBytes();
@@ -913,7 +917,10 @@ namespace IronRuby.Builtins {
         public bool Equals(MutableString other) {
             if (ReferenceEquals(other, null)) return false;
 
-            if (KnowsAscii && other.KnowsAscii && IsAscii() != other.IsAscii()) {
+            // MRI's rb_str_comparable: a zero-length string is comparable with any string,
+            // whatever the two encodings are. "".b == "" is true.
+            if (!IsEmpty && !other.IsEmpty &&
+                KnowsAscii && other.KnowsAscii && IsAscii() != other.IsAscii()) {
                 return false;
             }
 
@@ -948,7 +955,15 @@ namespace IronRuby.Builtins {
                     bothAscii = false;
                 }
                 int result = _content.OrdinalCompareTo(other._content);
-                return !bothAscii && result == 0 ? _encoding.CompareTo(other._encoding) : result;
+                if (result != 0 || bothAscii) {
+                    return result;
+                }
+                // MRI's rb_str_comparable: equal bytes in different encodings only differ if
+                // both strings are non-empty; a zero-length string matches anything.
+                if (IsEmpty || other.IsEmpty) {
+                    return 0;
+                }
+                return _encoding.CompareTo(other._encoding);
             } else {
                 return _content.OrdinalCompareTo(other._content);
             }
