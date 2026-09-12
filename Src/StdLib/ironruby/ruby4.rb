@@ -1936,6 +1936,12 @@ class Enumerator
     def call(*args)
       @block.call(*args)
     end
+
+    # Lets a yielder stand in for a block: `Enumerator.new { |y| ary.each(&y) }`.
+    def to_proc
+      yielder = self
+      ::Kernel.proc { |*args| yielder.yield(*args) }
+    end
   end unless const_defined?(:Yielder)
 
   unless method_defined?(:each_without_generator)
@@ -2634,6 +2640,133 @@ class Enumerator
     end
     private :__to_int__
   end
+
+  # --- Enumerator::Chain -------------------------------------------------
+  class Chain < Enumerator
+    def initialize(*enums)
+      @__enums__ = enums
+      self
+    end
+
+    def each(&block)
+      return to_enum(:each) { size } unless block
+      @__enums__.each { |enum| enum.each { |*values| block.call(*values) } }
+      self
+    end
+
+    def size
+      total = 0
+      @__enums__.each do |enum|
+        n = enum.respond_to?(:size) ? enum.size : nil
+        return nil unless n.is_a?(::Numeric)
+        return n if n == ::Float::INFINITY
+        total += n
+      end
+      total
+    end
+
+    def rewind
+      @__enums__.reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
+      self
+    end
+
+    def inspect
+      "#<Enumerator::Chain: #{@__enums__.inspect}>"
+    end
+    alias_method :to_s, :inspect
+
+    def +(other)
+      Chain.new(self, other)
+    end
+  end
+
+  # --- Enumerator::Product -----------------------------------------------
+  # The cartesian product of its arguments, leftmost varying slowest.
+  class Product < Enumerator
+    def initialize(*enums, **options)
+      enums.each do |enum|
+        unless enum.respond_to?(:each)
+          ::Kernel.raise(::TypeError, "wrong argument type #{enum.class} (must respond to :each)")
+        end
+      end
+      @__enums__ = enums
+      self
+    end
+
+    def each(&block)
+      return to_enum(:each) { size } unless block
+      __product__(0, [], block)
+      self
+    end
+
+    def __product__(index, prefix, block)
+      if index == @__enums__.size
+        block.call(prefix.dup)
+        return
+      end
+      @__enums__[index].each do |*values|
+        prefix.push(values.size <= 1 ? values[0] : values)
+        __product__(index + 1, prefix, block)
+        prefix.pop
+      end
+    end
+    private :__product__
+
+    def size
+      total = 1
+      @__enums__.each do |enum|
+        n = enum.respond_to?(:size) ? enum.size : nil
+        return nil unless n.is_a?(::Numeric)
+        total *= n
+      end
+      total
+    end
+
+    def rewind
+      @__enums__.reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
+      self
+    end
+
+    def inspect
+      "#<Enumerator::Product: #{@__enums__.inspect}>"
+    end
+    alias_method :to_s, :inspect
+  end
+
+  def +(other)
+    Chain.new(self, other)
+  end unless method_defined?(:+)
+
+  def self.product(*enums, &block)
+    product = Product.new(*enums)
+    return product unless block
+    product.each(&block)
+    nil
+  end unless respond_to?(:product)
+
+  # Enumerator.produce(initial = nil) { |previous| ... } - an endless sequence
+  # built by feeding each value back into the block. StopIteration ends it.
+  def self.produce(*args, &block)
+    ::Kernel.raise(::ArgumentError, "no block given") unless block
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    has_initial = !args.empty?
+    initial = args[0]
+    Enumerator.new(::Float::INFINITY) do |y|
+      value = has_initial ? initial : block.call(nil)
+      loop do
+        y << value
+        value = block.call(value)
+      end
+    end
+  end unless respond_to?(:produce)
+end
+
+module Enumerable
+  def chain(*others)
+    ::Enumerator::Chain.new(self, *others)
+  end unless method_defined?(:chain)
 end
 
 module Enumerable
