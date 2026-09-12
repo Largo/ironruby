@@ -898,6 +898,15 @@ namespace IronRuby.Builtins {
         }
 
         private void AppendFloat(char type) {
+            // "%f" applied to an Integer is exact in CRuby: the value is not squeezed through
+            // a double first, so 10**39 prints all forty of its digits. The other float
+            // conversions do go through the double - "%.25g" of that same Integer shows the
+            // nearest double - so only "%f" takes this path.
+            if (type == 'f' && (_opts.Value is int || _opts.Value is BigInteger)) {
+                AppendExactInteger();
+                return;
+            }
+
             double value;
             if (_siteStorage != null) {
                 value = _siteStorage.CastToDouble(_opts.Value);
@@ -959,6 +968,28 @@ namespace IronRuby.Builtins {
             }
 
             AppendPadded(SignFor(isNegative), prefix, body, true);
+        }
+
+        /// <summary>"%f" of an Integer: all of its digits followed by a zero fraction.</summary>
+        private void AppendExactInteger() {
+            BigInteger value = (_opts.Value is int) ? new BigInteger((int)_opts.Value) : (BigInteger)_opts.Value;
+
+            int precision = _opts.Precision;
+            if (precision == UnspecifiedPrecision) {
+                precision = 6;
+            }
+            if (precision > 1000) {
+                precision = 1000;
+            }
+
+            string body = BigInteger.Abs(value).ToString(CultureInfo.InvariantCulture);
+            if (precision > 0) {
+                body += "." + new string('0', precision);
+            } else if (_opts.AltForm || _TrailingZeroAfterWholeFloat) {
+                body += _TrailingZeroAfterWholeFloat ? ".0" : ".";
+            }
+
+            AppendPadded(SignFor(value.Sign < 0), "", body, true);
         }
 
         #endregion

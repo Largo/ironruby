@@ -436,7 +436,10 @@ namespace IronRuby.Builtins {
 
             RubyClass cls;
             var context = tosConversion.Context;
-            if (context.HasInstanceVariables(self) && ((cls = context.GetClassOf(self)).IsRubyClass || cls.IsObjectClass)) {
+            // Ruby 1.8 fell back to #to_s when the object had no instance variables; 1.9 dropped
+            // that, so a Ruby object with a custom #to_s and no state still inspects as
+            // "#<Foo:0x...>". That difference is visible through "%p" and Kernel#p.
+            if ((cls = context.GetClassOf(self)).IsRubyClass || cls.IsObjectClass) {
                 return RubyUtils.InspectObject(inspectStorage, tosConversion, self);
             } else {
                 var site = tosConversion.GetSite(ConvertToSAction.Make(context));
