@@ -62,8 +62,10 @@ namespace IronRuby.Builtins {
         /// original arguments, because Ruby auto-splats an Array into a multi-parameter block.
         /// </summary>
         internal static Proc/*!*/ PackingBlock(RubyContext/*!*/ context, Func<BlockParam, object, object>/*!*/ body) {
+            // BlockDispatcherUnsplatN never shrinks the leading-parameter array below the count the
+            // caller passed, so `__` can still carry a stale slot even though the declared parameter
+            // count is 0. `args` holds every yielded value regardless, so `__` is simply ignored.
             return Proc.Create(context, 0, delegate(BlockParam/*!*/ selfBlock, object _, object[] __, RubyArray/*!*/ args) {
-                Debug.Assert(__.Length == 0);
                 return body(selfBlock, PackValues(args));
             });
         }
@@ -76,7 +78,6 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static Proc/*!*/ SplattingBlock(RubyContext/*!*/ context, Func<BlockParam, RubyArray, object>/*!*/ body) {
             return Proc.Create(context, 0, delegate(BlockParam/*!*/ selfBlock, object _, object[] __, RubyArray/*!*/ args) {
-                Debug.Assert(__.Length == 0);
                 return body(selfBlock, args);
             });
         }
