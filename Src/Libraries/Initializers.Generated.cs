@@ -4916,9 +4916,14 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.Require)
             );
             
+            DefineLibraryMethod(module, "respond_to_missing?", 0x52, 
+                0x00000000U, 
+                new Func<System.Object, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.RespondToMissing)
+            );
+            
             DefineLibraryMethod(module, "respond_to?", 0x51, 
-                0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Boolean, System.Boolean>(IronRuby.Builtins.KernelOps.RespondTo)
+                0x00040008U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.String, System.Boolean, System.Boolean>(IronRuby.Builtins.KernelOps.RespondTo)
             );
             
             DefineLibraryMethod(module, "select", 0x52, 
