@@ -19,12 +19,15 @@ JOBS="${2:-6}"
 TIMEOUT="${SWEEP_TIMEOUT:-60}"
 
 cd "$IR_ROOT" || exit 1
-export RUBY_EXE="$IR_ROOT/ir.sh"
+# IR lets a sweep run against a build other than the one in the tree, so a
+# before/after pair can be measured at the same time under the same load.
+IR="${IR:-$IR_ROOT/ir.sh}"
+export RUBY_EXE="$IR"
 
 run_one() {
   file="$1"
   log="$(mktemp)"
-  timeout -s KILL "$TIMEOUT" "$IR_ROOT/ir.sh" -Imspec/lib mspec/bin/mspec-run "$file" >"$log" 2>&1
+  timeout -s KILL "$TIMEOUT" "$IR" -Imspec/lib mspec/bin/mspec-run "$file" >"$log" 2>&1
   status=$?
   tally="$(grep -m1 -E '^[0-9]+ files?, [0-9]+ examples?' "$log")"
   if [ -n "$tally" ]; then
@@ -45,9 +48,19 @@ run_one() {
   rm -f "$log"
 }
 export -f run_one
-export IR_ROOT TIMEOUT
+export IR_ROOT TIMEOUT IR
 
-find spec/core -name '*_spec.rb' | sort |
-  xargs -P "$JOBS" -I{} bash -c 'run_one "$@"' _ {} > "$OUT"
+# SWEEP_RESUME=1 keeps the rows already in $OUT and only runs the rest, so a
+# sweep interrupted by a machine-wide load spike can be picked up again.
+if [ "${SWEEP_RESUME:-0}" = 1 ] && [ -s "$OUT" ]; then
+  cut -f2 "$OUT" | sort -u > /tmp/sweep-done.$$
+  find spec/core -name '*_spec.rb' | sort > /tmp/sweep-all.$$
+  comm -23 /tmp/sweep-all.$$ /tmp/sweep-done.$$ |
+    xargs -P "$JOBS" -I{} bash -c 'run_one "$@"' _ {} >> "$OUT"
+  rm -f /tmp/sweep-done.$$ /tmp/sweep-all.$$
+else
+  find spec/core -name '*_spec.rb' | sort |
+    xargs -P "$JOBS" -I{} bash -c 'run_one "$@"' _ {} > "$OUT"
+fi
 
 echo "wrote $OUT: $(wc -l < "$OUT") files, $(grep -c 'NO-TALLY' "$OUT") NO-TALLY"
