@@ -29,6 +29,7 @@ using System.IO;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.Serialization;
+using System.Text;
 using System.Threading;
 using IronRuby.Builtins;
 using Range = IronRuby.Builtins.Range;
@@ -2310,19 +2311,234 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static double ConvertMutableStringToFloat(RubyContext/*!*/ context, MutableString/*!*/ value) {
-            return ConvertStringToFloat(context, value.ConvertToString());
+            double result;
+            if (TryParseRubyFloat(value.ConvertToString(), out result)) {
+                return result;
+            }
+
+            throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}", context.Inspect(value));
         }
 
         [Emitted]
         public static double ConvertStringToFloat(RubyContext/*!*/ context, string/*!*/ value) {
             double result;
-            bool complete;
-            if (Tokenizer.TryParseDouble(value, out result, out complete) && complete) {
+            if (TryParseRubyFloat(value, out result)) {
                 return result;
             }
 
-            throw RubyExceptions.InvalidValueForType(context, value, "Float");
+            throw RubyExceptions.CreateArgumentError("invalid value for Float(): {0}",
+                context.Inspect(MutableString.CreateMutable(value, RubyEncoding.UTF8)));
         }
+
+        #region Kernel#Float string grammar
+
+        // Kernel#Float does not accept what C's strtod does. Surrounding whitespace is allowed
+        // but an embedded NUL is not; '_' may separate digits; a trailing '.' is rejected while a
+        // leading one is not; hexadecimal literals are accepted; "inf", "Infinity" and "nan" are
+        // not. The rules below were derived by differential testing against CRuby 3.3.8.
+
+        private static bool IsFloatWhitespace(char c) {
+            return c == ' ' || (c >= '\t' && c <= '\r');
+        }
+
+        private static bool IsDecimalDigit(char c) {
+            return c >= '0' && c <= '9';
+        }
+
+        private static bool IsHexadecimalDigit(char c) {
+            return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F');
+        }
+
+        /// <summary>
+        /// Consumes a run of digits, appending them to <paramref name="digits"/>. When
+        /// <paramref name="allowUnderscore"/> is set an '_' may appear between two digits of the
+        /// run, so "1_0" scans but "1__0", "_1" and "1_" do not. Returns the number of digits
+        /// consumed, or -1 for a misplaced underscore.
+        /// </summary>
+        private static int ScanDigitRun(string/*!*/ str, int end, ref int index, StringBuilder/*!*/ digits, bool hexadecimal, bool allowUnderscore) {
+            int count = 0;
+            while (index < end) {
+                char c = str[index];
+                if (hexadecimal ? IsHexadecimalDigit(c) : IsDecimalDigit(c)) {
+                    digits.Append(c);
+                    count++;
+                    index++;
+                } else if (c == '_' && allowUnderscore && count > 0) {
+                    char next = (index + 1 < end) ? str[index + 1] : '\0';
+                    if (!(hexadecimal ? IsHexadecimalDigit(next) : IsDecimalDigit(next))) {
+                        return -1;
+                    }
+                    index++;
+                } else {
+                    break;
+                }
+            }
+            return count;
+        }
+
+        /// <summary>Scans "[eEpP] [+-] digits"; returns false if no digits follow.</summary>
+        private static bool ScanExponent(string/*!*/ str, int end, ref int index, out int exponent) {
+            exponent = 0;
+
+            bool negative = false;
+            if (index < end && (str[index] == '+' || str[index] == '-')) {
+                negative = (str[index] == '-');
+                index++;
+            }
+
+            StringBuilder digits = new StringBuilder();
+            if (ScanDigitRun(str, end, ref index, digits, false, true) <= 0) {
+                return false;
+            }
+
+            if (!Int32.TryParse(digits.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out exponent)) {
+                // Far past the point where the result saturates to 0 or Infinity either way.
+                exponent = 99999;
+            }
+            if (negative) {
+                exponent = -exponent;
+            }
+            return true;
+        }
+
+        internal static bool TryParseRubyFloat(string/*!*/ str, out double result) {
+            result = 0.0;
+
+            int index = 0;
+            int end = str.Length;
+            while (index < end && IsFloatWhitespace(str[index])) {
+                index++;
+            }
+            while (end > index && IsFloatWhitespace(str[end - 1])) {
+                end--;
+            }
+            if (index == end) {
+                return false;
+            }
+
+            bool negative = false;
+            if (str[index] == '+' || str[index] == '-') {
+                negative = (str[index] == '-');
+                index++;
+            }
+
+            bool parsed = (index + 1 < end && str[index] == '0' && (str[index + 1] == 'x' || str[index + 1] == 'X'))
+                ? TryParseHexadecimalFloat(str, index + 2, end, out result)
+                : TryParseDecimalFloat(str, index, end, out result);
+
+            if (parsed && negative) {
+                result = -result;
+            }
+            return parsed;
+        }
+
+        private static bool TryParseDecimalFloat(string/*!*/ str, int index, int end, out double result) {
+            result = 0.0;
+
+            StringBuilder digits = new StringBuilder();
+            int integerDigits = ScanDigitRun(str, end, ref index, digits, false, true);
+            if (integerDigits < 0) {
+                return false;
+            }
+
+            int scale = 0;
+            if (index < end && str[index] == '.') {
+                index++;
+                int fractionDigits = ScanDigitRun(str, end, ref index, digits, false, true);
+                // Digits are required after the point: ".5" parses, "5." and "1.e5" do not.
+                if (fractionDigits <= 0) {
+                    return false;
+                }
+                scale = -fractionDigits;
+            } else if (integerDigits == 0) {
+                return false;
+            }
+
+            int exponent = 0;
+            if (index < end && (str[index] == 'e' || str[index] == 'E')) {
+                index++;
+                if (!ScanExponent(str, end, ref index, out exponent)) {
+                    return false;
+                }
+            }
+
+            if (index != end) {
+                return false;
+            }
+
+            long power = (long)exponent + scale;
+            if (power > 99999) {
+                power = 99999;
+            } else if (power < -99999) {
+                power = -99999;
+            }
+
+            // Double.Parse saturates to Infinity or zero rather than failing, which is what Ruby
+            // does with "1e400" and "1e-400".
+            return Double.TryParse(
+                digits.ToString() + "E" + power.ToString(CultureInfo.InvariantCulture),
+                NumberStyles.Float, CultureInfo.InvariantCulture, out result);
+        }
+
+        private static bool TryParseHexadecimalFloat(string/*!*/ str, int index, int end, out double result) {
+            result = 0.0;
+
+            // Underscores are not accepted among the hexadecimal digits, only in the exponent.
+            StringBuilder digits = new StringBuilder();
+            if (ScanDigitRun(str, end, ref index, digits, true, false) <= 0) {
+                return false;
+            }
+
+            int scale = 0;
+            bool hasFraction = false;
+            if (index < end && str[index] == '.') {
+                index++;
+                int fractionDigits = ScanDigitRun(str, end, ref index, digits, true, false);
+                if (fractionDigits <= 0) {
+                    return false;
+                }
+                scale = -4 * fractionDigits;
+                hasFraction = true;
+            }
+
+            int exponent = 0;
+            bool hasExponent = false;
+            if (index < end && (str[index] == 'p' || str[index] == 'P')) {
+                index++;
+                if (!ScanExponent(str, end, ref index, out exponent)) {
+                    return false;
+                }
+                hasExponent = true;
+            }
+
+            // A hexadecimal fraction is only meaningful with a binary exponent, so "0x1.8" is
+            // rejected while "0x1f" and "0x1p3" are not.
+            if (hasFraction && !hasExponent) {
+                return false;
+            }
+            if (index != end) {
+                return false;
+            }
+
+            BigInteger mantissa = BigInteger.Zero;
+            for (int i = 0; i < digits.Length; i++) {
+                char c = digits[i];
+                int digit = (c <= '9') ? (c - '0') : ((c | 0x20) - 'a' + 10);
+                mantissa = mantissa * 16 + digit;
+            }
+
+            long power = (long)exponent + scale;
+            if (power > 99999) {
+                power = 99999;
+            } else if (power < -99999) {
+                power = -99999;
+            }
+
+            result = Math.ScaleB((double)mantissa, (int)power);
+            return true;
+        }
+
+        #endregion
 
         [Emitted] // ProtocolConversionAction
         public static Exception/*!*/ CreateTypeConversionError(string/*!*/ fromType, string/*!*/ toType) {
