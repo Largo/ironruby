@@ -113,7 +113,11 @@ namespace IronRuby.Builtins {
                         break;
 
                     default:
-                        result.Insert(0, ":\"").Append('"');
+                        // MRI quotes a symbol that is not a bare name the same way it quotes a
+                        // string, escapes and all, so a symbol carrying a control character does
+                        // not write that byte out raw in the middle of someone's output.
+                        result = MutableStringOps.Inspect(context, self.String);
+                        result.Insert(0, ':');
                         break;
                 }
             }
