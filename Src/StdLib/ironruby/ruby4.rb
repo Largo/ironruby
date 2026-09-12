@@ -3751,6 +3751,110 @@ class Regexp
   end unless method_defined?(:match?)
 end
 
+# MatchData knew nothing about named groups - m[:name] was a TypeError about
+# converting a Symbol into an Integer - and had none of the byte-offset or
+# pattern-matching methods. The group names come from the CLR Match through the
+# three plain CLR methods added to MatchData.cs; everything else is built on
+# top of them and of #string, which is the subject the offsets refer to.
+class MatchData
+  alias_method :__ir_index__, :[]
+
+  def [](*args)
+    if args.size == 1
+      key = args[0]
+      if key.is_a?(::Symbol) || key.is_a?(::String)
+        name = key.to_s
+        unless HasNamedGroup(name)
+          ::Kernel.raise(::IndexError, "undefined group name reference: #{name}")
+        end
+        return nil unless NamedGroupSuccess(name)
+        start = GetNamedGroupStart(name)
+        return string[start, GetNamedGroupLength(name)]
+      end
+    end
+    __ir_index__(*args)
+  end
+
+  def names
+    GetGroupNames().map { |n| n.to_s }
+  end unless method_defined?(:names)
+
+  def named_captures(symbolize_names: false)
+    result = {}
+    names.each do |n|
+      result[symbolize_names ? n.to_sym : n] = self[n]
+    end
+    result
+  end unless method_defined?(:named_captures)
+
+  def deconstruct
+    captures
+  end unless method_defined?(:deconstruct)
+
+  def deconstruct_keys(keys)
+    all = names
+    result = {}
+    if keys.nil?
+      all.each { |n| result[n.to_sym] = self[n] }
+      return result
+    end
+    keys.each do |k|
+      k = k.to_sym
+      return result unless all.include?(k.to_s)
+      result[k] = self[k.to_s]
+    end
+    result
+  end unless method_defined?(:deconstruct_keys)
+
+  def match(n)
+    self[n.is_a?(::Integer) ? n : n.to_s]
+  end unless method_defined?(:match)
+
+  def match_length(n)
+    m = match(n)
+    m && m.length
+  end unless method_defined?(:match_length)
+
+  def __group_bounds__(n)
+    if n.is_a?(::Integer)
+      s = self.begin(n)
+      return nil if s.nil?
+      [s, self.end(n)]
+    else
+      name = n.to_s
+      unless HasNamedGroup(name)
+        ::Kernel.raise(::IndexError, "undefined group name reference: #{name}")
+      end
+      return nil unless NamedGroupSuccess(name)
+      s = GetNamedGroupStart(name)
+      [s, s + GetNamedGroupLength(name)]
+    end
+  end
+  private :__group_bounds__
+
+  # Character offsets in, byte offsets out: the subject's own bytes decide.
+  def byteoffset(n)
+    bounds = __group_bounds__(n)
+    return [nil, nil] if bounds.nil?
+    subject = string
+    [subject[0, bounds[0]].bytesize, subject[0, bounds[1]].bytesize]
+  end unless method_defined?(:byteoffset)
+
+  def bytebegin(n)
+    byteoffset(n)[0]
+  end unless method_defined?(:bytebegin)
+
+  def byteend(n)
+    byteoffset(n)[1]
+  end unless method_defined?(:byteend)
+
+  alias_method :__ir_values_at__, :values_at
+
+  def values_at(*indexes)
+    indexes.map { |i| self[i] }
+  end
+end
+
 class Symbol
   def match?(pattern)
     !to_s.match(pattern).nil?
