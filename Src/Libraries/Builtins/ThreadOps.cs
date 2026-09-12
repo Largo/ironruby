@@ -572,53 +572,26 @@ namespace IronRuby.Builtins {
         }
 #endif
 
+        /// <summary>
+        /// Thread#raise takes exactly the arguments Kernel#raise does, including `cause:`, and is
+        /// built from the same helper so the two cannot drift apart.
+        ///
+        /// The cause is resolved in the *calling* thread's context, which is what MRI 4.0 does:
+        /// the exception carries the cause of whoever raised it, not of the thread it lands in.
+        /// </summary>
         [RubyMethod("raise")]
         [RubyStackTraceHidden]
-        public static void RaiseException(RubyContext/*!*/ context, Thread/*!*/ self) {
+        public static void RaiseException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
+            CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
+            RubyContext/*!*/ context, Thread/*!*/ self, params object[]/*!*/ args) {
+
             if (self == Thread.CurrentThread) {
-                KernelOps.RaiseException(context, self);
+                KernelOps.RaiseException(respondToStorage, storage0, storage1, setBackTraceStorage, context, self, args);
                 return;
             }
 
 #if FEATURE_EXCEPTION_STATE
-            // TODO: RubyContext.CurrentException is a thread-local static, and cannot be accessed from other threads
-            // To fix this, it would have to be stored somehow without using ThreadStaticAttribute
-            // For now, we just throw a RuntimeError
-            RaiseAsyncException(self, new RuntimeError());
-#else
-            throw new NotImplementedError("Thread#raise not supported on this platform");
-#endif
-        }
-
-        [RubyMethod("raise")]
-        [RubyStackTraceHidden]
-        public static void RaiseException(Thread/*!*/ self, [NotNull]MutableString/*!*/ message) {
-            if (self == Thread.CurrentThread) {
-                KernelOps.RaiseException(self, message);
-                return;
-            }
-
-#if FEATURE_EXCEPTION_STATE
-            Exception e = RubyExceptionData.InitializeException(new RuntimeError(message.ToString()), message);
-            RaiseAsyncException(self, e);
-#else
-            throw new NotImplementedError("Thread#raise not supported on this platform");
-#endif
-        }
-
-        [RubyMethod("raise")]
-        [RubyStackTraceHidden]
-        public static void RaiseException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1, 
-            CallSiteStorage<Action<CallSite, Exception, RubyArray>>/*!*/ setBackTraceStorage, 
-            Thread/*!*/ self, object/*!*/ obj, [Optional]object arg, [Optional]RubyArray backtrace) {
-
-            if (self == Thread.CurrentThread) {
-                KernelOps.RaiseException(respondToStorage, storage0, storage1, setBackTraceStorage, self, obj, arg, backtrace);
-                return;
-            }
-
-#if FEATURE_EXCEPTION_STATE
-            Exception e = KernelOps.CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, obj, arg, backtrace);
+            Exception e = KernelOps.CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args);
             RaiseAsyncException(self, e);
 #else
             throw new NotImplementedError("Thread#raise not supported on this platform");

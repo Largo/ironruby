@@ -64,6 +64,10 @@ namespace IronRuby.Runtime {
         // can be set explicitly by the user (even to nil):
         private RubyArray _backtrace;
 
+        // Exception#cause; _hasCause tells "decided" from "not raised yet", see TrySetCause.
+        private Exception _cause;
+        private bool _hasCause;
+
         [NonSerialized]
         private CallSite<Func<CallSite, RubyContext, Exception, RubyArray, object>> _setBacktraceCallSite;
 
@@ -177,12 +181,52 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Exception#cause. MRI fixes the cause the first time an exception is raised and never
+        /// changes it afterwards, so re-raising a rescued exception keeps the original chain.
+        /// <see cref="HasCause"/> distinguishes "never raised / cause not decided yet" from an
+        /// explicit `cause: nil`; both answer nil from Ruby.
+        /// </summary>
+        public Exception Cause {
+            get { return _cause; }
+        }
+
+        public bool HasCause {
+            get { return _hasCause; }
+        }
+
+        /// <summary>
+        /// Assigns the cause if it has not been assigned yet. Returns true if it was assigned now.
+        /// </summary>
+        public bool TrySetCause(Exception cause) {
+            if (_hasCause) {
+                return false;
+            }
+            _hasCause = true;
+            // an exception is never its own cause (MRI: `raise e, cause: e` leaves cause nil)
+            _cause = (cause == _exception || cause == _visibleException) ? null : cause;
+            return true;
+        }
+
         public static string/*!*/ GetClrMessage(RubyContext/*!*/ context, object message) {
             return Protocols.ToClrStringNoThrow(context, message);
         }
 
         public static string/*!*/ GetClrMessage(RubyClass/*!*/ exceptionClass, object message) {
-            return GetClrMessage(exceptionClass.Context, message ?? exceptionClass.Name);
+            // RubyClass.Name is null for an anonymous class, which used to make
+            // `Class.new(StandardError).new` die with ArgumentNullException. MRI's default
+            // message is the class's #to_s, i.e. "#<Class:0x...>" for an anonymous one.
+            return GetClrMessage(exceptionClass.Context, message ?? GetDefaultMessage(exceptionClass));
+        }
+
+        /// <summary>
+        /// MRI's default Exception#message: the name of the class (its #to_s).
+        /// </summary>
+        public static MutableString/*!*/ GetDefaultMessage(RubyClass/*!*/ exceptionClass) {
+            var context = exceptionClass.Context;
+            return exceptionClass.Name != null
+                ? MutableString.Create(exceptionClass.Name, context.GetIdentifierEncoding())
+                : exceptionClass.GetDisplayName(context, false);
         }
 
         public static Exception/*!*/ InitializeException(Exception/*!*/ exception, object message) {

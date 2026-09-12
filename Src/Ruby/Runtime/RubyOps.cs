@@ -1787,6 +1787,12 @@ namespace IronRuby.Runtime {
             // calls "new" on the exception class if it hasn't been called yet:
             exception = RubyExceptionData.HandleException(scope.RubyContext, exception);
 
+            // Exception#cause: the exception that was being handled when this one was raised.
+            // $! still holds it here - we are about to overwrite it below. Kernel#raise has
+            // already decided the cause for the exceptions it throws, and TrySetCause leaves
+            // those (and any re-raise of an already-raised exception) alone.
+            RubyExceptionData.GetInstance(exception).TrySetCause(scope.RubyContext.CurrentException);
+
             scope.RubyContext.CurrentException = exception;
             RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
             return true;

@@ -85,7 +85,7 @@ namespace IronRuby.Builtins {
         public static Exception/*!*/ ReinitializeException(RubyContext/*!*/ context, Exception/*!*/ self, [DefaultParameterValue(null)]object message) {
             var instance = RubyExceptionData.GetInstance(self);
             instance.Backtrace = null;
-            instance.Message = message ?? MutableString.Create(context.GetClassOf(self).Name, context.GetIdentifierEncoding());
+            instance.Message = message ?? RubyExceptionData.GetDefaultMessage(context.GetClassOf(self));
             return self;
         }
 
@@ -101,6 +101,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("backtrace", RubyMethodAttributes.PublicInstance)]
         public static RubyArray GetBacktrace(Exception/*!*/ self) {
             return RubyExceptionData.GetInstance(self).Backtrace;
+        }
+
+        /// <summary>
+        /// The exception that was being handled ($!) when this one was raised, or nil.
+        /// Assigned once, by Kernel#raise; see RubyExceptionData.TrySetCause.
+        /// </summary>
+        [RubyMethod("cause", RubyMethodAttributes.PublicInstance)]
+        public static Exception GetCause(Exception/*!*/ self) {
+            return RubyExceptionData.GetInstance(self).Cause;
         }
 
         [RubyMethod("set_backtrace", RubyMethodAttributes.PublicInstance)]
@@ -173,10 +182,12 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("inspect", RubyMethodAttributes.PublicInstance)]
         public static MutableString/*!*/ Inspect(UnaryOpStorage/*!*/ inspectStorage, ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
+            var context = inspectStorage.Context;
             object message = RubyExceptionData.GetInstance(self).Message;
-            string className = inspectStorage.Context.GetClassDisplayName(self);
+            // an anonymous class has no name; MRI prints "#<#<Class:0x...>: msg>" for it
+            MutableString className = RubyExceptionData.GetDefaultMessage(context.GetClassOf(self));
 
-            MutableString result = MutableString.CreateMutable(inspectStorage.Context.GetIdentifierEncoding());
+            MutableString result = MutableString.CreateMutable(context.GetIdentifierEncoding());
             result.Append("#<");
             result.Append(className);
             result.Append(": ");
