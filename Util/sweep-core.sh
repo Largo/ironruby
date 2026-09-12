@@ -29,7 +29,10 @@ run_one() {
   log="$(mktemp)"
   timeout -s KILL "$TIMEOUT" "$IR" -Imspec/lib mspec/bin/mspec-run "$file" >"$log" 2>&1
   status=$?
-  tally="$(grep -m1 -E '^[0-9]+ files?, [0-9]+ examples?' "$log")"
+  # -a matters: a spec that prints a NUL byte makes grep call the log a binary
+  # file and report "Binary file ... matches" instead of the tally line, which
+  # looks exactly like a spec that printed no tally at all.
+  tally="$(grep -a -m1 -E '^[0-9]+ files?, [0-9]+ examples?' "$log")"
   if [ -n "$tally" ]; then
     printf '%s\t%s\t%s\t\n' "$status" "$file" "$tally"
   else
@@ -40,7 +43,7 @@ run_one() {
     esac
     # Did mspec get as far as running examples? The dotted formatter prints
     # progress characters on their own line before anything else.
-    if [ "$cause" = REPORT ] && ! grep -qE '^[.EF]+$|^[0-9]+\)$' "$log"; then
+    if [ "$cause" = REPORT ] && ! grep -a -qE '^[.EF]+$|^[0-9]+\)$' "$log"; then
       cause=LOAD
     fi
     printf '%s\t%s\tNO-TALLY\t%s\n' "$status" "$file" "$cause"

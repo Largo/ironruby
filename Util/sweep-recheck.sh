@@ -13,18 +13,19 @@ IR_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
 SWEEP="$1"
 TIMEOUT="${2:-180}"
 cd "$IR_ROOT" || exit 1
-export RUBY_EXE="$IR_ROOT/ir.sh"
+IR="${IR:-$IR_ROOT/ir.sh}"
+export RUBY_EXE="$IR"
 
 tmp="$(mktemp)"
 while IFS=$'\t' read -r status file tally cause; do
-  if [ "$tally" != "NO-TALLY" ]; then
-    printf '%s\t%s\t%s\t%s\n' "$status" "$file" "$tally" "$cause"
-    continue
-  fi
+  case "$tally" in
+    NO-TALLY|"Binary file"*|"") ;;                 # re-measure
+    *) printf '%s\t%s\t%s\t%s\n' "$status" "$file" "$tally" "$cause"; continue ;;
+  esac
   log="$(mktemp)"
-  timeout -s KILL "$TIMEOUT" "$IR_ROOT/ir.sh" -Imspec/lib mspec/bin/mspec-run "$file" >"$log" 2>&1
+  timeout -s KILL "$TIMEOUT" "$IR" -Imspec/lib mspec/bin/mspec-run "$file" >"$log" 2>&1
   st=$?
-  new="$(grep -m1 -E '^[0-9]+ files?, [0-9]+ examples?' "$log")"
+  new="$(grep -a -m1 -E '^[0-9]+ files?, [0-9]+ examples?' "$log")"
   if [ -n "$new" ]; then
     printf '%s\t%s\t%s\t\n' "$st" "$file" "$new"
   else
@@ -33,7 +34,7 @@ while IFS=$'\t' read -r status file tally cause; do
       0|1) c=REPORT ;;
       *) c=ABORT ;;
     esac
-    if [ "$c" = REPORT ] && ! grep -qE '^[.EF]+$|^[0-9]+\)$' "$log"; then
+    if [ "$c" = REPORT ] && ! grep -a -qE '^[.EF]+$|^[0-9]+\)$' "$log"; then
       c=LOAD
     fi
     printf '%s\t%s\tNO-TALLY\t%s\n' "$st" "$file" "$c"
