@@ -800,7 +800,7 @@ namespace IronRuby.Builtins {
         // Ruby constructor:
         public static object CreateAnonymousModule(RubyScope/*!*/ scope, BlockParam body, RubyClass/*!*/ self) {
             RubyModule newModule = new RubyModule(self, null);
-            return (body != null) ? RubyUtils.EvaluateInModule(newModule, body, null, newModule) : newModule;
+            return (body != null) ? RubyUtils.EvaluateInModule(newModule, body, new[] { (object)newModule }, newModule) : newModule;
         }
 
         // thread safe:

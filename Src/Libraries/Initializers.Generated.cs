@@ -5809,6 +5809,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod, System.Boolean>(IronRuby.Builtins.MethodOps.Equal)
             );
             
+            DefineLibraryMethod(module, "name", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.MethodOps.GetName)
+            );
+            
             DefineLibraryMethod(module, "of", 0x51, 
                 0x80000004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, System.Object[], IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.MethodOps.BindGenericParameters)
@@ -5824,9 +5829,19 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, System.Object[], IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.MethodOps.SelectOverload_old)
             );
             
+            DefineLibraryMethod(module, "owner", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MethodOps.GetOwner)
+            );
+            
             DefineLibraryMethod(module, "parameters", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetParameters)
+            );
+            
+            DefineLibraryMethod(module, "receiver", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyMethod, System.Object>(IronRuby.Builtins.MethodOps.GetReceiver)
             );
             
             DefineLibraryMethod(module, "source_location", 0x51, 
@@ -9610,6 +9625,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.UnboundMethod, System.Object, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.UnboundMethod.Bind)
             );
             
+            DefineLibraryMethod(module, "bind_call", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.UnboundMethod, System.Object, System.Object[], System.Object>(IronRuby.Builtins.UnboundMethod.BindCall)
+            );
+            
             DefineLibraryMethod(module, "clone", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.UnboundMethod.Clone)
@@ -9625,6 +9645,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod, System.Boolean>(IronRuby.Builtins.UnboundMethod.Equal)
             );
             
+            DefineLibraryMethod(module, "name", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.UnboundMethod.GetName)
+            );
+            
             DefineLibraryMethod(module, "of", 0x51, 
                 0x80000004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, System.Object[], IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.UnboundMethod.BingGenericParameters)
@@ -9638,6 +9663,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "overloads", 0x51, 
                 0x80000004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, System.Object[], IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.UnboundMethod.SelectOverload_old)
+            );
+            
+            DefineLibraryMethod(module, "owner", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.UnboundMethod.GetOwner)
             );
             
             DefineLibraryMethod(module, "parameters", 0x51, 

@@ -41,7 +41,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("already initialized class");
             }
 
-            return (block != null) ? RubyUtils.EvaluateInModule(self, block, null) : null;
+            return (block != null) ? RubyUtils.EvaluateInModule(self, block, new object[] { self }) : null;
         }
 
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
@@ -658,7 +658,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("module_eval")]
         [RubyMethod("class_eval")]
         public static object Evaluate([NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self) {
-            return RubyUtils.EvaluateInModule(self, block, null);
+            // The module is passed to the block as its single argument, so
+            // `Struct.new(:a) { |c| ... }` and `String.class_eval { |m| ... }` see it rather
+            // than nil. module_exec/class_exec pass the caller's arguments instead.
+            return RubyUtils.EvaluateInModule(self, block, new object[] { self });
         }
 
         // This method is not available in 1.8 so far, but since the usual workaround is very inefficient it is useful to have it in 1.8 as well.
