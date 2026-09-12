@@ -332,8 +332,13 @@ namespace IronRuby.Builtins {
                     result.Add(new StringBuilder());
                     foreach (GlobNode node in _nodes) {
                         List<StringBuilder> tmp = new List<StringBuilder>();
-                        foreach (StringBuilder builder in node.Flatten()) {
-                            foreach (StringBuilder sb in result) {
+                        List<StringBuilder> alternatives = node.Flatten();
+                        // The accumulated prefixes are the *outer* loop so that the left-most
+                        // group varies slowest: "a{.js,.html}{.erb,.rjs}" expands in the order
+                        // a.js.erb, a.js.rjs, a.html.erb, a.html.rjs. Iterating the
+                        // alternatives outermost reversed that.
+                        foreach (StringBuilder sb in result) {
+                            foreach (StringBuilder builder in alternatives) {
                                 StringBuilder newsb = new StringBuilder(sb.ToString());
                                 newsb.Append(builder.ToString());
                                 tmp.Add(newsb);
@@ -394,9 +399,10 @@ namespace IronRuby.Builtins {
             bool inEscape = false;
             foreach (char c in pattern) {
                 if (inEscape) {
-                    if (c != ',' && c != '{' && c != '}') {
-                        ungrouper.AddChar('\\');
-                    }
+                    // The backslash is kept even before ',', '{' and '}' so that the escape
+                    // survives into PatternToRegex. Dropping it made Dir["special/\\{}/x"]
+                    // look like an unbalanced '}' at brace level 0, which matches nothing.
+                    ungrouper.AddChar('\\');
                     ungrouper.AddChar(c);
                     inEscape = false;
                     continue;
@@ -522,6 +528,20 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            /// <summary>
+            /// PlatformAdaptationLayer has no notion of links, so this goes straight to
+            /// System.IO. A PAL over a virtual file system simply reports no symlinks, which
+            /// is the pre-existing behaviour.
+            /// </summary>
+            private static bool IsSymbolicLinkToDirectory(string/*!*/ path) {
+                try {
+                    var info = new DirectoryInfo(path);
+                    return info.Exists && info.LinkTarget != null;
+                } catch (Exception) {
+                    return false;
+                }
+            }
+
             /// <summary>Joins a directory and a name without doubling the separator at the root.</summary>
             private static string/*!*/ Combine(string/*!*/ directory, string/*!*/ name) {
                 return directory.EndsWith("/", StringComparison.Ordinal) ? directory + name : directory + "/" + name;
@@ -628,6 +648,12 @@ namespace IronRuby.Builtins {
                     string objectName = Path.GetFileName(file);
                     if (FnMatch(dirSegment, objectName, _flags)) {
                         var canon = RubyUtils.CanonicalizePath(file);
+                        if (doubleStar && IsSymbolicLinkToDirectory(canon)) {
+                            // A recursive "**" neither reports a symlinked directory nor walks
+                            // into it - otherwise Dir["**/"] both lists "special/ln/" and
+                            // reports everything below it a second time.
+                            continue;
+                        }
                         TestPath(canon, patternEnd, isLastPathSegment, false);
                         if (doubleStar) {
                             DoGlob(canon, position, true, false);
@@ -662,11 +688,15 @@ namespace IronRuby.Builtins {
 
             var segments = pattern.Split('/');
             var kept = new List<string>(segments.Length);
-            foreach (var segment in segments) {
-                if (segment == "**" && kept.Count > 0 && kept[kept.Count - 1] == "**") {
+            for (int i = 0; i < segments.Length; i++) {
+                // A trailing "**" is a plain "*", not a recursive descent, so it never
+                // collapses into the "**" before it: Dir["**/**"] is the whole tree while
+                // Dir["**"] is one level.
+                bool recursive = segments[i] == "**" && i < segments.Length - 1;
+                if (recursive && kept.Count > 0 && kept[kept.Count - 1] == "**") {
                     continue;
                 }
-                kept.Add(segment);
+                kept.Add(segments[i]);
             }
             return (kept.Count == segments.Length) ? pattern : String.Join("/", kept.ToArray());
         }
