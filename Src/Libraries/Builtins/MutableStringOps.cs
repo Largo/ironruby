@@ -2023,7 +2023,11 @@ namespace IronRuby.Builtins {
             if (subString == null || self.Length < subString.Length) {
                 return false;
             }
-            return self.EndsWith(subString.ConvertToString());
+
+            // Comparing the strings rather than converting the argument to a CLR string keeps
+            // this working for a string holding bytes that are invalid in its encoding, which
+            // MRI answers from the trailing bytes.
+            return self.EndsWith(subString);
         }
 
         #endregion
@@ -2109,6 +2113,21 @@ namespace IronRuby.Builtins {
         [RubyMethod("include?")]
         public static bool Include(MutableString/*!*/ str, [DefaultProtocol, NotNull]MutableString/*!*/ subString) {
             str.RequireCompatibleEncoding(subString);
+
+            // MRI looks for the byte sequence, so it answers this even for a string holding
+            // bytes that are invalid in its encoding. Reading such a string as characters -
+            // which is what the path below does - raises instead, and that is not a theoretical
+            // concern: mspec asks `description.include?(pattern)` about every example it runs,
+            // so one spec description with a stray byte in it used to take down the whole run
+            // before any tally was printed.
+            if (subString.ContainsInvalidCharacters()) {
+                // rb_str_index gives up on a broken needle rather than searching for it.
+                return false;
+            }
+            if (str.ContainsInvalidCharacters()) {
+                return str.IndexOf(subString.ToByteArray()) != -1;
+            }
+
             str.PrepareForCharacterRead();
             subString.PrepareForCharacterRead();
             return str.IndexOf(subString) != -1;
