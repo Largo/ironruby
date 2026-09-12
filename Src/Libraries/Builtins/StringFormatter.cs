@@ -177,12 +177,19 @@ namespace IronRuby.Builtins {
 
             _buf.Append(_format, _index, _format.Length - _index);
 
-            // Ruby only warns when $VERBOSE is true, and a lone Hash argument is assumed to carry
-            // keyword references even when the format string does not use any.
+            // Leftover arguments raise under $DEBUG and only warn under $VERBOSE. A lone Hash
+            // argument is assumed to carry keyword references even when the format string uses
+            // none, so it never counts as unused.
             if (!_useNamed && (!_useAbsolute.HasValue || !_useAbsolute.Value) && _relativeIndex != _data.Count
-                && !(_data.Count == 1 && _data[0] is IDictionary)
-                && RubyOps.IsTrue(_context.Verbose)) {
-                _context.ReportWarning("too many arguments for format string");
+                && !(_data.Count == 1 && _data[0] is IDictionary)) {
+
+                object debug;
+                if (_context.TryGetGlobalVariable(null, "DEBUG", out debug) && RubyOps.IsTrue(debug)) {
+                    throw RubyExceptions.CreateArgumentError("too many arguments for format string");
+                }
+                if (RubyOps.IsTrue(_context.Verbose)) {
+                    _context.ReportWarning("too many arguments for format string");
+                }
             }
 
             MutableString result = MutableString.Create(_buf.ToString(), _resultEncoding ?? _encoding);
