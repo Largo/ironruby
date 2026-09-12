@@ -139,10 +139,17 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString/*!*/ ToMutableString(ConversionStorage<MutableString>/*!*/ tosConversion) {
-            MutableString str = Protocols.ConvertToString(tosConversion, _begin);
-            str.Append(Separator);
-            str.Append(Protocols.ConvertToString(tosConversion, _end));
-            return str;
+            // String#to_s answers the string itself, so appending to what the conversion
+            // returns rewrites the range's own endpoint: ("ab".."zz").to_s used to leave
+            // the begin string reading "ab..zz".
+            MutableString begin = Protocols.ConvertToString(tosConversion, _begin);
+            MutableString end = Protocols.ConvertToString(tosConversion, _end);
+
+            var result = MutableString.CreateMutable(begin.Encoding);
+            result.Append(begin);
+            result.Append(Separator);
+            result.Append(end);
+            return result;
         }
     }
 }
