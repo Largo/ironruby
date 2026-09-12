@@ -877,22 +877,12 @@ unless defined?(Fiber)
       __err__(::TypeError, "wrong argument type #{key.class} (expected Symbol)")
     end
 
+    # Exactly Kernel#raise's argument handling (including cause:) but returning the
+    # exception instead of throwing it, so that it can be handed to the target fiber.
+    # The cause is resolved here, i.e. in the calling fiber's context, which is what
+    # MRI 4.0 does.
     def self.__make_exception__(args)
-      if args.empty?
-        cur = $!
-        return cur if cur
-        return ::RuntimeError.new("")
-      end
-      first = args[0]
-      if first.is_a?(::String)
-        ::RuntimeError.new(first)
-      elsif args.size >= 2
-        exc = first.exception(args[1])
-        exc.set_backtrace(args[2]) if args.size >= 3 && args[2]
-        exc
-      else
-        first.exception
-      end
+      __build_exception__(*args)
     end
 
     def self.__init_storage__(storage, parent)

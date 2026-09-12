@@ -301,8 +301,23 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Builds the exception `raise` would throw, without throwing it. Fiber#raise is written
+        /// in Ruby (Src/StdLib/ironruby/ruby4.rb) and has to hand the exception to another fiber,
+        /// so it needs the argument handling - including `cause:`, which MRI resolves in the
+        /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
+        /// </summary>
+        [RubyMethod("__build_exception__", RubyMethodAttributes.PrivateInstance)]
+        public static Exception/*!*/ BuildException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
+            CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
+            RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
+
+            return CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args);
+        }
+
+        /// <summary>
         /// The whole of `raise [exception [, message [, backtrace]]] [, cause: c]`, shared by
-        /// Kernel#raise, Thread#raise and (via Kernel) Fiber#raise so that all three agree.
+        /// Kernel#raise, Thread#raise and (via __build_exception__) Fiber#raise so that all
+        /// three agree.
         /// </summary>
         internal static Exception/*!*/ CreateExceptionToRaise(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
