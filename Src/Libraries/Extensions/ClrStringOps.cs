@@ -370,7 +370,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_i")]
         public static object/*!*/ ToInteger(string/*!*/ self, [DefaultProtocol, DefaultParameterValue(10)]int @base) {
             if (@base == 1 || @base < 0 || @base > 36) {
-                throw RubyExceptions.CreateArgumentError("illegal radix {0}", @base);
+                throw RubyExceptions.CreateArgumentError("invalid radix {0}", @base);
             }
             return Tokenizer.ParseInteger(self, @base).ToObject();
         }

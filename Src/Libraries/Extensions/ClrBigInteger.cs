@@ -929,7 +929,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_s")]
         public static MutableString/*!*/ ToString(BigInteger/*!*/ self, int radix) {
             if (radix < 2 || radix > 36) {
-                throw RubyExceptions.CreateArgumentError("illegal radix {0}", radix);
+                throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
             }
 
             // TODO: Can we do the ToLower in BigInteger?

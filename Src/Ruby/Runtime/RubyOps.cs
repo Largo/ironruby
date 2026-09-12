@@ -1838,7 +1838,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static ArgumentException/*!*/ CreateArgumentsErrorForMissingBlock() {
-            return (ArgumentException)RubyExceptions.CreateArgumentError("block not supplied");
+            return (ArgumentException)RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
         }
 
         [Emitted]
@@ -1848,7 +1848,17 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static ArgumentException/*!*/ MakeWrongNumberOfArgumentsError(int actual, int expected) {
-            return new ArgumentException(String.Format("wrong number of arguments ({0} for {1})", actual, expected));
+            // MRI wording since 1.9: "wrong number of arguments (given 1, expected 0)".
+            return new ArgumentException(String.Format("wrong number of arguments (given {0}, expected {1})", actual, expected));
+        }
+
+        /// <summary>
+        /// Same, but with MRI's variable-arity spelling of the expected count: "1..3", "1+" or "2, 3, or 5".
+        /// The description is a compile-time constant produced by the binder.
+        /// </summary>
+        [Emitted]
+        public static ArgumentException/*!*/ MakeWrongNumberOfArgumentsErrorN(int actual, string/*!*/ expected) {
+            return new ArgumentException(String.Format("wrong number of arguments (given {0}, expected {1})", actual, expected));
         }
 
         [Emitted] //SuperCall
@@ -2321,12 +2331,18 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            throw RubyExceptions.InvalidValueForType(context, value, "Float");
+            // MRI: Float("zz") => ArgumentError: invalid value for Float(): "zz"
+            throw RubyExceptions.CreateArgumentError("invalid value for Float(): \"{0}\"", value);
         }
 
         [Emitted] // ProtocolConversionAction
         public static Exception/*!*/ CreateTypeConversionError(string/*!*/ fromType, string/*!*/ toType) {
             return RubyExceptions.CreateTypeConversionError(fromType, toType);
+        }
+
+        [Emitted] // ProtocolConversionAction
+        public static Exception/*!*/ CreateImplicitConversionError(string/*!*/ fromType, string/*!*/ toType) {
+            return RubyExceptions.CreateImplicitConversionError(fromType, toType);
         }
 
         [Emitted] // ConvertToFixnumAction

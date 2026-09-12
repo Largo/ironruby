@@ -160,7 +160,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             StringIO/*!*/ self, [NotNull]object/*!*/ other) {
 
             if (!Protocols.RespondTo(respondToStorage, other, "to_strio")) {
-                throw RubyExceptions.CreateTypeConversionError(respondToStorage.Context.GetClassName(other), "StringIO");
+                throw RubyExceptions.CreateImplicitConversionError(respondToStorage.Context.GetClassName(other), "StringIO");
             }
 
             var site = toStringIoStorage.GetCallSite("to_strio", 0);

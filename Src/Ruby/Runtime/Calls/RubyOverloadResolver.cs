@@ -747,30 +747,49 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private Expression MakeIncorrectArgumentCountError(BindingTarget target) {
-            IList<int> available = target.ExpectedArgumentCount;
-            int expected;
+            return Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                AstUtils.Constant(target.ActualArgumentCount),
+                AstUtils.Constant(DescribeExpectedArgumentCount(target.ExpectedArgumentCount))
+            );
+        }
 
-            if (available.Count > 0) {
-                int minGreater = Int32.MaxValue;
-                int maxLesser = Int32.MinValue;
-                int max = Int32.MinValue;
-                foreach (int arity in available) {
-                    if (arity > target.ActualArgumentCount) {
-                        minGreater = Math.Min(minGreater, arity);
-                    } else {
-                        maxLesser = Math.Max(maxLesser, arity);
-                    }
-
-                    max = Math.Max(max, arity);
-                }
-
-                expected = (target.ActualArgumentCount < maxLesser ? maxLesser : Math.Min(minGreater, max));
-            } else {
+        /// <summary>
+        /// MRI spells the acceptable arities as a single number ("expected 1"), a range when they are
+        /// contiguous ("expected 1..3") or a list otherwise ("expected 2, 3, or 5"). Verified against
+        /// CRuby 3.3.8 (File.open, String#bytesplice).
+        /// </summary>
+        private static string/*!*/ DescribeExpectedArgumentCount(IList<int>/*!*/ available) {
+            if (available.Count == 0) {
                 // no overload is callable:
-                expected = 0;
+                return "0";
             }
 
-            return Methods.MakeWrongNumberOfArgumentsError.OpCall(AstUtils.Constant(target.ActualArgumentCount), AstUtils.Constant(expected));
+            var sorted = new List<int>(available);
+            sorted.Sort();
+            // the same arity can be contributed by several overloads:
+            for (int i = sorted.Count - 1; i > 0; i--) {
+                if (sorted[i] == sorted[i - 1]) {
+                    sorted.RemoveAt(i);
+                }
+            }
+
+            if (sorted.Count == 1) {
+                return sorted[0].ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            if (sorted[sorted.Count - 1] - sorted[0] == sorted.Count - 1) {
+                return sorted[0].ToString(System.Globalization.CultureInfo.InvariantCulture) + ".." +
+                    sorted[sorted.Count - 1].ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+
+            var sb = new StringBuilder();
+            for (int i = 0; i < sorted.Count; i++) {
+                if (i > 0) {
+                    sb.Append(i == sorted.Count - 1 ? (sorted.Count == 2 ? " or " : ", or ") : ", ");
+                }
+                sb.Append(sorted[i]);
+            }
+            return sb.ToString();
         }
 
         private Expression MakeCallFailureError(BindingTarget target) {
@@ -796,7 +815,9 @@ namespace IronRuby.Runtime.Calls {
                                     toType = Binder.GetTypeName(cr.To);
                                 }
 
-                                return Methods.CreateTypeConversionError.OpCall(
+                                // An argument that failed to convert to a [DefaultProtocol] parameter type is
+                                // MRI's implicit-conversion failure: "no implicit conversion of nil into String".
+                                return Methods.CreateImplicitConversionError.OpCall(
                                     AstUtils.Constant(cr.GetArgumentTypeName(Binder)),
                                     AstUtils.Constant(toType)
                                 );

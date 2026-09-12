@@ -212,7 +212,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
         public static BigDecimal InducedFrom(RubyClass/*!*/ self, object value) {
-            throw RubyExceptions.CreateTypeConversionError(self.Context.GetClassDisplayName(value), self.Name);
+            throw RubyExceptions.CreateImplicitConversionError(self.Context.GetClassDisplayName(value), self.Name);
         }
 
         #endregion

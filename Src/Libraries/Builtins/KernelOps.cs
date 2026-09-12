@@ -100,7 +100,8 @@ namespace IronRuby.Builtins {
             }
 
             if (i < str.Length) {
-                throw RubyExceptions.CreateArgumentError("invalid value for Integer: \"{0}\"", str);
+                // MRI: Integer("zz") => ArgumentError: invalid value for Integer(): "zz"
+                throw RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", str);
             }
 
             return result;

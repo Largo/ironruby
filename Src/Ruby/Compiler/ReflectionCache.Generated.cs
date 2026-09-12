@@ -162,6 +162,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CreateSymbolMM;
         public static MethodInfo/*!*/ CreateSymbolN { get { return _CreateSymbolN ?? (_CreateSymbolN = CallInstruction.CacheFunc<IronRuby.Builtins.MutableString[], IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubySymbol>(RubyOps.CreateSymbolN)); } }
         private static MethodInfo _CreateSymbolN;
+        public static MethodInfo/*!*/ CreateImplicitConversionError { get { return _CreateImplicitConversionError ?? (_CreateImplicitConversionError = CallInstruction.CacheFunc<System.String, System.String, System.Exception>(RubyOps.CreateImplicitConversionError)); } }
+        private static MethodInfo _CreateImplicitConversionError;
         public static MethodInfo/*!*/ CreateTypeConversionError { get { return _CreateTypeConversionError ?? (_CreateTypeConversionError = CallInstruction.CacheFunc<System.String, System.String, System.Exception>(RubyOps.CreateTypeConversionError)); } }
         private static MethodInfo _CreateTypeConversionError;
         public static MethodInfo/*!*/ CreateVector { get { return _CreateVector ?? (_CreateVector = GetMethod(typeof(RubyOps), "CreateVector")); } }
@@ -436,6 +438,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MakeVirtualClassInstantiatedError;
         public static MethodInfo/*!*/ MakeWrongNumberOfArgumentsError { get { return _MakeWrongNumberOfArgumentsError ?? (_MakeWrongNumberOfArgumentsError = CallInstruction.CacheFunc<System.Int32, System.Int32, System.ArgumentException>(RubyOps.MakeWrongNumberOfArgumentsError)); } }
         private static MethodInfo _MakeWrongNumberOfArgumentsError;
+        public static MethodInfo/*!*/ MakeWrongNumberOfArgumentsErrorN { get { return _MakeWrongNumberOfArgumentsErrorN ?? (_MakeWrongNumberOfArgumentsErrorN = CallInstruction.CacheFunc<System.Int32, System.String, System.ArgumentException>(RubyOps.MakeWrongNumberOfArgumentsErrorN)); } }
+        private static MethodInfo _MakeWrongNumberOfArgumentsErrorN;
         public static MethodInfo/*!*/ MarkException { get { return _MarkException ?? (_MarkException = CallInstruction.CacheFunc<System.Exception, System.Exception>(RubyOps.MarkException)); } }
         private static MethodInfo _MarkException;
         public static MethodInfo/*!*/ MatchLastInputLine { get { return _MatchLastInputLine ?? (_MatchLastInputLine = CallInstruction.CacheFunc<IronRuby.Builtins.RubyRegex, IronRuby.Runtime.RubyScope, System.Boolean>(RubyOps.MatchLastInputLine)); } }
