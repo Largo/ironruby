@@ -63,15 +63,32 @@ namespace IronRuby.Runtime {
             return new FrozenError(String.Format(CultureInfo.InvariantCulture, "can't modify frozen {0}", className));
         }
 
+        // Guards against #inspect itself mutating the frozen receiver, which would re-enter
+        // CreateObjectFrozenError and blow the stack (an uncatchable failure on .NET).
+        // MRI has the same problem and solves it the same way, printing "..." for the receiver.
+        [ThreadStatic]
+        private static int _frozenErrorInspectDepth;
+
         /// <summary>
         /// MRI: "can't modify frozen Array: [1, 2]".
         /// </summary>
         public static Exception/*!*/ CreateObjectFrozenError(RubyContext/*!*/ context, object obj) {
             string inspect;
-            try {
-                inspect = context.Inspect(obj).ToString();
-            } catch (Exception) {
-                return CreateObjectFrozenError(context.GetClassDisplayName(obj));
+            if (_frozenErrorInspectDepth > 0) {
+                inspect = "...";
+            } else {
+                _frozenErrorInspectDepth++;
+                try {
+                    inspect = context.Inspect(obj).ToString();
+                } catch (FrozenError nested) {
+                    // #inspect mutated the frozen receiver; the nested error already spells the
+                    // message with "..." in place of the receiver, which is what MRI reports too.
+                    return nested;
+                } catch (Exception) {
+                    return CreateObjectFrozenError(context.GetClassDisplayName(obj));
+                } finally {
+                    _frozenErrorInspectDepth--;
+                }
             }
             return ((FrozenError)new FrozenError(String.Format(CultureInfo.InvariantCulture, "can't modify frozen {0}: {1}",
                 context.GetClassDisplayName(obj), inspect))).SetReceiver(obj);
