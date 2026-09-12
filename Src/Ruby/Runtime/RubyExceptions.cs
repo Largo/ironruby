@@ -22,6 +22,7 @@ using IronRuby.Builtins;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using IronRuby.Compiler;
 
@@ -207,12 +208,25 @@ namespace IronRuby.Runtime {
         [ThreadStatic]
         private static bool _disableMethodMissingMessageFormatting;
 
+        /// <summary>
+        /// True for values whose #inspect is too expensive to be worth putting in an error message.
+        /// Only Bignums qualify today: BigInteger.ToString is quadratic in the number of digits.
+        /// </summary>
+        private static bool IsTooBigToInspect(object/*!*/ obj) {
+            return obj is BigInteger big && big.GetBitLength() > 4096;
+        }
+
         internal static string/*!*/ FormatMethodMissingMessage(RubyContext/*!*/ context, object obj, string/*!*/ name, string/*!*/ message) {
             Assert.NotNull(name);
 
             string str;
             if (obj == null) {
                 str = "nil:NilClass";
+            } else if (IsTooBigToInspect(obj)) {
+                // Rendering a multi-megabit Bignum in base 10 is quadratic: (2 ** 40_000_000).no_such_method
+                // spent minutes building a message nobody would read. MRI 3.4 dropped the value from this
+                // message entirely; naming the class is the closest we get without changing the common case.
+                str = context.GetClassName(obj);
             } else if (_disableMethodMissingMessageFormatting) {
                 str = RubyUtils.ObjectToMutableString(context, obj).ToString();
             } else {

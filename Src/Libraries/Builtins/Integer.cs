@@ -267,6 +267,27 @@ namespace IronRuby.Builtins {
             return self.IsEven;
         }
 
+        /// <summary>
+        /// The number of bits of the two's complement representation of self, excluding the
+        /// sign bit: 0.bit_length == 0, 255.bit_length == 8, (-256).bit_length == 8.
+        /// </summary>
+        [RubyMethod("bit_length")]
+        public static int BitLength(int self) {
+            // ~self for negatives, so that -1 -> 0 and -257 -> 9, the way MRI counts.
+            uint magnitude = self < 0 ? (uint)~self : (uint)self;
+            return 32 - System.Numerics.BitOperations.LeadingZeroCount(magnitude);
+        }
+
+        /// <summary>
+        /// <see cref="BigInteger.GetBitLength"/> already uses MRI's definition (shortest
+        /// two's complement representation, sign bit excluded).
+        /// </summary>
+        [RubyMethod("bit_length")]
+        public static object BitLength(BigInteger/*!*/ self) {
+            long bits = self.GetBitLength();
+            return bits <= Int32.MaxValue ? ScriptingRuntimeHelpers.Int32ToObject((int)bits) : (object)(BigInteger)bits;
+        }
+
         #endregion
 
         #region next, succ, pred

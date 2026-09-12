@@ -2993,6 +2993,12 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadInteger_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "bit_length", 0x51, 
+                0x00000000U, 0x00000000U, 
+                new Func<System.Int32, System.Int32>(IronRuby.Builtins.Integer.BitLength), 
+                new Func<System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.Integer.BitLength)
+            );
+            
             DefineLibraryMethod(module, "ceil", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
