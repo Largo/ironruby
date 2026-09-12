@@ -458,7 +458,10 @@ namespace IronRuby.Builtins {
             // first argument has to be something that responds to #exception.
             var message = obj as MutableString;
             if (message != null && args.Length == 1) {
-                return RubyExceptionData.InitializeException(new RuntimeError(message.ToString()), message);
+                // The CLR message is for display only - the Ruby-visible message is the MutableString
+                // handed to InitializeException - so it must not reject a message that holds bytes
+                // invalid in its encoding. MRI raises such a message happily.
+                return RubyExceptionData.InitializeException(new RuntimeError(message.ToClrString()), message);
             }
 
             if (!Protocols.RespondTo(respondToStorage, obj, "exception")) {

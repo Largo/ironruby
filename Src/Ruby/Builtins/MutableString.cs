@@ -818,6 +818,20 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Like <see cref="ToString()"/>, but never throws: bytes that are invalid in the string's
+        /// encoding are escaped rather than rejected. Use this wherever a CLR string is needed for
+        /// display only - a CLR exception message, say - since a Ruby string is free to hold bytes
+        /// that do not decode, and failing to render one is worse than rendering it with escapes.
+        /// </summary>
+        public string/*!*/ ToClrString() {
+            try {
+                return ToString();
+            } catch (DecoderFallbackException) {
+                return ToStringWithEscapedInvalidCharacters(_encoding);
+            }
+        }
+
+        /// <summary>
         /// Switches the content to a byte array using the current encoding and decodes the binary into a string using the given encoding.
         /// </summary>
         /// <exception cref="DecoderFallbackException">Invalid characters present.</exception>
