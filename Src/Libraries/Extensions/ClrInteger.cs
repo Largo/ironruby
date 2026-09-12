@@ -361,8 +361,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("**")]
         public static object/*!*/ Power(int self, int other) {
             if (other >= 0) {
-                BigInteger bigSelf = (BigInteger)self;
-                return Protocols.Normalize(bigSelf.Power(other));
+                return ClrBigInteger.PowerNonNegative(self, other);
             } else if (self == 1) {
                 return One;
             } else {

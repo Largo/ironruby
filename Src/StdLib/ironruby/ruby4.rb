@@ -258,9 +258,23 @@ module Comparable
   end unless method_defined?(:clamp)
 end
 
+module Math
+  # MRI raises Math::DomainError out of Math.sqrt/log/... and Integer#digits.
+  class DomainError < StandardError; end unless const_defined?(:DomainError)
+end
+
 class Integer
   def digits(base = 10)
+    unless base.is_a?(Integer)
+      unless base.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{base.class} into Integer"
+      end
+      base = base.to_int
+    end
+    # MRI checks the receiver before the radix
     raise Math::DomainError, "out of domain" if negative?
+    raise ArgumentError, "negative radix" if base < 0
+    raise ArgumentError, "invalid radix #{base}" if base < 2
     return [0] if zero?
     result = []
     n = self
