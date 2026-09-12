@@ -2009,8 +2009,9 @@ namespace IronRuby.Builtins {
             
             #endif
             DefineLibraryMethod(module, "dirname", 0x61, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyFileOps.DirName)
+                0x00000000U, 0x00040000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyFileOps.DirName), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyFileOps.DirName)
             );
             
             #if FEATURE_FILESYSTEM

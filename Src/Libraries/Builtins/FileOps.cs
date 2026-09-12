@@ -137,7 +137,11 @@ namespace IronRuby.Builtins {
         #region Declared Constants
 
         static RubyFileOps() {
-            ALT_SEPARATOR = MutableString.CreateAscii(AltDirectorySeparatorChar.ToString()).Freeze();
+            // On Unix '\\' is an ordinary filename character and PATH is colon
+            // separated; File::ALT_SEPARATOR is nil there, as in CRuby.
+            ALT_SEPARATOR = IsWindows
+                ? MutableString.CreateAscii(AltDirectorySeparatorChar.ToString()).Freeze()
+                : null;
             SEPARATOR = MutableString.CreateAscii(DirectorySeparatorChar.ToString()).Freeze();
             Separator = SEPARATOR;
             PATH_SEPARATOR = MutableString.CreateAscii(PathSeparatorChar.ToString()).Freeze();
@@ -145,10 +149,19 @@ namespace IronRuby.Builtins {
 
         private const char AltDirectorySeparatorChar = '\\';
         private const char DirectorySeparatorChar = '/';
-        private const char PathSeparatorChar = ';';
+
+        internal static readonly bool IsWindows = System.IO.Path.DirectorySeparatorChar == '\\';
+
+        private static char PathSeparatorChar {
+            get { return IsWindows ? ';' : ':'; }
+        }
+
+        private static readonly char[] SeparatorChars = IsWindows
+            ? new[] { DirectorySeparatorChar, AltDirectorySeparatorChar }
+            : new[] { DirectorySeparatorChar };
 
         internal static bool IsDirectorySeparator(int c) {
-            return c == DirectorySeparatorChar || c == AltDirectorySeparatorChar;
+            return c == DirectorySeparatorChar || (IsWindows && c == AltDirectorySeparatorChar);
         }
 
         [RubyConstant]
@@ -486,7 +499,7 @@ namespace IronRuby.Builtins {
             }
 
             string strPath = path.ConvertToString();
-            string[] parts = strPath.Split(new[] { DirectorySeparatorChar, AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+            string[] parts = strPath.Split(SeparatorChars, StringSplitOptions.RemoveEmptyEntries);
 
             if (parts.Length == 0) {
                 return MutableString.CreateMutable(path.Encoding).Append((char)path.GetLastChar()).TaintBy(path);
@@ -543,7 +556,74 @@ namespace IronRuby.Builtins {
             return DirName(Protocols.CastToPath(toPath, path));
         }
 
+        [RubyMethod("dirname", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ DirName(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+            [DefaultProtocol]int level) {
+
+            if (level < 0) {
+                throw RubyExceptions.CreateArgumentError("negative level: {0}", level);
+            }
+
+            MutableString result = Protocols.CastToPath(toPath, path);
+            if (level == 0) {
+                // "level 0" means "no component removed", not even the trailing slash.
+                return MutableString.CreateMutable(result.ConvertToString(), result.Encoding).TaintBy(result);
+            }
+
+            for (int i = 0; i < level; i++) {
+                MutableString next = DirName(result);
+                // "/" and "." are fixed points; stop early so a huge level is cheap.
+                if (next.ConvertToString() == result.ConvertToString()) {
+                    return next;
+                }
+                result = next;
+            }
+            return result;
+        }
+
         private static MutableString/*!*/ DirName(MutableString/*!*/ path) {
+            if (!IsWindows) {
+                return MutableString.CreateMutable(PosixDirName(path.ConvertToString()), path.Encoding).TaintBy(path);
+            }
+            return WindowsDirName(path);
+        }
+
+        /// <summary>
+        /// dirname(3) as CRuby implements it on Unix: a leading run of slashes collapses
+        /// to a single "/", interior runs are preserved, and a path with no slash left is ".".
+        /// </summary>
+        private static string/*!*/ PosixDirName(string/*!*/ path) {
+            int start = 0;
+            while (start < path.Length && path[start] == '/') {
+                start++;
+            }
+
+            bool rooted = start > 0;
+            if (start == path.Length) {
+                return rooted ? "/" : ".";
+            }
+
+            // Everything after the root: "/////foo/bar/" is treated as root + "foo/bar/".
+            string rest = path.Substring(start);
+
+            int end = rest.Length;
+            while (end > 0 && rest[end - 1] == '/') {
+                end--;
+            }
+
+            int slash = rest.LastIndexOf('/', end - 1);
+            if (slash < 0) {
+                return rooted ? "/" : ".";
+            }
+
+            while (slash > 0 && rest[slash - 1] == '/') {
+                slash--;
+            }
+
+            return (rooted ? "/" : "") + rest.Substring(0, slash);
+        }
+
+        private static MutableString/*!*/ WindowsDirName(MutableString/*!*/ path) {
             string strPath = path.ConvertToString();
             string directoryName = strPath;
 
