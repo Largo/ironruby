@@ -71,7 +71,9 @@ namespace IronRuby.Builtins {
         public static RubyMethod/*!*/ Bind(UnboundMethod/*!*/ self, object target) {
             RubyContext context = self._targetConstraint.Context;
 
-            if (!context.IsKindOf(target, self._targetConstraint)) {
+            // Since Ruby 3.0 (Feature #15608) an unbound method whose owner is a module rather than a class
+            // may be bound to any receiver:
+            if (self._targetConstraint.IsClass && !context.IsKindOf(target, self._targetConstraint)) {
                 throw RubyExceptions.CreateTypeError(
                     "bind argument must be an instance of {0}", self._targetConstraint.GetName(context)
                 );
@@ -102,12 +104,16 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("name")]
         public static RubySymbol/*!*/ GetName(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
+            // EncodeIdentifier rather than StringifyIdentifier: both return a Symbol, but the latter
+            // hardcodes UTF-8 where this needs the context's identifier encoding.
             return context.EncodeIdentifier(self._name);
         }
 
+        // The module the method is defined in. With Module#prepend this is the prepended module rather than
+        // the class the method was looked up on.
         [RubyMethod("owner")]
         public static RubyModule/*!*/ GetOwner(UnboundMethod/*!*/ self) {
-            return self._info.DeclaringModule;
+            return self._info.DeclaringModule ?? self._targetConstraint;
         }
 
         [RubyMethod("to_s")]

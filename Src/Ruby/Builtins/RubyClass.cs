@@ -383,6 +383,45 @@ namespace IronRuby.Builtins {
             Debug.Assert(j == -1);
         }
 
+        internal override void PrependsUpdated(RubyModule/*!*/[]/*!*/ oldPrepends, RubyModule/*!*/[]/*!*/ newPrepends) {
+            Context.RequiresClassHierarchyLock();
+
+            // visit newly inserted modules in reverse method resolution order:
+            int j = oldPrepends.Length - 1;
+            for (int i = newPrepends.Length - 1; i >= 0; i--) {
+                var prepend = newPrepends[i];
+                if (j < 0 || prepend != oldPrepends[j]) {
+                    // new module:
+                    prepend.AddDependentClass(this);
+
+                    InitializeNewMixin(prepend);
+                    Debug.Assert(!prepend.MethodInitializationNeeded || MethodInitializationNeeded);
+
+                    if (!prepend.MethodInitializationNeeded) {
+                        foreach (var entry in prepend.GetMethods()) {
+                            // Skip the prepended modules that are above the current one in MRO:
+                            PrepareMethodUpdate(entry.Key, entry.Value, i + 1, true);
+                        }
+                    }
+                } else {
+                    // original module:
+                    j--;
+                }
+            }
+            Debug.Assert(j == -1);
+
+            // A prepend changes method resolution for this class and everything below it wholesale: every method
+            // the prepended modules define (now or later) shadows what the class resolved to before. PrepareMethodUpdate
+            // above only covers the methods that exist right now and only when the overridden method was already cached,
+            // so invalidate all call sites bound to this class and its descendants unconditionally.
+            if (!MethodInitializationNeeded) {
+                MethodsUpdated("Prepend");
+            }
+
+            // classes/modules that mix this one in need the new modules spliced into their flattened arrays:
+            PropagatePrependsToDependentClasses(oldPrepends, newPrepends);
+        }
+
         /// <summary>
         /// Invalidates
         /// - failure cache on RubyClass via incrementing extension version
@@ -415,6 +454,15 @@ namespace IronRuby.Builtins {
         }
 
         internal void PrepareMethodUpdate(string/*!*/ methodName, RubyMemberInfo/*!*/ method, int mixinsToSkip) {
+            PrepareMethodUpdate(methodName, method, mixinsToSkip, false);
+        }
+
+        /// <summary>
+        /// <paramref name="modulesToSkip"/> counts entries of the declared-ancestor list of this class, which is
+        /// [prepends..., this, mixins...]. When <paramref name="skippingPrepends"/> is set the count refers to the
+        /// leading prepends, otherwise to this class plus the leading mixins.
+        /// </summary>
+        internal void PrepareMethodUpdate(string/*!*/ methodName, RubyMemberInfo/*!*/ method, int mixinsToSkip, bool skippingPrepends) {
             Context.RequiresClassHierarchyLock();
 
             bool superClassUpdated = false;
@@ -442,11 +490,17 @@ namespace IronRuby.Builtins {
                 return;
             }
 
-            Debug.Assert(mixinsToSkip <= Mixins.Length);
+            Debug.Assert(skippingPrepends ? mixinsToSkip <= Prepends.Length : mixinsToSkip <= Mixins.Length);
             int modulesToSkip, updatedLevel;
             if (mixinsToSkip > 0) {
-                // skip this class when looking for overridden method:
-                modulesToSkip = mixinsToSkip + 1;
+                if (skippingPrepends) {
+                    // the overriding method lives in a prepended module; skip it and the prepends above it,
+                    // so the search starts either at a lower prepend or at this class itself:
+                    modulesToSkip = mixinsToSkip;
+                } else {
+                    // skip the prepends and this class when looking for overridden method:
+                    modulesToSkip = Prepends.Length + mixinsToSkip + 1;
+                }
 
                 // update groups in this class as well:
                 updatedLevel = _level - 1;

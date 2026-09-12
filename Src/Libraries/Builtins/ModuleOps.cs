@@ -79,7 +79,8 @@ namespace IronRuby.Builtins {
             // extendedObject has been extended by self, i.e. self has been included into extendedObject's singleton class
         }
 
-        [RubyMethod("include", RubyMethodAttributes.PrivateInstance)]
+        // public since Ruby 2.1
+        [RubyMethod("include")]
         public static RubyModule/*!*/ Include(
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ appendFeaturesStorage,
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ includedStorage,
@@ -109,6 +110,58 @@ namespace IronRuby.Builtins {
         [RubyMethod("append_features", RubyMethodAttributes.PrivateInstance)]
         public static RubyModule/*!*/ AppendFeatures(RubyModule/*!*/ self, [NotNull]RubyModule/*!*/ owner) {
             owner.IncludeModules(self);
+            return self;
+        }
+
+        #endregion
+
+        #region prepend, prepended, prepend_features
+
+        [RubyMethod("prepend")]
+        public static RubyModule/*!*/ Prepend(
+            CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ prependFeaturesStorage,
+            CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ prependedStorage,
+            RubyModule/*!*/ self, params object[]/*!*/ args) {
+
+            if (args.Length == 0) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
+            }
+
+            // reported by name rather than by the generic conversion failure, the way MRI does it:
+            var modules = new RubyModule[args.Length];
+            for (int i = 0; i < args.Length; i++) {
+                modules[i] = args[i] as RubyModule;
+                if (modules[i] == null && args[i] != null) {
+                    throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Module)",
+                        self.Context.GetClassDisplayName(args[i])
+                    );
+                }
+            }
+
+            RubyUtils.RequirePrepends(self, modules);
+
+            var prependFeatures = prependFeaturesStorage.GetCallSite("prepend_features", 1);
+            var prepended = prependedStorage.GetCallSite("prepended", 1);
+
+            // Module#prepend_features inserts the module in front of the receiver;
+            // ancestors after `prepend a, b': [a, b, self, ...]
+            for (int i = modules.Length - 1; i >= 0; i--) {
+                prependFeatures.Target(prependFeatures, modules[i], self);
+                prepended.Target(prepended, modules[i], self);
+            }
+
+            return self;
+        }
+
+        [RubyMethod("prepended", RubyMethodAttributes.PrivateInstance)]
+        public static void Prepended(RubyModule/*!*/ self, RubyModule/*!*/ owner) {
+            // self has been prepended to owner
+        }
+
+        // thread-safe:
+        [RubyMethod("prepend_features", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ PrependFeatures(RubyModule/*!*/ self, [NotNull]RubyModule/*!*/ owner) {
+            owner.PrependModules(self);
             return self;
         }
 
@@ -277,8 +330,10 @@ namespace IronRuby.Builtins {
 
             var visibility = GetDefinedMethodVisibility(scope, self, methodName);
             using (self.Context.ClassHierarchyLocker()) {
-                // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do:
-                if (!self.HasAncestorNoLock(targetConstraint)) {
+                // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do.
+                // Since Ruby 3.0 (Feature #15608) a method whose owner is a module rather than a class may be
+                // bound to any receiver, so only a class constraint is enforced.
+                if (targetConstraint.IsClass && !self.HasAncestorNoLock(targetConstraint)) {
                     throw RubyExceptions.CreateTypeError(
                         "bind argument must be a subclass of {0}", targetConstraint.GetName(scope.RubyContext)
                     );
@@ -518,7 +573,18 @@ namespace IronRuby.Builtins {
             if (ReferenceEquals(self, module)) {
                 return ScriptingRuntimeHelpers.False;
             }
-            return self.HasAncestor(module) ? ScriptingRuntimeHelpers.True : null;
+
+            if (self.Context != module.Context) {
+                return null;
+            }
+
+            using (self.Context.ClassHierarchyLocker()) {
+                if (self.HasAncestorNoLock(module)) {
+                    return ScriptingRuntimeHelpers.True;
+                }
+                // related the other way round is `false', unrelated is `nil':
+                return module.HasAncestorNoLock(self) ? ScriptingRuntimeHelpers.False : null;
+            }
         }
 
         // thread-safe:
@@ -540,9 +606,20 @@ namespace IronRuby.Builtins {
         [RubyMethod(">")]
         public static object IsNotSubclassOrIncluded(RubyModule/*!*/ self, [NotNull]RubyModule/*!*/ module) {
             if (ReferenceEquals(self, module)) {
-                return false;
+                return ScriptingRuntimeHelpers.False;
             }
-            return module.HasAncestor(self) ? ScriptingRuntimeHelpers.True : null;
+
+            if (self.Context != module.Context) {
+                return null;
+            }
+
+            using (self.Context.ClassHierarchyLocker()) {
+                if (module.HasAncestorNoLock(self)) {
+                    return ScriptingRuntimeHelpers.True;
+                }
+                // related the other way round is `false', unrelated is `nil':
+                return self.HasAncestorNoLock(module) ? ScriptingRuntimeHelpers.False : null;
+            }
         }
 
         // thread-safe:
@@ -967,6 +1044,17 @@ namespace IronRuby.Builtins {
 
             // unbound method binable to any class with "constraint" mixin:
             return new UnboundMethod(constraint, methodName, method);
+        }
+
+        // thread-safe:
+        [RubyMethod("public_instance_method")]
+        public static UnboundMethod/*!*/ GetPublicInstanceMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
+            if (method == null || method.Visibility != RubyMethodVisibility.Public) {
+                throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
+            }
+
+            return GetInstanceMethod(self, methodName);
         }
 
         #endregion

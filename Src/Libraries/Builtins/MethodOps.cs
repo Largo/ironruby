@@ -83,6 +83,23 @@ namespace IronRuby.Builtins {
             return new UnboundMethod(self.GetTargetClass(), self.Name, self.Info);
         }
 
+        [RubyMethod("name")]
+        public static object GetName(RubyContext/*!*/ context, RubyMethod/*!*/ self) {
+            return context.StringifyIdentifier(self.Name);
+        }
+
+        [RubyMethod("receiver")]
+        public static object GetReceiver(RubyMethod/*!*/ self) {
+            return self.Target;
+        }
+
+        // The module the method is defined in. With Module#prepend this is the prepended module rather than
+        // the class the method was looked up on.
+        [RubyMethod("owner")]
+        public static RubyModule/*!*/ GetOwner(RubyMethod/*!*/ self) {
+            return self.Info.DeclaringModule ?? self.GetTargetClass();
+        }
+
         internal static RubyMemberInfo/*!*/ BindGenericParameters(RubyContext/*!*/ context, RubyMemberInfo/*!*/ info, string/*!*/ name, object[]/*!*/ typeArgs) {
             RubyMemberInfo result = info.TryBindGenericParameters(Protocols.ToTypes(context, typeArgs));
             if (result == null) {
