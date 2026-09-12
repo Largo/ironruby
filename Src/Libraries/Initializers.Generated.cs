@@ -6172,6 +6172,21 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Int32, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Of)
             );
             
+            DefineLibraryMethod(module, "prepend", 0x51, 
+                0x80000008U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Prepend)
+            );
+            
+            DefineLibraryMethod(module, "prepend_features", 0x52, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.PrependFeatures)
+            );
+            
+            DefineLibraryMethod(module, "prepended", 0x52, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Prepended)
+            );
+            
             DefineLibraryMethod(module, "private", 0x52, 
                 0x80020004U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.SetPrivateVisibility)

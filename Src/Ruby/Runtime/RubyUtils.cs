@@ -757,7 +757,34 @@ namespace IronRuby.Runtime {
                 }
 
                 if (module.Context != target.Context) {
-                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module `{0}' into `{1}' (runtime mismatch)", 
+                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module `{0}' into `{1}' (runtime mismatch)",
+                        module.GetName(target.Context), target.GetName(module.Context)
+                    ));
+                }
+            }
+        }
+
+        public static void RequirePrepends(RubyModule/*!*/ target, params RubyModule[]/*!*/ modules) {
+            foreach (RubyModule module in modules) {
+                if (module == null) {
+                    throw RubyExceptions.CreateTypeError("wrong argument type nil (expected Module)");
+                }
+
+                if (module.IsClass) {
+                    throw RubyExceptions.CreateTypeError("wrong argument type Class (expected Module)");
+                }
+
+                // the monitor is reentrant, so this is safe whether or not the caller already holds the lock:
+                bool cyclic;
+                using (target.Context.ClassHierarchyLocker()) {
+                    cyclic = module == target || module.HasAncestorNoLock(target);
+                }
+                if (cyclic) {
+                    throw RubyExceptions.CreateArgumentError("cyclic prepend detected");
+                }
+
+                if (module.Context != target.Context) {
+                    throw RubyExceptions.CreateTypeError(String.Format("cannot mix a foreign module `{0}' into `{1}' (runtime mismatch)",
                         module.GetName(target.Context), target.GetName(module.Context)
                     ));
                 }

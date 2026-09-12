@@ -114,6 +114,47 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region prepend, prepended, prepend_features
+
+        [RubyMethod("prepend")]
+        public static RubyModule/*!*/ Prepend(
+            CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ prependFeaturesStorage,
+            CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ prependedStorage,
+            RubyModule/*!*/ self, [NotNullItems]params RubyModule/*!*/[]/*!*/ modules) {
+
+            if (modules.Length == 0) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
+            }
+
+            RubyUtils.RequirePrepends(self, modules);
+
+            var prependFeatures = prependFeaturesStorage.GetCallSite("prepend_features", 1);
+            var prepended = prependedStorage.GetCallSite("prepended", 1);
+
+            // Module#prepend_features inserts the module in front of the receiver;
+            // ancestors after `prepend a, b': [a, b, self, ...]
+            for (int i = modules.Length - 1; i >= 0; i--) {
+                prependFeatures.Target(prependFeatures, modules[i], self);
+                prepended.Target(prepended, modules[i], self);
+            }
+
+            return self;
+        }
+
+        [RubyMethod("prepended", RubyMethodAttributes.PrivateInstance)]
+        public static void Prepended(RubyModule/*!*/ self, RubyModule/*!*/ owner) {
+            // self has been prepended to owner
+        }
+
+        // thread-safe:
+        [RubyMethod("prepend_features", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ PrependFeatures(RubyModule/*!*/ self, [NotNull]RubyModule/*!*/ owner) {
+            owner.PrependModules(self);
+            return self;
+        }
+
+        #endregion
+
         #region private, protected, public, private_class_method, public_class_method, module_function
 
         // thread-safe:

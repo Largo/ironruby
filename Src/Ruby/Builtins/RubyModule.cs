@@ -282,8 +282,17 @@ namespace IronRuby.Builtins {
         // When adding a module that itself contains other modules, Ruby tries to maintain the ordering of the
         // contained modules so that method resolution is reasonably consistent.
         //
-        // MRO walk: this, _mixins[0], _mixins[1], ..., _mixins[n-1], super, ...
+        // MRO walk: _prepends[0], ..., _prepends[p-1], this, _mixins[0], _mixins[1], ..., _mixins[n-1], super, ...
         private RubyModule[]/*!*/ _mixins;
+
+        //
+        // The entire list of modules prepended to this one (Module#prepend). Unlike mixins these are searched
+        // *before* this module itself, so a prepended method wins over the module's own definition and `super`
+        // from it reaches the module's own method. Newly-prepended modules are at the front of the array.
+        // The array is flattened the same way _mixins is: prepending a module splices in that module's whole
+        // ancestor chain (its own prepends, itself, its mixins).
+        //
+        private RubyModule[]/*!*/ _prepends;
 
         // A list of extension methods included into this type or null if none were included.
         // { method-name -> methods }
@@ -336,6 +345,10 @@ namespace IronRuby.Builtins {
             get { return _mixins; }
         }
 
+        internal RubyModule[]/*!*/ Prepends {
+            get { return _prepends; }
+        }
+
         public string Name {
             get { return _name; }
             internal set { _name = value; }
@@ -386,6 +399,7 @@ namespace IronRuby.Builtins {
             _namespaceTracker = namespaceTracker;
             _typeTracker = typeTracker;
             _mixins = expandedMixins ?? EmptyArray;
+            _prepends = EmptyArray;
             _restrictions = restrictions;
             _weakSelf = new WeakReference(this);
 
@@ -481,10 +495,12 @@ namespace IronRuby.Builtins {
 
         private List<RubyModule>/*!*/ GetUninitializedAncestors(bool methods) {
             var result = new List<RubyModule>();
+            result.AddRange(_prepends);
             result.Add(this);
             result.AddRange(_mixins);
             var super = GetSuperClass();
             while (super != null && (methods ? super.MethodInitializationNeeded : super.ConstantInitializationNeeded)) {
+                result.AddRange(super._prepends);
                 result.Add(super);
                 result.AddRange(super._mixins);
                 super = super.SuperClass;
@@ -581,6 +597,7 @@ namespace IronRuby.Builtins {
 
             _classVariables = (module._classVariables != null) ? new Dictionary<string, object>(module._classVariables) : null;
             _mixins = ArrayUtils.Copy(module._mixins);
+            _prepends = ArrayUtils.Copy(module._prepends);
 
             // dependentModules - skip
             // tracker - skip, .NET members not copied
@@ -881,6 +898,11 @@ namespace IronRuby.Builtins {
 
         internal bool ForEachDeclaredAncestor(Func<RubyModule/*!*/, bool>/*!*/ action) {
             Context.RequiresClassHierarchyLock();
+
+            // prepended modules come before this module (Module#prepend):
+            foreach (RubyModule p in _prepends) {
+                if (action(p)) return true;
+            }
 
             // this module:
             if (action(this)) return true;
@@ -1929,17 +1951,189 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
+        public RubyModule[]/*!*/ GetPrepends() {
+            using (Context.ClassHierarchyLocker()) {
+                return ArrayUtils.Copy(_prepends);
+            }
+        }
+
+        // thread-safe:
         public void IncludeModules(params RubyModule[]/*!*/ modules) {
             using (Context.ClassHierarchyLocker()) {
                 IncludeModulesNoLock(modules);
             }
         }
         
+        // thread-safe:
+        public void PrependModules(params RubyModule[]/*!*/ modules) {
+            using (Context.ClassHierarchyLocker()) {
+                PrependModulesNoLock(modules);
+            }
+        }
+
+        /// <summary>
+        /// Module#prepend. Inserts the given modules (with their own ancestor chains spliced in) *before* this
+        /// module in the method resolution order. Unlike include, prepend does not skip modules that are already
+        /// ancestors of the super class -- MRI happily produces a duplicate entry in that case.
+        /// </summary>
+        internal void PrependModulesNoLock(RubyModule[]/*!*/ modules) {
+            Context.RequiresClassHierarchyLock();
+            Mutate();
+
+            RubyUtils.RequirePrepends(this, modules);
+
+            RubyModule[] expanded = ExpandPrependsNoLock(_prepends, modules);
+
+            foreach (RubyModule module in expanded) {
+                if (module.IsInterface && !CanIncludeClrInterface) {
+                    if (Array.IndexOf(_prepends, module) == -1) {
+                        throw new InvalidOperationException(String.Format(
+                            "Interface `{0}' cannot be prepended to class `{1}' because its underlying type has already been created",
+                            module.Name, Name
+                        ));
+                    }
+                }
+            }
+
+            var oldPrepends = _prepends;
+            if (oldPrepends.Length == expanded.Length) {
+                // nothing new was inserted (re-prepending an already prepended module is a no-op in MRI):
+                return;
+            }
+
+            PrependsUpdated(oldPrepends, _prepends = expanded);
+            _context.ConstantAccessVersion++;
+        }
+
+        /// <summary>
+        /// Expands the modules being prepended into a flat list. Prepending a module splices in that module's
+        /// whole ancestor chain (its prepends, itself, then its mixins), mirroring what MRI does.
+        /// Modules that are already in the list keep their original position.
+        /// </summary>
+        private static RubyModule[]/*!*/ ExpandPrependsNoLock(RubyModule/*!*/[]/*!*/ existing, IList<RubyModule/*!*/>/*!*/ added) {
+            List<RubyModule> expanded = new List<RubyModule>(existing);
+
+            foreach (RubyModule module in added) {
+                Assert.NotNull(module);
+
+                int index = 0;
+                foreach (RubyModule ancestor in GetFlattenedAncestors(module)) {
+                    int at = expanded.IndexOf(ancestor);
+                    if (at >= 0) {
+                        index = at + 1;
+                    } else {
+                        expanded.Insert(index, ancestor);
+                        index++;
+                    }
+                }
+            }
+
+            return expanded.ToArray();
+        }
+
+        // The declared ancestors of a (non-class) module in MRO order: its prepends, itself, its mixins.
+        private static List<RubyModule/*!*/>/*!*/ GetFlattenedAncestors(RubyModule/*!*/ module) {
+            var result = new List<RubyModule>(module._prepends.Length + 1 + module._mixins.Length);
+            result.AddRange(module._prepends);
+            result.Add(module);
+            result.AddRange(module._mixins);
+            return result;
+        }
+
+        /// <summary>
+        /// A module gained prepends after it had already been mixed into (or prepended to) other modules.
+        /// Their flattened arrays must gain the new modules right before this one.
+        /// RubyClass overrides this to also invalidate call sites; it calls back here to do the propagation.
+        /// </summary>
+        internal virtual void PrependsUpdated(RubyModule/*!*/[]/*!*/ oldPrepends, RubyModule/*!*/[]/*!*/ newPrepends) {
+            PropagatePrependsToDependentClasses(oldPrepends, newPrepends);
+        }
+
+        internal void PropagatePrependsToDependentClasses(RubyModule/*!*/[]/*!*/ oldPrepends, RubyModule/*!*/[]/*!*/ newPrepends) {
+            Context.RequiresClassHierarchyLock();
+
+            if (_dependentClasses == null) {
+                return;
+            }
+
+            foreach (var cls in _dependentClasses) {
+                cls.SpliceAncestorUpdate(this, oldPrepends, newPrepends);
+            }
+        }
+
+        /// <summary>
+        /// <paramref name="owner"/> (which appears somewhere in this module's flattened mixin or prepend array)
+        /// gained prepends; splice the newly added ones in right before it.
+        /// </summary>
+        internal void SpliceAncestorUpdate(RubyModule/*!*/ owner, RubyModule/*!*/[]/*!*/ oldPrepends, RubyModule/*!*/[]/*!*/ newPrepends) {
+            Context.RequiresClassHierarchyLock();
+
+            var addedList = new List<RubyModule>();
+            foreach (var m in newPrepends) {
+                if (Array.IndexOf(oldPrepends, m) == -1) {
+                    addedList.Add(m);
+                }
+            }
+
+            if (addedList.Count == 0) {
+                return;
+            }
+
+            var added = addedList.ToArray();
+
+            int mixinIndex = Array.IndexOf(_mixins, owner);
+            if (mixinIndex >= 0) {
+                var oldMixins = _mixins;
+                var expanded = SpliceBefore(oldMixins, mixinIndex, added);
+                if (expanded.Length != oldMixins.Length) {
+                    MixinsUpdated(oldMixins, _mixins = expanded);
+                }
+            }
+
+            int prependIndex = Array.IndexOf(_prepends, owner);
+            if (prependIndex >= 0) {
+                var old = _prepends;
+                var expanded = SpliceBefore(old, prependIndex, added);
+                if (expanded.Length != old.Length) {
+                    PrependsUpdated(old, _prepends = expanded);
+                }
+            }
+
+            _context.ConstantAccessVersion++;
+        }
+
+        private static RubyModule[]/*!*/ SpliceBefore(RubyModule/*!*/[]/*!*/ list, int index, RubyModule/*!*/[]/*!*/ added) {
+            var result = new List<RubyModule>(list);
+            int at = index;
+            foreach (var m in added) {
+                if (result.IndexOf(m) >= 0) {
+                    continue;
+                }
+                result.Insert(at, m);
+                at++;
+            }
+            return result.ToArray();
+        }
+
         internal void IncludeModulesNoLock(RubyModule[]/*!*/ modules) {
             Context.RequiresClassHierarchyLock();
             Mutate();
 
             RubyUtils.RequireMixins(this, modules);
+
+            // MRI treats `include M' as a no-op when M is already an ancestor via a prepend:
+            if (_prepends.Length > 0) {
+                var filtered = new List<RubyModule>(modules.Length);
+                foreach (var m in modules) {
+                    if (Array.IndexOf(_prepends, m) == -1) {
+                        filtered.Add(m);
+                    }
+                }
+                if (filtered.Count == 0) {
+                    return;
+                }
+                modules = filtered.ToArray();
+            }
 
             RubyModule[] expanded = ExpandMixinsNoLock(GetSuperClass(), _mixins, modules);
 
@@ -2005,9 +2199,14 @@ namespace IronRuby.Builtins {
                     }
                 } else {
                     // Module is not yet present in _mixins
+                    // Modules prepended to it precede it in the MRO, so splice them in at the insertion point first:
+                    if (module._prepends.Length > 0) {
+                        index = ExpandMixinsNoLock(superClass, existing, index, module._prepends, false);
+                    }
+
                     // Recursively insert module dependencies at the insertion point, then insert module itself
                     newIndex = ExpandMixinsNoLock(superClass, existing, index, module._mixins, false);
-                    
+
                     // insert module only if it is not an ancestor of the superclass:
                     if (superClass == null || !superClass.HasAncestorNoLock(module)) {
                         existing.Insert(index, module);
