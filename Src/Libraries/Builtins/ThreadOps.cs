@@ -840,15 +840,22 @@ namespace IronRuby.Builtins {
 
                     Utils.Log(trace.ToString(), "THREAD");
 
-                    if (_globalAbortOnException || info.AbortOnException) {
+                    // A SystemExit that reaches a thread's top level means the program asked to
+                    // terminate, so MRI hands it to the main thread whatever abort_on_exception
+                    // says - and without the "terminated with exception" report.
+                    bool exiting = e is SystemExit;
+
+                    if (exiting || _globalAbortOnException || info.AbortOnException) {
                         // MRI re-raises the exception on the main thread. Never rethrow it here:
                         // this is a background thread, and an unhandled exception on one takes the
                         // whole process down. Park it for the main thread instead - it is delivered
                         // at the main thread's next blocking point, and #join still re-raises it
                         // because info.Exception is set.
-                        Console.Error.WriteLine("#<Thread:0x{0:x8}> terminated with exception:",
-                            info.Thread.ManagedThreadId);
-                        Console.Error.WriteLine(e.Message);
+                        if (!exiting) {
+                            Console.Error.WriteLine("#<Thread:0x{0:x8}> terminated with exception:",
+                                info.Thread.ManagedThreadId);
+                            Console.Error.WriteLine(e.Message);
+                        }
 
                         Thread mainThread = context.MainThread;
                         if (mainThread != null && mainThread != Thread.CurrentThread) {
