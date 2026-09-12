@@ -3952,6 +3952,8 @@ class Exception
     end
   end
   private_class_method :__append_full_message__
+end
+
 class Range
   # Range#min/#max/#minmax are specialised in MRI: without a block they answer from the
   # endpoints instead of enumerating. IronRuby inherited Enumerable's versions, so
