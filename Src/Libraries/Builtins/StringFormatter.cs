@@ -229,20 +229,15 @@ namespace IronRuby.Builtins {
 
             while (true) {
                 if (_index >= _format.Length) {
-                    // Ruby distinguishes three ways of running out of format string, by what had
-                    // already been consumed when it happened.
+                    // A bare trailing '%' is "incomplete"; anything else that ran out mid-specifier
+                    // is "malformed", with the width/precision wording when digits were expected.
+                    // Ruby 3.3 and earlier were laxer here - "%1$" produced a literal '%' - but
+                    // 3.4 made every truncated specifier an error (spec/core/kernel/shared/sprintf.rb).
                     if (numberSeen) {
                         throw RubyExceptions.CreateArgumentError("malformed format string - %*[0-9]");
                     }
-                    if (argumentSeen) {
-                        // "%1$" and "%<foo>" still fetch their argument - so a missing one is
-                        // reported - and then emit a bare '%'.
-                        GetData(_opts.ArgIndex, _opts.Name);
-                        _buf.Append('%');
-                        return;
-                    }
-                    if (flagSeen) {
-                        throw RubyExceptions.CreateArgumentError("invalid format character - %");
+                    if (flagSeen || argumentSeen) {
+                        throw RubyExceptions.CreateArgumentError("malformed format string - %");
                     }
                     throw RubyExceptions.CreateArgumentError("incomplete format specifier; use %% (double %) instead");
                 }
@@ -348,13 +343,6 @@ namespace IronRuby.Builtins {
                         break;
                     }
                     continue;
-                }
-
-                // A '%' directly before a newline or a NUL is not a specifier at all: Ruby emits
-                // the '%' and copies the character after it verbatim.
-                if ((c == '\n' || c == '\0') && !flagSeen && !numberSeen && !argumentSeen) {
-                    _buf.Append('%');
-                    return;
                 }
 
                 // conversion character

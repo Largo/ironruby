@@ -2445,9 +2445,15 @@ namespace IronRuby.Runtime {
             if (index < end && str[index] == '.') {
                 index++;
                 int fractionDigits = ScanDigitRun(str, end, ref index, digits, false, true);
-                // Digits are required after the point: ".5" parses, "5." and "1.e5" do not.
-                if (fractionDigits <= 0) {
+                if (fractionDigits < 0) {
                     return false;
+                }
+                if (fractionDigits == 0) {
+                    // Ruby 3.4 accepts a trailing point, so Float("10.") is 10.0, but the point
+                    // has to end the number: "." and "1.e5" are still errors.
+                    if (integerDigits == 0 || index != end) {
+                        return false;
+                    }
                 }
                 scale = -fractionDigits;
             } else if (integerDigits == 0) {
