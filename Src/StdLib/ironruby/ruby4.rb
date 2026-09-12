@@ -2655,6 +2655,169 @@ module Errno
 end
 
 class Array
+  # ---- the sixteen Array methods spec/core/array gets NoMethodError for ----
+
+  def sample(n = nil, random: ::Kernel)
+    rng = random
+    if n.nil?
+      return nil if empty?
+      return self[__sample_index__(rng, size)]
+    end
+    n = ::Kernel.Integer(n)
+    ::Kernel.raise(::ArgumentError, "negative sample number") if n < 0
+    n = size if n > size
+    pool = dup
+    result = []
+    n.times do
+      i = __sample_index__(rng, pool.size)
+      result << pool.delete_at(i)
+    end
+    result
+  end unless method_defined?(:sample)
+
+  def __sample_index__(rng, limit)
+    value = rng.rand(limit)
+    value = value.to_int if value.respond_to?(:to_int) && !value.is_a?(::Integer)
+    unless value.is_a?(::Integer)
+      ::Kernel.raise(::NoMethodError, "undefined method `to_int' for #{value.inspect}")
+    end
+    ::Kernel.raise(::RangeError, "random number too big #{value}") if value < 0 || value >= limit
+    value
+  end
+  private :__sample_index__
+
+  def rotate(n = 1)
+    n = ::Kernel.Integer(n)
+    return dup if empty?
+    n %= size
+    self[n..-1] + self[0, n]
+  end unless method_defined?(:rotate)
+
+  def rotate!(n = 1)
+    replace(rotate(n))
+  end unless method_defined?(:rotate!)
+
+  def union(*others)
+    result = dup
+    others.each { |o| result |= ::Kernel.Array(o) }
+    result | []
+  end unless method_defined?(:union)
+
+  def difference(*others)
+    result = dup
+    others.each { |o| result -= ::Kernel.Array(o) }
+    result
+  end unless method_defined?(:difference)
+
+  def intersection(*others)
+    result = dup
+    others.each { |o| result &= ::Kernel.Array(o) }
+    result & []  == [] ? result : result
+  end unless method_defined?(:intersection)
+
+  def fetch_values(*keys, &block)
+    keys.map { |k| block ? (fetch(k) { |i| block.call(i) }) : fetch(k) }
+  end unless method_defined?(:fetch_values)
+
+  def rfind(&block)
+    return ::Enumerator.new { |y| reverse_each { |x| y << x } } unless block
+    reverse_each { |x| return x if block.call(x) }
+    nil
+  end unless method_defined?(:rfind)
+
+  def bsearch(&block)
+    i = bsearch_index(&block)
+    i.nil? ? nil : self[i]
+  end unless method_defined?(:bsearch)
+
+  def bsearch_index(&block)
+    return ::Enumerator.new { |y| each_index { |i| y << i } } unless block
+    low = 0
+    high = size - 1
+    result = nil
+    while low <= high
+      mid = low + (high - low) / 2
+      r = block.call(self[mid])
+      case r
+      when true then result = mid; high = mid - 1
+      when false, nil then low = mid + 1
+      when ::Integer
+        return mid if r == 0
+        if r < 0 then high = mid - 1 else low = mid + 1 end
+      else
+        ::Kernel.raise(::TypeError, "wrong argument type #{r.class} (must be numeric, true, false or nil)")
+      end
+    end
+    result
+  end unless method_defined?(:bsearch_index)
+
+  def repeated_permutation(n)
+    n = ::Kernel.Integer(n)
+    unless block_given?
+      count = n < 0 ? 0 : size**n
+      return ::Enumerator.new(count) { |y| repeated_permutation(n) { |p| y << p } }
+    end
+    return self if n < 0
+    __repeat__(n, false) { |combo| yield combo }
+    self
+  end unless method_defined?(:repeated_permutation)
+
+  def repeated_combination(n)
+    n = ::Kernel.Integer(n)
+    unless block_given?
+      return ::Enumerator.new { |y| repeated_combination(n) { |c| y << c } }
+    end
+    return self if n < 0
+    __repeat__(n, true) { |combo| yield combo }
+    self
+  end unless method_defined?(:repeated_combination)
+
+  # Walks the n-fold product of the receiver's indices, optionally keeping only
+  # the non-decreasing tuples, which is exactly repeated_combination.
+  def __repeat__(n, sorted)
+    if n == 0
+      yield []
+      return
+    end
+    return if empty?
+    indices = ::Array.new(n, 0)
+    loop do
+      yield indices.map { |i| self[i] }
+      k = n - 1
+      k -= 1 while k >= 0 && indices[k] == size - 1
+      return if k < 0
+      indices[k] += 1
+      ((k + 1)...n).each { |j| indices[j] = sorted ? indices[k] : 0 }
+    end
+  end
+  private :__repeat__
+
+  def select!(&block)
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    before = size
+    keep_if(&block)
+    size == before ? nil : self
+  end unless method_defined?(:select!)
+
+  alias_method :filter!, :select! unless method_defined?(:filter!)
+
+  def keep_if(&block)
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    replace(select { |x| block.call(x) })
+    self
+  end unless method_defined?(:keep_if)
+
+  def sort_by!(&block)
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    replace(sort_by { |x| block.call(x) })
+    self
+  end unless method_defined?(:sort_by!)
+
+  def to_set(*args, &block)
+    require 'set'
+    ::Set.new(self, *args, &block)
+  end unless method_defined?(:to_set)
+
   def to_h
     result = {}
     each do |pair|
