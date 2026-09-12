@@ -936,7 +936,8 @@ namespace IronRuby.Builtins {
 
         #region succ, +, -, <=>, ==, eql?, hash
 
-        [RubyMethod("succ")]
+        // Time#succ was removed in Ruby 1.9.2. Keeping it made a Time range look iterable, so
+        // (t...t).max answered t instead of raising TypeError "can't iterate from Time".
         public static RubyTime/*!*/ SuccessiveSecond(RubyTime/*!*/ self) {
             return Shift(self, ExactNum.One);
         }

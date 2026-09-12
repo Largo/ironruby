@@ -32,10 +32,10 @@ namespace IronRuby.Builtins {
     using BinaryOpSite = CallSite<Func<CallSite, object, object, object>>;
 
     /// <summary>
-    /// A Range represents an interval—a set of values with a start and an end.
-    /// Ranges may be constructed using the s..e and s…e literals, or with Range::new.
+    /// A Range represents an intervalï¿½a set of values with a start and an end.
+    /// Ranges may be constructed using the s..e and sï¿½e literals, or with Range::new.
     /// Ranges constructed using .. run from the start to the end inclusively.
-    /// Those created using … exclude the end value.
+    /// Those created using ï¿½ exclude the end value.
     /// When used as an iterator, ranges return each value in the sequence. 
     /// </summary>
     /// <example>
@@ -294,17 +294,32 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Iterates over the elements of self, passing each in turn to the block.
         /// You can only iterate if the start object of the range supports the succ method
-        /// (which means that you can‘t iterate over ranges of Float objects). 
+        /// (which means that you canï¿½t iterate over ranges of Float objects). 
         /// </summary>
         [RubyMethod("each")]
         public static object Each(EachStorage/*!*/ storage, [NotNull]BlockParam/*!*/ block, Range/*!*/ self) {
-            if (self.Begin is int && self.End is int) {
+            if (self.End == null) {
+                return StepEndless(storage, block, self, self.Begin, 1);
+            } else if (self.Begin is int && self.End is int) {
                 return StepFixnum(block, self, (int)self.Begin, (int)self.End, 1);
             } else if (self.Begin is MutableString) {
                 return StepString(storage, block, self, (MutableString)self.Begin, (MutableString)self.End, 1);
+            } else if (self.Begin is RubySymbol && self.End is RubySymbol) {
+                return StepSymbol(storage, block, self, (RubySymbol)self.Begin, (RubySymbol)self.End, 1);
             } else {
                 return StepObject(storage, block, self, self.Begin, self.End, 1);
             }
+        }
+
+        /// <summary>
+        /// MRI iterates a Symbol range through String#upto on the symbol names, so
+        /// (:A..:z).to_a has 58 entries. Walking Symbol#succ instead never terminated: :Z.succ
+        /// is :AA, which still sorts before :z, and so on forever.
+        /// </summary>
+        private static object StepSymbol(EachStorage/*!*/ storage, BlockParam/*!*/ block, Range/*!*/ self, RubySymbol/*!*/ begin, RubySymbol/*!*/ end, int step) {
+            var context = storage.Context;
+            return StepStringCore(storage, block, self, begin.String, end.String, step,
+                (str) => context.CreateSymbol(str, false));
         }
 
         [RubyMethod("step")]
@@ -325,7 +340,16 @@ namespace IronRuby.Builtins {
 
             // We attempt to cast step to Fixnum here even though if we were iterating over Floats, for instance, we use step as is.
             // This prevents cases such as (1.0..2.0).step(0x800000000000000) {|x| x } from working but that is what MRI does.
-            if (self.Begin is int && self.End is int) {
+            if (self.Begin is MutableString && step is double) {
+                // MRI only steps a String range by an Integer; a Float step is a TypeError there,
+                // and here it would silently truncate and then loop forever over an endless range.
+                throw RubyExceptions.CreateTypeError("no implicit conversion to integer from float");
+            }
+
+            if (self.End == null && (self.Begin is int || self.Begin is MutableString)) {
+                var endlessStep = storage.FixnumCastSite;
+                return StepEndless(storage, block, self, self.Begin, endlessStep.Target(endlessStep, step));
+            } else if (self.Begin is int && self.End is int) {
                 // self.begin is Fixnum; directly call item = item + 1 instead of succ
                 var site = storage.FixnumCastSite;
                 int intStep = site.Target(site, step);
@@ -375,6 +399,39 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Step through an endless range (1.., "a"..). It only terminates when the block breaks,
+        /// which is what makes (1..).min(2) or (1..).lazy work.
+        /// </summary>
+        private static object StepEndless(EachStorage/*!*/ storage, BlockParam/*!*/ block, Range/*!*/ self, object begin, int step) {
+            Assert.NotNull(storage, block, self);
+            CheckStep(step);
+
+            object result;
+            if (begin is int) {
+                // long, so that walking off the end of Fixnum promotes to Bignum the way MRI does
+                long item = (int)begin;
+                while (true) {
+                    if (block.Yield(Protocols.Normalize(item), out result)) {
+                        return result;
+                    }
+                    item += step;
+                }
+            }
+
+            CheckBegin(storage, begin);
+            object current = begin;
+            var succSite = storage.SuccSite;
+            while (true) {
+                if (block.Yield(current is MutableString ? ((MutableString)current).Clone() : current, out result)) {
+                    return result;
+                }
+                for (int i = 0; i < step; i++) {
+                    current = succSite.Target(succSite, current);
+                }
+            }
+        }
+
+        /// <summary>
         /// Step through a Range of Strings.
         /// </summary>
         /// <remarks>
@@ -382,33 +439,56 @@ namespace IronRuby.Builtins {
         /// It uses a hybrid string comparison to prevent infinite loops and calls String#succ to get each item in the range.
         /// </remarks>
         private static object StepString(EachStorage/*!*/ storage, BlockParam/*!*/ block, Range/*!*/ self, MutableString begin, MutableString end, int step) {
+            return StepStringCore(storage, block, self, begin, end, step, null);
+        }
+
+        /// <summary>
+        /// The body shared by String and Symbol ranges. <paramref name="wrap"/> turns each
+        /// produced string into the value the block sees (null means "yield the string itself").
+        /// </summary>
+        private static object StepStringCore(EachStorage/*!*/ storage, BlockParam/*!*/ block, Range/*!*/ self,
+            MutableString/*!*/ begin, MutableString/*!*/ end, int step, Func<MutableString, object> wrap) {
             Assert.NotNull(storage, block, self);
             CheckStep(step);
             object result;
-            MutableString item = begin;
+
+            // MRI's String#upto walks one-byte endpoints by character code, which is why
+            // ("A".."z") has 58 elements rather than the 26 that #succ would produce.
+            if (begin.GetByteCount() == 1 && end.GetByteCount() == 1) {
+                int from = begin.GetByte(0), to = end.GetByte(0);
+                for (int c = from; self.ExcludeEnd ? c < to : c <= to; c += step) {
+                    var item = MutableString.CreateBinary(new byte[] { (byte)c }, begin.Encoding);
+                    if (block.Yield(wrap != null ? wrap(item) : item, out result)) {
+                        return result;
+                    }
+                }
+                return self;
+            }
+
+            MutableString current = begin;
             int comp;
 
-            while ((comp = Protocols.Compare(storage, item, end)) < 0) {
-                if (block.Yield(item.Clone(), out result)) {
+            while ((comp = Protocols.Compare(storage, current, end)) < 0) {
+                if (block.Yield(wrap != null ? wrap(current.Clone()) : current.Clone(), out result)) {
                     return result;
                 }
 
-                if (ReferenceEquals(item, begin)) {
-                    item = item.Clone();
+                if (ReferenceEquals(current, begin)) {
+                    current = current.Clone();
                 }
 
-                // TODO: this can be optimized 
+                // TODO: this can be optimized
                 for (int i = 0; i < step; i++) {
-                    MutableStringOps.SuccInPlace(item);
+                    MutableStringOps.SuccInPlace(current);
                 }
 
-                if (item.Length > end.Length) {
+                if (current.Length > end.Length) {
                     return self;
                 }
             }
 
             if (comp == 0 && !self.ExcludeEnd) {
-                if (block.Yield(item.Clone(), out result)) {
+                if (block.Yield(wrap != null ? wrap(current.Clone()) : current.Clone(), out result)) {
                     return result;
                 }
             }

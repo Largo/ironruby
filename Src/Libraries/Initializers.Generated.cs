@@ -9356,11 +9356,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.GetSubsec)
             );
             
-            DefineLibraryMethod(module, "succ", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.SuccessiveSecond)
-            );
-            
             DefineLibraryMethod(module, "sunday?", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyTime, System.Boolean>(IronRuby.Builtins.RubyTimeOps.IsSunday)
