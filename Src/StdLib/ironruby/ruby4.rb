@@ -1672,6 +1672,24 @@ unless defined?(Fiber)
   end
 end
 
+module Kernel
+  # A non-blocking fiber does not park its thread: it hands the wait to the
+  # fiber scheduler, which is free to resume something else.  Without this,
+  # `Fiber.new(blocking: false) { sleep }` parks the fiber's thread forever and
+  # the resuming fiber never gets control back - spec/core/kernel/sleep_spec.rb
+  # hung there and took the rest of spec/core/kernel with it.
+  alias_method :__ir_sleep__, :sleep
+  private :__ir_sleep__
+
+  def sleep(*args)
+    scheduler = ::Fiber.current_scheduler
+    return __ir_sleep__(*args) unless scheduler
+    scheduler.kernel_sleep(*args)
+    args.empty? ? 0 : args[0].to_i
+  end
+  module_function :sleep
+end
+
 # --- constants and core methods the 1.9 snapshot predates -------------------
 
 class Float
