@@ -691,15 +691,24 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ ExpandPath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [DefaultParameterValue(null)]object basePath) {
             var context = self.Context;
+            MutableString pathStr = Protocols.CastToPath(toPath, path);
 
             string result = RubyUtils.ExpandPath(
                 context.Platform,
-                context.DecodePath(Protocols.CastToPath(toPath, path)),
+                context.DecodePath(pathStr),
                 (basePath == null) ? context.Platform.CurrentDirectory : context.DecodePath(Protocols.CastToPath(toPath, basePath)),
                 true
             );
 
-            return self.Context.EncodePath(result);
+            return EncodePathLike(result, pathStr);
+        }
+
+        /// <summary>
+        /// The path methods hand back a string in the encoding of the path they were
+        /// given, not in the filesystem encoding.
+        /// </summary>
+        private static MutableString/*!*/ EncodePathLike(string/*!*/ result, MutableString/*!*/ original) {
+            return MutableString.CreateMutable(result, original.Encoding).TaintBy(original);
         }
 
         [RubyMethod("absolute_path", RubyMethodAttributes.PublicSingleton)]
@@ -707,14 +716,26 @@ namespace IronRuby.Builtins {
             [DefaultParameterValue(null)]object basePath) {
             var context = self.Context;
 
+            MutableString pathStr = Protocols.CastToPath(toPath, path);
             string result = RubyUtils.ExpandPath(
                 context.Platform,
-                context.DecodePath(Protocols.CastToPath(toPath, path)),
+                context.DecodePath(pathStr),
                 (basePath == null) ? context.Platform.CurrentDirectory : context.DecodePath(Protocols.CastToPath(toPath, basePath)),
                 false
             );
 
-            return self.Context.EncodePath(result);
+            return EncodePathLike(result, pathStr);
+        }
+
+        [RubyMethod("absolute_path?", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsAbsolutePath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
+            // No expansion and no filesystem access: "~" and "C:/x" are relative on Unix.
+            string strPath = Protocols.CastToPath(toPath, path).ConvertToString();
+            if (IsWindows) {
+                return strPath.Length >= 3 && Tokenizer.IsLetter(strPath[0]) && strPath[1] == ':' && IsDirectorySeparator(strPath[2])
+                    || strPath.Length >= 2 && IsDirectorySeparator(strPath[0]) && IsDirectorySeparator(strPath[1]);
+            }
+            return strPath.Length > 0 && strPath[0] == DirectorySeparatorChar;
         }
 
         [RubyMethod("fnmatch", RubyMethodAttributes.PublicSingleton)]
@@ -740,7 +761,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("join", RubyMethodAttributes.PublicSingleton)]
         public static MutableString Join(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, params object[]/*!*/ parts) {
-            MutableString result = MutableString.CreateMutable(RubyEncoding.Binary);
+            MutableString result = null;
             Dictionary<object, bool> visitedLists = null;
             var worklist = new Stack<object>();
             int current = 0;
@@ -754,7 +775,7 @@ namespace IronRuby.Builtins {
                     if (list.Count == 0) {
                         str = MutableString.FrozenEmpty;
                     } else if (visitedLists != null && visitedLists.ContainsKey(list)) {
-                        str = RubyUtils.InfiniteRecursionMarker;
+                        throw RubyExceptions.CreateArgumentError("recursive array");
                     } else {
                         if (visitedLists == null) {
                             visitedLists = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
@@ -766,18 +787,25 @@ namespace IronRuby.Builtins {
                 } else if (part == null) {
                     throw RubyExceptions.CreateImplicitConversionError("NilClass", "String");
                 } else {
-                    str = Protocols.CastToPath(toPath, part);
+                    try {
+                        str = Protocols.CastToPath(toPath, part);
+                    } catch (ArgumentException e) when (e.Message == "path name contains null byte") {
+                        // rb_file_join reports a NUL as a plain string problem.
+                        throw RubyExceptions.CreateArgumentError("string contains null byte");
+                    }
                 }
 
                 if (current > 0) {
+                    // Append negotiates the encodings, so the join of two EUC-JP paths
+                    // stays EUC-JP instead of decaying to binary.
                     AppendDirectoryName(result, str);
                 } else {
-                    result.Append(str);
+                    result = MutableString.CreateMutable(str.Encoding).Append(str);
                 }
                 current++;
             }
 
-            return result;
+            return result ?? MutableString.CreateEmpty();
         }
 
         private static void Push(Stack<Object>/*!*/ stack, IList/*!*/ values) {
