@@ -6250,6 +6250,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPublic)
             );
             
+            DefineLibraryMethod(module, "public_instance_method", 0x51, 
+                0x00010002U, 
+                new Func<IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.ModuleOps.GetPublicInstanceMethod)
+            );
+            
             DefineLibraryMethod(module, "public_instance_methods", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetPublicInstanceMethods), 

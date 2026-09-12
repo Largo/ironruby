@@ -1041,6 +1041,17 @@ namespace IronRuby.Builtins {
             return new UnboundMethod(constraint, methodName, method);
         }
 
+        // thread-safe:
+        [RubyMethod("public_instance_method")]
+        public static UnboundMethod/*!*/ GetPublicInstanceMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
+            if (method == null || method.Visibility != RubyMethodVisibility.Public) {
+                throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
+            }
+
+            return GetInstanceMethod(self, methodName);
+        }
+
         #endregion
 
         #region to_s, name, freeze
