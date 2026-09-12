@@ -213,9 +213,12 @@ namespace IronRuby.Runtime.Conversions {
                     ArrayUtils.Insert(Symbols.RespondTo, Symbols.MethodMissing, ArrayUtils.ConvertAll(conversions, (c) => c.ToMethodName))
                 );
 
-                // we can optimize if Kernel#respond_to? method is not overridden:
+                // we can optimize if Kernel#respond_to? method is not overridden, and we must take the same
+                // path when respond_to? is missing altogether (BasicObject does not include Kernel) - otherwise
+                // selectedConversion stays null and the error path below dereferences it.
                 respondToMethod = targetClass.ResolveMethodForSiteNoLock(Symbols.RespondTo, VisibilityContext.AllVisible);
-                if (respondToMethod.Found && respondToMethod.Info.DeclaringModule == targetClass.Context.KernelModule && respondToMethod.Info is RubyLibraryMethodInfo) { // TODO: better override detection
+                if (!respondToMethod.Found ||
+                    (respondToMethod.Info.DeclaringModule == targetClass.Context.KernelModule && respondToMethod.Info is RubyLibraryMethodInfo)) { // TODO: better override detection
                     respondToMethod = MethodResolutionResult.NotFound;
 
                     // get the first applicable conversion:

@@ -100,7 +100,7 @@ namespace IronRuby.Builtins {
             }
 
             if (i < str.Length) {
-                throw RubyExceptions.CreateArgumentError("invalid value for Integer: \"{0}\"", str);
+                throw RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", str);
             }
 
             return result;

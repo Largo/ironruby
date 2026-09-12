@@ -1,11 +1,11 @@
 /* ****************************************************************************
  *
- * Copyright (c) Microsoft Corporation. 
+ * Copyright (c) Microsoft Corporation.
  *
- * This source code is subject to terms and conditions of the Apache License, Version 2.0. A 
- * copy of the license can be found in the License.html file at the root of this distribution. If 
- * you cannot locate the  Apache License, Version 2.0, please send an email to 
- * ironruby@microsoft.com. By using this source code in any fashion, you are agreeing to be bound 
+ * This source code is subject to terms and conditions of the Apache License, Version 2.0. A
+ * copy of the license can be found in the License.html file at the root of this distribution. If
+ * you cannot locate the  Apache License, Version 2.0, please send an email to
+ * ironruby@microsoft.com. By using this source code in any fashion, you are agreeing to be bound
  * by the terms of the Apache License, Version 2.0.
  *
  * You must not remove this notice, or any other, from this software.
@@ -36,6 +36,10 @@ namespace IronRuby.Builtins {
         private CallSite<Func<CallSite, object, double>> _tofConversion;
         private CallSite<Func<CallSite, object, MutableString>> _tosConversion;
         private CallSite<Func<CallSite, object, IntegerValue>> _integerConversion;
+        private CallSite<Func<CallSite, object, MutableString>> _tostrTryCast;
+        private CallSite<Func<CallSite, object, object, object>> _index;
+        private CallSite<Func<CallSite, object, object, object>> _hasKey;
+        private CallSite<Func<CallSite, object, object, object>> _new;
 
         [Emitted]
         public StringFormatterSiteStorage(RubyContext/*!*/ context) : base(context) {
@@ -56,47 +60,52 @@ namespace IronRuby.Builtins {
             return site.Target(site, value);
         }
 
+        public MutableString TryConvertToStr(object value) {
+            var site = RubyUtils.GetCallSite(ref _tostrTryCast, TryConvertToStrAction.Make(Context));
+            return site.Target(site, value);
+        }
+
         public IntegerValue ConvertToInteger(object value) {
             var site = RubyUtils.GetCallSite(ref _integerConversion, CompositeConversionAction.Make(Context, CompositeConversion.ToIntToI));
             return site.Target(site, value);
+        }
+
+        /// <summary>Dynamic <c>hash[key]</c> so that Hash#default and the default block are honoured.</summary>
+        public object Index(object hash, object key) {
+            var site = RubyUtils.GetCallSite(ref _index, Context, "[]", 1);
+            return site.Target(site, hash, key);
+        }
+
+        /// <summary>Dynamic <c>hash.key?(key)</c>.</summary>
+        public object HasKey(object hash, object key) {
+            var site = RubyUtils.GetCallSite(ref _hasKey, Context, "key?", 1);
+            return site.Target(site, hash, key);
+        }
+
+        /// <summary>Dynamic <c>cls.new(arg)</c>, used to raise exception classes that are defined in Ruby.</summary>
+        public object New(object cls, object arg) {
+            var site = RubyUtils.GetCallSite(ref _new, Context, "new", 1);
+            return site.Target(site, cls, arg);
         }
     }
 
     /// <summary>
     /// StringFormatter provides Ruby's sprintf style string formatting services.
-    /// 
-    /// TODO: Many dynamic languages have similar printf style functionality.
-    ///       Combine this with IronPython's StringFormatter and move the common code into the DLR
-    /// 
-    /// TODO: Support negative numbers for %u and %o and %x
+    ///
+    /// The conversion specifier syntax implemented here is the one documented for Kernel#format:
+    ///
+    ///   % [flags] [argnum$] [&lt;name&gt;] [width] [.precision] conversion
+    ///   % [flags] [width] [.precision] {name}
+    ///
+    /// flags       - '-' '+' ' ' '0' '#'
+    /// conversion  - b B c d E e f G g i o p s u X x a A %
+    ///
+    /// Numeric output is produced from scratch (BigInteger arithmetic for the float
+    /// conversions) rather than by delegating to System.String.Format, because the CLI's
+    /// numeric formats differ from C's printf in exponent width, rounding, precision limits
+    /// and negative-number handling.
     /// </summary>
-    internal sealed class StringFormatter {      
-
-        // This is a ThreadStatic since so that formatting operations on one thread do not interfere with other threads
-        [ThreadStatic]
-        private static NumberFormatInfo NumberFormatInfoForThread;
-
-        private static NumberFormatInfo nfi {
-            get {
-                if (NumberFormatInfoForThread == null) {
-                    NumberFormatInfo numberFormatInfo = new CultureInfo("en-US").NumberFormat;
-                    // The CLI formats as "Infinity", but Ruby formats differently:
-                    //   sprintf("%f", 1.0/0) => "Inf"
-                    //   sprintf("%f", -1.0/0) => "-Inf"
-                    //   sprintf("%f", 0.0/0) => "Nan"
-                    numberFormatInfo.PositiveInfinitySymbol = "Infinity";
-                    numberFormatInfo.NegativeInfinitySymbol = "-Infinity";
-                    numberFormatInfo.NaNSymbol = "NaN";
-                    NumberFormatInfoForThread = numberFormatInfo;
-                }
-                return NumberFormatInfoForThread;
-            }
-        }
-
-        public bool TrailingZeroAfterWholeFloat {
-            get { return _TrailingZeroAfterWholeFloat; }
-            set { _TrailingZeroAfterWholeFloat = value; }
-        }
+    internal sealed class StringFormatter {
 
         const int UnspecifiedPrecision = -1; // Use the default precision
 
@@ -105,22 +114,23 @@ namespace IronRuby.Builtins {
         private readonly RubyContext/*!*/ _context;
 
         private bool? _useAbsolute;
+        private bool _useNamed;
         private int _relativeIndex;
         private bool _tainted;
 
         private int _index;
-        private char _curCh;
 
         // The options for formatting the current formatting specifier in the format string
         private FormatSettings _opts;
         // Should ddd.0 be displayed as "ddd" or "ddd.0". "'%g' % ddd.0" needs "ddd", but str(ddd.0) needs "ddd.0"
         private bool _TrailingZeroAfterWholeFloat;
 
-        /// TODO: Use MutableString instead of StringBuilder for building the string + encodings
         private StringBuilder _buf;
 
-        // TODO (encoding):
         private readonly RubyEncoding/*!*/ _encoding;
+        private readonly bool _formatIsAscii;
+        private RubyEncoding _resultEncoding;
+        private RubyEncoding _argEncoding;
 
         private readonly StringFormatterSiteStorage/*!*/ _siteStorage;
 
@@ -133,9 +143,9 @@ namespace IronRuby.Builtins {
             _context = context;
             _format = format;
             _data = data;
-
-            // TODO (encoding):
             _encoding = encoding;
+            _resultEncoding = encoding;
+            _formatIsAscii = IsAsciiOnly(format);
         }
 
         internal StringFormatter(StringFormatterSiteStorage/*!*/ siteStorage, string/*!*/ format, RubyEncoding/*!*/ encoding, IList/*!*/ data)
@@ -147,6 +157,11 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region Public API Surface
+
+        public bool TrailingZeroAfterWholeFloat {
+            get { return _TrailingZeroAfterWholeFloat; }
+            set { _TrailingZeroAfterWholeFloat = value; }
+        }
 
         public MutableString/*!*/ Format() {
             _index = 0;
@@ -160,15 +175,17 @@ namespace IronRuby.Builtins {
                 DoFormatCode();
             }
 
-            if (_context.DomainManager.Configuration.DebugMode) {
-                if ((!_useAbsolute.HasValue || !_useAbsolute.Value) && _relativeIndex != _data.Count) {
-                    throw RubyExceptions.CreateArgumentError("too many arguments for format string");
-                }
-            }
-
             _buf.Append(_format, _index, _format.Length - _index);
 
-            MutableString result = MutableString.Create(_buf.ToString(), _encoding);
+            // Ruby only warns when $VERBOSE is true, and a lone Hash argument is assumed to carry
+            // keyword references even when the format string does not use any.
+            if (!_useNamed && (!_useAbsolute.HasValue || !_useAbsolute.Value) && _relativeIndex != _data.Count
+                && !(_data.Count == 1 && _data[0] is IDictionary)
+                && RubyOps.IsTrue(_context.Verbose)) {
+                _context.ReportWarning("too many arguments for format string");
+            }
+
+            MutableString result = MutableString.Create(_buf.ToString(), _resultEncoding ?? _encoding);
 
             if (_tainted) {
                 result.IsTainted = true;
@@ -179,172 +196,221 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region Private APIs
+        #region Specifier parsing
+
+        private static bool IsAsciiOnly(string/*!*/ str) {
+            for (int i = 0; i < str.Length; i++) {
+                if (str[i] > 0x7f) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private Exception/*!*/ MalformedFormat(char c) {
+            return RubyExceptions.CreateArgumentError("malformed format string - %" + c);
+        }
 
         private void DoFormatCode() {
-            // we already pulled the first %
-
-            if (_index == _format.Length || _format[_index] == '\n' || _format[_index] == '\0') {
-                // '%' at the end of the string. Just print it and we are done.
-                _buf.Append('%');
-                return;
-            }
-
-            _curCh = _format[_index++];
-
-            if (_curCh == '%') {
-                // Escaped '%' character using "%%". Just print it and we are done
-                _buf.Append('%');
-                return;
+            // we already pulled the first '%'; _index points just past it.
+            if (_index == _format.Length) {
+                throw RubyExceptions.CreateArgumentError("incomplete format specifier; use %% (double %) instead");
             }
 
             _opts = new FormatSettings();
+            _opts.Precision = UnspecifiedPrecision;
 
-            ReadConversionFlags();
+            bool widthSeen = false;
+            bool precisionSeen = false;
+            bool anythingSeen = false;
+            char conversion = '\0';
 
-            ReadArgumentIndex(); // This can be before or after width and precision
-
-            ReadMinimumFieldWidth();
-
-            ReadPrecision();
-
-            ReadArgumentIndex(); // This can be before or after width and precision
-
-            _opts.Value = GetData(_opts.ArgIndex);
-
-            WriteConversion();
-        }
-
-        private void ReadConversionFlags() {
-            while(true) {
-                switch (_curCh) {
-                    case '#': _opts.AltForm = true; break;
-                    case '-': _opts.LeftAdj = true; _opts.ZeroPad = false; break;
-                    case '0': if (!_opts.LeftAdj) _opts.ZeroPad = true; break;
-                    case '+': _opts.SignChar = true; _opts.Space = false; break;
-                    case ' ': if (!_opts.SignChar) _opts.Space = true; break;
-                    default:
-                        return;
-                }
-
+            while (true) {
                 if (_index >= _format.Length) {
-                    throw RubyExceptions.CreateArgumentError("illegal format character - %");
+                    throw anythingSeen
+                        ? RubyExceptions.CreateArgumentError("malformed format string - %")
+                        : RubyExceptions.CreateArgumentError("incomplete format specifier; use %% (double %) instead");
                 }
 
-                _curCh = _format[_index++];
-            }
-        }
+                char c = _format[_index];
 
-        private void ReadArgumentIndex() {
-            int? argIndex = TryReadArgumentIndex();
-            if (argIndex.HasValue) {
-                if (_opts.ArgIndex.HasValue) {
-                    RubyExceptions.CreateArgumentError("value given twice");
+                if (c == '#' || c == '-' || c == '+' || c == ' ' || c == '0') {
+                    _index++;
+                    anythingSeen = true;
+                    switch (c) {
+                        case '#': _opts.AltForm = true; break;
+                        case '-': _opts.LeftAdj = true; break;
+                        case '+': _opts.SignChar = true; break;
+                        case ' ': _opts.Space = true; break;
+                        case '0': _opts.ZeroPad = true; break;
+                    }
+                    continue;
                 }
-                _opts.ArgIndex = argIndex;
+
+                if (c == '*') {
+                    _index++;
+                    anythingSeen = true;
+                    if (widthSeen) {
+                        throw RubyExceptions.CreateArgumentError("width given twice");
+                    }
+                    widthSeen = true;
+                    int w = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex(), null));
+                    if (w < 0) {
+                        _opts.LeftAdj = true;
+                        w = -w;
+                    }
+                    _opts.FieldWidth = w;
+                    continue;
+                }
+
+                if (c == '.') {
+                    _index++;
+                    anythingSeen = true;
+                    if (precisionSeen) {
+                        throw RubyExceptions.CreateArgumentError("precision given twice");
+                    }
+                    precisionSeen = true;
+                    if (_index < _format.Length && _format[_index] == '*') {
+                        _index++;
+                        int p = _siteStorage.CastToFixnum(GetData(TryReadStarArgumentIndex(), null));
+                        _opts.Precision = (p < 0) ? UnspecifiedPrecision : p;
+                    } else {
+                        int p = 0;
+                        while (_index < _format.Length && _format[_index] >= '0' && _format[_index] <= '9') {
+                            p = p * 10 + (_format[_index++] - '0');
+                        }
+                        _opts.Precision = p;
+                    }
+                    continue;
+                }
+
+                if (c >= '1' && c <= '9') {
+                    int end = _index;
+                    while (end < _format.Length && _format[end] >= '0' && _format[end] <= '9') {
+                        end++;
+                    }
+                    if (end < _format.Length && _format[end] == '$') {
+                        if (_opts.ArgIndex.HasValue) {
+                            throw RubyExceptions.CreateArgumentError("value given twice");
+                        }
+                        _opts.ArgIndex = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
+                        _index = end + 1;
+                    } else {
+                        if (widthSeen) {
+                            throw RubyExceptions.CreateArgumentError("width given twice");
+                        }
+                        widthSeen = true;
+                        _opts.FieldWidth = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
+                        _index = end;
+                    }
+                    anythingSeen = true;
+                    continue;
+                }
+
+                if (c == '<' || c == '{') {
+                    char close = (c == '<') ? '>' : '}';
+                    int end = _format.IndexOf(close, _index + 1);
+                    if (end < 0) {
+                        throw RubyExceptions.CreateArgumentError("malformed name - unmatched parenthesis");
+                    }
+                    if (_opts.Name != null) {
+                        throw RubyExceptions.CreateArgumentError("name{0}{1}{2} after <{3}>",
+                            c.ToString(), _format.Substring(_index + 1, end - _index - 1), close.ToString(), _opts.Name);
+                    }
+                    _opts.Name = _format.Substring(_index + 1, end - _index - 1);
+                    _opts.NameStyle = c;
+                    _index = end + 1;
+                    anythingSeen = true;
+                    if (c == '{') {
+                        // %{name} is a complete directive; it formats the value with to_s
+                        conversion = 's';
+                        break;
+                    }
+                    continue;
+                }
+
+                // conversion character
+                _index++;
+                conversion = c;
+                break;
             }
+
+            if (conversion == '%' && _opts.NameStyle != '{') {
+                if (anythingSeen) {
+                    throw RubyExceptions.CreateArgumentError("invalid format character - %");
+                }
+                _buf.Append('%');
+                return;
+            }
+
+            if ("bBoxXdiueEfGgaAcps".IndexOf(conversion) < 0) {
+                throw MalformedFormat(conversion);
+            }
+
+            _opts.Value = GetData(_opts.ArgIndex, _opts.Name);
+
+            WriteConversion(conversion);
         }
 
-        private int? TryReadArgumentIndex() {
-            if (char.IsDigit(_curCh)) {
+        private int? TryReadStarArgumentIndex() {
+            if (_index < _format.Length && _format[_index] >= '1' && _format[_index] <= '9') {
                 int end = _index;
-                while (end < _format.Length && char.IsDigit(_format[end])) {
+                while (end < _format.Length && _format[end] >= '0' && _format[end] <= '9') {
                     end++;
                 }
                 if (end < _format.Length && _format[end] == '$') {
-                    int argIndex = int.Parse(_format.Substring(_index - 1, end - _index + 1), CultureInfo.InvariantCulture);
-                    _index = end + 1; // Point past the '$'
-                    if (_index < _format.Length) {
-                        _curCh = _format[_index++];
-                        return argIndex;
-                    }
+                    int result = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
+                    _index = end + 1;
+                    return result;
                 }
             }
             return null;
         }
 
-        private int ReadNumberOrStar() {
-            int res = 0; // default value
-            if (_curCh == '*') {
-                _curCh = _format[_index++]; // Skip the '*'
-                int? argindex = TryReadArgumentIndex();
-
-                res = _siteStorage.CastToFixnum(GetData(argindex));
-                if (res < 0) {
-                    _opts.LeftAdj = true;
-                    res = -res;
-                }
-            } else {
-                if (Char.IsDigit(_curCh)) {
-                    res = 0;
-                    while (Char.IsDigit(_curCh) && _index < this._format.Length) {
-                        res = res * 10 + ((int)(_curCh - '0'));
-                        _curCh = _format[_index++];
-                    }
-                }
-            }
-            return res;
-        }
-
-        private void ReadMinimumFieldWidth() {
-            _opts.FieldWidth = ReadNumberOrStar();
-            if (_opts.FieldWidth == Int32.MaxValue) {
-                // TODO: this should be thrown by the converter
-                throw RubyExceptions.CreateRangeError("bignum too big to convert into `long'");
-            }
-        }
-
-        private void ReadPrecision() {
-            if (_curCh == '.') {
-                _curCh = _format[_index++];
-                // possibility: "8.f", "8.0f", or "8.2f"
-                _opts.Precision = ReadNumberOrStar();
-            } else {
-                _opts.Precision = UnspecifiedPrecision;
-            }
-        }
-
-        private void WriteConversion() {
-            // conversion type (required)
-            switch (_curCh) {
-                // binary number
+        private void WriteConversion(char conversion) {
+            switch (conversion) {
                 case 'b':
-                case 'B': AppendBinary(_curCh); return;
-                // single character (int or single char str)
-                case 'c': AppendChar(); return;
-                // signed integer decimal
+                case 'B': AppendRadix(conversion, 2); return;
+                case 'o': AppendRadix(conversion, 8); return;
+                case 'x':
+                case 'X': AppendRadix(conversion, 16); return;
                 case 'd':
-                case 'i': AppendInt('D'); return;
-                // floating point exponential format 
+                case 'i':
+                case 'u': AppendInt(); return;
                 case 'e':
                 case 'E':
-                // floating point decimal
                 case 'f':
-                // Same as "e" if exponent is less than -4 or more than precision, "f" otherwise.
                 case 'G':
-                case 'g': AppendFloat(_curCh); return;
-                // unsigned octal
-                case 'o': AppendOctal(); return;
-                // call inspect on argument
+                case 'g':
+                case 'a':
+                case 'A': AppendFloat(conversion); return;
+                case 'c': AppendChar(); return;
                 case 'p': AppendInspect(); return;
-                // string
                 case 's': AppendString(); return;
-                // unsigned decimal
-                case 'u': AppendInt(_curCh); return;
-                // unsigned hexadecimal
-                case 'x':
-                case 'X': AppendHex(_curCh); return;
-                default: throw RubyExceptions.CreateArgumentError("malformed format string - %" + _curCh);
+                default: throw MalformedFormat(conversion);
             }
         }
 
-        private object GetData(int? absoluteIndex) {
+        #endregion
+
+        #region Argument access
+
+        private object GetData(int? absoluteIndex, string name) {
+            if (name != null) {
+                return GetNamedData(name);
+            }
+
+            if (_useNamed) {
+                throw RubyExceptions.CreateArgumentError("unnumbered({0}) mixed with named", (_relativeIndex + 1).ToString());
+            }
+
             if (_useAbsolute.HasValue) {
                 // All arguments must use absolute or relative index. They can't be mixed
                 if (_useAbsolute.Value && !absoluteIndex.HasValue) {
-                    throw RubyExceptions.CreateArgumentError("unnumbered({0}) mixed with numbered", _relativeIndex + 1);
+                    throw RubyExceptions.CreateArgumentError("unnumbered({0}) mixed with numbered", (_relativeIndex + 1).ToString());
                 } else if (!_useAbsolute.Value && absoluteIndex.HasValue) {
-                    throw RubyExceptions.CreateArgumentError("numbered({0}) after unnumbered({1})", absoluteIndex.Value, _relativeIndex + 1);
+                    throw RubyExceptions.CreateArgumentError("numbered({0}) after unnumbered({1})",
+                        absoluteIndex.Value.ToString(), _relativeIndex.ToString());
                 }
             } else {
                 // First time through, set _useAbsolute based on our current value
@@ -352,614 +418,631 @@ namespace IronRuby.Builtins {
             }
 
             int index = _useAbsolute.Value ? (absoluteIndex.Value - 1) : _relativeIndex++;
-            if (index < _data.Count) {
+            if (index >= 0 && index < _data.Count) {
                 return _data[index];
             }
 
             throw RubyExceptions.CreateArgumentError("too few arguments");
         }
 
-        // TODO: encodings
-        private void AppendChar() {
-            int value = _siteStorage.CastToFixnum(_opts.Value);
-            if (value < 0 && _context.RubyOptions.Compatibility >= RubyCompatibility.Ruby19) {
-                throw RubyExceptions.CreateArgumentError("invalid character: {0}", value);
+        private object GetNamedData(string/*!*/ name) {
+            if (_useAbsolute.HasValue) {
+                throw RubyExceptions.CreateArgumentError("named<{0}> after {1}({2})", name,
+                    _useAbsolute.Value ? "numbered" : "unnumbered", (_relativeIndex == 0 ? 1 : _relativeIndex).ToString());
+            }
+            _useNamed = true;
+
+            if (_data.Count != 1 || !(_data[0] is IDictionary)) {
+                throw RubyExceptions.CreateArgumentError("one hash required");
             }
 
-            char c = (char)(value & 0xff);
-            if (_opts.FieldWidth > 1) {
-                if (!_opts.LeftAdj) {
-                    _buf.Append(' ', _opts.FieldWidth - 1);
+            object hash = _data[0];
+            object key = _context.CreateSymbol(name, RubyEncoding.UTF8);
+
+            if (_siteStorage == null) {
+                IDictionary dict = (IDictionary)hash;
+                if (dict.Contains(key)) {
+                    return dict[key];
                 }
-                _buf.Append(c);
-                if (_opts.LeftAdj) {
-                    _buf.Append(' ', _opts.FieldWidth - 1);
-                }
-            } else {
-                _buf.Append(c);
+                throw CreateKeyError(hash, name, key);
             }
+
+            if (RubyOps.IsTrue(_siteStorage.HasKey(hash, key))) {
+                return _siteStorage.Index(hash, key);
+            }
+
+            // honours Hash#default and the default block; a nil result means "not found"
+            object result = _siteStorage.Index(hash, key);
+            if (result == null) {
+                throw CreateKeyError(hash, name, key);
+            }
+            return result;
         }
 
-        private void AppendInt(char format) {
-            IntegerValue integer = (_opts.Value == null) ? 0 : _siteStorage.ConvertToInteger(_opts.Value);
+        private Exception/*!*/ CreateKeyError(object hash, string/*!*/ name, object key) {
+            string message = (_opts.NameStyle == '{')
+                ? "key{" + name + "} not found"
+                : "key<" + name + "> not found";
 
-            object val;
-            bool isPositive;
-            if (integer.IsFixnum) {
-                isPositive = integer.Fixnum >= 0;
-                val = integer.Fixnum;
-            } else {
-                isPositive = integer.Bignum.IsZero() || integer.Bignum.IsPositive();
-                val = integer.Bignum;
-            }
-
-            if (_opts.LeftAdj) {
-                AppendLeftAdj(val, isPositive, 'D');
-            } else if (_opts.ZeroPad) {
-                AppendZeroPad(val, isPositive, 'D');
-            } else {
-                AppendNumeric(val, isPositive, 'D', format == 'u');
-            }
-        }
-
-        private static readonly char[] zero = new char[] { '0' };
-
-        // Return the new type char to use
-        // opts.Precision will be set to the nubmer of digits to display after the decimal point
-        private char AdjustForG(char type, double v) {
-            if (type != 'G' && type != 'g')
-                return type;
-            if (Double.IsNaN(v) || Double.IsInfinity(v))
-                return type;
-
-            double absV = SM.Abs(v);
-
-            if ((v != 0.0) && // 0.0 should not be displayed as scientific notation
-                absV < 1e-4 || // Values less than 0.0001 will need scientific notation
-                absV >= SM.Pow(10, _opts.Precision)) { // Values bigger than 1e<precision> will need scientific notation
-
-                // One digit is displayed before the decimal point. Hence, we need one fewer than the precision after the decimal point
-                int fractionDigitsRequired = (_opts.Precision - 1);
-                string expForm = absV.ToString("E" + fractionDigitsRequired, CultureInfo.InvariantCulture);
-                string mantissa = expForm.Substring(0, expForm.IndexOf('E')).TrimEnd(zero);
-
-                // We do -2 to ignore the digit before the decimal point and the decimal point itself
-                Debug.Assert(mantissa[1] == '.');
-                _opts.Precision = mantissa.Length - 2;
-
-                type = (type == 'G') ? 'E' : 'e';
-            } else {
-                // "0.000ddddd" is allowed when the precision is 5. The 3 leading zeros are not counted
-                int numberDecimalDigits = _opts.Precision;
-                if (absV < 1e-3) numberDecimalDigits += 3;
-                else if (absV < 1e-2) numberDecimalDigits += 2;
-                else if (absV < 1e-1) numberDecimalDigits += 1;
-
-                string fixedPointForm = absV.ToString("F" + numberDecimalDigits, CultureInfo.InvariantCulture).TrimEnd(zero);
-                string fraction = fixedPointForm.Substring(fixedPointForm.IndexOf('.') + 1);
-                if (absV < 1.0) {
-                    _opts.Precision = fraction.Length;
-                } else {
-                    int digitsBeforeDecimalPoint = 1 + (int)SM.Log10(absV);
-                    _opts.Precision = SM.Min(_opts.Precision - digitsBeforeDecimalPoint, fraction.Length);
-                }
-
-                type = 'f';
-            }
-
-            return type;
-        }
-
-        private void AppendFloat(char type) {
-            double v;
-            if (_siteStorage != null) {
-                v = _siteStorage.CastToDouble(_opts.Value);
-            } else {
-                v = (double)_opts.Value;
-            }
-
-            // scientific exponential format 
-            Debug.Assert(type == 'E' || type == 'e' ||
-                // floating point decimal
-                         type == 'f' ||
-                // Same as "e" if exponent is less than -4 or more than precision, "f" otherwise.
-                         type == 'G' || type == 'g');
-
-            bool forceDot = false;
-            // update our precision first...
-            if (_opts.Precision != UnspecifiedPrecision) {
-                if (_opts.Precision == 0 && _opts.AltForm) forceDot = true;
-                if (_opts.Precision > 50)
-                    _opts.Precision = 50;
-            } else {
-                // alternate form (#) specified, set precision to zero...
-                if (_opts.AltForm) {
-                    _opts.Precision = 0;
-                    forceDot = true;
-                } else _opts.Precision = 6;
-            }
-
-            type = AdjustForG(type, v);
-            nfi.NumberDecimalDigits = _opts.Precision;
-
-            // then append
-            if (_opts.LeftAdj) {
-                AppendLeftAdj(v, v >= 0, type);
-            } else if (_opts.ZeroPad) {
-                AppendZeroPadFloat(v, type);
-            } else {
-                AppendNumeric(v, v >= 0, type, false);
-            }
-            if (v <= 0 && v > -1 && _buf[0] != '-') {
-                FixupFloatMinus(v);
-            }
-
-            if (forceDot) {
-                FixupAltFormDot();
-            }
-        }
-
-        private void FixupAltFormDot() {
-            _buf.Append('.');
-            if (_opts.FieldWidth != 0) {
-                // try and remove the extra character we're adding.
-                for (int i = 0; i < _buf.Length; i++) {
-                    char c = _buf[i];
-                    if (c == ' ' || c == '0') {
-                        _buf.Remove(i, 1);
-                        break;
-                    } else if (c != '-' && c != '+') {
-                        break;
+            object keyErrorClass;
+            if (_siteStorage != null && _context.ObjectClass.TryGetConstant(null, "KeyError", out keyErrorClass)) {
+                try {
+                    object instance = _siteStorage.New(keyErrorClass, MutableString.CreateMutable(message, RubyEncoding.UTF8));
+                    Exception exception = instance as Exception;
+                    if (exception != null) {
+                        _context.SetInstanceVariable(instance, "@receiver", hash);
+                        _context.SetInstanceVariable(instance, "@key", key);
+                        return exception;
                     }
+                } catch (Exception) {
+                    // fall through to IndexError
                 }
             }
+
+            return RubyExceptions.CreateIndexError(message);
         }
 
-        private void FixupFloatMinus(double value) {
-            // Ruby always appends a minus sign even if precision is 0 and the value would appear to be zero.
-            //   sprintf("%.0f", -0.1) => "-0"
-            // Ruby also displays a "-0.0" for a negative zero whereas the CLR displays just "0.0"
-            bool fNeedMinus;
-            if (value == 0.0) {
-                fNeedMinus = MathUtils.IsNegativeZero(value);
+        #endregion
+
+        #region Padding
+
+        /// <summary>
+        /// Lays out sign + prefix + digits in a field of _opts.FieldWidth characters.
+        /// </summary>
+        private void AppendPadded(string/*!*/ sign, string/*!*/ prefix, string/*!*/ digits, bool allowZeroPad) {
+            int pad = _opts.FieldWidth - (sign.Length + prefix.Length + digits.Length);
+            if (pad <= 0) {
+                _buf.Append(sign).Append(prefix).Append(digits);
+            } else if (_opts.LeftAdj) {
+                _buf.Append(sign).Append(prefix).Append(digits).Append(' ', pad);
+            } else if (_opts.ZeroPad && allowZeroPad) {
+                _buf.Append(sign).Append(prefix).Append('0', pad).Append(digits);
             } else {
-                fNeedMinus = true;
-                for (int i = 0; i < _buf.Length; i++) {
-                    char c = _buf[i];
-                    if (c != '.' && c != '0' && c != ' ') {
-                        fNeedMinus = false;
-                        break;
-                    }
-                }
-            }
-
-            if (fNeedMinus) {
-                if (_opts.FieldWidth != 0) {
-                    // trim us back down to the correct field width...
-                    if (_buf[_buf.Length - 1] == ' ') {
-                        _buf.Insert(0, "-");
-                        _buf.Remove(_buf.Length - 1, 1);
-                    } else {
-                        int index = 0;
-                        while (_buf[index] == ' ') index++;
-                        if (index > 0) index--;
-                        _buf[index] = '-';
-                    }
-                } else {
-                    _buf.Insert(0, "-");
-                }
+                _buf.Append(' ', pad).Append(sign).Append(prefix).Append(digits);
             }
         }
 
-        private void AppendZeroPad(object val, bool fPos, char format) {
-            if (fPos && (_opts.SignChar || _opts.Space)) {
-                // produce [' '|'+']0000digits
-                // first get 0 padded number to field width
-                string res = String.Format(nfi, "{0:" + format + _opts.FieldWidth.ToString(CultureInfo.InvariantCulture) + "}", val);
-
-                char signOrSpace = _opts.SignChar ? '+' : ' ';
-                // then if we ended up with a leading zero replace it, otherwise
-                // append the space / + to the front.
-                if (res[0] == '0' && res.Length > 1) {
-                    res = signOrSpace + res.Substring(1);
-                } else {
-                    res = signOrSpace + res;
-                }
-                _buf.Append(res);
-            } else {
-                string res = String.Format(nfi, "{0:" + format + _opts.FieldWidth.ToString(CultureInfo.InvariantCulture) + "}", val);
-
-                // Difference: 
-                //   System.String.Format("{0:D3}", -1)      '-001'
-                //   "%03d" % -1                             '-01'
-
-                if (res[0] == '-') {
-                    // negative
-                    _buf.Append("-");
-                    if (res[1] != '0') {
-                        _buf.Append(res.Substring(1));
-                    } else {
-                        _buf.Append(res.Substring(2));
-                    }
-                } else {
-                    // positive
-                    _buf.Append(res);
-                }
+        private string/*!*/ SignFor(bool isNegative) {
+            if (isNegative) {
+                return "-";
             }
-        }
-
-        private void AppendZeroPadFloat(double val, char format) {
-            if (val >= 0) {
-                StringBuilder res = new StringBuilder(val.ToString(format.ToString(), nfi));
-                if (res.Length < _opts.FieldWidth) {
-                    res.Insert(0, new string('0', _opts.FieldWidth - res.Length));
-                }
-                if (_opts.SignChar || _opts.Space) {
-                    char signOrSpace = _opts.SignChar ? '+' : ' ';
-                    // then if we ended up with a leading zero replace it, otherwise
-                    // append the space / + to the front.
-                    if (res[0] == '0' && res[1] != '.') {
-                        res[0] = signOrSpace;
-                    } else {
-                        res.Insert(0, signOrSpace.ToString());
-                    }
-                }
-                _buf.Append(res);
-            } else {
-                StringBuilder res = new StringBuilder(val.ToString(format.ToString(), nfi));
-                if (res.Length < _opts.FieldWidth) {
-                    res.Insert(1, new string('0', _opts.FieldWidth - res.Length));
-                }
-                _buf.Append(res);
+            if (_opts.SignChar) {
+                return "+";
             }
-        }
-
-        private void AppendNumeric(object val, bool fPos, char format, bool unsigned) {
-            bool isNegative = false;
-
-            if (val is BigInteger && ((BigInteger)val).Sign == -1)
-                isNegative = true;
-            else if (val is int && (int)val < 0)
-                isNegative = true;
-            else if (val is float && (float)val < 0)
-                isNegative = true;
-
-            if (isNegative && unsigned) {
-                val = val is BigInteger ? CastToUnsignedBigInteger((BigInteger)val) : (object)(uint)(int)val;
-            }
-
-            if (fPos && (_opts.SignChar || _opts.Space)) {
-                string strval = (_opts.SignChar ? "+" : " ") + String.Format(nfi, "{0:" + format.ToString() + "}", val);
-                if (strval.Length < _opts.FieldWidth) {
-                    _buf.Append(' ', _opts.FieldWidth - strval.Length);
-                }
-                _buf.Append(strval);
-            } else if (_opts.Precision == UnspecifiedPrecision) {
-                _buf.AppendFormat(nfi, "{0," + _opts.FieldWidth.ToString(CultureInfo.InvariantCulture) + ":" + format + "}", val);
-                if (unsigned && isNegative)
-                    _buf.Insert(0, "..");
-            } else if (_opts.Precision < 100) {
-                //CLR formatting has a maximum precision of 100.
-                _buf.AppendFormat(nfi, "{0," + _opts.FieldWidth.ToString(CultureInfo.InvariantCulture) + ":" + format + _opts.Precision.ToString(CultureInfo.InvariantCulture) + "}", val);
-            } else {
-                StringBuilder res = new StringBuilder();
-                res.AppendFormat("{0:" + format + "}", val);
-                if (res.Length < _opts.Precision) {
-                    char padding = unsigned ? '.' : '0';
-                    res.Insert(0, new String(padding, _opts.Precision - res.Length));
-                }
-                if (res.Length < _opts.FieldWidth) {
-                    res.Insert(0, new String(' ', _opts.FieldWidth - res.Length));
-                }
-                _buf.Append(res.ToString());
-            }
-
-            // If AdjustForG() sets opts.Precision == 0, it means that no significant digits should be displayed after
-            // the decimal point. ie. 123.4 should be displayed as "123", not "123.4". However, we might still need a 
-            // decorative ".0". ie. to display "123.0"
-            if (_TrailingZeroAfterWholeFloat && (format == 'f') && _opts.Precision == 0)
-                _buf.Append(".0");
-        }
-
-        private void AppendLeftAdj(object val, bool fPos, char type) {
-            string str = String.Format(nfi, "{0:" + type.ToString() + "}", val);
-            if (fPos) {
-                if (_opts.SignChar) str = '+' + str;
-                else if (_opts.Space) str = ' ' + str;
-            }
-            _buf.Append(str);
-            if (str.Length < _opts.FieldWidth) _buf.Append(' ', _opts.FieldWidth - str.Length);
-        }
-
-        private static bool NeedsAltForm(char format, char last) {
-            if (format == 'X' || format == 'x') return true;
-
-            if (last == '0') return false;
-            return true;
-        }
-
-        // Note backwards formats
-        private static string GetAltFormPrefixForRadix(char format, int radix) {
-            switch (radix) {
-                case 2:
-                    return format == 'b' ? "b0" : "B0";
-                case 8: return "0";
-                case 16: return format + "0";
+            if (_opts.Space) {
+                return " ";
             }
             return "";
         }
 
-        private static uint[] _Mask = new uint[] { 0x0, 0x1, 0x0, 0x7, 0xF };
-        private static char[] _UpperDigits = new char[] { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' };
-        private static char[] _LowerDigits = new char[] { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+        #endregion
 
-        private StringBuilder/*!*/ AppendBase(object/*!*/ value, int bitsToShift, bool lowerCase) {
-            if (value is BigInteger)
-                return AppendBaseBigInteger((BigInteger)value, bitsToShift, lowerCase);
+        #region Integer conversions
 
-            StringBuilder/*!*/ result = new StringBuilder();
-            bool isNegative = IsNegative(value);
-            uint val = unchecked((uint)(int)value);
-            uint limit = isNegative ? 0xFFFFFFFF : 0;
-            uint mask = _Mask[bitsToShift];
-            char[] digits = lowerCase ? _LowerDigits : _UpperDigits;
+        private BigInteger ToIntegerArgument() {
+            object value = _opts.Value;
 
-            if (IsZero(value)) {
-                result.Append(digits[0]);
-                return result;
+            if (value == null) {
+                throw RubyExceptions.CreateTypeError("can't convert nil into Integer");
             }
 
-            while (val != limit) {
-                result.Append(digits[val & mask]);
-                val = val >> bitsToShift;
-                limit = limit >> bitsToShift;
+            MutableString str = value as MutableString;
+            if (str != null) {
+                // Ruby runs String arguments through Kernel#Integer
+                object parsed = KernelOps.ToInteger(null, str);
+                return (parsed is BigInteger) ? (BigInteger)parsed : (BigInteger)(int)parsed;
             }
 
-            if (isNegative)
-                result.Append(digits[mask]);
-
-            return result;
+            IntegerValue integer = _siteStorage.ConvertToInteger(value);
+            return integer.IsFixnum ? (BigInteger)integer.Fixnum : integer.Bignum;
         }
 
-        private StringBuilder/*!*/ AppendBaseInt(int value, int radix) {
-            StringBuilder/*!*/ str = new StringBuilder();
+        private void AppendInt() {
+            BigInteger value = ToIntegerArgument();
+            bool isNegative = value.Sign < 0;
+            string digits = BigInteger.Abs(value).ToString(CultureInfo.InvariantCulture);
 
-            if (value == 0) str.Append('0');
-            while (value != 0) {
-                int digit = value % radix;
-                str.Append(_LowerDigits[digit]);
-                value /= radix;
-            }
-            return str;
-        }
-
-        private StringBuilder/*!*/ AppendBaseUnsignedInt(uint value, uint radix) {
-            StringBuilder/*!*/ str = new StringBuilder();
-
-            if (value == 0) str.Append('0');
-            while (value != 0) {
-                uint digit = value % radix;
-                str.Append(_LowerDigits[digit]);
-                value /= radix;
-            }
-            return str;
-        }
-
-        private StringBuilder/*!*/ AppendBase2(object/*!*/ value, int radix, bool unsigned) {
-            if (value is BigInteger)
-                return AppendBaseBigInteger((BigInteger)value, radix);
-
-            if (unsigned)
-                return AppendBaseInt((int)value, radix);
-            else
-                return AppendBaseUnsignedInt((uint)value, (uint)radix);
-        }
-
-        private StringBuilder/*!*/ AppendBaseBigInteger(BigInteger/*!*/ value, int radix) {
-            StringBuilder/*!*/ str = new StringBuilder();
-            if (value == 0) str.Append('0');
-            while (value != 0) {
-                int digit = (int)(value % radix);
-                str.Append(_LowerDigits[digit]);
-                value /= radix;
-            }
-            return str;
-        }
-
-        private BigInteger/*!*/ MakeBigIntegerFromByteArray(byte[] bytes) {
-            uint[] data = new uint[(bytes.Length / 4) + 1];
-
-            int j = 0;
-            for (int i = 0; i < bytes.Length; i += 4) {
-                uint word = 0;
-                int diff = bytes.Length - i;
-                if (diff > 3) {
-                    word = (uint)bytes[i] | (uint)(bytes[i + 1] << 8) | (uint)(bytes[i + 2] << 16) | (uint)((uint)bytes[i + 3] << 24);
-                } else if (diff == 3) {
-                    word = (uint)bytes[i] | (uint)(bytes[i + 1] << 8) | (uint)(bytes[i + 2] << 16);
-                } else if (diff == 2) {
-                    word = (uint)bytes[i] | (uint)(bytes[i + 1] << 8);
-                } else if (diff == 1) {
-                    word = (uint)bytes[i];
+            if (_opts.Precision != UnspecifiedPrecision) {
+                if (value.IsZero && _opts.Precision == 0) {
+                    digits = "";
+                } else if (digits.Length < _opts.Precision) {
+                    digits = digits.PadLeft(_opts.Precision, '0');
                 }
-                data[j++] = word;
             }
 
-            return BigIntegerCompat.Create(1, data);
+            AppendPadded(SignFor(isNegative), "", digits, _opts.Precision == UnspecifiedPrecision);
         }
 
-        private BigInteger/*!*/ CastToUnsignedBigInteger(BigInteger/*!*/ value) {
-            return MakeBigIntegerFromByteArray(value.ToByteArray());
-        }
+        private static readonly char[] _LowerDigits = new char[] { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f' };
+        private static readonly char[] _UpperDigits = new char[] { '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F' };
 
-        private BigInteger/*!*/ GenerateMask(BigInteger/*!*/ value) {
-            byte[] bytes = new byte[value.ToByteArray().Length];
-            for (int i = 0; i < bytes.Length; i++) {
-                bytes[i] = 0xFF;
+        private static string/*!*/ ToRadixString(BigInteger value, int radix, bool upperCase) {
+            Debug.Assert(value.Sign >= 0);
+            if (value.IsZero) {
+                return "0";
             }
-            return MakeBigIntegerFromByteArray(bytes);
-        }
-
-        private StringBuilder/*!*/ AppendBaseBigInteger(BigInteger value, int bitsToShift, bool lowerCase) {
-            StringBuilder/*!*/ result = new StringBuilder();
-            bool isNegative = value.Sign == -1;
-            BigInteger/*!*/ val = CastToUnsignedBigInteger(value);
-            BigInteger/*!*/ limit = isNegative ? GenerateMask(value) : BigInteger.Zero;
-            uint mask = _Mask[bitsToShift];
-            char[] digits = lowerCase ? _LowerDigits : _UpperDigits;
-
-            while (val != limit) {
-                result.Append(digits[(int)(val & mask)]);
-                val >>= bitsToShift;
-                limit >>= bitsToShift;
+            char[] table = upperCase ? _UpperDigits : _LowerDigits;
+            StringBuilder result = new StringBuilder();
+            BigInteger r = new BigInteger(radix);
+            while (!value.IsZero) {
+                BigInteger rem;
+                value = BigInteger.DivRem(value, r, out rem);
+                result.Append(table[(int)rem]);
             }
-
-            if (isNegative)
-                result.Append(digits[mask]);
-
-            return result;
-        }
-
-        private object/*!*/ Negate(object/*!*/ value) {
-            if (value is BigInteger)
-                return ~((BigInteger)value);
-            else
-                return -((int)value);
-        }
-
-        private bool IsZero(object/*!*/ value) {
-            if (value is BigInteger)
-                return ((BigInteger)value).IsZero();
-            else
-                return (int)value == 0;
-        }
-
-        private bool IsNegative(object/*!*/ value) {
-            if (value is BigInteger)
-                return ((BigInteger)value).Sign == -1;
-            else
-                return (int)value < 0;
+            char[] chars = new char[result.Length];
+            for (int i = 0; i < result.Length; i++) {
+                chars[i] = result[result.Length - 1 - i];
+            }
+            return new string(chars);
         }
 
         /// <summary>
-        /// AppendBase appends an integer at the specified radix doing all the
-        /// special forms for Ruby.  We have a copy and paste version of this
-        /// for BigInteger below that should be kept in sync.
+        /// Minimal infinite-two's-complement digit string of a negative number: exactly one leading
+        /// (radix-1) digit followed by the remaining digits.  E.g. -255 in base 16 gives "f01".
         /// </summary>
-        private void AppendBase(char format, int radix) {
-            IntegerValue integer = (_opts.Value == null) ? 0 : _siteStorage.ConvertToInteger(_opts.Value);
+        private static string/*!*/ ToComplementString(BigInteger magnitude, int radix, bool upperCase) {
+            Debug.Assert(magnitude.Sign > 0);
 
-            // TODO: split paths for bignum and fixnum
-            object value = integer.IsFixnum ? (object)integer.Fixnum : (object)integer.Bignum;
+            int digitCount = ToRadixString(magnitude, radix, false).Length;
+            BigInteger power = BigInteger.Pow(radix, digitCount + 1);
+            string s = ToRadixString(power - magnitude, radix, upperCase);
 
-            bool isNegative = IsNegative(value);
-            if (isNegative) {
-                // These options mean we're not looking at the one's complement
-                if (_opts.Space || _opts.SignChar)
-                    value = Negate(value);
-
-                // if negative number, the leading space has no impact
-                if (radix != 2 && radix != 8 && radix != 16)
-                    _opts.Space = false;
+            char signDigit = (upperCase ? _UpperDigits : _LowerDigits)[radix - 1];
+            int i = 0;
+            while (i + 1 < s.Length && s[i] == signDigit && s[i + 1] == signDigit) {
+                i++;
             }
+            return s.Substring(i);
+        }
 
-            // we build up the number backwards inside a string builder,
-            // and after we've finished building this up we append the
-            // string to our output buffer backwards.
+        private void AppendRadix(char format, int radix) {
+            BigInteger value = ToIntegerArgument();
+            bool upperCase = (format == 'X' || format == 'B');
+            bool isNegative = value.Sign < 0;
 
-            StringBuilder str;
+            string altPrefix;
             switch (radix) {
-                case 2:
-                    str = AppendBase(value, 1, true);
-                    break;
-                case 8:
-                    str = AppendBase(value, 3, true);
-                    break;
-                case 16:
-                    str = AppendBase(value, 4, format == 'x');
-                    break;
-                default:
-                    str = AppendBase2(value, 10, format == 'u');
-                    break;
+                case 2: altPrefix = (format == 'B') ? "0B" : "0b"; break;
+                case 16: altPrefix = (format == 'X') ? "0X" : "0x"; break;
+                default: altPrefix = ""; break;
             }
 
-            // pad out for additional precision
-            if (str.Length < _opts.Precision) {
-                int len = _opts.Precision - str.Length;
-                char padding = '0';
-                if (radix == 2 && isNegative)
-                    padding = '1';
-                else if (radix == 8 && isNegative)
-                    padding = '7';
-                else if (radix == 16 && isNegative)
-                    padding = format == 'x' ? 'f' : 'F';
+            if (!isNegative || _opts.SignChar || _opts.Space) {
+                // plain magnitude with a sign
+                string digits = ToRadixString(BigInteger.Abs(value), radix, upperCase);
+                bool isZero = value.IsZero;
 
-                str.Append(padding, len);
-            }
-
-            // pad result to minimum field width
-            if (_opts.FieldWidth != 0) {
-                int signLen = (isNegative || _opts.SignChar) ? 1 : 0;
-                int spaceLen = _opts.Space ? 1 : 0;
-                int len = _opts.FieldWidth - (str.Length + signLen + spaceLen);
-
-                if (len > 0) {
-                    // we account for the size of the alternate form, if we'll end up adding it.
-                    if (_opts.AltForm && NeedsAltForm(format, (!_opts.LeftAdj && _opts.ZeroPad) ? '0' : str[str.Length - 1])) {
-                        len -= GetAltFormPrefixForRadix(format, radix).Length;
+                if (_opts.Precision != UnspecifiedPrecision) {
+                    if (isZero && _opts.Precision == 0) {
+                        digits = "";
+                    } else if (digits.Length < _opts.Precision) {
+                        digits = digits.PadLeft(_opts.Precision, '0');
                     }
+                }
 
-                    if (len > 0) {
-                        // and finally append the right form
-                        if (_opts.LeftAdj) {
-                            str.Insert(0, " ", len);
-                        } else {
-                            if (_opts.ZeroPad) {
-                                str.Append('0', len);
-                            } else {
-                                _buf.Append(' ', len);
-                            }
+                string prefix = "";
+                if (_opts.AltForm) {
+                    if (radix == 8) {
+                        if (digits.Length == 0 || digits[0] != '0') {
+                            digits = "0" + digits;
                         }
+                    } else if (!isZero) {
+                        prefix = altPrefix;
                     }
                 }
-            }
 
-            // append the alternate form
-            if (_opts.AltForm && NeedsAltForm(format, str[str.Length - 1]))
-                str.Append(GetAltFormPrefixForRadix(format, radix));
+                AppendPadded(SignFor(isNegative), prefix, digits, _opts.Precision == UnspecifiedPrecision);
+            } else {
+                // two's complement form: ..fff
+                string digits = ToComplementString(BigInteger.Negate(value), radix, upperCase);
+                string prefix = _opts.AltForm ? altPrefix : "";
+                char signDigit = (upperCase ? _UpperDigits : _LowerDigits)[radix - 1];
 
-            // add any sign if necessary
-            if (isNegative) {
-                if (radix == 2 || radix == 8 || radix == 16) {
-                    if (_opts.SignChar || _opts.Space)
-                        _buf.Append('-');
-                    else if (!_opts.ZeroPad && _opts.Precision == -1)
-                        _buf.Append("..");
-                } else {
-                    _buf.Append("-");
+                int target = -1;
+                if (_opts.Precision != UnspecifiedPrecision) {
+                    target = _opts.Precision - 2;
+                } else if (_opts.ZeroPad && !_opts.LeftAdj && _opts.FieldWidth > 0) {
+                    target = _opts.FieldWidth - 2 - prefix.Length;
                 }
-            } else if (_opts.SignChar) {
-                _buf.Append('+');
-            } else if (_opts.Space) {
-                _buf.Append(' ');
-            }
 
-            // append the final value
-            for (int i = str.Length - 1; i >= 0; i--) {
-                _buf.Append(str[i]);
+                if (target > digits.Length) {
+                    digits = digits.PadLeft(target, signDigit);
+                }
+
+                AppendPadded("", prefix + "..", digits, false);
             }
         }
 
-        private void AppendBinary(char format) {
-            AppendBase(format, 2);
+        #endregion
+
+        #region Float conversions
+
+        private static void DecomposeDouble(double value, out BigInteger mantissa, out int exponent) {
+            long bits = BitConverter.DoubleToInt64Bits(value);
+            int biasedExponent = (int)((bits >> 52) & 0x7FF);
+            long fraction = bits & 0xFFFFFFFFFFFFFL;
+
+            if (biasedExponent == 0) {
+                mantissa = fraction;
+                exponent = -1074;
+            } else {
+                mantissa = fraction | (1L << 52);
+                exponent = biasedExponent - 1075;
+            }
         }
 
-        private void AppendHex(char format) {
-            AppendBase(format, 16);
+        /// <summary>
+        /// Exact round-half-to-even of |value| * 10^scale to an integer.
+        /// </summary>
+        private static BigInteger ScaledRound(double value, int scale) {
+            BigInteger mantissa;
+            int exponent;
+            DecomposeDouble(value, out mantissa, out exponent);
+
+            BigInteger numerator = mantissa;
+            BigInteger denominator = BigInteger.One;
+
+            if (exponent >= 0) {
+                numerator <<= exponent;
+            } else {
+                denominator <<= -exponent;
+            }
+
+            if (scale >= 0) {
+                numerator *= BigInteger.Pow(10, scale);
+            } else {
+                denominator *= BigInteger.Pow(10, -scale);
+            }
+
+            BigInteger remainder;
+            BigInteger quotient = BigInteger.DivRem(numerator, denominator, out remainder);
+
+            int cmp = (remainder * 2).CompareTo(denominator);
+            if (cmp > 0 || (cmp == 0 && !quotient.IsEven)) {
+                quotient += BigInteger.One;
+            }
+            return quotient;
         }
 
-        private void AppendOctal() {
-            AppendBase('o', 8);
+        /// <summary>|value| rendered as ddd.ddd with exactly <paramref name="precision"/> fraction digits.</summary>
+        private static string/*!*/ FormatFixed(double value, int precision) {
+            string digits = ScaledRound(value, precision).ToString(CultureInfo.InvariantCulture);
+            if (precision <= 0) {
+                return digits;
+            }
+            if (digits.Length <= precision) {
+                digits = digits.PadLeft(precision + 1, '0');
+            }
+            return digits.Substring(0, digits.Length - precision) + "." + digits.Substring(digits.Length - precision);
+        }
+
+        /// <summary>Decimal exponent that %e would produce for |value| at the given precision.</summary>
+        private static int ExponentFor(double value, int precision, out BigInteger digits) {
+            if (value == 0.0) {
+                digits = BigInteger.Zero;
+                for (int i = 0; i < precision; i++) {
+                    digits = digits * 10;
+                }
+                return 0;
+            }
+
+            int exponent = (int)SM.Floor(SM.Log10(value));
+            BigInteger low = BigInteger.Pow(10, precision);
+            BigInteger high = low * 10;
+
+            digits = ScaledRound(value, precision - exponent);
+            int guard = 0;
+            while (digits >= high && guard++ < 8) {
+                exponent++;
+                digits = ScaledRound(value, precision - exponent);
+            }
+            while (digits < low && guard++ < 16) {
+                exponent--;
+                digits = ScaledRound(value, precision - exponent);
+            }
+            return exponent;
+        }
+
+        private static string/*!*/ FormatExponential(double value, int precision, bool upperCase, bool forceDot) {
+            BigInteger scaled;
+            int exponent = ExponentFor(value, precision, out scaled);
+
+            string digits = scaled.ToString(CultureInfo.InvariantCulture);
+            if (digits.Length < precision + 1) {
+                digits = digits.PadLeft(precision + 1, '0');
+            }
+
+            StringBuilder result = new StringBuilder();
+            result.Append(digits[0]);
+            if (precision > 0) {
+                result.Append('.').Append(digits, 1, digits.Length - 1);
+            } else if (forceDot) {
+                result.Append('.');
+            }
+            result.Append(upperCase ? 'E' : 'e');
+            result.Append(exponent < 0 ? '-' : '+');
+            int absExponent = SM.Abs(exponent);
+            string exponentDigits = absExponent.ToString(CultureInfo.InvariantCulture);
+            if (exponentDigits.Length < 2) {
+                exponentDigits = exponentDigits.PadLeft(2, '0');
+            }
+            result.Append(exponentDigits);
+            return result.ToString();
+        }
+
+        private static string/*!*/ StripTrailingZeros(string/*!*/ significand, bool keepDot) {
+            int dot = significand.IndexOf('.');
+            if (dot < 0) {
+                return significand;
+            }
+            int end = significand.Length;
+            while (end > dot + 1 && significand[end - 1] == '0') {
+                end--;
+            }
+            if (end == dot + 1 && !keepDot) {
+                end = dot;
+            }
+            return significand.Substring(0, end);
+        }
+
+        private static string/*!*/ FormatGeneral(double value, int precision, bool upperCase, bool altForm) {
+            if (precision == 0) {
+                precision = 1;
+            }
+
+            BigInteger ignored;
+            int exponent = ExponentFor(value, precision - 1, out ignored);
+
+            if (exponent < -4 || exponent >= precision) {
+                string s = FormatExponential(value, precision - 1, upperCase, altForm);
+                if (altForm) {
+                    return s;
+                }
+                int e = s.IndexOf(upperCase ? 'E' : 'e');
+                return StripTrailingZeros(s.Substring(0, e), false) + s.Substring(e);
+            } else {
+                string s = FormatFixed(value, precision - 1 - exponent);
+                if (altForm) {
+                    return (s.IndexOf('.') < 0) ? s + "." : s;
+                }
+                return StripTrailingZeros(s, false);
+            }
+        }
+
+        private static string/*!*/ FormatHexFloat(double value, int precision, bool upperCase, bool altForm) {
+            char[] table = upperCase ? _UpperDigits : _LowerDigits;
+
+            if (value == 0.0) {
+                string zeroFraction = (precision > 0) ? new string('0', precision) : "";
+                string zeroBody = "0";
+                if (zeroFraction.Length > 0) {
+                    zeroBody += "." + zeroFraction;
+                } else if (altForm) {
+                    zeroBody += ".";
+                }
+                return zeroBody + (upperCase ? "P+0" : "p+0");
+            }
+
+            BigInteger mantissa;
+            int exponent2;
+            DecomposeDouble(value, out mantissa, out exponent2);
+
+            int msb = -1;
+            BigInteger probe = mantissa;
+            while (!probe.IsZero) {
+                probe >>= 1;
+                msb++;
+            }
+
+            int exponent = exponent2 + msb;
+            BigInteger fraction = mantissa - (BigInteger.One << msb);
+            int fractionBits = msb;
+            int hexDigits = (fractionBits + 3) / 4;
+            BigInteger scaled = fraction << (hexDigits * 4 - fractionBits);
+            int leading = 1;
+
+            if (precision >= 0 && precision < hexDigits) {
+                BigInteger divisor = BigInteger.Pow(16, hexDigits - precision);
+                BigInteger remainder;
+                BigInteger quotient = BigInteger.DivRem(scaled, divisor, out remainder);
+                int cmp = (remainder * 2).CompareTo(divisor);
+                if (cmp > 0 || (cmp == 0 && !quotient.IsEven)) {
+                    quotient += BigInteger.One;
+                }
+                BigInteger limit = BigInteger.Pow(16, precision);
+                if (quotient >= limit) {
+                    quotient -= limit;
+                    leading = 2;
+                }
+                scaled = quotient;
+                hexDigits = precision;
+            }
+
+            string fractionDigits;
+            if (hexDigits == 0) {
+                fractionDigits = "";
+            } else {
+                StringBuilder sb = new StringBuilder();
+                BigInteger v = scaled;
+                for (int i = 0; i < hexDigits; i++) {
+                    sb.Insert(0, table[(int)(v & 15)]);
+                    v >>= 4;
+                }
+                fractionDigits = sb.ToString();
+            }
+
+            if (precision < 0) {
+                fractionDigits = fractionDigits.TrimEnd('0');
+            } else if (fractionDigits.Length < precision) {
+                fractionDigits = fractionDigits.PadRight(precision, '0');
+            }
+
+            StringBuilder result = new StringBuilder();
+            result.Append((char)('0' + leading));
+            if (fractionDigits.Length > 0) {
+                result.Append('.').Append(fractionDigits);
+            } else if (altForm) {
+                result.Append('.');
+            }
+            result.Append(upperCase ? 'P' : 'p');
+            result.Append(exponent < 0 ? '-' : '+');
+            result.Append(SM.Abs(exponent).ToString(CultureInfo.InvariantCulture));
+            return result.ToString();
+        }
+
+        private void AppendFloat(char type) {
+            double value;
+            if (_siteStorage != null) {
+                value = _siteStorage.CastToDouble(_opts.Value);
+            } else {
+                value = (double)_opts.Value;
+            }
+
+            bool upperCase = (type == 'E' || type == 'G' || type == 'A');
+
+            if (Double.IsNaN(value)) {
+                AppendPadded(_opts.SignChar ? "+" : (_opts.Space ? " " : ""), "", "NaN", false);
+                return;
+            }
+
+            bool isNegative = (value < 0.0) || (value == 0.0 && Double.IsNegative(value));
+            double magnitude = SM.Abs(value);
+
+            if (Double.IsInfinity(value)) {
+                AppendPadded(SignFor(isNegative), "", "Inf", false);
+                return;
+            }
+
+            int precision = _opts.Precision;
+            if (precision == UnspecifiedPrecision) {
+                precision = (type == 'a' || type == 'A') ? -1 : 6;
+            }
+            if (precision > 1000) {
+                precision = 1000;
+            }
+
+            string body;
+            string prefix = "";
+
+            switch (type) {
+                case 'f':
+                    body = FormatFixed(magnitude, precision);
+                    if (precision == 0 && _opts.AltForm) {
+                        body += ".";
+                    }
+                    if (_TrailingZeroAfterWholeFloat && precision == 0 && body.IndexOf('.') < 0) {
+                        body += ".0";
+                    }
+                    break;
+
+                case 'e':
+                case 'E':
+                    body = FormatExponential(magnitude, precision, upperCase, _opts.AltForm);
+                    break;
+
+                case 'g':
+                case 'G':
+                    body = FormatGeneral(magnitude, precision, upperCase, _opts.AltForm);
+                    break;
+
+                default: // 'a', 'A'
+                    body = FormatHexFloat(magnitude, precision, upperCase, _opts.AltForm);
+                    prefix = upperCase ? "0X" : "0x";
+                    break;
+            }
+
+            AppendPadded(SignFor(isNegative), prefix, body, true);
+        }
+
+        #endregion
+
+        #region String-ish conversions
+
+        private void AppendChar() {
+            object value = _opts.Value;
+
+            MutableString str = value as MutableString;
+
+            // Ruby uses rb_check_string_type (i.e. to_str) and falls back to NUM2INT.
+            // Symbols must not take the string path - they have no to_str in Ruby 1.9+.
+            if (str == null && _siteStorage != null && value != null &&
+                !(value is int) && !(value is BigInteger) && !(value is double) && !(value is RubySymbol)) {
+                try {
+                    str = _siteStorage.TryConvertToStr(value);
+                } catch (InvalidOperationException e) {
+                    // to_str exists but returned a non-String
+                    throw RubyExceptions.CreateTypeError(e, "can't convert {0} into String", _context.GetClassDisplayName(value));
+                }
+            }
+
+            string text;
+            if (str != null) {
+                string s = str.ToString();
+                if (s.Length == 0) {
+                    text = "";
+                } else if (Char.IsHighSurrogate(s[0]) && s.Length > 1) {
+                    text = s.Substring(0, 2);
+                } else {
+                    text = s.Substring(0, 1);
+                }
+                TrackEncoding(str);
+            } else {
+                if (value == null) {
+                    throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
+                }
+
+                int codepoint;
+                if (value is int) {
+                    codepoint = (int)value;
+                } else {
+                    try {
+                        codepoint = _siteStorage.CastToFixnum(value);
+                    } catch (InvalidOperationException e) {
+                        string className = _context.GetClassDisplayName(value);
+                        // "X#to_int should return Integer" means to_int exists but misbehaved;
+                        // anything else means there is no conversion at all.
+                        throw (e.Message != null && e.Message.IndexOf("should return") >= 0)
+                            ? RubyExceptions.CreateTypeError(e, "can't convert {0} into Integer", className)
+                            : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", className);
+                    }
+                }
+
+                if (codepoint < 0 || codepoint > 0x10FFFF) {
+                    throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint.ToString());
+                }
+                text = Char.ConvertFromUtf32(codepoint);
+
+                if (codepoint > 0x7F && !IsRepresentable(text)) {
+                    throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint.ToString());
+                }
+            }
+
+            // width counts characters, not UTF-16 code units
+            int length = (text.Length > 0) ? 1 : 0;
+            int pad = _opts.FieldWidth - length;
+            if (pad <= 0) {
+                _buf.Append(text);
+            } else if (_opts.LeftAdj) {
+                _buf.Append(text).Append(' ', pad);
+            } else {
+                _buf.Append(' ', pad).Append(text);
+            }
+        }
+
+        /// <summary>True if the text can be encoded in the encoding the result will carry.</summary>
+        private bool IsRepresentable(string/*!*/ text) {
+            RubyEncoding encoding = _resultEncoding ?? _encoding;
+            if (encoding == null) {
+                return true;
+            }
+            try {
+                encoding.StrictEncoding.GetBytes(text);
+                return true;
+            } catch (EncoderFallbackException) {
+                return false;
+            } catch (ArgumentException) {
+                return false;
+            }
         }
 
         private void AppendInspect() {
@@ -972,7 +1055,10 @@ namespace IronRuby.Builtins {
         }
 
         private void AppendString() {
-            MutableString/*!*/ str = _siteStorage.ConvertToString(_opts.Value);
+            MutableString/*!*/ str = (_opts.Value == null)
+                ? MutableString.CreateEmpty()
+                : _siteStorage.ConvertToString(_opts.Value);
+
             if (KernelOps.Tainted(_context, str)) {
                 _tainted = true;
             }
@@ -980,8 +1066,37 @@ namespace IronRuby.Builtins {
             AppendString(str);
         }
 
+        private void TrackEncoding(MutableString/*!*/ str) {
+            if (str.IsAscii()) {
+                return;
+            }
+
+            RubyEncoding encoding = str.Encoding;
+            if (encoding == null || encoding == _resultEncoding) {
+                return;
+            }
+
+            if (_formatIsAscii && (_argEncoding == null || _argEncoding == encoding)) {
+                _argEncoding = encoding;
+                _resultEncoding = encoding;
+                return;
+            }
+
+            throw RubyExceptions.CreateEncodingCompatibilityError(_resultEncoding ?? _encoding, encoding);
+        }
+
         private void AppendString(MutableString/*!*/ mutable) {
-            string str = mutable.ConvertToString();
+            TrackEncoding(mutable);
+
+            string str;
+            try {
+                str = mutable.ConvertToString();
+            } catch (DecoderFallbackException) {
+                // the argument holds bytes that are not valid in its own encoding; Ruby copies them
+                // through verbatim. We cannot represent that in the StringBuilder we build the result
+                // in, so fall back to the lossy conversion rather than letting a CLR exception escape.
+                str = mutable.ToString();
+            }
 
             if (_opts.Precision != UnspecifiedPrecision && str.Length > _opts.Precision) {
                 str = str.Substring(0, _opts.Precision);
@@ -1005,18 +1120,8 @@ namespace IronRuby.Builtins {
         // The conversion specifier format is as follows:
         //   % conversionFlags fieldWidth . precision conversionType
         // where:
-        //   mappingKey - value to be formatted
-        //   conversionFlags - # 0 - + * <space>
-        //   conversionType - b c d E e f G g i o p s u X x %
-        // Note:
-        //   conversionFlags can also contain: number$
-        //     where number is the index of the argument to get data from (uses 1-based indexing, so >= 1)
-        //     This is called "abolute indexing", and if it's used anywhere it must be used everywhere.
-        //     If absolute indexing is used, the "*" conversionFlag must be followed by number$ to indicate
-        //     the (1-based) index of the argument containing the field width.
-        // Ex:
-        //   %#4o - Display argument as octal and prepend with leading 0 if necessary,
-        //                   for a total of at least 4 characters
+        //   conversionFlags - # 0 - + <space>
+        //   conversionType - b B c d E e f G g i o p s u X x a A %
 
         [Flags]
         internal enum FormatOptions {
@@ -1100,16 +1205,16 @@ namespace IronRuby.Builtins {
             internal int FieldWidth;
 
             // Number of significant digits to display, before and after the decimal point.
-            // For floats, it gets adjusted to the number of digits to display after the decimal point since
-            // that is the value required by StringBuilder.AppendFormat.
-            // For clarity, we should break this up into the two values - the precision specified by the
-            // format string, and the value to be passed in to StringBuilder.AppendFormat
             internal int Precision;
 
             internal object Value;
 
             // If using absolute indexing, the index of the argument that has the data value
             internal int? ArgIndex;
+
+            // %<name>s / %{name} reference
+            internal string Name;
+            internal char NameStyle;
         }
         #endregion
     }
