@@ -3036,6 +3036,12 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadInteger_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "bit_length", 0x51, 
+                0x00000000U, 0x00000000U, 
+                new Func<System.Int32, System.Int32>(IronRuby.Builtins.Integer.BitLength), 
+                new Func<System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.Integer.BitLength)
+            );
+            
             DefineLibraryMethod(module, "ceil", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
@@ -7023,8 +7029,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "*", 0x51, 
-                0x00010000U, 
-                new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Repeat)
+                0x00010000U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Repeat), 
+                new Func<IronRuby.Builtins.MutableString, System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Repeat)
             );
             
             DefineLibraryMethod(module, "%", 0x51, 
@@ -9393,11 +9400,6 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "subsec", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyTime, System.Object>(IronRuby.Builtins.RubyTimeOps.GetSubsec)
-            );
-            
-            DefineLibraryMethod(module, "succ", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyTime, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.SuccessiveSecond)
             );
             
             DefineLibraryMethod(module, "sunday?", 0x51, 

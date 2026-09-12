@@ -1358,8 +1358,7 @@ namespace IronRuby.Prism {
             }
 
             foreach (var required in node.Requireds) {
-                statements.Add(new SimpleAssignmentExpression(Target(required),
-                    new MethodCall(args, "shift", null, span), null, span));
+                statements.Add(AssignNext(required, args, span));
             }
 
             foreach (var opt in node.Optionals) {
@@ -1389,8 +1388,7 @@ namespace IronRuby.Prism {
             }
 
             foreach (var post in node.Posts) {
-                statements.Add(new SimpleAssignmentExpression(Target(post),
-                    new MethodCall(args, "shift", null, span), null, span));
+                statements.Add(AssignNext(post, args, span));
             }
 
             foreach (var statement in BindKeywordsFrom(node, kwVar)) {
@@ -1404,6 +1402,19 @@ namespace IronRuby.Prism {
                 blockParam = DefineParameter(block.Name ?? "?block?", Span(node.Block));
             }
             return new Parameters(LeftValue.EmptyArray, 0, null, args, blockParam, span);
+        }
+
+        /// <summary>
+        /// Emits `target = ?args?.shift`. A destructured parameter such as |(a, b)| or
+        /// |(*)| resolves to a CompoundLeftValue, which only a parallel assignment can
+        /// take; handing one to SimpleAssignmentExpression trips its Debug.Assert.
+        /// </summary>
+        private Expression/*!*/ AssignNext(Pm.PmNode/*!*/ target, LocalVariable/*!*/ args, SourceSpan span) {
+            var shift = new MethodCall(args, "shift", null, span);
+            var lhs = Target(target);
+            return lhs is CompoundLeftValue compound
+                ? (Expression)new ParallelAssignmentExpression(compound, new Expression[] { shift }, span)
+                : new SimpleAssignmentExpression(lhs, shift, null, span);
         }
 
         /// <summary>

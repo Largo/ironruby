@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Diagnostics;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Generation;
 using System.Numerics;
@@ -304,13 +305,13 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Raises self to the exponent power, where exponent is Bignum.
         /// </summary>
-        /// <returns>self ** exponent as Float </returns>
-        /// <remarks>Converts self and exponent to Float (directly) and then calls System.Math.Pow</remarks>
+        /// <returns>self ** exponent as Bignum/Fixnum if exponent &gt;= 0, Float otherwise</returns>
         [RubyMethod("**")]
         public static object Power(RubyContext/*!*/ context, BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ exponent) {
-            context.ReportWarning("in a**b, b may be too big");
-            double result = Math.Pow(self.ToFloat64(), exponent.ToFloat64());
-            return result;
+            if (exponent.Sign < 0) {
+                return Math.Pow(self.ToFloat64(), exponent.ToFloat64());
+            }
+            return PowerNonNegative(self, exponent);
         }
 
         /// <summary>
@@ -327,7 +328,58 @@ namespace IronRuby.Builtins {
             if (exponent < 0) {
                 return Power(self, (double)exponent);
             }
-            return Protocols.Normalize(self.Power(exponent));
+            return PowerNonNegative(self, exponent);
+        }
+
+        /// <summary>
+        /// The most bits MRI 3.4+ is willing to produce from Integer#** before it gives up with
+        /// an ArgumentError (16 GiB). Anything past <see cref="Int32.MaxValue"/> bits is out of
+        /// reach for System.Numerics.BigInteger anyway, so that is the effective ceiling here.
+        /// </summary>
+        private const long PowerResultBitLimit = 16L * 1024 * 1024 * 1024;
+
+        /// <summary>
+        /// self ** exponent for exponent &gt;= 0.
+        ///
+        /// Refuses absurd result sizes up front the way MRI 3.4+ does, rather than spending
+        /// minutes and gigabytes on a value nobody can use, and shifts instead of multiplying
+        /// when |self| is a power of two - BigInteger.Pow multiplies in quadratic time, which
+        /// makes even a legal result like 2 ** 40_000_000 effectively a hang.
+        /// </summary>
+        internal static object/*!*/ PowerNonNegative(BigInteger/*!*/ self, BigInteger/*!*/ exponent) {
+            Debug.Assert(exponent.Sign >= 0);
+
+            if (exponent.IsZero) {
+                return ScriptingRuntimeHelpers.Int32ToObject(1);
+            }
+            if (self.IsZero || self.IsOne) {
+                return ScriptingRuntimeHelpers.Int32ToObject(self.IsZero ? 0 : 1);
+            }
+            if (self == BigInteger.MinusOne) {
+                return ScriptingRuntimeHelpers.Int32ToObject(exponent.IsEven ? 1 : -1);
+            }
+
+            // |self| >= 2 from here on, so the result needs at least
+            // (bitLength(|self|) - 1) * exponent + 1 bits.
+            BigInteger magnitude = BigInteger.Abs(self);
+            long magnitudeBits = magnitude.GetBitLength();
+            BigInteger resultBits = (BigInteger)(magnitudeBits - 1) * exponent + BigInteger.One;
+            if (resultBits > PowerResultBitLimit || resultBits > Int32.MaxValue) {
+                throw RubyExceptions.CreateArgumentError("exponent is too large");
+            }
+
+            bool negateResult = self.Sign < 0 && !exponent.IsEven;
+            int exp = (int)exponent;
+
+            BigInteger result;
+            if ((magnitude & (magnitude - BigInteger.One)).IsZero) {
+                // |self| == 2 ** (magnitudeBits - 1): a shift, linear instead of quadratic
+                result = BigInteger.One << (int)((magnitudeBits - 1) * exp);
+            } else {
+                result = BigInteger.Pow(magnitude, exp);
+            }
+
+            return Protocols.Normalize(negateResult ? -result : result);
         }
 
         /// <summary>
