@@ -761,9 +761,9 @@ lambda { |x,| p x }.call [1]
 lambda { |x,| p x }.call [1,2]
 lambda { |(x,y)| p [x,y] }.call [1,2]
 ", @"
-#<ArgumentError: wrong number of arguments (0 for 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1)>
 1
-#<ArgumentError: wrong number of arguments (2 for 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
 []
 [1]
 [1, 2]
@@ -1654,10 +1654,10 @@ c5[1,2,*[3,4]] = 5
 c6[1,2] = 3
 c6[1,*[2,3,4,5,6]] = 7
 ", 
-// #<ArgumentError: wrong number of arguments (2 for 1)>
-// #<ArgumentError: wrong number of arguments (2 for 1)>
-// #<ArgumentError: wrong number of arguments (3 for 2)>
-// #<ArgumentError: wrong number of arguments (3 for 2)>
+// #<ArgumentError: wrong number of arguments (given 2, expected 1)>
+// #<ArgumentError: wrong number of arguments (given 2, expected 1)>
+// #<ArgumentError: wrong number of arguments (given 3, expected 2)>
+// #<ArgumentError: wrong number of arguments (given 3, expected 2)>
 @"
 [1, 2, 3]
 [1, 2, 3, 4]
@@ -2586,9 +2586,9 @@ BEGIN {
 p eval('x', $binding) rescue p $!
 p eval('y+z', $binding)
 ", @"
-#<NoMethodError: undefined method `x' for main:Object>
+#<NoMethodError: undefined method `x' for main>
 3
-#<NoMethodError: undefined method `x' for main:Object>
+#<NoMethodError: undefined method `x' for main>
 3
 ");
         }
@@ -2684,7 +2684,7 @@ p n.call(nil)
 n.call() rescue p $!
 p n.call([1,2])
 ", @"
-#<NoMethodError: private method `foo' called for C:C>
+#<NoMethodError: private method `foo' called for an instance of C>
 true
 #<ArgumentError: no receiver given>
 false

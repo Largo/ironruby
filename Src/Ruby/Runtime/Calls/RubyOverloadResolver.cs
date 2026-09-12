@@ -777,6 +777,13 @@ namespace IronRuby.Runtime.Calls {
                 return sorted[0].ToString(System.Globalization.CultureInfo.InvariantCulture);
             }
 
+            // An overload taking `params` reports Int32.MaxValue as its maximum; MRI spells an
+            // unbounded arity "3+", not "3 or 2147483647".
+            if (sorted[sorted.Count - 1] == Int32.MaxValue) {
+                sorted.RemoveAt(sorted.Count - 1);
+                return sorted[0].ToString(System.Globalization.CultureInfo.InvariantCulture) + "+";
+            }
+
             if (sorted[sorted.Count - 1] - sorted[0] == sorted.Count - 1) {
                 return sorted[0].ToString(System.Globalization.CultureInfo.InvariantCulture) + ".." +
                     sorted[sorted.Count - 1].ToString(System.Globalization.CultureInfo.InvariantCulture);

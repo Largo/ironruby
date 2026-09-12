@@ -229,7 +229,7 @@ p d.foo(1) rescue p $!
 123
 123
 123
-#<ArgumentError: wrong number of arguments (1 for 0)>
+#<ArgumentError: wrong number of arguments (given 1, expected 0)>
 ");
         }
 
@@ -684,7 +684,7 @@ eval('
 ", @"
 main
 main
-#<NoMethodError: undefined method `foo' for main:Object>
+#<NoMethodError: undefined method `foo' for main>
 ");
         }
     }

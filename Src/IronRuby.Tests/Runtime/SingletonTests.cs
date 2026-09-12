@@ -372,7 +372,7 @@ $SM.c_c rescue p $!
 p $SM.c_m
 ", @"
 #<NameError: undefined method `c_c' for class `Class'>
-#<NoMethodError: undefined method `c_c' for #<Class:M>>
+#<NoMethodError: undefined method `c_c' for class #<Class:M>>
 :c_m
 ");
         }
@@ -426,13 +426,13 @@ C                                                  Object
 #<Class:#<Class:#<Class:C>>>                       #<Class:#<Class:#<Class:#<Class:C>>>>
 #<Class:#<Class:#<Class:#<Class:C>>>>              #<Class:#<Class:#<Class:#<Class:C>>>>
 
-undefined method `superclass' for M:Module
+undefined method `superclass' for module M
 #<Class:M>                                         #<Class:#<Class:M>>
 #<Class:#<Class:M>>                                #<Class:#<Class:#<Class:M>>>
 #<Class:#<Class:#<Class:M>>>                       #<Class:#<Class:#<Class:#<Class:M>>>>
 #<Class:#<Class:#<Class:#<Class:M>>>>              #<Class:#<Class:#<Class:#<Class:M>>>>
 
-undefined method `superclass' for #<MM:0x*>
+undefined method `superclass' for module #<MM:0x*>
 #<Class:#<MM:0x*>>                           #<Class:#<Class:#<MM:0x*>>>
 #<Class:#<Class:#<MM:0x*>>>                  #<Class:#<Class:#<Class:#<MM:0x*>>>>
 #<Class:#<Class:#<Class:#<MM:0x*>>>>         #<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>>
