@@ -131,6 +131,11 @@ namespace IronRuby.Builtins {
                             // CLR regex "[]" throws exception
                             return String.Empty;
                         }
+                        if (pathName) {
+                            // Under FNM_PATHNAME a bracket expression never matches the
+                            // separator, not even when it lists or negates it.
+                            result.Append("(?![/])");
+                        }
                         result.Append(set);
                         charClass = null;
                     } else {
@@ -149,7 +154,7 @@ namespace IronRuby.Builtins {
                         continue;
 
                     case '?':
-                        result.Append('.');
+                        result.Append(pathName ? "[^/]" : ".");
                         break;
 
                     case '[':

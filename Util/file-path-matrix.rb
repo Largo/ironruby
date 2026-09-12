@@ -14,7 +14,17 @@
 # Only methods that are pure string manipulation are included; anything that
 # touches the filesystem would make the output depend on the machine.
 #
-# Expected differences: none.  Every line that differs is a bug.
+# Expected differences, as of the last run (7 lines out of 1440):
+#
+#   6  "incompat ..." - CRuby and IronRuby disagree about *which* encodings are
+#      ASCII-incompatible (IronRuby exposes the EBCDIC code pages .NET has), so
+#      the two runs iterate different lists.  The behaviour under test - that a
+#      non-ASCII-compatible path raises Encoding::CompatibilityError - matches.
+#   1  File.join("a", :b) - IronRuby's to_path/to_str conversion accepts a
+#      Symbol where CRuby raises TypeError.  That is a conversion-protocol bug,
+#      not a path bug.
+#
+# Anything beyond those is a real difference.
 
 def repr(value)
   case value

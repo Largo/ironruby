@@ -536,22 +536,22 @@ namespace IronRuby.Builtins {
                 return MutableString.CreateMutable(last, path.Encoding);
             }
 
-            StringComparison comparison = Environment.OSVersion.Platform == PlatformID.Unix ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            StringComparison comparison = IsWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             int matchLength = last.Length;
 
-            if (suffix != null) {
-                string strSuffix = suffix.ToString();
-                if (strSuffix.LastCharacter() == '*' && strSuffix.Length > 1) {
-                    int suffixIdx = last.LastIndexOf(
-                        strSuffix.Substring(0, strSuffix.Length - 1),
-                        comparison
-                    );
-                    if (suffixIdx >= 0 && suffixIdx + strSuffix.Length <= last.Length) {
-                        matchLength = suffixIdx;
-                    }
-                } else if (last.EndsWith(strSuffix, comparison)) {
-                    matchLength = last.Length - strSuffix.Length;
-                }
+            string strSuffix = suffix.ToString();
+            if (strSuffix == ".*") {
+                // ".*" is the only wildcard rmext() understands; any other suffix,
+                // including ".t*", is matched literally.
+                matchLength = last.Length - FindExtension(last).Length;
+            } else if (last.EndsWith(strSuffix, comparison)) {
+                matchLength = last.Length - strSuffix.Length;
+            }
+
+            // Stripping the suffix never leaves nothing behind: basename("bar", "bar")
+            // is "bar", not "".
+            if (matchLength == 0) {
+                matchLength = last.Length;
             }
 
             return MutableString.CreateMutable(path.Encoding).Append(last, 0, matchLength).TaintBy(path);
@@ -572,8 +572,13 @@ namespace IronRuby.Builtins {
 
             MutableString result = Protocols.CastToPath(toPath, path);
             if (level == 0) {
-                // "level 0" means "no component removed", not even the trailing slash.
-                return MutableString.CreateMutable(result.ConvertToString(), result.Encoding).TaintBy(result);
+                // Level 0 removes no component, but still normalises: the leading run of
+                // slashes collapses and an empty path becomes ".", as in CRuby.
+                string strPath = result.ConvertToString();
+                if (!IsWindows) {
+                    strPath = NormalizeRoot(strPath);
+                }
+                return MutableString.CreateMutable(strPath, result.Encoding).TaintBy(result);
             }
 
             for (int i = 0; i < level; i++) {
@@ -598,6 +603,18 @@ namespace IronRuby.Builtins {
         /// dirname(3) as CRuby implements it on Unix: a leading run of slashes collapses
         /// to a single "/", interior runs are preserved, and a path with no slash left is ".".
         /// </summary>
+        private static string/*!*/ NormalizeRoot(string/*!*/ path) {
+            int start = 0;
+            while (start < path.Length && path[start] == '/') {
+                start++;
+            }
+
+            if (start == 0) {
+                return path.Length == 0 ? "." : path;
+            }
+            return "/" + path.Substring(start);
+        }
+
         private static string/*!*/ PosixDirName(string/*!*/ path) {
             int start = 0;
             while (start < path.Length && path[start] == '/') {
@@ -684,7 +701,42 @@ namespace IronRuby.Builtins {
         [RubyMethod("extname", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ GetExtension(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             MutableString pathStr = Protocols.CastToPath(toPath, path);
-            return MutableString.Create(RubyUtils.GetExtension(pathStr.ConvertToString()), pathStr.Encoding).TaintBy(pathStr);
+            string last = LastPathComponent(pathStr.ConvertToString());
+            string extension = FindExtension(last);
+
+            // CRuby hands back a shared empty binary string when there is no extension,
+            // so File.extname("foo").encoding is ASCII-8BIT, not the path's encoding.
+            return extension.Length == 0
+                ? MutableString.CreateBinary().TaintBy(pathStr)
+                : MutableString.Create(extension, pathStr.Encoding).TaintBy(pathStr);
+        }
+
+        private static string/*!*/ LastPathComponent(string/*!*/ path) {
+            for (int i = path.Length - 1; i >= 0; i--) {
+                if (IsDirectorySeparator(path[i])) {
+                    return path.Substring(i + 1);
+                }
+            }
+            return path;
+        }
+
+        /// <summary>
+        /// ruby_enc_find_extname: leading dots belong to the name ("/.config" is hidden,
+        /// not an extension of ""), and the extension runs from the last remaining dot to
+        /// the end, so "foo." has the extension ".".
+        /// </summary>
+        private static string/*!*/ FindExtension(string/*!*/ name) {
+            int start = 0;
+            while (start < name.Length && name[start] == '.') {
+                start++;
+            }
+
+            if (start >= name.Length) {
+                return "";
+            }
+
+            int dot = name.LastIndexOf('.');
+            return dot < start ? "" : name.Substring(dot);
         }
 
         [RubyMethod("expand_path", RubyMethodAttributes.PublicSingleton)]
@@ -741,7 +793,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("fnmatch", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("fnmatch?", RubyMethodAttributes.PublicSingleton)]
         public static bool FnMatch(ConversionStorage<MutableString>/*!*/ toPath, object/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, object path, [Optional]int flags) {
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, object path, [DefaultProtocol, Optional]int flags) {
 
             return Glob.FnMatch(pattern.ConvertToString(), Protocols.CastToPath(toPath, path).ConvertToString(), flags);
         }

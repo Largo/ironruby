@@ -2072,12 +2072,12 @@ namespace IronRuby.Builtins {
             
             #endif
             DefineLibraryMethod(module, "fnmatch", 0x61, 
-                0x00020004U, 
+                0x000a0004U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Int32, System.Boolean>(IronRuby.Builtins.RubyFileOps.FnMatch)
             );
             
             DefineLibraryMethod(module, "fnmatch?", 0x61, 
-                0x00020004U, 
+                0x000a0004U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Int32, System.Boolean>(IronRuby.Builtins.RubyFileOps.FnMatch)
             );
             
