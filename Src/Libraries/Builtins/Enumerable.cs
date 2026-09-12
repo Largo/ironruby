@@ -42,6 +42,45 @@ namespace IronRuby.Builtins {
             return site.Target(site, self, block, args);
         }
 
+        /// <summary>
+        /// Packs the values a single `yield` handed the iteration block into the one object MRI
+        /// stores for it: no value becomes nil, one value stays itself, several become an Array.
+        /// `def each; yield 1, 2; end` is therefore what makes `to_a` produce [[1, 2]], not [1].
+        /// </summary>
+        internal static object PackValues(RubyArray/*!*/ args) {
+            switch (args.Count) {
+                case 0: return null;
+                case 1: return args[0];
+                default: return args;
+            }
+        }
+
+        /// <summary>
+        /// Creates the block Enumerable iterates with. It is declared `|*args|`, so it sees every
+        /// value a yield passed rather than only the first, packs them per <see cref="PackValues"/>
+        /// and hands the single item on. Re-yielding that item to a user block restores the
+        /// original arguments, because Ruby auto-splats an Array into a multi-parameter block.
+        /// </summary>
+        internal static Proc/*!*/ PackingBlock(RubyContext/*!*/ context, Func<BlockParam, object, object>/*!*/ body) {
+            return Proc.Create(context, 0, delegate(BlockParam/*!*/ selfBlock, object _, object[] __, RubyArray/*!*/ args) {
+                Debug.Assert(__.Length == 0);
+                return body(selfBlock, PackValues(args));
+            });
+        }
+
+        /// <summary>
+        /// The same block for the methods that hand a yield's values straight on to a user block.
+        /// MRI forwards them unchanged there - `def each; yield 1, 2; end` makes `map { |a| a }`
+        /// see 1, not [1, 2] - even where the same method packs the value it *stores*
+        /// (`take_while` does both). <paramref name="body"/> gets the raw argument list.
+        /// </summary>
+        internal static Proc/*!*/ SplattingBlock(RubyContext/*!*/ context, Func<BlockParam, RubyArray, object>/*!*/ body) {
+            return Proc.Create(context, 0, delegate(BlockParam/*!*/ selfBlock, object _, object[] __, RubyArray/*!*/ args) {
+                Debug.Assert(__.Length == 0);
+                return body(selfBlock, args);
+            });
+        }
+
         #region all?, any?, none?
 
         [RubyMethod("all?")]
@@ -61,10 +100,11 @@ namespace IronRuby.Builtins {
 
         private static object TrueForItems(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self, bool stop, bool positiveResult) {
             object result = ScriptingRuntimeHelpers.BooleanToObject(!positiveResult);
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                object item = PackValues(args);
                 if (predicate != null) {
                     object blockResult;
-                    if (predicate.Yield(item, out blockResult)) {
+                    if (predicate.YieldSplat(args, out blockResult)) {
                         result = blockResult;
                         return selfBlock.PropagateFlow(predicate, blockResult);
                     }
@@ -110,31 +150,17 @@ namespace IronRuby.Builtins {
             RubyArray resultArray = new RubyArray();
             object result = resultArray;
 
-            if (collector.Proc.Dispatcher.ParameterCount <= 1 && !collector.Proc.Dispatcher.HasUnsplatParameter && !collector.Proc.Dispatcher.HasProcParameter) {
-                // optimize for a block with a single parameter:
-                Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
-                    object blockResult;
-                    if (collector.Yield(item, out blockResult)) {
-                        result = blockResult;
-                        return selfBlock.PropagateFlow(collector, blockResult);
-                    }
-                    resultArray.Add(blockResult);
-                    return null;
-                }));
-            } else {
-                // general case:
-                Each(each, self, Proc.Create(each.Context, 0, delegate(BlockParam/*!*/ selfBlock, object _, object[] __, RubyArray args) {
-                    Debug.Assert(__.Length == 0);
-
-                    object blockResult;
-                    if (collector.YieldSplat(args, out blockResult)) {
-                        result = blockResult;
-                        return selfBlock.PropagateFlow(collector, blockResult);
-                    }
-                    resultArray.Add(blockResult);
-                    return null;
-                }));
-            }
+            // #map keeps nothing but what the block returns, so the yielded values go to the
+            // block exactly as they were yielded - no packing (`yield 1, 2` reaches `{ |a| }` as 1).
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+                object blockResult;
+                if (collector.YieldSplat(args, out blockResult)) {
+                    result = blockResult;
+                    return selfBlock.PropagateFlow(collector, blockResult);
+                }
+                resultArray.Add(blockResult);
+                return null;
+            }));
             return result;
         }
 
@@ -155,7 +181,7 @@ namespace IronRuby.Builtins {
             [NotNull]BlockParam/*!*/ predicate, object self, [Optional]object ifNone) {
             object result = Missing.Value;
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 object blockResult;
                 if (predicate.Yield(item, out blockResult)) {
                     result = blockResult;
@@ -191,9 +217,9 @@ namespace IronRuby.Builtins {
             int index = 0;
 
             object result = null;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (predicate.YieldSplat(args, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
@@ -218,7 +244,7 @@ namespace IronRuby.Builtins {
 
             int index = 0;
             object result = null;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (Protocols.IsEqual(equals, item, value)) {
                     result = ScriptingRuntimeHelpers.Int32ToObject(index);
                     return selfBlock.Break(null);
@@ -245,7 +271,7 @@ namespace IronRuby.Builtins {
             int index = 0;
             object result = self;
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 object blockResult;
                 if (block.Yield(item, index, out blockResult)) {
                     result = blockResult;
@@ -267,7 +293,7 @@ namespace IronRuby.Builtins {
         public static RubyArray/*!*/ ToArray(CallSiteStorage<EachSite>/*!*/ each, object self) {
             RubyArray data = new RubyArray();
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 data.Add(item);
                 return null;
             }));
@@ -280,7 +306,7 @@ namespace IronRuby.Builtins {
         public static RubyArray/*!*/ ToArray(CallSiteStorage<EachSiteN>/*!*/ each, object self, params object[] args) {
             RubyArray data = new RubyArray();
 
-            Each(each, self, args, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, args, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 data.Add(item);
                 return null;
             }));
@@ -311,7 +337,7 @@ namespace IronRuby.Builtins {
             RubyArray resultArray = new RubyArray();
             object result = resultArray;
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 object blockResult;
                 if (predicate.Yield(item, out blockResult)) {
                     result = blockResult;
@@ -340,7 +366,7 @@ namespace IronRuby.Builtins {
             object result = resultArray;
             var site = caseEquals.GetCallSite("===");
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (RubyOps.IsTrue(site.Target(site, pattern, item))) {
                     if (action != null && action.Yield(item, out item)) {
                         result = item;
@@ -363,7 +389,7 @@ namespace IronRuby.Builtins {
         public static object Contains(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ equals, object self, object value) {
             object result = ScriptingRuntimeHelpers.BooleanToObject(false);
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (Protocols.IsEqual(equals, item, value)) {
                     result = ScriptingRuntimeHelpers.BooleanToObject(true);
                     return selfBlock.Break(result);
@@ -453,7 +479,7 @@ namespace IronRuby.Builtins {
             bool firstItem = true;
             object result = null;
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (firstItem) {
                     result = item;
                     firstItem = false;
@@ -486,7 +512,7 @@ namespace IronRuby.Builtins {
 
             object min = null, max = null;
 
-	     Func<IronRuby.Runtime.BlockParam,object,object,object> blockProc = delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Func<BlockParam, object, object> blockProc = delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (hasOddItem) {
                     hasOddItem = false;
 
@@ -537,7 +563,7 @@ namespace IronRuby.Builtins {
                 return selfBlock.PropagateFlow(comparer, blockResult);
             };
 
-            Each(each, self, Proc.Create(each.Context, blockProc));
+            Each(each, self, PackingBlock(each.Context, blockProc));
 
             if (blockJumped) {
                 return blockResult;
@@ -607,7 +633,7 @@ namespace IronRuby.Builtins {
             pair.Add(falseSet);
             object result = pair;
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 object blockResult;
                 if (predicate.Yield(item, out blockResult)) {
                     result = blockResult;
@@ -642,7 +668,7 @@ namespace IronRuby.Builtins {
             object result = null;
 
             // Collect the key, value pairs
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (keySelector == null) {
                     throw RubyExceptions.NoBlockGiven();
                 }
@@ -686,7 +712,7 @@ namespace IronRuby.Builtins {
             object result = results;
 
             int index = 0;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 // Collect items
                 RubyArray array = new RubyArray(args.Length + 1);
                 array.Add(item);
@@ -722,7 +748,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("count")]
         public static int Count(CallSiteStorage<EachSite>/*!*/ each, object self) {
             int result = 0;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 result++;
                 return null;
             }));
@@ -736,7 +762,7 @@ namespace IronRuby.Builtins {
             }
 
             int result = 0;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (Protocols.IsEqual(equals, item, value)) {
                     result++;
                 }
@@ -750,9 +776,9 @@ namespace IronRuby.Builtins {
             int count = 0;
 
             object result = null;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
                 object blockResult;
-                if (comparer.Yield(item, out blockResult)) {
+                if (comparer.YieldSplat(args, out blockResult)) {
                     count = -1;
                     result = blockResult;
                     return selfBlock.PropagateFlow(comparer, blockResult); 
@@ -772,11 +798,11 @@ namespace IronRuby.Builtins {
             int count = 0;
 
             object result = null;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
                 object blockResult;
                 if (comparer == null) {
-                    blockResult = item;
-                } else if (comparer.Yield(item, out blockResult)) {
+                    blockResult = PackValues(args);
+                } else if (comparer.YieldSplat(args, out blockResult)) {
                     count = -1;
                     result = blockResult;
                     return selfBlock.PropagateFlow(comparer, blockResult);
@@ -798,7 +824,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("first")]
         public static object First(CallSiteStorage<EachSite>/*!*/ each, object self) {
             object result = null;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 result = item;
                 selfBlock.Break(null);
                 return null;
@@ -818,7 +844,7 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 result.Add(item);
                 if (--count == 0) {
                     selfBlock.Break(null);
@@ -839,15 +865,15 @@ namespace IronRuby.Builtins {
             RubyArray resultArray = new RubyArray();
 
             object result = resultArray;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
                 object blockResult;
-                if (predicate.Yield(item, out blockResult)) {
+                if (predicate.YieldSplat(args, out blockResult)) {
                     result = blockResult;
                     return selfBlock.PropagateFlow(predicate, blockResult);
                 }
 
                 if (Protocols.IsTrue(blockResult)) {
-                    resultArray.Add(item);
+                    resultArray.Add(PackValues(args));
                 } else {
                     selfBlock.Break(null);
                 }
@@ -866,7 +892,7 @@ namespace IronRuby.Builtins {
             
             var result = new RubyArray();
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (count > 0) {
                     count--;
                 } else {
@@ -890,7 +916,7 @@ namespace IronRuby.Builtins {
 
             bool dropping = true;
             object result = resultArray; 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (dropping) {
                     object blockResult;
                     if (predicate.Yield(item, out blockResult)) {
@@ -934,7 +960,7 @@ namespace IronRuby.Builtins {
 
             // call "each" only in the first iteration:
             object result = null;
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (block.Yield(item, out result)) {
                     iterations = -1;
                     return selfBlock.PropagateFlow(block, result);
@@ -1005,7 +1031,7 @@ namespace IronRuby.Builtins {
 
             object result = null;
 
-            Each(each, self, Proc.Create(each.Context, delegate(BlockParam/*!*/ selfBlock, object _, object item) {
+            Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
                 if (slice == null) {
                     slice = new RubyArray(sliceSize);
                 }
