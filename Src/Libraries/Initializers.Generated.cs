@@ -931,8 +931,8 @@ namespace IronRuby.Builtins {
         
         private static void LoadDir_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "[]", 0x61, 
-                0x80010002U, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyDir.Glob)
+                0x80000008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyDir.Glob)
             );
             
             DefineLibraryMethod(module, "chdir", 0x61, 
@@ -981,9 +981,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "glob", 0x61, 
-                0x00060005U, 0x00030002U, 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.RubyDir.Glob), 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.RubyDir.Glob)
+                0x80000010U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object[], System.Object>(IronRuby.Builtins.RubyDir.Glob)
             );
             
             DefineLibraryMethod(module, "mkdir", 0x61, 
@@ -2345,8 +2344,10 @@ namespace IronRuby.Builtins {
             SetBuiltinConstant(module, "EXCL", IronRuby.Builtins.RubyFileOps.Constants.EXCL);
             SetBuiltinConstant(module, "FNM_CASEFOLD", IronRuby.Builtins.RubyFileOps.Constants.FNM_CASEFOLD);
             SetBuiltinConstant(module, "FNM_DOTMATCH", IronRuby.Builtins.RubyFileOps.Constants.FNM_DOTMATCH);
+            SetBuiltinConstant(module, "FNM_EXTGLOB", IronRuby.Builtins.RubyFileOps.Constants.FNM_EXTGLOB);
             SetBuiltinConstant(module, "FNM_NOESCAPE", IronRuby.Builtins.RubyFileOps.Constants.FNM_NOESCAPE);
             SetBuiltinConstant(module, "FNM_PATHNAME", IronRuby.Builtins.RubyFileOps.Constants.FNM_PATHNAME);
+            SetBuiltinConstant(module, "FNM_SHORTNAME", IronRuby.Builtins.RubyFileOps.Constants.FNM_SHORTNAME);
             SetBuiltinConstant(module, "FNM_SYSCASE", IronRuby.Builtins.RubyFileOps.Constants.FNM_SYSCASE);
             SetBuiltinConstant(module, "LOCK_EX", IronRuby.Builtins.RubyFileOps.Constants.LOCK_EX);
             SetBuiltinConstant(module, "LOCK_NB", IronRuby.Builtins.RubyFileOps.Constants.LOCK_NB);

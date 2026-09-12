@@ -45,11 +45,18 @@ for n in names:
 open(path, 'wb').write('\n'.join(out).encode('utf-8'))
 PY
 
-if ! $DOTNET build Src/ClassInitGenerator/ClassInitGenerator.csproj -p:DlrSourceDir="$DLR" | grep -E 'error|Build succeeded'; then
+# Note the build status is taken from dotnet's own exit code, not from grepping
+# its output: `dotnet build | grep -E 'error|Build succeeded'` succeeds when the
+# build FAILS, because the error lines match the pattern too. That let a broken
+# build through to the generator, which then reflected over a stale
+# IronRuby.Libraries.dll and silently regenerated the *previous* registrations.
+if ! BUILD_LOG=$($DOTNET build Src/ClassInitGenerator/ClassInitGenerator.csproj -p:DlrSourceDir="$DLR" 2>&1); then
+  echo "$BUILD_LOG" | grep -E 'error' | sort -u
   cp /tmp/Initializers.Generated.bak.cs "$GEN"
   echo "generator build failed; $GEN restored" >&2
   exit 1
 fi
+echo "$BUILD_LOG" | grep -E 'Build succeeded'
 
 D=Src/ClassInitGenerator/bin/Debug/net8.0
 $DOTNET $D/ClassInitGenerator.dll $D/IronRuby.Libraries.dll "/libraries:$LIBS" /out:/tmp/Initializers.Generated.new.cs > /dev/null
