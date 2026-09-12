@@ -1311,8 +1311,13 @@ namespace IronRuby.Builtins {
             RubyMemberInfo existing;
             bool skipHidden = false;
             if (TryGetMethod(name, ref skipHidden, out existing)) {
+                // If this module defines the method itself, change the visibility of *that* definition.
+                // `method' is the result of a full MRO lookup, which with Module#prepend can land on an
+                // override in a prepended module; copying that one down here would make its `super' recurse.
+                var redefined = (existing != null && !existing.IsUndefined) ? existing : method;
+
                 // CLR members: Detaches the member from its underlying type (by creating a copy).
-                SetMethodNoEventNoLock(callerContext, name, method.Copy((RubyMemberFlags)visibility, this));
+                SetMethodNoEventNoLock(callerContext, name, redefined.Copy((RubyMemberFlags)visibility, this));
             } else {
                 SetMethodNoEventNoLock(callerContext, name, new SuperForwarderInfo((RubyMemberFlags)visibility, method.DeclaringModule, name));
             }
