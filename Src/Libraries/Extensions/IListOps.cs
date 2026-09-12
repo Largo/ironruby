@@ -314,25 +314,53 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("product")]
-        public static RubyArray/*!*/ Product(IList/*!*/ self, [DefaultProtocol, NotNullItems]params IList/*!*/[]/*!*/ arrays) {
-            var result = new RubyArray();
-            
-            if (self.Count == 0) {
-                return result;
-            }
-            for (int i = 0; i < arrays.Length; i++) {
-                if (arrays[i].Count == 0) {
-                    return result;
+        public static object Product(BlockParam block, IList/*!*/ self, [DefaultProtocol, NotNullItems]params IList/*!*/[]/*!*/ arrays) {
+            var result = (block == null) ? new RubyArray() : null;
+
+            // If any of the lists is empty the product is empty; MRI short-circuits before the size check.
+            bool empty = self.Count == 0;
+            if (!empty) {
+                for (int i = 0; i < arrays.Length; i++) {
+                    if (arrays[i].Count == 0) {
+                        empty = true;
+                        break;
+                    }
                 }
             }
-            
+
+            if (empty) {
+                return (block == null) ? (object)result : self;
+            }
+
+            // MRI refuses to even start building a product whose size doesn't fit into a native integer.
+            // Without this check (0..100).to_a.product(a, a, ... ) loops essentially forever.
+            long size = self.Count;
+            for (int i = 0; i < arrays.Length; i++) {
+                long count = arrays[i].Count;
+                if (size > Int64.MaxValue / count) {
+                    throw RubyExceptions.CreateRangeError("too big to product");
+                }
+                size *= count;
+            }
+            if (size > Int32.MaxValue) {
+                throw RubyExceptions.CreateRangeError("too big to product");
+            }
+
             int[] indices = new int[1 + arrays.Length];
             while (true) {
                 var current = new RubyArray(indices.Length);
                 for (int i = 0; i < indices.Length; i++) {
                     current[i] = GetNth(i, self, arrays)[indices[i]];
                 }
-                result.Add(current);
+
+                if (block != null) {
+                    object blockResult;
+                    if (block.Yield(current, out blockResult)) {
+                        return blockResult;
+                    }
+                } else {
+                    result.Add(current);
+                }
 
                 // increment indices:
                 for (int i = indices.Length - 1; i >= 0; i--) {
@@ -343,7 +371,7 @@ namespace IronRuby.Builtins {
                     } else if (i > 0) {
                         indices[i] = 0;
                     } else {
-                        return result;
+                        return (block == null) ? (object)result : self;
                     }
                 }
             }
