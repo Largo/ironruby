@@ -566,6 +566,16 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        [RubyMethod("binmode?")]
+        public static bool IsBinmode(RubyIO/*!*/ self) {
+            return self.IsBinmode;
+        }
+
+        [RubyMethod("stat", BuildConfig = "FEATURE_FILESYSTEM")]
+        public static System.IO.FileSystemInfo/*!*/ Stat(RubyIO/*!*/ self) {
+            return RubyFileOps.RubyStatOps.Create(self);
+        }
+
         [RubyMethod("sync")]
         public static bool Sync(RubyIO/*!*/ self) {
             self.RequireOpen();

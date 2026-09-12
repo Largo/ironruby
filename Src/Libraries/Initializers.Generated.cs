@@ -3238,6 +3238,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyIO, IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.Binmode)
             );
             
+            DefineLibraryMethod(module, "binmode?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyIO, System.Boolean>(IronRuby.Builtins.RubyIOOps.IsBinmode)
+            );
+            
             DefineLibraryMethod(module, "close", 0x51, 
                 0x00000000U, 
                 new Action<IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.Close)
@@ -3440,6 +3445,13 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyIO, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.SetEncodings)
             );
             
+            #if FEATURE_FILESYSTEM
+            DefineLibraryMethod(module, "stat", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyIO, System.IO.FileSystemInfo>(IronRuby.Builtins.RubyIOOps.Stat)
+            );
+            
+            #endif
             DefineLibraryMethod(module, "sync", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyIO, System.Boolean>(IronRuby.Builtins.RubyIOOps.Sync)

@@ -119,9 +119,23 @@ namespace IronRuby.Builtins {
 
         private static void Reinitialize(RubyFile/*!*/ file, MutableString/*!*/ path, IOInfo info, int permission) {
             var strPath = file.Context.DecodePath(path);
+
+            // open(2) only honours the permission argument when it actually creates the
+            // file, and applies the umask to it.
+            bool creating = (info.Mode & IOMode.CreateIfNotExists) != 0
+                && !file.Context.Platform.FileExists(strPath);
+
             var stream = RubyFile.OpenFileStream(file.Context, strPath, info.Mode);
 
+            if (creating && permission != 0 && Posix.IsAvailable) {
+                int umask = NativeUmask(0);
+                NativeUmask(umask);
+                int errno;
+                Posix.Chmod(strPath, permission & ~umask, out errno);
+            }
+
             file.Path = strPath;
+            file.PathEncoding = path.Encoding;
             file.Mode = info.Mode;
             file.SetStream(stream);
             file.SetFileDescriptor(file.Context.AllocateFileDescriptor(stream));
@@ -129,6 +143,9 @@ namespace IronRuby.Builtins {
             if (info.HasEncoding) {
                 file.ExternalEncoding = info.ExternalEncoding;
                 file.InternalEncoding = info.InternalEncoding;
+            } else if ((info.Mode & IOMode.PreserveEndOfLines) != 0) {
+                // The "b" flag with no explicit encoding means BINARY.
+                file.ExternalEncoding = RubyEncoding.Binary;
             }
         }
         
@@ -1131,7 +1148,8 @@ namespace IronRuby.Builtins {
         private static MutableString/*!*/ RealPath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             object basedir, bool strict) {
 
-            string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
+            MutableString pathStr = Protocols.CastToPath(toPath, path);
+            string strPath = self.Context.DecodePath(pathStr);
             string strBase = (basedir == Missing.Value || basedir == null)
                 ? null
                 : self.Context.DecodePath(Protocols.CastToPath(toPath, basedir));
@@ -1140,7 +1158,7 @@ namespace IronRuby.Builtins {
                 return ExpandPath(toPath, self, path, basedir == Missing.Value ? null : basedir);
             }
 
-            return self.Context.EncodePath(ResolvePath(self.Context, strPath, strBase, strict));
+            return EncodePathLike(ResolvePath(self.Context, strPath, strBase, strict), pathStr);
         }
 
         #endregion
@@ -1310,7 +1328,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_path")]
         public static MutableString GetPath(RubyFile/*!*/ self) {
             self.RequireInitialized();
-            return self.Path != null ? self.Context.EncodePath(self.Path) : null;
+            if (self.Path == null) {
+                return null;
+            }
+            // File#path hands back the path in the encoding it was opened with.
+            MutableString result = self.Context.EncodePath(self.Path);
+            if (self.PathEncoding != null) {
+                result = MutableString.CreateMutable(result.ConvertToString(), self.PathEncoding);
+            }
+            return result;
         }
 
         #endregion
@@ -1350,6 +1376,20 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyClass("Stat", Extends = typeof(FileSystemInfo), Inherits = typeof(object), BuildConfig = "FEATURE_FILESYSTEM"), Includes(typeof(Comparable))]
         public class RubyStatOps {
+
+            /// <summary>
+            /// fstat(2) on any IO, including one that never had a path (a pipe, a socket,
+            /// or a file opened from a descriptor).
+            /// </summary>
+            internal static FileSystemInfo/*!*/ Create(RubyIO/*!*/ io) {
+                io.RequireOpen();
+                Posix.StatData data;
+                int errno;
+                if (Posix.TryFStat(io.GetFileDescriptor(), out data, out errno)) {
+                    return new StatInfo("", data);
+                }
+                throw Posix.Error(errno == 0 ? Posix.EBADF : errno, "");
+            }
 
             internal static FileSystemInfo/*!*/ Create(RubyFile/*!*/ file) {
                 file.RequireInitialized();

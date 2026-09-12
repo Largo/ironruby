@@ -158,6 +158,14 @@ namespace IronRuby.Builtins {
         // On Unix MRI performs no end-of-line translation, in text mode or otherwise:
         private static readonly bool _IsWindowsPlatform = System.IO.Path.DirectorySeparatorChar == '\\';
 
+        /// <summary>
+        /// True when the stream was opened with the "b" flag.  Distinct from
+        /// PreserveEndOfLines, which is vacuously true off Windows.
+        /// </summary>
+        public bool IsBinmode {
+            get { return (_mode & IOMode.PreserveEndOfLines) != 0; }
+        }
+
         public bool PreserveEndOfLines {
             get { 
                 return !_IsWindowsPlatform || (_mode & IOMode.PreserveEndOfLines) != 0; 

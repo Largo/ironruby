@@ -734,7 +734,42 @@ RUBY_ENGINE_VERSION = RUBY_VERSION unless defined?(RUBY_ENGINE_VERSION)
 RUBY_COPYRIGHT = "ironruby - Apache License, Version 2.0" unless defined?(RUBY_COPYRIGHT)
 RUBY_DESCRIPTION = "ironruby #{RUBY_VERSION} (.NET)" unless defined?(RUBY_DESCRIPTION)
 
+class IO
+  # autoclose is tracked but not acted on: IronRuby closes descriptors it owns
+  # through the CLR stream, and never closes one handed to it from outside.
+  def autoclose?
+    defined?(@__autoclose) ? @__autoclose : true
+  end unless method_defined?(:autoclose?)
+
+  def autoclose=(value)
+    @__autoclose = !!value
+  end unless method_defined?(:autoclose=)
+end
+
 class File
+  # File.size, File.size? and File.directory? take an IO, or anything that
+  # converts to one with #to_io, as well as a path; the C# implementations only
+  # know about paths.
+  class << self
+    [:size, :size?, :directory?].each do |name|
+      path_only = instance_method(name)
+      define_method(name) do |target|
+        unless target.is_a?(String) || target.respond_to?(:to_path)
+          io = target.respond_to?(:to_io) ? target.to_io : (target.is_a?(IO) ? target : nil)
+          if io
+            stat = io.stat
+            case name
+            when :directory? then return stat.directory?
+            when :size?      then return stat.size == 0 ? nil : stat.size
+            else                  return stat.size
+            end
+          end
+        end
+        path_only.bind(self).call(target)
+      end
+    end
+  end
+
   def self.realpath(path, dir = nil)
     expand_path(path, dir)
   end unless respond_to?(:realpath)

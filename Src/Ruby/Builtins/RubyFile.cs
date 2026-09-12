@@ -22,6 +22,12 @@ namespace IronRuby.Builtins {
     public class RubyFile : RubyIO {
         public string Path { get; set; }
 
+        /// <summary>
+        /// The encoding of the string File.open was given, so File#path can hand it back
+        /// unchanged.  Null for files opened from a descriptor or from a CLR string.
+        /// </summary>
+        public RubyEncoding PathEncoding { get; set; }
+
         public RubyFile(RubyContext/*!*/ context)
             : base(context) {
             Path = null;
