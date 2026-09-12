@@ -219,7 +219,7 @@ namespace IronRuby.Builtins {
             if (TryGetIndex(name, out index)) {
                 return index;
             }
-            throw RubyExceptions.CreateNameError(String.Format("no member `{0}' in struct", name));
+            throw RubyExceptions.CreateNameError(String.Format("no member '{0}' in struct", name));
         }
 
         public int GetHashCode(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<int>/*!*/ fixnumCast) {

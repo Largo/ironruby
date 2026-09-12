@@ -1623,7 +1623,13 @@ namespace IronRuby.Runtime {
                 }
             }
 
-            throw RubyExceptions.CreateNameError(String.Format("uninitialized constant {0}::{1}", owner.Name, name));
+            // MRI omits the owner for Object: "uninitialized constant Foo", but keeps it otherwise:
+            // "uninitialized constant Math::Nope".
+            throw RubyExceptions.CreateNameError(
+                (owner == ObjectClass || String.IsNullOrEmpty(owner.Name))
+                    ? String.Format("uninitialized constant {0}", name)
+                    : String.Format("uninitialized constant {0}::{1}", owner.Name, name)
+            );
         }
 
         // thread-safe:
@@ -1737,7 +1743,7 @@ namespace IronRuby.Runtime {
         private RubyInstanceData MutateInstanceVariables(object obj) {
             RubyInstanceData data;
             if (IsObjectFrozen(obj, out data)) {
-                throw RubyExceptions.CreateObjectFrozenError();
+                throw RubyExceptions.CreateObjectFrozenError(this, obj);
             }
             return data;
         }

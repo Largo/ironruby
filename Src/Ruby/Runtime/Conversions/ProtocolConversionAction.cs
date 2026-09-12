@@ -171,6 +171,15 @@ namespace IronRuby.Runtime.Conversions {
         protected abstract MethodInfo ConversionResultValidator { get; }
         protected abstract string/*!*/ TargetTypeName { get; }
 
+        /// <summary>
+        /// MRI words an IMPLICIT protocol conversion failure ("no implicit conversion of X into Y")
+        /// differently from an EXPLICIT one (Kernel#Integer / Kernel#Float: "can't convert X into Y").
+        /// Almost every conversion here is implicit; the Integer()/Float() ones override this.
+        /// </summary>
+        protected virtual MethodInfo/*!*/ ConversionErrorFactory {
+            get { return Methods.CreateImplicitConversionError; }
+        }
+
         public override Type/*!*/ ReturnType {
             get { 
                 return (ConversionResultValidator != null) ? ConversionResultValidator.ReturnType : typeof(object); 
@@ -295,13 +304,13 @@ namespace IronRuby.Runtime.Conversions {
 
         protected virtual Expression/*!*/ MakeErrorExpression(CallArguments/*!*/ args, Expression/*!*/ targetClassNameConstant, Type/*!*/ resultType) {
             return Ast.Throw(
-                Methods.CreateTypeConversionError.OpCall(targetClassNameConstant, AstUtils.Constant(TargetTypeName)),
+                ConversionErrorFactory.OpCall(targetClassNameConstant, AstUtils.Constant(TargetTypeName)),
                 resultType
             );
         }
 
         protected virtual void SetError(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, Expression/*!*/ targetClassNameConstant, Type/*!*/ resultType) {
-            metaBuilder.SetError(Methods.CreateTypeConversionError.OpCall(targetClassNameConstant, AstUtils.Constant(TargetTypeName)));            
+            metaBuilder.SetError(ConversionErrorFactory.OpCall(targetClassNameConstant, AstUtils.Constant(TargetTypeName)));
         }
 
         protected virtual Expression/*!*/ MakeValidatorCall(CallArguments/*!*/ args, Expression/*!*/ targetClassNameConstant, Expression/*!*/ result) {
@@ -645,7 +654,7 @@ namespace IronRuby.Runtime.Conversions {
             object target = args.Target;
 
             if (target == null) {
-                metaBuilder.SetError(Methods.CreateTypeConversionError.OpCall(AstUtils.Constant("nil"), AstUtils.Constant(TargetTypeName)));
+                metaBuilder.SetError(ConversionErrorFactory.OpCall(AstUtils.Constant("nil"), AstUtils.Constant(TargetTypeName)));
                 return true;
             }
 
@@ -729,13 +738,19 @@ namespace IronRuby.Runtime.Conversions {
 
         protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
 
+        // Kernel#Integer(x) and "%d" % x go through this (to_int then to_i); MRI words those
+        // "can't convert nil into Integer", not "no implicit conversion ...".
+        protected override MethodInfo/*!*/ ConversionErrorFactory {
+            get { return Methods.CreateTypeConversionError; }
+        }
+
         internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             if (args.Target == null) {
-                metaBuilder.SetError(Methods.CreateTypeConversionError.OpCall(AstUtils.Constant("nil"), AstUtils.Constant(TargetTypeName)));
+                metaBuilder.SetError(ConversionErrorFactory.OpCall(AstUtils.Constant("nil"), AstUtils.Constant(TargetTypeName)));
                 return true;
             }
 
-            metaBuilder.Result = 
+            metaBuilder.Result =
                 ImplicitConvert(typeof(int), args) ??
                 ImplicitConvert(typeof(BigInteger), args);
 
@@ -770,9 +785,14 @@ namespace IronRuby.Runtime.Conversions {
         where TSelf : ConvertToFloatingPointAction<TSelf>, new() {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToF; } }
 
+        // Kernel#Float(x): MRI says "can't convert nil into Float".
+        protected override MethodInfo/*!*/ ConversionErrorFactory {
+            get { return Methods.CreateTypeConversionError; }
+        }
+
         internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             if (args.Target == null) {
-                metaBuilder.SetError(Methods.CreateTypeConversionError.OpCall(AstUtils.Constant("nil"), AstUtils.Constant(TargetTypeName)));
+                metaBuilder.SetError(ConversionErrorFactory.OpCall(AstUtils.Constant("nil"), AstUtils.Constant(TargetTypeName)));
                 return true;
             }
 

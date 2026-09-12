@@ -343,7 +343,7 @@ namespace IronRuby.Builtins {
 
         private void FrozenOrCopyOnWrite(uint flags) {
             if ((flags & IsFrozenFlag) != 0) {
-                throw RubyExceptions.CreateObjectFrozenError();
+                throw RubyExceptions.CreateObjectFrozenError("String");
             }
 
             // TODO: we can do better if the representation is being changed: we don't need to copy the data twice
@@ -702,7 +702,7 @@ namespace IronRuby.Builtins {
             set {
                 var flags = _flags;
                 if ((flags & IsFrozenFlag) != 0) {
-                    throw RubyExceptions.CreateObjectFrozenError();
+                    throw RubyExceptions.CreateObjectFrozenError("String");
                 }
 
                 _flags = (flags & ~IsTaintedFlag) | (value ? IsTaintedFlag : 0);
@@ -716,7 +716,7 @@ namespace IronRuby.Builtins {
             set {
                 var flags = _flags;
                 if ((flags & IsFrozenFlag) != 0) {
-                    throw RubyExceptions.CreateObjectFrozenError();
+                    throw RubyExceptions.CreateObjectFrozenError("String");
                 }
 
                 _flags = (flags & ~IsUntrustedFlag) | (value ? IsUntrustedFlag : 0);
@@ -756,7 +756,7 @@ namespace IronRuby.Builtins {
 
         public void RequireNotFrozen() {
             if (IsFrozen) {
-                throw RubyExceptions.CreateObjectFrozenError();
+                throw RubyExceptions.CreateObjectFrozenError("String");
             }
         }
 

@@ -211,6 +211,17 @@ namespace IronRuby.Builtins {
     public static class RuntimeErrorOps {
     }
 
+    [RubyException("FrozenError", Extends = typeof(FrozenError), Inherits = typeof(RuntimeError))]
+    public static class FrozenErrorOps {
+        [RubyMethod("receiver")]
+        public static object Receiver(FrozenError/*!*/ self) {
+            if (!self.HasReceiver) {
+                throw RubyExceptions.CreateArgumentError("no receiver is available");
+            }
+            return self.Receiver;
+        }
+    }
+
     // special one:
     [RubyException("SystemCallError", Extends = typeof(ExternalException), Inherits = typeof(SystemException))]
     public static class SystemCallErrorOps {

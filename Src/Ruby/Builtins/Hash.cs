@@ -117,7 +117,7 @@ namespace IronRuby.Builtins {
 
         public void RequireNotFrozen() {
             if ((_flags & IsFrozenFlag) != 0) {
-                throw RubyExceptions.CreateObjectFrozenError();
+                throw RubyExceptions.CreateObjectFrozenError("Hash");
             }
         }
 

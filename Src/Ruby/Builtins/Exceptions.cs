@@ -242,6 +242,43 @@ namespace IronRuby.Builtins {
 #endif
     }
 
+    /// <summary>
+    /// Ruby's FrozenError (a subclass of RuntimeError since Ruby 2.5). Declared here in the core
+    /// assembly, not in Src/Libraries, so that RubyExceptions can throw it -- the core assembly
+    /// cannot reference the library one. Registration lives in Src/Libraries/Builtins/Exceptions.cs.
+    /// </summary>
+    [Serializable]
+    public class FrozenError : RuntimeError {
+        private object _receiver;
+        private bool _hasReceiver;
+
+        public FrozenError() : this(null, null) { }
+        public FrozenError(string message) : this(message, null) { }
+        public FrozenError(string message, Exception inner) : base(message, inner) { }
+
+        /// <summary>
+        /// The object that was being modified, exposed as FrozenError#receiver.
+        /// </summary>
+        public object Receiver {
+            get { return _receiver; }
+        }
+
+        public bool HasReceiver {
+            get { return _hasReceiver; }
+        }
+
+        public FrozenError SetReceiver(object receiver) {
+            _receiver = receiver;
+            _hasReceiver = true;
+            return this;
+        }
+
+#if FEATURE_SERIALIZATION
+        protected FrozenError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+            : base(info, context) { }
+#endif
+    }
+
     [Serializable]
     public class SyntaxError : ScriptError {
         private readonly string _file;
