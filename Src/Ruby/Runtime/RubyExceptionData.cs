@@ -162,6 +162,15 @@ namespace IronRuby.Runtime {
         public object Message {
             get {
                 if (_message == null) {
+                    // A Ruby-defined exception class whose #initialize never set a message: MRI's
+                    // default is the class name, not the CLR's "Exception of type X was thrown."
+                    var rubyObject = _visibleException as IRubyObject;
+                    if (rubyObject != null) {
+                        var immediateClass = rubyObject.ImmediateClass;
+                        if (immediateClass != null) {
+                            return _message = GetDefaultMessage(immediateClass.NominalClass);
+                        }
+                    }
                     _message = MutableString.Create(_visibleException.Message, RubyEncoding.UTF8);
                 }
                 return _message;

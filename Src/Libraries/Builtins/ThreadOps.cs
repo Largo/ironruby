@@ -591,7 +591,9 @@ namespace IronRuby.Builtins {
             }
 
 #if FEATURE_EXCEPTION_STATE
-            Exception e = KernelOps.CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args);
+            // A bare `thread.raise` on *another* thread is a plain RuntimeError; it does not
+            // re-raise the caller's $! (MRI can't see the target thread's $! either).
+            Exception e = KernelOps.CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args, false);
             RaiseAsyncException(self, e);
 #else
             throw new NotImplementedError("Thread#raise not supported on this platform");

@@ -323,6 +323,13 @@ namespace IronRuby.Builtins {
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyContext/*!*/ context, object[]/*!*/ args) {
 
+            return CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args, true);
+        }
+
+        internal static Exception/*!*/ CreateExceptionToRaise(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
+            CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
+            RubyContext/*!*/ context, object[]/*!*/ args, bool bareRaiseReRaisesCurrentException) {
+
             object cause;
             bool hasCause = TryTakeCauseKeyword(ref args, out cause);
 
@@ -337,7 +344,7 @@ namespace IronRuby.Builtins {
             Exception exception;
             if (args.Length == 0) {
                 // bare `raise` re-raises $!, or a fresh RuntimeError with an empty message.
-                exception = context.CurrentException;
+                exception = bareRaiseReRaisesCurrentException ? context.CurrentException : null;
                 if (exception == null) {
                     exception = RubyExceptionData.InitializeException(new RuntimeError(""), MutableString.CreateEmpty());
                 }
