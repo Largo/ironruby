@@ -1110,9 +1110,23 @@ namespace IronRuby.Builtins {
         }
 
         public bool EndsWith(char value) {
-            return GetLastChar() == value;
+            try {
+                return GetLastChar() == value;
+            } catch (DecoderFallbackException) {
+                // The string holds bytes that are not a valid character sequence in its encoding.
+                // MRI still answers this question - it looks at the trailing bytes rather than
+                // decoding the whole string - and IO#puts asks it about every string it writes,
+                // so a string with a stray byte in it must not take the process down.
+                // In an ASCII compatible encoding an ASCII character is always encoded as itself,
+                // so the last byte decides.
+                if (value < 0x80 && _encoding.IsAsciiIdentity) {
+                    int byteCount = GetByteCount();
+                    return byteCount > 0 && GetByte(byteCount - 1) == (byte)value;
+                }
+                return false;
+            }
         }
-        
+
         public bool EndsWith(string/*!*/ value) {
             // TODO:
             return _content.ConvertToString().EndsWith(value, StringComparison.Ordinal);
@@ -2312,7 +2326,10 @@ namespace IronRuby.Builtins {
                     if (currentChar == quote) {
                         result.Append('\\');
                         result.Append((char)quote);
-                    } else if (currentChar < 0x0020 || currentChar >= 0x080 && (escape & Escape.NonAscii) != 0) {
+                    } else if (currentChar < 0x0020 || currentChar == 0x007f
+                        || currentChar >= 0x080 && (escape & Escape.NonAscii) != 0) {
+                        // DEL is a control character: MRI escapes it like the other
+                        // non-printable ASCII characters rather than writing it out raw.
                         AppendHexEscape(result, currentChar);
                     } else {
                         result.Append((char)currentChar);
@@ -2328,7 +2345,13 @@ namespace IronRuby.Builtins {
             if (currentChar == escapePlaceholder) {
                 result.Append('\\');
             } else if (currentChar < 0x0080) {
-                AppendBinaryCharRepresentation(result, currentChar, nextChar, escape, quote);
+                if (IsUnnamedControlCharacter(currentChar) && currentChar != quote) {
+                    // In a Unicode string MRI spells a control character that has no
+                    // single-letter escape as \uXXXX, not as \xXX.
+                    AppendUnicodeEscape(result, currentChar);
+                } else {
+                    AppendBinaryCharRepresentation(result, currentChar, nextChar, escape, quote);
+                }
             } else if ((escape & Escape.NonAscii) != 0) {
                 if (nextChar != -1 && Char.IsSurrogatePair((char)currentChar, (char)nextChar)) {
                     currentChar = Tokenizer.ToCodePoint(currentChar, nextChar);
@@ -2368,6 +2391,28 @@ namespace IronRuby.Builtins {
             result.Append("\\x");
             result.Append((c >> 4).ToUpperHexDigit());
             result.Append((c & 0xf).ToUpperHexDigit());
+        }
+
+        private static void AppendUnicodeEscape(StringBuilder/*!*/ result, int c) {
+            result.Append("\\u");
+            result.Append((c >> 12 & 0xf).ToUpperHexDigit());
+            result.Append((c >> 8 & 0xf).ToUpperHexDigit());
+            result.Append((c >> 4 & 0xf).ToUpperHexDigit());
+            result.Append((c & 0xf).ToUpperHexDigit());
+        }
+
+        /// <summary>
+        /// True for the ASCII control characters that have no single-letter escape sequence
+        /// (\a \b \t \n \v \f \r \e), including DEL.
+        /// </summary>
+        private static bool IsUnnamedControlCharacter(int c) {
+            switch (c) {
+                case '\a': case '\b': case '\t': case '\n':
+                case '\v': case '\f': case '\r': case 27:
+                    return false;
+                default:
+                    return c < 0x0020 || c == 0x007f;
+            }
         }
 
         private string/*!*/ ToStringWithEscapedInvalidCharacters(RubyEncoding/*!*/ encoding, bool octalEscapes, out int escapePlaceholder) {
