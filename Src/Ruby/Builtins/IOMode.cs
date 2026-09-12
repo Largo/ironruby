@@ -30,6 +30,13 @@ namespace IronRuby.Builtins {
 
         WriteAppends = 0x08,
 
+        // Accepted and ignored: they exist so File::NOCTTY, File::SYNC and
+        // File::SHARE_DELETE can be OR'd into a mode without changing it.
+        NonBlocking = 0x04,
+        NoControllingTerminal = 0x10,
+        Synchronized = 0x20,
+        ShareDelete = 0x40,
+
         CreateIfNotExists = 0x100,
         Truncate = 0x200,
         ErrorIfExists = 0x400,
@@ -163,7 +170,7 @@ namespace IronRuby.Builtins {
                 case IOMode.WriteOnly: return FileAccess.Write;
                 case IOMode.ReadOnly: return FileAccess.Read;
                 case IOMode.ReadWrite: return FileAccess.ReadWrite;
-                default: throw RubyExceptions.CreateEINVAL("illegal access mode {0}", mode);
+                default: throw RubyExceptions.CreateEINVAL("invalid access mode {0}", mode);
             }
         }
 
@@ -227,7 +234,7 @@ namespace IronRuby.Builtins {
         }
 
         internal static Exception/*!*/ IllegalMode(string/*!*/ modeString) {
-            return RubyExceptions.CreateArgumentError("illegal access mode {0}", modeString);
+            return RubyExceptions.CreateArgumentError("invalid access mode {0}", modeString);
         }
     }
 }

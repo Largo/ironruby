@@ -54,12 +54,13 @@ namespace IronRuby.Builtins {
                 fileMode = FileMode.Open;
             }
 
-            if ((mode & IOMode.Truncate) != 0 && (access & FileAccess.Write) == 0) {
-                throw RubyExceptions.CreateEINVAL("cannot truncate a file opened for reading only");
-            }
-
-            if ((mode & IOMode.WriteAppends) != 0 && (access & FileAccess.Write) == 0) {
-                throw RubyExceptions.CreateEINVAL("cannot append to a file opened for reading only");
+            // O_RDONLY|O_TRUNC and O_RDONLY|O_APPEND are legal on Unix: the file opens
+            // read-only (a later write raises IOError "not opened for writing") and
+            // O_TRUNC still empties it.  Truncating needs write access on the handle
+            // even though the Ruby-level mode stays read-only.
+            bool truncateReadOnly = (mode & IOMode.Truncate) != 0 && (access & FileAccess.Write) == 0;
+            if (truncateReadOnly) {
+                access |= FileAccess.Write;
             }
 
             if (String.IsNullOrEmpty(path)) {

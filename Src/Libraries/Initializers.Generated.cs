@@ -2355,9 +2355,12 @@ namespace IronRuby.Builtins {
             SetBuiltinConstant(module, "LOCK_NB", IronRuby.Builtins.RubyFileOps.Constants.LOCK_NB);
             SetBuiltinConstant(module, "LOCK_SH", IronRuby.Builtins.RubyFileOps.Constants.LOCK_SH);
             SetBuiltinConstant(module, "LOCK_UN", IronRuby.Builtins.RubyFileOps.Constants.LOCK_UN);
+            SetBuiltinConstant(module, "NOCTTY", IronRuby.Builtins.RubyFileOps.Constants.NOCTTY);
             SetBuiltinConstant(module, "NONBLOCK", IronRuby.Builtins.RubyFileOps.Constants.NONBLOCK);
             SetBuiltinConstant(module, "RDONLY", IronRuby.Builtins.RubyFileOps.Constants.RDONLY);
             SetBuiltinConstant(module, "RDWR", IronRuby.Builtins.RubyFileOps.Constants.RDWR);
+            SetBuiltinConstant(module, "SHARE_DELETE", IronRuby.Builtins.RubyFileOps.Constants.SHARE_DELETE);
+            SetBuiltinConstant(module, "SYNC", IronRuby.Builtins.RubyFileOps.Constants.SYNC);
             SetBuiltinConstant(module, "TRUNC", IronRuby.Builtins.RubyFileOps.Constants.TRUNC);
             SetBuiltinConstant(module, "WRONLY", IronRuby.Builtins.RubyFileOps.Constants.WRONLY);
             

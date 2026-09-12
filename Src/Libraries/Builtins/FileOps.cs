@@ -212,7 +212,13 @@ namespace IronRuby.Builtins {
             [RubyConstant]
             public readonly static int LOCK_UN = 0x08;
             [RubyConstant]
-            public readonly static int NONBLOCK = (int)IOMode.WriteOnly;
+            public readonly static int NONBLOCK = (int)IOMode.NonBlocking;
+            [RubyConstant]
+            public readonly static int NOCTTY = (int)IOMode.NoControllingTerminal;
+            [RubyConstant]
+            public readonly static int SYNC = (int)IOMode.Synchronized;
+            [RubyConstant]
+            public readonly static int SHARE_DELETE = (int)IOMode.ShareDelete;
             [RubyConstant]
             public readonly static int RDONLY = (int)IOMode.ReadOnly;
             [RubyConstant]
