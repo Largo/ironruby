@@ -1,0 +1,53 @@
+#!/bin/bash
+# Per-file run of every spec/core file, one mspec process each.
+#
+#   Util/sweep-core.sh [outfile] [jobs]
+#
+# Emits one TSV row per spec file:
+#
+#   <exit status>\t<spec file>\t<mspec tally line | NO-TALLY>\t<cause>
+#
+# "cause" is only meaningful for NO-TALLY rows and is one of:
+#   ABORT   process died on a .NET Debug.Assert (exit 134) or other signal
+#   HANG    exceeded the per-file timeout (exit 124)
+#   REPORT  the examples ran -- mspec printed progress -- but the run died
+#           before the summary, so the tally never appeared
+#   LOAD    the file never got as far as running an example
+IR_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
+OUT="${1:-$IR_ROOT/Util/sweep-core.tsv}"
+JOBS="${2:-6}"
+TIMEOUT="${SWEEP_TIMEOUT:-60}"
+
+cd "$IR_ROOT" || exit 1
+export RUBY_EXE="$IR_ROOT/ir.sh"
+
+run_one() {
+  file="$1"
+  log="$(mktemp)"
+  timeout -s KILL "$TIMEOUT" "$IR_ROOT/ir.sh" -Imspec/lib mspec/bin/mspec-run "$file" >"$log" 2>&1
+  status=$?
+  tally="$(grep -m1 -E '^[0-9]+ files?, [0-9]+ examples?' "$log")"
+  if [ -n "$tally" ]; then
+    printf '%s\t%s\t%s\t\n' "$status" "$file" "$tally"
+  else
+    case "$status" in
+      124|137) cause=HANG ;;
+      0|1) cause=REPORT ;;
+      *) cause=ABORT ;;
+    esac
+    # Did mspec get as far as running examples? The dotted formatter prints
+    # progress characters on their own line before anything else.
+    if [ "$cause" = REPORT ] && ! grep -qE '^[.EF]+$|^[0-9]+\)$' "$log"; then
+      cause=LOAD
+    fi
+    printf '%s\t%s\tNO-TALLY\t%s\n' "$status" "$file" "$cause"
+  fi
+  rm -f "$log"
+}
+export -f run_one
+export IR_ROOT TIMEOUT
+
+find spec/core -name '*_spec.rb' | sort |
+  xargs -P "$JOBS" -I{} bash -c 'run_one "$@"' _ {} > "$OUT"
+
+echo "wrote $OUT: $(wc -l < "$OUT") files, $(grep -c 'NO-TALLY' "$OUT") NO-TALLY"
