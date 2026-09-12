@@ -15,7 +15,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Reflection;
+using System.Text;
 using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
 using System.Numerics;
@@ -697,9 +699,90 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("to_s")]
         public static MutableString ToS(RubyContext/*!*/ context, double self) {
-            StringFormatter sf = new StringFormatter(context, "%.15g", RubyEncoding.Binary, new object[] { self });
-            sf.TrailingZeroAfterWholeFloat = true;
-            return sf.Format();
+            return MutableString.CreateAscii(ToShortestString(self));
+        }
+
+        /// <summary>
+        /// Ruby's Float#to_s: the shortest decimal that reads back as the same double, with a
+        /// decimal point always present. Fixed notation is used while the decimal point falls in
+        /// (0, DBL_DIG] or in (-4, 0]; outside that range the result is exponential with at least
+        /// one fraction digit and a two-digit exponent, so 1e15 is "1.0e+15" and 1e14 is
+        /// "100000000000000.0".
+        /// </summary>
+        internal static string/*!*/ ToShortestString(double value) {
+            if (Double.IsNaN(value)) {
+                return "NaN";
+            }
+            if (Double.IsPositiveInfinity(value)) {
+                return "Infinity";
+            }
+            if (Double.IsNegativeInfinity(value)) {
+                return "-Infinity";
+            }
+
+            bool negative = (value < 0.0) || (value == 0.0 && Double.IsNegative(value));
+
+            // "R" round-trips through the shortest digit string on .NET Core 3.0 and later,
+            // which is the same set of digits Ruby's dtoa produces in shortest mode.
+            string repr = Math.Abs(value).ToString("R", CultureInfo.InvariantCulture);
+
+            int exponent = 0;
+            int e = repr.IndexOf('E');
+            if (e >= 0) {
+                exponent = Int32.Parse(repr.Substring(e + 1), CultureInfo.InvariantCulture);
+                repr = repr.Substring(0, e);
+            }
+
+            int dot = repr.IndexOf('.');
+            string digits = (dot < 0) ? repr : repr.Substring(0, dot) + repr.Substring(dot + 1);
+            // Number of digits that belong to the left of the decimal point.
+            int pointPosition = ((dot < 0) ? repr.Length : dot) + exponent;
+
+            int leading = 0;
+            while (leading < digits.Length && digits[leading] == '0') {
+                leading++;
+                pointPosition--;
+            }
+            digits = digits.Substring(leading).TrimEnd('0');
+            if (digits.Length == 0) {
+                digits = "0";
+                pointPosition = 1;
+            }
+
+            StringBuilder result = new StringBuilder();
+            if (negative) {
+                result.Append('-');
+            }
+
+            // Fixed notation runs from just past 0.0001 up to DBL_DIG integral digits, plus one
+            // extra decade when the digits reach into the fraction so that no padding zeros are
+            // invented: 1536234243126633.5 stays fixed while 1.5e+15 and 1234567890123456.0 do
+            // not. Derived by differential testing against CRuby over 200k random doubles.
+            const int DblDig = 15;
+            bool fixedForm = pointPosition > -4 &&
+                (pointPosition <= DblDig || (pointPosition == DblDig + 1 && digits.Length > pointPosition));
+
+            if (fixedForm && pointPosition > 0) {
+                if (digits.Length <= pointPosition) {
+                    result.Append(digits).Append('0', pointPosition - digits.Length).Append(".0");
+                } else {
+                    result.Append(digits, 0, pointPosition).Append('.').Append(digits, pointPosition, digits.Length - pointPosition);
+                }
+            } else if (fixedForm) {
+                result.Append("0.").Append('0', -pointPosition).Append(digits);
+            } else {
+                result.Append(digits[0]).Append('.');
+                if (digits.Length > 1) {
+                    result.Append(digits, 1, digits.Length - 1);
+                } else {
+                    result.Append('0');
+                }
+                int power = pointPosition - 1;
+                result.Append('e').Append(power < 0 ? '-' : '+');
+                result.Append(Math.Abs(power).ToString(CultureInfo.InvariantCulture).PadLeft(2, '0'));
+            }
+
+            return result.ToString();
         }
 
         #endregion
