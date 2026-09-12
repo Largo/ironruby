@@ -290,6 +290,56 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region allbits?, anybits?, nobits?
+
+        /// <summary>
+        /// Both operands are widened to <see cref="BigInteger"/> first: BigInteger's bitwise
+        /// operators already use the infinite two's complement representation that Ruby
+        /// specifies for negative integers, so (~0b1).allbits?(42) comes out true without any
+        /// special casing of the sign.
+        /// </summary>
+        private static BigInteger MaskBits(object/*!*/ self, IntegerValue mask) {
+            return ToBigInteger(self) & (mask.IsFixnum ? (BigInteger)mask.Fixnum : mask.Bignum);
+        }
+
+        /// <summary>Returns true when every bit set in mask is also set in self.</summary>
+        [RubyMethod("allbits?")]
+        public static bool AllBits(object/*!*/ self, [DefaultProtocol]IntegerValue mask) {
+            BigInteger m = mask.IsFixnum ? (BigInteger)mask.Fixnum : mask.Bignum;
+            return MaskBits(self, mask) == m;
+        }
+
+        /// <summary>Returns true when at least one bit set in mask is also set in self.</summary>
+        [RubyMethod("anybits?")]
+        public static bool AnyBits(object/*!*/ self, [DefaultProtocol]IntegerValue mask) {
+            return !MaskBits(self, mask).IsZero;
+        }
+
+        /// <summary>Returns true when no bit set in mask is set in self.</summary>
+        [RubyMethod("nobits?")]
+        public static bool NoBits(object/*!*/ self, [DefaultProtocol]IntegerValue mask) {
+            return MaskBits(self, mask).IsZero;
+        }
+
+        #endregion
+
+        #region ceildiv
+
+        /// <summary>
+        /// self.ceildiv(other) == -((-self).div(other)), which is how MRI defines it. Going
+        /// through the dynamic `div` (rather than dividing here) is what makes
+        /// 3.ceildiv(1.2) and 3.ceildiv(6/5r) work: `div` already floors the result of `/`
+        /// for whatever numeric type `other` turns out to be, and always yields an Integer.
+        /// </summary>
+        [RubyMethod("ceildiv")]
+        public static object CeilDiv(UnaryOpStorage/*!*/ negateStorage, BinaryOpStorage/*!*/ divStorage, object/*!*/ self, object other) {
+            var negate = negateStorage.GetCallSite("-@");
+            var div = divStorage.GetCallSite("div");
+            return negate.Target(negate, div.Target(div, negate.Target(negate, self), other));
+        }
+
+        #endregion
+
         #region next, succ, pred
 
         /// <summary>

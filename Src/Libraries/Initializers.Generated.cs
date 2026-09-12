@@ -3036,6 +3036,16 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadInteger_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "allbits?", 0x51, 
+                0x00010000U, 
+                new Func<System.Object, IronRuby.Runtime.IntegerValue, System.Boolean>(IronRuby.Builtins.Integer.AllBits)
+            );
+            
+            DefineLibraryMethod(module, "anybits?", 0x51, 
+                0x00010000U, 
+                new Func<System.Object, IronRuby.Runtime.IntegerValue, System.Boolean>(IronRuby.Builtins.Integer.AnyBits)
+            );
+            
             DefineLibraryMethod(module, "bit_length", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<System.Int32, System.Int32>(IronRuby.Builtins.Integer.BitLength), 
@@ -3046,6 +3056,11 @@ namespace IronRuby.Builtins {
                 0x00000000U, 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.Integer.ToInteger), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.Ceil)
+            );
+            
+            DefineLibraryMethod(module, "ceildiv", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.Integer.CeilDiv)
             );
             
             DefineLibraryMethod(module, "chr", 0x51, 
@@ -3106,6 +3121,11 @@ namespace IronRuby.Builtins {
                 0x00000000U, 0x00000000U, 
                 new Func<System.Int32, System.Object>(IronRuby.Builtins.Integer.Next), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object>(IronRuby.Builtins.Integer.Next)
+            );
+            
+            DefineLibraryMethod(module, "nobits?", 0x51, 
+                0x00010000U, 
+                new Func<System.Object, IronRuby.Runtime.IntegerValue, System.Boolean>(IronRuby.Builtins.Integer.NoBits)
             );
             
             DefineLibraryMethod(module, "numerator", 0x51, 
