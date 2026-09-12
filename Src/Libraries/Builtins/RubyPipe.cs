@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Threading;
+using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
     /// <summary>
@@ -27,31 +28,58 @@ namespace IronRuby.Builtins {
     internal class RubyPipe : Stream {
         private readonly EventWaitHandle _dataAvailableEvent;
         private readonly EventWaitHandle _writerClosedEvent;
+        private readonly EventWaitHandle _readerClosedEvent;
         private readonly WaitHandle[] _eventArray;
         private readonly Queue<byte> _queue;
 
         private const int WriterClosedEventIndex = 1;
+        private const int ReaderClosedEventIndex = 2;
 
         private RubyPipe() {
             _dataAvailableEvent = new AutoResetEvent(false);
             _writerClosedEvent = new ManualResetEvent(false);
-            _eventArray = new WaitHandle[2];
+            _readerClosedEvent = new ManualResetEvent(false);
+            _eventArray = new WaitHandle[3];
             _queue = new Queue<byte>();
 
             _eventArray[0] = _dataAvailableEvent;
             _eventArray[1] = _writerClosedEvent;
+            _eventArray[2] = _readerClosedEvent;
             Debug.Assert(_eventArray[WriterClosedEventIndex] == _writerClosedEvent);
+            Debug.Assert(_eventArray[ReaderClosedEventIndex] == _readerClosedEvent);
         }
 
         private RubyPipe(RubyPipe pipe) {
             _dataAvailableEvent = pipe._dataAvailableEvent;
             _writerClosedEvent = pipe._writerClosedEvent;
+            _readerClosedEvent = pipe._readerClosedEvent;
             _eventArray = pipe._eventArray;
             _queue = pipe._queue;
         }
 
         internal void CloseWriter() {
             _writerClosedEvent.Set();
+        }
+
+        internal void CloseReader() {
+            // Wakes up a thread parked in Read so that closing the read end of a pipe from another
+            // thread terminates the blocked read, the way CRuby does.
+            _readerClosedEvent.Set();
+        }
+
+        /// <summary>
+        /// Called when this end of the pipe is closed. The reader and the writer are distinct objects
+        /// so that each end can signal the other; see PipeWriter.
+        /// </summary>
+        protected virtual void OnClose() {
+            CloseReader();
+        }
+
+        protected override void Dispose(bool disposing) {
+            if (disposing) {
+                OnClose();
+            }
+            base.Dispose(disposing);
         }
 
         public static void CreatePipe(out Stream reader, out Stream writer) {
@@ -90,22 +118,34 @@ namespace IronRuby.Builtins {
         }
 
         public override int Read(byte[] buffer, int offset, int count) {
-            // Wait until data is available, or if the writer has closed the pipe
-            //
-            // In the latter case, we do need to return any pending data, and so fall through.
-            // Pending data will be returned the first time, and 0 will naturually be returned subsequent times 
-            WaitHandle.WaitAny(_eventArray);
+            if (count == 0) {
+                return 0;
+            }
 
-            lock (((ICollection)_queue).SyncRoot) {
-                if (_queue.Count <= count) {
-                    _queue.CopyTo(buffer, 0);
-                    _queue.Clear();
-                    return _queue.Count;
-                } else {
-                    for (int idx = 0; idx < count; idx++) {
-                        buffer[idx] = _queue.Dequeue();
+            while (true) {
+                lock (((ICollection)_queue).SyncRoot) {
+                    if (_queue.Count > 0) {
+                        int read = Math.Min(count, _queue.Count);
+                        for (int i = 0; i < read; i++) {
+                            buffer[offset + i] = _queue.Dequeue();
+                        }
+                        if (_queue.Count > 0) {
+                            // _dataAvailableEvent is an AutoResetEvent, so re-arm it for the bytes we left behind.
+                            _dataAvailableEvent.Set();
+                        }
+                        return read;
                     }
-                    return count;
+
+                    if (_writerClosedEvent.WaitOne(0)) {
+                        // Writer is gone and the queue is drained: end of file.
+                        return 0;
+                    }
+                }
+
+                // Wait until data is available, the writer closes the pipe, or this end is closed
+                // from another thread.
+                if (WaitHandle.WaitAny(_eventArray) == ReaderClosedEventIndex) {
+                    throw RubyExceptions.CreateIOError("stream closed in another thread");
                 }
             }
         }
@@ -137,11 +177,8 @@ namespace IronRuby.Builtins {
                 : base(pipe) {
             }
 
-            protected override void Dispose(bool disposing) {
-                if (disposing) {
-                    base.Dispose(disposing);
-                    CloseWriter();
-                }
+            protected override void OnClose() {
+                CloseWriter();
             }
         }
     }
