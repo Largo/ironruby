@@ -426,10 +426,13 @@ namespace IronRuby.Builtins {
 
                     case '}':
                         if (ungrouper.Level < 1) {
-                            // Unbalanced closing bracket matches nothing
-                            return ArrayUtils.EmptyStrings;
+                            // A '}' with no '{' open is an ordinary character. Treating it as
+                            // "matches nothing" broke Dir["special/\\{}/special"], where the
+                            // '{' is escaped and so never opened a level.
+                            ungrouper.AddChar(c);
+                        } else {
+                            ungrouper.FinishLevel();
                         }
-                        ungrouper.FinishLevel();
                         break;
 
                     default:
@@ -517,8 +520,14 @@ namespace IronRuby.Builtins {
                 string match = (_stripPrefix > 0 && full.Length >= _stripPrefix) ? full.Substring(_stripPrefix) : full;
                 if (match.Length == 0) {
                     // The base directory itself is not a match, so Dir["**/"] does not lead
-                    // with an empty string.
-                    return;
+                    // with an empty string. The one exception is a directory-only pattern
+                    // under an explicit base:, where MRI does report it - as "/", the part of
+                    // the path left after the base is taken off:
+                    //   Dir.glob('**/', base: "deeply/nested") == ["/", "directory/", ...]
+                    if (_base == null || !_dirOnly) {
+                        return;
+                    }
+                    match = "/";
                 }
 
                 if (_pal.DirectoryExists(full)) {
@@ -662,7 +671,8 @@ namespace IronRuby.Builtins {
                 }
                 // "**" never matches "." as a component - that would re-glob the same
                 // directory one level down and report every match twice.
-                if (atBase && !doubleStar && ((_flags & Constants.FNM_DOTMATCH) != 0 || dirSegment[0] == '.')) {
+                if (atBase && !doubleStar &&
+                    ((_flags & Constants.FNM_DOTMATCH) != 0 || (dirSegment[0] == '.' && !isPreviousDoubleStar))) {
                     // "." is a legitimate glob result but ".." is not: Dir[".*"] is
                     // [".", ".dotfile", ...] with no "..".
                     if (FnMatch(dirSegment, ".", _flags)) {
