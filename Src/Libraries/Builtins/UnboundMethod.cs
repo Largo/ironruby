@@ -84,6 +84,18 @@ namespace IronRuby.Builtins {
             return new UnboundMethod(self._targetConstraint, self._name, self._info);
         }
 
+        [RubyMethod("name")]
+        public static object GetName(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
+            return context.StringifyIdentifier(self._name);
+        }
+
+        // The module the method is defined in. With Module#prepend this is the prepended module rather than
+        // the class the method was looked up on.
+        [RubyMethod("owner")]
+        public static RubyModule/*!*/ GetOwner(UnboundMethod/*!*/ self) {
+            return self._info.DeclaringModule ?? self._targetConstraint;
+        }
+
         [RubyMethod("to_s")]
         public static MutableString/*!*/ ToS(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
             return ToS(context, self.Name, self._info.DeclaringModule, self._targetConstraint, "UnboundMethod");

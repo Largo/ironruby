@@ -79,7 +79,8 @@ namespace IronRuby.Builtins {
             // extendedObject has been extended by self, i.e. self has been included into extendedObject's singleton class
         }
 
-        [RubyMethod("include", RubyMethodAttributes.PrivateInstance)]
+        // public since Ruby 2.1
+        [RubyMethod("include")]
         public static RubyModule/*!*/ Include(
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ appendFeaturesStorage,
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ includedStorage,
@@ -120,10 +121,21 @@ namespace IronRuby.Builtins {
         public static RubyModule/*!*/ Prepend(
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ prependFeaturesStorage,
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ prependedStorage,
-            RubyModule/*!*/ self, [NotNullItems]params RubyModule/*!*/[]/*!*/ modules) {
+            RubyModule/*!*/ self, params object[]/*!*/ args) {
 
-            if (modules.Length == 0) {
+            if (args.Length == 0) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
+            }
+
+            // reported by name rather than by the generic conversion failure, the way MRI does it:
+            var modules = new RubyModule[args.Length];
+            for (int i = 0; i < args.Length; i++) {
+                modules[i] = args[i] as RubyModule;
+                if (modules[i] == null && args[i] != null) {
+                    throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Module)",
+                        self.Context.GetClassDisplayName(args[i])
+                    );
+                }
             }
 
             RubyUtils.RequirePrepends(self, modules);
@@ -559,7 +571,18 @@ namespace IronRuby.Builtins {
             if (ReferenceEquals(self, module)) {
                 return ScriptingRuntimeHelpers.False;
             }
-            return self.HasAncestor(module) ? ScriptingRuntimeHelpers.True : null;
+
+            if (self.Context != module.Context) {
+                return null;
+            }
+
+            using (self.Context.ClassHierarchyLocker()) {
+                if (self.HasAncestorNoLock(module)) {
+                    return ScriptingRuntimeHelpers.True;
+                }
+                // related the other way round is `false', unrelated is `nil':
+                return module.HasAncestorNoLock(self) ? ScriptingRuntimeHelpers.False : null;
+            }
         }
 
         // thread-safe:
@@ -581,9 +604,20 @@ namespace IronRuby.Builtins {
         [RubyMethod(">")]
         public static object IsNotSubclassOrIncluded(RubyModule/*!*/ self, [NotNull]RubyModule/*!*/ module) {
             if (ReferenceEquals(self, module)) {
-                return false;
+                return ScriptingRuntimeHelpers.False;
             }
-            return module.HasAncestor(self) ? ScriptingRuntimeHelpers.True : null;
+
+            if (self.Context != module.Context) {
+                return null;
+            }
+
+            using (self.Context.ClassHierarchyLocker()) {
+                if (module.HasAncestorNoLock(self)) {
+                    return ScriptingRuntimeHelpers.True;
+                }
+                // related the other way round is `false', unrelated is `nil':
+                return self.HasAncestorNoLock(module) ? ScriptingRuntimeHelpers.False : null;
+            }
         }
 
         // thread-safe:
