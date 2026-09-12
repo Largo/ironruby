@@ -1555,7 +1555,19 @@ end
 # maps to the sealed System::IndexOutOfRangeException here, so it cannot be
 # subclassed. StandardError is the closest base that actually instantiates;
 # the cost is that `rescue IndexError` will not catch these.
-class KeyError < StandardError; end unless defined?(KeyError)
+unless defined?(KeyError)
+  class KeyError < StandardError
+    def initialize(message = nil, receiver: nil, key: nil)
+      # The C# core (Kernel#format's named references, Hash#fetch) sets @receiver/@key
+      # directly after constructing with just a message.
+      @receiver = receiver
+      @key = key
+      super(message)
+    end
+
+    attr_reader :receiver, :key
+  end
+end
 class StopIteration < StandardError; end unless defined?(StopIteration)
 class UncaughtThrowError < ArgumentError; end unless defined?(UncaughtThrowError)
 class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)

@@ -92,19 +92,107 @@ namespace IronRuby.Builtins {
         [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
         public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value) {
             var str = value.ConvertToString();
-            int i = 0;
-            object result = Tokenizer.ParseInteger(str, 0, ref i).ToObject();
 
-            while (i < str.Length && Tokenizer.IsWhiteSpace(str[i])) {
-                i++;
+            object result;
+            if (TryParseRubyInteger(str, out result)) {
+                return result;
             }
 
-            if (i < str.Length) {
-                throw RubyExceptions.CreateArgumentError("invalid value for Integer: \"{0}\"", str);
-            }
-
-            return result;
+            throw RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", str);
         }
+
+        #region Kernel#Integer string grammar
+
+        // Kernel#Integer is stricter than String#to_i: it consumes the whole string or fails.
+        // Surrounding whitespace and one sign are allowed, an embedded NUL is not; a radix
+        // prefix of 0x, 0b, 0o or 0d may appear, and a bare leading zero means octal; single
+        // underscores may separate digits. Derived by differential testing against CRuby 3.3.8.
+
+        private static bool IsIntegerWhitespace(char c) {
+            return c == ' ' || (c >= '\t' && c <= '\r');
+        }
+
+        private static int DigitValue(char c) {
+            if (c >= '0' && c <= '9') {
+                return c - '0';
+            }
+            if (c >= 'a' && c <= 'z') {
+                return c - 'a' + 10;
+            }
+            if (c >= 'A' && c <= 'Z') {
+                return c - 'A' + 10;
+            }
+            return -1;
+        }
+
+        private static bool TryParseRubyInteger(string/*!*/ str, out object result) {
+            result = null;
+
+            int index = 0;
+            int end = str.Length;
+            while (index < end && IsIntegerWhitespace(str[index])) {
+                index++;
+            }
+            while (end > index && IsIntegerWhitespace(str[end - 1])) {
+                end--;
+            }
+            if (index == end) {
+                return false;
+            }
+
+            bool negative = false;
+            if (str[index] == '+' || str[index] == '-') {
+                negative = (str[index] == '-');
+                index++;
+            }
+
+            int radix = 10;
+            int digits = 0;
+            if (index < end && str[index] == '0') {
+                char prefix = (index + 1 < end) ? str[index + 1] : '\0';
+                switch (prefix) {
+                    case 'x': case 'X': radix = 16; index += 2; break;
+                    case 'b': case 'B': radix = 2; index += 2; break;
+                    case 'o': case 'O': radix = 8; index += 2; break;
+                    case 'd': case 'D': radix = 10; index += 2; break;
+                    default:
+                        // A bare leading zero is octal, and counts as a digit in its own right so
+                        // that "0" and "0_0" parse while "08" does not.
+                        radix = 8;
+                        digits = 1;
+                        index++;
+                        break;
+                }
+            }
+
+            BigInteger magnitude = BigInteger.Zero;
+            while (index < end) {
+                char c = str[index];
+                int digit = DigitValue(c);
+                if (digit >= 0 && digit < radix) {
+                    magnitude = magnitude * radix + digit;
+                    digits++;
+                    index++;
+                } else if (c == '_' && digits > 0) {
+                    int next = (index + 1 < end) ? DigitValue(str[index + 1]) : -1;
+                    if (next < 0 || next >= radix) {
+                        return false;
+                    }
+                    index++;
+                } else {
+                    return false;
+                }
+            }
+
+            if (digits == 0) {
+                return false;
+            }
+
+            result = Protocols.Normalize(negative ? -magnitude : magnitude);
+            return true;
+        }
+
+        #endregion
 
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
@@ -436,6 +524,12 @@ namespace IronRuby.Builtins {
 
             RubyClass cls;
             var context = tosConversion.Context;
+            // TODO: Ruby 1.8 fell back to #to_s when the object had no instance variables and 1.9
+            // dropped that, so a stateless object with a custom #to_s should still inspect as
+            // "#<Foo:0x...>" - visible through "%p" and Kernel#p. Removing the HasInstanceVariables
+            // test here fixes that but also rewrites the receiver in NoMethodError messages
+            // ("for main:Object") and changes ObjectOperations.Format, so it needs to land together
+            // with the exception-message work rather than on its own.
             if (context.HasInstanceVariables(self) && ((cls = context.GetClassOf(self)).IsRubyClass || cls.IsObjectClass)) {
                 return RubyUtils.InspectObject(inspectStorage, tosConversion, self);
             } else {
