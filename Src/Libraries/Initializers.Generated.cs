@@ -1730,6 +1730,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadException_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "==", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyContext, System.Exception, System.Object, System.Boolean>(IronRuby.Builtins.ExceptionOps.Equal)
+            );
+            
             DefineLibraryMethod(module, "backtrace", 0x51, 
                 0x00000000U, 
                 new Func<System.Exception, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ExceptionOps.GetBacktrace)
@@ -1740,16 +1745,24 @@ namespace IronRuby.Builtins {
                 new Func<System.Exception, System.Exception>(IronRuby.Builtins.ExceptionOps.GetCause)
             );
             
-            DefineRuleGenerator(module, "exception", 0x51, IronRuby.Builtins.ExceptionOps.GetException());
+            DefineLibraryMethod(module, "exception", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.RubyContext, System.Exception, System.Object, System.Object>(IronRuby.Builtins.ExceptionOps.GetException)
+            );
             
             DefineLibraryMethod(module, "initialize", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Exception, System.Object, System.Exception>(IronRuby.Builtins.ExceptionOps.ReinitializeException)
             );
             
+            DefineLibraryMethod(module, "initialize_copy", 0x52, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Exception, System.Exception, System.Exception>(IronRuby.Builtins.ExceptionOps.InitializeCopy)
+            );
+            
             DefineLibraryMethod(module, "inspect", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ExceptionOps.Inspect)
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ExceptionOps.Inspect)
             );
             
             DefineLibraryMethod(module, "message", 0x51, 
@@ -1765,12 +1778,12 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
-                new Func<System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
             );
             
             DefineLibraryMethod(module, "to_str", 0x51, 
                 0x00000000U, 
-                new Func<System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
             );
             
         }

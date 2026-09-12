@@ -94,6 +94,24 @@ namespace IronRuby.Builtins {
             return new RuleGenerator(RuleGenerators.InstanceConstructor);
         }
 
+        /// <summary>
+        /// #dup and #clone route here. Object#initialize_copy copies the instance variables;
+        /// an exception's message, backtrace and cause live outside them, in RubyExceptionData.
+        /// </summary>
+        [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
+        public static Exception/*!*/ InitializeCopy(RubyContext/*!*/ context, Exception/*!*/ self, [NotNull]Exception/*!*/ source) {
+            KernelOps.InitializeCopy(context, self, source);
+
+            var sourceData = RubyExceptionData.GetInstance(source);
+            var selfData = RubyExceptionData.GetInstance(self);
+            selfData.Message = sourceData.Message;
+            selfData.Backtrace = sourceData.Backtrace;
+            if (sourceData.HasCause) {
+                selfData.TrySetCause(sourceData.Cause);
+            }
+            return self;
+        }
+
         #endregion
 
         #region Public Instance Methods
@@ -126,46 +144,31 @@ namespace IronRuby.Builtins {
             return RubyExceptionData.GetInstance(self).Backtrace = backtrace;
         }
 
-        // signature: (Exception! self, [Optional]object arg) : Exception!
-        // arg is a message
+        /// <summary>
+        /// MRI's Exception#exception: self when called with no argument or with self, otherwise a
+        /// *clone* of self carrying the new message. Cloning rather than allocating a fresh
+        /// instance matters - #initialize is not run again, so a subclass that takes something
+        /// other than a message in its constructor keeps its state (and any shared mutable state
+        /// stays shared, which ruby/spec relies on).
+        /// </summary>
         [RubyMethod("exception", RubyMethodAttributes.PublicInstance)]
-        public static RuleGenerator/*!*/ GetException() {
-            return new RuleGenerator((metaBuilder, args, name) => {
-                Debug.Assert(args.Target is Exception);
+        public static object GetException(UnaryOpStorage/*!*/ cloneStorage, RubyContext/*!*/ context, Exception/*!*/ self,
+            [Optional]object message) {
 
-                // 1 optional parameter (exceptionArg):
-                var argsBuilder = new ArgsBuilder(0, 0, 0, 1, false);
-                argsBuilder.AddCallArguments(metaBuilder, args);
+            if (message == Missing.Value || ReferenceEquals(message, self)) {
+                return self;
+            }
 
-                if (!metaBuilder.Error) {
-                    if (argsBuilder.ActualArgumentCount == 0) {
-                        metaBuilder.Result = args.TargetExpression;
-                    } else {
-                        RubyClass cls = args.RubyContext.GetClassOf(args.Target);
-                        var classExpression = AstUtils.Constant(cls);
-                        args.SetTarget(classExpression, cls);
+            var site = cloneStorage.GetCallSite("clone");
+            var copy = site.Target(site, self) as Exception;
+            if (copy == null) {
+                throw RubyExceptions.CreateTypeError("exception object expected");
+            }
 
-                        ParameterExpression messageVariable = null;
-
-                        // RubyOps.MarkException(new <exception-type>(GetClrMessage(<class>, #message = <message>)))
-                        if (cls.BuildAllocatorCall(metaBuilder, args, () =>
-                            Ast.Call(null, new Func<RubyClass, object, string>(GetClrMessage).GetMethodInfo(),
-                                classExpression,
-                                Ast.Assign(messageVariable = metaBuilder.GetTemporary(typeof(object), "#message"), AstUtils.Box(argsBuilder[0]))
-                            )
-                        )) {
-                            // ReinitializeException(<result>, #message)
-                            metaBuilder.Result = Ast.Call(null, new Func<RubyContext, Exception, object, Exception>(ReinitializeException).GetMethodInfo(),
-                                AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)),
-                                metaBuilder.Result,
-                                messageVariable ?? AstUtils.Box(argsBuilder[0])
-                            );
-                        } else {
-                            metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
-                        }
-                    }
-                }
-            });
+            // unlike #initialize this leaves the backtrace alone, as MRI's clone does
+            RubyExceptionData.GetInstance(copy).Message =
+                message ?? RubyExceptionData.GetDefaultMessage(context.GetClassOf(copy));
+            return copy;
         }
 
         [RubyMethod("message")]
@@ -176,26 +179,63 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_s")]
         [RubyMethod("to_str")]
-        public static object StringRepresentation(Exception/*!*/ self) {
-            return RubyExceptionData.GetInstance(self).Message;
+        public static object StringRepresentation(ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
+            object message = RubyExceptionData.GetInstance(self).Message;
+            // MRI applies String() to whatever was passed as the message, so
+            // `raise MyError, some_object` reports some_object.to_s.
+            return message is MutableString ? message : Protocols.ConvertToString(tosConversion, message);
+        }
+
+        /// <summary>
+        /// MRI compares the class, the message and the backtrace - never object identity, so a
+        /// #dup is == to its original. The message is read out of the exception's own state
+        /// rather than through #message, which subclasses are free to override (and
+        /// ExceptionSpecs::UnExceptional does).
+        /// </summary>
+        [RubyMethod("==")]
+        public static bool Equal(BinaryOpStorage/*!*/ equals, RubyContext/*!*/ context, Exception/*!*/ self, object other) {
+            if (ReferenceEquals(self, other)) {
+                return true;
+            }
+
+            var otherException = other as Exception;
+            if (otherException == null) {
+                return false;
+            }
+
+            if (context.GetClassOf(self).GetNonSingletonClass() != context.GetClassOf(otherException).GetNonSingletonClass()) {
+                return false;
+            }
+
+            var selfData = RubyExceptionData.GetInstance(self);
+            var otherData = RubyExceptionData.GetInstance(otherException);
+            return Protocols.IsEqual(equals, selfData.Message, otherData.Message)
+                && Protocols.IsEqual(equals, selfData.Backtrace, otherData.Backtrace);
         }
 
         [RubyMethod("inspect", RubyMethodAttributes.PublicInstance)]
-        public static MutableString/*!*/ Inspect(UnaryOpStorage/*!*/ inspectStorage, ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
+        public static MutableString/*!*/ Inspect(UnaryOpStorage/*!*/ inspectStorage, UnaryOpStorage/*!*/ toSStorage,
+            ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
+
             var context = inspectStorage.Context;
-            object message = RubyExceptionData.GetInstance(self).Message;
+            // MRI goes through #to_s here, so an override of it shows up in #inspect
+            var toSSite = toSStorage.GetCallSite("to_s");
+            object message = toSSite.Target(toSSite, self);
+
             // an anonymous class has no name; MRI prints "#<#<Class:0x...>: msg>" for it
             MutableString className = RubyExceptionData.GetDefaultMessage(context.GetClassOf(self));
+
+            var messageString = message as MutableString;
+            if (message == null || (messageString != null && messageString.IsEmpty)) {
+                // MRI drops the "#<...>" wrapper entirely when #to_s is empty
+                return className;
+            }
 
             MutableString result = MutableString.CreateMutable(context.GetIdentifierEncoding());
             result.Append("#<");
             result.Append(className);
             result.Append(": ");
-            if (message != null) {
-                result.Append(KernelOps.Inspect(inspectStorage, tosConversion, message));
-            } else {
-                result.Append(className);
-            }
+            result.Append(KernelOps.Inspect(inspectStorage, tosConversion, message));
             result.Append('>');
             return result;
         }
