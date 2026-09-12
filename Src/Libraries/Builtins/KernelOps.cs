@@ -1351,7 +1351,15 @@ namespace IronRuby.Builtins {
             }
         }
 
-        //fork
+        // There is no fork on the CLR. MRI defines the method on platforms that cannot fork too and has it
+        // raise NotImplementedError; Process.respond_to?(:fork) is what portable code tests instead.
+        // The method has to exist: fixtures such as spec/core/kernel/fixtures/classes.rb do `public :fork'.
+        [RubyMethod("fork", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("fork", RubyMethodAttributes.PublicSingleton)]
+        public static object Fork(BlockParam block, object self) {
+            throw RubyExceptions.CreateNotImplementedError("fork() function is unimplemented on this machine");
+        }
+
 #endif
         #endregion
 

@@ -4678,6 +4678,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.KernelOps.ToFloat)
             );
             
+            DefineLibraryMethod(module, "fork", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Fork)
+            );
+            
             DefineLibraryMethod(module, "format", 0x52, 
                 0x80020004U, 
                 new Func<IronRuby.Builtins.StringFormatterSiteStorage, System.Object, IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf)
@@ -5163,6 +5168,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "Float", 0x61, 
                 0x00010000U, 
                 new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.KernelOps.ToFloat)
+            );
+            
+            DefineLibraryMethod(module, "fork", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Fork)
             );
             
             DefineLibraryMethod(module, "format", 0x61, 
