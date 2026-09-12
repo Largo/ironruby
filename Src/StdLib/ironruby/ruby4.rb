@@ -1254,22 +1254,12 @@ unless defined?(Fiber)
       __err__(::TypeError, "wrong argument type #{key.class} (expected Symbol)")
     end
 
+    # Exactly Kernel#raise's argument handling (including cause:) but returning the
+    # exception instead of throwing it, so that it can be handed to the target fiber.
+    # The cause is resolved here, i.e. in the calling fiber's context, which is what
+    # MRI 4.0 does.
     def self.__make_exception__(args)
-      if args.empty?
-        cur = $!
-        return cur if cur
-        return ::RuntimeError.new("")
-      end
-      first = args[0]
-      if first.is_a?(::String)
-        ::RuntimeError.new(first)
-      elsif args.size >= 2
-        exc = first.exception(args[1])
-        exc.set_backtrace(args[2]) if args.size >= 3 && args[2]
-        exc
-      else
-        first.exception
-      end
+      __build_exception__(*args)
     end
 
     def self.__init_storage__(storage, parent)
@@ -3827,4 +3817,125 @@ class Struct
     end
   end
   private :initialize
+end
+
+# --------------------------------------------------------------------------
+# Exception#detailed_message / #full_message (Ruby 3.2+)
+# --------------------------------------------------------------------------
+#
+# This is the text `ruby` prints for an uncaught exception, exposed as methods
+# so that libraries can reuse and override it. Written in Ruby rather than C#
+# because it is pure string assembly over #message, #backtrace and #cause, all
+# of which already exist.
+#
+# The escape sequences are MRI's: \e[1m = bold (the message), \e[1;4m = bold
+# plus underline (the class name), \e[m = reset. MRI leaves the bold
+# unterminated when the class is anonymous and ruby/spec pins that, so the
+# missing \e[m below is deliberate.
+
+class Exception
+  # Whether an uncaught exception would be printed to a terminal. Decides the
+  # default for the `highlight:` option.
+  def self.to_tty?
+    $stderr.tty?
+  rescue StandardError, NotImplementedError
+    false
+  end
+
+  def detailed_message(highlight: false, **)
+    Exception.send(:__check_highlight__, highlight)
+
+    text = begin
+      s = to_s
+      s.nil? ? "" : s.to_s
+    rescue NoMethodError, TypeError
+      ""
+    end
+
+    # nil for an anonymous class, in which case MRI leaves the class out
+    name = self.class.name
+
+    if text.empty?
+      # MRI singles out RuntimeError: it is what a bare `raise "..."` produces,
+      # so an empty one means nobody ever gave a reason.
+      plain = self.class.equal?(::RuntimeError) ? "unhandled exception" : (name || self.class.to_s)
+      return highlight ? "\e[1;4m#{plain}\e[m" : plain
+    end
+
+    # a multi-line message carries the class on its first line only
+    lines = text.split("\n", -1)
+    first = lines.shift
+    if highlight
+      first = name ? "\e[1m#{first} (\e[1;4m#{name}\e[m\e[1m)\e[m" : "\e[1m#{first}"
+      lines = lines.map { |line| "\e[1m#{line}\e[m" }
+    elsif name
+      first = "#{first} (#{name})"
+    end
+    lines.unshift(first).join("\n")
+  end
+
+  def full_message(highlight: Exception.to_tty?, order: :top, **options)
+    Exception.send(:__check_highlight__, highlight)
+    unless order == :top || order == :bottom
+      raise ArgumentError, "expected :top or :bottom as order: #{order.inspect}"
+    end
+
+    result = +""
+    if order == :bottom
+      result << (highlight ? "\e[1mTraceback\e[m (most recent call last):\n" : "Traceback (most recent call last):\n")
+    end
+    # `order` is ours; every other keyword (plus the resolved highlight) is
+    # handed on to #detailed_message, which the user may have overridden.
+    Exception.send(:__append_full_message__, result, self, highlight, order, options, caller)
+    result
+  end
+
+  def self.__check_highlight__(highlight)
+    unless highlight == true || highlight == false
+      raise ArgumentError, "expected true or false as highlight: #{highlight.inspect}"
+    end
+  end
+  private_class_method :__check_highlight__
+
+  def self.__detailed__(exc, highlight, options)
+    detailed = exc.detailed_message(**options, highlight: highlight) if exc.respond_to?(:detailed_message)
+    detailed = detailed.to_str if detailed && !detailed.is_a?(::String) && detailed.respond_to?(:to_str)
+    unless detailed.is_a?(::String)
+      name = exc.class.name || exc.class.to_s
+      detailed = highlight ? "\e[1;4m#{name}\e[m" : name
+    end
+    detailed
+  end
+  private_class_method :__detailed__
+
+  # `fallback` is the caller of #full_message, which MRI shows when the
+  # exception was never raised and so has no backtrace of its own.
+  def self.__append_full_message__(out, exc, highlight, order, options, fallback)
+    backtrace = begin
+      exc.backtrace
+    rescue StandardError
+      nil
+    end
+    backtrace = fallback if backtrace.nil? || backtrace.empty?
+    backtrace = [] if backtrace.nil?
+    head = backtrace[0]
+    rest = backtrace[1..-1] || []
+    detailed = __detailed__(exc, highlight, options)
+    cause = begin
+      exc.cause
+    rescue StandardError, NoMethodError
+      nil
+    end
+
+    if order == :top
+      out << (head ? "#{head}: #{detailed}\n" : "#{detailed}\n")
+      rest.each { |line| out << "\tfrom #{line}\n" }
+      __append_full_message__(out, cause, highlight, order, options, nil) if cause
+    else
+      __append_full_message__(out, cause, highlight, order, options, nil) if cause
+      (rest.size - 1).downto(0) { |i| out << "\t#{i + 1}: from #{rest[i]}\n" }
+      out << (head ? "#{head}: #{detailed}\n" : "#{detailed}\n")
+    end
+  end
+  private_class_method :__append_full_message__
 end

@@ -126,7 +126,7 @@ namespace IronRuby.Runtime {
         public static MutableString/*!*/ CastToString(CallSite<Func<CallSite, object, MutableString>>/*!*/ toStrSite, object obj) {
             var result = toStrSite.Target(toStrSite, obj);
             if (result == null) {
-                throw RubyExceptions.CreateTypeConversionError("nil", "String");
+                throw RubyExceptions.CreateImplicitConversionError("nil", "String");
             }
             return result;
         }
@@ -150,7 +150,7 @@ namespace IronRuby.Runtime {
         public static MutableString/*!*/ CastToPath(CallSite<Func<CallSite, object, MutableString>>/*!*/ toPath, object obj) {
             MutableString result = toPath.Target(toPath, obj);
             if (result == null) {
-                throw RubyExceptions.CreateTypeConversionError("nil", "String");
+                throw RubyExceptions.CreateImplicitConversionError("nil", "String");
             }
             return result;
         }

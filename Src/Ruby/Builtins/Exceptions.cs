@@ -253,9 +253,29 @@ namespace IronRuby.Builtins {
     /// </summary>
     [Serializable]
     public class FrozenError : RuntimeError {
+        private object _receiver;
+        private bool _hasReceiver;
+
         public FrozenError() : this(null, null) { }
         public FrozenError(string message) : this(message, null) { }
         public FrozenError(string message, Exception inner) : base(message, inner) { }
+
+        /// <summary>
+        /// The object that was being modified, exposed as FrozenError#receiver.
+        /// </summary>
+        public object Receiver {
+            get { return _receiver; }
+        }
+
+        public bool HasReceiver {
+            get { return _hasReceiver; }
+        }
+
+        public FrozenError SetReceiver(object receiver) {
+            _receiver = receiver;
+            _hasReceiver = true;
+            return this;
+        }
 
 #if FEATURE_SERIALIZATION
         protected FrozenError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)

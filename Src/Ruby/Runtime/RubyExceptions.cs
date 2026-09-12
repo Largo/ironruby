@@ -22,6 +22,7 @@ using IronRuby.Builtins;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime.Calls;
 using System.Globalization;
+using System.Numerics;
 using System.Text;
 using IronRuby.Compiler;
 
@@ -44,19 +45,93 @@ namespace IronRuby.Runtime {
             return new InvalidOperationException(FormatMessage(message, args), innerException);
         }
 
+        /// <summary>
+        /// MRI raises FrozenError (a RuntimeError subclass) with "can't modify frozen &lt;class&gt;: &lt;inspect&gt;".
+        /// This overload is the fallback used where neither the class name nor a RubyContext is available.
+        /// </summary>
         public static Exception/*!*/ CreateObjectFrozenError() {
             // MRI raises FrozenError here, not RuntimeError. FrozenError derives from
             // RuntimeError, so existing `rescue RuntimeError` handlers still catch it.
             return new FrozenError("can't modify frozen object");
         }
 
+        /// <summary>
+        /// MRI: "can't modify frozen String" - used where the class is statically known but no
+        /// RubyContext is in hand to produce the inspect suffix.
+        /// </summary>
+        public static Exception/*!*/ CreateObjectFrozenError(string/*!*/ className) {
+            return new FrozenError(String.Format(CultureInfo.InvariantCulture, "can't modify frozen {0}", className));
+        }
+
+        // Guards against #inspect itself mutating the frozen receiver, which would re-enter
+        // CreateObjectFrozenError and blow the stack (an uncatchable failure on .NET).
+        // MRI has the same problem and solves it the same way, printing "..." for the receiver.
+        [ThreadStatic]
+        private static int _frozenErrorInspectDepth;
+
+        /// <summary>
+        /// MRI: "can't modify frozen Array: [1, 2]".
+        /// </summary>
+        public static Exception/*!*/ CreateObjectFrozenError(RubyContext/*!*/ context, object obj) {
+            string inspect;
+            if (_frozenErrorInspectDepth > 0) {
+                inspect = "...";
+            } else {
+                _frozenErrorInspectDepth++;
+                try {
+                    inspect = context.Inspect(obj).ToString();
+                } catch (FrozenError nested) {
+                    // #inspect mutated the frozen receiver; the nested error already spells the
+                    // message with "..." in place of the receiver, which is what MRI reports too.
+                    return nested;
+                } catch (Exception) {
+                    return CreateObjectFrozenError(context.GetClassDisplayName(obj));
+                } finally {
+                    _frozenErrorInspectDepth--;
+                }
+            }
+            return ((FrozenError)new FrozenError(String.Format(CultureInfo.InvariantCulture, "can't modify frozen {0}: {1}",
+                context.GetClassDisplayName(obj), inspect))).SetReceiver(obj);
+        }
+
+        /// <summary>
+        /// The EXPLICIT conversion failure message: Integer(), Float(), Hash() and friends.
+        /// MRI: Integer(nil) => "can't convert nil into Integer".
+        /// For the implicit (to_str/to_int/to_ary/to_hash protocol) failure use
+        /// <see cref="CreateImplicitConversionError"/> instead - MRI words those differently.
+        /// </summary>
         public static Exception/*!*/ CreateTypeConversionError(string/*!*/ fromType, string/*!*/ toType) {
             Assert.NotNull(fromType, toType);
-            return CreateTypeError("can't convert {0} into {1}", fromType, toType);
+            return CreateTypeError("can't convert {0} into {1}", MessageTypeName(fromType), MessageTypeName(toType));
+        }
+
+        /// <summary>
+        /// The IMPLICIT conversion failure message (MRI's rb_convert_type path):
+        ///   [1] + 1        => "no implicit conversion of Integer into Array"
+        ///   File.open(nil) => "no implicit conversion of nil into String"
+        /// </summary>
+        public static Exception/*!*/ CreateImplicitConversionError(string/*!*/ fromType, string/*!*/ toType) {
+            Assert.NotNull(fromType, toType);
+            return CreateTypeError("no implicit conversion of {0} into {1}", MessageTypeName(fromType), MessageTypeName(toType));
+        }
+
+        /// <summary>
+        /// How MRI spells a class in a TypeError message: nil/true/false are spelled by value, and
+        /// Fixnum/Bignum were unified into Integer in Ruby 2.4 (IronRuby still has the split classes).
+        /// </summary>
+        public static string/*!*/ MessageTypeName(string/*!*/ className) {
+            switch (className) {
+                case "NilClass": return "nil";
+                case "TrueClass": return "true";
+                case "FalseClass": return "false";
+                case "Fixnum":
+                case "Bignum": return "Integer";
+                default: return className;
+            }
         }
 
         public static Exception/*!*/ CreateUnexpectedTypeError(RubyContext/*!*/ context, object param, string/*!*/ type) {
-            return CreateTypeError("wrong argument type {0} (expected {1})", context.GetClassDisplayName(param), type);
+            return CreateTypeError("wrong argument type {0} (expected {1})", MessageTypeName(context.GetClassDisplayName(param)), MessageTypeName(type));
         }
 
         public static Exception/*!*/ CannotConvertTypeToTargetType(RubyContext/*!*/ context, object param, string/*!*/ toType) {
@@ -89,8 +164,8 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ MakeCoercionError(RubyContext/*!*/ context, object self, object other) {
-            string selfClass = context.GetClassOf(self).Name;
-            string otherClass = context.GetClassOf(other).Name;
+            string selfClass = MessageTypeName(context.GetClassOf(self).Name);
+            string otherClass = MessageTypeName(context.GetClassOf(other).Name);
             return CreateTypeError("{0} can't be coerced into {1}", selfClass, otherClass);
         }
 
@@ -104,6 +179,25 @@ namespace IronRuby.Runtime {
 
         public static Exception/*!*/ CreateNameError(string/*!*/ message, params object[] args) {
             return new MemberAccessException(FormatMessage(message, args));
+        }
+
+        /// <summary>
+        /// Records NameError#name and NameError#receiver on an already-created error.
+        /// Returns the error so it can be used inline in a `throw`.
+        /// </summary>
+        public static Exception/*!*/ WithNameAndReceiver(Exception/*!*/ error, object name, object receiver) {
+            var data = RubyExceptionData.GetInstance(error);
+            data.Name = name;
+            data.SetReceiver(receiver);
+            return error;
+        }
+
+        /// <summary>
+        /// Same, taking the name as a plain string and interning it as a Symbol, which is what
+        /// MRI's NameError#name answers for a missing method, constant or class variable.
+        /// </summary>
+        public static Exception/*!*/ WithNameAndReceiver(RubyContext/*!*/ context, Exception/*!*/ error, string/*!*/ name, object receiver) {
+            return WithNameAndReceiver(error, context.CreateSymbol(name, RubyEncoding.UTF8), receiver);
         }
 
         public static Exception/*!*/ CreateUndefinedMethodError(RubyModule/*!*/ module, string/*!*/ methodName) {
@@ -133,8 +227,22 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ MakeComparisonError(RubyContext/*!*/ context, object self, object other) {
-            string selfClass = context.GetClassOf(self).Name;
-            string otherClass = context.GetClassOf(other).Name;
+            // MRI's rb_cmperr: the left operand is always spelled by class, the right one by
+            // *inspect* when it is an immediate (nil/true/false/Integer/Symbol/Float) and by class otherwise.
+            //   1 < nil   => "comparison of Integer with nil failed"
+            //   1 < "a"   => "comparison of Integer with String failed"
+            //   [1,:b].max => "comparison of Integer with :b failed"
+            string selfClass = MessageTypeName(context.GetClassOf(self).Name);
+            string otherClass;
+            if (other == null || other is bool || other is int || other is BigInteger || other is double || other is RubySymbol) {
+                try {
+                    otherClass = context.Inspect(other).ToString();
+                } catch (Exception) {
+                    otherClass = MessageTypeName(context.GetClassOf(other).Name);
+                }
+            } else {
+                otherClass = MessageTypeName(context.GetClassOf(other).Name);
+            }
             return CreateArgumentError("comparison of {0} with {1} failed", selfClass, otherClass);
         }
 
@@ -189,15 +297,17 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateMethodMissing(RubyContext/*!*/ context, object self, string/*!*/ name) {
-            return CreateMethodMissing(FormatMethodMissingMessage(context, self, name));
+            return WithNameAndReceiver(context, CreateMethodMissing(FormatMethodMissingMessage(context, self, name)), name, self);
         }
 
         public static Exception/*!*/ CreatePrivateMethodCalled(RubyContext/*!*/ context, object self, string/*!*/ name) {
-            return CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "private method `{0}' called for {1}"));
+            return WithNameAndReceiver(context,
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "private method `{0}' called for {1}")), name, self);
         }
 
         public static Exception/*!*/ CreateProtectedMethodCalled(RubyContext/*!*/ context, object self, string/*!*/ name) {
-            return CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "protected method `{0}' called for {1}"));
+            return WithNameAndReceiver(context,
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "protected method `{0}' called for {1}")), name, self);
         }
 
         public static string/*!*/ FormatMethodMissingMessage(RubyContext/*!*/ context, object self, string/*!*/ name) {
@@ -210,27 +320,56 @@ namespace IronRuby.Runtime {
         internal static string/*!*/ FormatMethodMissingMessage(RubyContext/*!*/ context, object obj, string/*!*/ name, string/*!*/ message) {
             Assert.NotNull(name);
 
-            string str;
+            return FormatMessage(message, name, FormatMethodMissingReceiver(context, obj));
+        }
+
+        /// <summary>
+        /// How MRI describes the receiver of a NameError/NoMethodError. Verified against CRuby 3.3.8:
+        ///   nil / true / false          => "nil" / "true" / "false"
+        ///   a class / a module          => "class String" / "module Enumerable"
+        ///   an object with a singleton  => its #inspect  ("#&lt;Object:0x...&gt;", "main")
+        ///   anything else               => "an instance of Object"
+        /// (IronRuby used to print "#&lt;Object:0x...&gt;" and "nil:NilClass" for all of these.)
+        /// </summary>
+        internal static string/*!*/ FormatMethodMissingReceiver(RubyContext/*!*/ context, object obj) {
             if (obj == null) {
-                str = "nil:NilClass";
-            } else if (_disableMethodMissingMessageFormatting) {
-                str = RubyUtils.ObjectToMutableString(context, obj).ToString();
-            } else {
-                _disableMethodMissingMessageFormatting = true;
-                try {
-                    str = context.Inspect(obj).ConvertToString();
-                    if (!str.StartsWith("#", StringComparison.Ordinal)) {
-                        str += ":" + context.GetClassName(obj);
-                    }
-                } catch (Exception) {
-                    // MRI: swallows all exceptions
-                    str = RubyUtils.ObjectToMutableString(context, obj).ToString();
-                } finally {
-                    _disableMethodMissingMessageFormatting = false;
-                }
+                return "nil";
             }
-            
-            return FormatMessage(message, name, str);
+            if (obj is bool) {
+                return (bool)obj ? "true" : "false";
+            }
+
+            var module = obj as RubyModule;
+            if (module != null) {
+                string kind = module.IsClass ? "class " : "module ";
+                return kind + (String.IsNullOrEmpty(module.Name) ? SafeInspect(context, obj) : module.Name);
+            }
+
+            // An object that carries a singleton class is spelled by inspect (that is how MRI keeps
+            // "main" and "#<Object:0x...>" for objects with singleton methods).
+            RubyClass immediate = context.GetImmediateClassOf(obj);
+            if (immediate != null && immediate.IsSingletonClass) {
+                return SafeInspect(context, obj);
+            }
+
+            // GetClassDisplayName is empty for an anonymous class; MRI prints "#<Class:0x...>".
+            var cls = context.GetClassOf(obj);
+            return "an instance of " + MessageTypeName(RubyExceptionData.GetDefaultMessage(cls).ToString());
+        }
+
+        private static string/*!*/ SafeInspect(RubyContext/*!*/ context, object obj) {
+            if (_disableMethodMissingMessageFormatting) {
+                return RubyUtils.ObjectToMutableString(context, obj).ToString();
+            }
+            _disableMethodMissingMessageFormatting = true;
+            try {
+                return context.Inspect(obj).ConvertToString();
+            } catch (Exception) {
+                // MRI: swallows all exceptions
+                return RubyUtils.ObjectToMutableString(context, obj).ToString();
+            } finally {
+                _disableMethodMissingMessageFormatting = false;
+            }
         }
 
         #endregion
@@ -272,7 +411,7 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ NoBlockGiven() {
-            return CreateLocalJumpError("no block given");
+            return CreateLocalJumpError("no block given (yield)");
         }
 
         public static Exception/*!*/ CreateIOError(string/*!*/ message) {

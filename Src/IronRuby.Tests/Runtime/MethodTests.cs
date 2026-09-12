@@ -120,10 +120,10 @@ foo(1,*[2,3,4])
 foo(1,*[2,3],*[4,5,6,7])
 foo(1,*[2,3,4,5,6,7,8,9,10,11,12])
 ", @"
-#<ArgumentError: wrong number of arguments (0 for 4)>
-#<ArgumentError: wrong number of arguments (1 for 4)>
-#<ArgumentError: wrong number of arguments (2 for 4)>
-#<ArgumentError: wrong number of arguments (3 for 4)>
+#<ArgumentError: wrong number of arguments (given 0, expected 4)>
+#<ArgumentError: wrong number of arguments (given 1, expected 4)>
+#<ArgumentError: wrong number of arguments (given 2, expected 4)>
+#<ArgumentError: wrong number of arguments (given 3, expected 4)>
 [1, 2, :c, :d, [], 3, 4]
 [1, 2, 3, :d, [], 4, 5]
 [1, 2, 3, 4, [], 5, 6]
@@ -581,9 +581,9 @@ c.set_foo(3,4) rescue p $!
 p c.foo(*[])
 p c.foo(1) rescue p $!
 "), @"
-#<ArgumentError: wrong number of arguments (2 for 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
 2
-#<ArgumentError: wrong number of arguments (1 for 0)>
+#<ArgumentError: wrong number of arguments (given 1, expected 0)>
 ");
         }
 

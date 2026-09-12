@@ -629,7 +629,17 @@ namespace IronRuby.Builtins {
         private void Mutate() {
             Debug.Assert(!IsDummySingletonClass);
             if (IsFrozen) {
-                throw RubyExceptions.CreateRuntimeError(String.Format("can't modify frozen {0}", IsClass ? "class" : "module"));
+                // MRI raises FrozenError and names what is frozen:
+                //   `def frozen_obj.x`    => "can't modify frozen Object: #<Object:0x...>"
+                //                            (the singleton class is frozen with its object, but
+                //                             the error is reported about the object)
+                //   `class FrozenC; end`  => "can't modify frozen class: FrozenC"
+                var cls = this as RubyClass;
+                if (cls != null && cls.IsSingletonClass) {
+                    throw RubyExceptions.CreateObjectFrozenError(_context, cls.SingletonClassOf);
+                }
+                throw new FrozenError(String.Format(System.Globalization.CultureInfo.InvariantCulture,
+                    "can't modify frozen {0}: {1}", IsClass ? "class" : "module", _context.Inspect(this)));
             }
         }
 

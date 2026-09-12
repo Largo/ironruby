@@ -695,18 +695,20 @@ namespace IronRuby.Builtins {
         }
 
         // not thread-safe:
-        [RubyMethod("class_variable_get", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("class_variable_get")]
         public static object GetClassVariable(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName) {
             object value;
             if (self.TryResolveClassVariable(variableName, out value) == null) {
-                RubyUtils.CheckClassVariableName(variableName);
-                throw RubyExceptions.CreateNameError("uninitialized class variable {0} in {1}", variableName, self.Name);
+                RubyUtils.CheckClassVariableName(self.Context, self, variableName);
+                throw RubyExceptions.WithNameAndReceiver(self.Context,
+                    RubyExceptions.CreateNameError("uninitialized class variable {0} in {1}", variableName, self.Name),
+                    variableName, self);
             }
             return value;
         }
 
         // not thread-safe:
-        [RubyMethod("class_variable_set", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("class_variable_set")]
         public static object ClassVariableSet(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName, object value) {
             RubyUtils.CheckClassVariableName(variableName);
             self.SetClassVariable(variableName, value);
@@ -714,7 +716,7 @@ namespace IronRuby.Builtins {
         }
 
         // not thread-safe:
-        [RubyMethod("remove_class_variable", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("remove_class_variable")]
         public static object RemoveClassVariable(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName) {
             object value;
             if (!self.TryGetClassVariable(variableName, out value)) {

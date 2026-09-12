@@ -147,7 +147,7 @@ namespace IronRuby.Builtins {
         }
 
         private static void ThrowObjectFrozenException() {
-            throw RubyExceptions.CreateObjectFrozenError();
+            throw RubyExceptions.CreateObjectFrozenError("Array");
         }
 
         private void Mutate() {

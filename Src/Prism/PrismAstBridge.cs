@@ -997,11 +997,31 @@ namespace IronRuby.Prism {
                     if (block == null && fwdBlock != null) {
                         block = new BlockReference(fwdBlock, Span(arg));
                     }
+                } else if (IsSplattedKeywordHash(arg)) {
+                    // `f(**opts)` must pass nothing when opts is empty - see KeywordArgumentSplat.
+                    exprs.Add(new KeywordArgumentSplat(Argument(arg)));
                 } else {
                     exprs.Add(Argument(arg));
                 }
             }
             return new Arguments(exprs.ToArray());
+        }
+
+        /// <summary>
+        /// True for a keyword-argument hash that was written with at least one `**` splat.
+        /// `f(x: 1)` is excluded: it can never be empty, so it needs no run-time check.
+        /// </summary>
+        private static bool IsSplattedKeywordHash(Pm.PmNode/*!*/ node) {
+            var keywordHash = node as Pm.KeywordHashNode;
+            if (keywordHash == null) {
+                return false;
+            }
+            foreach (var element in keywordHash.Elements) {
+                if (element is Pm.AssocSplatNode) {
+                    return true;
+                }
+            }
+            return false;
         }
 
         private Arguments OptionalArguments(Pm.PmNode argumentsNode) {
