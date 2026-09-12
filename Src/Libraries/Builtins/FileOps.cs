@@ -95,7 +95,7 @@ namespace IronRuby.Builtins {
             if (optionsOrPermissions != Missing.Value) {
                 int? p = toIntSite.Target(toIntSite, optionsOrPermissions);
                 if (!p.HasValue) {
-                    throw RubyExceptions.CreateTypeConversionError(context.GetClassName(optionsOrPermissions), "Integer");
+                    throw RubyExceptions.CreateImplicitConversionError(context.GetClassName(optionsOrPermissions), "Integer");
                 }
                 permissions = p.Value;
             }
@@ -673,7 +673,7 @@ namespace IronRuby.Builtins {
                         continue;
                     }
                 } else if (part == null) {
-                    throw RubyExceptions.CreateTypeConversionError("NilClass", "String");
+                    throw RubyExceptions.CreateImplicitConversionError("NilClass", "String");
                 } else {
                     str = Protocols.CastToPath(toPath, part);
                 }

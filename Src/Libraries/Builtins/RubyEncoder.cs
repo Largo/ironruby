@@ -1090,7 +1090,7 @@ namespace IronRuby.Builtins {
 
                         case 'm': // Base64
                             if (GetPackArg(self, i) == null) {
-                                throw RubyExceptions.CreateTypeConversionError("nil", "String");
+                                throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                             }
                             WriteBase64(stream, ToMutableString(stringCast, stream, GetPackArg(self, i)),
                                 // count 0 means a single unbroken line; 1 and 2 fall back to the default 45
@@ -1113,7 +1113,7 @@ namespace IronRuby.Builtins {
 
                         case 'u': // UU-encoded
                             if (GetPackArg(self, i) == null) {
-                                throw RubyExceptions.CreateTypeConversionError("nil", "String");
+                                throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                             }
                             RubyEncoder.EncodeUU(ToMutableString(stringCast, stream, GetPackArg(self, i)).ToByteArray(), 
                                 (directive.Count.HasValue && directive.Count.Value > 2) ? directive.Count.Value : 45, 

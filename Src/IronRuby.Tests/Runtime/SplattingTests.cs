@@ -160,8 +160,8 @@ p x.key, x.value
 end
 ");
             }, @"
-#<ArgumentError: wrong number of arguments (1 for 3)>
-#<ArgumentError: wrong number of arguments (2 for 3)>
+#<ArgumentError: wrong number of arguments (given 1, expected 3+)>
+#<ArgumentError: wrong number of arguments (given 2, expected 3+)>
 B1 -> 0
 B1 -> 1
 B1 -> 2
@@ -219,7 +219,7 @@ end
 ");
             }, @"
 Z2 -> 10000
-#<TypeError: can't convert String into Fixnum>
+#<TypeError: no implicit conversion of String into Integer>
 Z1 -> 10000
 ");
 

@@ -161,7 +161,8 @@ namespace IronRuby.Builtins {
                 if (arity >= 0) {
                     throw RubyOps.MakeWrongNumberOfArgumentsError(argCount, arity);
                 } else if (argCount < -arity - 1) {
-                    throw RubyOps.MakeWrongNumberOfArgumentsError(argCount, -arity - 1);
+                    // MRI spells an unbounded arity "expected 1+".
+                    throw RubyOps.MakeWrongNumberOfArgumentsErrorN(argCount, (-arity - 1).ToString(CultureInfo.InvariantCulture) + "+");
                 }
             }
         }

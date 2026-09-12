@@ -225,8 +225,9 @@ namespace IronRuby.Builtins {
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__LoadError));
             DefineGlobalClass("LocalJumpError", typeof(IronRuby.Builtins.LocalJumpError), 0x00000007, def56, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__LocalJumpError));
-            IronRuby.Builtins.RubyClass def68 = DefineGlobalClass("NameError", typeof(System.MemberAccessException), 0x00000007, def56, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__NameError));
+            IronRuby.Builtins.RubyClass def68 = DefineGlobalClass("NameError", typeof(System.MemberAccessException), 0x00000007, def56, LoadNameError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], System.MemberAccessException>(IronRuby.Builtins.NameErrorOps.Factory)
+            );
             DefineGlobalClass("NotImplementedError", typeof(IronRuby.Builtins.NotImplementedError), 0x00000007, def64, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__NotImplementedError));
             IronRuby.Builtins.RubyClass def59 = DefineGlobalClass("RangeError", typeof(System.ArgumentOutOfRangeException), 0x00000007, def56, LoadRangeError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
@@ -350,10 +351,11 @@ namespace IronRuby.Builtins {
             IronRuby.Builtins.RubyClass def22 = DefineClass("Errno::EXDEV", typeof(IronRuby.Builtins.Errno.ImproperLinkError), 0x0000000F, def55, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalClass("FloatDomainError", typeof(IronRuby.Builtins.FloatDomainError), 0x0000000F, def59, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__FloatDomainError));
-            DefineGlobalClass("FrozenError", typeof(IronRuby.Builtins.FrozenError), 0x00000007, def60, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__FrozenError));
+            DefineGlobalClass("FrozenError", typeof(IronRuby.Builtins.FrozenError), 0x00000007, def60, LoadFrozenError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.FrozenError>(IronRuby.Builtins.FrozenErrorOps.Factory)
+            );
             DefineGlobalClass("NoMethodError", typeof(System.MissingMethodException), 0x00000007, def68, LoadNoMethodError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, System.MissingMethodException>(IronRuby.Builtins.NoMethodErrorOps.Factory)
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], System.MissingMethodException>(IronRuby.Builtins.NoMethodErrorOps.Factory)
             );
             SetBuiltinConstant(def41, "Constants", def42);
             SetBuiltinConstant(def43, "WaitReadable", def44);
@@ -1745,21 +1747,39 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadException_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "==", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyContext, System.Exception, System.Object, System.Boolean>(IronRuby.Builtins.ExceptionOps.Equal)
+            );
+            
             DefineLibraryMethod(module, "backtrace", 0x51, 
                 0x00000000U, 
                 new Func<System.Exception, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ExceptionOps.GetBacktrace)
             );
             
-            DefineRuleGenerator(module, "exception", 0x51, IronRuby.Builtins.ExceptionOps.GetException());
+            DefineLibraryMethod(module, "cause", 0x51, 
+                0x00000000U, 
+                new Func<System.Exception, System.Exception>(IronRuby.Builtins.ExceptionOps.GetCause)
+            );
+            
+            DefineLibraryMethod(module, "exception", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.RubyContext, System.Exception, System.Object, System.Object>(IronRuby.Builtins.ExceptionOps.GetException)
+            );
             
             DefineLibraryMethod(module, "initialize", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Exception, System.Object, System.Exception>(IronRuby.Builtins.ExceptionOps.ReinitializeException)
             );
             
+            DefineLibraryMethod(module, "initialize_copy", 0x52, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Exception, System.Exception, System.Exception>(IronRuby.Builtins.ExceptionOps.InitializeCopy)
+            );
+            
             DefineLibraryMethod(module, "inspect", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ExceptionOps.Inspect)
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ExceptionOps.Inspect)
             );
             
             DefineLibraryMethod(module, "message", 0x51, 
@@ -1775,12 +1795,12 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
-                new Func<System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
             );
             
             DefineLibraryMethod(module, "to_str", 0x51, 
                 0x00000000U, 
-                new Func<System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
             );
             
         }
@@ -2901,6 +2921,14 @@ namespace IronRuby.Builtins {
         private static void LoadFloat_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             LoadIronRuby__Clr__Float_Class(module);
             module.UndefineMethodNoEvent("new");
+        }
+        
+        private static void LoadFrozenError_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "receiver", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.FrozenError, System.Object>(IronRuby.Builtins.FrozenErrorOps.Receiver)
+            );
+            
         }
         
         private static void LoadGC_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -4464,6 +4492,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadKernel_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__build_exception__", 0x52, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[], System.Exception>(IronRuby.Builtins.KernelOps.BuildException)
+            );
+            
             DefineLibraryMethod(module, "__id__", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetObjectId)
@@ -4629,10 +4662,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "fail", 0x52, 
-                0x00000000U, 0x00000002U, 0x00000000U, 
-                new Action<IronRuby.Runtime.RubyContext, System.Object>(IronRuby.Builtins.KernelOps.RaiseException), 
-                new Action<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.RaiseException), 
-                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, IronRuby.Builtins.RubyArray>>, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.RaiseException)
+                0x80000000U, 
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
             );
             
             DefineLibraryMethod(module, "Float", 0x52, 
@@ -4847,10 +4878,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "raise", 0x52, 
-                0x00000000U, 0x00000002U, 0x00000000U, 
-                new Action<IronRuby.Runtime.RubyContext, System.Object>(IronRuby.Builtins.KernelOps.RaiseException), 
-                new Action<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.RaiseException), 
-                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, IronRuby.Builtins.RubyArray>>, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.RaiseException)
+                0x80000000U, 
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
             );
             
             DefineLibraryMethod(module, "rand", 0x52, 
@@ -5120,10 +5149,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "fail", 0x61, 
-                0x00000000U, 0x00000002U, 0x00000000U, 
-                new Action<IronRuby.Runtime.RubyContext, System.Object>(IronRuby.Builtins.KernelOps.RaiseException), 
-                new Action<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.RaiseException), 
-                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, IronRuby.Builtins.RubyArray>>, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.RaiseException)
+                0x80000000U, 
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
             );
             
             DefineLibraryMethod(module, "Float", 0x61, 
@@ -5230,10 +5257,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "raise", 0x61, 
-                0x00000000U, 0x00000002U, 0x00000000U, 
-                new Action<IronRuby.Runtime.RubyContext, System.Object>(IronRuby.Builtins.KernelOps.RaiseException), 
-                new Action<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.RaiseException), 
-                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, IronRuby.Builtins.RubyArray>>, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.RaiseException)
+                0x80000000U, 
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
             );
             
             DefineLibraryMethod(module, "rand", 0x61, 
@@ -5986,12 +6011,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.IsClassVariableDefined)
             );
             
-            DefineLibraryMethod(module, "class_variable_get", 0x52, 
+            DefineLibraryMethod(module, "class_variable_get", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.GetClassVariable)
             );
             
-            DefineLibraryMethod(module, "class_variable_set", 0x52, 
+            DefineLibraryMethod(module, "class_variable_set", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.ClassVariableSet)
             );
@@ -6199,7 +6224,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.PublicMethodDefined)
             );
             
-            DefineLibraryMethod(module, "remove_class_variable", 0x52, 
+            DefineLibraryMethod(module, "remove_class_variable", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.RemoveClassVariable)
             );
@@ -6245,6 +6270,19 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "nesting", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetLexicalModuleNesting)
+            );
+            
+        }
+        
+        private static void LoadNameError_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "name", 0x51, 
+                0x00000000U, 
+                new Func<System.Exception, System.Object>(IronRuby.Builtins.NameErrorOps.GetName)
+            );
+            
+            DefineLibraryMethod(module, "receiver", 0x51, 
+                0x00000000U, 
+                new Func<System.Exception, System.Object>(IronRuby.Builtins.NameErrorOps.GetReceiver)
             );
             
         }
@@ -8976,10 +9014,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "raise", 0x51, 
-                0x00000000U, 0x00000002U, 0x00000000U, 
-                new Action<IronRuby.Runtime.RubyContext, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.RaiseException), 
-                new Action<System.Threading.Thread, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ThreadOps.RaiseException), 
-                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, IronRuby.Builtins.RubyArray>>, System.Threading.Thread, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ThreadOps.RaiseException)
+                0x80000000U, 
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object[]>(IronRuby.Builtins.ThreadOps.RaiseException)
             );
             
             DefineLibraryMethod(module, "report_on_exception", 0x51, 

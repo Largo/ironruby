@@ -734,7 +734,7 @@ namespace IronRuby.Runtime {
 
             for (int i = 0; i < loadPaths.Length; i++) {
                 if (loadPaths[i] == null) {
-                    throw RubyExceptions.CreateTypeConversionError("nil", "String");
+                    throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                 }
 
                 result[i] = Protocols.CastToPath(toPath, loadPaths[i]).ConvertToString();
@@ -966,7 +966,7 @@ namespace IronRuby.Runtime {
 
             foreach (object file in GetLoadedFiles()) {
                 if (file == null) {
-                    throw RubyExceptions.CreateTypeConversionError("nil", "String");
+                    throw RubyExceptions.CreateImplicitConversionError("nil", "String");
                 }
 
                 // use case sensitive comparison

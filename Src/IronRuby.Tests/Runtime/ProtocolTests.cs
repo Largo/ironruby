@@ -140,7 +140,7 @@ p Tests.to_int_to_str(E.new) rescue puts $!
 [2, nil]
 to_int
 to_str
-can't convert E into String
+no implicit conversion of E into String
 ");
 
             AssertOutput(delegate() {
@@ -160,7 +160,7 @@ p Tests.to_str_to_int(E.new) rescue puts $!
 [""C"", 0]
 to_str
 to_int
-can't convert E into Fixnum
+no implicit conversion of E into Integer
 ");
         }
 

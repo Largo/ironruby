@@ -729,7 +729,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (token == Tokens.Integer && nextToken == Tokens.Integer) {
                 return isNegative ? -value.Integer1 : value.Integer1;
             } else {
-                throw RubyExceptions.CreateTypeConversionError("String", "Integer");
+                throw RubyExceptions.CreateImplicitConversionError("String", "Integer");
             }
         }
 

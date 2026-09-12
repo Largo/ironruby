@@ -1079,10 +1079,28 @@ namespace IronRuby.Runtime {
         public const int OptimizedOpCallParamCount = 5;
         
         #region MakeArray
-        
+
         [Emitted]
         public static RubyArray/*!*/ MakeArray0() {
             return new RubyArray(0);
+        }
+
+        /// <summary>
+        /// Ruby 3 semantics for a call-site `**splat`: the keyword hash is passed as a trailing
+        /// positional argument, but an *empty* one is dropped entirely -- `f(1, **{})` calls
+        /// `f(1)`, not `f(1, {})`.  A literal `f(1, {})` still passes the hash, which is why this
+        /// is only emitted for argument hashes that actually contain a `**` splat.
+        /// The result is fed to the ordinary splatting machinery, so it is either [] or [hash].
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ SplatKeywordHash(object hash) {
+            var dict = hash as IDictionary<object, object>;
+            if (dict != null && dict.Count == 0) {
+                return new RubyArray(0);
+            }
+            var result = new RubyArray(1);
+            result.Add(hash);
+            return result;
         }
 
         [Emitted]
@@ -1770,6 +1788,12 @@ namespace IronRuby.Runtime {
             // calls "new" on the exception class if it hasn't been called yet:
             exception = RubyExceptionData.HandleException(scope.RubyContext, exception);
 
+            // Exception#cause: the exception that was being handled when this one was raised.
+            // $! still holds it here - we are about to overwrite it below. Kernel#raise has
+            // already decided the cause for the exceptions it throws, and TrySetCause leaves
+            // those (and any re-raise of an already-raised exception) alone.
+            RubyExceptionData.GetInstance(exception).TrySetCause(scope.RubyContext.CurrentException);
+
             scope.RubyContext.CurrentException = exception;
             RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
             return true;
@@ -1839,7 +1863,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static ArgumentException/*!*/ CreateArgumentsErrorForMissingBlock() {
-            return (ArgumentException)RubyExceptions.CreateArgumentError("block not supplied");
+            return (ArgumentException)RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
         }
 
         [Emitted]
@@ -1849,7 +1873,17 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static ArgumentException/*!*/ MakeWrongNumberOfArgumentsError(int actual, int expected) {
-            return new ArgumentException(String.Format("wrong number of arguments ({0} for {1})", actual, expected));
+            // MRI wording since 1.9: "wrong number of arguments (given 1, expected 0)".
+            return new ArgumentException(String.Format("wrong number of arguments (given {0}, expected {1})", actual, expected));
+        }
+
+        /// <summary>
+        /// Same, but with MRI's variable-arity spelling of the expected count: "1..3", "1+" or "2, 3, or 5".
+        /// The description is a compile-time constant produced by the binder.
+        /// </summary>
+        [Emitted]
+        public static ArgumentException/*!*/ MakeWrongNumberOfArgumentsErrorN(int actual, string/*!*/ expected) {
+            return new ArgumentException(String.Format("wrong number of arguments (given {0}, expected {1})", actual, expected));
         }
 
         [Emitted] //SuperCall
@@ -2551,6 +2585,11 @@ namespace IronRuby.Runtime {
             return RubyExceptions.CreateTypeConversionError(fromType, toType);
         }
 
+        [Emitted] // ProtocolConversionAction
+        public static Exception/*!*/ CreateImplicitConversionError(string/*!*/ fromType, string/*!*/ toType) {
+            return RubyExceptions.CreateImplicitConversionError(fromType, toType);
+        }
+
         [Emitted] // ConvertToFixnumAction
         public static int ConvertBignumToFixnum(BigInteger/*!*/ bignum) {
             int fixnum;
@@ -2612,7 +2651,9 @@ namespace IronRuby.Runtime {
         private static object GetClassVariableInternal(RubyModule/*!*/ module, string/*!*/ name) {
             object value;
             if (module.TryResolveClassVariable(name, out value) == null) {
-                throw RubyExceptions.CreateNameError(String.Format("uninitialized class variable {0} in {1}", name, module.Name));
+                throw RubyExceptions.WithNameAndReceiver(module.Context,
+                    RubyExceptions.CreateNameError(String.Format("uninitialized class variable {0} in {1}", name, module.Name)),
+                    name, module);
             }
             return value;
         }

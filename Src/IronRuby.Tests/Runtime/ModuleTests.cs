@@ -251,14 +251,14 @@ puts s.f(*[])
 puts s.f(*[1]) rescue p $!
 "
                 ), @"
-#<ArgumentError: wrong number of arguments (0 for 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1)>
 3
-#<ArgumentError: wrong number of arguments (2 for 1)>
-#<ArgumentError: wrong number of arguments (0 for 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
+#<ArgumentError: wrong number of arguments (given 0, expected 1)>
 6
-#<ArgumentError: wrong number of arguments (2 for 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
 6
-#<ArgumentError: wrong number of arguments (1 for 0)>
+#<ArgumentError: wrong number of arguments (given 1, expected 0)>
 ");
         }
 

@@ -127,7 +127,7 @@ namespace IronRuby.Builtins {
 
             int? desc = toIntSite.Target(toIntSite, descriptor);
             if (!desc.HasValue) {
-                throw RubyExceptions.CreateTypeConversionError(context.GetClassDisplayName(descriptor), "Fixnum");
+                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(descriptor), "Fixnum");
             }
             Reinitialize(self, desc.Value, info);
 
@@ -468,7 +468,7 @@ namespace IronRuby.Builtins {
         private static RubyIO/*!*/ ToIo(RubyContext/*!*/ context, object obj) {
             RubyIO io = obj as RubyIO;
             if (io == null) {
-                throw RubyExceptions.CreateTypeConversionError(context.GetClassDisplayName(obj), "IO");
+                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(obj), "IO");
             }
             return io;
         }

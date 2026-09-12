@@ -179,7 +179,7 @@ puts C.Equals(3,3)              # static
 puts C.Equals(3,3,4)            # overload
 ", @"
 false
-#<ArgumentError: wrong number of arguments (2 for 1)>
+#<ArgumentError: wrong number of arguments (given 2, expected 1)>
 true
 true
 true
@@ -1283,9 +1283,9 @@ puts d.f(1,2,3,4,5,6)                     # e6 on A
 f1
 e5
 e6
-#<ArgumentError: wrong number of arguments (1 for 2)>
+#<ArgumentError: wrong number of arguments (given 1, expected 2 or 5)>
 e5
-#<ArgumentError: wrong number of arguments (6 for 5)>
+#<ArgumentError: wrong number of arguments (given 6, expected 2 or 5)>
 f1
 e5
 e6
@@ -1972,7 +1972,7 @@ C[1].new rescue p $!
 C[1].instance_method(:Arity) rescue p $!
 ", @"
 #<Method: InteropTests::Generics1::C[Fixnum]#Arity>
-#<NoMethodError: undefined method `new' for InteropTests::Generics1::C[T]:Module>
+#<NoMethodError: undefined method `new' for module InteropTests::Generics1::C[T]>
 #<NameError: undefined method `Arity' for module `InteropTests::Generics1::C[T]'>
 ");
         }
@@ -3446,7 +3446,7 @@ class System::Collections::ArrayList
 end
 p Inst.Foo(a) rescue p $!
 ", @"
-#<TypeError: can't convert System::Collections::ArrayList into Fixnum>
+#<TypeError: no implicit conversion of System::Collections::ArrayList into Integer>
 101
 ");
             // meta-object conversions:

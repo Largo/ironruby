@@ -41,7 +41,7 @@ namespace IronRuby.Builtins {
         private static void RequireNotFrozen(IList/*!*/ self) {
             RubyArray array = self as RubyArray;
             if (array != null && array.IsFrozen) {
-                throw RubyExceptions.CreateObjectFrozenError();
+                throw RubyExceptions.CreateObjectFrozenError("Array");
             }
         }
 
@@ -50,9 +50,11 @@ namespace IronRuby.Builtins {
         }
 
         internal static int NormalizeIndexThrowIfNegative(IList/*!*/ list, int index) {
+            int original = index;
             index = NormalizeIndex(list.Count, index);
             if (index < 0) {
-                throw RubyExceptions.CreateIndexError("index {0} out of array", index);
+                // MRI: a[-5] = 1 on a 2-element array => "index -5 too small for array; minimum: -2"
+                throw RubyExceptions.CreateIndexError("index {0} too small for array; minimum: {1}", original, -list.Count);
             }
             return index;
         }
@@ -937,6 +939,7 @@ namespace IronRuby.Builtins {
             [Optional]object defaultValue) {
 
             int convertedIndex = Protocols.CastToFixnum(fixnumCast, index);
+            int originalIndex = convertedIndex;
 
             if (InRangeNormalized(list, ref convertedIndex)) {
                 return list[convertedIndex];
@@ -953,7 +956,9 @@ namespace IronRuby.Builtins {
             }
 
             if (defaultValue == Missing.Value) {
-                throw RubyExceptions.CreateIndexError("index {0} out of array", convertedIndex);
+                // MRI: [1].fetch(5) => "index 5 outside of array bounds: -1...1"
+                throw RubyExceptions.CreateIndexError("index {0} outside of array bounds: {1}...{2}",
+                    originalIndex, -list.Count, list.Count);
             }
             return defaultValue;
         }
@@ -1600,9 +1605,11 @@ namespace IronRuby.Builtins {
                 return self;
             }
 
+            int originalIndex = index;
             index = index < 0 ? index + self.Count + 1 : index;
             if (index < 0) {
-                throw RubyExceptions.CreateIndexError("index {0} out of array", index);
+                // MRI: [1,2].insert(-5, 3) => "index -5 too small for array; minimum: -3"
+                throw RubyExceptions.CreateIndexError("index {0} too small for array; minimum: {1}", originalIndex, -self.Count - 1);
             }
 
             if (index >= self.Count) {

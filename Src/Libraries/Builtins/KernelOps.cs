@@ -373,47 +373,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("fail", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("fail", RubyMethodAttributes.PublicSingleton)]
         [RubyStackTraceHidden]
-        public static void RaiseException(RubyContext/*!*/ context, object self) {
-            Exception exception = context.CurrentException;
-            if (exception == null) {
-                exception = new RuntimeError();
-            }
-
-#if DEBUG && FEATURE_THREAD && FEATURE_EXCEPTION_STATE
-            if (RubyOptions.UseThreadAbortForSyncRaise) {
-                RubyUtils.RaiseAsyncException(Thread.CurrentThread, exception);
-            }
-#endif
-            // rethrow semantics, preserves the backtrace associated with the exception:
-            throw exception;
-        }
-
-        [RubyMethod("raise", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("raise", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("fail", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("fail", RubyMethodAttributes.PublicSingleton)]
-        [RubyStackTraceHidden]
-        public static void RaiseException(object self, [NotNull]MutableString/*!*/ message) {
-            Exception exception = RubyExceptionData.InitializeException(new RuntimeError(message.ToString()), message);
-
-#if DEBUG && FEATURE_THREAD && FEATURE_EXCEPTION_STATE
-            if (RubyOptions.UseThreadAbortForSyncRaise) {
-                RubyUtils.RaiseAsyncException(Thread.CurrentThread, exception);
-            }
-#endif
-            throw exception;
-        }
-
-        [RubyMethod("raise", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("raise", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("fail", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("fail", RubyMethodAttributes.PublicSingleton)]
-        [RubyStackTraceHidden]
         public static void RaiseException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
-            CallSiteStorage<Action<CallSite, Exception, RubyArray>>/*!*/ setBackTraceStorage,
-            object self, object/*!*/ obj, [Optional]object arg, [Optional]RubyArray backtrace) {
+            CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
+            RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
 
-            Exception exception = CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, obj, arg, backtrace);
+            Exception exception = CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args);
 #if DEBUG && FEATURE_THREAD && FEATURE_EXCEPTION_STATE
             if (RubyOptions.UseThreadAbortForSyncRaise) {
                 RubyUtils.RaiseAsyncException(Thread.CurrentThread, exception);
@@ -421,32 +385,164 @@ namespace IronRuby.Builtins {
 #endif
             // rethrow semantics, preserves the backtrace associated with the exception:
             throw exception;
+        }
+
+        /// <summary>
+        /// Builds the exception `raise` would throw, without throwing it. Fiber#raise is written
+        /// in Ruby (Src/StdLib/ironruby/ruby4.rb) and has to hand the exception to another fiber,
+        /// so it needs the argument handling - including `cause:`, which MRI resolves in the
+        /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
+        /// </summary>
+        [RubyMethod("__build_exception__", RubyMethodAttributes.PrivateInstance)]
+        public static Exception/*!*/ BuildException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
+            CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
+            RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
+
+            return CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args);
+        }
+
+        /// <summary>
+        /// The whole of `raise [exception [, message [, backtrace]]] [, cause: c]`, shared by
+        /// Kernel#raise, Thread#raise and (via __build_exception__) Fiber#raise so that all
+        /// three agree.
+        /// </summary>
+        internal static Exception/*!*/ CreateExceptionToRaise(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
+            CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
+            RubyContext/*!*/ context, object[]/*!*/ args) {
+
+            return CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args, true);
         }
 
         internal static Exception/*!*/ CreateExceptionToRaise(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
-            CallSiteStorage<Action<CallSite, Exception, RubyArray>>/*!*/ setBackTraceStorage,
-            object/*!*/ obj, object arg, RubyArray backtrace) {
+            CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
+            RubyContext/*!*/ context, object[]/*!*/ args, bool bareRaiseReRaisesCurrentException) {
 
-            if (Protocols.RespondTo(respondToStorage, obj, "exception")) {
-                Exception e = null;
-                if (arg != Missing.Value) {
-                    var site = storage1.GetCallSite("exception");
-                    e = site.Target(site, obj, arg) as Exception;
-                } else {
-                    var site = storage0.GetCallSite("exception");
-                    e = site.Target(site, obj) as Exception;
+            object cause;
+            bool hasCause = TryTakeCauseKeyword(ref args, out cause);
+
+            if (args.Length > 3) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..3)", args.Length);
+            }
+
+            if (args.Length == 0 && hasCause) {
+                throw RubyExceptions.CreateArgumentError("only cause is given with no arguments");
+            }
+
+            Exception exception;
+            if (args.Length == 0) {
+                // bare `raise` re-raises $!, or a fresh RuntimeError with an empty message.
+                exception = bareRaiseReRaisesCurrentException ? context.CurrentException : null;
+                if (exception == null) {
+                    exception = RubyExceptionData.InitializeException(new RuntimeError(""), MutableString.CreateEmpty());
                 }
+            } else {
+                exception = MakeException(respondToStorage, storage0, storage1, args);
 
-                if (e != null) {
-                    if (backtrace != null) {
-                        var site = setBackTraceStorage.GetCallSite("set_backtrace", 1);
-                        site.Target(site, e, backtrace);
-                    }
-                    return e;
+                if (args.Length >= 3 && args[2] != null) {
+                    var site = setBackTraceStorage.GetCallSite("set_backtrace", 1);
+                    site.Target(site, exception, args[2]);
                 }
             }
 
-            throw RubyExceptions.CreateTypeError("exception class/object expected");
+            SetCause(context, exception, hasCause, cause);
+            return exception;
+        }
+
+        private static Exception/*!*/ MakeException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
+            object[]/*!*/ args) {
+
+            object obj = args[0];
+
+            // `raise "boom"` is RuntimeError. A String is only accepted on its own: MRI answers
+            // "exception class/object expected" for `raise "boom", "more"`, because there the
+            // first argument has to be something that responds to #exception.
+            var message = obj as MutableString;
+            if (message != null && args.Length == 1) {
+                return RubyExceptionData.InitializeException(new RuntimeError(message.ToString()), message);
+            }
+
+            if (!Protocols.RespondTo(respondToStorage, obj, "exception")) {
+                throw RubyExceptions.CreateTypeError("exception class/object expected");
+            }
+
+            object result;
+            if (args.Length >= 2) {
+                var site = storage1.GetCallSite("exception");
+                result = site.Target(site, obj, args[1]);
+            } else {
+                var site = storage0.GetCallSite("exception");
+                result = site.Target(site, obj);
+            }
+
+            var exception = result as Exception;
+            if (exception == null) {
+                // MRI distinguishes "you passed something that isn't raisable at all" from
+                // "#exception answered something that isn't an exception".
+                throw RubyExceptions.CreateTypeError("exception object expected");
+            }
+            return exception;
+        }
+
+        /// <summary>
+        /// Splits a trailing `cause:` keyword off the argument list.
+        ///
+        /// IronRuby has no real keyword arguments - they arrive as a trailing Hash - so this can
+        /// only go by shape: a trailing Hash whose single key is :cause. That is deliberate,
+        /// because MRI passes any *other* trailing hash on to the exception constructor
+        /// (`raise MyError, data: 42`). The one case it gets wrong is an explicitly braced
+        /// `raise "msg", {cause: e}`, which MRI treats as positional.
+        /// </summary>
+        private static bool TryTakeCauseKeyword(ref object[]/*!*/ args, out object cause) {
+            cause = null;
+            if (args.Length == 0) {
+                return false;
+            }
+
+            var hash = args[args.Length - 1] as IDictionary<object, object>;
+            if (hash == null || hash.Count != 1) {
+                return false;
+            }
+
+            foreach (var entry in hash) {
+                var key = entry.Key as RubySymbol;
+                if (key == null || key.ToString() != "cause") {
+                    return false;
+                }
+                cause = entry.Value;
+            }
+
+            var rest = new object[args.Length - 1];
+            Array.Copy(args, rest, rest.Length);
+            args = rest;
+            return true;
+        }
+
+        private static void SetCause(RubyContext/*!*/ context, Exception/*!*/ exception, bool hasCause, object cause) {
+            Exception causeException;
+            if (hasCause) {
+                if (cause == null) {
+                    causeException = null;
+                } else {
+                    causeException = cause as Exception;
+                    if (causeException == null) {
+                        throw RubyExceptions.CreateTypeError("exception object expected");
+                    }
+                }
+            } else {
+                // no explicit cause: chain to whatever is currently being handled ($!)
+                causeException = context.CurrentException;
+            }
+
+            // `raise e, cause: e` is not circular, it just leaves the cause unset.
+            if (causeException != exception) {
+                for (Exception c = causeException; c != null; c = RubyExceptionData.GetInstance(c).Cause) {
+                    if (c == exception) {
+                        throw RubyExceptions.CreateArgumentError("circular causes");
+                    }
+                }
+            }
+
+            RubyExceptionData.GetInstance(exception).TrySetCause(causeException);
         }
 
         #endregion
@@ -774,7 +870,7 @@ namespace IronRuby.Builtins {
             object value;
             if (!context.TryGetInstanceVariable(self, name, out value)) {
                 // We didn't find it, check if the name is valid
-                RubyUtils.CheckInstanceVariableName(name);
+                RubyUtils.CheckInstanceVariableName(context, self, name);
                 return null;
             }
             return value;
