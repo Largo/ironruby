@@ -941,7 +941,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("cycle")]
         public static Enumerator/*!*/ GetCycleEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam block, object self,
             [DefaultProtocol, DefaultParameterValue(Int32.MaxValue)]int iterations) {
-            return new Enumerator((_, innerBlock) => Cycle(each, innerBlock, self, iterations));
+            // Int32.MaxValue is the "no argument" sentinel, which means an endless cycle rather
+            // than that many repetitions - so the size descriptor gets nil for it, not the number.
+            return Enumerator.Sized((_, innerBlock) => Cycle(each, innerBlock, self, iterations), self, "cycle",
+                iterations == Int32.MaxValue ? null : ScriptingRuntimeHelpers.Int32ToObject(iterations));
         }
 
         [RubyMethod("cycle")]

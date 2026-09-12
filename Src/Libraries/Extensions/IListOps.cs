@@ -1562,8 +1562,10 @@ namespace IronRuby.Builtins {
             return self.Count;
         }
 
+        // "none?" was aliased to "empty?" here, which is not what it means: [nil].none? is true
+        // and [1].none? is false, and it takes a block or a pattern. Enumerable#none? does all of
+        // that, and this definition only shadowed it.
         [RubyMethod("empty?")]
-        [RubyMethod("none?")]
         public static bool Empty(IList/*!*/ self) {
             return self.Count == 0;
         }

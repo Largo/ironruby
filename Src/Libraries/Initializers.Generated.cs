@@ -8388,11 +8388,6 @@ namespace IronRuby.Builtins {
                 new Func<System.Collections.IList, System.Int32>(IronRuby.Builtins.IListOps.NumberOfNonNilItems)
             );
             
-            DefineLibraryMethod(module, "none?", 0x51, 
-                0x00000000U, 
-                new Func<System.Collections.IList, System.Boolean>(IronRuby.Builtins.IListOps.Empty)
-            );
-            
             DefineLibraryMethod(module, "permutation", 0x51, 
                 0x00020000U, 
                 new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Nullable<System.Int32>, System.Object>(IronRuby.Builtins.IListOps.GetPermutations)

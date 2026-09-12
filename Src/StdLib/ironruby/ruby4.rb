@@ -68,6 +68,79 @@ module Enumerable
     self
   end unless method_defined?(:each_entry)
 
+  # Ruby 2.5 gave the predicates an optional pattern, matched with #===.
+  # The built-ins only know the block form, and because they are defined on
+  # Enumerable they shadow rather than extend, so wrap them.
+  unless method_defined?(:all_without_pattern?)
+    alias_method :all_without_pattern?, :all?
+    alias_method :any_without_pattern?, :any?
+    alias_method :none_without_pattern?, :none?
+    alias_method :one_without_pattern?, :one?
+
+    def __check_pattern_args__(args)
+      return if args.size <= 1
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    end
+    private :__check_pattern_args__
+
+    def all?(*args, &block)
+      __check_pattern_args__(args)
+      return all_without_pattern?(&block) if args.empty?
+      pattern = args[0]
+      each { |*values| return false unless pattern === __enum_item__(values) }
+      true
+    end
+
+    def any?(*args, &block)
+      __check_pattern_args__(args)
+      return any_without_pattern?(&block) if args.empty?
+      pattern = args[0]
+      each { |*values| return true if pattern === __enum_item__(values) }
+      false
+    end
+
+    def none?(*args, &block)
+      __check_pattern_args__(args)
+      return none_without_pattern?(&block) if args.empty?
+      pattern = args[0]
+      each { |*values| return false if pattern === __enum_item__(values) }
+      true
+    end
+
+    def one?(*args, &block)
+      __check_pattern_args__(args)
+      return one_without_pattern?(&block) if args.empty?
+      pattern = args[0]
+      found = false
+      each do |*values|
+        next unless pattern === __enum_item__(values)
+        return false if found
+        found = true
+      end
+      found
+    end
+  end
+
+  # min/max also grew an `n` form.
+  unless method_defined?(:min_without_count)
+    alias_method :min_without_count, :min
+    alias_method :max_without_count, :max
+
+    def min(*args, &block)
+      return min_without_count(&block) if args.empty?
+      n = __count_arg__(args[0])
+      sorted = block ? to_a.sort(&block) : to_a.sort
+      sorted.first(n)
+    end
+
+    def max(*args, &block)
+      return max_without_count(&block) if args.empty?
+      n = __count_arg__(args[0])
+      sorted = block ? to_a.sort(&block) : to_a.sort
+      sorted.reverse.first(n)
+    end
+  end
+
   def group_by
     return to_enum(:group_by) unless block_given?
     result = {}
@@ -81,35 +154,65 @@ module Enumerable
     memo
   end unless method_defined?(:each_with_object)
 
-  def min_by
-    return to_enum(:min_by) unless block_given?
-    best = nil
-    best_key = nil
-    each do |*values|
-      item = __enum_item__(values)
-      key = yield(item)
-      if best_key.nil? || (key <=> best_key) < 0
-        best_key = key
-        best = item
+  # Ruby 2.2 added the `n` form: the n smallest/largest, as an Array.
+  def min_by(*args, &block)
+    return to_enum(:min_by, *args) unless block
+    if args.empty?
+      best = nil
+      best_key = nil
+      each do |*values|
+        item = __enum_item__(values)
+        key = block.call(item)
+        if best_key.nil? || (key <=> best_key) < 0
+          best_key = key
+          best = item
+        end
       end
+      best
+    else
+      __sort_by_key__(block).first(__count_arg__(args[0]))
     end
-    best
   end unless method_defined?(:min_by)
 
-  def max_by
-    return to_enum(:max_by) unless block_given?
-    best = nil
-    best_key = nil
+  def max_by(*args, &block)
+    return to_enum(:max_by, *args) unless block
+    if args.empty?
+      best = nil
+      best_key = nil
+      each do |*values|
+        item = __enum_item__(values)
+        key = block.call(item)
+        if best_key.nil? || (key <=> best_key) > 0
+          best_key = key
+          best = item
+        end
+      end
+      best
+    else
+      __sort_by_key__(block).reverse.first(__count_arg__(args[0]))
+    end
+  end unless method_defined?(:max_by)
+
+  def __count_arg__(n)
+    n = n.to_int unless n.is_a?(Integer)
+    raise ArgumentError, "negative size (#{n})" if n < 0
+    n
+  end
+  private :__count_arg__
+
+  # Sorts by the block's key, keeping input order for equal keys so that
+  # `min_by(n)` and `max_by(n)` agree with MRI on ties.
+  def __sort_by_key__(block)
+    decorated = []
+    index = 0
     each do |*values|
       item = __enum_item__(values)
-      key = yield(item)
-      if best_key.nil? || (key <=> best_key) > 0
-        best_key = key
-        best = item
-      end
+      decorated << [block.call(item), index, item]
+      index += 1
     end
-    best
-  end unless method_defined?(:max_by)
+    decorated.sort { |a, b| c = (a[0] <=> b[0]); c == 0 ? (a[1] <=> b[1]) : c }.map { |triple| triple[2] }
+  end
+  private :__sort_by_key__
 
   def minmax_by(&block)
     return to_enum(:minmax_by) unless block
