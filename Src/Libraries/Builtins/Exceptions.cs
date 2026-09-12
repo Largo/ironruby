@@ -307,6 +307,27 @@ namespace IronRuby.Builtins {
 
     [RubyException("FrozenError", Extends = typeof(FrozenError), Inherits = typeof(RuntimeError))]
     public static class FrozenErrorOps {
+        /// <summary>
+        /// FrozenError.new([message] [, receiver: obj]) - the receiver keyword is recognised by
+        /// shape, exactly as in NameErrorOps.
+        /// </summary>
+        [RubyConstructor]
+        public static FrozenError/*!*/ Factory(RubyClass/*!*/ self, params object[]/*!*/ args) {
+            object receiver;
+            bool hasReceiver = NameErrorOps.TryTakeReceiverKeyword(ref args, out receiver);
+            if (args.Length > 1) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..1)", args.Length);
+            }
+
+            object message = args.Length > 0 ? args[0] : null;
+            var result = new FrozenError(RubyExceptionData.GetClrMessage(self, message));
+            RubyExceptionData.InitializeException(result, message);
+            if (hasReceiver) {
+                result.SetReceiver(receiver);
+            }
+            return result;
+        }
+
         [RubyMethod("receiver")]
         public static object Receiver(FrozenError/*!*/ self) {
             if (!self.HasReceiver) {

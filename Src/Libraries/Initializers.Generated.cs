@@ -352,7 +352,8 @@ namespace IronRuby.Builtins {
             DefineGlobalClass("FloatDomainError", typeof(IronRuby.Builtins.FloatDomainError), 0x0000000F, def59, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__FloatDomainError));
             DefineGlobalClass("FrozenError", typeof(IronRuby.Builtins.FrozenError), 0x00000007, def60, LoadFrozenError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__FrozenError));
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.FrozenError>(IronRuby.Builtins.FrozenErrorOps.Factory)
+            );
             DefineGlobalClass("NoMethodError", typeof(System.MissingMethodException), 0x00000007, def68, LoadNoMethodError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Builtins.RubyClass, System.Object[], System.MissingMethodException>(IronRuby.Builtins.NoMethodErrorOps.Factory)
             );
