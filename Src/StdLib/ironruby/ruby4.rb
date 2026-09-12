@@ -2153,6 +2153,184 @@ class String
     replace(scrub(replacement, &block))
   end unless method_defined?(:scrub!)
 
+  # ---- case mapping options (2.4) and strip selectors (4.0) ---------------
+  #
+  # The built-ins take no arguments, so every `upcase(:ascii)` and
+  # `strip("a-c")` in the specs came back as a wrong-number-of-arguments error.
+
+  CASE_OPTIONS__ = [:ascii, :turkic, :lithuanian, :fold]
+
+  def __case_options__(options, folding_allowed)
+    ::Kernel.raise(::ArgumentError, "too many options") if options.size > 2
+    options.each do |o|
+      ::Kernel.raise(::ArgumentError, "invalid option") unless CASE_OPTIONS__.include?(o)
+      if o == :fold && !folding_allowed
+        ::Kernel.raise(::ArgumentError, "option :fold only allowed for downcasing")
+      end
+    end
+    # :turkic and :lithuanian are the only pair MRI accepts together.
+    if options.size == 2 && !(options.include?(:turkic) && options.include?(:lithuanian))
+      ::Kernel.raise(::ArgumentError, "too many options")
+    end
+    options
+  end
+  private :__case_options__
+
+  # Turkic keeps the dot: I/ı and İ/i are separate letters.
+  def __turkic__(up)
+    if up
+      gsub("i", "İ")
+    else
+      gsub("I", "ı")
+    end
+  end
+  private :__turkic__
+
+  [[:upcase, true], [:downcase, false], [:capitalize, true], [:swapcase, true]].each do |name, upward|
+    plain = :"__ir_#{name}__"
+    alias_method plain, name
+    private plain
+
+    define_method(name) do |*options|
+      __case_options__(options, name == :downcase)
+      return __send__(plain) if options.empty?
+      if options.include?(:ascii)
+        # Only a-z/A-Z move; everything else is left alone.
+        case name
+        when :upcase then gsub(/[a-z]/) { |c| c.__send__(plain) }
+        when :downcase then gsub(/[A-Z]/) { |c| c.__send__(plain) }
+        when :swapcase then gsub(/[a-zA-Z]/) { |c| c.__send__(plain) }
+        else
+          rest = self[1..-1].to_s
+          self[0, 1].to_s.gsub(/[a-z]/) { |c| c.__send__(:__ir_upcase__) } +
+            rest.gsub(/[A-Z]/) { |c| c.__send__(:__ir_downcase__) }
+        end
+      elsif options.include?(:turkic)
+        __turkic__(upward).__send__(plain)
+      else
+        # :lithuanian and :fold: MRI currently does plain full case mapping.
+        __send__(plain)
+      end
+    end
+
+    bang = :"#{name}!"
+    if method_defined?(bang)
+      plain_bang = :"__ir_#{name}_bang__"
+      alias_method plain_bang, bang
+      private plain_bang
+      define_method(bang) do |*options|
+        return __send__(plain_bang) if options.empty?
+        result = __send__(name, *options)
+        result == self ? nil : replace(result)
+      end
+    end
+  end
+
+  # A character is stripped when it is in every one of the given sets, which is
+  # exactly what String#count answers for a one-character string.
+  def __selected__(ch, selectors)
+    ch.count(*selectors) > 0
+  end
+  private :__selected__
+
+  alias_method :__ir_strip__, :strip
+  alias_method :__ir_lstrip__, :lstrip
+  alias_method :__ir_rstrip__, :rstrip
+  private :__ir_strip__, :__ir_lstrip__, :__ir_rstrip__
+
+  def lstrip(*selectors)
+    return __ir_lstrip__ if selectors.empty?
+    i = 0
+    i += 1 while i < length && __selected__(self[i, 1], selectors)
+    self[i..-1] || self[0, 0]
+  end
+
+  def rstrip(*selectors)
+    return __ir_rstrip__ if selectors.empty?
+    i = length
+    i -= 1 while i > 0 && __selected__(self[i - 1, 1], selectors)
+    self[0, i]
+  end
+
+  def strip(*selectors)
+    return __ir_strip__ if selectors.empty?
+    lstrip(*selectors).rstrip(*selectors)
+  end
+
+  [:strip, :lstrip, :rstrip].each do |name|
+    bang = :"#{name}!"
+    next unless method_defined?(bang)
+    plain_bang = :"__ir_#{name}_bang__"
+    alias_method plain_bang, bang
+    private plain_bang
+    define_method(bang) do |*selectors|
+      return __send__(plain_bang) if selectors.empty?
+      result = __send__(name, *selectors)
+      result == self ? nil : replace(result)
+    end
+  end
+
+  # ---- Unicode normalisation and grapheme clusters ------------------------
+  #
+  # Both are handed to the CLR, which has the Unicode tables: normalisation to
+  # System.String#Normalize and segmentation to StringInfo's text elements,
+  # which are grapheme clusters by another name.
+
+  NORMALIZATION_FORMS__ = {
+    nfc: :FormC, nfd: :FormD, nfkc: :FormKC, nfkd: :FormKD
+  }
+
+  def __normalization_form__(form)
+    name = NORMALIZATION_FORMS__[form]
+    ::Kernel.raise(::ArgumentError, "Invalid normalization form #{form}.") unless name
+    ::System::Text::NormalizationForm.__send__(name)
+  end
+  private :__normalization_form__
+
+  def __require_unicode__
+    unless [::Encoding::UTF_8, ::Encoding::US_ASCII].include?(encoding)
+      ::Kernel.raise(::Encoding::CompatibilityError, "Unicode Normalization not appropriate for #{encoding}")
+    end
+    unless valid_encoding?
+      ::Kernel.raise(::ArgumentError, "invalid byte sequence in #{encoding}")
+    end
+  end
+  private :__require_unicode__
+
+  def unicode_normalize(form = :nfc)
+    __require_unicode__
+    result = to_clr_string.Normalize(__normalization_form__(form)).to_s
+    result.force_encoding(encoding) if result.respond_to?(:force_encoding)
+    result
+  end unless method_defined?(:unicode_normalize)
+
+  def unicode_normalize!(form = :nfc)
+    replace(unicode_normalize(form))
+  end unless method_defined?(:unicode_normalize!)
+
+  def unicode_normalized?(form = :nfc)
+    __require_unicode__
+    to_clr_string.IsNormalized(__normalization_form__(form))
+  end unless method_defined?(:unicode_normalized?)
+
+  def each_grapheme_cluster
+    return ::Enumerator.new(grapheme_clusters.size) { |y| grapheme_clusters.each { |g| y << g } } unless block_given?
+    grapheme_clusters.each { |g| yield g }
+    self
+  end unless method_defined?(:each_grapheme_cluster)
+
+  def grapheme_clusters
+    return chars unless valid_encoding?
+    result = []
+    e = ::System::Globalization::StringInfo.GetTextElementEnumerator(to_clr_string)
+    while e.MoveNext
+      piece = e.GetTextElement.to_s
+      piece.force_encoding(encoding) if piece.respond_to?(:force_encoding)
+      result << piece
+    end
+    result
+  end unless method_defined?(:grapheme_clusters)
+
   # `str =~ x` is `x =~ str` for a Regexp and a TypeError for anything that is
   # not, which is how MRI stops the common `"a" =~ "b"` mistake.
   def =~(other)
