@@ -171,27 +171,59 @@ namespace IronRuby.Builtins {
 
         #region chr
 
+        /// <summary>
+        /// MRI's int_chr. The receiver is first narrowed to an unsigned 32 bit code point;
+        /// anything outside 0..0xffffffff is rejected here, and the message depends on whether
+        /// the receiver was a Fixnum ("-1 out of char range") or a Bignum ("bignum out of char
+        /// range") - which is why the parameter is an <see cref="IntegerValue"/> rather than an
+        /// int: taking an int made every oversized receiver fail during argument conversion
+        /// with "bignum too big to convert into Fixnum" instead.
+        ///
+        /// With no encoding argument a code point of 0xff or less is returned as that single
+        /// raw byte - US-ASCII below 0x80, BINARY otherwise - no matter what
+        /// Encoding.default_internal is. default_internal is only consulted above 0xff, and
+        /// when it is nil that case is a RangeError.
+        /// </summary>
         [RubyMethod("chr")]
-        public static MutableString/*!*/ ToChr(ConversionStorage<MutableString>/*!*/ toStr, [DefaultProtocol]int self, 
+        public static MutableString/*!*/ ToChr(ConversionStorage<MutableString>/*!*/ toStr, [DefaultProtocol]IntegerValue self,
             [Optional]object encoding) {
 
-            RubyEncoding enc;
-            RubyEncoding resultEncoding;
-            if (encoding != Missing.Value) {
-                resultEncoding = enc = Protocols.ConvertToEncoding(toStr, encoding);
-            } else {
-                enc = toStr.Context.DefaultInternalEncoding ?? RubyEncoding.Ascii;
-                resultEncoding = (self <= 0x7f) ? RubyEncoding.Ascii : (self <= 0xff) ? RubyEncoding.Binary : enc;
+            BigInteger value = self.IsFixnum ? (BigInteger)self.Fixnum : self.Bignum;
+            if (value.Sign < 0 || value > UInt32.MaxValue) {
+                if (self.IsFixnum) {
+                    throw RubyExceptions.CreateRangeError("{0} out of char range", self.Fixnum);
+                }
+                throw RubyExceptions.CreateRangeError("bignum out of char range");
+            }
+            uint codepoint = (uint)value;
+
+            if (encoding == Missing.Value) {
+                if (codepoint <= 0xff) {
+                    return MutableString.CreateBinary(
+                        new[] { (byte)codepoint },
+                        codepoint <= 0x7f ? RubyEncoding.Ascii : RubyEncoding.Binary
+                    );
+                }
+                var internalEncoding = toStr.Context.DefaultInternalEncoding;
+                if (internalEncoding == null) {
+                    throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+                }
+                return ToChr(internalEncoding, internalEncoding, codepoint);
             }
 
-            return ToChr(enc, resultEncoding, self);
+            var enc = Protocols.ConvertToEncoding(toStr, encoding);
+            return ToChr(enc, enc, codepoint);
         }
 
         internal static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, int codepoint) {
             if (codepoint < 0) {
                 throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
             }
+            return ToChr(encoding, resultEncoding, (uint)codepoint);
+        }
 
+        /// <summary>MRI's rb_enc_uint_chr: either the encoded character, or a RangeError.</summary>
+        private static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint) {
             switch (encoding.CodePage) {
                 case RubyEncoding.CodePageUTF7:
                 case RubyEncoding.CodePageUTF8:
@@ -199,23 +231,52 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageUTF16LE:
                 case RubyEncoding.CodePageUTF32BE:
                 case RubyEncoding.CodePageUTF32LE:
+                    // Lone surrogates are not code points; letting them through produced a
+                    // System.Text.EncoderFallbackException out of the encoder later on.
                     if (codepoint > 0x10ffff) {
-                        throw RubyExceptions.CreateRangeError("{0} is not a valid Unicode code point (0..0x10ffff)", codepoint);
-                    }
-                    return MutableString.CreateMutable(Tokenizer.UnicodeCodePointToString(codepoint), resultEncoding);
-
-                case RubyEncoding.CodePageSJIS:
-                    if (codepoint >= 0x81 && codepoint <= 0x9f || codepoint >= 0xe0 && codepoint <= 0xfc) {
-                        throw RubyExceptions.CreateArgumentError("invalid codepoint 0x{0:x2} in Shift_JIS", codepoint);
-                    }
-                    goto default;
-
-                case RubyEncoding.CodePageEUCJP:
-                    // MRI's bahavior is strange - bug?
-                    if (codepoint >= 0x80) {
                         throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
                     }
+                    if (codepoint >= 0xd800 && codepoint <= 0xdfff) {
+                        throw InvalidCodePoint(encoding, codepoint);
+                    }
+                    return MutableString.CreateMutable(Tokenizer.UnicodeCodePointToString((int)codepoint), resultEncoding);
+
+                case RubyEncoding.CodePageAscii:
+                    if (codepoint > 0x7f) {
+                        throw InvalidCodePoint(encoding, codepoint);
+                    }
                     goto default;
+
+                case RubyEncoding.CodePageSJIS:
+                    // Single byte: ASCII plus the half-width katakana block. Double byte: a
+                    // lead byte from 0x81-0x9f/0xe0-0xfc and a trail byte from 0x40-0xfc
+                    // excluding 0x7f.
+                    if (codepoint <= 0x7f || codepoint >= 0xa1 && codepoint <= 0xdf) {
+                        return MutableString.CreateBinary(new[] { (byte)codepoint }, resultEncoding);
+                    }
+                    if (codepoint <= 0xffff) {
+                        uint lead = codepoint >> 8, trail = codepoint & 0xff;
+                        if ((lead >= 0x81 && lead <= 0x9f || lead >= 0xe0 && lead <= 0xfc) &&
+                            trail >= 0x40 && trail <= 0xfc && trail != 0x7f) {
+                            return MutableString.CreateBinary(new[] { (byte)lead, (byte)trail }, resultEncoding);
+                        }
+                    }
+                    throw InvalidCodePoint(encoding, codepoint);
+
+                case RubyEncoding.CodePageEUCJP:
+                    // Single byte ASCII only; two byte 0xa1-0xfe pairs for JIS X 0208 and the
+                    // 0x8e prefix for half-width katakana.
+                    if (codepoint <= 0x7f) {
+                        return MutableString.CreateBinary(new[] { (byte)codepoint }, resultEncoding);
+                    }
+                    if (codepoint > 0xff && codepoint <= 0xffff) {
+                        uint lead = codepoint >> 8, trail = codepoint & 0xff;
+                        if (lead >= 0xa1 && lead <= 0xfe && trail >= 0xa1 && trail <= 0xfe ||
+                            lead == 0x8e && trail >= 0xa1 && trail <= 0xdf) {
+                            return MutableString.CreateBinary(new[] { (byte)lead, (byte)trail }, resultEncoding);
+                        }
+                    }
+                    throw InvalidCodePoint(encoding, codepoint);
 
                 default:
                     if (codepoint <= 0xff) {
@@ -232,6 +293,10 @@ namespace IronRuby.Builtins {
                     }
                     throw new NotSupportedException(RubyExceptions.FormatMessage("Encoding {0} code points not supported", encoding));
             }
+        }
+
+        private static Exception/*!*/ InvalidCodePoint(RubyEncoding/*!*/ encoding, uint codepoint) {
+            return RubyExceptions.CreateRangeError("invalid codepoint 0x{0:X} in {1}", codepoint, encoding.Name);
         }
 
         #endregion

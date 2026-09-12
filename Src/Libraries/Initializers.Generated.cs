@@ -3065,7 +3065,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "chr", 0x51, 
                 0x00010000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Int32, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.Integer.ToChr)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.IntegerValue, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.Integer.ToChr)
             );
             
             DefineLibraryMethod(module, "denominator", 0x51, 
