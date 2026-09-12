@@ -387,8 +387,16 @@ namespace IronRuby.Builtins {
             public override int IndexOf(char c, int start, int count) {
                 if (_owner.HasByteCharacters) {
                     return Utils.IndexOf(_data, _count, c, start, count);
-                } else {
+                }
+                try {
                     return SwitchToChars().IndexOf(c, start, count);
+                } catch (DecoderFallbackException) when (c < 0x80) {
+                    // The content is not a valid character sequence in its encoding, so it
+                    // cannot be read as characters at all. MRI searches the bytes, which is
+                    // what makes String#each_line work on such a string - and each_line is
+                    // what pp walks a string with, so without this a failure message about a
+                    // string with a stray byte in it is a decoder error instead of the string.
+                    return Utils.IndexOf(_data, _count, c, start, count);
                 }
             }
 
@@ -400,8 +408,13 @@ namespace IronRuby.Builtins {
             public override int IndexOf(string/*!*/ str, int start, int count) {
                 if (_owner.HasByteCharacters) {
                     return Utils.IndexOf(_data, _count, str, start, count);
-                } else {
+                }
+                try {
                     return SwitchToChars().IndexOf(str, start, count);
+                } catch (DecoderFallbackException) when (str.IsAscii()) {
+                    // See IndexOf(char): the bytes are all that is left to search. Only an
+                    // ASCII needle can be matched against them byte for byte.
+                    return Utils.IndexOf(_data, _count, str, start, count);
                 }
             }
 
