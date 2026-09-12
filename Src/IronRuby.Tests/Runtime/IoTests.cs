@@ -244,7 +244,7 @@ hello
             var toPath = new ConversionStorage<MutableString>(Context);
 
             // use the string encoding if given
-            RubyDir.MakeDirectory(toPath, dir, MutableString.CreateBinary(sjis, RubyEncoding.SJIS), null);
+            RubyDir.MakeDirectory(toPath, new ConversionStorage<int>(Context), dir, MutableString.CreateBinary(sjis, RubyEncoding.SJIS), null);
             Assert(pal.Entries["ﾎ"]);
 
             // IO system returns UTF8 encoded strings:
