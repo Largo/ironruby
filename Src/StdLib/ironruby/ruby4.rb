@@ -1748,12 +1748,21 @@ class Enumerator
 
   unless method_defined?(:each_without_generator)
     alias_method :each_without_generator, :each
-
+    # The built-in #initialize lives on Enumerator itself, so redefining it here
+    # hides it from `super`, which would find Object#initialize and silently
+    # leave the enumerator with no target. __enum_init__ is the way back in.
     def initialize(*args, &block)
       if block
+        # Enumerator.new(size = nil) { |yielder| ... }
         @generator = block
+        @__size__ = args[0] unless args.empty?
       else
-        super
+        if args.empty?
+          ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1+)")
+        end
+        target = args[0]
+        method = args.size > 1 ? args[1] : :each
+        __enum_init__(target, method, args[2..-1] || [])
       end
     end
 
@@ -1772,9 +1781,10 @@ class Enumerator
     unless block_given?
       # yield [value, index] pairs, lazily, via the generator form above
       source = self
-      return Enumerator.new { |y|
-        n = offset
-        source.each { |*a| y << [a.size <= 1 ? a.first : a, n]; n += 1 }
+      n = source.size
+      return Enumerator.new(n) { |y|
+        i = offset
+        source.each { |*a| y << [a.size <= 1 ? a.first : a, i]; i += 1 }
       }
     end
     i = offset
@@ -1793,7 +1803,8 @@ class Enumerator
   def with_object(memo)
     unless block_given?
       source = self
-      return Enumerator.new { |y| source.each { |*a| y << [a.size <= 1 ? a.first : a, memo] } }
+      n = source.size
+      return Enumerator.new(n) { |y| source.each { |*a| y << [a.size <= 1 ? a.first : a, memo] } }
     end
     each do |*args|
       yield(args.size <= 1 ? args.first : args, memo)
@@ -1802,9 +1813,241 @@ class Enumerator
   end unless method_defined?(:with_object)
   alias_method :each_with_object, :with_object unless method_defined?(:each_with_object)
 
+  # --- #size -----------------------------------------------------------
+  # MRI gives every enumerator a size function: an Integer, a Proc, or nil when
+  # the length cannot be known without iterating. Three things supply one here -
+  # `Enumerator.new(size) { }`, the block form of `to_enum`, and the descriptor
+  # the C# builtins record - and everything else is honestly nil.
+  def __set_size__(value)
+    @__size__ = value
+    self
+  end
+
   def size
+    n = @__size__
+    return n.call if n.is_a?(::Proc) || n.is_a?(::Method)
+    return n unless n.nil?
+    info = __enum_size_info__
+    return __size_from_info__(info[0], info[1], info[2]) if info
+    target = __enum_target__
+    return __size_from_target__(target[0], target[1], target[2]) if target && !@generator
     nil
-  end unless method_defined?(:size)
+  end
+
+  # Number of items `source` yields, when that is knowable without iterating.
+  def __source_count__(source)
+    return nil if source.nil?
+    if source.is_a?(::Range) || source.respond_to?(:size)
+      n = source.size
+      return n if n.is_a?(::Numeric)
+      nil
+    elsif source.respond_to?(:length)
+      n = source.length
+      n.is_a?(::Numeric) ? n : nil
+    end
+  end
+  private :__source_count__
+
+  def __size_from_info__(source, op, arg)
+    case op
+    when :same
+      __source_count__(source)
+    when :self
+      source
+    when :slice
+      n = __source_count__(source)
+      n && arg > 0 ? (n + arg - 1) / arg : nil
+    when :cons
+      n = __source_count__(source)
+      n ? (n - arg + 1 < 0 ? 0 : n - arg + 1) : nil
+    when :cycle
+      __cycle_size__(__source_count__(source), arg)
+    when :upto
+      arg < source ? 0 : arg - source + 1
+    when :downto
+      source < arg ? 0 : source - arg + 1
+    end
+  end
+  private :__size_from_info__
+
+  # `cycle` repeats forever unless a count is given, and an empty source never
+  # yields at all, so its size is 0 rather than infinite.
+  def __cycle_size__(count, times)
+    return nil if count.nil?
+    return 0 if count == 0
+    return ::Float::INFINITY if times.nil?
+    times <= 0 ? 0 : count * times
+  end
+  private :__cycle_size__
+
+  # `to_enum(:each_slice, 2)` and friends: the descriptor is the method name.
+  SIZE_SAME_METHODS = [
+    :each, :each_entry, :each_pair, :each_key, :each_value, :each_index,
+    :reverse_each, :map, :collect, :map!, :collect!, :flat_map, :collect_concat,
+    :select, :filter, :find_all, :select!, :filter!, :reject, :reject!,
+    :keep_if, :delete_if, :sort_by, :min_by, :max_by, :group_by, :partition,
+    :each_with_index, :each_with_object, :each_char, :each_byte, :each_codepoint,
+    :each_line, :find_index, :detect, :find, :take_while, :drop_while,
+    :filter_map
+  ].freeze
+
+  def __size_from_target__(source, meth, args)
+    case meth
+    when :each_slice
+      n = __source_count__(source)
+      n && args[0].to_i > 0 ? (n + args[0].to_i - 1) / args[0].to_i : nil
+    when :each_cons
+      n = __source_count__(source)
+      n ? [n - args[0].to_i + 1, 0].max : nil
+    when :times
+      source
+    when :upto
+      args[0] < source ? 0 : args[0] - source + 1
+    when :downto
+      source < args[0] ? 0 : source - args[0] + 1
+    when :cycle
+      __cycle_size__(__source_count__(source), args[0])
+    else
+      SIZE_SAME_METHODS.include?(meth) ? __source_count__(source) : nil
+    end
+  end
+  private :__size_from_target__
+
+  def inspect
+    target = (@generator ? nil : __enum_target__)
+    return "#<#{self.class}: #{@generator ? 'generator' : '...'}>" unless target
+    recv, meth, args = target
+    detail = "#{recv.inspect}:#{meth}"
+    detail += "(#{args.map { |a| a.inspect }.join(', ')})" unless args.empty?
+    "#<#{self.class}: #{detail}>"
+  end
+  alias_method :to_s, :inspect
+
+  # --- external iteration ------------------------------------------------
+  # #next has to suspend `each` half way through, which needs a coroutine.
+  # Fiber is a background thread plus a mailbox here, so an enumerator that is
+  # stepped and then abandoned parks one thread until the process exits; that is
+  # the price of external iteration and MRI's own docs warn about the cost too.
+  def __iter_fiber__
+    @__fiber__ ||= begin
+      source = self
+      @__iter_done__ = false
+      ::Fiber.new do
+        result = source.each { |*args| ::Fiber.yield([:y, args]) }
+        [:done, result]
+      end
+    end
+  end
+  private :__iter_fiber__
+
+  def __iter_stop__
+    error = ::StopIteration.new("iteration reached an end")
+    error.__set_result__(@__iter_result__)
+    ::Kernel.raise(error)
+  end
+  private :__iter_stop__
+
+  # Pulls one more set of yielded values out of the fiber, unless one is already
+  # waiting because of a #peek.
+  def __iter_advance__
+    return if @__peeked__
+    __iter_stop__ if @__iter_done__
+    fed = @__feed__
+    @__feed__ = nil
+    @__has_feed__ = false
+    tag, payload = __iter_fiber__.resume(fed)
+    if tag == :y
+      @__peek__ = payload
+      @__peeked__ = true
+    else
+      @__iter_done__ = true
+      @__iter_result__ = payload
+      @__fiber__ = nil
+      __iter_stop__
+    end
+  end
+  private :__iter_advance__
+
+  def next_values
+    __iter_advance__
+    values = @__peek__
+    @__peeked__ = false
+    @__peek__ = nil
+    values
+  end
+
+  def peek_values
+    __iter_advance__
+    @__peek__.dup
+  end
+
+  def next
+    values = next_values
+    values.size <= 1 ? values[0] : values
+  end
+
+  def peek
+    values = peek_values
+    values.size <= 1 ? values[0] : values
+  end
+
+  # The value the *suspended* `yield` inside the source method will return.
+  def feed(value)
+    ::Kernel.raise(::TypeError, "feed value already set") if @__has_feed__
+    @__has_feed__ = true
+    @__feed__ = value
+    nil
+  end
+
+  def rewind
+    fiber = @__fiber__
+    @__fiber__ = nil
+    @__iter_done__ = false
+    @__iter_result__ = nil
+    @__peeked__ = false
+    @__peek__ = nil
+    @__feed__ = nil
+    @__has_feed__ = false
+    # Unwind the abandoned fiber so its ensure blocks run and its thread exits.
+    fiber.kill if fiber && fiber.alive?
+    target = (@generator ? nil : __enum_target__)
+    receiver = target && target[0]
+    receiver.rewind if receiver && receiver.respond_to?(:rewind)
+    self
+  end
+end
+
+class StopIteration
+  def __set_result__(value)
+    @result = value
+    self
+  end
+
+  def result
+    @result
+  end
+end
+
+module Kernel
+  # MRI defaults the method to :each and takes an optional block returning the
+  # enumerator's #size.
+  def to_enum(method = :each, *args, &size_block)
+    enum = ::Enumerator.new(self, method, *args)
+    enum.__set_size__(size_block) if size_block
+    enum
+  end
+  alias_method :enum_for, :to_enum
+
+  # The C# Kernel#loop does not know about StopIteration, which is what makes
+  # `loop { e.next }` terminate instead of blowing up.
+  def loop
+    return to_enum(:loop) { ::Float::INFINITY } unless block_given?
+    begin
+      yield while true
+    rescue ::StopIteration => stop
+      stop.result
+    end
+  end
 end
 
 # Comparable#== calls <=>, and the default Kernel#<=> is defined in terms of

@@ -1544,6 +1544,21 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadEnumerator_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__enum_init__", 0x52, 
+                0x0002000cU, 
+                new Func<IronRuby.Builtins.Enumerator, System.Object, System.String, IronRuby.Builtins.RubyArray, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.Enumerator.InitializeFrom)
+            );
+            
+            DefineLibraryMethod(module, "__enum_size_info__", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.GetSizeInfo)
+            );
+            
+            DefineLibraryMethod(module, "__enum_target__", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.GetTarget)
+            );
+            
             DefineLibraryMethod(module, "each", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.Each)
