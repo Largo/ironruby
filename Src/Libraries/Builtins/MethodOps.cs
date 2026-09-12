@@ -38,6 +38,25 @@ namespace IronRuby.Builtins {
             return self.Info.GetArity();            
         }
 
+        [RubyMethod("name")]
+        public static RubySymbol/*!*/ GetName(RubyContext/*!*/ context, RubyMethod/*!*/ self) {
+            return context.EncodeIdentifier(self.Name);
+        }
+
+        /// <summary>
+        /// The module the method is defined in, which for an alias is the module the alias was
+        /// created in rather than the one holding the original definition.
+        /// </summary>
+        [RubyMethod("owner")]
+        public static RubyModule/*!*/ GetOwner(RubyMethod/*!*/ self) {
+            return self.Info.DeclaringModule;
+        }
+
+        [RubyMethod("receiver")]
+        public static object GetReceiver(RubyMethod/*!*/ self) {
+            return self.Target;
+        }
+
         [RubyMethod("clone")]
         public static RubyMethod/*!*/ Clone(RubyMethod/*!*/ self) {
             return new RubyMethod(self.Target, self.Info, self.Name);

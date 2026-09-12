@@ -1965,7 +1965,7 @@ p D.new.instance_eval(&q)
 hello
 main
 #<C:0x*>
-:a
+#<D:0x*>
 :b
 []
 123

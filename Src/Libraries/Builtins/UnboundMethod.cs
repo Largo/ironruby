@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Runtime.CompilerServices;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -79,9 +80,34 @@ namespace IronRuby.Builtins {
             return new RubyMethod(target, self._info, self._name);
         }
 
+        /// <summary>
+        /// Binds and calls in one step. mspec's own pretty_inspect uses this, so its absence
+        /// turned unrelated failures into "undefined method `bind_call'" noise.
+        /// </summary>
+        [RubyMethod("bind_call")]
+        public static object BindCall(RubyScope/*!*/ scope, BlockParam block, UnboundMethod/*!*/ self, object target,
+            params object[]/*!*/ args) {
+
+            var bound = Bind(self, target);
+            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>(
+                "call", new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
+            );
+            return site.Target(site, scope, bound, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
+        }
+
         [RubyMethod("clone")]
         public static UnboundMethod/*!*/ Clone(UnboundMethod/*!*/ self) {
             return new UnboundMethod(self._targetConstraint, self._name, self._info);
+        }
+
+        [RubyMethod("name")]
+        public static RubySymbol/*!*/ GetName(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
+            return context.EncodeIdentifier(self._name);
+        }
+
+        [RubyMethod("owner")]
+        public static RubyModule/*!*/ GetOwner(UnboundMethod/*!*/ self) {
+            return self._info.DeclaringModule;
         }
 
         [RubyMethod("to_s")]

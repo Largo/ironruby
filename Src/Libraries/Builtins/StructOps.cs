@@ -79,7 +79,7 @@ namespace IronRuby.Builtins {
             var result = RubyStruct.DefineStruct(self, className, attributeNames);
 
             if (block != null) {
-                return RubyUtils.EvaluateInModule(result, block, null, result);
+                return RubyUtils.EvaluateInModule(result, block, new object[] { result }, result);
             }
 
             return result;

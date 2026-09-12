@@ -184,7 +184,12 @@ namespace IronRuby.Builtins {
             [RubyConstant]
             public readonly static int FNM_PATHNAME = 0x02;
             [RubyConstant]
-            public readonly static int FNM_SYSCASE = 0x08;
+            public readonly static int FNM_EXTGLOB = Glob.FnmExtGlob;
+            [RubyConstant]
+            public readonly static int FNM_SHORTNAME = 0x00;
+            // FNM_CASEFOLD only on a case insensitive file system; 0 on Unix.
+            [RubyConstant]
+            public readonly static int FNM_SYSCASE = Glob.FnmSysCase;
             [RubyConstant]
             public readonly static int LOCK_EX = 0x02;
             [RubyConstant]
