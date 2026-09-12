@@ -306,6 +306,19 @@ namespace IronRuby.Builtins {
                 AddEncoding(seen, result, encoding);
             }
 
+            // Code pages Encoding.GetEncoding resolves but Encoding.GetEncodings() does not
+            // enumerate on this platform. Leaving them out would make Encoding.find answer with an
+            // encoding that Encoding.list says does not exist.
+            foreach (var codepage in new[] { 51936 /* GB2312 */, 51949 /* EUC-KR */, 54936 /* GB18030 */, 50220, 50221 }) {
+                try {
+                    AddEncoding(seen, result, RubyEncoding.GetRubyEncoding(codepage));
+                } catch (ArgumentException) {
+                    // not available here
+                } catch (NotSupportedException) {
+                    // not available here
+                }
+            }
+
             foreach (var info in Encoding.GetEncodings()) {
                 AddEncoding(seen, result, RubyEncoding.GetRubyEncoding(info.CodePage));
             }
