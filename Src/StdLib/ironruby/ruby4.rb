@@ -40,12 +40,39 @@ module Enumerable
     result
   end unless method_defined?(:tally)
 
+  # MRI does not simply fold with +: once a Float turns up it switches to
+  # Kahan-Babuska compensated summation, which is why ([0.1] * 10).sum is
+  # exactly 1.0 there and 0.9999999999999999 under a naive inject. Non-numeric
+  # elements (String, Array) keep the plain fold.
   def sum(init = 0)
-    if block_given?
-      inject(init) { |acc, x| acc + yield(x) }
-    else
-      inject(init) { |acc, x| acc + x }
+    acc = init
+    compensation = 0.0
+    compensating = false
+    each do |*values|
+      x = __enum_item__(values)
+      x = yield(x) if block_given?
+      unless compensating
+        unless x.is_a?(Float) && (acc.is_a?(Integer) || acc.is_a?(Float) || acc.is_a?(Rational))
+          acc = acc + x
+          next
+        end
+        compensating = true
+        acc = acc.to_f
+      end
+      unless x.is_a?(Integer) || x.is_a?(Float) || x.is_a?(Rational)
+        # back out of float mode: settle the compensation before leaving it behind
+        acc += compensation
+        compensation = 0.0
+        compensating = false
+        acc = acc + x
+        next
+      end
+      x = x.to_f
+      t = acc + x
+      compensation += acc.abs >= x.abs ? (acc - t) + x : (x - t) + acc
+      acc = t
     end
+    compensating ? acc + compensation : acc
   end unless method_defined?(:sum)
 
   alias_method :filter, :select unless method_defined?(:filter)
@@ -462,9 +489,9 @@ class Array
     __dig_step__(self[key], rest)
   end unless method_defined?(:dig)
 
-  def sum(init = 0)
-    inject(init) { |acc, x| block_given? ? acc + yield(x) : acc + x }
-  end unless method_defined?(:sum)
+  # No Array#sum here on purpose: Enumerable#sum already does the compensated
+  # summation MRI does, and this was a second, naive copy that Array never
+  # reached anyway - method_defined? saw the included Enumerable#sum and skipped it.
 
   def intersect?(other)
     !(self & other).empty?
@@ -578,7 +605,10 @@ class Hash
     result = dup
     result.delete_if { |_, v| v.nil? }
     result
-  end unless method_defined?(:compact)
+    # instance_methods(false) rather than method_defined?: Hash includes Enumerable,
+    # whose #compact is defined by this point and returns an Array of pairs, so
+    # method_defined? is true and Hash would be left returning the wrong class.
+  end unless instance_methods(false).include?(:compact)
 
   alias_method :filter, :select unless method_defined?(:filter)
 end
@@ -1774,6 +1804,18 @@ end
 
 if defined?(Rational) && Rational.instance_method(:round).arity == 0
   class Rational
+    # Rational still comes from rational18.rb, which prints the 1.8 forms:
+    # inspect as "Rational(5, 8)" and to_s dropping a denominator of 1. 1.9
+    # changed both - "(5/8)" and "2/1" - and every spec that prints a Rational
+    # compares against those.
+    def to_s
+      "#{numerator}/#{denominator}"
+    end
+
+    def inspect
+      "(#{to_s})"
+    end
+
     alias_method :__ir_round__, :round
 
     def round(ndigits = 0)
@@ -3669,7 +3711,11 @@ class Struct
       members.each_with_index { |m, i| result[m] = self[i] }
     end
     result
-  end unless method_defined?(:to_h)
+    # instance_methods(false) rather than method_defined?: Struct includes Enumerable,
+    # whose #to_h is already defined by this point, so method_defined? is true and this
+    # definition would be skipped - leaving Struct with a #to_h that walks each (the
+    # values) instead of each_pair.
+  end unless instance_methods(false).include?(:to_h)
 
   def dig(key, *rest)
     value = begin
