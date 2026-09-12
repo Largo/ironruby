@@ -1672,6 +1672,98 @@ unless defined?(Fiber)
   end
 end
 
+# Kernel#Complex and Kernel#Rational never learned to read a String - they went
+# straight for #real and #numerator on it - so every `Complex("1+2i")` in the
+# specs was a NoMethodError. Parsing is String#to_c / String#to_r; what these
+# add is MRI's strictness, because Complex("abc") is an ArgumentError where
+# "abc".to_c is (0+0i).
+module Kernel
+  NUMERIC_STRING__ = /\A[+-]?[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?(?:\/[0-9][0-9_]*)?\z/
+  COMPLEX_STRING__ = /\A[0-9+\-._eE\/i@]+\z/
+
+  def __convert_error__(value)
+    ::Kernel.raise(::ArgumentError, "invalid value for convert(): #{value.inspect}")
+  end
+  private :__convert_error__
+
+  def __string_to_c__(str)
+    t = str.strip
+    __convert_error__(str) if t.empty? || t !~ COMPLEX_STRING__ || t !~ /[0-9]/
+    t.to_c
+  end
+  private :__string_to_c__
+
+  def __string_to_r__(str)
+    t = str.strip
+    __convert_error__(str) unless t =~ NUMERIC_STRING__
+    t.to_r
+  end
+  private :__string_to_r__
+
+  # The built-in Complex/Rational are stubs that load complex18.rb and then
+  # redefine themselves, so they have to be run once before they can be wrapped
+  # - otherwise the first call through the wrapper replaces the wrapper.
+  begin
+    require 'complex18'
+    require 'rational18'
+    Complex(0, 0)
+    Rational(0, 1)
+  rescue ::Exception
+  end
+
+  if private_method_defined?(:Complex) || method_defined?(:Complex)
+    alias_method :__ir_Complex__, :Complex
+    private :__ir_Complex__
+
+    def Complex(real, imaginary = nil, exception: true)
+      if real.is_a?(::String) || imaginary.is_a?(::String)
+        begin
+          r = real.is_a?(::String) ? __string_to_c__(real) : real
+          return r if imaginary.nil?
+          i = imaginary.is_a?(::String) ? __string_to_c__(imaginary) : imaginary
+        rescue ::ArgumentError
+          raise if exception
+          return nil
+        end
+        return r + i * ::Complex.new(0, 1)
+      end
+      begin
+        imaginary.nil? ? __ir_Complex__(real) : __ir_Complex__(real, imaginary)
+      rescue ::ArgumentError, ::TypeError
+        raise if exception
+        nil
+      end
+    end
+    module_function :Complex
+  end
+
+  if private_method_defined?(:Rational) || method_defined?(:Rational)
+    alias_method :__ir_Rational__, :Rational
+    private :__ir_Rational__
+
+    def Rational(numerator, denominator = nil, exception: true)
+      if numerator.is_a?(::String) || denominator.is_a?(::String)
+        begin
+          n = numerator.is_a?(::String) ? __string_to_r__(numerator) : numerator
+          return n if denominator.nil?
+          d = denominator.is_a?(::String) ? __string_to_r__(denominator) : denominator
+        rescue ::ArgumentError
+          raise if exception
+          return nil
+        end
+        return n / d
+      end
+      begin
+        denominator.nil? ? __ir_Rational__(numerator) : __ir_Rational__(numerator, denominator)
+      rescue ::ArgumentError, ::TypeError
+        raise if exception
+        nil
+      end
+    end
+    module_function :Rational
+  end
+end
+
 # A non-blocking fiber does not sleep on the thread: it hands the wait to the
 # fiber scheduler, which is free to run something else in the meantime. Without
 # this, `sleep` with no duration inside a non-blocking fiber blocks the whole
