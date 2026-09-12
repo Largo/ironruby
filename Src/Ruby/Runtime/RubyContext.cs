@@ -1625,11 +1625,11 @@ namespace IronRuby.Runtime {
 
             // MRI omits the owner for Object: "uninitialized constant Foo", but keeps it otherwise:
             // "uninitialized constant Math::Nope".
-            throw RubyExceptions.CreateNameError(
+            throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
                 (owner == ObjectClass || String.IsNullOrEmpty(owner.Name))
                     ? String.Format("uninitialized constant {0}", name)
                     : String.Format("uninitialized constant {0}::{1}", owner.Name, name)
-            );
+            ), name, owner);
         }
 
         // thread-safe:

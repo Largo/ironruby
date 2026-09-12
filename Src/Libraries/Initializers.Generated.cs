@@ -225,8 +225,9 @@ namespace IronRuby.Builtins {
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__LoadError));
             DefineGlobalClass("LocalJumpError", typeof(IronRuby.Builtins.LocalJumpError), 0x00000007, def56, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__LocalJumpError));
-            IronRuby.Builtins.RubyClass def68 = DefineGlobalClass("NameError", typeof(System.MemberAccessException), 0x00000007, def56, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__NameError));
+            IronRuby.Builtins.RubyClass def68 = DefineGlobalClass("NameError", typeof(System.MemberAccessException), 0x00000007, def56, LoadNameError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], System.MemberAccessException>(IronRuby.Builtins.NameErrorOps.Factory)
+            );
             DefineGlobalClass("NotImplementedError", typeof(IronRuby.Builtins.NotImplementedError), 0x00000007, def64, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__NotImplementedError));
             IronRuby.Builtins.RubyClass def59 = DefineGlobalClass("RangeError", typeof(System.ArgumentOutOfRangeException), 0x00000007, def56, LoadRangeError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
@@ -353,7 +354,7 @@ namespace IronRuby.Builtins {
             DefineGlobalClass("FrozenError", typeof(IronRuby.Builtins.FrozenError), 0x00000007, def60, LoadFrozenError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__FrozenError));
             DefineGlobalClass("NoMethodError", typeof(System.MissingMethodException), 0x00000007, def68, LoadNoMethodError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, System.MissingMethodException>(IronRuby.Builtins.NoMethodErrorOps.Factory)
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], System.MissingMethodException>(IronRuby.Builtins.NoMethodErrorOps.Factory)
             );
             SetBuiltinConstant(def41, "Constants", def42);
             SetBuiltinConstant(def43, "WaitReadable", def44);
@@ -5994,12 +5995,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.IsClassVariableDefined)
             );
             
-            DefineLibraryMethod(module, "class_variable_get", 0x52, 
+            DefineLibraryMethod(module, "class_variable_get", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.GetClassVariable)
             );
             
-            DefineLibraryMethod(module, "class_variable_set", 0x52, 
+            DefineLibraryMethod(module, "class_variable_set", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.ClassVariableSet)
             );
@@ -6207,7 +6208,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.PublicMethodDefined)
             );
             
-            DefineLibraryMethod(module, "remove_class_variable", 0x52, 
+            DefineLibraryMethod(module, "remove_class_variable", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.RemoveClassVariable)
             );
@@ -6253,6 +6254,19 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "nesting", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetLexicalModuleNesting)
+            );
+            
+        }
+        
+        private static void LoadNameError_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "name", 0x51, 
+                0x00000000U, 
+                new Func<System.Exception, System.Object>(IronRuby.Builtins.NameErrorOps.GetName)
+            );
+            
+            DefineLibraryMethod(module, "receiver", 0x51, 
+                0x00000000U, 
+                new Func<System.Exception, System.Object>(IronRuby.Builtins.NameErrorOps.GetReceiver)
             );
             
         }

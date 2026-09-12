@@ -517,6 +517,26 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Same checks, but recording NameError#name and NameError#receiver. MRI answers the
+        /// name as it was passed (a String here, not a Symbol) and the object it was asked of.
+        /// </summary>
+        public static void CheckClassVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name) {
+            if (!Tokenizer.IsClassVariableName(name)) {
+                throw RubyExceptions.WithNameAndReceiver(
+                    RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a class variable name", name)),
+                    MutableString.Create(name, context.GetIdentifierEncoding()), receiver);
+            }
+        }
+
+        public static void CheckInstanceVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name) {
+            if (!Tokenizer.IsInstanceVariableName(name)) {
+                throw RubyExceptions.WithNameAndReceiver(
+                    RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as an instance variable name", name)),
+                    MutableString.Create(name, context.GetIdentifierEncoding()), receiver);
+            }
+        }
+
         #endregion
 
         #region Constants

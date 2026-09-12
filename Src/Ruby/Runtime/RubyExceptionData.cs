@@ -68,6 +68,13 @@ namespace IronRuby.Runtime {
         private Exception _cause;
         private bool _hasCause;
 
+        // NameError#name / NameError#receiver. Both NameError and NoMethodError are backed by
+        // framework exception types (MemberAccessException, MissingMethodException) that cannot
+        // carry extra fields, so they live here alongside the message and backtrace.
+        private object _name;
+        private object _receiver;
+        private bool _hasReceiver;
+
         [NonSerialized]
         private CallSite<Func<CallSite, RubyContext, Exception, RubyArray, object>> _setBacktraceCallSite;
 
@@ -207,6 +214,31 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Assigns the cause if it has not been assigned yet. Returns true if it was assigned now.
         /// </summary>
+        /// <summary>
+        /// NameError#name: the symbol, string or constant name the error is about. nil if unknown.
+        /// </summary>
+        public object Name {
+            get { return _name; }
+            set { _name = value; }
+        }
+
+        /// <summary>
+        /// NameError#receiver: the object the missing name was looked up on. Unset (rather than
+        /// nil) when the error was built without one - MRI raises ArgumentError for that.
+        /// </summary>
+        public object Receiver {
+            get { return _receiver; }
+        }
+
+        public bool HasReceiver {
+            get { return _hasReceiver; }
+        }
+
+        public void SetReceiver(object receiver) {
+            _receiver = receiver;
+            _hasReceiver = true;
+        }
+
         public bool TrySetCause(Exception cause) {
             if (_hasCause) {
                 return false;

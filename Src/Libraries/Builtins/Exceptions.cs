@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Runtime.Remoting;
@@ -171,19 +172,102 @@ namespace IronRuby.Builtins {
 
     [RubyException("NameError", Extends = typeof(MemberAccessException), Inherits = typeof(SystemException))]
     public static class NameErrorOps {
+        /// <summary>
+        /// NameError.new([message [, name]] [, receiver: obj]). IronRuby has no real keyword
+        /// arguments, so `receiver:` is recognised by shape: a trailing Hash whose only key is
+        /// :receiver. NoMethodError inherits this parsing through NoMethodErrorOps.Factory.
+        /// </summary>
+        [RubyConstructor]
+        public static MemberAccessException/*!*/ Factory(RubyClass/*!*/ self, params object[]/*!*/ args) {
+            object receiver;
+            bool hasReceiver = TryTakeReceiverKeyword(ref args, out receiver);
+            if (args.Length > 2) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..2)", args.Length);
+            }
+
+            object message = args.Length > 0 ? args[0] : null;
+            var result = new MemberAccessException(RubyExceptionData.GetClrMessage(self, message));
+            RubyExceptionData.InitializeException(result, message);
+
+            var data = RubyExceptionData.GetInstance(result);
+            data.Name = args.Length > 1 ? args[1] : null;
+            if (hasReceiver) {
+                data.SetReceiver(receiver);
+            }
+            return result;
+        }
+
+        [RubyMethod("name")]
+        public static object GetName(Exception/*!*/ self) {
+            return RubyExceptionData.GetInstance(self).Name;
+        }
+
+        [RubyMethod("receiver")]
+        public static object GetReceiver(Exception/*!*/ self) {
+            var data = RubyExceptionData.GetInstance(self);
+            if (!data.HasReceiver) {
+                throw RubyExceptions.CreateArgumentError("no receiver is available");
+            }
+            return data.Receiver;
+        }
+
+        /// <summary>
+        /// Splits a trailing `receiver:` keyword hash off the argument list. Only a hash whose
+        /// single key is :receiver counts, so a genuine positional Hash still gets through.
+        /// </summary>
+        internal static bool TryTakeReceiverKeyword(ref object[]/*!*/ args, out object receiver) {
+            receiver = null;
+            if (args.Length == 0) {
+                return false;
+            }
+
+            var hash = args[args.Length - 1] as IDictionary<object, object>;
+            if (hash == null || hash.Count != 1) {
+                return false;
+            }
+
+            foreach (var entry in hash) {
+                var key = entry.Key as RubySymbol;
+                if (key == null || key.ToString() != "receiver") {
+                    return false;
+                }
+                receiver = entry.Value;
+            }
+
+            var rest = new object[args.Length - 1];
+            Array.Copy(args, rest, rest.Length);
+            args = rest;
+            return true;
+        }
     }
 
     [RubyException("NoMethodError", Extends = typeof(MissingMethodException), Inherits = typeof(MemberAccessException))]
     [HideMethod("message")]
-    public static class NoMethodErrorOps {        
+    public static class NoMethodErrorOps {
+        /// <summary>
+        /// NoMethodError.new([message [, name [, args]]] [, receiver: obj]).
+        /// </summary>
         [RubyConstructor]
-        public static MissingMethodException/*!*/ Factory(
-            RubyClass/*!*/ self,
-            [DefaultParameterValue(null)]object message, 
-            [DefaultParameterValue(null)]object name,
-            [DefaultParameterValue(null)]object args) {
-            MissingMethodException result = new MissingMethodException(RubyExceptionData.GetClrMessage(self, message ?? "NoMethodError"));
+        public static MissingMethodException/*!*/ Factory(RubyClass/*!*/ self, params object[]/*!*/ allArgs) {
+            object receiver;
+            bool hasReceiver = NameErrorOps.TryTakeReceiverKeyword(ref allArgs, out receiver);
+            if (allArgs.Length > 3) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0..3)", allArgs.Length);
+            }
+
+            object message = allArgs.Length > 0 ? allArgs[0] : null;
+            object name = allArgs.Length > 1 ? allArgs[1] : null;
+            object args = allArgs.Length > 2 ? allArgs[2] : null;
+
+            MissingMethodException result = new MissingMethodException(RubyExceptionData.GetClrMessage(self, message));
             RubyExceptionData.InitializeException(result, message);
+
+            var data = RubyExceptionData.GetInstance(result);
+            data.Name = name;
+            if (hasReceiver) {
+                data.SetReceiver(receiver);
+            }
+
             // Exception.Data requires the value to be Serializable. We workaround this using an array
             // of size 1 since System.Array is serializable. This will allow the exception to be marshalled.
             // If the value cannot actually be marshalled, it will fail only if the value is later accessed.

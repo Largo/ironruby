@@ -2430,7 +2430,9 @@ namespace IronRuby.Runtime {
         private static object GetClassVariableInternal(RubyModule/*!*/ module, string/*!*/ name) {
             object value;
             if (module.TryResolveClassVariable(name, out value) == null) {
-                throw RubyExceptions.CreateNameError(String.Format("uninitialized class variable {0} in {1}", name, module.Name));
+                throw RubyExceptions.WithNameAndReceiver(module.Context,
+                    RubyExceptions.CreateNameError(String.Format("uninitialized class variable {0} in {1}", name, module.Name)),
+                    name, module);
             }
             return value;
         }

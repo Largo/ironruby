@@ -777,7 +777,7 @@ namespace IronRuby.Builtins {
             object value;
             if (!context.TryGetInstanceVariable(self, name, out value)) {
                 // We didn't find it, check if the name is valid
-                RubyUtils.CheckInstanceVariableName(name);
+                RubyUtils.CheckInstanceVariableName(context, self, name);
                 return null;
             }
             return value;

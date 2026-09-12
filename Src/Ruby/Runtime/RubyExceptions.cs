@@ -181,6 +181,25 @@ namespace IronRuby.Runtime {
             return new MemberAccessException(FormatMessage(message, args));
         }
 
+        /// <summary>
+        /// Records NameError#name and NameError#receiver on an already-created error.
+        /// Returns the error so it can be used inline in a `throw`.
+        /// </summary>
+        public static Exception/*!*/ WithNameAndReceiver(Exception/*!*/ error, object name, object receiver) {
+            var data = RubyExceptionData.GetInstance(error);
+            data.Name = name;
+            data.SetReceiver(receiver);
+            return error;
+        }
+
+        /// <summary>
+        /// Same, taking the name as a plain string and interning it as a Symbol, which is what
+        /// MRI's NameError#name answers for a missing method, constant or class variable.
+        /// </summary>
+        public static Exception/*!*/ WithNameAndReceiver(RubyContext/*!*/ context, Exception/*!*/ error, string/*!*/ name, object receiver) {
+            return WithNameAndReceiver(error, context.CreateSymbol(name, RubyEncoding.UTF8), receiver);
+        }
+
         public static Exception/*!*/ CreateUndefinedMethodError(RubyModule/*!*/ module, string/*!*/ methodName) {
             // MRI doesn't display the singleton's name:
             if (module.IsSingletonClass) {
@@ -278,15 +297,17 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateMethodMissing(RubyContext/*!*/ context, object self, string/*!*/ name) {
-            return CreateMethodMissing(FormatMethodMissingMessage(context, self, name));
+            return WithNameAndReceiver(context, CreateMethodMissing(FormatMethodMissingMessage(context, self, name)), name, self);
         }
 
         public static Exception/*!*/ CreatePrivateMethodCalled(RubyContext/*!*/ context, object self, string/*!*/ name) {
-            return CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "private method `{0}' called for {1}"));
+            return WithNameAndReceiver(context,
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "private method `{0}' called for {1}")), name, self);
         }
 
         public static Exception/*!*/ CreateProtectedMethodCalled(RubyContext/*!*/ context, object self, string/*!*/ name) {
-            return CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "protected method `{0}' called for {1}"));
+            return WithNameAndReceiver(context,
+                CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "protected method `{0}' called for {1}")), name, self);
         }
 
         public static string/*!*/ FormatMethodMissingMessage(RubyContext/*!*/ context, object self, string/*!*/ name) {
@@ -331,7 +352,9 @@ namespace IronRuby.Runtime {
                 return SafeInspect(context, obj);
             }
 
-            return "an instance of " + MessageTypeName(context.GetClassDisplayName(obj));
+            // GetClassDisplayName is empty for an anonymous class; MRI prints "#<Class:0x...>".
+            var cls = context.GetClassOf(obj);
+            return "an instance of " + MessageTypeName(RubyExceptionData.GetDefaultMessage(cls).ToString());
         }
 
         private static string/*!*/ SafeInspect(RubyContext/*!*/ context, object obj) {
