@@ -1552,10 +1552,13 @@ namespace IronRuby.Builtins {
         [RubyMethod("abort", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("abort", RubyMethodAttributes.PublicSingleton)]
         public static void Abort(BinaryOpStorage/*!*/ writeStorage, object/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ message) {
+            // MRI writes the message as a line, and the SystemExit it raises carries that message
+            // rather than the "exit" that a bare exit uses.
+            var printed = message.EndsWith('\n') ? message : message.Clone().Append('\n');
             var site = writeStorage.GetCallSite("write", 1);
-            site.Target(site, writeStorage.Context.StandardErrorOutput, message);
+            site.Target(site, writeStorage.Context.StandardErrorOutput, printed);
 
-            Exit(self, 1);
+            throw new SystemExit(1, message.ConvertToString());
         }
 
         [RubyMethod("exit", RubyMethodAttributes.PrivateInstance)]
