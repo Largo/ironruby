@@ -1808,7 +1808,9 @@ module Kernel
       text = messages.map { |m| s = m.to_s; s.end_with?("\n") ? s : s + "\n" }.join
       text = "#{prefix}#{text}" if prefix
       # The built-in always appends a newline of its own, so drop the last one.
-      text = text[0...-1] if text.end_with?("\n")
+      # By bytes, not by characters: a message is allowed to hold bytes that are
+      # invalid in its encoding, and slicing it as characters raises on those.
+      text = text.byteslice(0, text.bytesize - 1) if text.end_with?("\n")
       __ir_warn__(text)
       nil
     end
