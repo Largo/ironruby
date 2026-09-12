@@ -19,6 +19,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
@@ -897,15 +898,25 @@ namespace IronRuby.Builtins {
                 Count = count;
             }
 
+            /// <summary>
+            /// sizeof(long) for the platform we are running on. Windows is LLP64 (4) even at
+            /// 64 bits; every Unix we run on is LP64, where it follows the pointer size.
+            /// </summary>
+            private static int NativeLongSize {
+                get {
+                    return RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? 4 : IntPtr.Size;
+                }
+            }
+
             private static char MapNative(char c, char modifier) {
-                if (c == 's' || c == 'S' || c == 'i' || c == 'I') {
+                if (c == 's' || c == 'S' || c == 'i' || c == 'I' || c == 'q' || c == 'Q') {
                     return c;
                 } else if (c == 'l') {
-                    return IntPtr.Size == 4 ? 'i' : 'q';
+                    return NativeLongSize == 4 ? 'i' : 'q';
                 } else if (c == 'L') {
-                    return IntPtr.Size == 4 ? 'I' : 'Q';
+                    return NativeLongSize == 4 ? 'I' : 'Q';
                 } else {
-                    throw RubyExceptions.CreateArgumentError("'{0}' allowed only after types sSiIlL", modifier);
+                    throw RubyExceptions.CreateArgumentError("'{0}' allowed only after types sSiIlLqQ", modifier);
                 }
             }
 
@@ -929,12 +940,10 @@ namespace IronRuby.Builtins {
                     int? count = 1;
                     char c2 = (i < format.Length) ? format[i] : '\0';
                     if (c2 == '_' || c2 == '!') {
-                        char mapped = MapNative(c, c2);
-
-                        // ignore !
-                        if (c2 == '_') {
-                            c = mapped;
-                        }
+                        // MRI treats ! and _ identically: both mean "the native size of this C
+                        // type". Dropping ! made pack('l!') four bytes wide on LP64, which is
+                        // how mspec's PlatformGuard::C_LONG_SIZE came out as 32 on Linux.
+                        c = MapNative(c, c2);
                         i++;
                         c2 = (i < format.Length) ? format[i] : '\0';
                     }

@@ -6976,8 +6976,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "*", 0x51, 
-                0x00010000U, 
-                new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Repeat)
+                0x00010000U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Repeat), 
+                new Func<IronRuby.Builtins.MutableString, System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Repeat)
             );
             
             DefineLibraryMethod(module, "%", 0x51, 
