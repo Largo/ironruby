@@ -4579,6 +4579,173 @@ class Exception
 end
 
 class Range
+  # ---- cover?, overlap?, bsearch, % ---------------------------------------
+  #
+  # 109 of spec/core/range's errors were #cover? alone and 71 were #bsearch;
+  # neither existed.
+
+  def cover?(value)
+    return __cover_range__(value) if value.is_a?(::Range)
+    b = self.begin
+    e = self.end
+    unless b.nil?
+      c = (b <=> value)
+      return false if c.nil? || c > 0
+    end
+    unless e.nil?
+      c = (value <=> e)
+      return false if c.nil?
+      return false if exclude_end? ? c >= 0 : c > 0
+    end
+    true
+  end unless method_defined?(:cover?)
+
+  def __cover_range__(other)
+    ob = other.begin
+    oe = other.end
+    # An empty range is covered by nothing.
+    if !ob.nil? && !oe.nil?
+      c = (ob <=> oe)
+      return false if c.nil?
+      return false if c > 0 || (c == 0 && other.exclude_end?)
+    end
+    return false if ob.nil? && !self.begin.nil?
+    return false if oe.nil? && !self.end.nil?
+    return false unless ob.nil? || cover?(ob)
+    se = self.end
+    return true if se.nil?
+    cmp = (se <=> oe)
+    return false if cmp.nil?
+    # MRI's r_cover_range_p: when the two ranges agree about their end being
+    # exclusive the comparison is enough, and when they disagree the inclusive
+    # one has to be measured against the other's last element instead.
+    if exclude_end? == other.exclude_end?
+      cmp >= 0
+    elsif exclude_end?
+      cmp > 0
+    elsif cmp >= 0
+      true
+    else
+      vmax = (other.max rescue nil)
+      return false if vmax.nil?
+      c = (se <=> vmax)
+      !c.nil? && c >= 0
+    end
+  end
+  private :__cover_range__
+
+  def overlap?(other)
+    unless other.is_a?(::Range)
+      ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (expected Range)")
+    end
+    return false if __empty_range__(self) || __empty_range__(other)
+    sb, se = self.begin, self.end
+    ob, oe = other.begin, other.end
+    unless se.nil? || ob.nil?
+      c = (ob <=> se)
+      return false if c.nil?
+      return false if exclude_end? ? c >= 0 : c > 0
+    end
+    unless oe.nil? || sb.nil?
+      c = (sb <=> oe)
+      return false if c.nil?
+      return false if other.exclude_end? ? c >= 0 : c > 0
+    end
+    true
+  end unless method_defined?(:overlap?)
+
+  def __empty_range__(r)
+    b, e = r.begin, r.end
+    return false if b.nil? || e.nil?
+    c = (b <=> e)
+    c.nil? || c > 0 || (c == 0 && r.exclude_end?)
+  end
+  private :__empty_range__
+
+  # Binary search over a numeric range, in MRI's two modes: a block answering
+  # true/false finds the smallest element it says true for, a block answering
+  # an Integer finds the element it answers 0 for.
+  def bsearch(&block)
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    b = self.begin
+    e = self.end
+    if (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer))
+      __bsearch_int__(block)
+    elsif (b.nil? || b.is_a?(::Numeric)) && (e.nil? || e.is_a?(::Numeric))
+      __bsearch_float__(block)
+    else
+      ::Kernel.raise(::TypeError, "can't do binary search for #{(b || e).class}")
+    end
+  end unless method_defined?(:bsearch)
+
+  # Answers :found, true (go left, remember) or false (go right).
+  def __bsearch_test__(block, value)
+    r = block.call(value)
+    case r
+    when true then true
+    when false, nil then false
+    when ::Integer then r == 0 ? :found : r < 0
+    else
+      ::Kernel.raise(::TypeError, "wrong argument type #{r.class} (must be numeric, true, false or nil)")
+    end
+  end
+  private :__bsearch_test__
+
+  def __bsearch_int__(block)
+    low = self.begin
+    high = self.end
+    high -= 1 if !high.nil? && exclude_end?
+    # An endless or beginless range is widened until the answer is bracketed.
+    if low.nil? || high.nil?
+      span = 1
+      if high.nil?
+        high = low + span
+        while __bsearch_test__(block, high) == false
+          span *= 2
+          high = low + span
+        end
+      else
+        low = high - span
+        while __bsearch_test__(block, low) != false
+          span *= 2
+          low = high - span
+        end
+      end
+    end
+    result = nil
+    while low <= high
+      mid = low + (high - low) / 2
+      case __bsearch_test__(block, mid)
+      when :found then return mid
+      when true then result = mid; high = mid - 1
+      else low = mid + 1
+      end
+    end
+    result
+  end
+  private :__bsearch_int__
+
+  def __bsearch_float__(block)
+    low = (self.begin || -::Float::MAX).to_f
+    high = (self.end || ::Float::MAX).to_f
+    result = nil
+    64.times do
+      mid = low + (high - low) / 2
+      break if mid == low || mid == high
+      case __bsearch_test__(block, mid)
+      when :found then return mid
+      when true then result = mid; high = mid
+      else low = mid
+      end
+    end
+    result
+  end
+  private :__bsearch_float__
+
+  def %(n)
+    step(n)
+  end unless method_defined?(:%)
+
   # Range#min/#max/#minmax are specialised in MRI: without a block they answer from the
   # endpoints instead of enumerating. IronRuby inherited Enumerable's versions, so
   # (0...2**64).max walked eighteen quintillion integers and never came back.
