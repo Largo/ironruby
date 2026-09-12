@@ -2092,6 +2092,14 @@ namespace IronRuby.Builtins {
 
         #region Names
 
+        /// <summary>
+        /// Ruby name of the module, never null. Anonymous modules and classes report
+        /// their display name (#<Class:0x...>) the way MRI does in error messages.
+        /// </summary>
+        public string/*!*/ GetNonNullName(RubyContext/*!*/ context) {
+            return _name != null ? GetName(context) : GetDisplayName(context, false).ToString();
+        }
+
         public string GetName(RubyContext/*!*/ context) {
             return context == _context ? _name : _name + "@" + _context.RuntimeId;
         }

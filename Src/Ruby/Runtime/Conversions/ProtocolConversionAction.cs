@@ -214,9 +214,11 @@ namespace IronRuby.Runtime.Conversions {
             // Ruby names true and false themselves rather than their classes in conversion errors:
             // "can't convert true into Integer", not "can't convert TrueClass into Integer". The
             // site is keyed on the class, so reading the value here is still cacheable.
+            // GetNonNullName rather than Name: an anonymous class has no name, and MRI
+            // still prints something there.
             string targetClassName = (args.Target is bool)
                 ? ((bool)args.Target ? "true" : "false")
-                : targetClass.GetNonSingletonClass().Name;
+                : targetClass.GetNonSingletonClass().GetNonNullName(args.RubyContext);
             Expression targetClassNameConstant = AstUtils.Constant(targetClassName, typeof(string));
             MethodResolutionResult respondToMethod, methodMissing = MethodResolutionResult.NotFound;
             ProtocolConversionAction selectedConversion = null;

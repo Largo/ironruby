@@ -635,9 +635,23 @@ module Comparable
   end unless method_defined?(:clamp)
 end
 
+module Math
+  # MRI raises Math::DomainError out of Math.sqrt/log/... and Integer#digits.
+  class DomainError < StandardError; end unless const_defined?(:DomainError)
+end
+
 class Integer
   def digits(base = 10)
+    unless base.is_a?(Integer)
+      unless base.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{base.class} into Integer"
+      end
+      base = base.to_int
+    end
+    # MRI checks the receiver before the radix
     raise Math::DomainError, "out of domain" if negative?
+    raise ArgumentError, "negative radix" if base < 0
+    raise ArgumentError, "invalid radix #{base}" if base < 2
     return [0] if zero?
     result = []
     n = self
@@ -3938,4 +3952,115 @@ class Exception
     end
   end
   private_class_method :__append_full_message__
+end
+
+class Range
+  # Range#min/#max/#minmax are specialised in MRI: without a block they answer from the
+  # endpoints instead of enumerating. IronRuby inherited Enumerable's versions, so
+  # (0...2**64).max walked eighteen quintillion integers and never came back.
+  #
+  # The shape follows MRI's range_max/range_min: only a Numeric begin takes the
+  # endpoint shortcut for an exclusive range, which is why ('a'...'f').max is still "e"
+  # (enumerated) while (303.20...908.1111).max is a TypeError.
+
+  def __range_count__(n)
+    unless n.is_a?(Integer)
+      unless n.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{n.class} into Integer"
+      end
+      n = n.to_int
+      unless n.is_a?(Integer)
+        raise TypeError, "can't convert #{n.class} to Integer"
+      end
+    end
+    raise ArgumentError, "negative size (#{n})" if n < 0
+    n
+  end
+  private :__range_count__
+
+  def max(n = nil, &block)
+    e = self.end
+    raise RangeError, "cannot get the maximum of endless range" if e.nil?
+    b = self.begin
+
+    if n
+      n = __range_count__(n)
+      # An Integer range can answer without walking: (0...2**64).max(2) must not enumerate.
+      if block.nil? && e.is_a?(Integer) && (b.nil? || b.is_a?(Integer))
+        last = exclude_end? ? e - 1 : e
+        return [] if b && b > last
+        count = b.nil? ? n : [n, last - b + 1].min
+        return Array.new(count) { |i| last - i }
+      end
+      # Otherwise enumerate, which is also what makes a Float/Array/Time range a TypeError.
+      return (block ? entries.sort(&block) : entries.sort).last(n).reverse
+    end
+
+    if b.nil?
+      if block
+        raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
+      end
+      if exclude_end?
+        raise TypeError, "cannot exclude non Integer end value" unless e.is_a?(Integer)
+        return e - 1
+      end
+      return e
+    end
+
+    return super(&block) if block || (exclude_end? && !b.is_a?(Numeric))
+
+    c = (b <=> e)
+    return nil if c.nil? || c > 0
+
+    if exclude_end?
+      raise TypeError, "cannot exclude non Integer end value" unless e.is_a?(Integer)
+      return nil if c == 0
+      return e - 1
+    end
+    e
+  end
+
+  def min(n = nil, &block)
+    b = self.begin
+    raise RangeError, "cannot get the minimum of beginless range" if b.nil?
+    if n
+      n = __range_count__(n)
+      return (block ? entries.sort(&block) : entries.sort).first(n) if block
+      return take(n)
+    end
+    if block
+      if self.end.nil?
+        raise RangeError, "cannot get the minimum of endless range with custom comparison method"
+      end
+      return super(&block)
+    end
+
+    e = self.end
+    c = e.nil? ? -1 : (b <=> e)
+    return nil if c.nil? || c > 0 || (c == 0 && exclude_end?)
+    b
+  end
+
+  def minmax(&block)
+    return super(&block) if block
+    [min, max]
+  end
+
+  # Enumerable#count would walk an endless range forever.
+  def count(*args, &block)
+    return super if block || !args.empty?
+    return Float::INFINITY if self.begin.nil? || self.end.nil?
+    super
+  end
+
+  def to_set(*args, &block)
+    raise RangeError, "cannot convert endless range to a set" if self.end.nil?
+    super
+  end
+
+  def to_a
+    raise RangeError, "cannot convert endless range to an array" if self.end.nil?
+    super
+  end
+  alias_method :entries, :to_a
 end

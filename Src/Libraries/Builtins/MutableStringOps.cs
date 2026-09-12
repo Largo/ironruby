@@ -401,7 +401,38 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("negative argument");
             }
 
-            return self.CreateInstance().TaintBy(self).AppendMultiple(self, times);
+            // Ruby 3.0 dropped subclass preservation here: "MyString.new("x") * 2".class is String.
+            var result = MutableString.CreateMutable(self.Encoding).TaintBy(self);
+            if (self.IsEmpty) {
+                // AppendMultiple would spin `times` times appending nothing: "" * 2_000_000_000 hung.
+                return result;
+            }
+            if ((long)self.GetByteCount() * times > Int32.MaxValue) {
+                throw RubyExceptions.CreateArgumentError("argument too big");
+            }
+            return result.AppendMultiple(self, times);
+        }
+
+        /// <summary>
+        /// A count that does not fit in a Fixnum. MRI's limit is a C long, not an int, so
+        /// "" * (2 ** 63 - 1) is "" rather than a RangeError, and only a genuinely out-of-range
+        /// count (past a C long) is a RangeError.
+        /// </summary>
+        [RubyMethod("*")]
+        public static MutableString/*!*/ Repeat(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ times) {
+            if (times.Sign < 0) {
+                throw RubyExceptions.CreateArgumentError("negative argument");
+            }
+            if (times > Int64.MaxValue) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into `long'");
+            }
+
+            // Ruby 3.0 dropped subclass preservation here: "MyString.new("x") * 2".class is String.
+            var result = MutableString.CreateMutable(self.Encoding).TaintBy(self);
+            if (self.IsEmpty) {
+                return result;
+            }
+            throw RubyExceptions.CreateArgumentError("argument too big");
         }
 
         // encoding aware

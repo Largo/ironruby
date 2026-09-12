@@ -454,6 +454,10 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString ReadLineOrParagraph(MutableString separator, int limit) {
+            if (limit == 0) {
+                // A zero limit reads an empty string forever, so IO#each_line(0) never returned.
+                throw RubyExceptions.CreateArgumentError("invalid limit: 0");
+            }
             var stream = GetReadableStream();
             try {
                 return stream.ReadLineOrParagraph(separator, _externalEncoding, PreserveEndOfLines, limit >= 0 ? limit : Int32.MaxValue);

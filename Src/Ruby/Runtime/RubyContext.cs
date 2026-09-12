@@ -1473,7 +1473,7 @@ namespace IronRuby.Runtime {
 
             RubyClass cls = TryGetClassOfRubyObject(obj);
             if (cls != null) {
-                return cls.Name;
+                return cls.GetNonNullName(this);
             }
 
             return GetTypeName(obj.GetType(), display);
