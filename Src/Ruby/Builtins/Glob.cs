@@ -745,7 +745,15 @@ namespace IronRuby.Builtins {
             string strPattern = context.DecodePath(pattern);
             string strBase = (baseDirectory != null) ? context.DecodePath(baseDirectory) : null;
             foreach (string strFileName in GetMatches(context.Platform, strPattern, flags, strBase, sort)) {
-                yield return context.EncodePath(strFileName).TaintBy(pattern);
+                // The results carry the pattern's encoding, not the path encoding:
+                // Dir.glob("file".encode("EUC-JP")).first.encoding is EUC-JP. A name that
+                // cannot be represented in it falls back to the path encoding rather than
+                // raising.
+                var name = MutableString.Create(strFileName, pattern.Encoding);
+                if (name.ContainsInvalidCharacters()) {
+                    name = context.EncodePath(strFileName);
+                }
+                yield return name.TaintBy(pattern);
             }
         }
     }
