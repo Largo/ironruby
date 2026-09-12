@@ -15,6 +15,7 @@
 
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
@@ -317,7 +318,8 @@ namespace IronRuby.Builtins {
         #endregion
 
         [RubyMethod("mkdir", RubyMethodAttributes.PublicSingleton)]
-        public static int MakeDirectory(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Optional]object permissions) {
+        public static int MakeDirectory(ConversionStorage<MutableString>/*!*/ toPath, ConversionStorage<int>/*!*/ fixnumCast,
+            RubyClass/*!*/ self, object dirname, [Optional]object permissions) {
             var platform = self.Context.Platform;
 
             string strDir = self.Context.DecodePath(Protocols.CastToPath(toPath, dirname));
@@ -330,6 +332,17 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateENOENT("No such file or directory - {0}", containingDir);
             }
                 
+            // The permission argument is not decoration: Dir.mkdir(path, 01755) has to
+            // reach mkdir(2) for the setuid/setgid/sticky bits to survive.
+            if (permissions != Missing.Value && permissions != null && Posix.IsAvailable) {
+                int mode = Protocols.CastToFixnum(fixnumCast, permissions);
+                int errno;
+                if (Posix.MkDir(strDir, mode, out errno) != 0) {
+                    throw Posix.Error(errno, strDir);
+                }
+                return 0;
+            }
+
             try {
                 platform.CreateDirectory(strDir);
             } catch (Exception ex) {

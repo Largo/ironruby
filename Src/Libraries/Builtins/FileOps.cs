@@ -988,7 +988,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("mkfifo", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static int MakeFifo(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
-            [DefaultParameterValue(0666)]int mode) {
+            [DefaultParameterValue(0x1B6 /* 0666 */)]int mode) {
 
             string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
             if (!Posix.IsAvailable) {
@@ -1561,7 +1561,7 @@ namespace IronRuby.Builtins {
                 int uid = real ? Posix.GetUid() : Posix.GetEUid();
                 if (uid == 0) {
                     // root bypasses read/write; execute still needs some x bit
-                    return bit != Posix.X_OK || (d.Mode & 0111) != 0;
+                    return bit != Posix.X_OK || (d.Mode & 0x49 /* 0111 */) != 0;
                 }
 
                 int shift;
@@ -1624,7 +1624,7 @@ namespace IronRuby.Builtins {
                 if (d == null || (d.Mode & 04) == 0) {
                     return null;
                 }
-                return d.Mode & 07777;
+                return d.Mode & 0xFFF /* 07777 */;
             }
 
             [RubyMethod("world_writable?")]
@@ -1633,7 +1633,7 @@ namespace IronRuby.Builtins {
                 if (d == null || (d.Mode & 02) == 0) {
                     return null;
                 }
-                return d.Mode & 07777;
+                return d.Mode & 0xFFF /* 07777 */;
             }
 
             [RubyMethod("owned?")]

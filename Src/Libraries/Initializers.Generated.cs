@@ -988,7 +988,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "mkdir", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Int32>(IronRuby.Builtins.RubyDir.MakeDirectory)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Int32>(IronRuby.Builtins.RubyDir.MakeDirectory)
             );
             
             DefineLibraryMethod(module, "open", 0x61, 
