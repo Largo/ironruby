@@ -506,6 +506,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _Splat;
         public static MethodInfo/*!*/ SplatAppend { get { return _SplatAppend ?? (_SplatAppend = CallInstruction.CacheFunc<System.Collections.IList, System.Collections.IList, System.Collections.IList>(RubyOps.SplatAppend)); } }
         private static MethodInfo _SplatAppend;
+        public static MethodInfo/*!*/ SplatKeywordHash { get { return _SplatKeywordHash ?? (_SplatKeywordHash = CallInstruction.CacheFunc<System.Object, IronRuby.Builtins.RubyArray>(RubyOps.SplatKeywordHash)); } }
+        private static MethodInfo _SplatKeywordHash;
         public static MethodInfo/*!*/ SplatPair { get { return _SplatPair ?? (_SplatPair = CallInstruction.CacheFunc<System.Object, System.Collections.IList, System.Object>(RubyOps.SplatPair)); } }
         private static MethodInfo _SplatPair;
         public static MethodInfo/*!*/ StringToMutableString { get { return _StringToMutableString ?? (_StringToMutableString = CallInstruction.CacheFunc<System.String, IronRuby.Builtins.MutableString>(RubyOps.StringToMutableString)); } }

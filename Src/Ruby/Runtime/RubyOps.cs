@@ -1078,10 +1078,28 @@ namespace IronRuby.Runtime {
         public const int OptimizedOpCallParamCount = 5;
         
         #region MakeArray
-        
+
         [Emitted]
         public static RubyArray/*!*/ MakeArray0() {
             return new RubyArray(0);
+        }
+
+        /// <summary>
+        /// Ruby 3 semantics for a call-site `**splat`: the keyword hash is passed as a trailing
+        /// positional argument, but an *empty* one is dropped entirely -- `f(1, **{})` calls
+        /// `f(1)`, not `f(1, {})`.  A literal `f(1, {})` still passes the hash, which is why this
+        /// is only emitted for argument hashes that actually contain a `**` splat.
+        /// The result is fed to the ordinary splatting machinery, so it is either [] or [hash].
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ SplatKeywordHash(object hash) {
+            var dict = hash as IDictionary<object, object>;
+            if (dict != null && dict.Count == 0) {
+                return new RubyArray(0);
+            }
+            var result = new RubyArray(1);
+            result.Add(hash);
+            return result;
         }
 
         [Emitted]
