@@ -201,6 +201,58 @@ module Enumerable
     chunk_while { |a, b| !block.call(a, b) }
   end unless method_defined?(:slice_when)
 
+  # A new group begins at every element the pattern or block accepts; the first
+  # element always starts one, however it answers.
+  def slice_before(*args, &block)
+    if args.empty? == block.nil?
+      raise ArgumentError, "both pattern and block are given" if block
+      raise ArgumentError, "wrong number of arguments (given 0, expected 1)"
+    end
+    pattern = args[0]
+    result = []
+    group = nil
+    each do |*values|
+      item = __enum_item__(values)
+      starts = block ? block.call(item) : (pattern === item)
+      if group.nil?
+        group = [item]
+      elsif starts
+        result << group
+        group = [item]
+      else
+        group << item
+      end
+    end
+    result << group if group
+    result
+  end unless method_defined?(:slice_before)
+
+  def slice_after(*args, &block)
+    if args.empty? == block.nil?
+      raise ArgumentError, "both pattern and block are given" if block
+      raise ArgumentError, "wrong number of arguments (given 0, expected 1)"
+    end
+    pattern = args[0]
+    result = []
+    group = []
+    each do |*values|
+      item = __enum_item__(values)
+      group << item
+      if block ? block.call(item) : (pattern === item)
+        result << group
+        group = []
+      end
+    end
+    result << group unless group.empty?
+    result
+  end unless method_defined?(:slice_after)
+
+  def reverse_each(&block)
+    return to_enum(:reverse_each) { size if respond_to?(:size) } unless block
+    to_a.reverse_each(&block)
+    self
+  end unless method_defined?(:reverse_each)
+
   def chunk
     return to_enum(:chunk) unless block_given?
     result = []
@@ -241,6 +293,36 @@ class Range
       span.floor.to_i + 1
     end
   end unless method_defined?(:size)
+
+  # The built-in #first/#last only answer the no-argument form, and because they
+  # are defined on Range they hide Enumerable#first(n) rather than falling
+  # through to it - so `(0..Float::INFINITY).first(3)` was an ArgumentError.
+  unless method_defined?(:first_without_count)
+    alias_method :first_without_count, :first
+    alias_method :last_without_count, :last
+
+    def first(*args)
+      return first_without_count if args.empty?
+      n = args[0]
+      n = n.to_int unless n.is_a?(Integer)
+      raise ArgumentError, "negative array size (or size too big)" if n < 0
+      result = []
+      return result if n == 0
+      each do |item|
+        result << item
+        break if result.size == n
+      end
+      result
+    end
+
+    def last(*args)
+      return last_without_count if args.empty?
+      n = args[0]
+      n = n.to_int unless n.is_a?(Integer)
+      raise ArgumentError, "negative array size (or size too big)" if n < 0
+      to_a.last(n)
+    end
+  end
 end
 
 module Kernel
@@ -2305,7 +2387,7 @@ class Enumerator
     def select(&block)
       __need_block__("select", block)
       source = self
-      __chain__ { |y| source.each { |*values| y.yield(*values) if block.call(*values) } }
+      __chain__ { |y| source.each { |*values| item = __value__(values); y << item if block.call(item) } }
     end
     alias_method :filter, :select
     alias_method :find_all, :select
@@ -2324,7 +2406,7 @@ class Enumerator
     def reject(&block)
       __need_block__("reject", block)
       source = self
-      __chain__ { |y| source.each { |*values| y.yield(*values) unless block.call(*values) } }
+      __chain__ { |y| source.each { |*values| item = __value__(values); y << item unless block.call(item) } }
     end
 
     def grep(pattern, &block)
@@ -2368,7 +2450,7 @@ class Enumerator
           key = block ? block.call(value) : value
           next if seen.key?(key)
           seen[key] = true
-          y.yield(*values)
+          y << value
         end
       end
     end
@@ -2385,7 +2467,7 @@ class Enumerator
         tag = ::Object.new
         catch(tag) do
           source.each do |*values|
-            y.yield(*values)
+            y << __value__(values)
             taken += 1
             throw(tag) if taken >= n
           end
@@ -2401,7 +2483,7 @@ class Enumerator
         catch(tag) do
           source.each do |*values|
             throw(tag) unless block.call(*values)
-            y.yield(*values)
+            y << __value__(values)
           end
         end
       end
@@ -2419,7 +2501,7 @@ class Enumerator
           if dropped < n
             dropped += 1
           else
-            y.yield(*values)
+            y << __value__(values)
           end
         end
       end
@@ -2432,7 +2514,7 @@ class Enumerator
         dropping = true
         source.each do |*values|
           dropping = false if dropping && !block.call(*values)
-          y.yield(*values) unless dropping
+          y << __value__(values) unless dropping
         end
       end
     end
