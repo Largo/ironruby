@@ -45,11 +45,12 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// The module the method is defined in, which for an alias is the module the alias was
-        /// created in rather than the one holding the original definition.
+        /// created in rather than the one holding the original definition. With Module#prepend
+        /// this is the prepended module rather than the class the method was looked up on.
         /// </summary>
         [RubyMethod("owner")]
         public static RubyModule/*!*/ GetOwner(RubyMethod/*!*/ self) {
-            return self.Info.DeclaringModule;
+            return self.Info.DeclaringModule ?? self.GetTargetClass();
         }
 
         [RubyMethod("receiver")]
@@ -81,23 +82,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("unbind")]
         public static UnboundMethod/*!*/ Unbind(RubyMethod/*!*/ self) {
             return new UnboundMethod(self.GetTargetClass(), self.Name, self.Info);
-        }
-
-        [RubyMethod("name")]
-        public static object GetName(RubyContext/*!*/ context, RubyMethod/*!*/ self) {
-            return context.StringifyIdentifier(self.Name);
-        }
-
-        [RubyMethod("receiver")]
-        public static object GetReceiver(RubyMethod/*!*/ self) {
-            return self.Target;
-        }
-
-        // The module the method is defined in. With Module#prepend this is the prepended module rather than
-        // the class the method was looked up on.
-        [RubyMethod("owner")]
-        public static RubyModule/*!*/ GetOwner(RubyMethod/*!*/ self) {
-            return self.Info.DeclaringModule ?? self.GetTargetClass();
         }
 
         internal static RubyMemberInfo/*!*/ BindGenericParameters(RubyContext/*!*/ context, RubyMemberInfo/*!*/ info, string/*!*/ name, object[]/*!*/ typeArgs) {

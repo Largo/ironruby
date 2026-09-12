@@ -797,6 +797,7 @@ namespace IronRuby.Builtins {
             module.UndefineMethodNoEvent("append_features");
             module.UndefineMethodNoEvent("extend_object");
             module.UndefineMethodNoEvent("module_function");
+            module.UndefineMethodNoEvent("prepend_features");
             DefineRuleGenerator(module, "allocate", 0x51, IronRuby.Builtins.ClassOps.Allocate());
             
             DefineLibraryMethod(module, "clr_constructor", 0x51, 
@@ -4698,6 +4699,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.KernelOps.ToFloat)
             );
             
+            DefineLibraryMethod(module, "fork", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Fork)
+            );
+            
             DefineLibraryMethod(module, "format", 0x52, 
                 0x80020004U, 
                 new Func<IronRuby.Builtins.StringFormatterSiteStorage, System.Object, IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Sprintf)
@@ -4931,9 +4937,14 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.Require)
             );
             
+            DefineLibraryMethod(module, "respond_to_missing?", 0x52, 
+                0x00000000U, 
+                new Func<System.Object, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.RespondToMissing)
+            );
+            
             DefineLibraryMethod(module, "respond_to?", 0x51, 
-                0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Boolean, System.Boolean>(IronRuby.Builtins.KernelOps.RespondTo)
+                0x00040008U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.String, System.Boolean, System.Boolean>(IronRuby.Builtins.KernelOps.RespondTo)
             );
             
             DefineLibraryMethod(module, "select", 0x52, 
@@ -5183,6 +5194,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "Float", 0x61, 
                 0x00010000U, 
                 new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.KernelOps.ToFloat)
+            );
+            
+            DefineLibraryMethod(module, "fork", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Fork)
             );
             
             DefineLibraryMethod(module, "format", 0x61, 
@@ -6120,7 +6136,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Freeze)
             );
             
-            DefineLibraryMethod(module, "include", 0x52, 
+            DefineLibraryMethod(module, "include", 0x51, 
                 0x80000008U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Include)
             );
@@ -6208,6 +6224,21 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Int32, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Of)
             );
             
+            DefineLibraryMethod(module, "prepend", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Prepend)
+            );
+            
+            DefineLibraryMethod(module, "prepend_features", 0x52, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.PrependFeatures)
+            );
+            
+            DefineLibraryMethod(module, "prepended", 0x52, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Prepended)
+            );
+            
             DefineLibraryMethod(module, "private", 0x52, 
                 0x80020004U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.SetPrivateVisibility)
@@ -6253,6 +6284,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "public_class_method", 0x51, 
                 0x80010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPublic)
+            );
+            
+            DefineLibraryMethod(module, "public_instance_method", 0x51, 
+                0x00010002U, 
+                new Func<IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.ModuleOps.GetPublicInstanceMethod)
             );
             
             DefineLibraryMethod(module, "public_instance_methods", 0x51, 
