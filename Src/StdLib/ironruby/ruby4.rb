@@ -1807,6 +1807,15 @@ if defined?(Rational) && Rational.instance_method(:round).arity == 0
         (self / s).__ir_round__ * s
       end
     end
+
+    # MRI shows a Rational as "3/4" and inspects it as "(3/4)".
+    def to_s
+      "#{numerator}/#{denominator}"
+    end
+
+    def inspect
+      "(#{numerator}/#{denominator})"
+    end
   end
 end
 
@@ -1858,6 +1867,303 @@ class String
     needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
     binary.index(needle, offset)
   end unless method_defined?(:byteindex)
+
+  def byterindex(needle, offset = -1)
+    binary = dup
+    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
+    needle = needle.dup
+    needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
+    binary.rindex(needle, offset)
+  end unless method_defined?(:byterindex)
+
+  # Replaces a byte range in place. Every index here is a byte index, so the
+  # work is done on a binary copy and tagged back afterwards, like bytesplice.
+  def bytesplice(*args)
+    str = args.pop
+    unless str.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{str.class} into String")
+    end
+    case args.size
+    when 1
+      range = args[0]
+      unless range.is_a?(::Range)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{range.class} into Integer")
+      end
+      index, length = __byte_range__(range)
+    when 2
+      index = ::Kernel.Integer(args[0])
+      length = ::Kernel.Integer(args[1])
+      index += bytesize if index < 0
+      ::Kernel.raise(::IndexError, "index #{args[0]} out of string") if index < 0 || index > bytesize
+      ::Kernel.raise(::IndexError, "negative length #{length}") if length < 0
+    else
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 2..5)")
+    end
+    length = bytesize - index if index + length > bytesize
+
+    binary = dup
+    binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
+    piece = str.dup
+    piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
+    result = binary[0, index] + piece + binary[(index + length)..-1].to_s
+    result.force_encoding(encoding) if result.respond_to?(:force_encoding)
+    replace(result)
+  end unless method_defined?(:bytesplice)
+
+  def __byte_range__(range)
+    size = bytesize
+    first = range.begin
+    first = 0 if first.nil?
+    first = ::Kernel.Integer(first)
+    first += size if first < 0
+    ::Kernel.raise(::RangeError, "#{range} out of range") if first < 0 || first > size
+    last = range.end
+    if last.nil?
+      length = size - first
+    else
+      last = ::Kernel.Integer(last)
+      last += size if last < 0
+      last -= 1 if range.exclude_end?
+      length = last - first + 1
+      length = 0 if length < 0
+    end
+    [first, length]
+  end
+  private :__byte_range__
+
+  # Appends the bytes of each argument without any encoding negotiation: an
+  # Integer contributes one byte, a String contributes its bytes as they are.
+  def append_as_bytes(*objects)
+    objects.each do |o|
+      bytes =
+        case o
+        when ::Integer then [o & 0xff].pack("C")
+        when ::String then o
+        else ::Kernel.raise(::TypeError, "wrong argument type #{o.class} (expected String or Integer)")
+        end
+      piece = bytes.dup
+      piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
+      binary = dup
+      binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
+      binary << piece
+      binary.force_encoding(encoding) if binary.respond_to?(:force_encoding)
+      replace(binary)
+    end
+    self
+  end unless method_defined?(:append_as_bytes)
+
+  def partition(pattern)
+    if pattern.is_a?(::Regexp)
+      m = pattern.match(self)
+      return [dup, "", ""] unless m
+      [m.pre_match, m[0], m.post_match]
+    else
+      pattern = ::Kernel.String(pattern) unless pattern.is_a?(::String)
+      i = index(pattern)
+      return [dup, "", ""] unless i
+      [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
+    end
+  end unless method_defined?(:partition)
+
+  def rpartition(pattern)
+    if pattern.is_a?(::Regexp)
+      start = nil
+      pos = 0
+      # Regexp#match takes no start offset here, so walk forward keeping the
+      # last match that begins at or after each position.
+      while pos <= length && (i = index(pattern, pos))
+        start = i
+        pos = i + 1
+      end
+      return ["", "", dup] unless start
+      m = pattern.match(self[start..-1])
+      [self[0, start], m[0], self[(start + m[0].length)..-1]]
+    else
+      pattern = ::Kernel.String(pattern) unless pattern.is_a?(::String)
+      i = rindex(pattern)
+      return ["", "", dup] unless i
+      [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
+    end
+  end unless method_defined?(:rpartition)
+
+  def prepend(*others)
+    others = others.map { |o| o.is_a?(::String) ? o : ::Kernel.String(o) }
+    replace(others.join + self)
+  end unless method_defined?(:prepend)
+
+  def casecmp?(other)
+    return nil unless other.is_a?(::String)
+    c = casecmp(other)
+    c.nil? ? nil : c == 0
+  end unless method_defined?(:casecmp?)
+
+  def delete_prefix!(prefix)
+    result = delete_prefix(prefix)
+    result == self ? nil : replace(result)
+  end unless method_defined?(:delete_prefix!)
+
+  def delete_suffix!(suffix)
+    result = delete_suffix(suffix)
+    result == self ? nil : replace(result)
+  end unless method_defined?(:delete_suffix!)
+
+  # 3.4's name for -@. Spelled out rather than aliased: String#-@ is itself
+  # defined further down this file.
+  def dedup
+    frozen? ? self : dup.freeze
+  end unless method_defined?(:dedup)
+
+  # Parses as much of a complex number as it can and answers (0+0i) for the
+  # rest, the way Kernel#Complex(str, exception: false) does. The grammar is
+  # MRI's: [real][sign imaginary"i"], or "real@angle" for polar form, with the
+  # real and imaginary parts each an integer, a float or a rational.
+  NUMBER__ = '[+-]?(?:\d[\d_]*)?(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?(?:\/\d[\d_]*)?'
+
+  def to_c
+    s = strip
+    if (m = /\A(#{NUMBER__})@(#{NUMBER__})/o.match(s)) && !m[1].empty? && !m[2].empty?
+      return ::Complex.polar(__to_num__(m[1]), __to_num__(m[2]))
+    end
+    if (m = /\A(#{NUMBER__})?([+-](?:\d[\d_]*)?(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?(?:\/\d[\d_]*)?)i/o.match(s))
+      real = m[1].nil? || m[1].empty? ? 0 : __to_num__(m[1])
+      imag = m[2] == "+" ? 1 : (m[2] == "-" ? -1 : __to_num__(m[2]))
+      return ::Complex.new(real, imag)
+    end
+    if (m = /\A(#{NUMBER__})i/o.match(s)) && !m[1].empty? && m[1] != "+" && m[1] != "-"
+      return ::Complex.new(0, __to_num__(m[1]))
+    end
+    if (m = /\A(#{NUMBER__})/o.match(s)) && !m[1].empty?
+      return ::Complex.new(__to_num__(m[1]), 0)
+    end
+    ::Complex.new(0, 0)
+  end unless method_defined?(:to_c)
+
+  def __to_num__(text)
+    text = text.delete("_")
+    if text.include?("/")
+      text.to_r
+    elsif text.include?(".") || text.include?("e") || text.include?("E")
+      text.to_f
+    else
+      text.to_i
+    end
+  end
+  private :__to_num__
+
+  # The inverse of #dump. Anything that is not something #dump could have
+  # produced is a RuntimeError, which is what MRI raises here.
+  def undump
+    s = self
+    forced = nil
+    if (m = /\A(".*")\.force_encoding\("([^"]+)"\)\z/m.match(s))
+      s = m[1]
+      forced = m[2]
+    end
+    unless s.start_with?('"') && s.end_with?('"') && s.length >= 2
+      ::Kernel.raise(::RuntimeError, "invalid dumped string; not wrapped with '\"' nor '\"...\".force_encoding(\"...\")' form")
+    end
+    body = s[1...-1]
+    ::Kernel.raise(::RuntimeError, "invalid dumped string") if body.nil?
+    out = +""
+    forced = nil
+    i = 0
+    while i < body.length
+      c = body[i]
+      if c == '"'
+        ::Kernel.raise(::RuntimeError, "invalid dumped string")
+      elsif c == "\\"
+        i += 1
+        e = body[i]
+        ::Kernel.raise(::RuntimeError, "invalid dumped string") if e.nil?
+        case e
+        when "n" then out << "\n"
+        when "t" then out << "\t"
+        when "r" then out << "\r"
+        when "f" then out << "\f"
+        when "v" then out << "\v"
+        when "b" then out << "\b"
+        when "a" then out << "\a"
+        when "e" then out << "\e"
+        when "s" then out << " "
+        when "\\" then out << "\\"
+        when '"' then out << '"'
+        when "#" then out << "#"
+        when "0" then out << "\0"
+        when "x"
+          hex = body[(i + 1), 2]
+          ::Kernel.raise(::RuntimeError, "invalid hex escape") unless hex =~ /\A[0-9a-fA-F]{2}\z/
+          out << hex.to_i(16).chr
+          i += 2
+        when "u"
+          if body[i + 1] == "{"
+            close = body.index("}", i + 1)
+            ::Kernel.raise(::RuntimeError, "unterminated Unicode escape") unless close
+            body[(i + 2)...close].split(" ").each { |cp| out << __undump_cp__(cp) }
+            i = close
+          else
+            cp = body[(i + 1), 4]
+            ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless cp =~ /\A[0-9a-fA-F]{4}\z/
+            out << __undump_cp__(cp)
+            i += 4
+          end
+        else
+          # MRI passes an escape it does not recognise through untouched.
+          out << "\\" << e
+        end
+      else
+        out << c
+      end
+      i += 1
+    end
+    out.force_encoding(forced) if forced && out.respond_to?(:force_encoding)
+    out
+  end unless method_defined?(:undump)
+
+  def __undump_cp__(hex)
+    ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless hex =~ /\A[0-9a-fA-F]+\z/
+    cp = hex.to_i(16)
+    ::Kernel.raise(::RuntimeError, "invalid Unicode codepoint") if cp > 0x10ffff
+    # pack("U") hands back an ASCII-8BIT string here; the bytes are UTF-8.
+    ch = [cp].pack("U")
+    ch.force_encoding(::Encoding::UTF_8) if ch.respond_to?(:force_encoding)
+    ch
+  end
+  private :__undump_cp__
+
+  # Replaces every byte that is not part of a valid character with the given
+  # replacement (the encoding's own replacement character by default).
+  def scrub(replacement = nil, &block)
+    return dup if valid_encoding?
+    default = encoding == ::Encoding::UTF_8 ? "�" : "?"
+    out = +""
+    out.force_encoding(encoding) if out.respond_to?(:force_encoding)
+    each_char do |ch|
+      if ch.valid_encoding?
+        out << ch
+      elsif block
+        out << block.call(ch).to_s
+      else
+        out << (replacement || default)
+      end
+    end
+    out
+  end unless method_defined?(:scrub)
+
+  def scrub!(replacement = nil, &block)
+    replace(scrub(replacement, &block))
+  end unless method_defined?(:scrub!)
+
+  # `str =~ x` is `x =~ str` for a Regexp and a TypeError for anything that is
+  # not, which is how MRI stops the common `"a" =~ "b"` mistake.
+  def =~(other)
+    if other.is_a?(::Regexp)
+      other =~ self
+    elsif other.respond_to?(:=~)
+      other =~ self
+    else
+      ::Kernel.raise(::TypeError, "type mismatch: #{other.class} given")
+    end
+  end unless method_defined?(:=~)
 end
 
 # The complex-number half of Numeric.  IronRuby's Complex has these, but the
@@ -1934,6 +2240,32 @@ end
 class Complex
   def real?
     false
+  end
+
+  # MRI builds both forms the same way: the real part, the imaginary part's
+  # sign, the imaginary part's magnitude, then "i" - with a "*" in front of the
+  # "i" when the magnitude does not end in a digit, so that "(3/4)*i" and
+  # "Infinity*i" stay readable. #to_s renders the parts with #to_s and #inspect
+  # renders them with #inspect and wraps the lot in parentheses.
+  def __format__(inspecting)
+    r = real
+    i = imag
+    negative = (i.respond_to?(:negative?) ? i.negative? : i < 0) rescue false
+    negative ||= (i.is_a?(::Float) && i == 0.0 && (1.0 / i) < 0)
+    magnitude = negative ? -i : i
+    rs = inspecting ? r.inspect : r.to_s
+    is = inspecting ? magnitude.inspect : magnitude.to_s
+    star = is =~ /\d\z/ ? "" : "*"
+    "#{rs}#{negative ? '-' : '+'}#{is}#{star}i"
+  end
+  private :__format__
+
+  def to_s
+    __format__(false)
+  end
+
+  def inspect
+    "(#{__format__(true)})"
   end
 
   def imaginary
