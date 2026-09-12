@@ -698,7 +698,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("collect!")]
         [RubyMethod("map!")]
         public static object CollectInPlace(BlockParam collector, IList/*!*/ self) {
-            return (collector != null) ? CollectInPlaceImpl(collector, self) : new Enumerator((_, block) => CollectInPlaceImpl(block, self));
+            return (collector != null) ? CollectInPlaceImpl(collector, self) : new Enumerator(self, "collect!");
         }
 
         private static object CollectInPlaceImpl(BlockParam/*!*/ collector, IList/*!*/ self) {
@@ -796,7 +796,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("delete_if")]
         public static object DeleteIf(BlockParam block, IList/*!*/ self) {
-            return (block != null) ? DeleteIfImpl(block, self) : new Enumerator((_, innerBlock) => DeleteIfImpl(innerBlock, self));
+            return (block != null) ? DeleteIfImpl(block, self) : new Enumerator(self, "delete_if");
         }
 
         private static object DeleteIfImpl(BlockParam/*!*/ block, IList/*!*/ self) {
@@ -807,7 +807,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("reject!")]
         public static object RejectInPlace(BlockParam block, IList/*!*/ self) {
-            return (block != null) ? RejectInPlaceImpl(block, self) : new Enumerator((_, innerBlock) => RejectInPlaceImpl(innerBlock, self));
+            return (block != null) ? RejectInPlaceImpl(block, self) : new Enumerator(self, "reject!");
         }
 
         private static object RejectInPlaceImpl(BlockParam/*!*/ block, IList/*!*/ self) {
@@ -819,7 +819,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("reject")]
         public static object Reject(CallSiteStorage<EachSite>/*!*/ each, UnaryOpStorage/*!*/ allocate,
             BlockParam predicate, IList/*!*/ self) {
-            return (predicate != null) ? RejectImpl(each, allocate, predicate, self) : new Enumerator((_, block) => RejectImpl(each, allocate, block, self));
+            return (predicate != null) ? RejectImpl(each, allocate, predicate, self) : new Enumerator(self, "reject");
         }
 
         private static object RejectImpl(CallSiteStorage<EachSite>/*!*/ each, UnaryOpStorage/*!*/ allocate, 
@@ -875,7 +875,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each")]
         public static Enumerator/*!*/ Each(IList/*!*/ self) {
-            return new Enumerator((_, block) => Each(block, self));
+            return new Enumerator(self, "each");
         }
 
         [RubyMethod("each")]
@@ -891,7 +891,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each_index")]
         public static Enumerator/*!*/ EachIndex(IList/*!*/ self) {
-            return new Enumerator((_, block) => EachIndex(block, self));
+            return new Enumerator(self, "each_index");
         }
         
         [RubyMethod("each_index")]
@@ -910,7 +910,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("reverse_each")]
         public static Enumerator/*!*/ ReverseEach(RubyArray/*!*/ self) {
-            return new Enumerator((_, block) => ReverseEach(block, self));
+            return new Enumerator(self, "reverse_each");
         }
 
         [RubyMethod("reverse_each")]

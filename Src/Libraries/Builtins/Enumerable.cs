@@ -131,7 +131,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("collect")]
         [RubyMethod("map")]
         public static Enumerator/*!*/ GetMapEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam collector, object self) {
-            return new Enumerator((_, block) => Map(each, block, self));
+            return new Enumerator(self, "map");
         }
 
         /// <summary>
@@ -264,7 +264,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each_with_index")]
         public static Enumerator/*!*/ GetEachWithIndexEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam block, object self) {
-            return new Enumerator((_, innerBlock) => EachWithIndex(each, innerBlock, self));
+            return new Enumerator(self, "each_with_index");
         }
 
         [RubyMethod("each_with_index")]
@@ -331,7 +331,7 @@ namespace IronRuby.Builtins {
         }
 
         private static Enumerator/*!*/ FilterEnum(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self, bool acceptingValue) {
-            return new Enumerator((_, block) => FilterImpl(each, block, self, acceptingValue));
+            return new Enumerator(self, acceptingValue ? "select" : "reject");
         }
 
         private static object FilterImpl(CallSiteStorage<EachSite>/*!*/ each, BlockParam/*!*/ predicate, object self, bool acceptingValue) {
@@ -622,7 +622,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("partition")]
         public static Enumerator/*!*/ GetPartitionEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
-            return new Enumerator((_, block) => Partition(each, block, self));
+            return new Enumerator(self, "partition");
         }
 
         [RubyMethod("partition")]
@@ -858,7 +858,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("take_while")]
         public static Enumerator/*!*/ GetTakeWhileEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
-            return new Enumerator((_, block) => TakeWhile(each, block, self));
+            return new Enumerator(self, "take_while");
         }
 
         [RubyMethod("take_while")]
@@ -908,7 +908,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("drop_while")]
         public static Enumerator/*!*/ GetDropWhileEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam predicate, object self) {
-            return new Enumerator((_, block) => DropWhile(each, block, self));
+            return new Enumerator(self, "drop_while");
         }
 
         [RubyMethod("drop_while")]
@@ -997,7 +997,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each_cons")]
         public static Enumerator/*!*/ GetEachConsEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam block, object self, [DefaultProtocol]int sliceSize) {
-            return new Enumerator((_, innerBlock) => EachCons(each, innerBlock, self, sliceSize));
+            return new Enumerator(self, "each_cons", sliceSize);
         }
 
         [RubyMethod("each_cons")]
@@ -1013,7 +1013,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each_slice")]
         public static Enumerator/*!*/ GetEachSliceEnumerator(CallSiteStorage<EachSite>/*!*/ each, BlockParam block, object self, [DefaultProtocol]int sliceSize) {
-            return new Enumerator((_, innerBlock) => EachSlice(each, innerBlock, self, sliceSize));
+            return new Enumerator(self, "each_slice", sliceSize);
         }
 
         [RubyMethod("each_slice")]
