@@ -222,21 +222,36 @@ namespace IronRuby.Builtins {
 
             bool widthSeen = false;
             bool precisionSeen = false;
-            bool anythingSeen = false;
+            bool flagSeen = false;
+            bool numberSeen = false;
+            bool argumentSeen = false;
             char conversion = '\0';
 
             while (true) {
                 if (_index >= _format.Length) {
-                    throw anythingSeen
-                        ? RubyExceptions.CreateArgumentError("malformed format string - %")
-                        : RubyExceptions.CreateArgumentError("incomplete format specifier; use %% (double %) instead");
+                    // Ruby distinguishes three ways of running out of format string, by what had
+                    // already been consumed when it happened.
+                    if (numberSeen) {
+                        throw RubyExceptions.CreateArgumentError("malformed format string - %*[0-9]");
+                    }
+                    if (argumentSeen) {
+                        // "%1$" and "%<foo>" still fetch their argument - so a missing one is
+                        // reported - and then emit a bare '%'.
+                        GetData(_opts.ArgIndex, _opts.Name);
+                        _buf.Append('%');
+                        return;
+                    }
+                    if (flagSeen) {
+                        throw RubyExceptions.CreateArgumentError("invalid format character - %");
+                    }
+                    throw RubyExceptions.CreateArgumentError("incomplete format specifier; use %% (double %) instead");
                 }
 
                 char c = _format[_index];
 
                 if (c == '#' || c == '-' || c == '+' || c == ' ' || c == '0') {
                     _index++;
-                    anythingSeen = true;
+                    flagSeen = true;
                     switch (c) {
                         case '#': _opts.AltForm = true; break;
                         case '-': _opts.LeftAdj = true; break;
@@ -249,7 +264,12 @@ namespace IronRuby.Builtins {
 
                 if (c == '*') {
                     _index++;
-                    anythingSeen = true;
+                    numberSeen = true;
+                    // The digits that may follow are checked before the argument is fetched, so
+                    // a bare trailing "%*" is malformed whether or not an argument was supplied.
+                    if (_index >= _format.Length) {
+                        throw RubyExceptions.CreateArgumentError("malformed format string - %*[0-9]");
+                    }
                     if (widthSeen) {
                         throw RubyExceptions.CreateArgumentError("width given twice");
                     }
@@ -265,7 +285,7 @@ namespace IronRuby.Builtins {
 
                 if (c == '.') {
                     _index++;
-                    anythingSeen = true;
+                    numberSeen = true;
                     if (precisionSeen) {
                         throw RubyExceptions.CreateArgumentError("precision given twice");
                     }
@@ -295,6 +315,7 @@ namespace IronRuby.Builtins {
                         }
                         _opts.ArgIndex = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
                         _index = end + 1;
+                        argumentSeen = true;
                     } else {
                         if (widthSeen) {
                             throw RubyExceptions.CreateArgumentError("width given twice");
@@ -302,8 +323,8 @@ namespace IronRuby.Builtins {
                         widthSeen = true;
                         _opts.FieldWidth = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
                         _index = end;
+                        numberSeen = true;
                     }
-                    anythingSeen = true;
                     continue;
                 }
 
@@ -320,13 +341,20 @@ namespace IronRuby.Builtins {
                     _opts.Name = _format.Substring(_index + 1, end - _index - 1);
                     _opts.NameStyle = c;
                     _index = end + 1;
-                    anythingSeen = true;
+                    argumentSeen = true;
                     if (c == '{') {
                         // %{name} is a complete directive; it formats the value with to_s
                         conversion = 's';
                         break;
                     }
                     continue;
+                }
+
+                // A '%' directly before a newline or a NUL is not a specifier at all: Ruby emits
+                // the '%' and copies the character after it verbatim.
+                if ((c == '\n' || c == '\0') && !flagSeen && !numberSeen && !argumentSeen) {
+                    _buf.Append('%');
+                    return;
                 }
 
                 // conversion character
@@ -336,7 +364,7 @@ namespace IronRuby.Builtins {
             }
 
             if (conversion == '%' && _opts.NameStyle != '{') {
-                if (anythingSeen) {
+                if (flagSeen || numberSeen || argumentSeen) {
                     throw RubyExceptions.CreateArgumentError("invalid format character - %");
                 }
                 _buf.Append('%');
@@ -526,9 +554,23 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("can't convert nil into Integer");
             }
 
+            if (value is int) {
+                return new BigInteger((int)value);
+            }
+            if (value is BigInteger) {
+                return (BigInteger)value;
+            }
+
+            // Ruby tries #to_str before #to_int and runs whatever string it gets through
+            // Kernel#Integer, so an object whose #to_str is not numeric raises ArgumentError
+            // rather than TypeError.
             MutableString str = value as MutableString;
+            // Symbols must not take the string path: they have no #to_str in Ruby 1.9+, so
+            // "%d" % :s is a TypeError rather than a failed Integer().
+            if (str == null && _siteStorage != null && !(value is RubySymbol)) {
+                str = _siteStorage.TryConvertToStr(value);
+            }
             if (str != null) {
-                // Ruby runs String arguments through Kernel#Integer
                 object parsed = KernelOps.ToInteger(null, str);
                 return (parsed is BigInteger) ? (BigInteger)parsed : (BigInteger)(int)parsed;
             }

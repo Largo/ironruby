@@ -30,7 +30,9 @@ end
 
 def show(label, fmt, args)
   begin
-    result = "|" + repr(format(fmt, *args)) + "|"
+    # Object ids differ run to run and between implementations, so "#<Foo:0x...>" from
+    # "%p" is masked rather than reported as a difference.
+    result = "|" + repr(format(fmt, *args)).gsub(/0x[0-9a-f]+/, "0xXX") + "|"
   rescue StandardError => e
     result = e.class.to_s + ": " + e.message
   end

@@ -202,7 +202,13 @@ namespace IronRuby.Runtime.Conversions {
             }
 
             RubyClass targetClass = args.RubyContext.GetImmediateClassOf(args.Target);
-            Expression targetClassNameConstant = AstUtils.Constant(targetClass.GetNonSingletonClass().Name, typeof(string));
+            // Ruby names true and false themselves rather than their classes in conversion errors:
+            // "can't convert true into Integer", not "can't convert TrueClass into Integer". The
+            // site is keyed on the class, so reading the value here is still cacheable.
+            string targetClassName = (args.Target is bool)
+                ? ((bool)args.Target ? "true" : "false")
+                : targetClass.GetNonSingletonClass().Name;
+            Expression targetClassNameConstant = AstUtils.Constant(targetClassName, typeof(string));
             MethodResolutionResult respondToMethod, methodMissing = MethodResolutionResult.NotFound;
             ProtocolConversionAction selectedConversion = null;
             RubyMemberInfo conversionMethod = null;
