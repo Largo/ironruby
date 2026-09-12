@@ -70,7 +70,9 @@ namespace IronRuby.Builtins {
         public static RubyMethod/*!*/ Bind(UnboundMethod/*!*/ self, object target) {
             RubyContext context = self._targetConstraint.Context;
 
-            if (!context.IsKindOf(target, self._targetConstraint)) {
+            // Since Ruby 3.0 (Feature #15608) an unbound method whose owner is a module rather than a class
+            // may be bound to any receiver:
+            if (self._targetConstraint.IsClass && !context.IsKindOf(target, self._targetConstraint)) {
                 throw RubyExceptions.CreateTypeError(
                     "bind argument must be an instance of {0}", self._targetConstraint.GetName(context)
                 );

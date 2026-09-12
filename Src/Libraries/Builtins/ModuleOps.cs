@@ -330,8 +330,10 @@ namespace IronRuby.Builtins {
 
             var visibility = GetDefinedMethodVisibility(scope, self, methodName);
             using (self.Context.ClassHierarchyLocker()) {
-                // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do:
-                if (!self.HasAncestorNoLock(targetConstraint)) {
+                // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do.
+                // Since Ruby 3.0 (Feature #15608) a method whose owner is a module rather than a class may be
+                // bound to any receiver, so only a class constraint is enforced.
+                if (targetConstraint.IsClass && !self.HasAncestorNoLock(targetConstraint)) {
                     throw RubyExceptions.CreateTypeError(
                         "bind argument must be a subclass of {0}", targetConstraint.GetName(scope.RubyContext)
                     );
