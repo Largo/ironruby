@@ -1099,7 +1099,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "compatible?", 0x61, 
-                new[] { 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000000U}, 
+                new[] { 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000006U, 0x00000000U}, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
@@ -1109,6 +1109,13 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible), 
                 new Func<IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetCompatible)
             );
             

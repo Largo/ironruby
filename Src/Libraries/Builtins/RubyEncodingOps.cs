@@ -440,6 +440,45 @@ namespace IronRuby.Builtins {
             return GetCompatible(self, encoding1.String, encoding2.String);
         }
 
+        // A Regexp carries an encoding but its contents are not a String, which is the distinction
+        // MRI's rb_enc_compatible draws: /abc/ in US-ASCII is compatible with a UTF-8 String the
+        // way Encoding::US_ASCII is, not the way "abc" is.
+        [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]
+        public static RubyEncoding GetCompatible(RubyClass/*!*/ self, [NotNull]RubyRegex/*!*/ regex1, [NotNull]RubyRegex/*!*/ regex2) {
+            return MutableString.GetCompatibleEncoding(regex1.Encoding, regex2.Encoding);
+        }
+
+        [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]
+        public static RubyEncoding GetCompatible(RubyClass/*!*/ self, [NotNull]MutableString/*!*/ str, [NotNull]RubyRegex/*!*/ regex) {
+            return str.GetCompatibleEncoding(regex.Encoding);
+        }
+
+        [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]
+        public static RubyEncoding GetCompatible(RubyClass/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [NotNull]MutableString/*!*/ str) {
+            // argument order matters: the Regexp is the first operand here
+            return MutableString.GetCompatibleEncoding(null, regex.Encoding, str, str.Encoding);
+        }
+
+        [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]
+        public static RubyEncoding GetCompatible(RubyClass/*!*/ self, [NotNull]RubySymbol/*!*/ symbol, [NotNull]RubyRegex/*!*/ regex) {
+            return GetCompatible(self, symbol.String, regex);
+        }
+
+        [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]
+        public static RubyEncoding GetCompatible(RubyClass/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [NotNull]RubySymbol/*!*/ symbol) {
+            return GetCompatible(self, regex, symbol.String);
+        }
+
+        [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]
+        public static RubyEncoding GetCompatible(RubyClass/*!*/ self, [NotNull]RubyEncoding/*!*/ encoding, [NotNull]RubyRegex/*!*/ regex) {
+            return MutableString.GetCompatibleEncoding(encoding, regex.Encoding);
+        }
+
+        [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]
+        public static RubyEncoding GetCompatible(RubyClass/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [NotNull]RubyEncoding/*!*/ encoding) {
+            return MutableString.GetCompatibleEncoding(regex.Encoding, encoding);
+        }
+
         [RubyMethod("compatible?", RubyMethodAttributes.PublicSingleton)]
         public static RubyEncoding GetCompatible(RubyClass/*!*/ self, object obj1, object obj2) {
             return null;

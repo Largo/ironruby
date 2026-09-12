@@ -109,7 +109,7 @@ namespace IronRuby.Builtins {
             if (kc != 0) {
                 // Handling multi-byte K-coded characters is not entirely correct here.
                 // Three cases to be considered:
-                // 1) Multi-byte character is explicitly contained in the pattern: /€*/
+                // 1) Multi-byte character is explicitly contained in the pattern: /ï¿½*/
                 // 2) Subsequent escapes form a complete character: /\342\202\254*/ or /\xe2\x82\xac*/
                 // 3) Subsequent escapes form an incomplete character: /[\x7f-\xff]{1,3}/
                 //
@@ -231,7 +231,17 @@ namespace IronRuby.Builtins {
         }
 
         public RubyEncoding/*!*/ Encoding {
-            get { return _pattern.Encoding; }
+            get {
+                // MRI's rb_reg_encoding. A regexp with no encoding flag whose source happens to be
+                // ASCII only is US-ASCII, whatever the encoding of the file it was written in, so
+                // that it can match a string in any ASCII compatible encoding. /n is not an
+                // encoding flag for this purpose.
+                var flag = _options & RubyRegexOptions.EncodingMask;
+                if ((flag == RubyRegexOptions.NONE || flag == RubyRegexOptions.FIXED) && _pattern.IsAscii()) {
+                    return RubyEncoding.Ascii;
+                }
+                return _pattern.Encoding;
+            }
         }
 
         public MutableString/*!*/ Pattern {
