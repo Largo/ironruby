@@ -2928,10 +2928,17 @@ namespace IronRuby.Runtime {
 
         /// <exception cref="ArgumentException">Unknown encoding.</exception>
         public RubyEncoding/*!*/ GetRubyEncoding(MutableString/*!*/ name) {
+            // These are the messages MRI gives, and they reach the user from #force_encoding,
+            // #encode, Integer#chr and IO as well as from Encoding.find. .NET's own message for an
+            // unknown name talks about Encoding.RegisterProvider, which means nothing in Ruby.
             if (!name.IsAscii()) {
-                throw new ArgumentException(String.Format("Unknown encoding: '{0}'", name.ToAsciiString()));
+                throw RubyExceptions.CreateArgumentError("invalid encoding name (non ASCII)");
             }
-            return RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name.ToString()));
+            try {
+                return RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name.ToString()));
+            } catch (ArgumentException) {
+                throw RubyExceptions.CreateArgumentError("unknown encoding name - {0}", name.ToAsciiString());
+            }
         }
 
         /// <exception cref="ArgumentException">Unknown encoding.</exception>

@@ -372,22 +372,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("find", RubyMethodAttributes.PublicSingleton)]
         public static RubyEncoding GetEncoding(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ name) {
-            if (!name.IsAscii()) {
-                throw RubyExceptions.CreateArgumentError("invalid encoding name (non ASCII)");
-            }
-
             // "internal" is the only name that can legitimately answer nil - Encoding.default_internal
             // is nil unless the program set it.
-            if (name.ToString().ToUpperInvariant() == "INTERNAL") {
+            if (name.IsAscii() && name.ToString().ToUpperInvariant() == "INTERNAL") {
                 return self.Context.DefaultInternalEncoding;
             }
 
-            try {
-                return self.Context.GetRubyEncoding(name);
-            } catch (ArgumentException) {
-                // .NET's message names its own RegisterProvider API; Ruby's names the encoding.
-                throw RubyExceptions.CreateArgumentError("unknown encoding name - {0}", name.ToAsciiString());
-            }
+            return self.Context.GetRubyEncoding(name);
         }
 
         #endregion
