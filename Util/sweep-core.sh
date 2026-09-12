@@ -43,7 +43,7 @@ run_one() {
     esac
     # Did mspec get as far as running examples? The dotted formatter prints
     # progress characters on their own line before anything else.
-    if [ "$cause" = REPORT ] && ! grep -a -qE '^[.EF]+$|^[0-9]+\)$' "$log"; then
+    if [ "$cause" = REPORT ] && ! grep -a -qE '^[.EF][.EF]*([^.EF]|$)|^[0-9]+\)$' "$log"; then
       cause=LOAD
     fi
     printf '%s\t%s\tNO-TALLY\t%s\n' "$status" "$file" "$cause"

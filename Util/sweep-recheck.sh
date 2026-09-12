@@ -34,7 +34,7 @@ while IFS=$'\t' read -r status file tally cause; do
       0|1) c=REPORT ;;
       *) c=ABORT ;;
     esac
-    if [ "$c" = REPORT ] && ! grep -a -qE '^[.EF]+$|^[0-9]+\)$' "$log"; then
+    if [ "$c" = REPORT ] && ! grep -a -qE '^[.EF][.EF]*([^.EF]|$)|^[0-9]+\)$' "$log"; then
       c=LOAD
     fi
     printf '%s\t%s\tNO-TALLY\t%s\n' "$st" "$file" "$c"
