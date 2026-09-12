@@ -638,6 +638,20 @@ end
 module Math
   # MRI raises Math::DomainError out of Math.sqrt/log/... and Integer#digits.
   class DomainError < StandardError; end unless const_defined?(:DomainError)
+
+  class << self
+    alias_method :__ir_frexp__, :frexp
+
+    # frexp answered the magnitude for a negative argument - Math.frexp(-0.5)
+    # came back [0.5, 0] where MRI says [-0.5, 0] - and 0.0 came back with the
+    # smallest exponent instead of [0.0, 0].
+    def frexp(value)
+      value = ::Kernel.Float(value)
+      return [value, 0] if value == 0.0 || value.nan? || value.infinite?
+      fraction, exponent = __ir_frexp__(value.abs)
+      [value < 0 ? -fraction : fraction, exponent]
+    end
+  end
 end
 
 class Integer
@@ -2433,6 +2447,181 @@ class String
     else
       ::Kernel.raise(::TypeError, "type mismatch: #{other.class} given")
     end
+  end unless method_defined?(:=~)
+end
+
+# Numeric#step never learned the keyword form - `1.step(by: 2, to: 7)` handed
+# the options hash to the positional parameter and came back with "can't convert
+# Hash into Float", which was 70 of spec/core/numeric's 123 errors. The
+# positional form still goes to the built-in.
+class Numeric
+  alias_method :__ir_step__, :step
+
+  def step(*args, &block)
+    kw = nil
+    if !args.empty? && args.last.is_a?(::Hash)
+      last = args.last
+      unless last.empty?
+        unknown = last.keys - [:to, :by]
+        unless unknown.empty?
+          ::Kernel.raise(::ArgumentError, "unknown keyword: #{unknown[0].inspect}")
+        end
+        kw = args.pop
+      end
+    end
+    if kw.nil?
+      # The built-in only has the block form.
+      return ::Enumerator.new { |y| __ir_step__(*args) { |v| y << v } } unless block
+      return __ir_step__(*args, &block)
+    end
+    unless args.empty?
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 0..2)")
+    end
+
+    limit = kw[:to]
+    increment = kw.key?(:by) ? kw[:by] : 1
+    unless block
+      return ::Enumerator.new { |y| step(**kw) { |v| y << v } }
+    end
+    ::Kernel.raise(::ArgumentError, "step can't be 0") if increment == 0
+
+    if limit.nil?
+      value = self
+      loop do
+        block.call(value)
+        value += increment
+      end
+      return self
+    end
+
+    if is_a?(::Float) || limit.is_a?(::Float) || increment.is_a?(::Float)
+      # MRI multiplies rather than accumulates so the rounding does not drift.
+      base = to_f
+      stop = limit.to_f
+      unit = increment.to_f
+      n = (stop - base) / unit
+      err = ((base.abs + stop.abs + (stop - base).abs) / unit.abs) * ::Float::EPSILON
+      err = 0.5 if err.nan? || err > 0.5
+      n = (n + err).floor
+      i = 0
+      while i <= n
+        block.call(base + i * unit)
+        i += 1
+      end
+    else
+      value = self
+      if increment > 0
+        while value <= limit
+          block.call(value)
+          value += increment
+        end
+      else
+        while value >= limit
+          block.call(value)
+          value += increment
+        end
+      end
+    end
+    self
+  end
+end
+
+class Numeric
+  def i
+    ::Complex.new(0, self)
+  end unless method_defined?(:i)
+
+  def to_c
+    ::Complex.new(self, 0)
+  end unless method_defined?(:to_c)
+
+  def numerator
+    to_r.numerator
+  end unless method_defined?(:numerator)
+
+  def denominator
+    to_r.denominator
+  end unless method_defined?(:denominator)
+
+  def fdiv(other)
+    to_f / other
+  end unless method_defined?(:fdiv)
+
+  alias_method :magnitude, :abs unless method_defined?(:magnitude)
+end
+
+class Float
+  # The neighbouring representable Floats. The CLR walks the IEEE bit pattern
+  # for us; MRI's next_float of +Infinity is +Infinity, where BitIncrement
+  # answers NaN, so the ends are special-cased.
+  def next_float
+    return ::Float::NAN if nan?
+    return self if self == ::Float::INFINITY
+    ::System::Math.BitIncrement(self)
+  end unless method_defined?(:next_float)
+
+  def prev_float
+    return ::Float::NAN if nan?
+    return self if self == -::Float::INFINITY
+    ::System::Math.BitDecrement(self)
+  end unless method_defined?(:prev_float)
+
+  # The exact value of the Float, which is always a dyadic rational.
+  def to_r
+    ::Kernel.raise(::FloatDomainError, to_s) if nan? || infinite?
+    fraction, exponent = ::Math.frexp(abs)
+    numerator = ::Math.ldexp(fraction, 53).to_i
+    numerator = -numerator if self < 0
+    exponent -= 53
+    if exponent >= 0
+      ::Kernel.Rational(numerator * (2**exponent), 1)
+    else
+      ::Kernel.Rational(numerator, 2**(-exponent))
+    end
+  end unless method_defined?(:to_r)
+
+  def rationalize(eps = nil)
+    return to_r if eps.nil?
+    eps = eps.abs
+    parts = __rationalize_within__((self - eps).to_r, (self + eps).to_r)
+    ::Kernel.Rational(parts[0], parts[1])
+  end unless method_defined?(:rationalize)
+
+  # Stern-Brocot search for the simplest fraction inside [low, high].
+  def __rationalize_within__(low, high)
+    return [low.numerator, low.denominator] if low == high
+    negative = low < 0
+    if negative
+      low, high = -high, -low
+    end
+    n = low.numerator / low.denominator
+    n += 1 while ::Kernel.Rational(n, 1) < low
+    if ::Kernel.Rational(n, 1) <= high
+      return negative ? [-n, 1] : [n, 1]
+    end
+    whole = low.numerator / low.denominator
+    one = ::Kernel.Rational(1, 1)
+    num, den = __rationalize_within__(one / (high - whole), one / (low - whole))
+    num, den = whole * num + den, num
+    negative ? [-num, den] : [num, den]
+  end
+  private :__rationalize_within__
+end
+
+class Symbol
+  include ::Comparable unless ancestors.include?(::Comparable)
+
+  def name
+    to_s.freeze
+  end unless method_defined?(:name)
+
+  def casecmp?(other)
+    return nil unless other.is_a?(::Symbol)
+    to_s.casecmp?(other.to_s)
+  end unless method_defined?(:casecmp?)
+
+  def =~(other)
+    to_s =~ other
   end unless method_defined?(:=~)
 end
 
