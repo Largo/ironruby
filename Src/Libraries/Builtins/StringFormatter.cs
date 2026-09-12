@@ -846,13 +846,20 @@ namespace IronRuby.Builtins {
                 BigInteger remainder;
                 BigInteger quotient = BigInteger.DivRem(scaled, divisor, out remainder);
                 int cmp = (remainder * 2).CompareTo(divisor);
-                if (cmp > 0 || (cmp == 0 && !quotient.IsEven)) {
+                // Round half to even.  The digit whose parity decides a tie is the last
+                // digit that survives truncation; when the precision is zero no fraction
+                // digit survives and the leading digit (always 1 here) decides, which is
+                // why "%.a" % 1.5 rounds up to 0x1p+1 rather than down to 0x1p+0.
+                bool lastKeptIsEven = (precision == 0) ? (leading % 2 == 0) : quotient.IsEven;
+                if (cmp > 0 || (cmp == 0 && !lastKeptIsEven)) {
                     quotient += BigInteger.One;
                 }
                 BigInteger limit = BigInteger.Pow(16, precision);
                 if (quotient >= limit) {
+                    // The mantissa carried past 2.0; renormalize to 1.0 x 2^(exponent+1)
+                    // the way C's printf does, so 123.456 prints as 0x1p+7, not 0x2p+6.
                     quotient -= limit;
-                    leading = 2;
+                    exponent++;
                 }
                 scaled = quotient;
                 hexDigits = precision;
