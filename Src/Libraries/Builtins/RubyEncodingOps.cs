@@ -98,8 +98,8 @@ namespace IronRuby.Builtins {
             }
 
             [RubyMethod("incomplete_input?")]
-            public static bool IsIncompleteInput(InvalidByteSequenceError/*!*/ self) {
-                return self.IncompleteInput;
+            public static object IsIncompleteInput(InvalidByteSequenceError/*!*/ self) {
+                return self.IncompleteInput.HasValue ? ScriptingRuntimeHelpers.BooleanToObject(self.IncompleteInput.Value) : null;
             }
         }
 

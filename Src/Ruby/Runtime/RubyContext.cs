@@ -2320,7 +2320,9 @@ namespace IronRuby.Runtime {
         }
 
         public RubyEncoding/*!*/ GetPathEncoding() {
-            return RubyEncoding.UTF8;
+            // On everything but Windows the filesystem encoding follows the default external
+            // encoding, so Encoding.default_external= moves it too.
+            return _defaultExternalEncoding ?? RubyEncoding.UTF8;
         }
 
         /// <summary>

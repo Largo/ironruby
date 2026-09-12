@@ -1290,7 +1290,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "incomplete_input?", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.InvalidByteSequenceError, System.Boolean>(IronRuby.Builtins.RubyEncodingOps.InvalidByteSequenceErrorOps.IsIncompleteInput)
+                new Func<IronRuby.Builtins.InvalidByteSequenceError, System.Object>(IronRuby.Builtins.RubyEncodingOps.InvalidByteSequenceErrorOps.IsIncompleteInput)
             );
             
             DefineLibraryMethod(module, "readagain_bytes", 0x51, 
