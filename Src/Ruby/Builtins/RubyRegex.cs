@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -31,6 +31,10 @@ namespace IronRuby.Builtins {
         private RubyRegexOptions _options;
         private bool _hasGAnchor;
 
+        // Regexp.allocate produces a regexp with no pattern at all, which MRI reports as BINARY
+        // rather than as the US-ASCII an empty pattern would give.
+        private bool _initialized;
+
         private Regex _cachedRegex;
 
         // Ruby 1.8: match operations use KCODE encoding so we need to remember the one for which we have cached CLR Regex.
@@ -58,6 +62,7 @@ namespace IronRuby.Builtins {
 
         public void Set(MutableString/*!*/ pattern, RubyRegexOptions options) {
             ContractUtils.RequiresNotNull(pattern, "pattern");
+            _initialized = true;
 
             // RubyRegexOptions.Once is only used to determine how the Regexp object should be created and cached. 
             // It is not a property of the final object. /foo/ should compare equal with /foo/o.
@@ -234,10 +239,12 @@ namespace IronRuby.Builtins {
             get {
                 // MRI's rb_reg_encoding. A regexp with no encoding flag whose source happens to be
                 // ASCII only is US-ASCII, whatever the encoding of the file it was written in, so
-                // that it can match a string in any ASCII compatible encoding. /n is not an
-                // encoding flag for this purpose.
-                var flag = _options & RubyRegexOptions.EncodingMask;
-                if ((flag == RubyRegexOptions.NONE || flag == RubyRegexOptions.FIXED) && _pattern.IsAscii()) {
+                // that it can match a string in any ASCII compatible encoding.
+                //
+                // /n is deliberately not included: MRI decides it on the bytes the pattern
+                // compiles to, where an \xFF escape is one non-ASCII byte, while _pattern still
+                // holds the four ASCII characters of the escape itself.
+                if (_initialized && (_options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.NONE && _pattern.IsAscii()) {
                     return RubyEncoding.Ascii;
                 }
                 return _pattern.Encoding;

@@ -2902,6 +2902,25 @@ namespace IronRuby.Runtime {
                 // encodings Ruby has and .NET does not. Without these, "UTF-16" and "UTF-32"
                 // resolved to .NET's utf-16/utf-32, which are Ruby's UTF-16LE and UTF-32LE, and
                 // "TIS-620" resolved to Windows-874, which has a larger repertoire.
+                // Ruby's names for code pages .NET spells differently - see GetRubySpecificName.
+                case "MACROMAN": return Encoding.GetEncoding(10000);
+                case "MACJAPANESE": return Encoding.GetEncoding(10001);
+                case "MACGREEK": return Encoding.GetEncoding(10006);
+                case "MACROMANIA": return Encoding.GetEncoding(10010);
+                case "MACUKRAINE": return Encoding.GetEncoding(10017);
+                case "MACTHAI": return Encoding.GetEncoding(10021);
+                case "MACCENTEURO": return Encoding.GetEncoding(10029);
+                case "MACICELAND": return Encoding.GetEncoding(10079);
+                case "MACTURKISH": return Encoding.GetEncoding(10081);
+                case "MACCROATIAN": return Encoding.GetEncoding(10082);
+                case "IBM720": return Encoding.GetEncoding(720);
+                case "IBM862": return Encoding.GetEncoding(862);
+                case "CP949": return Encoding.GetEncoding(949);
+                case "GBK": return Encoding.GetEncoding(936);
+                case "GB2312": return Encoding.GetEncoding(51936);
+                case "EUC-KR": return Encoding.GetEncoding(51949);
+                case "GB18030": return Encoding.GetEncoding(54936);
+
                 case "UTF-16": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF16).StrictEncoding;
                 case "UTF-32": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32).StrictEncoding;
                 case "CESU-8": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8).StrictEncoding;
