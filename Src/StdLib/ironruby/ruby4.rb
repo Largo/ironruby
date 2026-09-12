@@ -2483,6 +2483,112 @@ class Enumerator
       end
     end
 
+    def __value__(values)
+      values.size <= 1 ? values[0] : values
+    end
+    private :__value__
+
+    # The grouping operations have to stay lazy too: inheriting the eager
+    # Enumerable versions makes `(1..Float::INFINITY).lazy.chunk_while { }`
+    # iterate forever instead of emitting each group as it closes.
+    def chunk(&block)
+      __need_block__("chunk", block)
+      source = self
+      __chain__ do |y|
+        key = nil
+        group = nil
+        source.each do |*values|
+          item = __value__(values)
+          k = block.call(item)
+          if group && k == key
+            group << item
+          else
+            y << [key, group] if group
+            key = k
+            group = [item]
+          end
+        end
+        y << [key, group] if group
+      end
+    end
+
+    def chunk_while(&block)
+      __need_block__("chunk_while", block)
+      source = self
+      __chain__ do |y|
+        group = nil
+        previous = nil
+        source.each do |*values|
+          item = __value__(values)
+          if group.nil?
+            group = [item]
+          elsif block.call(previous, item)
+            group << item
+          else
+            y << group
+            group = [item]
+          end
+          previous = item
+        end
+        y << group if group
+      end
+    end
+
+    def slice_when(&block)
+      __need_block__("slice_when", block)
+      chunk_while { |a, b| !block.call(a, b) }
+    end
+
+    def slice_before(*args, &block)
+      has_pattern = !args.empty?
+      pattern = args[0]
+      source = self
+      __chain__ do |y|
+        group = nil
+        source.each do |*values|
+          item = __value__(values)
+          starts = has_pattern ? (pattern === item) : block.call(item)
+          if group.nil?
+            group = [item]
+          elsif starts
+            y << group
+            group = [item]
+          else
+            group << item
+          end
+        end
+        y << group if group
+      end
+    end
+
+    def slice_after(*args, &block)
+      has_pattern = !args.empty?
+      pattern = args[0]
+      source = self
+      __chain__ do |y|
+        group = []
+        source.each do |*values|
+          item = __value__(values)
+          group << item
+          if has_pattern ? (pattern === item) : block.call(item)
+            y << group
+            group = []
+          end
+        end
+        y << group unless group.empty?
+      end
+    end
+
+    # Staying lazy across to_enum is what keeps `lazy.to_enum(:each)` usable on
+    # an infinite source.
+    def to_enum(method = :each, *args, &size_block)
+      source = self
+      Lazy.__raw__(size_block) do |y|
+        source.send(method, *args) { |*values| y.yield(*values) }
+      end
+    end
+    alias_method :enum_for, :to_enum
+
     def first(n = nil)
       if n.nil?
         result = nil
