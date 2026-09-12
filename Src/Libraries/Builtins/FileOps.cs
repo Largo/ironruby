@@ -747,12 +747,48 @@ namespace IronRuby.Builtins {
 
             string result = RubyUtils.ExpandPath(
                 context.Platform,
-                context.DecodePath(pathStr),
+                ExpandTilde(context, context.DecodePath(pathStr)),
                 (basePath == null) ? context.Platform.CurrentDirectory : context.DecodePath(Protocols.CastToPath(toPath, basePath)),
-                true
+                false
             );
 
             return EncodePathLike(result, pathStr);
+        }
+
+        /// <summary>
+        /// "~" uses $HOME and falls back to the user database; "~name" always goes to the
+        /// user database.  A $HOME that is empty or relative is an error, as in CRuby, and
+        /// an unknown user name is an ArgumentError rather than a silent pass-through.
+        /// </summary>
+        private static string/*!*/ ExpandTilde(RubyContext/*!*/ context, string/*!*/ path) {
+            if (path.Length == 0 || path[0] != '~' || IsWindows) {
+                return path;
+            }
+
+            int slash = path.IndexOf('/', 1);
+            string userName = (slash < 0) ? path.Substring(1) : path.Substring(1, slash - 1);
+            string rest = (slash < 0) ? null : path.Substring(slash + 1);
+
+            string home;
+            if (userName.Length == 0) {
+                home = context.Platform.GetEnvironmentVariable("HOME");
+                if (home == null) {
+                    home = Posix.GetHomeDirectory(Posix.GetEUid());
+                }
+                if (home == null) {
+                    throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
+                }
+                if (home.Length == 0 || home[0] != DirectorySeparatorChar) {
+                    throw RubyExceptions.CreateArgumentError("non-absolute home");
+                }
+            } else {
+                home = Posix.GetHomeDirectory(userName);
+                if (home == null) {
+                    throw RubyExceptions.CreateArgumentError("user {0} doesn't exist", userName);
+                }
+            }
+
+            return (rest == null) ? home : home + "/" + rest;
         }
 
         /// <summary>
