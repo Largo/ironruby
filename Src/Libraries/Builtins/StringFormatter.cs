@@ -959,6 +959,12 @@ namespace IronRuby.Builtins {
                 case 'g':
                 case 'G':
                     body = FormatGeneral(magnitude, precision, upperCase, _opts.AltForm);
+                    // Float#to_s is built on "%.15g" and wants the decorative ".0" that marks
+                    // the result as a float: 123.0.to_s is "123.0", not "123". "%g" itself
+                    // never adds it, so only the internal Float#to_s caller sets the flag.
+                    if (_TrailingZeroAfterWholeFloat && body.IndexOfAny(_FloatMarkers) < 0) {
+                        body += ".0";
+                    }
                     break;
 
                 default: // 'a', 'A'
@@ -969,6 +975,9 @@ namespace IronRuby.Builtins {
 
             AppendPadded(SignFor(isNegative), prefix, body, true);
         }
+
+        /// <summary>Characters whose presence already marks a rendered number as a float.</summary>
+        private static readonly char[] _FloatMarkers = new char[] { '.', 'e', 'E', 'n', 'N' };
 
         /// <summary>"%f" of an Integer: all of its digits followed by a zero fraction.</summary>
         private void AppendExactInteger() {
