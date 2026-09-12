@@ -14,6 +14,23 @@
 # as <hh>.  That keeps the output diffable even when a formatter emits raw
 # binary, which is what stops mspec from printing a tally for
 # spec/core/string/modulo_spec.rb.
+#
+# Expected differences, as of the last run (31 lines out of 110,106).  The
+# reference here is CRuby 3.3.8, the `ruby` on this box, but IronRuby targets
+# 4.0, so some rows differ on purpose:
+#
+#   16  truncated specifiers - "%-", "%#", "% ", "%+", "%0", "%1$", "%\n",
+#       "%<foo>".  3.3 let several of these fall through to a literal '%';
+#       3.4 made them all errors and ruby/spec asserts the 3.4 behaviour
+#       (spec/core/kernel/shared/sprintf.rb:494).  IronRuby follows the spec.
+#   12  "%p" of an object with a custom #to_s.  Kernel#inspect still has Ruby
+#       1.8's fallback to #to_s; removing it also rewrites NoMethodError
+#       messages, so it is deferred to that work (see KernelOps.Inspect).
+#    2  "can't convert X into Fixnum" where CRuby says "no implicit conversion
+#       of X into Integer" - Fixnum/Integer unification.
+#    1  Rational#inspect renders "Rational(3, 2)" instead of "(3/2)".
+#
+# Anything beyond those is a real formatting difference.
 
 def repr(value)
   return "nil" if value.nil?
