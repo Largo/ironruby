@@ -1672,6 +1672,26 @@ unless defined?(Fiber)
   end
 end
 
+# A non-blocking fiber does not sleep on the thread: it hands the wait to the
+# fiber scheduler, which is free to run something else in the meantime. Without
+# this, `sleep` with no duration inside a non-blocking fiber blocks the whole
+# process for ever - spec/core/kernel/sleep_spec.rb stops dead there.
+module Kernel
+  if private_method_defined?(:sleep) || method_defined?(:sleep)
+    alias_method :__ir_sleep__, :sleep
+    private :__ir_sleep__
+
+    def sleep(*args)
+      scheduler = ::Fiber.current_scheduler
+      if scheduler && scheduler.respond_to?(:kernel_sleep)
+        return scheduler.kernel_sleep(*args)
+      end
+      __ir_sleep__(*args)
+    end
+    module_function :sleep
+  end
+end
+
 # --- constants and core methods the 1.9 snapshot predates -------------------
 
 class Float

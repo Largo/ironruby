@@ -325,7 +325,18 @@ namespace IronRuby.Builtins {
                     return result;
                 }
             }
-            
+
+            // MRI refuses to start rather than run for the rest of the day: the product of
+            // eleven 101-element arrays is 101**11 tuples, which is not a thing anyone is
+            // waiting for. Without this the spec for it hangs the whole file.
+            long size = self.Count;
+            for (int i = 0; i < arrays.Length; i++) {
+                size *= arrays[i].Count;
+                if (size > Int32.MaxValue) {
+                    throw RubyExceptions.CreateRangeError("too big to product");
+                }
+            }
+
             int[] indices = new int[1 + arrays.Length];
             while (true) {
                 var current = new RubyArray(indices.Length);
