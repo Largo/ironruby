@@ -1407,7 +1407,9 @@ p __ENCODING__
                 Assert(reader.Encoding == BinaryEncoding.Instance);
             }
 
-            AssertOutput(() => source1.Execute(), @"#<Encoding:ASCII-8BIT>");
+            // Ruby 3.4 renamed ASCII-8BIT to BINARY and #inspect shows both:
+            //   $ ruby -e 'p Encoding::ASCII_8BIT'  =>  #<Encoding:BINARY (ASCII-8BIT)>
+            AssertOutput(() => source1.Execute(), @"#<Encoding:BINARY (ASCII-8BIT)>");
 
             // default hosted encoding is UTF8:
             var source2 = Context.CreateSnippet("p __ENCODING__", SourceCodeKind.Expression);
