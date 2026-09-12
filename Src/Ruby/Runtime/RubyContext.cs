@@ -2897,6 +2897,14 @@ namespace IronRuby.Runtime {
                 // the encoding name doesn't correspond to its code page:
                 case "CP1025": return Encoding.GetEncoding(21025);
 
+                // encodings Ruby has and .NET does not. Without these, "UTF-16" and "UTF-32"
+                // resolved to .NET's utf-16/utf-32, which are Ruby's UTF-16LE and UTF-32LE, and
+                // "TIS-620" resolved to Windows-874, which has a larger repertoire.
+                case "UTF-16": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF16).StrictEncoding;
+                case "UTF-32": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32).StrictEncoding;
+                case "CESU-8": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8).StrictEncoding;
+                case "TIS-620": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageTIS620).StrictEncoding;
+
                 default:
                     string alias;
                     if (RubyEncoding.Aliases.TryGetValue(name, out alias)) {

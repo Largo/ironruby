@@ -56,7 +56,15 @@ namespace IronRuby.Builtins {
         public const int CodePageUTF16LE = 1200;
         public const int CodePageUTF32BE = 12001;
         public const int CodePageUTF32LE = 12000;
-        
+
+        // Code pages for the encodings Ruby has and .NET does not - see RubyOnlyEncodings.
+        // Windows allocates code page numbers below 65536, so nothing in this block can ever
+        // collide with an encoding System.Text hands out.
+        public const int CodePageUTF16 = 1000016;
+        public const int CodePageUTF32 = 1000032;
+        public const int CodePageCESU8 = 1000008;
+        public const int CodePageTIS620 = 1000620;
+
         // TODO: how does MRI sort encodings?
 
 #if !NETFRAMEWORK
@@ -120,6 +128,9 @@ namespace IronRuby.Builtins {
 
         private static Encoding/*!*/ CreateEncoding(int codepage, bool throwOnError) {
 #if FEATURE_ENCODING
+            if (RubyOnlyEncodings.IsRubyOnly(codepage)) {
+                return RubyOnlyEncodings.Create(codepage, throwOnError);
+            }
             if (throwOnError) {
                 return Encoding.GetEncoding(codepage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
             } else {
@@ -190,6 +201,12 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageUTF16LE: return "UTF-16LE";
                 case RubyEncoding.CodePageUTF32BE: return "UTF-32BE";
                 case RubyEncoding.CodePageUTF32LE: return "UTF-32LE";
+
+                // no .NET counterpart, see RubyOnlyEncodings:
+                case RubyEncoding.CodePageUTF16: return "UTF-16";
+                case RubyEncoding.CodePageUTF32: return "UTF-32";
+                case RubyEncoding.CodePageCESU8: return "CESU-8";
+                case RubyEncoding.CodePageTIS620: return "TIS-620";
                 case RubyEncoding.CodePageSJIS: return "Shift_JIS";
                 case RubyEncoding.CodePageAscii: return "US-ASCII";
 
@@ -496,6 +513,12 @@ namespace IronRuby.Builtins {
                 case 50227: // ISO-2022-CN
                 case 52936: // HZ-GB-2312
                 case CodePageUTF7:
+
+                // UTF-16 and UTF-32 without an endianness suffix carry their byte order in a BOM,
+                // so no character can be read out of them until that BOM has been seen. Ruby makes
+                // them dummy encodings; the suffixed UTF-16LE/BE and UTF-32LE/BE are not.
+                case CodePageUTF16:
+                case CodePageUTF32:
                     return true;
 
                 default:
