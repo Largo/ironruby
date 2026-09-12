@@ -318,7 +318,7 @@ namespace IronRuby.Builtins {
         /// <returns>self</returns>
         [RubyMethodAttribute("times")]
         public static object Times(BlockParam/*!*/ block, int self) {
-            return (block != null) ? TimesImpl(block, self) : new Enumerator((_, innerBlock) => TimesImpl(innerBlock, self));
+            return (block != null) ? TimesImpl(block, self) : new Enumerator(self, "times");
         }
 
         private static object TimesImpl(BlockParam/*!*/ block, int self) {
@@ -345,7 +345,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("times")]
         public static object Times(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam block, object/*!*/ self) {
             return (block != null) ? TimesImpl(lessThanStorage, addStorage, block, self) : 
-                new Enumerator((_, innerBlock) => TimesImpl(lessThanStorage, addStorage, innerBlock, self));
+                new Enumerator(self, "times");
         }
 
         public static object TimesImpl(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ addStorage, BlockParam/*!*/ block, object/*!*/ self) {
@@ -381,7 +381,7 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("upto")]
         public static object UpTo(BlockParam block, int self, int other) {
-            return (block != null) ? UpToImpl(block, self, other) : new Enumerator((_, innerBlock) => UpToImpl(innerBlock, self, other));
+            return (block != null) ? UpToImpl(block, self, other) : new Enumerator(self, "upto", other);
         }
 
         private static object UpToImpl(BlockParam block, int self, int other) {
@@ -409,7 +409,7 @@ namespace IronRuby.Builtins {
         public static object UpTo(BinaryOpStorage/*!*/ greaterThanStorage, BinaryOpStorage/*!*/ addStorage, 
             BlockParam block, object/*!*/ self, object other) {
             return (block != null) ? UpToImpl(greaterThanStorage, addStorage, block, self, other) :
-                new Enumerator((_, innerBlock) => UpToImpl(greaterThanStorage, addStorage, innerBlock, self, other));
+                new Enumerator(self, "upto", other);
         }
 
         private static object UpToImpl(BinaryOpStorage/*!*/ greaterThanStorage, BinaryOpStorage/*!*/ addStorage,
@@ -460,7 +460,7 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("downto")]
         public static object DownTo(BlockParam block, int self, int other) {
-            return (block != null) ? DownToImpl(block, self, other) : new Enumerator((_, innerBlock) => DownToImpl(innerBlock, self, other));
+            return (block != null) ? DownToImpl(block, self, other) : new Enumerator(self, "downto", other);
         }
 
         private static object DownToImpl(BlockParam/*!*/ block, int self, int other) {
@@ -489,7 +489,7 @@ namespace IronRuby.Builtins {
             BlockParam block, object/*!*/ self, object other) {
 
             return (block != null) ? DownToImpl(lessThanStorage, subtractStorage, block, self, other) :
-                new Enumerator((_, innerBlock) => DownToImpl(lessThanStorage, subtractStorage, innerBlock, self, other));
+                new Enumerator(self, "downto", other);
         }
 
         private static object DownToImpl(BinaryOpStorage/*!*/ lessThanStorage, BinaryOpStorage/*!*/ subtractStorage,
