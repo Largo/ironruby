@@ -288,7 +288,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each")]
         public static Enumerator/*!*/ GetEachEnumerator(EachStorage/*!*/ storage, Range/*!*/ self) {
-            return new Enumerator((_, block) => Each(storage, block, self));
+            return new Enumerator(self, "each");
         }
 
         /// <summary>

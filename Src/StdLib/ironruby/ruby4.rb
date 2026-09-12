@@ -49,6 +49,383 @@ module Enumerable
   end unless method_defined?(:sum)
 
   alias_method :filter, :select unless method_defined?(:filter)
+
+  # A `yield` with several values is one element, packed into an Array; a yield
+  # with none is nil. Everything below goes through this so that
+  # `def each; yield 1, 2; end` behaves the way the C# side now does.
+  def __enum_item__(values)
+    case values.size
+    when 0 then nil
+    when 1 then values[0]
+    else values
+    end
+  end
+  private :__enum_item__
+
+  def each_entry(&block)
+    return to_enum(:each_entry) unless block
+    each { |*values| block.call(__enum_item__(values)) }
+    self
+  end unless method_defined?(:each_entry)
+
+  # Ruby 2.5 gave the predicates an optional pattern, matched with #===.
+  # The built-ins only know the block form, and because they are defined on
+  # Enumerable they shadow rather than extend, so wrap them.
+  unless method_defined?(:all_without_pattern?)
+    alias_method :all_without_pattern?, :all?
+    alias_method :any_without_pattern?, :any?
+    alias_method :none_without_pattern?, :none?
+    alias_method :one_without_pattern?, :one?
+
+    def __check_pattern_args__(args)
+      return if args.size <= 1
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    end
+    private :__check_pattern_args__
+
+    def all?(*args, &block)
+      __check_pattern_args__(args)
+      return all_without_pattern?(&block) if args.empty?
+      pattern = args[0]
+      each { |*values| return false unless pattern === __enum_item__(values) }
+      true
+    end
+
+    def any?(*args, &block)
+      __check_pattern_args__(args)
+      return any_without_pattern?(&block) if args.empty?
+      pattern = args[0]
+      each { |*values| return true if pattern === __enum_item__(values) }
+      false
+    end
+
+    def none?(*args, &block)
+      __check_pattern_args__(args)
+      return none_without_pattern?(&block) if args.empty?
+      pattern = args[0]
+      each { |*values| return false if pattern === __enum_item__(values) }
+      true
+    end
+
+    def one?(*args, &block)
+      __check_pattern_args__(args)
+      return one_without_pattern?(&block) if args.empty?
+      pattern = args[0]
+      found = false
+      each do |*values|
+        next unless pattern === __enum_item__(values)
+        return false if found
+        found = true
+      end
+      found
+    end
+  end
+
+  # min/max also grew an `n` form.
+  unless method_defined?(:min_without_count)
+    alias_method :min_without_count, :min
+    alias_method :max_without_count, :max
+
+    def min(*args, &block)
+      return min_without_count(&block) if args.empty?
+      n = __count_arg__(args[0])
+      sorted = block ? to_a.sort(&block) : to_a.sort
+      sorted.first(n)
+    end
+
+    def max(*args, &block)
+      return max_without_count(&block) if args.empty?
+      n = __count_arg__(args[0])
+      sorted = block ? to_a.sort(&block) : to_a.sort
+      sorted.reverse.first(n)
+    end
+  end
+
+  def group_by
+    return to_enum(:group_by) unless block_given?
+    result = {}
+    each { |*values| item = __enum_item__(values); (result[yield(item)] ||= []) << item }
+    result
+  end unless method_defined?(:group_by)
+
+  def each_with_object(memo)
+    return to_enum(:each_with_object, memo) unless block_given?
+    each { |*values| yield(__enum_item__(values), memo) }
+    memo
+  end unless method_defined?(:each_with_object)
+
+  # Ruby 2.2 added the `n` form: the n smallest/largest, as an Array.
+  def min_by(*args, &block)
+    return to_enum(:min_by, *args) unless block
+    if args.empty?
+      best = nil
+      best_key = nil
+      each do |*values|
+        item = __enum_item__(values)
+        key = block.call(item)
+        if best_key.nil? || (key <=> best_key) < 0
+          best_key = key
+          best = item
+        end
+      end
+      best
+    else
+      __sort_by_key__(block).first(__count_arg__(args[0]))
+    end
+  end unless method_defined?(:min_by)
+
+  def max_by(*args, &block)
+    return to_enum(:max_by, *args) unless block
+    if args.empty?
+      best = nil
+      best_key = nil
+      each do |*values|
+        item = __enum_item__(values)
+        key = block.call(item)
+        if best_key.nil? || (key <=> best_key) > 0
+          best_key = key
+          best = item
+        end
+      end
+      best
+    else
+      __sort_by_key__(block).reverse.first(__count_arg__(args[0]))
+    end
+  end unless method_defined?(:max_by)
+
+  def __count_arg__(n)
+    n = n.to_int unless n.is_a?(Integer)
+    raise ArgumentError, "negative size (#{n})" if n < 0
+    n
+  end
+  private :__count_arg__
+
+  # Sorts by the block's key, keeping input order for equal keys so that
+  # `min_by(n)` and `max_by(n)` agree with MRI on ties.
+  def __sort_by_key__(block)
+    decorated = []
+    index = 0
+    each do |*values|
+      item = __enum_item__(values)
+      decorated << [block.call(item), index, item]
+      index += 1
+    end
+    decorated.sort { |a, b| c = (a[0] <=> b[0]); c == 0 ? (a[1] <=> b[1]) : c }.map { |triple| triple[2] }
+  end
+  private :__sort_by_key__
+
+  def minmax_by(&block)
+    return to_enum(:minmax_by) unless block
+    [min_by(&block), max_by(&block)]
+  end unless method_defined?(:minmax_by)
+
+  def flat_map
+    return to_enum(:flat_map) unless block_given?
+    result = []
+    each do |*values|
+      # Like #map, #flat_map hands the yielded values straight to the block
+      # rather than the packed item: `yield 1, 2` reaches `{ |a| }` as 1.
+      mapped = yield(*values)
+      array = mapped.is_a?(Array) ? mapped : (mapped.respond_to?(:to_ary) ? mapped.to_ary : nil)
+      array.is_a?(Array) ? result.concat(array) : result << mapped
+    end
+    result
+  end unless method_defined?(:flat_map)
+  alias_method :collect_concat, :flat_map unless method_defined?(:collect_concat)
+
+  def uniq
+    seen = {}
+    result = []
+    each do |*values|
+      item = __enum_item__(values)
+      key = block_given? ? yield(item) : item
+      next if seen.key?(key)
+      seen[key] = true
+      result << item
+    end
+    result
+  end unless method_defined?(:uniq)
+
+  def compact
+    result = []
+    each { |*values| item = __enum_item__(values); result << item unless item.nil? }
+    result
+  end unless method_defined?(:compact)
+
+  def to_h(*args)
+    result = {}
+    each do |*values|
+      pair = block_given? ? yield(*values) : __enum_item__(values)
+      array = pair.respond_to?(:to_ary) ? pair.to_ary : pair
+      unless array.is_a?(Array)
+        raise TypeError, "wrong element type #{pair.class} (expected array)"
+      end
+      unless array.size == 2
+        raise ArgumentError, "element has wrong array length (expected 2, was #{array.size})"
+      end
+      result[array[0]] = array[1]
+    end
+    result
+  end unless method_defined?(:to_h)
+
+  def grep_v(pattern)
+    result = []
+    each do |*values|
+      item = __enum_item__(values)
+      next if pattern === item
+      result << (block_given? ? yield(item) : item)
+    end
+    result
+  end unless method_defined?(:grep_v)
+
+  def chunk_while
+    return to_enum(:chunk_while) unless block_given?
+    result = []
+    chunk = nil
+    previous = nil
+    each do |*values|
+      item = __enum_item__(values)
+      if chunk.nil?
+        chunk = [item]
+      elsif yield(previous, item)
+        chunk << item
+      else
+        result << chunk
+        chunk = [item]
+      end
+      previous = item
+    end
+    result << chunk if chunk
+    result
+  end unless method_defined?(:chunk_while)
+
+  def slice_when(&block)
+    return to_enum(:slice_when) unless block
+    chunk_while { |a, b| !block.call(a, b) }
+  end unless method_defined?(:slice_when)
+
+  # A new group begins at every element the pattern or block accepts; the first
+  # element always starts one, however it answers.
+  def slice_before(*args, &block)
+    if args.empty? == block.nil?
+      raise ArgumentError, "both pattern and block are given" if block
+      raise ArgumentError, "wrong number of arguments (given 0, expected 1)"
+    end
+    pattern = args[0]
+    result = []
+    group = nil
+    each do |*values|
+      item = __enum_item__(values)
+      starts = block ? block.call(item) : (pattern === item)
+      if group.nil?
+        group = [item]
+      elsif starts
+        result << group
+        group = [item]
+      else
+        group << item
+      end
+    end
+    result << group if group
+    result
+  end unless method_defined?(:slice_before)
+
+  def slice_after(*args, &block)
+    if args.empty? == block.nil?
+      raise ArgumentError, "both pattern and block are given" if block
+      raise ArgumentError, "wrong number of arguments (given 0, expected 1)"
+    end
+    pattern = args[0]
+    result = []
+    group = []
+    each do |*values|
+      item = __enum_item__(values)
+      group << item
+      if block ? block.call(item) : (pattern === item)
+        result << group
+        group = []
+      end
+    end
+    result << group unless group.empty?
+    result
+  end unless method_defined?(:slice_after)
+
+  def reverse_each(&block)
+    return to_enum(:reverse_each) { size if respond_to?(:size) } unless block
+    to_a.reverse_each(&block)
+    self
+  end unless method_defined?(:reverse_each)
+
+  def chunk
+    return to_enum(:chunk) unless block_given?
+    result = []
+    key = nil
+    chunk = nil
+    each do |*values|
+      item = __enum_item__(values)
+      k = yield(item)
+      if chunk && k == key
+        chunk << item
+      else
+        result << [key, chunk] if chunk
+        key = k
+        chunk = [item]
+      end
+    end
+    result << [key, chunk] if chunk
+    result
+  end unless method_defined?(:chunk)
+end
+
+class Range
+  # The number of elements a numeric range iterates. Non-numeric beginnings
+  # cannot be counted without walking the range, which MRI refuses to do.
+  def size
+    from = self.begin
+    to = self.end
+    raise TypeError, "can't iterate from #{from.class}" unless from.is_a?(Numeric)
+    return Float::INFINITY if to.nil?
+    return Float::INFINITY if to.is_a?(Float) && to.infinite? == 1
+    span = to - from
+    return 0 if span < 0
+    # Half-open ranges lose the last element only when it lands exactly on the
+    # end, so 1...3 has two elements but 1.0...3.5 still has three.
+    if exclude_end? && span == span.floor
+      span.to_i
+    else
+      span.floor.to_i + 1
+    end
+  end unless method_defined?(:size)
+
+  # The built-in #first/#last only answer the no-argument form, and because they
+  # are defined on Range they hide Enumerable#first(n) rather than falling
+  # through to it - so `(0..Float::INFINITY).first(3)` was an ArgumentError.
+  unless method_defined?(:first_without_count)
+    alias_method :first_without_count, :first
+    alias_method :last_without_count, :last
+
+    def first(*args)
+      return first_without_count if args.empty?
+      n = args[0]
+      n = n.to_int unless n.is_a?(Integer)
+      raise ArgumentError, "negative array size (or size too big)" if n < 0
+      result = []
+      return result if n == 0
+      each do |item|
+        result << item
+        break if result.size == n
+      end
+      result
+    end
+
+    def last(*args)
+      return last_without_count if args.empty?
+      n = args[0]
+      n = n.to_int unless n.is_a?(Integer)
+      raise ArgumentError, "negative array size (or size too big)" if n < 0
+      to_a.last(n)
+    end
+  end
 end
 
 module Kernel
@@ -1555,7 +1932,19 @@ end
 # maps to the sealed System::IndexOutOfRangeException here, so it cannot be
 # subclassed. StandardError is the closest base that actually instantiates;
 # the cost is that `rescue IndexError` will not catch these.
-class KeyError < StandardError; end unless defined?(KeyError)
+unless defined?(KeyError)
+  class KeyError < StandardError
+    def initialize(message = nil, receiver: nil, key: nil)
+      # The C# core (Kernel#format's named references, Hash#fetch) sets @receiver/@key
+      # directly after constructing with just a message.
+      @receiver = receiver
+      @key = key
+      super(message)
+    end
+
+    attr_reader :receiver, :key
+  end
+end
 class StopIteration < StandardError; end unless defined?(StopIteration)
 class UncaughtThrowError < ArgumentError; end unless defined?(UncaughtThrowError)
 class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
@@ -1744,16 +2133,31 @@ class Enumerator
     def call(*args)
       @block.call(*args)
     end
+
+    # Lets a yielder stand in for a block: `Enumerator.new { |y| ary.each(&y) }`.
+    def to_proc
+      yielder = self
+      ::Kernel.proc { |*args| yielder.yield(*args) }
+    end
   end unless const_defined?(:Yielder)
 
   unless method_defined?(:each_without_generator)
     alias_method :each_without_generator, :each
-
+    # The built-in #initialize lives on Enumerator itself, so redefining it here
+    # hides it from `super`, which would find Object#initialize and silently
+    # leave the enumerator with no target. __enum_init__ is the way back in.
     def initialize(*args, &block)
       if block
+        # Enumerator.new(size = nil) { |yielder| ... }
         @generator = block
+        @__size__ = args[0] unless args.empty?
       else
-        super
+        if args.empty?
+          ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1+)")
+        end
+        target = args[0]
+        method = args.size > 1 ? args[1] : :each
+        __enum_init__(target, method, args[2..-1] || [])
       end
     end
 
@@ -1772,9 +2176,10 @@ class Enumerator
     unless block_given?
       # yield [value, index] pairs, lazily, via the generator form above
       source = self
-      return Enumerator.new { |y|
-        n = offset
-        source.each { |*a| y << [a.size <= 1 ? a.first : a, n]; n += 1 }
+      n = source.size
+      return Enumerator.new(n) { |y|
+        i = offset
+        source.each { |*a| y << [a.size <= 1 ? a.first : a, i]; i += 1 }
       }
     end
     i = offset
@@ -1793,7 +2198,8 @@ class Enumerator
   def with_object(memo)
     unless block_given?
       source = self
-      return Enumerator.new { |y| source.each { |*a| y << [a.size <= 1 ? a.first : a, memo] } }
+      n = source.size
+      return Enumerator.new(n) { |y| source.each { |*a| y << [a.size <= 1 ? a.first : a, memo] } }
     end
     each do |*args|
       yield(args.size <= 1 ? args.first : args, memo)
@@ -1802,9 +2208,804 @@ class Enumerator
   end unless method_defined?(:with_object)
   alias_method :each_with_object, :with_object unless method_defined?(:each_with_object)
 
+  # --- #size -----------------------------------------------------------
+  # MRI gives every enumerator a size function: an Integer, a Proc, or nil when
+  # the length cannot be known without iterating. Three things supply one here -
+  # `Enumerator.new(size) { }`, the block form of `to_enum`, and the descriptor
+  # the C# builtins record - and everything else is honestly nil.
+  def __set_size__(value)
+    @__size__ = value
+    self
+  end
+
   def size
+    n = @__size__
+    return n.call if n.is_a?(::Proc) || n.is_a?(::Method)
+    return n unless n.nil?
+    info = __enum_size_info__
+    return __size_from_info__(info[0], info[1], info[2]) if info
+    target = __enum_target__
+    return __size_from_target__(target[0], target[1], target[2]) if target && !@generator
     nil
-  end unless method_defined?(:size)
+  end
+
+  # Number of items `source` yields, when that is knowable without iterating.
+  def __source_count__(source)
+    return nil if source.nil?
+    if source.is_a?(::Range) || source.respond_to?(:size)
+      n = source.size
+      return n if n.is_a?(::Numeric)
+      nil
+    elsif source.respond_to?(:length)
+      n = source.length
+      n.is_a?(::Numeric) ? n : nil
+    end
+  end
+  private :__source_count__
+
+  def __size_from_info__(source, op, arg)
+    case op
+    when :same
+      __source_count__(source)
+    when :self
+      source
+    when :slice
+      n = __source_count__(source)
+      n && arg > 0 ? (n + arg - 1) / arg : nil
+    when :cons
+      n = __source_count__(source)
+      n ? (n - arg + 1 < 0 ? 0 : n - arg + 1) : nil
+    when :cycle
+      __cycle_size__(__source_count__(source), arg)
+    when :upto
+      arg < source ? 0 : arg - source + 1
+    when :downto
+      source < arg ? 0 : source - arg + 1
+    end
+  end
+  private :__size_from_info__
+
+  # `cycle` repeats forever unless a count is given, and an empty source never
+  # yields at all, so its size is 0 rather than infinite.
+  def __cycle_size__(count, times)
+    return nil if count.nil?
+    return 0 if count == 0
+    return ::Float::INFINITY if times.nil?
+    times <= 0 ? 0 : count * times
+  end
+  private :__cycle_size__
+
+  # `to_enum(:each_slice, 2)` and friends: the descriptor is the method name.
+  SIZE_SAME_METHODS = [
+    :each, :each_entry, :each_pair, :each_key, :each_value, :each_index,
+    :reverse_each, :map, :collect, :map!, :collect!, :flat_map, :collect_concat,
+    :select, :filter, :find_all, :select!, :filter!, :reject, :reject!,
+    :keep_if, :delete_if, :sort_by, :min_by, :max_by, :group_by, :partition,
+    :each_with_index, :each_with_object, :each_char, :each_byte, :each_codepoint,
+    :each_line, :find_index, :detect, :find, :take_while, :drop_while,
+    :filter_map
+  ].freeze
+
+  def __size_from_target__(source, meth, args)
+    case meth
+    when :each_slice
+      n = __source_count__(source)
+      n && args[0].to_i > 0 ? (n + args[0].to_i - 1) / args[0].to_i : nil
+    when :each_cons
+      n = __source_count__(source)
+      n ? [n - args[0].to_i + 1, 0].max : nil
+    when :times
+      source
+    when :upto
+      args[0] < source ? 0 : args[0] - source + 1
+    when :downto
+      source < args[0] ? 0 : source - args[0] + 1
+    when :cycle
+      __cycle_size__(__source_count__(source), args[0])
+    else
+      SIZE_SAME_METHODS.include?(meth) ? __source_count__(source) : nil
+    end
+  end
+  private :__size_from_target__
+
+  def inspect
+    target = (@generator ? nil : __enum_target__)
+    return "#<#{self.class}: #{@generator ? 'generator' : '...'}>" unless target
+    recv, meth, args = target
+    detail = "#{recv.inspect}:#{meth}"
+    detail += "(#{args.map { |a| a.inspect }.join(', ')})" unless args.empty?
+    "#<#{self.class}: #{detail}>"
+  end
+  alias_method :to_s, :inspect
+
+  # --- external iteration ------------------------------------------------
+  # #next has to suspend `each` half way through, which needs a coroutine.
+  # Fiber is a background thread plus a mailbox here, so an enumerator that is
+  # stepped and then abandoned parks one thread until the process exits; that is
+  # the price of external iteration and MRI's own docs warn about the cost too.
+  def __iter_fiber__
+    @__fiber__ ||= begin
+      source = self
+      @__iter_done__ = false
+      ::Fiber.new do
+        result = source.each { |*args| ::Fiber.yield([:y, args]) }
+        [:done, result]
+      end
+    end
+  end
+  private :__iter_fiber__
+
+  def __iter_stop__
+    error = ::StopIteration.new("iteration reached an end")
+    error.__set_result__(@__iter_result__)
+    ::Kernel.raise(error)
+  end
+  private :__iter_stop__
+
+  # Pulls one more set of yielded values out of the fiber, unless one is already
+  # waiting because of a #peek.
+  def __iter_advance__
+    return if @__peeked__
+    __iter_stop__ if @__iter_done__
+    fed = @__feed__
+    @__feed__ = nil
+    @__has_feed__ = false
+    tag, payload = __iter_fiber__.resume(fed)
+    if tag == :y
+      @__peek__ = payload
+      @__peeked__ = true
+    else
+      @__iter_done__ = true
+      @__iter_result__ = payload
+      @__fiber__ = nil
+      __iter_stop__
+    end
+  end
+  private :__iter_advance__
+
+  def next_values
+    __iter_advance__
+    values = @__peek__
+    @__peeked__ = false
+    @__peek__ = nil
+    values
+  end
+
+  def peek_values
+    __iter_advance__
+    @__peek__.dup
+  end
+
+  def next
+    values = next_values
+    values.size <= 1 ? values[0] : values
+  end
+
+  def peek
+    values = peek_values
+    values.size <= 1 ? values[0] : values
+  end
+
+  # The value the *suspended* `yield` inside the source method will return.
+  def feed(value)
+    ::Kernel.raise(::TypeError, "feed value already set") if @__has_feed__
+    @__has_feed__ = true
+    @__feed__ = value
+    nil
+  end
+
+  def rewind
+    fiber = @__fiber__
+    @__fiber__ = nil
+    @__iter_done__ = false
+    @__iter_result__ = nil
+    @__peeked__ = false
+    @__peek__ = nil
+    @__feed__ = nil
+    @__has_feed__ = false
+    # Unwind the abandoned fiber so its ensure blocks run and its thread exits.
+    fiber.kill if fiber && fiber.alive?
+    target = (@generator ? nil : __enum_target__)
+    receiver = target && target[0]
+    receiver.rewind if receiver && receiver.respond_to?(:rewind)
+    self
+  end
+
+  # --- Enumerator::Lazy --------------------------------------------------
+  # Every lazy operation is a new Lazy whose generator pulls from the previous
+  # one, so nothing runs until the chain is forced and an infinite source is
+  # fine. The per-iteration state (counters, seen-sets) lives *inside* the
+  # generator block, not in the closure that builds it, so forcing the same
+  # lazy twice starts over instead of resuming where the last force stopped.
+  class Lazy < Enumerator
+    # `Enumerator::Lazy.new(obj, size = nil) { |yielder, *values| ... }`
+    def initialize(obj, size = nil, &block)
+      unless block
+        ::Kernel.raise(::ArgumentError, "tried to call lazy new without a block")
+      end
+      @generator = lambda { |y| obj.each { |*values| block.call(y, *values) } }
+      @__size__ = size
+      self
+    end
+
+    # Builds a Lazy straight from a generator, bypassing #initialize.
+    def self.__raw__(size = nil, &generator)
+      lazy = allocate
+      lazy.__lazy_init__(size, &generator)
+      lazy
+    end
+
+    def __lazy_init__(size, &generator)
+      @generator = generator
+      @__size__ = size
+      self
+    end
+
+    def __chain__(size = nil, &generator)
+      Lazy.__raw__(size, &generator)
+    end
+    private :__chain__
+
+    def __need_block__(name, block)
+      return if block
+      ::Kernel.raise(::ArgumentError, "tried to call lazy #{name} without a block")
+    end
+    private :__need_block__
+
+    def lazy
+      self
+    end
+
+    # Back to an ordinary Enumerator over the same elements.
+    def eager
+      source = self
+      ::Enumerator.new(@__size__) { |y| source.each { |*values| y.yield(*values) } }
+    end
+
+    def size
+      value = @__size__
+      return value.call if value.is_a?(::Proc) || value.is_a?(::Method)
+      value
+    end
+
+    def inspect
+      "#<#{self.class}: ...>"
+    end
+    alias_method :to_s, :inspect
+
+    def map(&block)
+      __need_block__("map", block)
+      source = self
+      __chain__(size) { |y| source.each { |*values| y << block.call(*values) } }
+    end
+    alias_method :collect, :map
+
+    def flat_map(&block)
+      __need_block__("flat_map", block)
+      source = self
+      __chain__ do |y|
+        source.each do |*values|
+          result = block.call(*values)
+          # MRI splices an Array (or anything with #to_ary) and yields anything
+          # else whole, so `flat_map { |x| x }` over strings is not flattened.
+          array = result.is_a?(::Array) ? result : (result.respond_to?(:to_ary) ? result.to_ary : nil)
+          if array.is_a?(::Array)
+            array.each { |item| y << item }
+          else
+            y << result
+          end
+        end
+      end
+    end
+    alias_method :collect_concat, :flat_map
+
+    def select(&block)
+      __need_block__("select", block)
+      source = self
+      __chain__ { |y| source.each { |*values| item = __value__(values); y << item if block.call(item) } }
+    end
+    alias_method :filter, :select
+    alias_method :find_all, :select
+
+    def filter_map(&block)
+      __need_block__("filter_map", block)
+      source = self
+      __chain__ do |y|
+        source.each do |*values|
+          result = block.call(*values)
+          y << result if result
+        end
+      end
+    end
+
+    def reject(&block)
+      __need_block__("reject", block)
+      source = self
+      __chain__ { |y| source.each { |*values| item = __value__(values); y << item unless block.call(item) } }
+    end
+
+    def grep(pattern, &block)
+      source = self
+      __chain__ do |y|
+        source.each do |*values|
+          value = values.size <= 1 ? values[0] : values
+          next unless pattern === value
+          y << (block ? block.call(value) : value)
+        end
+      end
+    end
+
+    def grep_v(pattern, &block)
+      source = self
+      __chain__ do |y|
+        source.each do |*values|
+          value = values.size <= 1 ? values[0] : values
+          next if pattern === value
+          y << (block ? block.call(value) : value)
+        end
+      end
+    end
+
+    def compact
+      source = self
+      __chain__ do |y|
+        source.each do |*values|
+          value = values.size <= 1 ? values[0] : values
+          y << value unless value.nil?
+        end
+      end
+    end
+
+    def uniq(&block)
+      source = self
+      __chain__ do |y|
+        seen = {}
+        source.each do |*values|
+          value = values.size <= 1 ? values[0] : values
+          key = block ? block.call(value) : value
+          next if seen.key?(key)
+          seen[key] = true
+          y << value
+        end
+      end
+    end
+
+    def take(n)
+      n = __to_int__(n)
+      ::Kernel.raise(::ArgumentError, "attempt to take negative size") if n < 0
+      current = size
+      new_size = current.nil? ? n : (current < n ? current : n)
+      return __chain__(0) { |y| } if n == 0
+      source = self
+      __chain__(new_size) do |y|
+        taken = 0
+        tag = ::Object.new
+        catch(tag) do
+          source.each do |*values|
+            y << __value__(values)
+            taken += 1
+            throw(tag) if taken >= n
+          end
+        end
+      end
+    end
+
+    def take_while(&block)
+      __need_block__("take_while", block)
+      source = self
+      __chain__ do |y|
+        tag = ::Object.new
+        catch(tag) do
+          source.each do |*values|
+            throw(tag) unless block.call(*values)
+            y << __value__(values)
+          end
+        end
+      end
+    end
+
+    def drop(n)
+      n = __to_int__(n)
+      ::Kernel.raise(::ArgumentError, "attempt to drop negative size") if n < 0
+      current = size
+      new_size = current.nil? ? nil : (current < n ? 0 : current - n)
+      source = self
+      __chain__(new_size) do |y|
+        dropped = 0
+        source.each do |*values|
+          if dropped < n
+            dropped += 1
+          else
+            y << __value__(values)
+          end
+        end
+      end
+    end
+
+    def drop_while(&block)
+      __need_block__("drop_while", block)
+      source = self
+      __chain__ do |y|
+        dropping = true
+        source.each do |*values|
+          dropping = false if dropping && !block.call(*values)
+          y << __value__(values) unless dropping
+        end
+      end
+    end
+
+    def with_index(offset = 0, &block)
+      offset = __to_int__(offset)
+      source = self
+      if block
+        __chain__(size) do |y|
+          i = offset
+          source.each do |*values|
+            y << block.call(values.size <= 1 ? values[0] : values, i)
+            i += 1
+          end
+        end
+      else
+        __chain__(size) do |y|
+          i = offset
+          source.each do |*values|
+            y << [values.size <= 1 ? values[0] : values, i]
+            i += 1
+          end
+        end
+      end
+    end
+
+    def each_with_index(&block)
+      with_index(0, &block)
+    end
+
+    def with_object(memo)
+      source = self
+      __chain__(size) do |y|
+        source.each { |*values| y << [values.size <= 1 ? values[0] : values, memo] }
+      end
+    end
+    alias_method :each_with_object, :with_object
+
+    def zip(*others, &block)
+      # MRI only stays lazy when every argument is a plain Array; anything else
+      # (and the block form) falls back to the eager Enumerable#zip.
+      if block || others.any? { |other| !other.is_a?(::Array) }
+        return eager.zip(*others, &block)
+      end
+      source = self
+      __chain__(size) do |y|
+        index = 0
+        source.each do |*values|
+          row = [values.size <= 1 ? values[0] : values]
+          others.each { |other| row << other[index] }
+          index += 1
+          y << row
+        end
+      end
+    end
+
+    def __value__(values)
+      values.size <= 1 ? values[0] : values
+    end
+    private :__value__
+
+    # The grouping operations have to stay lazy too: inheriting the eager
+    # Enumerable versions makes `(1..Float::INFINITY).lazy.chunk_while { }`
+    # iterate forever instead of emitting each group as it closes.
+    def chunk(&block)
+      __need_block__("chunk", block)
+      source = self
+      __chain__ do |y|
+        key = nil
+        group = nil
+        source.each do |*values|
+          item = __value__(values)
+          k = block.call(item)
+          if group && k == key
+            group << item
+          else
+            y << [key, group] if group
+            key = k
+            group = [item]
+          end
+        end
+        y << [key, group] if group
+      end
+    end
+
+    def chunk_while(&block)
+      __need_block__("chunk_while", block)
+      source = self
+      __chain__ do |y|
+        group = nil
+        previous = nil
+        source.each do |*values|
+          item = __value__(values)
+          if group.nil?
+            group = [item]
+          elsif block.call(previous, item)
+            group << item
+          else
+            y << group
+            group = [item]
+          end
+          previous = item
+        end
+        y << group if group
+      end
+    end
+
+    def slice_when(&block)
+      __need_block__("slice_when", block)
+      chunk_while { |a, b| !block.call(a, b) }
+    end
+
+    def slice_before(*args, &block)
+      has_pattern = !args.empty?
+      pattern = args[0]
+      source = self
+      __chain__ do |y|
+        group = nil
+        source.each do |*values|
+          item = __value__(values)
+          starts = has_pattern ? (pattern === item) : block.call(item)
+          if group.nil?
+            group = [item]
+          elsif starts
+            y << group
+            group = [item]
+          else
+            group << item
+          end
+        end
+        y << group if group
+      end
+    end
+
+    def slice_after(*args, &block)
+      has_pattern = !args.empty?
+      pattern = args[0]
+      source = self
+      __chain__ do |y|
+        group = []
+        source.each do |*values|
+          item = __value__(values)
+          group << item
+          if has_pattern ? (pattern === item) : block.call(item)
+            y << group
+            group = []
+          end
+        end
+        y << group unless group.empty?
+      end
+    end
+
+    # Staying lazy across to_enum is what keeps `lazy.to_enum(:each)` usable on
+    # an infinite source.
+    def to_enum(method = :each, *args, &size_block)
+      source = self
+      Lazy.__raw__(size_block) do |y|
+        source.send(method, *args) { |*values| y.yield(*values) }
+      end
+    end
+    alias_method :enum_for, :to_enum
+
+    def first(n = nil)
+      if n.nil?
+        result = nil
+        tag = ::Object.new
+        catch(tag) do
+          each do |*values|
+            result = values.size <= 1 ? values[0] : values
+            throw(tag)
+          end
+        end
+        return result
+      end
+      n = __to_int__(n)
+      ::Kernel.raise(::ArgumentError, "attempt to take negative size") if n < 0
+      result = []
+      return result if n == 0
+      tag = ::Object.new
+      catch(tag) do
+        each do |*values|
+          result << (values.size <= 1 ? values[0] : values)
+          throw(tag) if result.size >= n
+        end
+      end
+      result
+    end
+
+    def force(*args)
+      args.empty? ? to_a : to_a(*args)
+    end
+
+    def to_a
+      result = []
+      each { |*values| result << (values.size <= 1 ? values[0] : values) }
+      result
+    end
+
+    def __to_int__(value)
+      return value if value.is_a?(::Integer)
+      unless value.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+      end
+      value.to_int
+    end
+    private :__to_int__
+  end
+
+  # --- Enumerator::Chain -------------------------------------------------
+  class Chain < Enumerator
+    def initialize(*enums)
+      @__enums__ = enums
+      self
+    end
+
+    def each(&block)
+      return to_enum(:each) { size } unless block
+      @__enums__.each { |enum| enum.each { |*values| block.call(*values) } }
+      self
+    end
+
+    def size
+      total = 0
+      @__enums__.each do |enum|
+        n = enum.respond_to?(:size) ? enum.size : nil
+        return nil unless n.is_a?(::Numeric)
+        return n if n == ::Float::INFINITY
+        total += n
+      end
+      total
+    end
+
+    def rewind
+      @__enums__.reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
+      self
+    end
+
+    def inspect
+      "#<Enumerator::Chain: #{@__enums__.inspect}>"
+    end
+    alias_method :to_s, :inspect
+
+    def +(other)
+      Chain.new(self, other)
+    end
+  end
+
+  # --- Enumerator::Product -----------------------------------------------
+  # The cartesian product of its arguments, leftmost varying slowest.
+  class Product < Enumerator
+    def initialize(*enums, **options)
+      enums.each do |enum|
+        unless enum.respond_to?(:each)
+          ::Kernel.raise(::TypeError, "wrong argument type #{enum.class} (must respond to :each)")
+        end
+      end
+      @__enums__ = enums
+      self
+    end
+
+    def each(&block)
+      return to_enum(:each) { size } unless block
+      __product__(0, [], block)
+      self
+    end
+
+    def __product__(index, prefix, block)
+      if index == @__enums__.size
+        block.call(prefix.dup)
+        return
+      end
+      @__enums__[index].each do |*values|
+        prefix.push(values.size <= 1 ? values[0] : values)
+        __product__(index + 1, prefix, block)
+        prefix.pop
+      end
+    end
+    private :__product__
+
+    def size
+      total = 1
+      @__enums__.each do |enum|
+        n = enum.respond_to?(:size) ? enum.size : nil
+        return nil unless n.is_a?(::Numeric)
+        total *= n
+      end
+      total
+    end
+
+    def rewind
+      @__enums__.reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
+      self
+    end
+
+    def inspect
+      "#<Enumerator::Product: #{@__enums__.inspect}>"
+    end
+    alias_method :to_s, :inspect
+  end
+
+  def +(other)
+    Chain.new(self, other)
+  end unless method_defined?(:+)
+
+  def self.product(*enums, &block)
+    product = Product.new(*enums)
+    return product unless block
+    product.each(&block)
+    nil
+  end unless respond_to?(:product)
+
+  # Enumerator.produce(initial = nil) { |previous| ... } - an endless sequence
+  # built by feeding each value back into the block. StopIteration ends it.
+  def self.produce(*args, &block)
+    ::Kernel.raise(::ArgumentError, "no block given") unless block
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    has_initial = !args.empty?
+    initial = args[0]
+    Enumerator.new(::Float::INFINITY) do |y|
+      value = has_initial ? initial : block.call(nil)
+      loop do
+        y << value
+        value = block.call(value)
+      end
+    end
+  end unless respond_to?(:produce)
+end
+
+module Enumerable
+  def chain(*others)
+    ::Enumerator::Chain.new(self, *others)
+  end unless method_defined?(:chain)
+end
+
+module Enumerable
+  def lazy
+    source = self
+    n = (size if respond_to?(:size))
+    n = nil unless n.is_a?(::Numeric)
+    ::Enumerator::Lazy.__raw__(n) { |y| source.each { |*values| y.yield(*values) } }
+  end unless method_defined?(:lazy)
+end
+
+class StopIteration
+  def __set_result__(value)
+    @result = value
+    self
+  end
+
+  def result
+    @result
+  end
+end
+
+module Kernel
+  # MRI defaults the method to :each and takes an optional block returning the
+  # enumerator's #size.
+  def to_enum(method = :each, *args, &size_block)
+    enum = ::Enumerator.new(self, method, *args)
+    enum.__set_size__(size_block) if size_block
+    enum
+  end
+  alias_method :enum_for, :to_enum
+
+  # The C# Kernel#loop does not know about StopIteration, which is what makes
+  # `loop { e.next }` terminate instead of blowing up.
+  def loop
+    return to_enum(:loop) { ::Float::INFINITY } unless block_given?
+    begin
+      yield while true
+    rescue ::StopIteration => stop
+      stop.result
+    end
+  end
 end
 
 # Comparable#== calls <=>, and the default Kernel#<=> is defined in terms of

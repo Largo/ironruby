@@ -1173,7 +1173,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("bytes")]
         [RubyMethod("each_byte")]
         public static Enumerator/*!*/ EachByte(MutableString/*!*/ self) {
-            return new Enumerator((_, block) => EachByte(block, self));
+            return new Enumerator(self, "each_byte");
         }
 
         [RubyMethod("bytes")]
@@ -1192,7 +1192,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("chars")]
         [RubyMethod("each_char")]
         public static Enumerator/*!*/ EachChar(MutableString/*!*/ self) {
-            return new Enumerator((_, block) => EachChar(block, self));
+            return new Enumerator(self, "each_char");
         }
 
         [RubyMethod("chars")]
@@ -1224,7 +1224,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("codepoints")]
         [RubyMethod("each_codepoint")]
         public static Enumerator/*!*/ EachCodePoint(MutableString/*!*/ self) {
-            return new Enumerator((_, block) => EachCodePoint(block, self));
+            return new Enumerator(self, "each_codepoint");
         }
 
         [RubyMethod("codepoints")]

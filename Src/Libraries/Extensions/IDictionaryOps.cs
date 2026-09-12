@@ -244,7 +244,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("each")]
         [RubyMethod("each_pair")]
         public static Enumerator/*!*/ Each(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self) {
-            return new Enumerator((_, block) => Each(context, block, self));
+            return new Enumerator(self, "each");
         }
 
         [RubyMethod("each")]
@@ -270,7 +270,7 @@ namespace IronRuby.Builtins {
         
         [RubyMethod("each_key")]
         public static Enumerator/*!*/ EachKey(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self) {
-            return new Enumerator((_, block) => EachKey(context, block, self));
+            return new Enumerator(self, "each_key");
         }
 
         [RubyMethod("each_key")]
@@ -295,7 +295,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each_value")]
         public static Enumerator/*!*/ EachValue(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self) {
-            return new Enumerator((_, block) => EachValue(context, block, self));
+            return new Enumerator(self, "each_value");
         }
 
         [RubyMethod("each_value")]
@@ -501,7 +501,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("select")]
         public static Enumerator/*!*/ Select(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self) {
-            return new Enumerator((_, block) => Select(context, block, self));
+            return new Enumerator(self, "select");
         }
 
         [RubyMethod("select")]
