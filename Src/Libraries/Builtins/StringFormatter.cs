@@ -292,6 +292,11 @@ namespace IronRuby.Builtins {
                     } else {
                         int p = 0;
                         while (_index < _format.Length && _format[_index] >= '0' && _format[_index] <= '9') {
+                            // A precision that does not fit in a Fixnum is an error, not a silent
+                            // wrap: "%.99999999999s" raises rather than truncating to garbage.
+                            if (p > (Int32.MaxValue - 9) / 10) {
+                                throw RubyExceptions.CreateArgumentError("precision too big");
+                            }
                             p = p * 10 + (_format[_index++] - '0');
                         }
                         _opts.Precision = p;
@@ -316,7 +321,11 @@ namespace IronRuby.Builtins {
                             throw RubyExceptions.CreateArgumentError("width given twice");
                         }
                         widthSeen = true;
-                        _opts.FieldWidth = int.Parse(_format.Substring(_index, end - _index), CultureInfo.InvariantCulture);
+                        int width;
+                        if (!Int32.TryParse(_format.Substring(_index, end - _index), NumberStyles.None, CultureInfo.InvariantCulture, out width)) {
+                            throw RubyExceptions.CreateArgumentError("width too big");
+                        }
+                        _opts.FieldWidth = width;
                         _index = end;
                         numberSeen = true;
                     }
