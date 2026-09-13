@@ -6669,18 +6669,26 @@ class Range
   # Binary search over a numeric range, in MRI's two modes: a block answering
   # true/false finds the smallest element it says true for, a block answering
   # an Integer finds the element it answers 0 for.
+  # The built-in handles an Integer range; a Float one it refuses outright,
+  # and MRI searches those too - bisecting the interval rather than the
+  # integers in it.
+  if method_defined?(:bsearch)
+    alias_method :__ir_bsearch__, :bsearch
+    private :__ir_bsearch__
+  end
+
   def bsearch(&block)
     return ::Enumerator.new { |y| each { |x| y << x } } unless block
     b = self.begin
     e = self.end
     if (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer))
-      __bsearch_int__(block)
+      respond_to?(:__ir_bsearch__, true) ? __ir_bsearch__(&block) : __bsearch_int__(block)
     elsif (b.nil? || b.is_a?(::Numeric)) && (e.nil? || e.is_a?(::Numeric))
       __bsearch_float__(block)
     else
       ::Kernel.raise(::TypeError, "can't do binary search for #{(b || e).class}")
     end
-  end unless method_defined?(:bsearch)
+  end
 
   # Answers :found, true (go left, remember) or false (go right).
   def __bsearch_test__(block, value)
