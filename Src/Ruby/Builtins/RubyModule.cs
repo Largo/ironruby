@@ -948,9 +948,14 @@ namespace IronRuby.Builtins {
         }
 
         public string/*!*/ MakeNestedModuleName(string nestedModuleSimpleName) {
-            return (IsObjectClass || nestedModuleSimpleName == null) ?
-                nestedModuleSimpleName :
-                _name + "::" + nestedModuleSimpleName;
+            if (IsObjectClass || nestedModuleSimpleName == null) {
+                return nestedModuleSimpleName;
+            }
+
+            // An anonymous outer module contributes "#<Module:0x...>", not nothing:
+            // module m::N inside m = Module.new is "#<Module:0x...>::N", not "::N".
+            string outer = _name ?? GetDisplayName(_context, false).ToString();
+            return outer + "::" + nestedModuleSimpleName;
         }
 
         // not thread-safe

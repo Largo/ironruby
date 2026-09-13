@@ -1177,7 +1177,7 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("define_singleton_method", RubyMethodAttributes.PublicInstance)]
-        public static RubyMethod/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
+        public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
             // TODO:
@@ -1187,7 +1187,7 @@ namespace IronRuby.Builtins {
         // thread-safe:
         // Defines method using mangled CLR name and aliases that method with the actual CLR name.
         [RubyMethod("define_singleton_method", RubyMethodAttributes.PublicInstance)]
-        public static RubyMethod/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
+        public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
             // TODO:
@@ -1196,7 +1196,7 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("define_singleton_method", RubyMethodAttributes.PublicInstance)]
-        public static UnboundMethod/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
+        public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
             // TODO:
@@ -1206,7 +1206,7 @@ namespace IronRuby.Builtins {
         // thread-safe:
         // Defines method using mangled CLR name and aliases that method with the actual CLR name.
         [RubyMethod("define_singleton_method", RubyMethodAttributes.PublicInstance)]
-        public static UnboundMethod/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
+        public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
             // TODO:
@@ -1215,7 +1215,7 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("define_singleton_method", RubyMethodAttributes.PublicInstance)]
-        public static Proc/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
+        public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
             object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
 
             // TODO:
@@ -1225,7 +1225,7 @@ namespace IronRuby.Builtins {
         // thread-safe:
         // Defines method using mangled CLR name and aliases that method with the actual CLR name.
         [RubyMethod("define_singleton_method", RubyMethodAttributes.PublicInstance)]
-        public static Proc/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
+        public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
             object self, [NotNull]ClrName/*!*/ methodName) {
 
             // TODO:
@@ -1234,7 +1234,7 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("define_singleton_method", RubyMethodAttributes.PublicInstance)]
-        public static Proc/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
+        public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
             // TODO:
@@ -1243,7 +1243,7 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("define_singleton_method", RubyMethodAttributes.PublicInstance)]
-        public static Proc/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
+        public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
             // TODO:

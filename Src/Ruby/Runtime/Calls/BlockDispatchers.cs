@@ -120,7 +120,7 @@ namespace IronRuby.Runtime.Calls {
 
         // R(0, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg) {
-            return _block(param, self, null);
+            return _block(param, self, MissingArg(0));
         }
 
         // R(1, -)
@@ -156,7 +156,7 @@ namespace IronRuby.Runtime.Calls {
 
         // R(0, *)
         public override object InvokeSplat(BlockParam/*!*/ param, object self, Proc procArg, IList/*!*/ splattee) {
-            return _block(param, self, (splattee.Count > 0) ? splattee[0] : null);
+            return _block(param, self, (splattee.Count > 0) ? splattee[0] : MissingArg(0));
         }
         
         // R(1, *)
@@ -202,7 +202,7 @@ namespace IronRuby.Runtime.Calls {
 
         // R(0, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg) {
-            return _block(param, self, null, null);
+            return _block(param, self, MissingArg(0), MissingArg(1));
         }
 
         // R(1, -)
@@ -210,18 +210,18 @@ namespace IronRuby.Runtime.Calls {
             IList splattee = arg1 as IList ?? Protocols.ImplicitTrySplat(param.RubyContext, arg1);
             if (splattee != null) {
                 switch (splattee.Count) {
-                    case 0: return _block(param, self, null, null);
-                    case 1: return _block(param, self, splattee[0], null);
+                    case 0: return _block(param, self, MissingArg(0), MissingArg(1));
+                    case 1: return _block(param, self, splattee[0], MissingArg(1));
                     default: return _block(param, self, splattee[0], splattee[1]);
                 }
             } else {
-                return _block(param, self, arg1, null);
+                return _block(param, self, arg1, MissingArg(1));
             }
         }
 
         // R(1, -)
         public override object InvokeNoAutoSplat(BlockParam/*!*/ param, object self, Proc procArg, object arg1) {
-            return _block(param, self, arg1, null);
+            return _block(param, self, arg1, MissingArg(1));
         }
 
         // R(2, -)
@@ -301,7 +301,7 @@ namespace IronRuby.Runtime.Calls {
 
         // R(0, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg) {
-            return _block(param, self, null, null, null);
+            return _block(param, self, MissingArg(0), MissingArg(1), MissingArg(2));
         }
 
         // R(1, -)
@@ -309,24 +309,24 @@ namespace IronRuby.Runtime.Calls {
             IList splattee = arg1 as IList ?? Protocols.ImplicitTrySplat(param.RubyContext, arg1);
             if (splattee != null) {
                 switch (splattee.Count) {
-                    case 0: return _block(param, self, null, null, null);
-                    case 1: return _block(param, self, splattee[0], null, null);
-                    case 2: return _block(param, self, splattee[0], splattee[1], null);
+                    case 0: return _block(param, self, MissingArg(0), MissingArg(1), MissingArg(2));
+                    case 1: return _block(param, self, splattee[0], MissingArg(1), MissingArg(2));
+                    case 2: return _block(param, self, splattee[0], splattee[1], MissingArg(2));
                     default: return _block(param, self, splattee[0], splattee[1], splattee[2]);
                 }
             } else {
-                return _block(param, self, arg1, null, null);
+                return _block(param, self, arg1, MissingArg(1), MissingArg(2));
             }
         }
 
         // R(1, -)
         public override object InvokeNoAutoSplat(BlockParam/*!*/ param, object self, Proc procArg, object arg1) {
-            return _block(param, self, arg1, null, null);
+            return _block(param, self, arg1, MissingArg(1), MissingArg(2));
         }
 
         // R(2, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg, object arg1, object arg2) {
-            return _block(param, self, arg1, arg2, null);
+            return _block(param, self, arg1, arg2, MissingArg(2));
         }
 
         // R(3, -)
@@ -406,12 +406,12 @@ namespace IronRuby.Runtime.Calls {
 
         // R(0, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg) {
-            return _block(param, self, null, null, null, null);
+            return _block(param, self, MissingArg(0), MissingArg(1), MissingArg(2), MissingArg(3));
         }
         
         // R(1, -)
         public override object InvokeNoAutoSplat(BlockParam/*!*/ param, object self, Proc procArg, object arg1) {
-            return _block(param, self, arg1, null, null, null);
+            return _block(param, self, arg1, MissingArg(1), MissingArg(2), MissingArg(3));
         }
 
         // R(1, -)
@@ -419,25 +419,25 @@ namespace IronRuby.Runtime.Calls {
             IList splattee = arg1 as IList ?? Protocols.ImplicitTrySplat(param.RubyContext, arg1);
             if (splattee != null) {
                 switch (splattee.Count) {
-                    case 0: return _block(param, self, null, null, null, null);
-                    case 1: return _block(param, self, splattee[0], null, null, null);
-                    case 2: return _block(param, self, splattee[0], splattee[1], null, null);
-                    case 3: return _block(param, self, splattee[0], splattee[1], splattee[2], null);
+                    case 0: return _block(param, self, MissingArg(0), MissingArg(1), MissingArg(2), MissingArg(3));
+                    case 1: return _block(param, self, splattee[0], MissingArg(1), MissingArg(2), MissingArg(3));
+                    case 2: return _block(param, self, splattee[0], splattee[1], MissingArg(2), MissingArg(3));
+                    case 3: return _block(param, self, splattee[0], splattee[1], splattee[2], MissingArg(3));
                     default: return _block(param, self, splattee[0], splattee[1], splattee[2], splattee[3]);
                 }
             } else {
-                return _block(param, self, arg1, null, null, null);
+                return _block(param, self, arg1, MissingArg(1), MissingArg(2), MissingArg(3));
             }
         }
 
         // R(2, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg, object arg1, object arg2) {
-            return _block(param, self, arg1, arg2, null, null);
+            return _block(param, self, arg1, arg2, MissingArg(2), MissingArg(3));
         }
 
         // R(3, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg, object arg1, object arg2, object arg3) {
-            return _block(param, self, arg1, arg2, arg3, null);
+            return _block(param, self, arg1, arg2, arg3, MissingArg(3));
         }
 
         // R(4, -)
