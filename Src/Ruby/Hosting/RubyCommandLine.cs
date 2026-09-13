@@ -99,7 +99,13 @@ namespace IronRuby.Hosting {
         }
 
         private Encoding/*!*/ GetSourceCodeEncoding() {
-            return (((RubyContext)Language).RubyOptions.DefaultEncoding ?? RubyEncoding.Ascii).Encoding;
+            // UTF-8, not US-ASCII: the command is already a decoded .NET string, and turning it
+            // back into bytes through US-ASCII replaced every non-ASCII character with a question
+            // mark. `ir -e 'p "αΣ".bytes'` printed [63, 63] while the same script in a file
+            // printed the four UTF-8 bytes. UTF-8 is also what the source unit's encoding resolves
+            // to further down when no magic comment says otherwise, so this only stops -e from
+            // being the one input path that loses bytes before the parser ever sees them.
+            return (((RubyContext)Language).RubyOptions.DefaultEncoding ?? RubyEncoding.UTF8).Encoding;
         }
         
         protected override Scope/*!*/ CreateScope() {
