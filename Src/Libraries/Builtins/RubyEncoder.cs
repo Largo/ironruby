@@ -782,10 +782,21 @@ namespace IronRuby.Builtins {
             return Int64BitsToDouble(unchecked((long)ReadUInt64(data, ref index, swap)));
         }
 
+        /// <summary>
+        /// The float directives use rb_to_float, which - unlike Float() - refuses a String
+        /// outright, so ["13"].pack("D") is a TypeError rather than 13.0.
+        /// </summary>
+        private static double ToPackFloat(ConversionStorage<double>/*!*/ floatConversion, object value) {
+            if (value is MutableString) {
+                throw RubyExceptions.CreateTypeError("can't convert String into Float");
+            }
+            return Protocols.CastToFloat(floatConversion, value);
+        }
+
         private static void WriteDouble(ConversionStorage<double>/*!*/ floatConversion,
             Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
             for (int j = 0; j < count; j++) {
-                Write(stream, unchecked((ulong)DoubleToInt64Bits(Protocols.CastToFloat(floatConversion, GetPackArg(self, i + j)))), swap);
+                Write(stream, unchecked((ulong)DoubleToInt64Bits(ToPackFloat(floatConversion, GetPackArg(self, i + j)))), swap);
             }
         }
 
@@ -806,7 +817,7 @@ namespace IronRuby.Builtins {
         private static void WriteSingle(ConversionStorage<double>/*!*/ floatConversion,
             Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
             for (int j = 0; j < count; j++) {
-                byte[] bytes = BitConverter.GetBytes((float)Protocols.CastToFloat(floatConversion, GetPackArg(self, i + j)));
+                byte[] bytes = BitConverter.GetBytes((float)ToPackFloat(floatConversion, GetPackArg(self, i + j)));
                 if (swap) {
                     stream.WriteByte(bytes[3]);
                     stream.WriteByte(bytes[2]);
