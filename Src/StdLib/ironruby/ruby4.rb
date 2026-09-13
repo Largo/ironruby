@@ -3223,6 +3223,338 @@ class Complex
   alias_method :rect, :rectangular
 end
 
+# The rest of Complex, on top of 1.8's complex.rb.
+#
+# complex.rb predates Ruby 1.9's Complex by a decade and differs from it
+# everywhere that matters: Kernel#Complex(a, b) built the result as
+# `Complex.new(a.real - b.imag, a.imag + b.real)`, so every argument had to
+# answer #real and #imag (which is why the specs' mock numerics all died on an
+# undefined #-); Complex.rect and Complex.rectangular did not exist; #<=>
+# compared magnitudes rather than answering nil; #to_f/#to_i/#to_r,
+# #rationalize, #fdiv, #finite? and #infinite? were missing; and Numeric's
+# comparison operators were inherited rather than undefined.
+#
+# Everything below follows MRI's complex.c.
+class Complex
+  # nucomp_real_check: Integer, Float and Rational pass; a Complex passes when
+  # its imaginary part is zero; any other Numeric passes when #real? is true.
+  def self.__real_check__(n)
+    return if n.is_a?(::Integer) || n.is_a?(::Float) || n.is_a?(::Rational)
+    if n.is_a?(::Complex)
+      return if n.imag == 0
+    elsif n.is_a?(::Numeric) && n.real?
+      return
+    end
+    ::Kernel.raise(::TypeError, "not a real")
+  end
+
+  # nucomp_s_new_internal: no canonicalisation, no checks.
+  def self.__raw__(real, imag)
+    c = allocate
+    c.__send__(:__set_parts__, real, imag)
+    c
+  end
+
+  def __set_parts__(real, imag)
+    @real = real
+    @image = imag
+  end
+  private :__set_parts__
+
+  # nucomp_s_canonicalize_internal: a Complex in either position folds in.
+  def self.__canon__(real, imag)
+    cr = real.is_a?(::Complex)
+    ci = imag.is_a?(::Complex)
+    if !cr && !ci
+      __raw__(real, imag)
+    elsif !cr
+      __raw__(real - imag.imag, 0 + imag.real)
+    elsif !ci
+      __raw__(real.real, real.imag + imag)
+    else
+      __raw__(real.real - imag.imag, real.imag + imag.real)
+    end
+  end
+
+  def self.rectangular(real, imag = 0)
+    __real_check__(real)
+    __real_check__(imag)
+    __canon__(real, imag)
+  end
+  class << self
+    alias_method :rect, :rectangular
+  end
+
+  def self.polar(abs, arg = 0)
+    __real_check__(abs)
+    __real_check__(arg)
+    return __raw__(abs, 0.0) if abs == 0 || arg == 0
+    __canon__(abs * ::Math.cos(arg), abs * ::Math.sin(arg))
+  end
+
+  I = __raw__(0, 1) unless const_defined?(:I, false) && I == __raw__(0, 1)
+
+  # k_exact_zero_p: an exact zero, so 0.0 does not count.
+  def __exact_zero_imag__
+    i = imag
+    !i.is_a?(::Float) && i == 0
+  end
+  private :__exact_zero_imag__
+
+  # rb_num_coerce_bin, with Complex's wording.
+  def __coerce_bin__(other, op)
+    unless other.respond_to?(:coerce)
+      ::Kernel.raise(::TypeError,
+        "#{other.nil? ? 'nil' : other.class} can't be coerced into #{self.class}")
+    end
+    a, b = other.coerce(self)
+    a.__send__(op, b)
+  end
+  private :__coerce_bin__
+
+  def __real_operand__(other)
+    other.is_a?(::Numeric) && other.real?
+  end
+  private :__real_operand__
+
+  def +(other)
+    if other.is_a?(::Complex)
+      ::Complex.__raw__(real + other.real, imag + other.imag)
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real + other, imag)
+    else
+      __coerce_bin__(other, :+)
+    end
+  end
+
+  def -(other)
+    if other.is_a?(::Complex)
+      ::Complex.__raw__(real - other.real, imag - other.imag)
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real - other, imag)
+    else
+      __coerce_bin__(other, :-)
+    end
+  end
+
+  def *(other)
+    if other.is_a?(::Complex)
+      ::Complex.__raw__(real * other.real - imag * other.imag,
+                        real * other.imag + imag * other.real)
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real * other, imag * other)
+    else
+      __coerce_bin__(other, :*)
+    end
+  end
+
+  def /(other)
+    if other.is_a?(::Complex)
+      d = other.abs2
+      ::Complex.__raw__((real * other.real + imag * other.imag).quo(d),
+                        (imag * other.real - real * other.imag).quo(d))
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real.quo(other), imag.quo(other))
+    else
+      __coerce_bin__(other, :/)
+    end
+  end
+  alias_method :quo, :/
+
+  def fdiv(other)
+    if other.is_a?(::Complex)
+      d = other.abs2.to_f
+      ::Complex.__raw__((real * other.real + imag * other.imag).fdiv(d),
+                        (imag * other.real - real * other.imag).fdiv(d))
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real.fdiv(other), imag.fdiv(other))
+    else
+      __coerce_bin__(other, :fdiv)
+    end
+  end
+
+  def **(other)
+    return ::Complex.__raw__(1, 0) if other.is_a?(::Numeric) && !other.is_a?(::Float) && other == 0
+    other = other.numerator if other.is_a?(::Rational) && other.denominator == 1
+    if other.is_a?(::Complex)
+      if other.imag == 0 && !other.imag.is_a?(::Float)
+        other = other.real
+      else
+        r, theta = polar
+        return ::Complex.polar(r ** other, theta * other) rescue nil
+      end
+    end
+    if other.is_a?(::Integer)
+      if other > 0
+        # Repeated squaring, so that an exact Complex stays exact.
+        x = self
+        z = x
+        n = other - 1
+        while n != 0
+          while true
+            q, rem = n.divmod(2)
+            break if rem != 0
+            x = ::Complex.__raw__(x.real * x.real - x.imag * x.imag,
+                                  2 * x.real * x.imag)
+            n = q
+          end
+          z = z * x
+          n -= 1
+        end
+        return z
+      end
+      return (::Complex.__raw__(1, 0) / self) ** (-other)
+    end
+    if __real_operand__(other)
+      r, theta = polar
+      return ::Complex.polar(r ** other, theta * other)
+    end
+    __coerce_bin__(other, :**)
+  end
+
+  def -@
+    ::Complex.__raw__(-real, -imag)
+  end
+
+  def +@
+    self
+  end
+
+  def abs
+    r = real
+    i = imag
+    if r.is_a?(::Float) || i.is_a?(::Float)
+      ::Math.hypot(r, i)
+    elsif r == 0
+      i.abs
+    elsif i == 0
+      r.abs
+    else
+      ::Math.hypot(r, i)
+    end
+  end
+  alias_method :magnitude, :abs
+
+  def abs2
+    real * real + imag * imag
+  end
+
+  def arg
+    ::Math.atan2(imag, real)
+  end
+  alias_method :angle, :arg
+  alias_method :phase, :arg
+
+  def polar
+    [abs, arg]
+  end
+
+  def conjugate
+    ::Complex.__raw__(real, -imag)
+  end
+  alias_method :conj, :conjugate
+
+  def ==(other)
+    if other.is_a?(::Complex)
+      real == other.real && imag == other.imag
+    elsif __real_operand__(other)
+      real == other && imag == 0
+    else
+      other == self
+    end
+  end
+
+  def eql?(other)
+    return false unless other.is_a?(::Complex)
+    real.class == other.real.class && imag.class == other.imag.class && self == other
+  end
+
+  def <=>(other)
+    return nil unless imag == 0
+    if other.is_a?(::Complex)
+      return other.imag == 0 ? (real <=> other.real) : nil
+    end
+    return real <=> other if __real_operand__(other)
+    return nil unless other.is_a?(::Numeric)
+    nil
+  end
+
+  def coerce(other)
+    return [::Complex.__raw__(other, 0), self] if __real_operand__(other)
+    return [other, self] if other.is_a?(::Complex)
+    ::Kernel.raise(::TypeError, "#{other.class} can't be coerced into #{self.class}")
+  end
+
+  def denominator
+    real.denominator.lcm(imag.denominator)
+  end
+
+  def numerator
+    cd = denominator
+    ::Complex.__raw__(real.numerator * (cd / real.denominator),
+                      imag.numerator * (cd / imag.denominator))
+  end
+
+  def to_c
+    self
+  end
+
+  def to_f
+    unless __exact_zero_imag__
+      ::Kernel.raise(::RangeError, "can't convert #{self} into Float")
+    end
+    real.to_f
+  end
+
+  def to_i
+    unless __exact_zero_imag__
+      ::Kernel.raise(::RangeError, "can't convert #{self} into Integer")
+    end
+    real.to_i
+  end
+
+  def to_r
+    unless __exact_zero_imag__ || imag == 0
+      ::Kernel.raise(::RangeError, "can't convert #{self} into Rational")
+    end
+    real.to_r
+  end
+
+  def rationalize(*args)
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    unless __exact_zero_imag__
+      ::Kernel.raise(::RangeError, "can't convert #{self} into Rational")
+    end
+    real.rationalize(*args)
+  end
+
+  def hash
+    [real, imag].hash
+  end
+
+  def zero?
+    real == 0 && imag == 0
+  end
+
+  def nonzero?
+    zero? ? nil : self
+  end
+
+  # MRI removes the real-number protocol from Complex rather than inheriting
+  # Numeric's, so that `Complex(1) < 2` is a NoMethodError and not an attempt
+  # to compare magnitudes.
+  %i[< <= > >= between? clamp positive? negative? % modulo div divmod
+     remainder floor ceil round truncate step i integer? divmod].each do |m|
+    undef_method(m) if method_defined?(m) || private_method_defined?(m)
+  end
+
+  def integer?
+    false
+  end
+end
+
 # CRuby has KeyError < IndexError and StopIteration < IndexError, but IndexError
 # maps to the sealed System::IndexOutOfRangeException here, so it cannot be
 # subclassed. StandardError is the closest base that actually instantiates;
