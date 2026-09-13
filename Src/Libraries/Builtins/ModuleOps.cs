@@ -680,7 +680,10 @@ namespace IronRuby.Builtins {
 
             using (self.Context.ClassHierarchyLocker()) {
                 self.ForEachAncestor(true, delegate(RubyModule/*!*/ module) {
-                    if (!module.IsSingletonClass) {
+                    // MRI lists singleton classes too: Object.new.singleton_class.ancestors starts
+                    // with the singleton class itself, and String.singleton_class.ancestors walks
+                    // #<Class:String>, #<Class:Object>, #<Class:BasicObject> before reaching Class.
+                    if (!module.IsDummySingletonClass) {
                         ancestors.Add(module);
                     }
                     return false;

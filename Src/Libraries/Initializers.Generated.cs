@@ -5433,16 +5433,16 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "load", 0x61, 
                 0x00000008U, 0x00000008U, 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
-                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
-                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.RubyMarshal.Load)
+                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
+                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
+                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load)
             );
             
             DefineLibraryMethod(module, "restore", 0x61, 
                 0x00000008U, 0x00000008U, 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
-                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
-                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.RubyMarshal.Load)
+                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
+                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
+                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load)
             );
             
         }
@@ -7055,8 +7055,10 @@ namespace IronRuby.Builtins {
         
         private static void LoadRegexp_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
             SetBuiltinConstant(module, "EXTENDED", IronRuby.Builtins.RegexpOps.EXTENDED);
+            SetBuiltinConstant(module, "FIXEDENCODING", IronRuby.Builtins.RegexpOps.FIXEDENCODING);
             SetBuiltinConstant(module, "IGNORECASE", IronRuby.Builtins.RegexpOps.IGNORECASE);
             SetBuiltinConstant(module, "MULTILINE", IronRuby.Builtins.RegexpOps.MULTILINE);
+            SetBuiltinConstant(module, "NOENCODING", IronRuby.Builtins.RegexpOps.NOENCODING);
             
         }
         
