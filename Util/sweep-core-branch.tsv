@@ -1035,7 +1035,7 @@
 1	spec/core/io/write_nonblock_spec.rb	1 file, 4 examples, 2 expectations, 0 failures, 31 errors, 0 tagged	
 0	spec/core/kernel/autoload_relative_spec.rb	1 file, 0 examples, 0 expectations, 0 failures, 0 errors, 0 tagged	
 1	spec/core/kernel/Array_spec.rb	1 file, 14 examples, 22 expectations, 1 failure, 2 errors, 0 tagged	
-1	spec/core/kernel/abort_spec.rb	NO-TALLY	REPORT
+0	spec/core/kernel/abort_spec.rb	1 file, 8 examples, 12 expectations, 0 failures, 0 errors, 0 tagged	
 1	spec/core/io/popen_spec.rb	1 file, 41 examples, 31 expectations, 18 failures, 11 errors, 0 tagged	
 0	spec/core/kernel/binding_spec.rb	1 file, 8 examples, 14 expectations, 0 failures, 0 errors, 0 tagged	
 1	spec/core/kernel/autoload_spec.rb	1 file, 25 examples, 26 expectations, 5 failures, 2 errors, 0 tagged	
@@ -1336,7 +1336,7 @@
 1	spec/core/module/undefined_instance_methods_spec.rb	1 file, 4 examples, 0 expectations, 0 failures, 4 errors, 0 tagged	
 1	spec/core/module/used_refinements_spec.rb	1 file, 4 examples, 0 expectations, 0 failures, 4 errors, 0 tagged	
 1	spec/core/module/undef_method_spec.rb	1 file, 19 examples, 26 expectations, 1 failure, 5 errors, 0 tagged	
-134	spec/core/mutex/lock_spec.rb	NO-TALLY	ABORT
+1	spec/core/mutex/lock_spec.rb	1 file, 6 examples, 6 expectations, 0 failures, 1 error, 0 tagged	
 0	spec/core/mutex/locked_spec.rb	1 file, 3 examples, 4 expectations, 0 failures, 0 errors, 0 tagged	
 1	spec/core/module/using_spec.rb	1 file, 20 examples, 5 expectations, 1 failure, 18 errors, 0 tagged	
 0	spec/core/mutex/try_lock_spec.rb	1 file, 4 examples, 4 expectations, 0 failures, 0 errors, 0 tagged	
