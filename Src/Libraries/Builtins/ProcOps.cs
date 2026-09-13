@@ -338,43 +338,25 @@ namespace IronRuby.Builtins {
 
         #region new
 
+        /// <summary>
+        /// Proc.new needs a block of its own: taking the enclosing method's block instead was
+        /// removed in Ruby 3.0, so a Proc.new without one is an ArgumentError even inside a method
+        /// that was given a block.
+        ///
+        /// The block is handed straight back when it is already an instance of the class being
+        /// asked for; otherwise it is wrapped in one, and that wrapper's #initialize gets whatever
+        /// arguments Proc.new was given.
+        /// </summary>
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
-        public static Proc/*!*/ CreateNew(CallSiteStorage<Func<CallSite, object, object>>/*!*/ storage, 
-            RubyScope/*!*/ scope, RubyClass/*!*/ self) {
-
-            RubyMethodScope methodScope = scope.GetInnerMostMethodScope();
-            if (methodScope == null || methodScope.BlockParameter == null) {
-                throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
-            }
-
-            var proc = methodScope.BlockParameter;
-
-            // an instance of Proc class, the identity is preserved:
-            if (self.GetUnderlyingSystemType() == typeof(Proc)) {
-                return proc;
-            }
-
-            // an instance of a Proc subclass:
-            var result = new Proc.Subclass(self, proc);
-
-            var initialize = storage.GetCallSite("initialize", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf));
-            initialize.Target(initialize, result);
-
-            return result;
-        }
-
-        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
-        public static object CreateNew(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, 
-            BlockParam block, RubyClass/*!*/ self) {
+        public static object CreateNew(CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>/*!*/ storage, 
+            BlockParam block, RubyClass/*!*/ self, params object[]/*!*/ args) {
 
             if (block == null) {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
 
             var proc = block.Proc;
-
-            // an instance of Proc class, the identity is preserved:
-            if (self.GetUnderlyingSystemType() == typeof(Proc)) {
+            if (ReferenceEquals(self.Context.GetClassOf(proc), self)) {
                 return proc;
             }
 
@@ -382,8 +364,9 @@ namespace IronRuby.Builtins {
             var result = new Proc.Subclass(self, proc);
 
             // propagate retry and return control flow:
-            var initialize = storage.GetCallSite("initialize", new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
-            object initResult = initialize.Target(initialize, result, block.Proc);
+            var initialize = storage.GetCallSite("initialize",
+                new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock));
+            object initResult = initialize.Target(initialize, result, block.Proc, RubyOps.MakeArrayN(args));
             if (initResult is BlockReturnResult) {
                 return initResult;
             }
