@@ -80,6 +80,30 @@ namespace IronRuby.Hosting {
         }
 #endif
 
+        /// <summary>
+        /// One feature named by --enable / --disable. MRI silently accepts the names of features
+        /// it has compiled out, so an unrecognised one here is not an error either - it would turn
+        /// a working command line into a startup failure on an implementation detail.
+        /// </summary>
+        private void SetFeature(string/*!*/ feature, bool enable) {
+            switch (feature) {
+                case "gems":
+                case "gem":
+                    _disableRubyGems = !enable;
+                    break;
+
+                case "all":
+                    _disableRubyGems = !enable;
+                    break;
+
+                default:
+                    // did_you_mean, error_highlight, syntax_suggest, frozen-string-literal, jit,
+                    // yjit, rubyopt: nothing here implements them yet, and refusing the option
+                    // would be worse than ignoring it.
+                    break;
+            }
+        }
+
         private static string[] GetPaths(string input) {
             string[] paths = StringUtils.Split(input, new char[] { Path.PathSeparator }, Int32.MaxValue, StringSplitOptions.RemoveEmptyEntries);
             for (int i = 0; i < paths.Length; i++) {
@@ -159,13 +183,42 @@ namespace IronRuby.Hosting {
                 return;
             }
 
-            if (arg.StartsWith("--external-encoding=", StringComparison.Ordinal)) {
-                _externalEncodingName = arg.Substring("--external-encoding=".Length);
+            if (arg.StartsWith("--external-encoding", StringComparison.Ordinal)) {
+                _externalEncodingName = (arg == "--external-encoding")
+                    ? PopNextArg() : arg.Substring("--external-encoding=".Length);
                 return;
             }
 
-            if (arg.StartsWith("--internal-encoding=", StringComparison.Ordinal)) {
-                _internalEncodingName = arg.Substring("--internal-encoding=".Length);
+            if (arg.StartsWith("--internal-encoding", StringComparison.Ordinal)) {
+                _internalEncodingName = (arg == "--internal-encoding")
+                    ? PopNextArg() : arg.Substring("--internal-encoding=".Length);
+                return;
+            }
+
+            // -U is -E's internal half on its own: default_internal becomes UTF-8 and the external
+            // encoding is left alone.
+            if (arg == "-U") {
+                _internalEncodingName = "UTF-8";
+                return;
+            }
+
+            // --enable=a,b / --disable=a,b and the hyphenated --enable-a / --disable-a spellings.
+            // MRI accepts a comma separated list in the '=' form.
+            if (arg.StartsWith("--enable", StringComparison.Ordinal) || arg.StartsWith("--disable", StringComparison.Ordinal)) {
+                bool enable = arg.StartsWith("--enable", StringComparison.Ordinal);
+                string prefix = enable ? "--enable" : "--disable";
+                string features;
+                if (arg == prefix) {
+                    features = PopNextArg();
+                } else if (arg[prefix.Length] == '=' || arg[prefix.Length] == '-') {
+                    features = arg.Substring(prefix.Length + 1);
+                } else {
+                    throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));
+                }
+
+                foreach (var feature in features.Split(',')) {
+                    SetFeature(feature.Trim(), enable);
+                }
                 return;
             }
 
@@ -289,10 +342,6 @@ namespace IronRuby.Hosting {
                 case "-1.9":
                 case "-2.0":
                     throw new InvalidOptionException(String.Format("Option `{0}' is no longer supported. The compatible Ruby version is 1.9.", optionName));
-
-                case "--disable-gems":
-                    _disableRubyGems = true;
-                    break;
 
                 case "-X":
                     switch (optionValue) {
