@@ -7,7 +7,8 @@ class NoMatchingPatternKeyError < NoMatchingPatternError; end
 class FrozenError < RuntimeError; end unless defined?(FrozenError)
 
 class Object
-  def then
+  def then(&block)
+    return to_enum(:then) { 1 } unless block
     yield self
   end unless method_defined?(:then)
   alias_method :yield_self, :then unless method_defined?(:yield_self)
@@ -15,6 +16,39 @@ class Object
   def itself
     self
   end unless method_defined?(:itself)
+
+  # #dup and #clone call these rather than #initialize_copy directly, and a class
+  # that has to do different work for the two - Set clones its backing Hash so
+  # that the clone of a frozen set is frozen too - overrides only one of them.
+  def initialize_dup(orig)
+    initialize_copy(orig)
+    self
+  end unless private_method_defined?(:initialize_dup) || method_defined?(:initialize_dup)
+
+  def initialize_clone(orig, freeze: nil)
+    initialize_copy(orig)
+    self
+  end unless private_method_defined?(:initialize_clone) || method_defined?(:initialize_clone)
+
+  private :initialize_dup, :initialize_clone
+
+  # The Method object for a method defined only on this object. Kernel#method
+  # would happily answer one inherited from the class.
+  def singleton_method(name)
+    name = name.to_sym if name.respond_to?(:to_sym)
+    unless name.is_a?(::Symbol)
+      ::Kernel.raise(::TypeError, "#{name.inspect} is not a symbol nor a string")
+    end
+    klass = (singleton_class rescue nil)
+    defined = klass &&
+      (klass.instance_methods(false).include?(name) ||
+       klass.private_instance_methods(false).include?(name) ||
+       klass.protected_instance_methods(false).include?(name))
+    unless defined
+      ::Kernel.raise(::NameError, "undefined singleton method `#{name}\' for #{inspect}")
+    end
+    method(name)
+  end unless method_defined?(:singleton_method)
 end
 
 module Kernel
