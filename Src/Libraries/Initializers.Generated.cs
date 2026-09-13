@@ -4598,13 +4598,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.NotMatch)
             );
             
-            #if FEATURE_PROCESS
-            DefineLibraryMethod(module, "`", 0x52, 
-                0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.ExecuteCommand)
-            );
-            
-            #endif
             DefineLibraryMethod(module, "<=>", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Compare)
@@ -4725,14 +4718,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Proc, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.Evaluate)
             );
             
-            #if FEATURE_PROCESS
-            DefineLibraryMethod(module, "exec", 0x52, 
-                0x00020004U, 0x8006000cU, 
-                new Action<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Execute), 
-                new Action<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString[]>(IronRuby.Builtins.KernelOps.Execute)
-            );
-            
-            #endif
             DefineLibraryMethod(module, "exit", 0x52, 
                 0x00000000U, 0x00000002U, 0x00010000U, 
                 new Action<System.Object>(IronRuby.Builtins.KernelOps.Exit), 
@@ -5080,14 +5065,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToString)
             );
             
-            #if FEATURE_PROCESS
-            DefineLibraryMethod(module, "system", 0x52, 
-                0x00020004U, 0x8006000cU, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.KernelOps.System), 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString[], System.Boolean>(IronRuby.Builtins.KernelOps.System)
-            );
-            
-            #endif
             DefineLibraryMethod(module, "taint", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Taint)
@@ -5184,13 +5161,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
             );
             
-            #if FEATURE_PROCESS
-            DefineLibraryMethod(module, "`", 0x61, 
-                0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.ExecuteCommand)
-            );
-            
-            #endif
             DefineLibraryMethod(module, "abort", 0x61, 
                 0x00000000U, 0x00020004U, 
                 new Action<System.Object>(IronRuby.Builtins.KernelOps.Abort), 
@@ -5248,14 +5218,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Proc, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.Evaluate)
             );
             
-            #if FEATURE_PROCESS
-            DefineLibraryMethod(module, "exec", 0x61, 
-                0x00020004U, 0x8006000cU, 
-                new Action<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Execute), 
-                new Action<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString[]>(IronRuby.Builtins.KernelOps.Execute)
-            );
-            
-            #endif
             DefineLibraryMethod(module, "exit", 0x61, 
                 0x00000000U, 0x00000002U, 0x00010000U, 
                 new Action<System.Object>(IronRuby.Builtins.KernelOps.Exit), 
@@ -5445,14 +5407,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToString)
             );
             
-            #if FEATURE_PROCESS
-            DefineLibraryMethod(module, "system", 0x61, 
-                0x00020004U, 0x8006000cU, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.KernelOps.System), 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString[], System.Boolean>(IronRuby.Builtins.KernelOps.System)
-            );
-            
-            #endif
             #if FEATURE_FILESYSTEM
             DefineLibraryMethod(module, "test", 0x61, 
                 0x00000004U, 0x00020000U, 0x000c0018U, 
@@ -6910,9 +6864,24 @@ namespace IronRuby.Builtins {
         
         #if FEATURE_PROCESS
         private static void LoadProcess_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "__children__", 0x61, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyProcess.Children)
+            DefineLibraryMethod(module, "__backquote__", 0x61, 
+                0x0000000cU, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyProcess.Backquote)
+            );
+            
+            DefineLibraryMethod(module, "__duplex_io__", 0x61, 
+                0x0000000cU, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, IronRuby.Builtins.RubyIO, IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyProcess.DuplexIO)
+            );
+            
+            DefineLibraryMethod(module, "__exec__", 0x61, 
+                0x0000000cU, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, System.Object>(IronRuby.Builtins.RubyProcess.ExecPrimitive)
+            );
+            
+            DefineLibraryMethod(module, "__get_cloexec__", 0x61, 
+                0x00020000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Int32, System.Object>(IronRuby.Builtins.RubyProcess.GetCloseOnExec)
             );
             
             DefineLibraryMethod(module, "__getegid__", 0x61, 
@@ -6945,9 +6914,59 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.GetSid)
             );
             
+            DefineLibraryMethod(module, "__initgroups__", 0x61, 
+                0x00030002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.InitGroups)
+            );
+            
             DefineLibraryMethod(module, "__issetugid__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, System.Object>(IronRuby.Builtins.RubyProcess.IsSetUgid)
+            );
+            
+            DefineLibraryMethod(module, "__make_status__", 0x61, 
+                0x00030000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32, IronRuby.Builtins.RubyProcess.Status>(IronRuby.Builtins.RubyProcess.MakeStatus)
+            );
+            
+            DefineLibraryMethod(module, "__native_fd__", 0x61, 
+                0x00020000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.NativeDescriptor)
+            );
+            
+            DefineLibraryMethod(module, "__os_pipe__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyProcess.OsPipe)
+            );
+            
+            DefineLibraryMethod(module, "__set_cloexec__", 0x61, 
+                0x00020000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Int32, System.Boolean, System.Object>(IronRuby.Builtins.RubyProcess.SetCloseOnExec)
+            );
+            
+            DefineLibraryMethod(module, "__set_last_status__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.SetLastStatus)
+            );
+            
+            DefineLibraryMethod(module, "__setegid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetEgid)
+            );
+            
+            DefineLibraryMethod(module, "__seteuid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetEuid)
+            );
+            
+            DefineLibraryMethod(module, "__setgid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetGid)
+            );
+            
+            DefineLibraryMethod(module, "__setgroups__", 0x61, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray, System.Int32>(IronRuby.Builtins.RubyProcess.SetGroups)
             );
             
             DefineLibraryMethod(module, "__setpgid__", 0x61, 
@@ -6970,9 +6989,14 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.Builtins.RubyProcess.SetSid)
             );
             
+            DefineLibraryMethod(module, "__setuid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetUid)
+            );
+            
             DefineLibraryMethod(module, "__spawn__", 0x61, 
-                0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash, System.Boolean, System.Int32>(IronRuby.Builtins.RubyProcess.SpawnPrimitive)
+                0x0000000cU, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.RubyProcess.SpawnPrimitive)
             );
             
             DefineLibraryMethod(module, "__waitpid__", 0x61, 
@@ -7050,6 +7074,11 @@ namespace IronRuby.Builtins {
         
         #if FEATURE_PROCESS && FEATURE_PROCESS
         private static void LoadProcess__Status_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "==", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyProcess.Status, System.Object, System.Boolean>(IronRuby.Builtins.RubyProcess.Status.Equals)
+            );
+            
             DefineLibraryMethod(module, "coredump?", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyProcess.Status, System.Boolean>(IronRuby.Builtins.RubyProcess.Status.CoreDump)
@@ -7062,7 +7091,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "exitstatus", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyProcess.Status, System.Int32>(IronRuby.Builtins.RubyProcess.Status.ExitStatus)
+                new Func<IronRuby.Builtins.RubyProcess.Status, System.Object>(IronRuby.Builtins.RubyProcess.Status.ExitStatus)
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 
@@ -7073,6 +7102,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "pid", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyProcess.Status, System.Int32>(IronRuby.Builtins.RubyProcess.Status.Pid)
+            );
+            
+            DefineLibraryMethod(module, "signaled?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyProcess.Status, System.Boolean>(IronRuby.Builtins.RubyProcess.Status.Signaled)
             );
             
             DefineLibraryMethod(module, "stopped?", 0x51, 
@@ -7087,12 +7121,22 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "success?", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyProcess.Status, System.Boolean>(IronRuby.Builtins.RubyProcess.Status.Success)
+                new Func<IronRuby.Builtins.RubyProcess.Status, System.Object>(IronRuby.Builtins.RubyProcess.Status.Success)
             );
             
             DefineLibraryMethod(module, "termsig", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyProcess.Status, System.Object>(IronRuby.Builtins.RubyProcess.Status.TermSig)
+            );
+            
+            DefineLibraryMethod(module, "to_i", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyProcess.Status, System.Int32>(IronRuby.Builtins.RubyProcess.Status.ToInt)
+            );
+            
+            DefineLibraryMethod(module, "to_s", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyProcess.Status, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyProcess.Status.ToStr)
             );
             
         }
