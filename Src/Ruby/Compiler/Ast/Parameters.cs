@@ -45,6 +45,17 @@ namespace IronRuby.Compiler.Ast {
         private readonly LeftValue _unsplat;
         private readonly LocalVariable _block;
 
+        // Set when the signature was lowered to a single splat whose contents a prologue
+        // unpacks by hand (keywords mixed with optional/rest/post positionals). The
+        // prologue empties the splat, so a parameterless `super` has to read the copy of
+        // the original argument list the prologue kept aside instead of the parameters.
+        private LeftValue _superSplat;
+
+        internal LeftValue SuperSplat {
+            get { return _superSplat; }
+            set { _superSplat = value; }
+        }
+
         public LeftValue/*!*/[]/*!*/ Mandatory {
             get { return _mandatory; }
         }
@@ -110,6 +121,11 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal void TransformForSuperCall(AstGenerator/*!*/ gen, CallSiteBuilder/*!*/ siteBuilder) {
+            if (_superSplat != null) {
+                siteBuilder.SplattedArgument = _superSplat.TransformRead(gen);
+                return;
+            }
+
             for (int i = 0; i < _leadingMandatoryCount; i++) {
                 siteBuilder.Add(_mandatory[i].TransformRead(gen));
             }

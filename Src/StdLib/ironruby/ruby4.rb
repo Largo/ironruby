@@ -5490,136 +5490,263 @@ end
 
 # 3.2's Data: immutable value objects. The constant did not exist, so every
 # file in spec/core/data failed to load.
+#
+# The shape follows struct.c: Data.define builds a subclass that owns the
+# member list, its .new normalises whatever it was handed into a keyword hash
+# and then calls #initialize, and Data#initialize is the one place that
+# validates the keys and freezes the object. Doing the validation inside .new
+# instead - which is what the first version of this file did - meant a
+# user-written #initialize was never reached, so neither the `super` idiom nor
+# psych's Data.instance_method(:initialize).bind_call trick worked.
 class Data
   class << self
-    def define(*members, &block)
-      members = members.map do |m|
+    def define(*names, &block)
+      names = names.map do |m|
         unless m.is_a?(::Symbol) || m.is_a?(::String)
           ::Kernel.raise(::TypeError, "#{m.inspect} is not a symbol nor a string")
         end
         m.to_sym
       end
-      duplicate = members.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
+      duplicate = names.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
       ::Kernel.raise(::ArgumentError, "duplicate member: #{duplicate}") if duplicate
+      names.freeze
 
       klass = ::Class.new(self) do
-        @__members__ = members
-
-        members.each do |name|
+        names.each do |name|
           define_method(name) { instance_variable_get("@#{name}") }
         end
 
         class << self
           def members
-            @__members__.dup
+            __data_members__.dup
           end
 
-          def [](*args, **kwargs)
-            new(*args, **kwargs)
-          end
-
-          def new(*args, **kwargs)
+          def new(*args, **kwargs, &block)
+            unless args.empty?
+              unless kwargs.empty?
+                ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 0)")
+              end
+              members = __data_members__
+              if args.size > members.size
+                ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..#{members.size})")
+              end
+              args.each_with_index { |value, i| kwargs[members[i]] = value }
+            end
             instance = allocate
-            instance.__send__(:__data_init__, @__members__, args, kwargs)
+            instance.__send__(:initialize, **kwargs, &block)
             instance
+          end
+
+          alias_method :[], :new
+
+          def inspect
+            ::Module.instance_method(:to_s).bind(self).call
           end
         end
       end
+      klass.instance_variable_set(:@__data_members__, names)
       klass.class_eval(&block) if block
       klass
     end
 
-    def members
-      @__members__ ? @__members__.dup : []
+    private
+
+    # The member list lives in an ivar on the class Data.define created. A
+    # plain `class Foo < Data` never gets one, and neither does Data itself,
+    # which is why .members is defined on the generated class rather than here
+    # - `Data.respond_to?(:members)` has to stay false.
+    def __data_members__
+      klass = self
+      while klass
+        names = klass.instance_variable_get(:@__data_members__)
+        return names if names
+        klass = klass.superclass
+      end
+      ::Kernel.raise(::NoMethodError, "undefined method `members' for #{self}")
     end
   end
 
-  def __data_init__(names, args, kwargs)
-    if !args.empty? && !kwargs.empty?
-      ::Kernel.raise(::ArgumentError, "wrong number of arguments")
+  def initialize(**kwargs)
+    names = __data_members__
+    given = {}
+    unknown = []
+    kwargs.each do |key, value|
+      key = __data_key__(key)
+      if names.include?(key.to_sym)
+        given[key.to_sym] = value
+      else
+        unknown << key.inspect
+      end
     end
-    if args.empty? && kwargs.empty? && !names.empty?
-      ::Kernel.raise(::ArgumentError, "missing keyword#{names.size > 1 ? 's' : ''}: #{names.map(&:inspect).join(', ')}")
+    missing = names.reject { |name| given.key?(name) }
+    unless missing.empty?
+      ::Kernel.raise(::ArgumentError,
+        "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map { |n| n.inspect }.join(', ')}")
     end
-    if !args.empty?
-      if args.size > names.size
-        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..#{names.size})")
-      end
-      if args.size < names.size
-        missing = names[args.size..-1]
-        ::Kernel.raise(::ArgumentError, "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map(&:inspect).join(', ')}")
-      end
-      names.each_with_index { |n, i| instance_variable_set("@#{n}", args[i]) }
-    else
-      missing = names - kwargs.keys
-      unless missing.empty?
-        ::Kernel.raise(::ArgumentError, "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map(&:inspect).join(', ')}")
-      end
-      unknown = kwargs.keys - names
-      unless unknown.empty?
-        ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
-      end
-      names.each { |n| instance_variable_set("@#{n}", kwargs[n]) }
-    end
+    given.each { |name, value| instance_variable_set("@#{name}", value) }
     freeze
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError,
+        "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.join(', ')}")
+    end
+    nil
   end
-  private :__data_init__
 
   def members
-    self.class.members
+    __data_members__.dup
   end
 
   def to_h(&block)
     result = {}
-    members.each { |n| result[n] = __send__(n) }
-    return result unless block
-    out = {}
-    result.each { |k, v| pair = block.call(k, v); out[pair[0]] = pair[1] }
-    out
+    __data_members__.each do |name|
+      key, value = name, __send__(name)
+      if block
+        pair = block.call(key, value)
+        unless ::Array === pair
+          converted = pair.respond_to?(:to_ary) ? pair.to_ary : nil
+          unless ::Array === converted
+            ::Kernel.raise(::TypeError, "wrong element type #{pair.class} (expected array)")
+          end
+          pair = converted
+        end
+        unless pair.size == 2
+          ::Kernel.raise(::ArgumentError, "element has wrong array length (expected 2, was #{pair.size})")
+        end
+        key, value = pair[0], pair[1]
+      end
+      result[key] = value
+    end
+    result
   end
 
   def deconstruct
-    members.map { |n| __send__(n) }
+    __data_members__.map { |name| __send__(name) }
   end
 
   def deconstruct_keys(keys)
     return to_h if keys.nil?
-    all = members
+    unless ::Array === keys
+      ::Kernel.raise(::TypeError, "wrong argument type #{keys.class} (expected Array or nil)")
+    end
+    names = __data_members__
+    return {} if keys.size > names.size
     result = {}
-    keys.each do |k|
-      return result unless all.include?(k)
-      result[k] = __send__(k)
+    keys.each do |key|
+      key = __data_key__(key)
+      return result unless names.include?(key.to_sym)
+      result[key] = __send__(key.to_sym)
     end
     result
   end
 
   def with(**kwargs)
     return self if kwargs.empty?
-    unknown = kwargs.keys - members
-    unless unknown.empty?
-      ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+    names = __data_members__
+    updates = {}
+    unknown = []
+    kwargs.each do |key, value|
+      key = __data_key__(key)
+      if names.include?(key.to_sym)
+        updates[key.to_sym] = value
+      else
+        unknown << key.inspect
+      end
     end
-    self.class.new(**to_h.merge(kwargs))
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError,
+        "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.join(', ')}")
+    end
+    copy = self.class.allocate
+    copy.__send__(:initialize, **to_h.merge(updates))
+    copy
   end
 
   def ==(other)
-    other.class == self.class && other.deconstruct == deconstruct
+    return true if equal?(other)
+    return false unless other.class == self.class
+    __data_paired__(:==, other) do
+      __data_members__.all? { |name| __send__(name) == other.__send__(name) }
+    end
   end
 
   def eql?(other)
-    other.class == self.class && members.all? { |n| __send__(n).eql?(other.__send__(n)) }
+    return true if equal?(other)
+    return false unless other.class == self.class
+    __data_paired__(:eql?, other) do
+      __data_members__.all? { |name| __send__(name).eql?(other.__send__(name)) }
+    end
   end
 
   def hash
-    ([self.class] + deconstruct).hash
+    stack = (::Thread.current[:__data_hash__] ||= [])
+    return self.class.hash if stack.any? { |seen| seen.equal?(self) }
+    stack.push(self)
+    begin
+      ([self.class] + deconstruct).hash
+    ensure
+      stack.pop
+    end
   end
 
-  def inspect
-    name = self.class.name
-    body = members.map { |n| "#{n}=#{__send__(n).inspect}" }.join(", ")
-    "#<data #{name ? "#{name} " : ''}#{body}>"
+  # struct.c prints the class path, not #name: a Data class whose name method
+  # has been redefined still inspects under its real path, and a class whose
+  # path starts with '#' - anonymous, or nested inside something anonymous -
+  # prints no name at all unless it is the recursive placeholder.
+  def to_s
+    path = ::Module.instance_method(:to_s).bind(self.class).call
+    named = !path.start_with?("#")
+    stack = (::Thread.current[:__data_inspect__] ||= [])
+    return "#<data #{path}:...>" if stack.any? { |seen| seen.equal?(self) }
+    stack.push(self)
+    begin
+      out = "#<data "
+      out << path if named
+      __data_members__.each_with_index do |name, i|
+        out << (i > 0 ? ", " : (named ? " " : ""))
+        out << "#{name}=#{__send__(name).inspect}"
+      end
+      out << ">"
+    ensure
+      stack.pop
+    end
   end
-  alias_method :to_s, :inspect
+  alias_method :inspect, :to_s
+
+  private
+
+  def __data_members__
+    self.class.__send__(:__data_members__)
+  end
+
+  # Data accepts a String wherever it accepts a Symbol, and asks anything else
+  # for #to_str before giving up. The value returned here is the key as the
+  # caller wrote it - a String stays a String so that #deconstruct_keys can key
+  # its result by it, and so that an unknown-keyword message quotes it.
+  def __data_key__(key)
+    return key if ::Symbol === key
+    return key if ::String === key
+    unless key.respond_to?(:to_str)
+      ::Kernel.raise(::TypeError, "#{key.inspect} is not a symbol nor a string")
+    end
+    converted = key.to_str
+    unless ::String === converted
+      ::Kernel.raise(::TypeError,
+        "can't convert #{key.class} into String (#{key.class}#to_str gives #{converted.class})")
+    end
+    converted
+  end
+
+  def __data_paired__(tag, other)
+    stack = (::Thread.current[:__data_paired__] ||= [])
+    pair = [tag, object_id, other.object_id]
+    return true if stack.include?(pair)
+    stack.push(pair)
+    begin
+      yield
+    ensure
+      stack.pop
+    end
+  end
 end unless defined?(Data)
 
 # ARGF was a plain Object carrying singleton methods, so it had no class to

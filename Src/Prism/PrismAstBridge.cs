@@ -1326,6 +1326,13 @@ namespace IronRuby.Prism {
 
             var kwVar = CurrentScope.AddVariable("?kw?", span);
 
+            // Everything below consumes ?args? destructively, so a parameterless `super`
+            // inside the body would find nothing left to forward. Keep the list as it
+            // arrived - trailing keyword hash included - and let SuperCall splat that.
+            var superArgs = CurrentScope.AddVariable("?superargs?", span);
+            statements.Add(new SimpleAssignmentExpression(superArgs,
+                new MethodCall(args, "dup", null, span), null, span));
+
             // A trailing Hash is how a keyword call arrives here, since keywords have no
             // calling-convention slot of their own. But when a block auto-splats a single
             // Array argument no keywords were passed, so the Hash stays positional
@@ -1401,7 +1408,9 @@ namespace IronRuby.Prism {
             if (node.Block is Pm.BlockParameterNode block) {
                 blockParam = DefineParameter(block.Name ?? "?block?", Span(node.Block));
             }
-            return new Parameters(LeftValue.EmptyArray, 0, null, args, blockParam, span);
+            return new Parameters(LeftValue.EmptyArray, 0, null, args, blockParam, span) {
+                SuperSplat = superArgs
+            };
         }
 
         /// <summary>
