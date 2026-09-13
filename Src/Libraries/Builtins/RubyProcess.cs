@@ -501,8 +501,19 @@ namespace IronRuby.Builtins {
         [RubyMethod("kill", RubyMethodAttributes.PublicSingleton)]
         public static object Kill(ConversionStorage<int>/*!*/ toInt, RubyModule/*!*/ self, object signalId, [NotNull]params object[]/*!*/ pids) {
             int signal = PosixSignals.ToNumber(signalId);
+
+            // A negative signal - -15, "-TERM", :"-SIGTERM" - is Ruby's way of saying "send it
+            // to the process group of each pid", which is kill(2)'s negative pid.
+            bool toProcessGroup = signal < 0;
+            if (toProcessGroup) {
+                signal = -signal;
+            }
+
             foreach (var pid in pids) {
                 int target = Protocols.CastToFixnum(toInt, pid);
+                if (toProcessGroup && target > 0) {
+                    target = -target;
+                }
 
                 // Signalling yourself with something that would end the process, and no handler to
                 // catch it, is a SignalException in MRI - the program gets to rescue it. Letting the
