@@ -4908,6 +4908,61 @@ end
 # caller_locations (2.0) and the Location objects it yields. The runtime only
 # offers caller strings, so parse those: "path:lineno:in `label'".
 class Thread
+  # A thread's own stack is reachable through Kernel#caller; another thread's is
+  # not, and IronRuby has no way to walk it, so those answer the same thing MRI
+  # answers for a thread that has already finished.
+  def backtrace(*args)
+    return nil unless self == ::Thread.current
+    __slice_stack__(::Kernel.send(:caller, 1), args)
+  end unless method_defined?(:backtrace)
+
+  def backtrace_locations(*args)
+    return nil unless self == ::Thread.current
+    __slice_stack__(::Kernel.send(:caller_locations, 1), args)
+  end unless method_defined?(:backtrace_locations)
+
+  # Both take (start, length) or a Range, like Kernel#caller.
+  def __slice_stack__(frames, args)
+    return frames if args.empty?
+    if args[0].is_a?(::Range)
+      return frames[args[0]]
+    end
+    start = ::Kernel.Integer(args[0])
+    return nil if start > frames.size
+    frames = frames[start..-1] || []
+    args.size > 1 && !args[1].nil? ? frames.first(::Kernel.Integer(args[1])) : frames
+  end
+  private :__slice_stack__
+
+  # There is no asynchronous-interrupt queue here, so nothing is ever pending.
+  def pending_interrupt?(error = nil)
+    false
+  end unless method_defined?(:pending_interrupt?)
+
+  def self.pending_interrupt?(error = nil)
+    false
+  end unless respond_to?(:pending_interrupt?)
+
+  def self.each_caller_location(&block)
+    return ::Kernel.send(:caller_locations, 1).each unless block
+    ::Kernel.send(:caller_locations, 1).each { |l| block.call(l) }
+    nil
+  end unless respond_to?(:each_caller_location)
+
+  def native_thread_id
+    return nil unless alive?
+    __native_thread_id__
+  end unless method_defined?(:native_thread_id)
+
+  def __native_thread_id__
+    if self == ::Thread.current
+      ::System::Environment.CurrentManagedThreadId
+    else
+      object_id
+    end
+  end
+  private :__native_thread_id__
+
   class Backtrace
     class Location
       attr_reader :path, :lineno, :label
@@ -5443,6 +5498,14 @@ end
 # missing \e[m below is deliberate.
 
 class Exception
+  # MRI answers nil when the exception carries no captured locations, which is
+  # every exception here: the backtrace is kept as strings, not as Location
+  # objects. Rebuilding Locations from the strings would be guesswork, so this
+  # gives the honest answer rather than a fabricated one.
+  def backtrace_locations
+    nil
+  end unless method_defined?(:backtrace_locations)
+
   # Whether an uncaught exception would be printed to a terminal. Decides the
   # default for the `highlight:` option.
   def self.to_tty?
