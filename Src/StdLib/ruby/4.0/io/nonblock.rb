@@ -1,18 +1,40 @@
-# io/nonblock - the O_NONBLOCK flag on a stream.
+# io/nonblock - the O_NONBLOCK descriptor flag.
 #
-# There is no fcntl underneath here to set the flag on, so this records what it
-# was told and answers it back. That is enough for code that sets the flag and
-# asks about it, which is what the flag is mostly used for; what it cannot do is
-# actually make a read return instead of blocking. Said plainly rather than
-# pretended otherwise.
+# Where the stream has an operating system descriptor this asks the kernel, so
+# it gives the right answer for a descriptor nobody here opened. Not every
+# stream has one: IronRuby's IO.pipe is not backed by a FileStream, so
+# IO#GetNativeDescriptor answers -1 for a pipe and there is no flag to read. For
+# those the value is remembered instead, which is a weaker answer and is why a
+# pipe reports false here where MRI reports true - MRI opens its pipes
+# non-blocking, and these really are blocking.
 
 class IO
+  # Linux values, the same ones IO#fcntl uses.
+  NONBLOCK_GET__ = 3   # F_GETFL
+  NONBLOCK_SET__ = 4   # F_SETFL
+  NONBLOCK_FLAG__ = 0x800 # O_NONBLOCK
+
+  def __nonblock_native__?
+    (::IO.GetNativeDescriptor(self) rescue -1) >= 0
+  end
+  private :__nonblock_native__?
+
   def nonblock?
-    defined?(@__nonblock__) ? !!@__nonblock__ : false
+    if __nonblock_native__?
+      (fcntl(NONBLOCK_GET__, 0) & NONBLOCK_FLAG__) != 0
+    else
+      defined?(@__nonblock__) ? !!@__nonblock__ : false
+    end
   end
 
   def nonblock=(value)
+    if __nonblock_native__?
+      flags = fcntl(NONBLOCK_GET__, 0)
+      flags = value ? (flags | NONBLOCK_FLAG__) : (flags & ~NONBLOCK_FLAG__)
+      fcntl(NONBLOCK_SET__, flags)
+    end
     @__nonblock__ = !!value
+    value
   end
 
   # With a block, sets the flag for the duration and puts it back afterwards.

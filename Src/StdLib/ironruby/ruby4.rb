@@ -6438,38 +6438,89 @@ class IO
   end unless method_defined?(:readpartial)
 
   class << self
-    # Nothing here multiplexes on descriptors, so a stream counts as readable
-    # when it is open and not at end of file, and writable when it is open.
-    # That is the honest answer for the file and pipe streams the specs use, and
-    # it is a great deal more useful than the NotSupportedException this was.
+    # Multiplexing through poll(2), for the streams that have an operating
+    # system descriptor to poll. Not all of them do: IronRuby's IO.pipe is not
+    # backed by a FileStream, so IO#GetNativeDescriptor answers -1 for a pipe
+    # and there is nothing to ask the kernel about. Those streams are reported
+    # ready - the same guess as before, but now confined to the cases where no
+    # better answer exists, and never allowed to turn into an indefinite wait.
+    POLLIN__ = 0x001
+    POLLOUT__ = 0x004
+    POLLERR__ = 0x008
+    POLLHUP__ = 0x010
+    POLLNVAL__ = 0x020
+
     def select(reads = nil, writes = nil, errors = nil, timeout = nil)
       [reads, writes, errors].each do |list|
-        next if list.nil?
-        unless list.respond_to?(:to_ary)
-          ::Kernel.raise(::TypeError, "no implicit conversion of #{list.class} into Array")
+        next if list.nil? || list.respond_to?(:to_ary)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{list.class} into Array")
+      end
+      reads = (reads || []).to_a
+      writes = (writes || []).to_a
+      errors = (errors || []).to_a
+      return nil if reads.empty? && writes.empty? && errors.empty?
+
+      pollable = []
+      unpollable = []
+      [[reads, POLLIN__, :read], [writes, POLLOUT__, :write], [errors, 0, :error]].each do |list, event, kind|
+        list.each do |io|
+          fd = ::IO.GetNativeDescriptor(io) rescue -1
+          (fd >= 0 ? pollable : unpollable) << [io, event, kind, fd]
         end
       end
-      readable = (reads || []).select { |io| __select_readable__(io) }
-      writable = (writes || []).select { |io| !io.closed? }
+
+      readable = []
+      writable = []
       failing = []
-      if readable.empty? && writable.empty? && failing.empty?
-        return nil
+
+      unless unpollable.empty?
+        unpollable.each do |io, _, kind, _|
+          next if io.closed?
+          case kind
+          when :read then readable << io
+          when :write then writable << io
+          end
+        end
       end
+
+      unless pollable.empty?
+        # If anything was answered without polling there is already a result, so
+        # the poll must not wait; otherwise honour the caller's timeout.
+        millis =
+          if !readable.empty? || !writable.empty?
+            0
+          elsif timeout.nil?
+            -1
+          else
+            (timeout.to_f * 1000).round
+          end
+        revents = ::IO.Poll(pollable.map { |_, _, _, fd| fd }, pollable.map { |_, e, _, _| e }, millis)
+        if revents.nil?
+          pollable.each do |io, _, kind, _|
+            next if io.closed?
+            case kind
+            when :read then readable << io
+            when :write then writable << io
+            end
+          end
+        else
+          pollable.each_with_index do |(io, _, kind, _), i|
+            got = revents[i]
+            case kind
+            when :read
+              readable << io if (got & (POLLIN__ | POLLHUP__ | POLLERR__ | POLLNVAL__)) != 0
+            when :write
+              writable << io if (got & (POLLOUT__ | POLLERR__ | POLLNVAL__)) != 0
+            else
+              failing << io if (got & (POLLERR__ | POLLNVAL__)) != 0
+            end
+          end
+        end
+      end
+
+      return nil if readable.empty? && writable.empty? && failing.empty?
       [readable, writable, failing]
     end
-
-    # #eof? blocks on a pipe with nothing in it yet, and select is the one
- # call that must never block, so only a regular file - where eof? is a
-      # position check - is asked. Anything else is reported readable, which
-      # is optimistic but cannot hang.
-    def __select_readable__(io)
-      return false if io.closed?
-      return !io.eof? if io.respond_to?(:stat) && io.stat.file?
-      true
-    rescue ::IOError, ::Errno::EBADF, ::NotImplementedError
-      false
-    end
-    private :__select_readable__
   end
 
   # Reads a byte-order mark, and if there is one, adopts the encoding it names

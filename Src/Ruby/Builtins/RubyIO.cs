@@ -15,6 +15,7 @@
 
 using System;
 using System.IO;
+using System.Runtime.InteropServices;
 using System.Threading;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Utils;
@@ -421,12 +422,125 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateEBADF();
         }
 
+        /// <summary>
+        /// The operating system's descriptor for this stream, or -1 when there is not one.
+        /// IronRuby's "file descriptor" is an index into a per-context table, so anything that
+        /// calls a syscall has to dig the real handle out of the underlying FileStream - passing
+        /// #fileno to fcntl or poll asks about an unrelated descriptor.
+        /// </summary>
+        public int NativeDescriptor {
+            get {
+                if (!_hasFileControl) {
+                    return -1;
+                }
+                var buffered = _stream;
+                if (buffered == null) {
+                    return -1;
+                }
+                var fs = buffered.BaseStream as System.IO.FileStream;
+                if (fs == null) {
+                    return -1;
+                }
+                return (int)fs.SafeFileHandle.DangerousGetHandle();
+            }
+        }
+
+        /// <summary>The native descriptor of an IO, for Ruby code that needs one.</summary>
+        public static int GetNativeDescriptor(RubyIO/*!*/ io) {
+            return io.NativeDescriptor;
+        }
+
+        #region poll
+
+        // struct pollfd { int fd; short events; short revents; }
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PollFd {
+            public int fd;
+            public short events;
+            public short revents;
+        }
+
+        public const short POLLIN = 0x001;
+        public const short POLLOUT = 0x004;
+        public const short POLLERR = 0x008;
+        public const short POLLHUP = 0x010;
+        public const short POLLNVAL = 0x020;
+
+        [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
+        private static extern int sys_poll([In, Out] PollFd[] fds, uint nfds, int timeout);
+
+        /// <summary>
+        /// poll(2) over the given descriptors. Answers a parallel array of revents, or null when
+        /// the platform has no poll. timeoutMilliseconds of -1 waits indefinitely, 0 returns at
+        /// once. This is what makes IO.select a real answer rather than a guess: asking the
+        /// kernel is the only way to know whether a descriptor has something waiting on it.
+        /// </summary>
+        // Takes plain lists so Ruby can call it with Ruby Arrays.
+        public static short[] Poll(System.Collections.IList/*!*/ descriptors, System.Collections.IList/*!*/ events, int timeoutMilliseconds) {
+            if (!_hasFileControl || descriptors.Count == 0) {
+                return null;
+            }
+
+            var fds = new PollFd[descriptors.Count];
+            for (int i = 0; i < descriptors.Count; i++) {
+                fds[i].fd = Convert.ToInt32(descriptors[i]);
+                fds[i].events = Convert.ToInt16(events[i]);
+            }
+
+            int result;
+            do {
+                result = sys_poll(fds, (uint)fds.Length, timeoutMilliseconds);
+            } while (result < 0 && Marshal.GetLastWin32Error() == 4); // EINTR
+
+            if (result < 0) {
+                return null;
+            }
+
+            var revents = new short[descriptors.Count];
+            for (int i = 0; i < fds.Length; i++) {
+                revents[i] = fds[i].revents;
+            }
+            return revents;
+        }
+
+        #endregion
+
+        #region fcntl
+
+        // Linux values. fcntl is variadic; for F_GETFL and F_SETFL the third argument is an int.
+        public const int F_GETFL = 3;
+        public const int F_SETFL = 4;
+        public const int O_NONBLOCK = 0x800;
+
+        private static readonly bool _hasFileControl = System.IO.Path.DirectorySeparatorChar == '/';
+
+        [DllImport("libc", EntryPoint = "fcntl", SetLastError = true)]
+        private static extern int sys_fcntl(int fd, int cmd, int arg);
+
+        /// <summary>
+        /// fcntl(2) on the underlying descriptor. Only the descriptor flags can be asked for or
+        /// set this way, which is what io/nonblock needs; a platform without fcntl still gets
+        /// the NotSupportedException this used to throw unconditionally.
+        /// </summary>
         public virtual int FileControl(int commandId, int arg) {
             GetStream();
 
-            // TODO:
-            throw new NotSupportedException();
+            if (!_hasFileControl) {
+                throw new NotSupportedException();
+            }
+
+            int fd = NativeDescriptor;
+            if (fd < 0) {
+                throw new NotSupportedException();
+            }
+            int result = sys_fcntl(fd, commandId, arg);
+            if (result < 0) {
+                throw RubyExceptions.CreateEBADF();
+            }
+            return result;
         }
+
+        #endregion
 
         public virtual int FileControl(int commandId, byte[] arg) {
             GetStream();
