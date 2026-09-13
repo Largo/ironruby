@@ -2229,11 +2229,17 @@ namespace IronRuby.Runtime {
             return (value != null) ? MutableString.Create(value.ToString(), RubyEncoding.UTF8) : MutableString.FrozenEmpty;
         }
 
+        /// <summary>MRI's rb_check_string_type: a #to_str answering nil is "not a String after all".</summary>
+        [Emitted] // ProtocolConversionAction
+        public static MutableString TryToStringValidator(string/*!*/ className, object obj) {
+            return (obj == null) ? null : ToStringValidator(className, obj);
+        }
+
         [Emitted] // ProtocolConversionAction
         public static MutableString/*!*/ ToStringValidator(string/*!*/ className, object obj) {
             MutableString result = obj as MutableString;
             if (result == null) {
-                throw RubyExceptions.CreateReturnTypeError(className, "to_str", "String");
+                throw RubyExceptions.CreateReturnTypeError(className, "to_str", "String", obj);
             }
             return result;
         }
@@ -2242,7 +2248,7 @@ namespace IronRuby.Runtime {
         public static string/*!*/ ToSymbolValidator(string/*!*/ className, object obj) {
             var str = obj as MutableString;
             if (str == null) {
-                throw RubyExceptions.CreateReturnTypeError(className, "to_str", "String"); 
+                throw RubyExceptions.CreateReturnTypeError(className, "to_str", "String", obj); 
             }
             return str.ConvertToString();
         }
@@ -2280,11 +2286,26 @@ namespace IronRuby.Runtime {
             return new RubyRegex(RubyRegex.Escape(ToStringValidator(className, obj)), RubyRegexOptions.NONE);
         }
 
+        /// <summary>
+        /// MRI's rb_check_array_type: a #to_ary that answers nil means "not an Array after all",
+        /// which is not an error - the caller keeps the object as it is. Anything else that is not
+        /// an Array is a broken promise and still raises.
+        /// </summary>
+        [Emitted] // ProtocolConversionAction
+        public static IList TryToArrayValidator(string/*!*/ className, object obj) {
+            return (obj == null) ? null : ToArrayValidator(className, obj);
+        }
+
+        [Emitted] // ProtocolConversionAction
+        public static IDictionary<object, object> TryToHashValidator(string/*!*/ className, object obj) {
+            return (obj == null) ? null : ToHashValidator(className, obj);
+        }
+
         [Emitted] // ProtocolConversionAction
         public static IList/*!*/ ToArrayValidator(string/*!*/ className, object obj) {
             var result = obj as IList;
             if (result == null) {
-                throw RubyExceptions.CreateReturnTypeError(className, "to_ary", "Array");
+                throw RubyExceptions.CreateReturnTypeError(className, "to_ary", "Array", obj);
             }
             return result;
         }
@@ -2293,7 +2314,7 @@ namespace IronRuby.Runtime {
         public static IList/*!*/ ToAValidator(string/*!*/ className, object obj) {
             var result = obj as IList;
             if (result == null) {
-                throw RubyExceptions.CreateReturnTypeError(className, "to_a", "Array");
+                throw RubyExceptions.CreateReturnTypeError(className, "to_a", "Array", obj);
             }
             return result;
         }
@@ -2302,7 +2323,7 @@ namespace IronRuby.Runtime {
         public static IDictionary<object, object>/*!*/ ToHashValidator(string/*!*/ className, object obj) {
             var result = obj as IDictionary<object, object>;
             if (result == null) {
-                throw RubyExceptions.CreateReturnTypeError(className, "to_hash", "Hash");
+                throw RubyExceptions.CreateReturnTypeError(className, "to_hash", "Hash", obj);
             }
             return result;
         }
@@ -2320,7 +2341,7 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.CreateRangeError("bignum too big to convert into {0}", targetType);
             }
 
-            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer");
+            throw RubyExceptions.CreateReturnTypeError(className, "to_int", "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction

@@ -46,17 +46,38 @@ module Kernel
 end
 
 module Enumerable
-  def filter_map
+  def filter_map(&block)
+    return to_enum(:filter_map) { size if respond_to?(:size) } unless block
     result = []
-    each { |x| v = yield(x); result << v if v }
+    # Like #map, the yielded values reach the block as they were yielded:
+    # `yield 1, 2` is 1 to a one-parameter block, not [1, 2].
+    each { |*values| v = block.call(*values); result << v if v }
     result
   end unless method_defined?(:filter_map)
 
-  def tally
-    result = Hash.new(0)
-    each { |x| result[x] += 1 }
-    result.default = nil
-    result
+  # The optional Hash counts into it instead of into a fresh one, which also
+  # means the frozen check happens before the first element is looked at.
+  def tally(counts = nil)
+    if counts.nil?
+      result = {}
+      each { |*values| item = __enum_item__(values); result[item] = (result[item] || 0) + 1 }
+      return result
+    end
+
+    hash = counts.is_a?(Hash) ? counts : Hash.try_convert(counts)
+    raise TypeError, "no implicit conversion of #{counts.class} into Hash" if hash.nil?
+    raise FrozenError.new("can't modify frozen Hash: #{hash.inspect}") if hash.frozen?
+    each do |*values|
+      item = __enum_item__(values)
+      # #fetch rather than #[] so that a default value or default proc on the
+      # given Hash cannot be mistaken for a count that is already there.
+      n = hash.fetch(item, 0)
+      unless n.is_a?(Integer)
+        raise TypeError, "wrong argument type #{n.class} (expected Integer)"
+      end
+      hash[item] = n + 1
+    end
+    hash
   end unless method_defined?(:tally)
 
   # MRI does not simply fold with +: once a Float turns up it switches to
@@ -108,11 +129,28 @@ module Enumerable
   end
   private :__enum_item__
 
-  def each_entry(&block)
-    return to_enum(:each_entry) unless block
-    each { |*values| block.call(__enum_item__(values)) }
+  # Extra arguments are passed straight through to #each, which is how a
+  # receiver whose #each takes parameters gets to see them.
+  def each_entry(*args, &block)
+    return to_enum(:each_entry, *args) unless block
+    each(*args) { |*values| block.call(__enum_item__(values)) }
     self
   end unless method_defined?(:each_entry)
+
+  unless method_defined?(:each_with_index_without_args)
+    alias_method :each_with_index_without_args, :each_with_index
+
+    def each_with_index(*args, &block)
+      return to_enum(:each_with_index, *args) { size if respond_to?(:size) } unless block
+      return each_with_index_without_args(&block) if args.empty?
+      index = 0
+      each(*args) do |*values|
+        block.call(__enum_item__(values), index)
+        index += 1
+      end
+      self
+    end
+  end
 
   # Ruby 2.5 gave the predicates an optional pattern, matched with #===.
   # The built-ins only know the block form, and because they are defined on
@@ -123,14 +161,19 @@ module Enumerable
     alias_method :none_without_pattern?, :none?
     alias_method :one_without_pattern?, :one?
 
-    def __check_pattern_args__(args)
-      return if args.size <= 1
-      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    def __check_pattern_args__(args, block = nil)
+      if args.size > 1
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+      end
+      # The pattern wins and the block is never called, which is worth saying out loud.
+      if block && !args.empty? && !$VERBOSE.nil?
+        warn "warning: given block not used"
+      end
     end
     private :__check_pattern_args__
 
     def all?(*args, &block)
-      __check_pattern_args__(args)
+      __check_pattern_args__(args, block)
       return all_without_pattern?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false unless pattern === __enum_item__(values) }
@@ -138,7 +181,7 @@ module Enumerable
     end
 
     def any?(*args, &block)
-      __check_pattern_args__(args)
+      __check_pattern_args__(args, block)
       return any_without_pattern?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return true if pattern === __enum_item__(values) }
@@ -146,7 +189,7 @@ module Enumerable
     end
 
     def none?(*args, &block)
-      __check_pattern_args__(args)
+      __check_pattern_args__(args, block)
       return none_without_pattern?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false if pattern === __enum_item__(values) }
@@ -154,7 +197,7 @@ module Enumerable
     end
 
     def one?(*args, &block)
-      __check_pattern_args__(args)
+      __check_pattern_args__(args, block)
       return one_without_pattern?(&block) if args.empty?
       pattern = args[0]
       found = false
@@ -167,21 +210,51 @@ module Enumerable
     end
   end
 
+  # The method-name form of #inject reports a bad name the way MRI does - by
+  # inspecting the object rather than by naming its class - and takes at most
+  # two arguments. A block alongside a method name is never called.
+  unless method_defined?(:inject_without_name_check)
+    alias_method :inject_without_name_check, :inject
+
+    def inject(*args, &block)
+      if args.size > 2
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)"
+      end
+      if args.size == 2 || (args.size == 1 && !block)
+        name = args.last
+        unless name.is_a?(Symbol) || name.is_a?(String)
+          # A name that is neither is still given the chance to be a String.
+          name = name.respond_to?(:to_str) ? name.to_str : nil
+          unless name.is_a?(String)
+            raise TypeError, "#{args.last.inspect} is not a symbol nor a string"
+          end
+          args = args.dup
+          args[-1] = name
+        end
+        if block && !$VERBOSE.nil?
+          warn "warning: given block not used"
+        end
+      end
+      inject_without_name_check(*args, &block)
+    end
+    alias_method :reduce, :inject
+  end
+
   # min/max also grew an `n` form.
   unless method_defined?(:min_without_count)
     alias_method :min_without_count, :min
     alias_method :max_without_count, :max
 
     def min(*args, &block)
-      return min_without_count(&block) if args.empty?
-      n = __count_arg__(args[0])
+      n = args.empty? ? nil : __count_arg__(args[0])
+      return min_without_count(&block) if n.nil?
       sorted = block ? to_a.sort(&block) : to_a.sort
       sorted.first(n)
     end
 
     def max(*args, &block)
-      return max_without_count(&block) if args.empty?
-      n = __count_arg__(args[0])
+      n = args.empty? ? nil : __count_arg__(args[0])
+      return max_without_count(&block) if n.nil?
       sorted = block ? to_a.sort(&block) : to_a.sort
       sorted.reverse.first(n)
     end
@@ -202,7 +275,8 @@ module Enumerable
 
   # Ruby 2.2 added the `n` form: the n smallest/largest, as an Array.
   def min_by(*args, &block)
-    return to_enum(:min_by, *args) unless block
+    return to_enum(:min_by, *args) { size if respond_to?(:size) } unless block
+    args = [] if args.size == 1 && args[0].nil?
     if args.empty?
       best = nil
       best_key = nil
@@ -221,7 +295,8 @@ module Enumerable
   end unless method_defined?(:min_by)
 
   def max_by(*args, &block)
-    return to_enum(:max_by, *args) unless block
+    return to_enum(:max_by, *args) { size if respond_to?(:size) } unless block
+    args = [] if args.size == 1 && args[0].nil?
     if args.empty?
       best = nil
       best_key = nil
@@ -239,7 +314,9 @@ module Enumerable
     end
   end unless method_defined?(:max_by)
 
+  # nil is not a count: `max(nil)` is the plain no-argument form, not an error.
   def __count_arg__(n)
+    return nil if n.nil?
     n = n.to_int unless n.is_a?(Integer)
     raise ArgumentError, "negative size (#{n})" if n < 0
     n
@@ -261,18 +338,29 @@ module Enumerable
   private :__sort_by_key__
 
   def minmax_by(&block)
-    return to_enum(:minmax_by) unless block
+    return to_enum(:minmax_by) { size if respond_to?(:size) } unless block
     [min_by(&block), max_by(&block)]
   end unless method_defined?(:minmax_by)
 
   def flat_map
-    return to_enum(:flat_map) unless block_given?
+    return to_enum(:flat_map) { size if respond_to?(:size) } unless block_given?
     result = []
     each do |*values|
       # Like #map, #flat_map hands the yielded values straight to the block
       # rather than the packed item: `yield 1, 2` reaches `{ |a| }` as 1.
       mapped = yield(*values)
-      array = mapped.is_a?(Array) ? mapped : (mapped.respond_to?(:to_ary) ? mapped.to_ary : nil)
+      array = if mapped.is_a?(Array)
+                mapped
+              elsif mapped.respond_to?(:to_ary)
+                converted = mapped.to_ary
+                # An element that answers #to_ary has promised an Array; nil
+                # means "not one after all", anything else is a broken promise.
+                unless converted.nil? || converted.is_a?(Array)
+                  raise TypeError, "can't convert #{mapped.class} to Array " \
+                                   "(#{mapped.class}#to_ary gives #{converted.class})"
+                end
+                converted
+              end
       array.is_a?(Array) ? result.concat(array) : result << mapped
     end
     result
@@ -300,7 +388,7 @@ module Enumerable
 
   def to_h(*args)
     result = {}
-    each do |*values|
+    each(*args) do |*values|
       pair = block_given? ? yield(*values) : __enum_item__(values)
       array = pair.respond_to?(:to_ary) ? pair.to_ary : pair
       unless array.is_a?(Array)
@@ -324,76 +412,96 @@ module Enumerable
     result
   end unless method_defined?(:grep_v)
 
-  def chunk_while
-    return to_enum(:chunk_while) unless block_given?
-    result = []
-    chunk = nil
-    previous = nil
-    each do |*values|
-      item = __enum_item__(values)
-      if chunk.nil?
-        chunk = [item]
-      elsif yield(previous, item)
-        chunk << item
-      else
-        result << chunk
-        chunk = [item]
+  # The whole slicing family answers a lazy Enumerator, never an Array: the
+  # receiver may be endless, and code that chains .lazy or .first onto one of
+  # these must not force the source. Each of them therefore does its work
+  # inside an Enumerator block and yields groups as they are completed. None of
+  # them can say how many groups there will be without running, so the
+  # Enumerator has no size.
+  def chunk_while(&block)
+    # MRI builds a Proc out of the block up front, so the missing-block error
+    # is the one #to_proc gives rather than a "no block given" LocalJumpError.
+    raise ArgumentError, "tried to create Proc object without a block" unless block
+    source = self
+    Enumerator.new do |yielder|
+      chunk = nil
+      previous = nil
+      source.each do |*values|
+        item = __enum_item__(values)
+        if chunk.nil?
+          chunk = [item]
+        elsif block.call(previous, item)
+          chunk << item
+        else
+          yielder.yield(chunk)
+          chunk = [item]
+        end
+        previous = item
       end
-      previous = item
+      yielder.yield(chunk) if chunk
     end
-    result << chunk if chunk
-    result
   end unless method_defined?(:chunk_while)
 
   def slice_when(&block)
-    return to_enum(:slice_when) unless block
+    raise ArgumentError, "tried to create Proc object without a block" unless block
     chunk_while { |a, b| !block.call(a, b) }
   end unless method_defined?(:slice_when)
+
+  # Exactly one of a pattern and a block, and MRI reports a wrong count against
+  # whichever form was chosen: with a block the method takes no arguments.
+  def __slice_args__(both_message, args, block)
+    if block
+      unless args.empty?
+        raise ArgumentError, both_message || "wrong number of arguments (given #{args.size}, expected 0)"
+      end
+    elsif args.size != 1
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1)"
+    end
+  end
+  private :__slice_args__
 
   # A new group begins at every element the pattern or block accepts; the first
   # element always starts one, however it answers.
   def slice_before(*args, &block)
-    if args.empty? == block.nil?
-      raise ArgumentError, "both pattern and block are given" if block
-      raise ArgumentError, "wrong number of arguments (given 0, expected 1)"
-    end
+    __slice_args__(nil, args, block)
     pattern = args[0]
-    result = []
-    group = nil
-    each do |*values|
-      item = __enum_item__(values)
-      starts = block ? block.call(item) : (pattern === item)
-      if group.nil?
-        group = [item]
-      elsif starts
-        result << group
-        group = [item]
-      else
-        group << item
+    source = self
+    Enumerator.new do |yielder|
+      group = nil
+      source.each do |*values|
+        item = __enum_item__(values)
+        starts = block ? block.call(item) : (pattern === item)
+        if group.nil?
+          group = [item]
+        elsif starts
+          yielder.yield(group)
+          group = [item]
+        else
+          group << item
+        end
       end
+      yielder.yield(group) if group
     end
-    result << group if group
-    result
   end unless method_defined?(:slice_before)
 
   def slice_after(*args, &block)
-    if args.empty? == block.nil?
-      raise ArgumentError, "both pattern and block are given" if block
-      raise ArgumentError, "wrong number of arguments (given 0, expected 1)"
-    end
+    # MRI words the both-given case differently in #slice_after than it does
+    # in #slice_before.
+    __slice_args__("both pattern and block are given", args, block)
     pattern = args[0]
-    result = []
-    group = []
-    each do |*values|
-      item = __enum_item__(values)
-      group << item
-      if block ? block.call(item) : (pattern === item)
-        result << group
-        group = []
+    source = self
+    Enumerator.new do |yielder|
+      group = []
+      source.each do |*values|
+        item = __enum_item__(values)
+        group << item
+        if block ? block.call(item) : (pattern === item)
+          yielder.yield(group)
+          group = []
+        end
       end
+      yielder.yield(group) unless group.empty?
     end
-    result << group unless group.empty?
-    result
   end unless method_defined?(:slice_after)
 
   def reverse_each(&block)
@@ -402,25 +510,141 @@ module Enumerable
     self
   end unless method_defined?(:reverse_each)
 
-  def chunk
-    return to_enum(:chunk) unless block_given?
-    result = []
-    key = nil
-    chunk = nil
-    each do |*values|
-      item = __enum_item__(values)
-      k = yield(item)
-      if chunk && k == key
-        chunk << item
-      else
-        result << [key, chunk] if chunk
-        key = k
-        chunk = [item]
+  # The block's value groups adjacent elements, but three of its answers are
+  # not keys at all: nil and :_separator drop the element and end the run,
+  # :_alone puts the element in a group of its own, and every other Symbol
+  # starting with an underscore is reserved and rejected.
+  def chunk(&block)
+    return to_enum(:chunk) { size if respond_to?(:size) } unless block
+    source = self
+    Enumerator.new do |yielder|
+      key = nil
+      chunk = nil
+      source.each do |*values|
+        item = __enum_item__(values)
+        k = block.call(item)
+        if k.nil? || k == :_separator
+          yielder.yield([key, chunk]) if chunk
+          key = nil
+          chunk = nil
+        elsif k == :_alone
+          yielder.yield([key, chunk]) if chunk
+          yielder.yield([:_alone, [item]])
+          key = nil
+          chunk = nil
+        elsif k.is_a?(Symbol) && k.to_s.start_with?("_")
+          raise RuntimeError, "symbols beginning with an underscore are reserved"
+        elsif chunk && k == key
+          chunk << item
+        else
+          yielder.yield([key, chunk]) if chunk
+          key = k
+          chunk = [item]
+        end
       end
+      yielder.yield([key, chunk]) if chunk
     end
-    result << [key, chunk] if chunk
-    result
   end unless method_defined?(:chunk)
+
+  # #sort_by has to walk the receiver exactly once - the block may be expensive
+  # or have side effects - which the decorate/sort/undecorate helper does.
+  unless method_defined?(:sort_by_without_enumerator)
+    alias_method :sort_by_without_enumerator, :sort_by
+
+    def sort_by(&block)
+      return to_enum(:sort_by) { size if respond_to?(:size) } unless block
+      __sort_by_key__(block)
+    end
+  end
+
+  # Neither of these can know how long the answer will be without running the
+  # block, so their Enumerators report no size even when the receiver has one.
+  unless method_defined?(:take_while_without_enumerator)
+    alias_method :take_while_without_enumerator, :take_while
+    alias_method :drop_while_without_enumerator, :drop_while
+
+    def take_while(&block)
+      return to_enum(:take_while) { nil } unless block
+      take_while_without_enumerator(&block)
+    end
+
+    def drop_while(&block)
+      return to_enum(:drop_while) { nil } unless block
+      drop_while_without_enumerator(&block)
+    end
+  end
+
+  # Both return the receiver when they are given a block (they returned nil),
+  # and both reject a slice size that cannot produce any slice at all.
+  unless method_defined?(:each_cons_without_self)
+    alias_method :each_cons_without_self, :each_cons
+    alias_method :each_slice_without_self, :each_slice
+
+    def __slice_size__(n, message)
+      size = n
+      size = size.to_int if !size.is_a?(Integer) && size.respond_to?(:to_int)
+      raise ArgumentError, message if size.is_a?(Integer) && size <= 0
+      n
+    end
+    private :__slice_size__
+
+    def each_cons(n, &block)
+      n = __slice_size__(n, "invalid size")
+      return each_cons_without_self(n) unless block
+      each_cons_without_self(n, &block)
+      self
+    end
+
+    def each_slice(n, &block)
+      n = __slice_size__(n, "invalid slice size")
+      return each_slice_without_self(n) unless block
+      each_slice_without_self(n, &block)
+      self
+    end
+  end
+
+  # An argument that is not an Array is taken by #to_ary if it has one and
+  # otherwise iterated with #each - a Range or a lazy Enumerator zips fine.
+  # Only something that can do neither is an error.
+  unless method_defined?(:zip_without_conversion)
+    alias_method :zip_without_conversion, :zip
+
+    def __zip_source__(other)
+      return other if other.is_a?(Array)
+      if other.respond_to?(:to_ary)
+        converted = other.to_ary
+        return converted if converted.is_a?(Array)
+      end
+      unless other.respond_to?(:each)
+        raise TypeError, "wrong argument type #{other.class} (must respond to :each)"
+      end
+      other.to_enum(:each)
+    end
+    private :__zip_source__
+
+    def zip(*others, &block)
+      sources = others.map { |other| __zip_source__(other) }
+      result = block ? nil : []
+      index = 0
+      each do |*values|
+        row = [__enum_item__(values)]
+        sources.each do |source|
+          row << if source.is_a?(Array)
+                   source[index]
+                 else
+                   begin
+                     source.next
+                   rescue StopIteration
+                     nil
+                   end
+                 end
+        end
+        index += 1
+        block ? block.call(row) : result << row
+      end
+      result
+    end
+  end
 end
 
 class Range
@@ -571,13 +795,94 @@ module Kernel
 end
 
 class Array
+  # #dig indexes with an Integer and nothing else: unlike #[] it does not take a
+  # Range or an arithmetic sequence, because there would be no way to keep
+  # digging into the several elements that would answer.
   def dig(key, *rest)
-    __dig_step__(self[key], rest)
+    __dig_step__(self[__array_to_int__(key)], rest)
   end unless method_defined?(:dig)
 
   # No Array#sum here on purpose: Enumerable#sum already does the compensated
   # summation MRI does, and this was a second, naive copy that Array never
   # reached anyway - method_defined? saw the included Enumerable#sum and skipped it.
+
+  # a[(0..).step(2)]: the sequence describes a stretch of the array and a stride
+  # through it. The stretch is normalized like a Range, except that a stride of
+  # more than one element makes the normalization strict - a stretch that does
+  # not fit is a RangeError rather than a silent clamp - and a negative stride
+  # reads the same stretch from its far end.
+  def __arithmetic_slice__(sequence)
+    unless sequence.is_a?(::Enumerator::ArithmeticSequence)
+      raise TypeError, "no implicit conversion of #{sequence.class} into Integer"
+    end
+
+    step = sequence.step
+    step = 1 if step.nil?
+    step = step.to_int unless step.is_a?(::Integer)
+    raise ArgumentError, "step can't be 0" if step == 0
+
+    first = sequence.begin
+    last = sequence.end
+    exclude_end = sequence.exclude_end?
+    if step < 0
+      # Reading backwards swaps the ends, and the exclusion travels with the
+      # element it excluded: it was the last one, it is now the first. The
+      # arithmetic is done on the index as written, before it is normalized, so
+      # that (0...-1) starts at 0 rather than at the element before the last.
+      first, last = last, first
+      if exclude_end && !first.nil?
+        first += 1
+        exclude_end = false
+      end
+    end
+
+    count = size
+    strict = step > 1 || step < -1
+
+    begin_index = first.nil? ? 0 : first.to_int
+    begin_index += count if begin_index < 0
+    if begin_index < 0 || begin_index > count
+      raise RangeError, "#{sequence.inspect} out of range" if strict
+      return nil
+    end
+
+    if last.nil?
+      end_index = count
+    else
+      end_index = last.to_int
+      end_index += count if end_index < 0
+      end_index += 1 unless exclude_end
+      end_index = count if end_index > count && !strict
+    end
+
+    length = end_index - begin_index
+    length = 0 if length < 0
+    raise RangeError, "#{sequence.inspect} out of range" if strict && length > count
+    # Whatever the stretch says, only elements that are really there come out.
+    length = count - begin_index if begin_index + length > count
+
+    result = []
+    if step > 0
+      i = begin_index
+      while i < begin_index + length
+        result << self[i]
+        i += step
+      end
+    else
+      i = begin_index + length - 1
+      while i >= begin_index
+        result << self[i]
+        i += step
+      end
+    end
+    result
+  end
+
+  # Array has its own #max, #min and #sum in MRI rather than inheriting Enumerable's,
+  # and code in the wild checks which one it gets. The bodies are Enumerable's.
+  def max(*args, &block) = super
+  def min(*args, &block) = super
+  def sum(*args, &block) = super
 
   def intersect?(other)
     !(self & other).empty?
@@ -786,7 +1091,10 @@ class Array
   def __array_to_int__(value)
     return value if value.is_a?(Integer)
     unless value.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{value.nil? ? 'nil' : value.class} into Integer"
+      if value.nil?
+        raise TypeError, "no implicit conversion from nil to integer"
+      end
+      raise TypeError, "no implicit conversion of #{value.class} into Integer"
     end
     converted = value.to_int
     unless converted.is_a?(Integer)
@@ -1391,8 +1699,28 @@ class Array
   unless (begin; [1].shift(1); true; rescue ArgumentError; false; end)
     alias_method :shift_without_count, :shift
 
-    def shift(count = nil)
-      return shift_without_count if count.nil?
+    def shift(*args)
+      if args.size > 1
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+      end
+      return shift_without_count if args.empty?
+
+      # nil is an argument here, not the absence of one, and an object that is
+      # not an Integer is asked for one exactly once - #self[0, count] would ask
+      # again - before the count is checked for being negative.
+      count = args[0]
+      unless count.is_a?(Integer)
+        unless count.respond_to?(:to_int)
+          raise TypeError, "no implicit conversion of #{count.nil? ? 'nil' : count.class} into Integer"
+        end
+        count = count.to_int
+        unless count.is_a?(Integer)
+          raise TypeError, "can't convert #{args[0].class} to Integer (#{args[0].class}#to_int gives #{count.class})"
+        end
+      end
+      raise ArgumentError, "negative array size" if count < 0
+
+      __array_check_frozen__
       taken = self[0, count] || []
       self[0, count] = []
       taken
@@ -4009,9 +4337,11 @@ class Array
     self
   end unless method_defined?(:sort_by!)
 
-  def to_set(*args, &block)
+  # The first argument is the Set class to build, not a Set constructor
+  # argument: `to_set(MySet)` has to answer a MySet.
+  def to_set(klass = nil, *args, &block)
     require 'set'
-    ::Set.new(self, *args, &block)
+    (klass || ::Set).new(self, *args, &block)
   end unless method_defined?(:to_set)
 
   def to_h
@@ -4300,6 +4630,14 @@ class Enumerator
   end
   private :__source_count__
 
+  # n * (n-1) * ... * (n-k+1), which is 1 when k is 0.
+  def __enum_falling_factorial__(n, k)
+    result = 1
+    k.times { |i| result *= (n - i) }
+    result
+  end
+  private :__enum_falling_factorial__
+
   def __size_from_info__(source, op, arg)
     case op
     when :same
@@ -4314,6 +4652,20 @@ class Enumerator
       n ? (n - arg + 1 < 0 ? 0 : n - arg + 1) : nil
     when :cycle
       __cycle_size__(__source_count__(source), arg)
+    when :combination, :permutation
+      # Arithmetic, not iteration: C(n, k) and n!/(n-k)!, and zero when k elements
+      # cannot be taken out of n at all.
+      n = __source_count__(source)
+      if n
+        k = arg.nil? ? n : arg
+        if k < 0 || k > n
+          0
+        elsif op == :combination
+          __enum_falling_factorial__(n, k) / __enum_falling_factorial__(k, k)
+        else
+          __enum_falling_factorial__(n, k)
+        end
+      end
     when :upto
       arg < source ? 0 : arg - source + 1
     when :downto
@@ -4726,17 +5078,40 @@ class Enumerator
     alias_method :each_with_object, :with_object
 
     def zip(*others, &block)
-      # MRI only stays lazy when every argument is a plain Array; anything else
-      # (and the block form) falls back to the eager Enumerable#zip.
-      if block || others.any? { |other| !other.is_a?(::Array) }
-        return eager.zip(*others, &block)
+      # Only the block form falls back to the eager Enumerable#zip. Everything
+      # else stays lazy, including arguments that are not Arrays: those are
+      # iterated with #each, which is what lets an endless receiver be zipped
+      # with a Range and cut short by #first.
+      return eager.zip(*others, &block) if block
+
+      sources = others.map do |other|
+        if other.is_a?(::Array)
+          other
+        elsif other.respond_to?(:to_ary) && (converted = other.to_ary).is_a?(::Array)
+          converted
+        elsif other.respond_to?(:each)
+          other.to_enum(:each)
+        else
+          ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (must respond to :each)")
+        end
       end
+
       source = self
       __chain__(size) do |y|
         index = 0
         source.each do |*values|
           row = [values.size <= 1 ? values[0] : values]
-          others.each { |other| row << other[index] }
+          sources.each do |other|
+            row << if other.is_a?(::Array)
+                     other[index]
+                   else
+                     begin
+                       other.next
+                     rescue ::StopIteration
+                       nil
+                     end
+                   end
+          end
           index += 1
           y << row
         end
@@ -5020,9 +5395,11 @@ end
 module Enumerable
   # Every Enumerable gets #to_set, not just Array: Hash, Struct, Range and
   # Enumerator are all asked for one by the specs.
-  def to_set(*args, &block)
+  # The first argument is the Set class to build, not a Set constructor
+  # argument: `to_set(MySet)` has to answer a MySet.
+  def to_set(klass = nil, *args, &block)
     require 'set'
-    ::Set.new(self, *args, &block)
+    (klass || ::Set).new(self, *args, &block)
   end unless method_defined?(:to_set)
 
   def chain(*others)

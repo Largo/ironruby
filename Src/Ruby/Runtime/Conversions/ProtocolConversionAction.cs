@@ -223,11 +223,13 @@ namespace IronRuby.Runtime.Conversions {
             MethodResolutionResult respondToMethod, methodMissing = MethodResolutionResult.NotFound;
             ProtocolConversionAction selectedConversion = null;
             RubyMemberInfo conversionMethod = null;
+            bool customMethodMissing = false, customRespondToMissing = false;
 
             using (targetClass.Context.ClassHierarchyLocker()) {
                 // check for type version:
                 metaBuilder.AddTargetTypeTest(args.Target, targetClass, args.TargetExpression, args.MetaContext,
-                    ArrayUtils.Insert(Symbols.RespondTo, Symbols.MethodMissing, ArrayUtils.ConvertAll(conversions, (c) => c.ToMethodName))
+                    ArrayUtils.Insert(Symbols.RespondTo, Symbols.MethodMissing,
+                        ArrayUtils.Insert(Symbols.RespondToMissing, ArrayUtils.ConvertAll(conversions, (c) => c.ToMethodName)))
                 );
 
                 // we can optimize if Kernel#respond_to? method is not overridden, and we must take the same
@@ -252,13 +254,34 @@ namespace IronRuby.Runtime.Conversions {
                             methodMissing.InvalidateSitesOnMissingMethodAddition(conversion.ToMethodName, targetClass.Context);
                         }
                     }
+
+                    if (conversionMethod == null) {
+                        // Whether the object gets a second chance through method_missing depends on
+                        // what it has overridden, and both answers are known here rather than at
+                        // call time - an object that has overridden neither (the overwhelmingly
+                        // common case) costs nothing extra.
+                        // The method_missing a hosting scope installs on main is there to resolve
+                        // names from that scope, not to answer conversions, and it needs a scope
+                        // that a conversion site has no way to pass. Asking it for #to_ary is both
+                        // meaningless and fatal, so it does not count as overridden here.
+                        customMethodMissing = IsOverridden(methodMissing.Info, targetClass.Context.BasicObjectClass)
+                            && !(methodMissing.Info is RubyScopeMethodMissingInfo);
+                        customRespondToMissing = IsOverridden(
+                            targetClass.ResolveMethodForSiteNoLock(Symbols.RespondToMissing, VisibilityContext.AllVisible).Info,
+                            targetClass.Context.KernelModule
+                        );
+                    }
                 }
             }
 
             if (!respondToMethod.Found) {
                 if (conversionMethod == null) {
-                    // error:
-                    selectedConversion.SetError(metaBuilder, args, targetClassNameConstant, resultType);
+                    // No to_xxx method - but MRI does not give up there. An object that has
+                    // overridden method_missing is asked for the conversion anyway, so that it can
+                    // answer one without defining a method for it; an object that has overridden
+                    // respond_to_missing? gets to veto that. Only "neither" is the conversion error.
+                    metaBuilder.Result = MakeMethodMissingConversion(args, selectedConversion, targetClassNameConstant, resultType,
+                        customMethodMissing, customRespondToMissing);
                     return;
                 } else {
                     // invoke target.to_xxx() and validate it; returns an instance of TTargetType:
@@ -309,6 +332,63 @@ namespace IronRuby.Runtime.Conversions {
                         conversions[i].MakeErrorExpression(args, targetClassNameConstant, resultType)
                 );
             }
+        }
+
+        /// <summary>
+        /// True if the method resolved to something other than the built-in definition it inherits
+        /// from <paramref name="builtinOwner"/>, i.e. the object really has overridden it.
+        /// </summary>
+        private static bool IsOverridden(RubyMemberInfo method, RubyModule builtinOwner) {
+            return method != null && !(method.DeclaringModule == builtinOwner && method is RubyLibraryMethodInfo);
+        }
+
+        /// <summary>
+        /// The conversion for a receiver whose class does not define to_xxx. MRI's rb_check_funcall
+        /// asks method_missing for it, unless a user-written respond_to_missing? says no first:
+        ///   both overridden:            respond_to_missing?(:to_xxx, true) ? to_xxx : &lt;error&gt;
+        ///   only method_missing:        to_xxx                    (the default veto never fires)
+        ///   only respond_to_missing?:   ask it for its side effects, then &lt;error&gt;
+        ///   neither:                    &lt;error&gt;
+        /// </summary>
+        private static Expression/*!*/ MakeMethodMissingConversion(CallArguments/*!*/ args, ProtocolConversionAction/*!*/ conversion,
+            Expression/*!*/ targetClassNameConstant, Type/*!*/ resultType, bool customMethodMissing, bool customRespondToMissing) {
+
+            var error = conversion.MakeErrorExpression(args, targetClassNameConstant, resultType);
+            if (!customMethodMissing && !customRespondToMissing) {
+                return error;
+            }
+
+            string toMethodName = conversion.ToMethodName;
+            Expression respondToMissing = customRespondToMissing
+                ? AstUtils.LightDynamic(
+                    RubyCallAction.Make(args.RubyContext, Symbols.RespondToMissing, RubyCallSignature.WithImplicitSelf(2)),
+                    args.TargetExpression,
+                    Ast.Constant(args.RubyContext.CreateSymbol(toMethodName, RubyEncoding.Binary)),
+                    AstUtils.Constant(true, typeof(object))
+                  )
+                : null;
+
+            if (!customMethodMissing) {
+                // Nothing would answer the call, but respond_to_missing? is still asked - it is
+                // user code and may have side effects that MRI's answer depends on having run.
+                return Ast.Block(respondToMissing, error);
+            }
+
+            var conversionCallSite = AstUtils.LightDynamic(
+                RubyCallAction.Make(args.RubyContext, toMethodName, RubyCallSignature.WithImplicitSelf(0)),
+                args.TargetExpression
+            );
+            var converted = ConvertResult(conversion.MakeValidatorCall(args, targetClassNameConstant, conversionCallSite), resultType);
+
+            if (respondToMissing != null) {
+                return Ast.Condition(Methods.IsTrue.OpCall(respondToMissing), converted, error);
+            }
+
+            // The object never actually said it could do this - method_missing is simply there.
+            // So a NoMethodError coming back out of it means "no, I can't", not an error to report,
+            // and the conversion failure is reported instead. That is how a plain method_missing
+            // that ends in super still yields "no implicit conversion of Foo into Array".
+            return Ast.TryCatch(converted, Ast.Catch(typeof(MissingMethodException), error));
         }
 
         internal protected abstract bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args);
@@ -456,7 +536,7 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class TryConvertToStrAction : TryConvertToReferenceTypeAction<TryConvertToStrAction, MutableString> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToStr; } }
         protected override string/*!*/ TargetTypeName { get { return "String"; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToStringValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.TryToStringValidator; } }
 
         protected internal override bool TryImplicitConversion(MetaObjectBuilder metaBuilder, CallArguments args) {
             if (base.TryImplicitConversion(metaBuilder, args)) {
@@ -530,14 +610,14 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class TryConvertToArrayAction : TryConvertToReferenceTypeAction<TryConvertToArrayAction, IList> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToAry; } }
         protected override string/*!*/ TargetTypeName { get { return "Array"; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToArrayValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.TryToArrayValidator; } }
     }
 
     // TODO: should be like to_s - default to_a is always called w/o call to respond_to?
     public sealed class TryConvertToAAction : TryConvertToReferenceTypeAction<TryConvertToAAction, IList> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToA; } }
         protected override string/*!*/ TargetTypeName { get { return "Array"; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToArrayValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.TryToArrayValidator; } }
     }
 
     public sealed class ConvertToHashAction : ConvertToReferenceTypeAction<ConvertToHashAction, IDictionary<object, object>> {
@@ -549,7 +629,7 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class TryConvertToHashAction : TryConvertToReferenceTypeAction<TryConvertToHashAction, IDictionary<object, object>> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToHash; } }
         protected override string/*!*/ TargetTypeName { get { return "Hash"; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToHashValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.TryToHashValidator; } }
     }
 
     /// <summary>

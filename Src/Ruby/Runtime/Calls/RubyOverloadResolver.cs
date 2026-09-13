@@ -799,6 +799,29 @@ namespace IronRuby.Runtime.Calls {
             return sb.ToString();
         }
 
+        /// <summary>
+        /// What a conversion target is called in an error message. The CLR name of the parameter
+        /// type is not what Ruby code sees: a parameter typed IList is an Array, not a
+        /// System::Collections::IList, and saying so turned "no implicit conversion of nil into
+        /// Array" into something no Ruby programmer would recognise.
+        /// </summary>
+        private string/*!*/ GetConversionTargetName(Type/*!*/ type) {
+            if (type.IsGenericType() && type.GetGenericTypeDefinition() == typeof(Union<,>)) {
+                var g = type.GetGenericArguments();
+                return GetConversionTargetName(g[0]) + " or " + GetConversionTargetName(g[1]);
+            }
+            if (typeof(IList).IsAssignableFrom(type)) {
+                return "Array";
+            }
+            if (typeof(IDictionary<object, object>).IsAssignableFrom(type)) {
+                return "Hash";
+            }
+            if (typeof(MutableString).IsAssignableFrom(type)) {
+                return "String";
+            }
+            return Binder.GetTypeName(type);
+        }
+
         private Expression MakeCallFailureError(BindingTarget target) {
             foreach (CallFailure cf in target.CallFailures) {
                 switch (cf.Reason) {
@@ -814,13 +837,7 @@ namespace IronRuby.Runtime.Calls {
                                     return Methods.CreateArgumentsErrorForMissingBlock.OpCall();
                                 }
 
-                                string toType;
-                                if (cr.To.IsGenericType() && cr.To.GetGenericTypeDefinition() == typeof(Union<,>)) {
-                                    var g = cr.To.GetGenericArguments();
-                                    toType = Binder.GetTypeName(g[0]) + " or " + Binder.GetTypeName(g[1]);
-                                } else {
-                                    toType = Binder.GetTypeName(cr.To);
-                                }
+                                string toType = GetConversionTargetName(cr.To);
 
                                 // An argument that failed to convert to a [DefaultProtocol] parameter type is
                                 // MRI's implicit-conversion failure: "no implicit conversion of nil into String".
