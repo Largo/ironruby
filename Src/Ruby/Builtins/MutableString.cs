@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -265,6 +265,25 @@ namespace IronRuby.Builtins {
         // creates an instance of self type with given content and encoding:
         internal virtual MutableString/*!*/ CreateInstance(Content/*!*/ content, RubyEncoding/*!*/ encoding) {
             return new MutableString(content, encoding);
+        }
+
+        /// <summary>
+        /// A blank String for a method that *derives* a new string from this one. Ruby 3.0 made
+        /// every such method answer with String even when the receiver is a subclass of it -
+        /// S.new("ab").upcase is a String, not an S - and only #dup, #clone and #+@ carry the
+        /// class over. Those go through CreateInstance and Clone, which still do.
+        /// </summary>
+        public MutableString/*!*/ CreateDerived() {
+            return new MutableString(_encoding);
+        }
+
+        internal MutableString/*!*/ CreateDerived(Content/*!*/ content, RubyEncoding/*!*/ encoding) {
+            return new MutableString(content, encoding);
+        }
+
+        /// <summary>A copy of this instance as a plain String. See CreateDerived.</summary>
+        public MutableString/*!*/ CloneDerived() {
+            return new MutableString(this);
         }
 
         public static MutableString/*!*/ CreateEmpty() {
@@ -801,7 +820,7 @@ namespace IronRuby.Builtins {
         #region Regular Expressions (read-only)
 
         internal MutableString/*!*/ EscapeRegularExpression() {
-            return CreateInstance(_content.EscapeRegularExpression(), _encoding);
+            return CreateDerived(_content.EscapeRegularExpression(), _encoding);
         }
 
         #endregion
@@ -1513,7 +1532,7 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ GetSlice(int start, int count) {
             ContractUtils.Requires(start >= 0, "start");
             ContractUtils.Requires(count >= 0, "count");
-            return CreateInstance(_content.GetSlice(start, count), _encoding);
+            return CreateDerived(_content.GetSlice(start, count), _encoding);
         }
 
         public string/*!*/ GetStringSlice(int start) {

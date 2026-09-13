@@ -2660,7 +2660,9 @@ class String
   # Replaces every byte that is not part of a valid character with the given
   # replacement (the encoding's own replacement character by default).
   def scrub(replacement = nil, &block)
-    return dup if valid_encoding?
+    # String, not the receiver's class: since Ruby 3.0 only #dup, #clone and #+@ carry a
+    # String subclass over to the result.
+    return __ir_plain_copy__ if valid_encoding?
     default = encoding == ::Encoding::UTF_8 ? "�" : "?"
     out = +""
     out.force_encoding(encoding) if out.respond_to?(:force_encoding)
@@ -3502,8 +3504,19 @@ class Array
 end
 
 class String
+  # A copy of the receiver as a plain String. Since Ruby 3.0 a method that derives a new
+  # string answers with String even when the receiver is a subclass of it; only #dup, #clone
+  # and #+@ carry the class over, and String.new here takes no encoding: keyword.
+  def __ir_plain_copy__
+    out = +""
+    out.force_encoding(encoding) if out.respond_to?(:force_encoding)
+    out << self
+    out
+  end
+  private :__ir_plain_copy__
+
   def b
-    dup.force_encoding("ASCII-8BIT")
+    __ir_plain_copy__.force_encoding(Encoding::BINARY)
   end unless method_defined?(:b)
 
   def match?(pattern, pos = 0)
