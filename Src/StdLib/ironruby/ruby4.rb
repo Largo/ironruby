@@ -5743,7 +5743,7 @@ class IO
     end
 
     def null?
-      @freed
+      @freed || @size == 0
     end
 
     def external?
@@ -5751,7 +5751,7 @@ class IO
     end
 
     def internal?
-      (@flags & INTERNAL) != 0
+      !null? && (@flags & INTERNAL) != 0
     end
 
     def mapped?
@@ -5813,6 +5813,9 @@ class IO
 
     def resize(new_size)
       __check_writable__
+      if external? || mapped?
+        ::Kernel.raise(AccessError, "Cannot resize external buffer!")
+      end
       new_size = ::Kernel.Integer(new_size)
       ::Kernel.raise(::ArgumentError, "Size can't be negative!") if new_size < 0
       current = get_string
@@ -5959,7 +5962,7 @@ class IO
     def to_s
       parts = []
       parts << "EXTERNAL" if external?
-      parts << "INTERNAL" if internal?
+      parts << "INTERNAL" if internal? && !null?
       parts << "MAPPED" if mapped?
       parts << "SHARED" if shared?
       parts << "LOCKED" if locked?
@@ -5968,7 +5971,17 @@ class IO
       parts << "NULL" if null?
       "#<IO::Buffer 0x#{(object_id << 1).to_s(16).rjust(16, '0')}+#{@size} #{parts.join(' ')}>"
     end
-    alias_method :inspect, :to_s
+    # MRI's inspect is the header with the hexdump under it; to_s is the
+    # header on its own.
+    def inspect
+      return to_s if null? || size == 0
+      "#{to_s}#{nl_}#{hexdump}"
+    end
+
+    def nl_
+      "\n"
+    end
+    private :nl_
 
     def <=>(other)
       return nil unless other.is_a?(::IO::Buffer)
@@ -5989,6 +6002,80 @@ class IO
       result
     end
     private :__binary_op__
+
+    # The in-place forms. MRI insists on a Buffer for the right-hand side of
+    # these, where the copying forms are happy with anything string-shaped, and
+    # it works over as many bytes as the two have in common rather than
+    # refusing a mismatch.
+    def __require_buffer__(other)
+      unless other.is_a?(::IO::Buffer)
+        ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (expected IO::Buffer)")
+      end
+      other
+    end
+    private :__require_buffer__
+
+    def __in_place_op__(other, op)
+      __check_writable__
+      __require_buffer__(other)
+      a = get_string
+      b = other.get_string
+      n = [a.bytesize, b.bytesize].min
+      bytes = a.bytes
+      n.times { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i)) & 0xff }
+      set_string(bytes.pack("C*"))
+      self
+    end
+    private :__in_place_op__
+
+    def and!(other)
+      __in_place_op__(other, :&)
+    end
+
+    def or!(other)
+      __in_place_op__(other, :|)
+    end
+
+    def xor!(other)
+      __in_place_op__(other, :^)
+    end
+
+    def not!
+      __check_writable__
+      set_string(get_string.bytes.map { |x| (~x) & 0xff }.pack("C*"))
+      self
+    end
+
+    # Moving bytes between the buffer and an IO. There is no scatter/gather
+    # underneath, so these are a plain read or write of the slice in question.
+    # MRI reads and writes as much as the buffer holds - the length argument is
+    # a minimum, not a cap - and answers how many bytes moved.
+    def read(io, length = nil, offset = 0)
+      want = size - offset
+      data = io.read(want)
+      return nil if data.nil?
+      set_string(data, offset)
+      data.bytesize
+    end
+
+    def write(io, length = nil, offset = 0)
+      io.write(get_string(offset, size - offset))
+    end
+
+    def pread(io, from, length = nil, offset = 0)
+      data = io.pread(size - offset, from)
+      set_string(data, offset)
+      data.bytesize
+    end
+
+    def pwrite(io, from, length = nil, offset = 0)
+      io.pwrite(get_string(offset, size - offset), from)
+    end
+
+    def copy(source, offset = 0, length = nil, source_offset = 0)
+      __require_buffer__(source)
+      set_string(source.get_string, offset, length, source_offset)
+    end
 
     def &(other)
       __binary_op__(other, :&)
