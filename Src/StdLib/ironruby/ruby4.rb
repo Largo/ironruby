@@ -4913,6 +4913,56 @@ class Integer
   end unless respond_to?(:try_convert)
 end
 
+# Binding had nothing but the CLR accessor for its receiver, so all of
+# spec/core/binding errored. Kernel#eval already accepts a binding, and every
+# one of these can be asked of the binding through it.
+class Binding
+  def receiver
+    self.SelfObject
+  end unless method_defined?(:receiver)
+
+  def eval(code, file = nil, line = nil)
+    if file
+      ::Kernel.eval(code, self, file, line || 1)
+    else
+      ::Kernel.eval(code, self)
+    end
+  end unless method_defined?(:eval)
+
+  def local_variables
+    eval("local_variables")
+  end unless method_defined?(:local_variables)
+
+  def local_variable_defined?(name)
+    __check_lvar_name__(name)
+    eval("defined?(#{name}) == 'local-variable'")
+  end unless method_defined?(:local_variable_defined?)
+
+  def local_variable_get(name)
+    __check_lvar_name__(name)
+    unless local_variable_defined?(name)
+      ::Kernel.raise(::NameError, "local variable `#{name}' is not defined for #{inspect}")
+    end
+    eval(name.to_s)
+  end unless method_defined?(:local_variable_get)
+
+  # The value cannot be written into the eval'd source, so it is parked in a
+  # thread-local and read back out from inside the binding.
+  def local_variable_set(name, value)
+    __check_lvar_name__(name)
+    ::Thread.current[:__ir_binding_value__] = value
+    eval("#{name} = ::Thread.current[:__ir_binding_value__]")
+    value
+  end unless method_defined?(:local_variable_set)
+
+  def __check_lvar_name__(name)
+    unless name.is_a?(::Symbol) || name.is_a?(::String)
+      ::Kernel.raise(::TypeError, "#{name.inspect} is not a symbol nor a string")
+    end
+  end
+  private :__check_lvar_name__
+end
+
 class IO
   def self.try_convert(obj)
     obj.respond_to?(:to_io) ? obj.to_io : nil
