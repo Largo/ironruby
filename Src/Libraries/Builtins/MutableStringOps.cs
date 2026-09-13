@@ -2420,12 +2420,24 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        /// <summary>
+        /// Most operations get along fine with bytes that are not valid in the string's encoding -
+        /// see EscapingEncoding - but the ones that have to interpret characters do not, and MRI
+        /// refuses those up front rather than producing nonsense.
+        /// </summary>
+        private static void RequireValidEncoding(MutableString/*!*/ self) {
+            if (self.ContainsInvalidCharacters()) {
+                throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", self.Encoding.Name);
+            }
+        }
+
         [RubyMethod("delete")]
         public static MutableString/*!*/ Delete(MutableString/*!*/ self, 
             [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ strs) {
             if (strs.Length == 0) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments");
             }
+            RequireValidEncoding(self);
             return InternalDelete(self, strs);
         }
 
@@ -2808,6 +2820,11 @@ namespace IronRuby.Builtins {
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, 
             [DefaultProtocol]MutableString separator, [DefaultProtocol, Optional]int limit) {
 
+            RequireValidEncoding(self);
+            if (separator != null) {
+                RequireValidEncoding(separator);
+            }
+
             if (separator == null) {
                 object defaultSeparator = stringCast.Context.StringSeparator;
                 RubyRegex regexSeparator = defaultSeparator as RubyRegex;
@@ -2832,7 +2849,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("split")]
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regexp, [DefaultProtocol, Optional]int limit) {
-            
+
+            RequireValidEncoding(self);
+
             if (regexp.IsEmpty) {
                 return InternalSplit(self, MutableString.FrozenEmpty, limit);
             }
