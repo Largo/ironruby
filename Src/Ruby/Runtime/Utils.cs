@@ -1027,11 +1027,19 @@ namespace IronRuby.Runtime {
             }
         }
 
+        // Replacing the Fallback only works for an encoding whose decoder routes bad input through
+        // it. A hand-written Encoding - BinaryEncoding, or any of RubyOnlyEncodings - raises
+        // straight from GetCharCount instead, and that exception used to escape String#valid_encoding?
+        // as a bare CLR DecoderFallbackException. Bad input is bad input either way.
         internal static bool ContainsInvalidCharacters(byte[]/*!*/ bytes, int start, int count, Encoding/*!*/ encoding) {
             var decoder = encoding.GetDecoder();
             var fallback = new CheckDecoderFallback();
             decoder.Fallback = fallback;
-            decoder.GetCharCount(bytes, start, count, true);
+            try {
+                decoder.GetCharCount(bytes, start, count, true);
+            } catch (DecoderFallbackException) {
+                return true;
+            }
             return fallback.HasInvalidCharacters;
         }
 
@@ -1039,7 +1047,11 @@ namespace IronRuby.Runtime {
             var encoder = encoding.GetEncoder();
             var fallback = new CheckEncoderFallback();
             encoder.Fallback = fallback;
-            encoder.GetByteCount(chars, start, count, true);
+            try {
+                encoder.GetByteCount(chars, start, count, true);
+            } catch (EncoderFallbackException) {
+                return true;
+            }
             return fallback.HasInvalidCharacters;
         }
 #else

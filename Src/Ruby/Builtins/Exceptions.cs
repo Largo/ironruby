@@ -202,8 +202,10 @@ namespace IronRuby.Builtins {
         [NonSerialized]
         private byte[] _errorBytes, _readAgainBytes;
 
+        // Nullable: an error object that was not produced by a conversion has not been told
+        // either way, and MRI's #incomplete_input? answers nil for it.
         [NonSerialized]
-        private bool _incompleteInput;
+        private bool? _incompleteInput;
 
         public RubyEncoding SourceEncoding { get { return _sourceEncoding; } set { _sourceEncoding = value; } }
         public RubyEncoding DestinationEncoding { get { return _destinationEncoding; } set { _destinationEncoding = value; } }
@@ -215,7 +217,7 @@ namespace IronRuby.Builtins {
         public byte[] ReadAgainBytes { get { return _readAgainBytes; } set { _readAgainBytes = value; } }
 
         /// <summary>True if the input ended in the middle of a character rather than being invalid.</summary>
-        public bool IncompleteInput { get { return _incompleteInput; } set { _incompleteInput = value; } }
+        public bool? IncompleteInput { get { return _incompleteInput; } set { _incompleteInput = value; } }
     }
 
     [Serializable]

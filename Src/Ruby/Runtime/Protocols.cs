@@ -152,7 +152,27 @@ namespace IronRuby.Runtime {
             if (result == null) {
                 throw RubyExceptions.CreateImplicitConversionError("nil", "String");
             }
-            return result;
+            return CheckPath(result);
+        }
+
+        /// <summary>
+        /// rb_get_path_check: a path must be in an ASCII-compatible encoding (the
+        /// separators have to be findable) and must not contain a NUL, which the
+        /// operating system would treat as the end of the name.
+        /// </summary>
+        public static MutableString/*!*/ CheckPath(MutableString/*!*/ path) {
+            if (!path.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError(String.Format(
+                    "path name must be ASCII-compatible ({0}): \"{1}\"",
+                    path.Encoding.Name, path.ToStringWithEscapedInvalidCharacters(path.Encoding)
+                ));
+            }
+
+            if (path.IndexOf('\0') >= 0) {
+                throw RubyExceptions.CreateArgumentError("path name contains null byte");
+            }
+
+            return path;
         }
 
         /// <summary>
