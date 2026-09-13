@@ -4936,10 +4936,6 @@ module ObjectSpace
       self
     end
 
-    def size
-      @table.size
-    end
-    alias_method :length, :size
 
     def inspect
       "#<ObjectSpace::WeakKeyMap:0x#{(object_id << 1).to_s(16).rjust(16, '0')} size=#{@table.size}>"
