@@ -513,7 +513,7 @@ Results logged to #{File.join(Dir.pwd, 'gem_make.out')}
         raise Gem::InstallError, msg
       end
 
-      FileUtils.rm_rf(path) if File.exists?(path)
+      FileUtils.rm_rf(path) if File.exist?(path)
       FileUtils.mkdir_p File.dirname(path)
 
       File.open(path, "wb") do |out|

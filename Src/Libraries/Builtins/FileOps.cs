@@ -85,14 +85,15 @@ namespace IronRuby.Builtins {
             Protocols.TryConvertToOptions(toHash, ref options, ref optionsOrMode, ref optionsOrPermissions);
             var toIntSite = toInt.GetSite(TryConvertToFixnumAction.Make(toInt.Context));
 
+            // A nil mode or permission means "not given", as in CRuby.
             IOInfo info = new IOInfo();
-            if (optionsOrMode != Missing.Value) {
+            if (optionsOrMode != Missing.Value && optionsOrMode != null) {
                 int? m = toIntSite.Target(toIntSite, optionsOrMode);
                 info = m.HasValue ? new IOInfo((IOMode)m) : IOInfo.Parse(context, Protocols.CastToString(toStr, optionsOrMode));
             }
 
             int permissions = 0;
-            if (optionsOrPermissions != Missing.Value) {
+            if (optionsOrPermissions != Missing.Value && optionsOrPermissions != null) {
                 int? p = toIntSite.Target(toIntSite, optionsOrPermissions);
                 if (!p.HasValue) {
                     throw RubyExceptions.CreateImplicitConversionError(context.GetClassName(optionsOrPermissions), "Integer");
@@ -119,9 +120,23 @@ namespace IronRuby.Builtins {
 
         private static void Reinitialize(RubyFile/*!*/ file, MutableString/*!*/ path, IOInfo info, int permission) {
             var strPath = file.Context.DecodePath(path);
+
+            // open(2) only honours the permission argument when it actually creates the
+            // file, and applies the umask to it.
+            bool creating = (info.Mode & IOMode.CreateIfNotExists) != 0
+                && !file.Context.Platform.FileExists(strPath);
+
             var stream = RubyFile.OpenFileStream(file.Context, strPath, info.Mode);
 
+            if (creating && permission != 0 && Posix.IsAvailable) {
+                int umask = NativeUmask(0);
+                NativeUmask(umask);
+                int errno;
+                Posix.Chmod(strPath, permission & ~umask, out errno);
+            }
+
             file.Path = strPath;
+            file.PathEncoding = path.Encoding;
             file.Mode = info.Mode;
             file.SetStream(stream);
             file.SetFileDescriptor(file.Context.AllocateFileDescriptor(stream));
@@ -129,6 +144,9 @@ namespace IronRuby.Builtins {
             if (info.HasEncoding) {
                 file.ExternalEncoding = info.ExternalEncoding;
                 file.InternalEncoding = info.InternalEncoding;
+            } else if ((info.Mode & IOMode.PreserveEndOfLines) != 0) {
+                // The "b" flag with no explicit encoding means BINARY.
+                file.ExternalEncoding = RubyEncoding.Binary;
             }
         }
         
@@ -137,7 +155,11 @@ namespace IronRuby.Builtins {
         #region Declared Constants
 
         static RubyFileOps() {
-            ALT_SEPARATOR = MutableString.CreateAscii(AltDirectorySeparatorChar.ToString()).Freeze();
+            // On Unix '\\' is an ordinary filename character and PATH is colon
+            // separated; File::ALT_SEPARATOR is nil there, as in CRuby.
+            ALT_SEPARATOR = IsWindows
+                ? MutableString.CreateAscii(AltDirectorySeparatorChar.ToString()).Freeze()
+                : null;
             SEPARATOR = MutableString.CreateAscii(DirectorySeparatorChar.ToString()).Freeze();
             Separator = SEPARATOR;
             PATH_SEPARATOR = MutableString.CreateAscii(PathSeparatorChar.ToString()).Freeze();
@@ -145,10 +167,19 @@ namespace IronRuby.Builtins {
 
         private const char AltDirectorySeparatorChar = '\\';
         private const char DirectorySeparatorChar = '/';
-        private const char PathSeparatorChar = ';';
+
+        internal static readonly bool IsWindows = System.IO.Path.DirectorySeparatorChar == '\\';
+
+        private static char PathSeparatorChar {
+            get { return IsWindows ? ';' : ':'; }
+        }
+
+        private static readonly char[] SeparatorChars = IsWindows
+            ? new[] { DirectorySeparatorChar, AltDirectorySeparatorChar }
+            : new[] { DirectorySeparatorChar };
 
         internal static bool IsDirectorySeparator(int c) {
-            return c == DirectorySeparatorChar || c == AltDirectorySeparatorChar;
+            return c == DirectorySeparatorChar || (IsWindows && c == AltDirectorySeparatorChar);
         }
 
         [RubyConstant]
@@ -199,7 +230,13 @@ namespace IronRuby.Builtins {
             [RubyConstant]
             public readonly static int LOCK_UN = 0x08;
             [RubyConstant]
-            public readonly static int NONBLOCK = (int)IOMode.WriteOnly;
+            public readonly static int NONBLOCK = (int)IOMode.NonBlocking;
+            [RubyConstant]
+            public readonly static int NOCTTY = (int)IOMode.NoControllingTerminal;
+            [RubyConstant]
+            public readonly static int SYNC = (int)IOMode.Synchronized;
+            [RubyConstant]
+            public readonly static int SHARE_DELETE = (int)IOMode.ShareDelete;
             [RubyConstant]
             public readonly static int RDONLY = (int)IOMode.ReadOnly;
             [RubyConstant]
@@ -417,7 +454,11 @@ namespace IronRuby.Builtins {
                 throw new InvalidError();
             }
 
+            // ftruncate(2) leaves the file offset alone; Stream.SetLength pulls it back
+            // to the new end, which would make a later write land in the wrong place.
+            long position = self.Position;
             self.Length = size;
+            self.Position = position;
             return 0;
         }
 
@@ -486,7 +527,7 @@ namespace IronRuby.Builtins {
             }
 
             string strPath = path.ConvertToString();
-            string[] parts = strPath.Split(new[] { DirectorySeparatorChar, AltDirectorySeparatorChar }, StringSplitOptions.RemoveEmptyEntries);
+            string[] parts = strPath.Split(SeparatorChars, StringSplitOptions.RemoveEmptyEntries);
 
             if (parts.Length == 0) {
                 return MutableString.CreateMutable(path.Encoding).Append((char)path.GetLastChar()).TaintBy(path);
@@ -517,22 +558,22 @@ namespace IronRuby.Builtins {
                 return MutableString.CreateMutable(last, path.Encoding);
             }
 
-            StringComparison comparison = Environment.OSVersion.Platform == PlatformID.Unix ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
+            StringComparison comparison = IsWindows ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
             int matchLength = last.Length;
 
-            if (suffix != null) {
-                string strSuffix = suffix.ToString();
-                if (strSuffix.LastCharacter() == '*' && strSuffix.Length > 1) {
-                    int suffixIdx = last.LastIndexOf(
-                        strSuffix.Substring(0, strSuffix.Length - 1),
-                        comparison
-                    );
-                    if (suffixIdx >= 0 && suffixIdx + strSuffix.Length <= last.Length) {
-                        matchLength = suffixIdx;
-                    }
-                } else if (last.EndsWith(strSuffix, comparison)) {
-                    matchLength = last.Length - strSuffix.Length;
-                }
+            string strSuffix = suffix.ToString();
+            if (strSuffix == ".*") {
+                // ".*" is the only wildcard rmext() understands; any other suffix,
+                // including ".t*", is matched literally.
+                matchLength = last.Length - FindExtension(last).Length;
+            } else if (last.EndsWith(strSuffix, comparison)) {
+                matchLength = last.Length - strSuffix.Length;
+            }
+
+            // Stripping the suffix never leaves nothing behind: basename("bar", "bar")
+            // is "bar", not "".
+            if (matchLength == 0) {
+                matchLength = last.Length;
             }
 
             return MutableString.CreateMutable(path.Encoding).Append(last, 0, matchLength).TaintBy(path);
@@ -543,7 +584,91 @@ namespace IronRuby.Builtins {
             return DirName(Protocols.CastToPath(toPath, path));
         }
 
+        [RubyMethod("dirname", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ DirName(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+            [DefaultProtocol]int level) {
+
+            if (level < 0) {
+                throw RubyExceptions.CreateArgumentError("negative level: {0}", level);
+            }
+
+            MutableString result = Protocols.CastToPath(toPath, path);
+            if (level == 0) {
+                // Level 0 removes no component, but still normalises: the leading run of
+                // slashes collapses and an empty path becomes ".", as in CRuby.
+                string strPath = result.ConvertToString();
+                if (!IsWindows) {
+                    strPath = NormalizeRoot(strPath);
+                }
+                return MutableString.CreateMutable(strPath, result.Encoding).TaintBy(result);
+            }
+
+            for (int i = 0; i < level; i++) {
+                MutableString next = DirName(result);
+                // "/" and "." are fixed points; stop early so a huge level is cheap.
+                if (next.ConvertToString() == result.ConvertToString()) {
+                    return next;
+                }
+                result = next;
+            }
+            return result;
+        }
+
         private static MutableString/*!*/ DirName(MutableString/*!*/ path) {
+            if (!IsWindows) {
+                return MutableString.CreateMutable(PosixDirName(path.ConvertToString()), path.Encoding).TaintBy(path);
+            }
+            return WindowsDirName(path);
+        }
+
+        /// <summary>
+        /// dirname(3) as CRuby implements it on Unix: a leading run of slashes collapses
+        /// to a single "/", interior runs are preserved, and a path with no slash left is ".".
+        /// </summary>
+        private static string/*!*/ NormalizeRoot(string/*!*/ path) {
+            int start = 0;
+            while (start < path.Length && path[start] == '/') {
+                start++;
+            }
+
+            if (start == 0) {
+                return path.Length == 0 ? "." : path;
+            }
+            return "/" + path.Substring(start);
+        }
+
+        private static string/*!*/ PosixDirName(string/*!*/ path) {
+            int start = 0;
+            while (start < path.Length && path[start] == '/') {
+                start++;
+            }
+
+            bool rooted = start > 0;
+            if (start == path.Length) {
+                return rooted ? "/" : ".";
+            }
+
+            // Everything after the root: "/////foo/bar/" is treated as root + "foo/bar/".
+            string rest = path.Substring(start);
+
+            int end = rest.Length;
+            while (end > 0 && rest[end - 1] == '/') {
+                end--;
+            }
+
+            int slash = rest.LastIndexOf('/', end - 1);
+            if (slash < 0) {
+                return rooted ? "/" : ".";
+            }
+
+            while (slash > 0 && rest[slash - 1] == '/') {
+                slash--;
+            }
+
+            return (rooted ? "/" : "") + rest.Substring(0, slash);
+        }
+
+        private static MutableString/*!*/ WindowsDirName(MutableString/*!*/ path) {
             string strPath = path.ConvertToString();
             string directoryName = strPath;
 
@@ -598,22 +723,109 @@ namespace IronRuby.Builtins {
         [RubyMethod("extname", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ GetExtension(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             MutableString pathStr = Protocols.CastToPath(toPath, path);
-            return MutableString.Create(RubyUtils.GetExtension(pathStr.ConvertToString()), pathStr.Encoding).TaintBy(pathStr);
+            string last = LastPathComponent(pathStr.ConvertToString());
+            string extension = FindExtension(last);
+
+            // CRuby hands back a shared empty binary string when there is no extension,
+            // so File.extname("foo").encoding is ASCII-8BIT, not the path's encoding.
+            return extension.Length == 0
+                ? MutableString.CreateBinary().TaintBy(pathStr)
+                : MutableString.Create(extension, pathStr.Encoding).TaintBy(pathStr);
+        }
+
+        private static string/*!*/ LastPathComponent(string/*!*/ path) {
+            for (int i = path.Length - 1; i >= 0; i--) {
+                if (IsDirectorySeparator(path[i])) {
+                    return path.Substring(i + 1);
+                }
+            }
+            return path;
+        }
+
+        /// <summary>
+        /// ruby_enc_find_extname: leading dots belong to the name ("/.config" is hidden,
+        /// not an extension of ""), and the extension runs from the last remaining dot to
+        /// the end, so "foo." has the extension ".".
+        /// </summary>
+        private static string/*!*/ FindExtension(string/*!*/ name) {
+            int start = 0;
+            while (start < name.Length && name[start] == '.') {
+                start++;
+            }
+
+            if (start >= name.Length) {
+                return "";
+            }
+
+            int dot = name.LastIndexOf('.');
+            return dot < start ? "" : name.Substring(dot);
         }
 
         [RubyMethod("expand_path", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ ExpandPath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             [DefaultParameterValue(null)]object basePath) {
             var context = self.Context;
+            MutableString pathStr = Protocols.CastToPath(toPath, path);
 
             string result = RubyUtils.ExpandPath(
                 context.Platform,
-                context.DecodePath(Protocols.CastToPath(toPath, path)),
-                (basePath == null) ? context.Platform.CurrentDirectory : context.DecodePath(Protocols.CastToPath(toPath, basePath)),
-                true
+                ExpandTilde(context, context.DecodePath(pathStr)),
+                (basePath == null)
+                    ? context.Platform.CurrentDirectory
+                    : ExpandTilde(context, context.DecodePath(Protocols.CastToPath(toPath, basePath))),
+                false
             );
 
-            return self.Context.EncodePath(result);
+            return EncodePathLike(context, result, pathStr);
+        }
+
+        /// <summary>
+        /// "~" uses $HOME and falls back to the user database; "~name" always goes to the
+        /// user database.  A $HOME that is empty or relative is an error, as in CRuby, and
+        /// an unknown user name is an ArgumentError rather than a silent pass-through.
+        /// </summary>
+        private static string/*!*/ ExpandTilde(RubyContext/*!*/ context, string/*!*/ path) {
+            if (path.Length == 0 || path[0] != '~' || IsWindows) {
+                return path;
+            }
+
+            int slash = path.IndexOf('/', 1);
+            string userName = (slash < 0) ? path.Substring(1) : path.Substring(1, slash - 1);
+            string rest = (slash < 0) ? null : path.Substring(slash + 1);
+
+            string home;
+            if (userName.Length == 0) {
+                home = context.Platform.GetEnvironmentVariable("HOME");
+                if (home == null) {
+                    home = Posix.GetHomeDirectory(Posix.GetEUid());
+                }
+                if (home == null) {
+                    throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
+                }
+                if (home.Length == 0 || home[0] != DirectorySeparatorChar) {
+                    throw RubyExceptions.CreateArgumentError("non-absolute home");
+                }
+            } else {
+                home = Posix.GetHomeDirectory(userName);
+                if (home == null) {
+                    throw RubyExceptions.CreateArgumentError("user {0} doesn't exist", userName);
+                }
+            }
+
+            return (rest == null) ? home : home + "/" + rest;
+        }
+
+        /// <summary>
+        /// The path methods hand back a string in the encoding of the path they were
+        /// given, not in the filesystem encoding.
+        /// </summary>
+        private static MutableString/*!*/ EncodePathLike(RubyContext/*!*/ context, string/*!*/ result, MutableString/*!*/ original) {
+            // Encode with the filesystem encoding and then relabel, rather than transcode:
+            // the bytes came from the OS, and a path whose bytes are not representable in
+            // the argument's encoding still has to come back (CRuby "forces" the encoding).
+            MutableString encoded = context.EncodePath(result);
+            encoded.ForceEncoding(original.Encoding);
+            return encoded.TaintBy(original);
         }
 
         [RubyMethod("absolute_path", RubyMethodAttributes.PublicSingleton)]
@@ -621,20 +833,32 @@ namespace IronRuby.Builtins {
             [DefaultParameterValue(null)]object basePath) {
             var context = self.Context;
 
+            MutableString pathStr = Protocols.CastToPath(toPath, path);
             string result = RubyUtils.ExpandPath(
                 context.Platform,
-                context.DecodePath(Protocols.CastToPath(toPath, path)),
+                context.DecodePath(pathStr),
                 (basePath == null) ? context.Platform.CurrentDirectory : context.DecodePath(Protocols.CastToPath(toPath, basePath)),
                 false
             );
 
-            return self.Context.EncodePath(result);
+            return EncodePathLike(context, result, pathStr);
+        }
+
+        [RubyMethod("absolute_path?", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsAbsolutePath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
+            // No expansion and no filesystem access: "~" and "C:/x" are relative on Unix.
+            string strPath = Protocols.CastToPath(toPath, path).ConvertToString();
+            if (IsWindows) {
+                return strPath.Length >= 3 && Tokenizer.IsLetter(strPath[0]) && strPath[1] == ':' && IsDirectorySeparator(strPath[2])
+                    || strPath.Length >= 2 && IsDirectorySeparator(strPath[0]) && IsDirectorySeparator(strPath[1]);
+            }
+            return strPath.Length > 0 && strPath[0] == DirectorySeparatorChar;
         }
 
         [RubyMethod("fnmatch", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("fnmatch?", RubyMethodAttributes.PublicSingleton)]
         public static bool FnMatch(ConversionStorage<MutableString>/*!*/ toPath, object/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, object path, [Optional]int flags) {
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, object path, [DefaultProtocol, Optional]int flags) {
 
             return Glob.FnMatch(pattern.ConvertToString(), Protocols.CastToPath(toPath, path).ConvertToString(), flags);
         }
@@ -654,7 +878,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("join", RubyMethodAttributes.PublicSingleton)]
         public static MutableString Join(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, params object[]/*!*/ parts) {
-            MutableString result = MutableString.CreateMutable(RubyEncoding.Binary);
+            MutableString result = null;
             Dictionary<object, bool> visitedLists = null;
             var worklist = new Stack<object>();
             int current = 0;
@@ -668,7 +892,7 @@ namespace IronRuby.Builtins {
                     if (list.Count == 0) {
                         str = MutableString.FrozenEmpty;
                     } else if (visitedLists != null && visitedLists.ContainsKey(list)) {
-                        str = RubyUtils.InfiniteRecursionMarker;
+                        throw RubyExceptions.CreateArgumentError("recursive array");
                     } else {
                         if (visitedLists == null) {
                             visitedLists = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
@@ -680,18 +904,25 @@ namespace IronRuby.Builtins {
                 } else if (part == null) {
                     throw RubyExceptions.CreateImplicitConversionError("NilClass", "String");
                 } else {
-                    str = Protocols.CastToPath(toPath, part);
+                    try {
+                        str = Protocols.CastToPath(toPath, part);
+                    } catch (ArgumentException e) when (e.Message == "path name contains null byte") {
+                        // rb_file_join reports a NUL as a plain string problem.
+                        throw RubyExceptions.CreateArgumentError("string contains null byte");
+                    }
                 }
 
                 if (current > 0) {
+                    // Append negotiates the encodings, so the join of two EUC-JP paths
+                    // stays EUC-JP instead of decaying to binary.
                     AppendDirectoryName(result, str);
                 } else {
-                    result.Append(str);
+                    result = MutableString.CreateMutable(str.Encoding).Append(str);
                 }
                 current++;
             }
 
-            return result;
+            return result ?? MutableString.CreateEmpty();
         }
 
         private static void Push(Stack<Object>/*!*/ stack, IList/*!*/ values) {
@@ -822,7 +1053,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("mkfifo", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static int MakeFifo(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
-            [DefaultParameterValue(0666)]int mode) {
+            [DefaultParameterValue(0x1B6 /* 0666 */)]int mode) {
 
             string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
             if (!Posix.IsAvailable) {
@@ -929,7 +1160,8 @@ namespace IronRuby.Builtins {
         private static MutableString/*!*/ RealPath(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
             object basedir, bool strict) {
 
-            string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
+            MutableString pathStr = Protocols.CastToPath(toPath, path);
+            string strPath = self.Context.DecodePath(pathStr);
             string strBase = (basedir == Missing.Value || basedir == null)
                 ? null
                 : self.Context.DecodePath(Protocols.CastToPath(toPath, basedir));
@@ -938,7 +1170,7 @@ namespace IronRuby.Builtins {
                 return ExpandPath(toPath, self, path, basedir == Missing.Value ? null : basedir);
             }
 
-            return self.Context.EncodePath(ResolvePath(self.Context, strPath, strBase, strict));
+            return EncodePathLike(self.Context, ResolvePath(self.Context, strPath, strBase, strict), pathStr);
         }
 
         #endregion
@@ -1090,7 +1322,10 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("size", BuildConfig = "FEATURE_FILESYSTEM")]
         public static object FileSize(RubyFile/*!*/ self) {
-            return RubyStatOps.Size(RubyStatOps.Create(self));
+            // fstat the descriptor rather than the path: the size of a file that has
+            // since been unlinked is still readable, and a closed File raises IOError.
+            self.RequireOpen();
+            return RubyStatOps.Size(RubyStatOps.Create((RubyIO)self));
         }
 #endif
         [RubyMethod("inspect")]
@@ -1108,7 +1343,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_path")]
         public static MutableString GetPath(RubyFile/*!*/ self) {
             self.RequireInitialized();
-            return self.Path != null ? self.Context.EncodePath(self.Path) : null;
+            if (self.Path == null) {
+                return null;
+            }
+            // File#path hands back the path in the encoding it was opened with.
+            MutableString result = self.Context.EncodePath(self.Path);
+            if (self.PathEncoding != null) {
+                result = MutableString.CreateMutable(result.ConvertToString(), self.PathEncoding);
+            }
+            return result;
         }
 
         #endregion
@@ -1148,6 +1391,40 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyClass("Stat", Extends = typeof(FileSystemInfo), Inherits = typeof(object), BuildConfig = "FEATURE_FILESYSTEM"), Includes(typeof(Comparable))]
         public class RubyStatOps {
+
+            /// <summary>
+            /// fstat(2) on any IO, including one that never had a path (a pipe, a socket,
+            /// or a file opened from a descriptor).
+            /// </summary>
+            internal static FileSystemInfo/*!*/ Create(RubyIO/*!*/ io) {
+                io.RequireOpen();
+
+                // Buffered writes have to reach the descriptor before it is stat'd, and
+                // fstat needs the real OS handle, not IronRuby's descriptor table index.
+                try {
+                    io.Flush();
+                } catch (NotSupportedException) {
+                    // A read-only console stream cannot be flushed and needs no flushing.
+                }
+                int fd = GetNativeFileDescriptor(io);
+                if (fd < 0) {
+                    // The console streams are not FileStreams, but their descriptors are
+                    // the well-known 0/1/2.
+                    switch (io.ConsoleStreamType) {
+                        case Microsoft.Scripting.Utils.ConsoleStreamType.Input: fd = 0; break;
+                        case Microsoft.Scripting.Utils.ConsoleStreamType.Output: fd = 1; break;
+                        case Microsoft.Scripting.Utils.ConsoleStreamType.ErrorOutput: fd = 2; break;
+                        default: throw RubyExceptions.CreateEBADF();
+                    }
+                }
+
+                Posix.StatData data;
+                int errno;
+                if (Posix.TryFStat(fd, out data, out errno)) {
+                    return new StatInfo("", data);
+                }
+                throw Posix.Error(errno == 0 ? Posix.EBADF : errno, "");
+            }
 
             internal static FileSystemInfo/*!*/ Create(RubyFile/*!*/ file) {
                 file.RequireInitialized();
@@ -1395,7 +1672,7 @@ namespace IronRuby.Builtins {
                 int uid = real ? Posix.GetUid() : Posix.GetEUid();
                 if (uid == 0) {
                     // root bypasses read/write; execute still needs some x bit
-                    return bit != Posix.X_OK || (d.Mode & 0111) != 0;
+                    return bit != Posix.X_OK || (d.Mode & 0x49 /* 0111 */) != 0;
                 }
 
                 int shift;
@@ -1458,7 +1735,7 @@ namespace IronRuby.Builtins {
                 if (d == null || (d.Mode & 04) == 0) {
                     return null;
                 }
-                return d.Mode & 07777;
+                return d.Mode & 0xFFF /* 07777 */;
             }
 
             [RubyMethod("world_writable?")]
@@ -1467,7 +1744,7 @@ namespace IronRuby.Builtins {
                 if (d == null || (d.Mode & 02) == 0) {
                     return null;
                 }
-                return d.Mode & 07777;
+                return d.Mode & 0xFFF /* 07777 */;
             }
 
             [RubyMethod("owned?")]
@@ -1677,7 +1954,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("exists?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        // #exists? was deprecated in 2.1 and removed in 3.9.
         public static bool Exists(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.Exists(toPath, self, path);
         }

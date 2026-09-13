@@ -238,6 +238,9 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "mkfifo", SetLastError = true)]
         private static extern int sys_mkfifo(byte[] path, int mode);
 
+        [DllImport("libc", EntryPoint = "mkdir", SetLastError = true)]
+        private static extern int sys_mkdir(byte[] path, int mode);
+
         [DllImport("libc", EntryPoint = "chmod", SetLastError = true)]
         private static extern int sys_chmod(byte[] path, int mode);
 
@@ -290,6 +293,10 @@ namespace IronRuby.Builtins {
             return Run(() => sys_mkfifo(ToPath(path), mode), out errno);
         }
 
+        internal static int MkDir(string path, int mode, out int errno) {
+            return Run(() => sys_mkdir(ToPath(path), mode), out errno);
+        }
+
         internal static int Chmod(string path, int mode, out int errno) {
             return Run(() => sys_chmod(ToPath(path), mode), out errno);
         }
@@ -319,6 +326,65 @@ namespace IronRuby.Builtins {
         /// <summary>times is {atime_sec, atime_nsec, mtime_sec, mtime_nsec}.</summary>
         internal static int UTimes(string path, long[] times, bool followLinks, out int errno) {
             return Run(() => sys_utimensat(AT_FDCWD, ToPath(path), times, followLinks ? 0 : AT_SYMLINK_NOFOLLOW), out errno);
+        }
+
+        // struct passwd on glibc/musl x86-64: two pointers, uid_t, gid_t, then three
+        // more pointers.  Only pw_dir is needed, so the rest stay opaque.
+        [StructLayout(LayoutKind.Sequential)]
+        private struct PasswdEntry {
+            internal IntPtr Name;
+            internal IntPtr Passwd;
+            internal int Uid;
+            internal int Gid;
+            internal IntPtr Gecos;
+            internal IntPtr Dir;
+            internal IntPtr Shell;
+        }
+
+        [DllImport("libc", EntryPoint = "getpwnam", SetLastError = true)]
+        private static extern IntPtr sys_getpwnam(byte[] name);
+
+        [DllImport("libc", EntryPoint = "getpwuid", SetLastError = true)]
+        private static extern IntPtr sys_getpwuid(int uid);
+
+        private static string GetHomeDirectory(IntPtr passwd) {
+            if (passwd == IntPtr.Zero) {
+                return null;
+            }
+            var entry = Marshal.PtrToStructure<PasswdEntry>(passwd);
+            return entry.Dir == IntPtr.Zero ? null : Marshal.PtrToStringUTF8(entry.Dir);
+        }
+
+        /// <summary>
+        /// The home directory of a named user, or null when there is no such user.
+        /// </summary>
+        internal static string GetHomeDirectory(string/*!*/ userName) {
+            if (!IsAvailable) {
+                return null;
+            }
+            try {
+                return GetHomeDirectory(sys_getpwnam(ToPath(userName)));
+            } catch (DllNotFoundException) {
+                return null;
+            } catch (EntryPointNotFoundException) {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// The home directory recorded for a uid, or null when there is no such user.
+        /// </summary>
+        internal static string GetHomeDirectory(int uid) {
+            if (!IsAvailable) {
+                return null;
+            }
+            try {
+                return GetHomeDirectory(sys_getpwuid(uid));
+            } catch (DllNotFoundException) {
+                return null;
+            } catch (EntryPointNotFoundException) {
+                return null;
+            }
         }
 
         internal static int GetUid() { return IsAvailable ? sys_getuid() : 0; }

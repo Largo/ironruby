@@ -213,7 +213,9 @@ namespace IronRuby.Builtins {
                 return -1;
             }
 
-            RubyIO io = new RubyFile(self.Context, path.ToString(), IOModeEnum.Parse(mode));
+            // The mode may carry an encoding suffix ("w:utf-8"), which only IOInfo parses.
+            IOMode ioMode = (mode != null) ? IOInfo.Parse(self.Context, mode).Mode : IOMode.Default;
+            RubyIO io = new RubyFile(self.Context, path.ToString(), ioMode);
             int fileDesc = io.GetFileDescriptor();
             io.Close();
             return fileDesc;
@@ -564,6 +566,16 @@ namespace IronRuby.Builtins {
                 self.PreserveEndOfLines = true;
             }
             return self;
+        }
+
+        [RubyMethod("binmode?")]
+        public static bool IsBinmode(RubyIO/*!*/ self) {
+            return self.IsBinmode;
+        }
+
+        [RubyMethod("stat", BuildConfig = "FEATURE_FILESYSTEM")]
+        public static System.IO.FileSystemInfo/*!*/ Stat(RubyIO/*!*/ self) {
+            return RubyFileOps.RubyStatOps.Create(self);
         }
 
         [RubyMethod("sync")]

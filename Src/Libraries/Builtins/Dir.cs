@@ -15,6 +15,7 @@
 
 using System;
 using System.IO;
+using System.Reflection;
 using System.Runtime.InteropServices;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
@@ -124,7 +125,7 @@ namespace IronRuby.Builtins {
 
 #if FEATURE_FILESYSTEM
         [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("exists?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        // #exists? was deprecated in 2.1 and removed in 3.9.
         public static bool Exists(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return RubyFileOps.DirectoryExists(self.Context, Protocols.CastToPath(toPath, path));
         }
@@ -242,11 +243,12 @@ namespace IronRuby.Builtins {
         /// Dir.glob("a\0b") is an ArgumentError, not a two pattern glob.
         /// </summary>
         private static MutableString/*!*/ ToGlobPattern(ConversionStorage<MutableString>/*!*/ toPath, object pattern) {
-            var result = Protocols.CastToPath(toPath, pattern);
-            if (result.IndexOf('\0') >= 0) {
+            try {
+                return Protocols.CastToPath(toPath, pattern);
+            } catch (ArgumentException e) when (e.Message == "path name contains null byte") {
+                // A glob pattern reports an embedded NUL in its own words.
                 throw RubyExceptions.CreateArgumentError("nul-separated glob pattern is deprecated");
             }
-            return result;
         }
 
         private static IEnumerable<MutableString>/*!*/ GlobMatches(ConversionStorage<MutableString>/*!*/ toPath, RubyContext/*!*/ context,
@@ -317,7 +319,8 @@ namespace IronRuby.Builtins {
         #endregion
 
         [RubyMethod("mkdir", RubyMethodAttributes.PublicSingleton)]
-        public static int MakeDirectory(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Optional]object permissions) {
+        public static int MakeDirectory(ConversionStorage<MutableString>/*!*/ toPath, ConversionStorage<int>/*!*/ fixnumCast,
+            RubyClass/*!*/ self, object dirname, [Optional]object permissions) {
             var platform = self.Context.Platform;
 
             string strDir = self.Context.DecodePath(Protocols.CastToPath(toPath, dirname));
@@ -330,6 +333,17 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateENOENT("No such file or directory - {0}", containingDir);
             }
                 
+            // The permission argument is not decoration: Dir.mkdir(path, 01755) has to
+            // reach mkdir(2) for the setuid/setgid/sticky bits to survive.
+            if (permissions != Missing.Value && permissions != null && Posix.IsAvailable) {
+                int mode = Protocols.CastToFixnum(fixnumCast, permissions);
+                int errno;
+                if (Posix.MkDir(strDir, mode, out errno) != 0) {
+                    throw Posix.Error(errno, strDir);
+                }
+                return 0;
+            }
+
             try {
                 platform.CreateDirectory(strDir);
             } catch (Exception ex) {
