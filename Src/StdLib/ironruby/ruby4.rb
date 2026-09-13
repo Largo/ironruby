@@ -687,6 +687,12 @@ class Array
   # summation MRI does, and this was a second, naive copy that Array never
   # reached anyway - method_defined? saw the included Enumerable#sum and skipped it.
 
+  # Array has its own #max, #min and #sum in MRI rather than inheriting Enumerable's,
+  # and code in the wild checks which one it gets. The bodies are Enumerable's.
+  def max(*args, &block) = super
+  def min(*args, &block) = super
+  def sum(*args, &block) = super
+
   def intersect?(other)
     !(self & other).empty?
   end unless method_defined?(:intersect?)

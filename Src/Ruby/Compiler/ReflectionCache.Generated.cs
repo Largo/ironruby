@@ -520,6 +520,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ToAValidator;
         public static MethodInfo/*!*/ TryToArrayValidator { get { return _TryToArrayValidator ?? (_TryToArrayValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Collections.IList>(RubyOps.TryToArrayValidator)); } }
         private static MethodInfo _TryToArrayValidator;
+        public static MethodInfo/*!*/ TryToStringValidator { get { return _TryToStringValidator ?? (_TryToStringValidator = CallInstruction.CacheFunc<System.String, System.Object, IronRuby.Builtins.MutableString>(RubyOps.TryToStringValidator)); } }
+        private static MethodInfo _TryToStringValidator;
         public static MethodInfo/*!*/ TryToHashValidator { get { return _TryToHashValidator ?? (_TryToHashValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>>(RubyOps.TryToHashValidator)); } }
         private static MethodInfo _TryToHashValidator;
         public static MethodInfo/*!*/ ToBignumValidator { get { return _ToBignumValidator ?? (_ToBignumValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Numerics.BigInteger>(RubyOps.ToBignumValidator)); } }

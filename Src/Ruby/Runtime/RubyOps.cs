@@ -2147,6 +2147,12 @@ namespace IronRuby.Runtime {
             return (value != null) ? MutableString.Create(value.ToString(), RubyEncoding.UTF8) : MutableString.FrozenEmpty;
         }
 
+        /// <summary>MRI's rb_check_string_type: a #to_str answering nil is "not a String after all".</summary>
+        [Emitted] // ProtocolConversionAction
+        public static MutableString TryToStringValidator(string/*!*/ className, object obj) {
+            return (obj == null) ? null : ToStringValidator(className, obj);
+        }
+
         [Emitted] // ProtocolConversionAction
         public static MutableString/*!*/ ToStringValidator(string/*!*/ className, object obj) {
             MutableString result = obj as MutableString;

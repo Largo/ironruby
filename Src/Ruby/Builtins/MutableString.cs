@@ -290,6 +290,10 @@ namespace IronRuby.Builtins {
             return MutableString.Create(String.Empty, RubyEncoding.Binary);
         }
 
+        public static MutableString/*!*/ CreateEmpty(RubyEncoding/*!*/ encoding) {
+            return MutableString.Create(String.Empty, encoding);
+        }
+
         /// <summary>
         /// Creates a copy of this instance, including content and taint.
         /// Doesn't copy frozen state and instance variables. 

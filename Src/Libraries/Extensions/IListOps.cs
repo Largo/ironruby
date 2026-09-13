@@ -912,8 +912,8 @@ namespace IronRuby.Builtins {
 
         private static object DeleteIfImpl(BlockParam/*!*/ block, IList/*!*/ self) {
             bool changed, jumped;
-            DeleteIf(block, self, out changed, out jumped);
-            return self;
+            object result = DeleteIf(block, self, out changed, out jumped);
+            return jumped ? result : self;
         }
 
         [RubyMethod("reject!")]
@@ -953,6 +953,13 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// The engine behind #delete_if and #reject!. MRI does not remove anything while the block
+        /// is running: it compacts the elements it is keeping towards the front of the array and
+        /// shortens it once, at the end. That is why the receiver still has its original length
+        /// when the block looks at it, and why a block that breaks out - or raises - leaves the
+        /// array with the elements it had already rejected gone and the rest untouched.
+        /// </summary>
         private static object DeleteIf(BlockParam/*!*/ block, IList/*!*/ self, out bool changed, out bool jumped) {
             Assert.NotNull(block, self);
 
@@ -960,24 +967,39 @@ namespace IronRuby.Builtins {
             jumped = false;
 
             RequireNotFrozen(self);
-            
-            // TODO: if block jumps the array is not modified:
-            int i = 0;
-            while (i < self.Count) {
-                object result;
-                if (block.Yield(self[i], out result)) {
-                    jumped = true;
-                    return result;
-                }
 
-                if (RubyOps.IsTrue(result)) {
-                    changed = true;
-                    self.RemoveAt(i);
-                } else {
-                    i++;
+            int processed = 0, kept = 0;
+            object jumpResult = null;
+            try {
+                while (processed < self.Count) {
+                    object item = self[processed];
+                    object result;
+                    if (block.Yield(item, out result)) {
+                        jumped = true;
+                        jumpResult = result;
+                        break;
+                    }
+
+                    processed++;
+                    if (RubyOps.IsTrue(result)) {
+                        changed = true;
+                    } else {
+                        if (kept != processed - 1) {
+                            self[kept] = item;
+                        }
+                        kept++;
+                    }
+                }
+            } finally {
+                if (kept != processed && processed <= self.Count) {
+                    int tail = self.Count - processed;
+                    for (int j = 0; j < tail; j++) {
+                        self[kept + j] = self[processed + j];
+                    }
+                    RemoveRange(self, kept + tail, self.Count - (kept + tail));
                 }
             }
-            return null;
+            return jumpResult;
         }
 
         #endregion
@@ -1611,7 +1633,7 @@ namespace IronRuby.Builtins {
             // build a list of strings to join:
             JoinRecursive(conversions, self, parts, ref isBinary, ref seen);
             if (parts.Count == 0) {
-                return MutableString.CreateEmpty();
+                return MutableString.CreateEmpty(RubyEncoding.Ascii);
             }
 
             if (separator != null && separator.IsBinary != isBinary && !separator.IsAscii()) {
@@ -1632,7 +1654,7 @@ namespace IronRuby.Builtins {
             }
 
             if (any == null) {
-                return MutableString.CreateEmpty();
+                return MutableString.CreateEmpty(RubyEncoding.Ascii);
             }
 
             var result = isBinary.HasValue && isBinary.Value ? 
@@ -1663,7 +1685,19 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("join")]
         public static MutableString/*!*/ Join(JoinConversionStorage/*!*/ conversions, IList/*!*/ self) {
-            return Join(conversions, self, conversions.Context.ItemSeparator);
+            return Join(conversions, self, DefaultSeparator(conversions.Context));
+        }
+
+        /// <summary>
+        /// #join with no separator, or with an explicit nil, falls back to $, - and warns about it,
+        /// because a global that silently changes what every #join in the program does is a trap.
+        /// </summary>
+        private static MutableString DefaultSeparator(RubyContext/*!*/ context) {
+            var separator = context.ItemSeparator;
+            if (separator != null) {
+                context.ReportWarning("$, is set to non-nil value");
+            }
+            return separator;
         }
 
         [RubyMethod("join")]
@@ -1673,10 +1707,11 @@ namespace IronRuby.Builtins {
             IList/*!*/ self, object separator) {
 
             if (self.Count == 0) {
-                return MutableString.CreateEmpty();
+                return MutableString.CreateEmpty(RubyEncoding.Ascii);
             }
 
-            return Join(conversions, self, separator != null ? Protocols.CastToString(toStr, separator) : null);
+            return Join(conversions, self,
+                separator != null ? Protocols.CastToString(toStr, separator) : DefaultSeparator(conversions.Context));
         }
 
         [RubyMethod("to_s")]
@@ -1687,7 +1722,10 @@ namespace IronRuby.Builtins {
                 if (handle == null) {
                     return MutableString.CreateAscii("[...]");
                 }
-                MutableString str = MutableString.CreateMutable(RubyEncoding.Binary);
+                // MRI starts the result off as US-ASCII and takes the encoding of the first
+                // element's inspection, so an empty array inspects as US-ASCII rather than as
+                // binary, and ["\u3042"] keeps the element's encoding.
+                MutableString str = MutableString.CreateMutable(RubyEncoding.Ascii);
                 str.Append('[');
                 bool first = true;
                 foreach (object obj in self) {
@@ -1696,7 +1734,11 @@ namespace IronRuby.Builtins {
                     } else {
                         str.Append(", ");
                     }
-                    str.Append(context.Inspect(obj));
+                    var item = context.Inspect(obj);
+                    if (str.Encoding == RubyEncoding.Ascii && !item.IsAscii()) {
+                        str.ForceEncoding(item.Encoding);
+                    }
+                    str.Append(item);
                 }
                 str.Append(']');
                 return str;
