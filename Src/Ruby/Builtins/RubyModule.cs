@@ -1395,6 +1395,14 @@ namespace IronRuby.Builtins {
             using (Context.ClassHierarchyLocker()) {
                 // MRI: aliases a super-forwarder not the real method.
                 method = ResolveMethodNoLock(oldName, VisibilityContext.AllVisible, MethodLookup.FallbackToObject | MethodLookup.ReturnForwarder).Info;
+
+                // `alias b a' inside a refinement means "the a of the module being refined": the refinement
+                // starts empty, so its own lookup would find nothing.
+                if (method == null && _refinedModule != null) {
+                    method = _refinedModule.ResolveMethodNoLock(oldName, VisibilityContext.AllVisible,
+                        MethodLookup.FallbackToObject | MethodLookup.ReturnForwarder).Info;
+                }
+
                 if (method == null) {
                     throw RubyExceptions.CreateUndefinedMethodError(this, oldName);
                 }
