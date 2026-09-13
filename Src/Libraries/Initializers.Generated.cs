@@ -6878,6 +6878,18 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.RangeOps.Begin)
             );
             
+            DefineLibraryMethod(module, "bsearch", 0x51, 
+                0x00000000U, 0x00000002U, 
+                new Func<IronRuby.Builtins.Range, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.RangeOps.GetBinarySearchEnumerator), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.RangeOps.BinarySearch)
+            );
+            
+            DefineLibraryMethod(module, "cover?", 0x51, 
+                0x00000002U, 0x0000000cU, 
+                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Builtins.Range, System.Object, System.Boolean>(IronRuby.Builtins.RangeOps.CaseEquals), 
+                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Builtins.Range, IronRuby.Builtins.Range, System.Boolean>(IronRuby.Builtins.RangeOps.Cover)
+            );
+            
             DefineLibraryMethod(module, "each", 0x51, 
                 0x00000000U, 0x00000002U, 
                 new Func<IronRuby.Builtins.RangeOps.EachStorage, IronRuby.Builtins.Range, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.RangeOps.GetEachEnumerator), 
@@ -6933,6 +6945,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "member?", 0x51, 
                 0x00000002U, 
                 new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Builtins.Range, System.Object, System.Boolean>(IronRuby.Builtins.RangeOps.CaseEquals)
+            );
+            
+            DefineLibraryMethod(module, "overlap?", 0x51, 
+                0x00000006U, 
+                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Builtins.Range, IronRuby.Builtins.Range, System.Boolean>(IronRuby.Builtins.RangeOps.Overlap)
             );
             
             DefineLibraryMethod(module, "step", 0x51, 

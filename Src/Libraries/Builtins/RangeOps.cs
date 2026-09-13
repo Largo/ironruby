@@ -197,22 +197,152 @@ namespace IronRuby.Builtins {
         /// end
         /// => "high"
         /// </example>
-        [RubyMethod("==="), RubyMethod("member?"), RubyMethod("include?")]
+        [RubyMethod("==="), RubyMethod("member?"), RubyMethod("include?"), RubyMethod("cover?")]
         public static bool CaseEquals(ComparisonStorage/*!*/ comparisonStorage, [NotNull]Range/*!*/ self, object value) {
             var compare = comparisonStorage.CompareSite;
 
-            object result = compare.Target(compare, self.Begin, value);
-            if (result == null || Protocols.ConvertCompareResult(comparisonStorage, result) > 0) {
+            // A nil endpoint is a beginless or endless range rather than a value to compare
+            // against: (1..) covers everything from 1 up, (..10) everything up to 10. Comparing
+            // nil <=> value yields nil, which used to make every such range answer false.
+            if (self.Begin != null) {
+                object result = compare.Target(compare, self.Begin, value);
+                if (result == null || Protocols.ConvertCompareResult(comparisonStorage, result) > 0) {
+                    return false;
+                }
+            }
+
+            if (self.End == null) {
+                return true;
+            }
+
+            object endResult = compare.Target(compare, value, self.End);
+            if (endResult == null) {
                 return false;
             }
 
-            result = compare.Target(compare, value, self.End);
+            int valueToEnd = Protocols.ConvertCompareResult(comparisonStorage, endResult);
+            return valueToEnd < 0 || (!self.ExcludeEnd && valueToEnd == 0);
+        }
+
+        /// <summary>
+        /// Since 2.6 cover? also takes a Range, and answers whether self contains the whole of it.
+        /// === / include? / member? keep the single-value meaning only.
+        /// </summary>
+        [RubyMethod("cover?")]
+        public static bool Cover(ComparisonStorage/*!*/ comparisonStorage, UnaryOpStorage/*!*/ maxStorage,
+            [NotNull]Range/*!*/ self, [NotNull]Range/*!*/ other) {
+            var compare = comparisonStorage.CompareSite;
+
+            // an unbounded end cannot be covered by a bounded one, and likewise for the beginning
+            if (self.End != null && other.End == null) {
+                return false;
+            }
+            if (self.Begin != null && other.Begin == null) {
+                return false;
+            }
+
+            // an empty range is covered by nothing, not by everything
+            if (other.Begin != null && other.End != null) {
+                object span = compare.Target(compare, other.Begin, other.End);
+                if (span != null) {
+                    int beginToEnd = Protocols.ConvertCompareResult(comparisonStorage, span);
+                    if (beginToEnd > (other.ExcludeEnd ? -1 : 0)) {
+                        return false;
+                    }
+                }
+            }
+
+            if (other.Begin != null && !CaseEquals(comparisonStorage, self, other.Begin)) {
+                return false;
+            }
+
+            if (self.End == null) {
+                return true;
+            }
+
+            object result = compare.Target(compare, self.End, other.End);
             if (result == null) {
                 return false;
             }
 
-            int valueToEnd = Protocols.ConvertCompareResult(comparisonStorage, result);
-            return valueToEnd < 0 || (!self.ExcludeEnd && valueToEnd == 0);
+            int selfEndToOtherEnd = Protocols.ConvertCompareResult(comparisonStorage, result);
+            if (self.ExcludeEnd == other.ExcludeEnd) {
+                return selfEndToOtherEnd >= 0;
+            }
+            if (self.ExcludeEnd) {
+                return selfEndToOtherEnd > 0;
+            }
+            if (selfEndToOtherEnd >= 0) {
+                return true;
+            }
+
+            // self is inclusive and other is not, so other's endpoint is one past its last
+            // element: (1..10).cover?(1...11) holds. Ask other for its max rather than trying
+            // to compute a predecessor - MRI does the same, and treats a max it cannot produce
+            // (a Float range, say) as not covered.
+            var maxSite = maxStorage.GetCallSite("max");
+            object otherMax;
+            try {
+                otherMax = maxSite.Target(maxSite, other);
+            } catch (InvalidOperationException) {
+                return false;
+            }
+
+            if (otherMax == null) {
+                return false;
+            }
+
+            object maxResult = compare.Target(compare, self.End, otherMax);
+            if (maxResult == null) {
+                return false;
+            }
+            return Protocols.ConvertCompareResult(comparisonStorage, maxResult) >= 0;
+        }
+
+        /// <summary>
+        /// Ruby 3.3. True when the two ranges have at least one element in common.
+        /// </summary>
+        [RubyMethod("overlap?")]
+        public static bool Overlap(ComparisonStorage/*!*/ comparisonStorage, [NotNull]Range/*!*/ self, [NotNull]Range/*!*/ other) {
+            var compare = comparisonStorage.CompareSite;
+
+            if (IsEmpty(comparisonStorage, self) || IsEmpty(comparisonStorage, other)) {
+                return false;
+            }
+
+            // they overlap unless one ends before the other begins
+            if (!EndsBefore(comparisonStorage, self.End, self.ExcludeEnd, other.Begin) &&
+                !EndsBefore(comparisonStorage, other.End, other.ExcludeEnd, self.Begin)) {
+                return true;
+            }
+            return false;
+        }
+
+        private static bool IsEmpty(ComparisonStorage/*!*/ comparisonStorage, Range/*!*/ range) {
+            if (range.Begin == null || range.End == null) {
+                return false;
+            }
+            var compare = comparisonStorage.CompareSite;
+            object result = compare.Target(compare, range.Begin, range.End);
+            if (result == null) {
+                return false;
+            }
+            int beginToEnd = Protocols.ConvertCompareResult(comparisonStorage, result);
+            return beginToEnd > (range.ExcludeEnd ? -1 : 0);
+        }
+
+        // Does a range ending at end (exclusive when excludeEnd) finish before begin starts?
+        private static bool EndsBefore(ComparisonStorage/*!*/ comparisonStorage, object end, bool excludeEnd, object begin) {
+            if (end == null || begin == null) {
+                return false;
+            }
+            var compare = comparisonStorage.CompareSite;
+            object result = compare.Target(compare, end, begin);
+            if (result == null) {
+                return false;
+            }
+            int endToBegin = Protocols.ConvertCompareResult(comparisonStorage, result);
+            return endToBegin < 0 || (excludeEnd && endToBegin == 0);
         }
 
         #endregion
@@ -289,6 +419,130 @@ namespace IronRuby.Builtins {
         [RubyMethod("each")]
         public static Enumerator/*!*/ GetEachEnumerator(EachStorage/*!*/ storage, Range/*!*/ self) {
             return new Enumerator(self, "each");
+        }
+
+        [RubyMethod("bsearch")]
+        public static Enumerator/*!*/ GetBinarySearchEnumerator(Range/*!*/ self) {
+            return new Enumerator(self, "bsearch");
+        }
+
+        /// <summary>
+        /// Binary search over an Integer range. The block decides which way to go: true/false
+        /// selects the find-minimum mode and returns the smallest element the block accepts,
+        /// while an Integer selects find-any mode - 0 means this is the element, and the sign
+        /// says which half to keep. A block returning anything else is a TypeError.
+        /// </summary>
+        [RubyMethod("bsearch")]
+        public static object BinarySearch(ConversionStorage<int>/*!*/ fixnumCast, [NotNull]BlockParam/*!*/ block, Range/*!*/ self) {
+            if (!(self.Begin is int || self.Begin == null) || !(self.End is int || self.End == null)) {
+                throw RubyExceptions.CreateTypeError("can't do binary search for {0}",
+                    block.RubyContext.GetClassName(self.Begin ?? self.End));
+            }
+
+            // long rather than int throughout: an endless range's upper bound starts at
+            // Int32.MaxValue, and (high - low) for a negative beginning overflows int - which
+            // produced a negative midpoint outside the range and a loop that never terminated.
+            long low = self.Begin == null ? Int32.MinValue : (int)self.Begin;
+            long high;
+            if (self.End == null) {
+                high = Int32.MaxValue;
+            } else {
+                high = (int)self.End;
+                if (self.ExcludeEnd) {
+                    high--;
+                }
+            }
+
+            object satisfied = null;
+            object found = null;
+
+            // An unbounded end has no midpoint to bisect towards, so probe beg+1, beg+2, beg+4 …
+            // until the block first accepts, and bisect the interval that leaves. This is what
+            // MRI does, and it keeps the answer correct past Int32.MaxValue.
+            if (self.End == null) {
+                long step = 1;
+                long probe = low;
+                while (true) {
+                    if (probe > Int32.MaxValue - step) {
+                        high = Int32.MaxValue;
+                        break;
+                    }
+                    probe = low + step;
+
+                    bool probeLower;
+                    if (!Probe(block, probe, ref satisfied, ref found, out probeLower)) {
+                        return found;
+                    }
+                    if (probeLower) {
+                        high = probe;
+                        break;
+                    }
+                    low = probe;
+                    step *= 2;
+                }
+                low = self.Begin == null ? Int32.MinValue : (int)self.Begin;
+            }
+
+            while (low <= high) {
+                long middle = low + ((high - low) >> 1);
+
+                bool searchLower;
+                if (!Probe(block, middle, ref satisfied, ref found, out searchLower)) {
+                    return found;
+                }
+
+                if (searchLower) {
+                    high = middle - 1;
+                } else {
+                    low = middle + 1;
+                }
+            }
+
+            return satisfied;
+        }
+
+        /// <summary>
+        /// Calls the block with one candidate. Returns false when the search is over - either the
+        /// block broke out or it answered 0 - leaving the answer in found.
+        /// </summary>
+        private static bool Probe(BlockParam/*!*/ block, long candidate, ref object satisfied, ref object found, out bool searchLower) {
+            object element = Protocols.Normalize(candidate);
+
+            object result;
+            if (block.Yield(element, out result)) {
+                found = result;
+                searchLower = false;
+                return false;
+            }
+
+            if (result is int) {
+                int direction = (int)result;
+                if (direction == 0) {
+                    found = element;
+                    searchLower = false;
+                    return false;
+                }
+                searchLower = direction < 0;
+            } else if (result is double) {
+                double direction = (double)result;
+                if (direction == 0.0) {
+                    found = element;
+                    searchLower = false;
+                    return false;
+                }
+                searchLower = direction < 0.0;
+            } else if (result is bool) {
+                searchLower = (bool)result;
+                if (searchLower) {
+                    satisfied = element;
+                }
+            } else if (result == null) {
+                searchLower = false;
+            } else {
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (must be numeric, true, false or nil)",
+                    block.RubyContext.GetClassName(result));
+            }
+            return true;
         }
 
         /// <summary>
