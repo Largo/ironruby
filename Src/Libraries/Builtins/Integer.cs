@@ -225,12 +225,22 @@ namespace IronRuby.Builtins {
         /// <summary>MRI's rb_enc_uint_chr: either the encoded character, or a RangeError.</summary>
         private static MutableString/*!*/ ToChr(RubyEncoding/*!*/ encoding, RubyEncoding/*!*/ resultEncoding, uint codepoint) {
             switch (encoding.CodePage) {
-                case RubyEncoding.CodePageUTF7:
-                case RubyEncoding.CodePageUTF8:
                 case RubyEncoding.CodePageUTF16BE:
                 case RubyEncoding.CodePageUTF16LE:
+                    // UTF-16 is the one Unicode form where a too-wide value is reported as invalid
+                    // rather than as out of range: a UTF-16 character is never longer than the
+                    // surrogate pair it already has room for, so rb_enc_codelen answers
+                    // ONIGERR_INVALID_CODE_POINT_VALUE instead of TOO_BIG_WIDE_CHAR_VALUE.
+                    if (codepoint > 0x10ffff || codepoint >= 0xd800 && codepoint <= 0xdfff) {
+                        throw InvalidCodePoint(encoding, codepoint);
+                    }
+                    return MutableString.CreateMutable(Tokenizer.UnicodeCodePointToString((int)codepoint), resultEncoding);
+
+                case RubyEncoding.CodePageUTF7:
+                case RubyEncoding.CodePageUTF8:
                 case RubyEncoding.CodePageUTF32BE:
                 case RubyEncoding.CodePageUTF32LE:
+                case RubyEncoding.CodePageCESU8:
                     // Lone surrogates are not code points; letting them through produced a
                     // System.Text.EncoderFallbackException out of the encoder later on.
                     if (codepoint > 0x10ffff) {
@@ -301,10 +311,11 @@ namespace IronRuby.Builtins {
                         }
                         throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
                     }
-                    if (encoding.IsSingleByteCharacterSet) {
-                        throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
-                    }
-                    throw new NotSupportedException(RubyExceptions.FormatMessage("Encoding {0} code points not supported", encoding));
+                    // Everything else - single byte encodings, dummy encodings, and anything whose
+                    // structure we don't model - has no character this wide. MRI's rb_enc_uint_chr
+                    // reports exactly that rather than refusing to answer: rb_enc_codelen returns
+                    // ONIGERR_TOO_BIG_WIDE_CHAR_VALUE and it raises "out of char range".
+                    throw OutOfCharRange(codepoint);
             }
         }
 

@@ -181,7 +181,7 @@ class Gem::ConfigFile
   end
 
   def load_rubygems_api_key
-    api_key_hash = File.exists?(credentials_path) ? load_file(credentials_path) : @hash
+    api_key_hash = File.exist?(credentials_path) ? load_file(credentials_path) : @hash
 
     @rubygems_api_key = api_key_hash[:rubygems_api_key] if api_key_hash.key? :rubygems_api_key
   end
@@ -190,7 +190,7 @@ class Gem::ConfigFile
     config = load_file(credentials_path).merge(:rubygems_api_key => api_key)
 
     dirname = File.dirname(credentials_path)
-    Dir.mkdir(dirname) unless File.exists?(dirname)
+    Dir.mkdir(dirname) unless File.exist?(dirname)
 
     require 'yaml'
 
@@ -202,7 +202,7 @@ class Gem::ConfigFile
   end
 
   def load_file(filename)
-    return {} unless filename and File.exists?(filename)
+    return {} unless filename and File.exist?(filename)
     begin
       require 'yaml'
       YAML.load(File.read(filename))

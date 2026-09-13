@@ -30,6 +30,13 @@ namespace IronRuby.Builtins {
 
         WriteAppends = 0x08,
 
+        // Accepted and ignored: they exist so File::NOCTTY, File::SYNC and
+        // File::SHARE_DELETE can be OR'd into a mode without changing it.
+        NonBlocking = 0x04,
+        NoControllingTerminal = 0x10,
+        Synchronized = 0x20,
+        ShareDelete = 0x40,
+
         CreateIfNotExists = 0x100,
         Truncate = 0x200,
         ErrorIfExists = 0x400,
@@ -129,6 +136,18 @@ namespace IronRuby.Builtins {
                 result = result.AddModeAndEncoding(context, Protocols.CastToString(toStr, optionValue));
             }
 
+            // :newline is a text-mode decorator, so it contradicts "b".
+            if (options.TryGetValue(context.CreateAsciiSymbol("newline"), out optionValue)
+                && (result.Mode & IOMode.PreserveEndOfLines) != 0) {
+                throw RubyExceptions.CreateArgumentError("newline decorator with binary mode");
+            }
+
+            // :flags is OR'd into whatever the mode argument already said.
+            if (options.TryGetValue(context.CreateAsciiSymbol("flags"), out optionValue)) {
+                int extra = Protocols.CastToFixnum(new ConversionStorage<int>(context), optionValue);
+                result = new IOInfo(result.Mode | (IOMode)extra, result.ExternalEncoding, result.InternalEncoding);
+            }
+
             return result;
         }
     }
@@ -163,7 +182,7 @@ namespace IronRuby.Builtins {
                 case IOMode.WriteOnly: return FileAccess.Write;
                 case IOMode.ReadOnly: return FileAccess.Read;
                 case IOMode.ReadWrite: return FileAccess.ReadWrite;
-                default: throw RubyExceptions.CreateEINVAL("illegal access mode {0}", mode);
+                default: throw RubyExceptions.CreateEINVAL("invalid access mode {0}", mode);
             }
         }
 
@@ -181,7 +200,7 @@ namespace IronRuby.Builtins {
             }
 
             IOMode result = IOMode.Default;
-            bool plus = false, binary = false, text = false;
+            bool plus = false, binary = false, text = false, exclusive = false;
 
             // The access letter comes first; after it MRI accepts the b/t/+ flags in
             // any order and tolerates repeats ("r+b" and "rb+" are both fine, so is
@@ -202,6 +221,12 @@ namespace IronRuby.Builtins {
                         text = true;
                         break;
 
+                    case 'x':
+                        // O_EXCL; only meaningful after 'w', which is what CRuby enforces.
+                        if (mode[0] != 'w') throw IllegalMode(mode);
+                        exclusive = true;
+                        break;
+
                     default:
                         throw IllegalMode(mode);
                 }
@@ -209,6 +234,10 @@ namespace IronRuby.Builtins {
 
             if (binary) {
                 result |= IOMode.PreserveEndOfLines;
+            }
+
+            if (exclusive) {
+                result |= IOMode.ErrorIfExists;
             }
 
             switch (mode[0]) {
@@ -227,7 +256,7 @@ namespace IronRuby.Builtins {
         }
 
         internal static Exception/*!*/ IllegalMode(string/*!*/ modeString) {
-            return RubyExceptions.CreateArgumentError("illegal access mode {0}", modeString);
+            return RubyExceptions.CreateArgumentError("invalid access mode {0}", modeString);
         }
     }
 }

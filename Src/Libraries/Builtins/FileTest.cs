@@ -80,8 +80,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("exist?", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("exists?", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("exists?", RubyMethodAttributes.PrivateInstance)]
+        // #exists? was deprecated in 2.1 and removed in 3.9.
         public static bool Exists(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return Query(self.Context, Protocols.CastToPath(toPath, path), true, (fsi) => true);
         }

@@ -56,7 +56,15 @@ namespace IronRuby.Builtins {
         public const int CodePageUTF16LE = 1200;
         public const int CodePageUTF32BE = 12001;
         public const int CodePageUTF32LE = 12000;
-        
+
+        // Code pages for the encodings Ruby has and .NET does not - see RubyOnlyEncodings.
+        // Windows allocates code page numbers below 65536, so nothing in this block can ever
+        // collide with an encoding System.Text hands out.
+        public const int CodePageUTF16 = 1000016;
+        public const int CodePageUTF32 = 1000032;
+        public const int CodePageCESU8 = 1000008;
+        public const int CodePageTIS620 = 1000620;
+
         // TODO: how does MRI sort encodings?
 
 #if !NETFRAMEWORK
@@ -120,6 +128,9 @@ namespace IronRuby.Builtins {
 
         private static Encoding/*!*/ CreateEncoding(int codepage, bool throwOnError) {
 #if FEATURE_ENCODING
+            if (RubyOnlyEncodings.IsRubyOnly(codepage)) {
+                return RubyOnlyEncodings.Create(codepage, throwOnError);
+            }
             if (throwOnError) {
                 return Encoding.GetEncoding(codepage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
             } else {
@@ -190,6 +201,12 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageUTF16LE: return "UTF-16LE";
                 case RubyEncoding.CodePageUTF32BE: return "UTF-32BE";
                 case RubyEncoding.CodePageUTF32LE: return "UTF-32LE";
+
+                // no .NET counterpart, see RubyOnlyEncodings:
+                case RubyEncoding.CodePageUTF16: return "UTF-16";
+                case RubyEncoding.CodePageUTF32: return "UTF-32";
+                case RubyEncoding.CodePageCESU8: return "CESU-8";
+                case RubyEncoding.CodePageTIS620: return "TIS-620";
                 case RubyEncoding.CodePageSJIS: return "Shift_JIS";
                 case RubyEncoding.CodePageAscii: return "US-ASCII";
 
@@ -216,7 +233,27 @@ namespace IronRuby.Builtins {
                 case 28605: return "ISO-8859-15";
 
                 case RubyEncoding.CodePageBig5: return "Big5";
-                case 936: return "GB2312";
+
+                // .NET's "gb2312" at code page 936 is the GBK superset; Ruby's GB2312 is EUC-CN,
+                // which is code page 51936.
+                case 936: return "GBK";
+                case 51936: return "GB2312";
+                case 51949: return "EUC-KR";
+                case 54936: return "GB18030";
+                case 949: return "CP949";
+
+                // Ruby's names for the Mac code pages; .NET spells them "x-mac-*".
+                case 10000: return "macRoman";
+                case 10001: return "MacJapanese";
+                case 10006: return "macGreek";
+                case 10007: return "macCyrillic";
+                case 10010: return "macRomania";
+                case 10017: return "macUkraine";
+                case 10021: return "macThai";
+                case 10029: return "macCentEuro";
+                case 10079: return "macIceland";
+                case 10081: return "macTurkish";
+                case 10082: return "macCroatian";
 
                 case 20866: return "KOI8-R";
                 case 21866: return "KOI8-U";
@@ -234,6 +271,8 @@ namespace IronRuby.Builtins {
 
                 case 37: return "IBM037";
                 case 437: return "IBM437";
+                case 720: return "IBM720";
+                case 862: return "IBM862";
                 case 737: return "IBM737";
                 case 775: return "IBM775";
                 case 850: return "CP850";
@@ -495,7 +534,14 @@ namespace IronRuby.Builtins {
                 case 50225: // ISO-2022-KR
                 case 50227: // ISO-2022-CN
                 case 52936: // HZ-GB-2312
+                case 37:    // IBM037, EBCDIC - no ASCII byte means itself
                 case CodePageUTF7:
+
+                // UTF-16 and UTF-32 without an endianness suffix carry their byte order in a BOM,
+                // so no character can be read out of them until that BOM has been seen. Ruby makes
+                // them dummy encodings; the suffixed UTF-16LE/BE and UTF-32LE/BE are not.
+                case CodePageUTF16:
+                case CodePageUTF32:
                     return true;
 
                 default:
@@ -629,6 +675,11 @@ namespace IronRuby.Builtins {
                 { "CP878", "KOI8-R" }, 
                 { "CP932", "Windows-31J" }, 
                 { "CP936", "GBK" }, 
+                { "CP720", "IBM720" }, 
+                { "EUC-CN", "GB2312" }, 
+                { "eucCN", "GB2312" }, 
+                { "MacJapan", "MacJapanese" }, 
+                { "ebcdic-cp-us", "IBM037" }, 
                 { "CP950", "Big5" }, 
                 { "CP951", "Big5-HKSCS" }, 
                 { "CP1258", "Windows-1258" },

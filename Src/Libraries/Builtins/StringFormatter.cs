@@ -502,8 +502,10 @@ namespace IronRuby.Builtins {
                     object instance = _siteStorage.New(keyErrorClass, MutableString.CreateMutable(message, RubyEncoding.UTF8));
                     Exception exception = instance as Exception;
                     if (exception != null) {
-                        _context.SetInstanceVariable(instance, "@receiver", hash);
-                        _context.SetInstanceVariable(instance, "@key", key);
+                        // KeyError#receiver and #key read these; see the KeyError
+                        // reopening in Src/StdLib/ironruby/ruby4.rb.
+                        _context.SetInstanceVariable(instance, "@__receiver", hash);
+                        _context.SetInstanceVariable(instance, "@__key", key);
                         return exception;
                     }
                 } catch (Exception) {
