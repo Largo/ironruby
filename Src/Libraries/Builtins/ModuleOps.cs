@@ -514,12 +514,13 @@ namespace IronRuby.Builtins {
         #region alias_method, remove_method, undef_method
 
         // thread-safe:
-        [RubyMethod("alias_method", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ AliasMethod(RubyContext/*!*/ context, RubyModule/*!*/ self,
+        // public since Ruby 3.0; returns the new method's name as a Symbol, like define_method
+        [RubyMethod("alias_method")]
+        public static object AliasMethod(RubyContext/*!*/ context, RubyModule/*!*/ self,
             [DefaultProtocol, NotNull]string/*!*/ newName, [DefaultProtocol, NotNull]string/*!*/ oldName) {
 
             self.AddMethodAlias(newName, oldName);
-            return self;
+            return context.CreateSymbol(newName, RubyEncoding.UTF8);
         }
 
         // thread-safe:

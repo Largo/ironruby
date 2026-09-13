@@ -1466,8 +1466,15 @@ namespace IronRuby.Builtins {
                 // Note: We need to copy overload group since otherwise it might mess up caching if the alias is defined in a sub-module and 
                 // overloads of the same name that are not included in the overload group are inherited to this module.
                 // EnumerateMethods also relies on overload groups only representing cached CLR members.
-                if (!method.IsRubyMember) {
-                    SetMethodNoEventNoLock(Context, newName, method.Copy(method.Flags, method.DeclaringModule));
+                // MRI keeps initialize/initialize_copy/initialize_clone/initialize_dup/respond_to_missing?
+                // private no matter what the aliased method's visibility was.
+                RubyMemberFlags flags = method.Flags;
+                if (RubyUtils.IsForcedPrivateMethod(newName)) {
+                    flags = (flags & ~RubyMemberFlags.VisibilityMask) | RubyMemberFlags.Private;
+                }
+
+                if (!method.IsRubyMember || flags != method.Flags) {
+                    SetMethodNoEventNoLock(Context, newName, method.Copy(flags, method.DeclaringModule));
                 } else {
                     SetMethodNoEventNoLock(Context, newName, method);
                 }

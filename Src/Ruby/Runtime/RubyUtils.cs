@@ -641,8 +641,19 @@ namespace IronRuby.Runtime {
 
         #region Methods
 
+        /// <summary>
+        /// Methods MRI forces to be private however they are defined: the initializers and respond_to_missing?.
+        /// </summary>
+        public static bool IsForcedPrivateMethod(string/*!*/ methodName) {
+            return methodName == Symbols.Initialize
+                || methodName == Symbols.InitializeCopy
+                || methodName == "initialize_clone"
+                || methodName == "initialize_dup"
+                || methodName == "respond_to_missing?";
+        }
+
         public static RubyMethodVisibility GetSpecialMethodVisibility(RubyMethodVisibility/*!*/ visibility, string/*!*/ methodName) {
-            return (methodName == Symbols.Initialize || methodName == Symbols.InitializeCopy) ? RubyMethodVisibility.Private : visibility;
+            return IsForcedPrivateMethod(methodName) ? RubyMethodVisibility.Private : visibility;
         }
 
         internal static string ToClrOperatorName(string/*!*/ rubyName) {

@@ -6016,9 +6016,9 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.InvalidComparison)
             );
             
-            DefineLibraryMethod(module, "alias_method", 0x52, 
+            DefineLibraryMethod(module, "alias_method", 0x51, 
                 0x0006000cU, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.String, System.String, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.AliasMethod)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.String, System.String, System.Object>(IronRuby.Builtins.ModuleOps.AliasMethod)
             );
             
             DefineLibraryMethod(module, "ancestors", 0x51, 
