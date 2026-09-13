@@ -330,6 +330,11 @@ namespace IronRuby.Builtins {
 
             var converted = new IList[others.Length];
             for (int i = 0; i < others.Length; i++) {
+                if (others[i] == null) {
+                    // nil converts to a null reference rather than failing, so it has to be
+                    // turned away here or it arrives as a null IList.
+                    throw RubyExceptions.CreateImplicitConversionError("NilClass", "Array");
+                }
                 IList other = Protocols.CastToArray(arrayCast, others[i]);
                 // A snapshot, not the receiver itself: the first append would otherwise make
                 // the second one see what the first one wrote.
@@ -729,7 +734,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("&")]
         public static RubyArray/*!*/ Intersection(UnaryOpStorage/*!*/ hashStorage, BinaryOpStorage/*!*/ eqlStorage, 
-            IList/*!*/ self, [DefaultProtocol]IList/*!*/ other) {
+            IList/*!*/ self, [DefaultProtocol, NotNull]IList/*!*/ other) {
             Dictionary<object, bool> items = new Dictionary<object, bool>(new EqualityComparer(hashStorage, eqlStorage));
             RubyArray result = new RubyArray();
 
@@ -771,7 +776,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("|")]
         public static RubyArray/*!*/ Union(UnaryOpStorage/*!*/ hashStorage, BinaryOpStorage/*!*/ eqlStorage, 
-            IList/*!*/ self, [DefaultProtocol]IList other) {
+            IList/*!*/ self, [DefaultProtocol, NotNull]IList/*!*/ other) {
             var seen = new Dictionary<object, bool>(new EqualityComparer(hashStorage, eqlStorage));
             bool nilSeen = false;
             var result = new RubyArray();
@@ -1731,7 +1736,13 @@ namespace IronRuby.Builtins {
             ConversionStorage<MutableString>/*!*/ toStr,
             IList/*!*/ self, object separator) {
 
+            // An empty array joins to an empty string without touching the separator - MRI does
+            // not ask it for #to_str - but the $, warning belongs to the call rather than to the
+            // work, so [].join(nil) still warns.
             if (self.Count == 0) {
+                if (separator == null) {
+                    DefaultSeparator(conversions.Context);
+                }
                 return MutableString.CreateEmpty(RubyEncoding.Ascii);
             }
 

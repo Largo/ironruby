@@ -8497,7 +8497,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "&", 0x51, 
-                0x00040000U, 
+                0x00040008U, 
                 new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Collections.IList, System.Collections.IList, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.IListOps.Intersection)
             );
             
@@ -8524,7 +8524,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "|", 0x51, 
-                0x00040000U, 
+                0x00040008U, 
                 new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Collections.IList, System.Collections.IList, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.IListOps.Union)
             );
             
