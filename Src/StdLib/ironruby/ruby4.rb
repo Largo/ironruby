@@ -4917,6 +4917,154 @@ class IO
   def self.try_convert(obj)
     obj.respond_to?(:to_io) ? obj.to_io : nil
   end unless respond_to?(:try_convert)
+
+  # ---- the byte and character side of IO ---------------------------------
+
+  # getc answered a byte as an Integer, which is the 1.8 meaning; MRI has
+  # answered a one-character String since 1.9, reading as many bytes as the
+  # character needs.
+  if instance_method(:getc).arity == 0
+    alias_method :__ir_getc__, :getc
+    private :__ir_getc__
+
+    def getc
+      first = __ir_getc__
+      return nil if first.nil?
+      return first if first.is_a?(::String)
+      enc = (external_encoding rescue nil) || ::Encoding.default_external
+      bytes = [first]
+      char = nil
+      4.times do
+        char = bytes.pack("C*")
+        char.force_encoding(enc) if char.respond_to?(:force_encoding)
+        break if char.valid_encoding?
+        nxt = __ir_getc__
+        break if nxt.nil?
+        bytes << nxt
+      end
+      char
+    end
+  end
+
+  def getbyte
+    s = read(1)
+    return nil if s.nil? || s.empty?
+    s.getbyte(0)
+  end unless method_defined?(:getbyte)
+
+  def readbyte
+    b = getbyte
+    ::Kernel.raise(::EOFError, "end of file reached") if b.nil?
+    b
+  end unless method_defined?(:readbyte)
+
+  def ungetbyte(byte)
+    return nil if byte.nil?
+    if byte.is_a?(::Integer)
+      ungetc(byte & 0xff)
+    else
+      ::Kernel.String(byte).bytes.reverse_each { |b| ungetc(b) }
+    end
+    nil
+  end unless method_defined?(:ungetbyte)
+
+  def each_char
+    return ::Enumerator.new { |y| each_char { |c| y << c } } unless block_given?
+    while (c = getc)
+      yield c
+    end
+    self
+  end unless method_defined?(:each_char)
+
+  def each_codepoint
+    return ::Enumerator.new { |y| each_codepoint { |c| y << c } } unless block_given?
+    each_char { |c| yield c.ord }
+    self
+  end unless method_defined?(:each_codepoint)
+
+  alias_method :codepoints, :each_codepoint unless method_defined?(:codepoints)
+
+  # ---- descriptor flags ---------------------------------------------------
+  #
+  # There is no exec here to leak a descriptor into, and no way to unset
+  # binmode once set, so these record what they are told and answer it back.
+
+  def autoclose=(value)
+    @__autoclose__ = !!value
+  end unless method_defined?(:autoclose=)
+
+  def autoclose?
+    defined?(@__autoclose__) && !@__autoclose__ ? false : true
+  end unless method_defined?(:autoclose?)
+
+  def close_on_exec=(value)
+    @__close_on_exec__ = !!value
+  end unless method_defined?(:close_on_exec=)
+
+  def close_on_exec?
+    defined?(@__close_on_exec__) && !@__close_on_exec__ ? false : true
+  end unless method_defined?(:close_on_exec?)
+
+  def binmode?
+    defined?(@__binmode__) ? !!@__binmode__ : false
+  end unless method_defined?(:binmode?)
+
+  # A hint to the kernel about the access pattern; there is nothing to pass it
+  # to here, but MRI still validates the arguments and answers nil.
+  def advise(advice, offset = 0, len = 0)
+    unless %i[normal sequential random willneed dontneed noreuse].include?(advice)
+      ::Kernel.raise(::NotImplementedError, "Unsupported advice: #{advice.inspect}")
+    end
+    ::Kernel.Integer(offset)
+    ::Kernel.Integer(len)
+    nil
+  end unless method_defined?(:advise)
+
+  def fdatasync
+    fsync
+    0
+  end unless method_defined?(:fdatasync)
+
+  def to_path
+    respond_to?(:path) ? path : nil
+  end unless method_defined?(:to_path)
+
+  # Positional read/write, done by saving and restoring the file position since
+  # there is no pread/pwrite underneath.
+  def pread(maxlen, offset, buffer = nil)
+    ::Kernel.raise(::ArgumentError, "negative string size") if maxlen < 0
+    saved = pos
+    begin
+      seek(offset)
+      result = read(maxlen)
+      ::Kernel.raise(::EOFError, "end of file reached") if result.nil?
+      buffer ? buffer.replace(result) : result
+    ensure
+      seek(saved)
+    end
+  end unless method_defined?(:pread)
+
+  def pwrite(string, offset)
+    saved = pos
+    begin
+      seek(offset)
+      write(string)
+    ensure
+      seek(saved)
+    end
+  end unless method_defined?(:pwrite)
+
+  # Nothing here blocks on a descriptor the way a real event loop would, so a
+  # readable stream is one that is not at end of file.
+  def wait_readable(timeout = nil)
+    eof? ? nil : self
+  rescue ::IOError
+    nil
+  end unless method_defined?(:wait_readable)
+
+  def wait_writable(timeout = nil)
+    closed? ? nil : self
+  end unless method_defined?(:wait_writable)
 end
 
 # caller_locations (2.0) and the Location objects it yields. The runtime only
