@@ -5718,6 +5718,10 @@ class IO
       @freed = false
     end
 
+    def __set_parent__(parent)
+      @parent = parent
+    end
+
     def __take_over__(data, offset, size, flags)
       @data = data
       @offset = offset
@@ -5738,9 +5742,17 @@ class IO
       size == 0
     end
 
+    # Freeing a buffer leaves it valid-but-null; what makes a buffer invalid is
+    # the storage underneath going away, which is what a slice of a transferred
+    # or freed buffer is looking at.
     def valid?
-      true
+      @parent.nil? || !@parent.__storage_dead__
     end
+
+    def __storage_dead__
+      defined?(@storage_dead) ? @storage_dead : false
+    end
+    protected :__storage_dead__
 
     def null?
       @freed || @size == 0
@@ -5794,6 +5806,7 @@ class IO
 
     def free
       @freed = true
+      @storage_dead = true
       @data = "".b
       @offset = 0
       @size = 0
@@ -5805,6 +5818,7 @@ class IO
       other = self.class.allocate
       other.__take_over__(@data, @offset, @size, @flags)
       @freed = true
+      @storage_dead = true
       @data = "".b
       @offset = 0
       @size = 0
@@ -5839,6 +5853,7 @@ class IO
       end
       other = self.class.allocate
       other.__take_over__(@data, @offset + offset, length, @flags)
+      other.__set_parent__(self)
       other
     end
 
@@ -6146,6 +6161,61 @@ class IO
       return __ir_set_encoding__(external, internal, *rest)
     end
     __ir_set_encoding__(*args)
+  end
+
+  # readpartial reads what is there, up to maxlen bytes, and only blocks when
+  # nothing is there at all. Nothing here has a non-blocking read underneath, so
+  # on a stream that is already open this is a read of at most maxlen bytes -
+  # which is what MRI does on a regular file too. The result is bytes, so
+  # ASCII-8BIT, and end of file is an EOFError rather than nil.
+  def readpartial(maxlen, outbuf = nil)
+    maxlen = ::Kernel.Integer(maxlen)
+    ::Kernel.raise(::ArgumentError, "negative length #{maxlen} given") if maxlen < 0
+    if maxlen == 0
+      result = "".b
+      return outbuf ? outbuf.replace(result) : result
+    end
+    data = __ir_read__(maxlen)
+    if data.nil? || data.empty?
+      ::Kernel.raise(::EOFError, "end of file reached")
+    end
+    data.force_encoding(::Encoding::BINARY) if data.respond_to?(:force_encoding)
+    outbuf ? outbuf.replace(data) : data
+  end unless method_defined?(:readpartial)
+
+  class << self
+    # Nothing here multiplexes on descriptors, so a stream counts as readable
+    # when it is open and not at end of file, and writable when it is open.
+    # That is the honest answer for the file and pipe streams the specs use, and
+    # it is a great deal more useful than the NotSupportedException this was.
+    def select(reads = nil, writes = nil, errors = nil, timeout = nil)
+      [reads, writes, errors].each do |list|
+        next if list.nil?
+        unless list.respond_to?(:to_ary)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{list.class} into Array")
+        end
+      end
+      readable = (reads || []).select { |io| __select_readable__(io) }
+      writable = (writes || []).select { |io| !io.closed? }
+      failing = []
+      if readable.empty? && writable.empty? && failing.empty?
+        return nil
+      end
+      [readable, writable, failing]
+    end
+
+    # #eof? blocks on a pipe with nothing in it yet, and select is the one
+ # call that must never block, so only a regular file - where eof? is a
+      # position check - is asked. Anything else is reported readable, which
+      # is optimistic but cannot hang.
+    def __select_readable__(io)
+      return false if io.closed?
+      return !io.eof? if io.respond_to?(:stat) && io.stat.file?
+      true
+    rescue ::IOError, ::Errno::EBADF, ::NotImplementedError
+      false
+    end
+    private :__select_readable__
   end
 
   # Reads a byte-order mark, and if there is one, adopts the encoding it names
