@@ -235,18 +235,45 @@ namespace IronRuby.Builtins {
             get { return _options; }
         }
 
+        /// <summary>
+        /// False only for a Regexp produced by Regexp.allocate, which has no pattern yet.
+        /// </summary>
+        public bool IsInitialized {
+            get { return _initialized; }
+        }
+
         public RubyEncoding/*!*/ Encoding {
             get {
                 // MRI's rb_reg_encoding. A regexp with no encoding flag whose source happens to be
                 // ASCII only is US-ASCII, whatever the encoding of the file it was written in, so
                 // that it can match a string in any ASCII compatible encoding.
                 //
-                // /n is deliberately not included: MRI decides it on the bytes the pattern
-                // compiles to, where an \xFF escape is one non-ASCII byte, while _pattern still
-                // holds the four ASCII characters of the escape itself.
-                if (_initialized && (_options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.NONE && _pattern.IsAscii()) {
+                // /n needs the extra escape check: MRI decides it on the bytes the pattern compiles
+                // to, where an \xFF escape is one non-ASCII byte, while _pattern still holds the
+                // four ASCII characters of the escape itself. So /ASCII/n is US-ASCII but
+                // /\xc2\xa1/n is BINARY.
+                if (!_initialized) {
+                    return _pattern.Encoding;
+                }
+
+                var encodingOptions = _options & RubyRegexOptions.EncodingMask;
+                if (encodingOptions == RubyRegexOptions.NONE && _pattern.IsAscii()) {
+                    // é is six ASCII characters that compile to one UTF-8 character, so the
+                    // regexp is UTF-8 even though its source is ASCII only. (A \xNN or octal escape
+                    // above 7 bits without /n is "invalid multibyte escape" in MRI; we don't raise,
+                    // and the pattern's own encoding is as good an answer as any.)
+                    bool isUnicode;
+                    if (HasNonAsciiEscape(_pattern, out isUnicode)) {
+                        return isUnicode ? RubyEncoding.UTF8 : _pattern.Encoding;
+                    }
+
                     return RubyEncoding.Ascii;
                 }
+
+                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !HasNonAsciiEscape(_pattern)) {
+                    return RubyEncoding.Ascii;
+                }
+
                 return _pattern.Encoding;
             }
         }
@@ -255,9 +282,235 @@ namespace IronRuby.Builtins {
             get { return _pattern; }
         }
 
+        #region Pattern inspection (group names, back references)
+
+        private static readonly string[] EmptyNames = new string[0];
+
+        /// <summary>
+        /// The names of the pattern's named groups, in the order they open, with duplicates kept so
+        /// that the position in the array is the group's Ruby index - 1. When a pattern uses named
+        /// groups the plain parenthesised groups don't capture, so those are exactly the capture
+        /// group numbers.
+        /// </summary>
+        public string[]/*!*/ GetGroupNames() {
+            return ScanGroupNames(_pattern);
+        }
+
+        internal static string[]/*!*/ ScanGroupNames(MutableString/*!*/ pattern) {
+            List<string> names = null;
+            int length = pattern.GetCharCount();
+            bool inClass = false;
+
+            for (int i = 0; i < length; i++) {
+                char c = pattern.GetChar(i);
+
+                if (c == '\\') {
+                    i++;
+                    continue;
+                }
+
+                if (inClass) {
+                    if (c == ']') {
+                        inClass = false;
+                    }
+                    continue;
+                }
+
+                if (c == '[') {
+                    inClass = true;
+                    continue;
+                }
+
+                if (c != '(' || i + 2 >= length || pattern.GetChar(i + 1) != '?') {
+                    continue;
+                }
+
+                char kind = pattern.GetChar(i + 2);
+                char terminator;
+                if (kind == '<') {
+                    // (?<= and (?<! are look-behind, not a named group
+                    if (i + 3 < length) {
+                        char next = pattern.GetChar(i + 3);
+                        if (next == '=' || next == '!') {
+                            continue;
+                        }
+                    }
+                    terminator = '>';
+                } else if (kind == '\'') {
+                    terminator = '\'';
+                } else {
+                    continue;
+                }
+
+                int start = i + 3;
+                int end = start;
+                while (end < length && pattern.GetChar(end) != terminator) {
+                    end++;
+                }
+
+                if (end >= length) {
+                    break;
+                }
+
+                var name = new StringBuilder(end - start);
+                for (int j = start; j < end; j++) {
+                    name.Append(pattern.GetChar(j));
+                }
+
+                (names ?? (names = new List<string>())).Add(name.ToString());
+                i = end;
+            }
+
+            return names != null ? names.ToArray() : EmptyNames;
+        }
+
+        /// <summary>
+        /// Whether the pattern contains a back reference (\1..\9, \k&lt;name&gt;, \k'name').
+        /// Those are the constructs that force the matcher to backtrack in a way that can take
+        /// more than linear time; see Regexp.linear_time?.
+        /// </summary>
+        public static bool HasBackReference(MutableString/*!*/ pattern) {
+            int length = pattern.GetCharCount();
+            for (int i = 0; i < length - 1; i++) {
+                if (pattern.GetChar(i) != '\\') {
+                    continue;
+                }
+
+                char c = pattern.GetChar(i + 1);
+                if (c >= '1' && c <= '9' || c == 'k') {
+                    return true;
+                }
+
+                // an escaped backslash isn't the start of a back reference
+                i++;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Whether the pattern contains an escape that denotes a character outside ASCII: \xNN or
+        /// \uNNNN or \NNN (octal) with a value above 0x7f.
+        ///
+        /// The pattern text of such a regexp is all ASCII, so String#ascii_only? says yes, but the
+        /// regexp still only matches one encoding's bytes - MRI's rb_reg_preprocess sets
+        /// ARG_ENCODING_FIXED for exactly this case.  Regexp.union has to know, or a /n regexp
+        /// written with byte escapes would silently lose its encoding when unioned with a plain
+        /// ASCII string.
+        /// </summary>
+        public static bool HasNonAsciiEscape(MutableString/*!*/ pattern) {
+            bool isUnicode;
+            return HasNonAsciiEscape(pattern, out isUnicode);
+        }
+
+        /// <summary>
+        /// As above, and tells whether the escape that decided it was a \u one.  \u names a code
+        /// point, so it compiles to UTF-8; \xNN and \NNN name a byte, so they compile to BINARY
+        /// (and MRI only allows them at all under /n).
+        /// </summary>
+        public static bool HasNonAsciiEscape(MutableString/*!*/ pattern, out bool isUnicode) {
+            isUnicode = false;
+            int length = pattern.GetCharCount();
+            for (int i = 0; i < length - 1; i++) {
+                if (pattern.GetChar(i) != '\\') {
+                    continue;
+                }
+
+                int value = -1;
+                char c = pattern.GetChar(i + 1);
+                if (c == 'x') {
+                    // \xN and \xNN; a lone \x is a syntax error the matcher will report.
+                    value = HexValue(pattern, i + 2, 2);
+                } else if (c == 'u') {
+                    // \uNNNN, or \u{...} whose first digit already decides it.
+                    value = (i + 2 < length && pattern.GetChar(i + 2) == '{')
+                        ? HexValue(pattern, i + 3, 6) : HexValue(pattern, i + 2, 4);
+                } else if (c >= '0' && c <= '7') {
+                    value = 0;
+                    for (int j = i + 1; j < length && j < i + 4; j++) {
+                        char digit = pattern.GetChar(j);
+                        if (digit < '0' || digit > '7') {
+                            break;
+                        }
+                        value = value * 8 + (digit - '0');
+                    }
+                }
+
+                if (value > 0x7f) {
+                    isUnicode = c == 'u';
+                    return true;
+                }
+
+                // an escaped backslash isn't the start of an escape
+                i++;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Reads up to <paramref name="maxDigits"/> hex digits starting at <paramref name="start"/>,
+        /// or -1 when there isn't one.
+        /// </summary>
+        private static int HexValue(MutableString/*!*/ pattern, int start, int maxDigits) {
+            int length = pattern.GetCharCount();
+            int value = -1;
+            for (int i = start; i < length && i < start + maxDigits; i++) {
+                char c = pattern.GetChar(i);
+                int digit;
+                if (c >= '0' && c <= '9') {
+                    digit = c - '0';
+                } else if (c >= 'a' && c <= 'f') {
+                    digit = c - 'a' + 10;
+                } else if (c >= 'A' && c <= 'F') {
+                    digit = c - 'A' + 10;
+                } else {
+                    break;
+                }
+                value = (value < 0 ? 0 : value * 16) + digit;
+            }
+            return value;
+        }
+
+        #endregion
+
+        /// <summary>
+        /// Whether the regexp can only match strings of one particular encoding: an encoding
+        /// modifier other than /n was given, or the pattern itself isn't ASCII only.
+        /// </summary>
+        public bool IsFixedEncoding {
+            get {
+                if ((_options & RubyRegexOptions.FIXED) != 0) {
+                    // /n on its own says nothing - /abc/n matches any ASCII compatible string. It
+                    // pins the encoding only once the pattern really compiles to non-ASCII bytes,
+                    // which it does for a byte escape as much as for a literal non-ASCII character.
+                    return !_pattern.IsAscii() || HasNonAsciiEscape(_pattern);
+                }
+
+                return (_options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0
+                    || Encoding != RubyEncoding.Ascii;
+            }
+        }
+
+        // The flags that make two regexps behave differently. /n is not one of them: it only says
+        // the pattern's bytes are not to be reinterpreted, so // and //n are the same regexp, while
+        // /abc/u and /abc/n differ because only the former pins an encoding (see IsFixedEncoding).
+        private const RubyRegexOptions BehaviouralOptions =
+            RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline;
+
         public bool Equals(RubyRegex other) {
-            return ReferenceEquals(this, other) 
-                || other != null && _options.Equals(other._options) && _pattern.Equals(other._pattern);
+            return ReferenceEquals(this, other)
+                || other != null
+                && (_options & BehaviouralOptions) == (other._options & BehaviouralOptions)
+                && IsFixedEncoding == other.IsFixedEncoding
+                && Encoding == other.Encoding
+                && PatternEquals(_pattern, other._pattern);
+        }
+
+        private static bool PatternEquals(MutableString/*!*/ x, MutableString/*!*/ y) {
+            // /n keeps the pattern as binary where the same literal without it keeps the source
+            // encoding, so the two hold the same characters in differently tagged strings.
+            return x.Equals(y) || x.IsAscii() && y.IsAscii() && x.ToString() == y.ToString();
         }
 
         public override bool Equals(object other) {
@@ -265,7 +518,8 @@ namespace IronRuby.Builtins {
         }
 
         public override int GetHashCode() {
-            return _pattern.GetHashCode() ^ _options.GetHashCode();
+            int pattern = _pattern.IsAscii() ? _pattern.ToString().GetHashCode() : _pattern.GetHashCode();
+            return pattern ^ (int)(_options & BehaviouralOptions);
         }
 
         public static RegexOptions ToClrOptions(RubyRegexOptions options) {
@@ -460,6 +714,9 @@ namespace IronRuby.Builtins {
             AppendEscapeForwardSlash(result, _pattern);
             result.Append('/');
             AppendOptionString(result, true);
+            if ((_options & RubyRegexOptions.FIXED) != 0) {
+                result.Append('n');
+            }
             return result;
         }
 
@@ -506,7 +763,14 @@ namespace IronRuby.Builtins {
                     return i;
                 }
 
-                if (pattern.GetChar(i - 1) != '\\') {
+                // An odd number of backslashes escapes the slash; an even number (\\/) does not,
+                // so that pattern doesn't get a third backslash added to it.
+                int backslashes = 0;
+                for (int j = i - 1; j >= 0 && pattern.GetChar(j) == '\\'; j--) {
+                    backslashes++;
+                }
+
+                if (backslashes % 2 == 0) {
                     return i;
                 }
 
@@ -521,7 +785,7 @@ namespace IronRuby.Builtins {
             int i = SkipToUnescapedForwardSlash(pattern, patternLength, 0);
             while (i >= 0) {
                 Debug.Assert(i < patternLength);
-                Debug.Assert(pattern.GetChar(i) == '/' && (i == 0 || pattern.GetChar(i - 1) != '\\'));
+                Debug.Assert(pattern.GetChar(i) == '/');
 
                 result.Append(pattern, first, i - first);
                 result.Append('\\');

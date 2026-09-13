@@ -75,16 +75,9 @@ namespace IronRuby.Builtins {
                 
         [RubyConstructor]
         public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, int options, [DefaultProtocol, Optional]MutableString encoding) {
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
 
-            return new RubyRegex(pattern, MakeOptions(options, encoding));
-        }
-
-        [RubyConstructor]
-        public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]bool ignoreCase, [DefaultProtocol, Optional]MutableString encoding) {
-
-            return new RubyRegex(pattern, MakeOptions(ignoreCase, encoding));
+            return new RubyRegex(pattern, MakeOptions(self.Context, options, encoding));
         }
 
         [RubyMethod("compile", RubyMethodAttributes.PublicSingleton)]
@@ -92,8 +85,23 @@ namespace IronRuby.Builtins {
             return new RuleGenerator(RuleGenerators.InstanceConstructor);
         }
 
+        /// <summary>
+        /// A Regexp is initialized once. MRI rejects a second #initialize rather than quietly
+        /// rewriting a pattern other code may already have matched with.
+        /// </summary>
+        private static void RequireUninitialized(RubyContext/*!*/ context, RubyRegex/*!*/ self) {
+            if (context.IsObjectFrozen(self)) {
+                throw RubyExceptions.CreateObjectFrozenError(context, self);
+            }
+
+            if (self.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("already initialized regexp");
+            }
+        }
+
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyRegex/*!*/ Reinitialize(RubyRegex/*!*/ self, [NotNull]RubyRegex/*!*/ other) {
+        public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self, [NotNull]RubyRegex/*!*/ other) {
+            RequireUninitialized(context, self);
             self.Set(other.Pattern, other.Options);
             return self;
         }
@@ -103,7 +111,7 @@ namespace IronRuby.Builtins {
             [NotNull]RubyRegex/*!*/ regex, int options, [Optional]object encoding) {
 
             ReportParametersIgnoredWarning(context, encoding);
-            return Reinitialize(self, regex);
+            return Reinitialize(context, self, regex);
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
@@ -111,22 +119,15 @@ namespace IronRuby.Builtins {
             [NotNull]RubyRegex/*!*/ regex, [DefaultParameterValue(null)]object ignoreCase, [Optional]object encoding) {
 
             ReportParametersIgnoredWarning(context, encoding);
-            return Reinitialize(self, regex);
+            return Reinitialize(context, self, regex);
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyRegex/*!*/ Reinitialize(RubyRegex/*!*/ self, 
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, int options, [DefaultProtocol, Optional]MutableString encoding) {
+        public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
 
-            self.Set(pattern, MakeOptions(options, encoding));
-            return self;
-        }
-
-        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyRegex/*!*/ Reinitialize(RubyRegex/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]bool ignoreCase, [DefaultProtocol, Optional]MutableString encoding) {
-
-            self.Set(pattern, MakeOptions(ignoreCase, encoding));
+            RequireUninitialized(context, self);
+            self.Set(pattern, MakeOptions(context, options, encoding));
             return self;
         }
 
@@ -138,8 +139,88 @@ namespace IronRuby.Builtins {
             return (ignoreCase ? RubyRegexOptions.IgnoreCase : RubyRegexOptions.NONE) | StringToRegexEncoding(encoding);
         }
 
+        /// <summary>
+        /// Regexp.new's second argument. MRI takes an Integer bit vector, a String of i/m/x flags,
+        /// nil/false for none, and treats anything else as "true" after warning - notably it never
+        /// calls #to_int or #to_str on it.
+        /// </summary>
+        internal static RubyRegexOptions MakeOptions(RubyContext/*!*/ context, object options, MutableString encoding) {
+            RubyRegexOptions result;
+
+            if (options == null || options is bool && !(bool)options || options == Missing.Value) {
+                result = RubyRegexOptions.NONE;
+            } else if (options is bool) {
+                result = RubyRegexOptions.IgnoreCase;
+            } else if (options is int) {
+                result = PublicToInternalOptions((int)options);
+            } else {
+                var str = options as MutableString;
+                if (str != null) {
+                    result = ParseOptionString(str);
+                } else {
+                    context.ReportWarning("expected true or false as ignorecase: " + context.Inspect(options));
+                    result = RubyRegexOptions.IgnoreCase;
+                }
+            }
+
+            return result | StringToRegexEncoding(encoding);
+        }
+
+        private static RubyRegexOptions ParseOptionString(MutableString/*!*/ flags) {
+            var result = RubyRegexOptions.NONE;
+            int count = flags.GetCharCount();
+
+            for (int i = 0; i < count; i++) {
+                switch (flags.GetChar(i)) {
+                    case 'i': result |= RubyRegexOptions.IgnoreCase; break;
+                    case 'm': result |= RubyRegexOptions.Multiline; break;
+                    case 'x': result |= RubyRegexOptions.Extended; break;
+                    default:
+                        throw RubyExceptions.CreateArgumentError("unknown regexp option: {0}", flags.ToString());
+                }
+            }
+
+            return result;
+        }
+
         internal static RubyRegexOptions MakeOptions(int options, MutableString encoding) {
-            return (RubyRegexOptions)options | StringToRegexEncoding(encoding);
+            return PublicToInternalOptions(options) | StringToRegexEncoding(encoding);
+        }
+
+        /// <summary>
+        /// Maps the bit vector Ruby exposes (IGNORECASE|EXTENDED|MULTILINE|FIXEDENCODING|NOENCODING)
+        /// onto the internal flags. The two encoding bits collide with IronRuby's historical
+        /// EUC/SJIS/UTF8 numbering, so they have to be translated rather than cast.
+        /// </summary>
+        internal static RubyRegexOptions PublicToInternalOptions(int options) {
+            var result = (RubyRegexOptions)(options & (IGNORECASE | EXTENDED | MULTILINE));
+
+            if ((options & NOENCODING) != 0) {
+                result |= RubyRegexOptions.FIXED;
+            }
+
+            if ((options & FIXEDENCODING) != 0) {
+                result |= RubyRegexOptions.FixedEncoding;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// The inverse of <see cref="PublicToInternalOptions"/>: what Regexp#options returns.
+        /// </summary>
+        internal static int InternalToPublicOptions(RubyRegexOptions options) {
+            int result = (int)(options & (RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline));
+
+            if ((options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0) {
+                result |= FIXEDENCODING;
+            }
+
+            if ((options & RubyRegexOptions.FIXED) != 0) {
+                result |= NOENCODING;
+            }
+
+            return result;
         }
 
         internal static RubyRegexOptions StringToRegexEncoding(MutableString encoding) {
@@ -171,6 +252,12 @@ namespace IronRuby.Builtins {
 
         [RubyConstant]
         public const int MULTILINE = (int)RubyRegexOptions.Multiline;
+
+        [RubyConstant]
+        public const int FIXEDENCODING = 16;
+
+        [RubyConstant]
+        public const int NOENCODING = 32;
 
         /// <summary>
         /// Set on a regexp whose encoding is fixed by its source or by an /u, /e or /s modifier.
@@ -208,7 +295,10 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("options")]
         public static int GetOptions(RubyRegex/*!*/ self) {
-            return (int)self.Options;
+            if (!self.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("uninitialized Regexp");
+            }
+            return InternalToPublicOptions(self.Options);
         }
 
         [RubyMethod("encoding", Compatibility = RubyCompatibility.Ruby19)]
@@ -216,14 +306,88 @@ namespace IronRuby.Builtins {
             return self.Encoding;
         }
 
+        /// <summary>
+        /// True when the regexp can only match strings of one particular encoding, i.e. when an
+        /// encoding modifier other than /n was given or the pattern itself isn't ASCII only.
+        /// </summary>
+        [RubyMethod("fixed_encoding?")]
+        public static bool IsFixedEncoding(RubyRegex/*!*/ self) {
+            return self.IsFixedEncoding;
+        }
+
+        [RubyMethod("names")]
+        public static RubyArray/*!*/ GetNames(RubyRegex/*!*/ self) {
+            var result = new RubyArray();
+            var seen = new List<string>();
+            foreach (var name in self.GetGroupNames()) {
+                if (!seen.Contains(name)) {
+                    seen.Add(name);
+                    result.Add(MutableString.Create(name, self.Encoding));
+                }
+            }
+            return result;
+        }
+
+        [RubyMethod("named_captures")]
+        public static Hash/*!*/ GetNamedCaptures(RubyContext/*!*/ context, RubyRegex/*!*/ self) {
+            var result = new Hash(context);
+            var names = self.GetGroupNames();
+            for (int i = 0; i < names.Length; i++) {
+                var key = MutableString.Create(names[i], self.Encoding).Freeze();
+                RubyArray indices;
+                object existing;
+                if (result.TryGetValue(key, out existing)) {
+                    indices = (RubyArray)existing;
+                } else {
+                    indices = new RubyArray();
+                    result[key] = indices;
+                }
+                indices.Add(ScriptingRuntimeHelpers.Int32ToObject(i + 1));
+            }
+            return result;
+        }
+
         [RubyMethod("casefold?")]
         public static bool IsCaseInsensitive(RubyRegex/*!*/ self) {
             return (self.Options & RubyRegexOptions.IgnoreCase) != 0;
         }
 
-        [RubyMethod("match")]
-        public static MatchData Match(RubyScope/*!*/ scope, RubyRegex/*!*/ self, [DefaultProtocol]MutableString str) {
+        /// <summary>
+        /// Plain match used by the CLR callers (String#=~, String#index, ...): no block, no start
+        /// offset, and it still sets $~.
+        /// </summary>
+        internal static MatchData Match(RubyScope/*!*/ scope, RubyRegex/*!*/ self, MutableString str) {
             return RubyRegex.SetCurrentMatchData(scope, self, str);
+        }
+
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, RubyRegex/*!*/ self,
+            [DefaultProtocol]MutableString str, [DefaultProtocol, DefaultParameterValue(0)]int start) {
+
+            if (!self.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("uninitialized Regexp");
+            }
+
+            MatchData match;
+            if (str == null) {
+                match = null;
+            } else {
+                int length = str.GetCharCount();
+                if (start < 0) {
+                    start += length;
+                }
+                match = (start >= 0 && start <= length) ? self.Match(str, start, false) : null;
+            }
+
+            scope.GetInnerMostClosureScope().CurrentMatch = match;
+
+            if (match != null && block != null) {
+                object blockResult;
+                block.Yield(match, out blockResult);
+                return blockResult;
+            }
+
+            return match;
         }
 
         [RubyMethod("hash")]
@@ -261,7 +425,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source")]
         public static MutableString/*!*/ Source(RubyRegex/*!*/ self) {
-            return self.Pattern.Clone();
+            // The source carries the regexp's own encoding, not the encoding of whatever string it
+            // was built from: Regexp.new("abc") is US-ASCII even when "abc" was BINARY.
+            var result = self.Pattern.Clone();
+            result.ForceEncoding(self.Encoding);
+            return result;
         }
 
         [RubyMethod("escape", RubyMethodAttributes.PublicSingleton)]
@@ -270,70 +438,205 @@ namespace IronRuby.Builtins {
             return RubyRegex.Escape(str).TaintBy(str);
         }
 
+        [RubyMethod("try_convert", RubyMethodAttributes.PublicSingleton)]
+        public static RubyRegex TryConvert(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ toRegexpStorage,
+            RubyClass/*!*/ self, object obj) {
+
+            var regex = obj as RubyRegex;
+            if (regex != null) {
+                return regex;
+            }
+
+            if (!Protocols.RespondTo(respondToStorage, obj, "to_regexp")) {
+                return null;
+            }
+
+            var site = toRegexpStorage.GetCallSite("to_regexp");
+            object result = site.Target(site, obj);
+
+            regex = result as RubyRegex;
+            if (regex == null) {
+                var context = respondToStorage.Context;
+                throw RubyExceptions.CreateTypeError("can't convert {0} into Regexp ({0}#to_regexp gives {1})",
+                    context.GetClassDisplayName(obj), context.GetClassDisplayName(result)
+                );
+            }
+
+            return regex;
+        }
+
+        /// <summary>
+        /// Whether the pattern is free of the backtracking-only constructs (back references) that
+        /// can make matching take more than linear time. Everything else IronRuby compiles is
+        /// handled by a bounded automaton walk.
+        /// </summary>
+        [RubyMethod("linear_time?", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsLinearTime(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [Optional]object options) {
+            if (options != Missing.Value && options != null) {
+                context.ReportWarning("flags ignored");
+            }
+            return !RubyRegex.HasBackReference(regex.Pattern);
+        }
+
+        [RubyMethod("linear_time?", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsLinearTime(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern,
+            [Optional]object options) {
+
+            return !RubyRegex.HasBackReference(pattern);
+        }
+
         [RubyMethod("last_match", RubyMethodAttributes.PublicSingleton)]
         public static MatchData LastMatch(RubyScope/*!*/ scope, RubyClass/*!*/ self) {
             return scope.GetInnerMostClosureScope().CurrentMatch;
         }
 
         [RubyMethod("last_match", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ LastMatch(RubyScope/*!*/ scope, RubyClass/*!*/ self, [DefaultProtocol]int groupIndex) {
-            return scope.GetInnerMostClosureScope().CurrentMatch.GetGroupValue(groupIndex);
+        public static MutableString LastMatch(ConversionStorage<int>/*!*/ fixnumCast, RubyScope/*!*/ scope, RubyClass/*!*/ self,
+            object groupIndex) {
+
+            MatchData match = scope.GetInnerMostClosureScope().CurrentMatch;
+            if (match == null) {
+                // With no match at all MRI answers nil for any argument, without converting it.
+                return null;
+            }
+
+            string name = GroupName(groupIndex);
+            if (name != null) {
+                if (!match.HasNamedGroup(name)) {
+                    throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", name);
+                }
+                return match.GetNamedGroupValue(name);
+            }
+
+            return match.GetGroupValue(Protocols.CastToFixnum(fixnumCast, groupIndex));
+        }
+
+        private static string GroupName(object groupIndex) {
+            var symbol = groupIndex as RubySymbol;
+            if (symbol != null) {
+                return symbol.ToString();
+            }
+
+            var str = groupIndex as MutableString;
+            return str != null ? str.ToString() : null;
         }
 
         [RubyMethod("union", RubyMethodAttributes.PublicSingleton)]
-        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<IList>/*!*/ toAry, RubyClass/*!*/ self, [NotNull]object/*!*/ obj) {
+        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            UnaryOpStorage/*!*/ toRegexpStorage, ConversionStorage<IList>/*!*/ toAry, RubyClass/*!*/ self, [NotNull]object/*!*/ obj) {
+
             IList list = Protocols.TryCastToArray(toAry, obj);
             if (list != null) {
-                return Union(stringCast, list);
+                return Union(stringCast, respondToStorage, toRegexpStorage, list);
             }
 
-            // TODO: to_regexp
-            RubyRegex regex = obj as RubyRegex;
-            if (regex != null) {
-                return regex;
-            }
-
-            return new RubyRegex(RubyRegex.Escape(Protocols.CastToString(stringCast, obj)), RubyRegexOptions.NONE);
+            return Union(stringCast, respondToStorage, toRegexpStorage, new object[] { obj });
         }
 
         [RubyMethod("union", RubyMethodAttributes.PublicSingleton)]
-        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RubyClass/*!*/ self, [NotNull]IList/*!*/ objs) {
-            return Union(stringCast, objs);
+        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            UnaryOpStorage/*!*/ toRegexpStorage, RubyClass/*!*/ self, [NotNull]IList/*!*/ objs) {
+
+            return Union(stringCast, respondToStorage, toRegexpStorage, objs);
         }
 
         [RubyMethod("union", RubyMethodAttributes.PublicSingleton)]
-        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RubyClass/*!*/ self, [NotNullItems]params object/*!*/[]/*!*/ objs) {
-            return Union(stringCast, objs);
+        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            UnaryOpStorage/*!*/ toRegexpStorage, RubyClass/*!*/ self, [NotNullItems]params object/*!*/[]/*!*/ objs) {
+
+            return Union(stringCast, respondToStorage, toRegexpStorage, objs);
         }
 
-        private static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, ICollection/*!*/ objs) {
+        private static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            UnaryOpStorage/*!*/ toRegexpStorage, ICollection/*!*/ objs) {
+
             if (objs.Count == 0) {
                 return new RubyRegex(MutableString.CreateAscii("(?!)"), RubyRegexOptions.NONE);
             }
 
-            MutableString result = MutableString.CreateMutable(RubyEncoding.Binary);
-            int i = 0;
+            // Each part is either a Regexp, which contributes its (?opts:...) form, or a string
+            // whose metacharacters are escaped. The result's encoding is negotiated first, because
+            // a conflict there is an error rather than a regexp.
+            var parts = new List<object>(objs.Count);
             foreach (var obj in objs) {
+                var regex = obj as RubyRegex;
+                if (regex == null) {
+                    regex = TryConvert(respondToStorage, toRegexpStorage, null, obj);
+                }
+                parts.Add((object)regex ?? Protocols.CastToString(stringCast, obj));
+            }
+
+            if (parts.Count == 1) {
+                var single = parts[0] as RubyRegex;
+                if (single != null) {
+                    return single;
+                }
+            }
+
+            var encoding = NegotiateUnionEncoding(parts);
+
+            MutableString result = MutableString.CreateMutable(encoding);
+            for (int i = 0; i < parts.Count; i++) {
                 if (i > 0) {
                     result.Append('|');
                 }
 
-                // TODO: to_regexp
-                RubyRegex regex = obj as RubyRegex;
+                var regex = parts[i] as RubyRegex;
                 if (regex != null) {
-                    if (objs.Count == 1) {
-                        return regex;
-                    }
-
                     regex.AppendTo(result);
                 } else {
-                    result.Append(RubyRegex.Escape(Protocols.CastToString(stringCast, obj)));
+                    result.Append(RubyRegex.Escape((MutableString)parts[i]));
                 }
-
-                i++;
             }
 
             return new RubyRegex(result, RubyRegexOptions.NONE);
+        }
+
+        /// <summary>
+        /// MRI's rule for Regexp.union: only the parts that are not ASCII only get a say in the
+        /// result's encoding, they all have to agree, and an ASCII incompatible one cannot be
+        /// mixed with an ASCII only part at all.
+        /// </summary>
+        private static RubyEncoding/*!*/ NegotiateUnionEncoding(List<object>/*!*/ parts) {
+            RubyEncoding result = null;
+            bool hasAsciiOnlyPart = false;
+
+            foreach (var part in parts) {
+                RubyEncoding encoding;
+                var regex = part as RubyRegex;
+                if (regex != null) {
+                    encoding = IsAsciiOnly(regex.Pattern) && (regex.Options & RubyRegexOptions.FixedEncoding) == 0
+                        ? null : regex.Encoding;
+                } else {
+                    var str = (MutableString)part;
+                    encoding = IsAsciiOnly(str) ? null : str.Encoding;
+                }
+
+                if (encoding == null) {
+                    hasAsciiOnlyPart = true;
+                } else if (result == null) {
+                    result = encoding;
+                } else if (result != encoding) {
+                    throw RubyExceptions.CreateArgumentError("incompatible encodings: {0} and {1}",
+                        result.Name, encoding.Name);
+                }
+            }
+
+            if (result == null) {
+                return RubyEncoding.Ascii;
+            }
+
+            if (hasAsciiOnlyPart && !result.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", result.Name);
+            }
+
+            return result;
+        }
+
+        private static bool IsAsciiOnly(MutableString/*!*/ str) {
+            // An ASCII incompatible encoding is never "ASCII only" however plain its characters
+            // look: "a" in UTF-16LE is the two bytes 61 00.
+            return str.Encoding.IsAsciiIdentity && str.IsAscii() && !RubyRegex.HasNonAsciiEscape(str);
         }
     }
 }
