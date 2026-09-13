@@ -398,7 +398,18 @@ namespace IronRuby.Builtins {
                 } else {
                     while (true) {
                         if (consumed >= input.Length) {
-                            if (_incomplete.Count != 0 && (flags & PartialInputFlag) == 0) {
+                            if (_incomplete.Count != 0 && (flags & PartialInputFlag) == 0 &&
+                                (_flags & InvalidMaskFlag) == InvalidReplaceFlag) {
+                                // A character cut short by the end of the input is an invalid byte
+                                // sequence like any other, so :invalid => :replace covers it too
+                                // and the conversion finishes rather than stopping on it.
+                                ResetDecoder();
+                                if (!Emit(_replacementBytes, written, limit)) {
+                                    status = "destination_buffer_full";
+                                    break;
+                                }
+                                status = "finished";
+                            } else if (_incomplete.Count != 0 && (flags & PartialInputFlag) == 0) {
                                 var errorBytes = _incomplete.ToArray();
                                 ResetDecoder();
                                 RecordInvalidByteSequence(errorBytes, EmptyBytes, true);
@@ -430,8 +441,11 @@ namespace IronRuby.Builtins {
                             ResetDecoder();
 
                             if ((_flags & InvalidMaskFlag) == InvalidReplaceFlag) {
-                                _putback.Clear();
-                                _putback.AddRange(readAgain);
+                                // The read-again bytes were never part of the error, only proof
+                                // that it was one; they go back into the input rather than into
+                                // the putback buffer, because the conversion carries straight on
+                                // and they may well start a character of their own.
+                                consumed -= readAgain.Length;
                                 if (!Emit(_replacementBytes, written, limit)) {
                                     status = "destination_buffer_full";
                                     break;
