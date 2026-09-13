@@ -952,10 +952,24 @@ namespace IronRuby.Builtins {
 
         // This method is a binder intrinsic and the behavior of the binder needs to be adjusted appropriately if changed.
         [RubyMethod("respond_to?")]
-        public static bool RespondTo(RubyContext/*!*/ context, object self,
-            [DefaultProtocol, NotNull]string/*!*/ methodName, [Optional]bool includePrivate) {
+        public static bool RespondTo(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ respondToMissingStorage,
+            RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ methodName, [Optional]bool includePrivate) {
 
-            return context.ResolveMethod(self, methodName, includePrivate).Found;
+            if (context.ResolveMethod(self, methodName, includePrivate).Found) {
+                return true;
+            }
+
+            // MRI asks respond_to_missing? before giving up, so that method_missing-backed methods can
+            // advertise themselves. Note that the protocol-conversion binder has a fast path that bypasses
+            // Kernel#respond_to? altogether, so a conversion method advertised this way is still not seen there.
+            var site = respondToMissingStorage.GetCallSite("respond_to_missing?", 2);
+            return Protocols.IsTrue(site.Target(site, self, context.StringifyIdentifier(methodName),
+                ScriptingRuntimeHelpers.BooleanToObject(includePrivate)));
+        }
+
+        [RubyMethod("respond_to_missing?", RubyMethodAttributes.PrivateInstance)]
+        public static bool RespondToMissing(object self, object methodName, object includePrivate) {
+            return false;
         }
 
         #endregion
@@ -1354,7 +1368,15 @@ namespace IronRuby.Builtins {
             }
         }
 
-        //fork
+        // There is no fork on the CLR. MRI defines the method on platforms that cannot fork too and has it
+        // raise NotImplementedError; Process.respond_to?(:fork) is what portable code tests instead.
+        // The method has to exist: fixtures such as spec/core/kernel/fixtures/classes.rb do `public :fork'.
+        [RubyMethod("fork", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("fork", RubyMethodAttributes.PublicSingleton)]
+        public static object Fork(BlockParam block, object self) {
+            throw RubyExceptions.CreateNotImplementedError("fork() function is unimplemented on this machine");
+        }
+
 #endif
         #endregion
 

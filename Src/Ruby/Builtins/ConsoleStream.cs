@@ -88,11 +88,45 @@ namespace IronRuby.Builtins {
         }
 
         public override void Write(byte[]/*!*/ buffer, int offset, int count) {
-            if (_consoleType == ConsoleStreamType.Output) {
-                _io.OutputStream.Write(buffer, offset, count);
-            } else {
-                _io.ErrorStream.Write(buffer, offset, count);
+            bool output = _consoleType == ConsoleStreamType.Output;
+            Stream stream = output ? _io.OutputStream : _io.ErrorStream;
+            (GetUnbufferedStream(stream, output) ?? stream).Write(buffer, offset, count);
+        }
+
+        private static Stream _rawOutput, _rawError;
+
+        /// <summary>
+        /// On Unix .NET's own standard-output stream emulates SIG_IGN for SIGPIPE by swallowing EPIPE
+        /// outright, so `ruby -e 'loop { puts :ok }' | head -1` never notices that its reader is gone
+        /// and spins forever instead of dying the way CRuby does.  A FileStream over the very same
+        /// descriptor does report the error, so use one whenever the standard stream is still the one
+        /// .NET opened (an embedder that redirected SharedIO keeps its own stream) and is redirected.
+        /// </summary>
+        private static Stream GetUnbufferedStream(Stream/*!*/ stream, bool output) {
+            if (Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX) {
+                return null;
             }
+
+            var name = stream.GetType().FullName;
+            if (name == null || !name.EndsWith("ConsoleStream", StringComparison.Ordinal)) {
+                return null;
+            }
+
+            ref Stream cache = ref (output ? ref _rawOutput : ref _rawError);
+            if (cache == null) {
+                try {
+                    if (output ? !Console.IsOutputRedirected : !Console.IsErrorRedirected) {
+                        return null;
+                    }
+                    cache = new FileStream(
+                        new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)(output ? 1 : 2), false),
+                        FileAccess.Write, 1
+                    );
+                } catch (Exception) {
+                    return null;
+                }
+            }
+            return cache;
         }
     }
 }

@@ -343,7 +343,7 @@ puts M.module_eval { |*a|
   'result'
 }
 ", @"
-[]
+[M]
 M
 result
 ");

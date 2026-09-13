@@ -186,7 +186,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("instance_eval")]
         public static object InstanceEval([NotNull]BlockParam/*!*/ block, object self) {
-            return RubyUtils.EvaluateInSingleton(self, block, null);
+            // The receiver is passed to the block: `obj.instance_eval { |o| o }` is obj.
+            return RubyUtils.EvaluateInSingleton(self, block, new object[] { self });
         }
 
         [RubyMethod("instance_exec")]

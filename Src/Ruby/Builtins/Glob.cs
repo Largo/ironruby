@@ -24,21 +24,53 @@ using System.IO;
 
 namespace IronRuby.Builtins {
     public static class Glob {
+        /// <summary>
+        /// File::FNM_EXTGLOB. Brace expansion is unconditional in Dir.glob, so the flag only
+        /// makes a difference to File.fnmatch?.
+        /// </summary>
+        public static int FnmExtGlob { get { return Constants.FNM_EXTGLOB; } }
+
+        /// <summary>File::FNM_SYSCASE - see <see cref="Constants"/>.</summary>
+        public static int FnmSysCase { get { return Constants.FNM_SYSCASE; } }
+
         // Duplicated constants from File.Constants
-        private static class Constants {
+        internal static class Constants {
             public readonly static int FNM_CASEFOLD = 0x08;
             public readonly static int FNM_DOTMATCH = 0x04;
             public readonly static int FNM_NOESCAPE = 0x01;
             public readonly static int FNM_PATHNAME = 0x02;
-            [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Performance", "CA1823:AvoidUnusedPrivateFields")] // TODO
-            public readonly static int FNM_SYSCASE = 0x08;
+            public readonly static int FNM_EXTGLOB = 0x10;
+
+            /// <summary>
+            /// File::FNM_SYSCASE is FNM_CASEFOLD on a case insensitive file system and 0
+            /// elsewhere. It used to be hard-wired to FNM_CASEFOLD, which is right on Windows
+            /// but made every glob and fnmatch? on Unix case insensitive, so that Dir["*.txt"]
+            /// picked up FILE.TXT.
+            /// </summary>
+            public readonly static int FNM_SYSCASE =
+                System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows)
+                    ? 0x08 : 0;
         }
 
         private class CharClass {
             private readonly StringBuilder/*!*/ _chars = new StringBuilder();
+            private bool _negated;
+            private bool _empty = true;
 
+            /// <summary>
+            /// A leading '!' or '^' negates the set; Ruby accepts both spellings. Only '^' used
+            /// to work, and only by accident - it was emitted literally and the surrounding
+            /// "[" ... "]" turned it into a CLR negation - so "[!f]" matched an 'f' instead of
+            /// excluding it.
+            /// </summary>
             internal void Add(char c) {
-                if (c == ']' || c == '\\') {
+                if (_empty && (c == '!' || c == '^')) {
+                    _negated = true;
+                    _empty = false;
+                    return;
+                }
+                _empty = false;
+                if (c == ']' || c == '\\' || (c == '^' && _chars.Length == 0)) {
                     _chars.Append('\\');
                 }
                 _chars.Append(c);
@@ -48,10 +80,7 @@ namespace IronRuby.Builtins {
                 if (_chars.Length == 0) {
                     return null;
                 }
-                if (_chars.Length == 1 && _chars[0] == '^') {
-                    _chars.Insert(0, "\\");
-                }
-                _chars.Insert(0, "[");
+                _chars.Insert(0, _negated ? "[^" : "[");
                 _chars.Append(']');
                 return _chars.ToString();
             }
@@ -72,6 +101,13 @@ namespace IronRuby.Builtins {
 
             bool inEscape = false;
             CharClass charClass = null;
+
+            // Where in `result` the current run of '*' started and how long the run is, but
+            // only while that run begins a path segment. That is what lets "**/" be spotted
+            // and widened below.
+            int starRunStart = -1;
+            int starRun = 0;
+            bool atSegmentStart = true;
 
             foreach (char c in pattern) {
                 if (inEscape) {
@@ -104,8 +140,13 @@ namespace IronRuby.Builtins {
                 }
                 switch (c) {
                     case '*':
+                        if (starRun == 0) {
+                            starRunStart = atSegmentStart ? result.Length : -1;
+                        }
+                        starRun++;
                         result.Append(pathName ? "[^/]*" : ".*");
-                        break;
+                        atSegmentStart = false;
+                        continue;
 
                     case '?':
                         result.Append('.');
@@ -115,10 +156,28 @@ namespace IronRuby.Builtins {
                         charClass = new CharClass();
                         break;
 
+                    case '/':
+                        // "**/" is the one construct that crosses a separator under
+                        // FNM_PATHNAME, and it matches zero segments as well:
+                        // File.fnmatch?("a/**/b", "a/b", File::FNM_PATHNAME) is true.
+                        if (pathName && starRun == 2 && starRunStart >= 0) {
+                            result.Length = starRunStart;
+                            result.Append("(?:.*[/])?");
+                        } else {
+                            AppendExplicitRegexChar(result, c);
+                        }
+                        starRun = 0;
+                        starRunStart = -1;
+                        atSegmentStart = true;
+                        continue;
+
                     default:
                         AppendExplicitRegexChar(result, c);
                         break;
                 }
+                starRun = 0;
+                starRunStart = -1;
+                atSegmentStart = false;
             }
 
             return (charClass == null) ? result.ToString() : String.Empty;
@@ -127,6 +186,17 @@ namespace IronRuby.Builtins {
         public static bool FnMatch(string/*!*/ pattern, string/*!*/ path, int flags) {
             if (pattern.Length == 0) {
                 return path.Length == 0;
+            }
+
+            if ((flags & Constants.FNM_EXTGLOB) != 0 && pattern.IndexOf('{') >= 0) {
+                // FNM_EXTGLOB turns brace expansion on for fnmatch?; the pattern matches when
+                // any one alternative does.
+                foreach (string group in UngroupGlobs(pattern, (flags & Constants.FNM_NOESCAPE) != 0)) {
+                    if (FnMatch(group, path, flags & ~Constants.FNM_EXTGLOB)) {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             bool pathName = ((flags & Constants.FNM_PATHNAME) != 0);
@@ -262,8 +332,13 @@ namespace IronRuby.Builtins {
                     result.Add(new StringBuilder());
                     foreach (GlobNode node in _nodes) {
                         List<StringBuilder> tmp = new List<StringBuilder>();
-                        foreach (StringBuilder builder in node.Flatten()) {
-                            foreach (StringBuilder sb in result) {
+                        List<StringBuilder> alternatives = node.Flatten();
+                        // The accumulated prefixes are the *outer* loop so that the left-most
+                        // group varies slowest: "a{.js,.html}{.erb,.rjs}" expands in the order
+                        // a.js.erb, a.js.rjs, a.html.erb, a.html.rjs. Iterating the
+                        // alternatives outermost reversed that.
+                        foreach (StringBuilder sb in result) {
+                            foreach (StringBuilder builder in alternatives) {
                                 StringBuilder newsb = new StringBuilder(sb.ToString());
                                 newsb.Append(builder.ToString());
                                 tmp.Add(newsb);
@@ -324,9 +399,10 @@ namespace IronRuby.Builtins {
             bool inEscape = false;
             foreach (char c in pattern) {
                 if (inEscape) {
-                    if (c != ',' && c != '{' && c != '}') {
-                        ungrouper.AddChar('\\');
-                    }
+                    // The backslash is kept even before ',', '{' and '}' so that the escape
+                    // survives into PatternToRegex. Dropping it made Dir["special/\\{}/x"]
+                    // look like an unbalanced '}' at brace level 0, which matches nothing.
+                    ungrouper.AddChar('\\');
                     ungrouper.AddChar(c);
                     inEscape = false;
                     continue;
@@ -350,10 +426,13 @@ namespace IronRuby.Builtins {
 
                     case '}':
                         if (ungrouper.Level < 1) {
-                            // Unbalanced closing bracket matches nothing
-                            return ArrayUtils.EmptyStrings;
+                            // A '}' with no '{' open is an ordinary character. Treating it as
+                            // "matches nothing" broke Dir["special/\\{}/special"], where the
+                            // '{' is escaped and so never opened a level.
+                            ungrouper.AddChar(c);
+                        } else {
+                            ungrouper.FinishLevel();
                         }
-                        ungrouper.FinishLevel();
                         break;
 
                     default:
@@ -369,20 +448,32 @@ namespace IronRuby.Builtins {
             private readonly string/*!*/ _pattern;
             private readonly int _flags;
             private readonly bool _dirOnly;
+            private readonly bool _sort;
+            private readonly string _base;
             private readonly List<string>/*!*/ _result;
-            private bool _stripTwo;
+
+            /// <summary>
+            /// Number of leading characters to cut off every result. Matching always runs from
+            /// a concrete base directory - "." by default, or the `base:` option - and that
+            /// prefix plus its separator is not part of what Ruby returns.
+            /// </summary>
+            private int _stripPrefix;
 
             private bool NoEscapes {
                 get { return ((_flags & Constants.FNM_NOESCAPE) != 0); }
             }
 
-            internal GlobMatcher(PlatformAdaptationLayer/*!*/ pal, string/*!*/ pattern, int flags) {
+            internal GlobMatcher(PlatformAdaptationLayer/*!*/ pal, string/*!*/ pattern, int flags, string baseDirectory, bool sort) {
                 _pal = pal;
-                _pattern = (pattern == "**") ? "*" : pattern;
-                _flags = flags | Constants.FNM_CASEFOLD;
+                _pattern = pattern;
+                // Dir.glob ignores FNM_CASEFOLD - MRI honours it in File.fnmatch? only - and
+                // uses FNM_SYSCASE, which is 0 on a case sensitive file system.
+                _flags = (flags & ~Constants.FNM_CASEFOLD) | Constants.FNM_SYSCASE;
+                _base = baseDirectory;
+                _sort = sort;
                 _result = new List<string>();
                 _dirOnly = _pattern.LastCharacter() == '/';
-                _stripTwo = false;
+                _stripPrefix = 0;
             }
 
             internal int FindNextSeparator(int position, bool allowWildcard, out bool containsWildcard) {
@@ -415,23 +506,54 @@ namespace IronRuby.Builtins {
                 return _pattern.Length;
             }
 
-            private void TestPath(string path, int patternEnd, bool isLastPathSegment) {
+            private void TestPath(string path, int patternEnd, bool isLastPathSegment, bool atBase) {
                 if (!isLastPathSegment) {
-                    DoGlob(path, patternEnd, false);
+                    DoGlob(path, patternEnd, false, atBase);
                     return;
                 }
 
-                if (!NoEscapes) {
-                    path = Unescape(path, _stripTwo ? 2 : 0);
-                } else if (_stripTwo) {
-                    path = path.Substring(2);
+                // The existence check has to use the full path; only the *result* has the base
+                // prefix removed. Stripping first happened to work while the prefix was always
+                // "./", but with `base: "sub"` it asked the file system about "x" instead of
+                // "sub/x" and every match was discarded.
+                string full = NoEscapes ? path : Unescape(path, 0);
+                string match = (_stripPrefix > 0 && full.Length >= _stripPrefix) ? full.Substring(_stripPrefix) : full;
+                if (match.Length == 0) {
+                    // The base directory itself is not a match, so Dir["**/"] does not lead
+                    // with an empty string. The one exception is a directory-only pattern
+                    // under an explicit base:, where MRI does report it - as "/", the part of
+                    // the path left after the base is taken off:
+                    //   Dir.glob('**/', base: "deeply/nested") == ["/", "directory/", ...]
+                    if (_base == null || !_dirOnly) {
+                        return;
+                    }
+                    match = "/";
                 }
 
-                if (_pal.DirectoryExists(path)) {
-                    _result.Add(path);
-                } else if (!_dirOnly && _pal.FileExists(path)) {
-                    _result.Add(path);
+                if (_pal.DirectoryExists(full)) {
+                    _result.Add(match);
+                } else if (!_dirOnly && _pal.FileExists(full)) {
+                    _result.Add(match);
                 }
+            }
+
+            /// <summary>
+            /// PlatformAdaptationLayer has no notion of links, so this goes straight to
+            /// System.IO. A PAL over a virtual file system simply reports no symlinks, which
+            /// is the pre-existing behaviour.
+            /// </summary>
+            private static bool IsSymbolicLinkToDirectory(string/*!*/ path) {
+                try {
+                    var info = new DirectoryInfo(path);
+                    return info.Exists && info.LinkTarget != null;
+                } catch (Exception) {
+                    return false;
+                }
+            }
+
+            /// <summary>Joins a directory and a name without doubling the separator at the root.</summary>
+            private static string/*!*/ Combine(string/*!*/ directory, string/*!*/ name) {
+                return directory.EndsWith("/", StringComparison.Ordinal) ? directory + name : directory + "/" + name;
             }
 
             private static string/*!*/ Unescape(string/*!*/ path, int start) {
@@ -461,12 +583,12 @@ namespace IronRuby.Builtins {
                 }
 
                 int pos = 0;
-                string baseDirectory = ".";
+                string baseDirectory = null;
                 if (_pattern[0] == '/' || _pattern.IndexOf(':') >= 0) {
                     bool containsWildcard;
                     pos = FindNextSeparator(0, false, out containsWildcard);
                     if (pos == _pattern.Length) {
-                        TestPath(_pattern, pos, true);
+                        TestPath(_pattern, pos, true, true);
                         return _result;
                     }
                     if (pos > 0 || _pattern[0] == '/') {
@@ -474,13 +596,26 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                _stripTwo = (baseDirectory == ".");
+                if (baseDirectory == null) {
+                    // A relative pattern is matched against `base:` when one was given, and the
+                    // base is not part of the result - "*" with base "a/b" yields "c", not
+                    // "a/b/c". MRI ignores base: for an absolute pattern, which is why this
+                    // only runs when the pattern gave us no base of its own.
+                    baseDirectory = String.IsNullOrEmpty(_base) ? "." : _base;
+                    _stripPrefix = baseDirectory.Length + 1;
+                }
 
-                DoGlob(baseDirectory, pos, false);
+                DoGlob(baseDirectory, pos, false, true);
                 return _result;
             }
 
-            internal void DoGlob(string/*!*/ baseDirectory, int position, bool isPreviousDoubleStar) {
+            /// <param name="atBase">
+            /// True while baseDirectory is still the directory named by the pattern's literal
+            /// prefix, i.e. no wildcard has been stepped through yet. Only there does "."
+            /// count as an entry: Dir["a/**/*", File::FNM_DOTMATCH] yields "a/." but not
+            /// "a/b/.".
+            /// </param>
+            internal void DoGlob(string/*!*/ baseDirectory, int position, bool isPreviousDoubleStar, bool atBase) {
                 if (!_pal.DirectoryExists(baseDirectory)) {
                     return;
                 }
@@ -495,46 +630,94 @@ namespace IronRuby.Builtins {
                 }
 
                 if (!containsWildcard) {
-                    string path = baseDirectory + "/" + dirSegment;
-                    TestPath(path, patternEnd, isLastPathSegment);
+                    string path = Combine(baseDirectory, dirSegment);
+                    TestPath(path, patternEnd, isLastPathSegment, atBase);
                     return;
                 }
 
-                bool doubleStar = dirSegment.Equals("**");
+                // "**" only recurses when another path segment follows it. A trailing "**" is
+                // just "*": Dir["dir/**"] is ["dir/f1", "dir/f2", "dir/sub"], not the whole
+                // subtree. This used to be special-cased for the pattern "**" on its own.
+                bool doubleStar = dirSegment.Equals("**") && !isLastPathSegment;
                 if (doubleStar && !isPreviousDoubleStar) {
-                    DoGlob(baseDirectory, patternEnd, true);
+                    DoGlob(baseDirectory, patternEnd, true, atBase);
                 }
 
-                foreach (string file in _pal.GetFileSystemEntries(baseDirectory, "*")) {
+                IEnumerable<string> entries = _pal.GetFileSystemEntries(baseDirectory, "*");
+                if (_sort) {
+                    // MRI sorts the entries of each directory as it walks into it rather than
+                    // sorting the final list, so "{zz,aa}/*" keeps the brace alternatives in
+                    // pattern order while sorting within each of them.
+                    var sorted = new List<string>(entries);
+                    sorted.Sort(StringComparer.Ordinal);
+                    entries = sorted;
+                }
+
+                foreach (string file in entries) {
                     string objectName = Path.GetFileName(file);
                     if (FnMatch(dirSegment, objectName, _flags)) {
                         var canon = RubyUtils.CanonicalizePath(file);
-                        TestPath(canon, patternEnd, isLastPathSegment);
+                        if (doubleStar && IsSymbolicLinkToDirectory(canon)) {
+                            // A recursive "**" neither reports a symlinked directory nor walks
+                            // into it - otherwise Dir["**/"] both lists "special/ln/" and
+                            // reports everything below it a second time.
+                            continue;
+                        }
+                        TestPath(canon, patternEnd, isLastPathSegment, false);
                         if (doubleStar) {
-                            DoGlob(canon, position, true);
+                            DoGlob(canon, position, true, false);
                         }
                     }
                 }
-                if (isLastPathSegment && (_flags & Constants.FNM_DOTMATCH) != 0 || dirSegment[0] == '.') {
+                // "**" never matches "." as a component - that would re-glob the same
+                // directory one level down and report every match twice.
+                if (atBase && !doubleStar &&
+                    ((_flags & Constants.FNM_DOTMATCH) != 0 || (dirSegment[0] == '.' && !isPreviousDoubleStar))) {
+                    // "." is a legitimate glob result but ".." is not: Dir[".*"] is
+                    // [".", ".dotfile", ...] with no "..".
                     if (FnMatch(dirSegment, ".", _flags)) {
-                        string directory = baseDirectory + "/.";
-                        if (_dirOnly) {
+                        string directory = Combine(baseDirectory, ".");
+                        if (isLastPathSegment && _dirOnly) {
                             directory += '/';
                         }
-                        TestPath(directory, patternEnd, true);
-                    }
-                    if (FnMatch(dirSegment, "..", _flags)) {
-                        string directory = baseDirectory + "/..";
-                        if (_dirOnly) {
-                            directory += '/';
-                        }
-                        TestPath(directory, patternEnd, true);
+                        TestPath(directory, patternEnd, isLastPathSegment, false);
                     }
                 }
             }
         }
 
+        /// <summary>
+        /// Collapses runs of "**" path segments. "**" followed by another "**" walks the same
+        /// tree twice, which reported every match of "**/**/*.txt" four times over; MRI treats
+        /// consecutive "**" segments as one.
+        /// </summary>
+        private static string/*!*/ CollapseDoubleStars(string/*!*/ pattern) {
+            if (pattern.IndexOf("**", StringComparison.Ordinal) < 0) {
+                return pattern;
+            }
+
+            var segments = pattern.Split('/');
+            var kept = new List<string>(segments.Length);
+            for (int i = 0; i < segments.Length; i++) {
+                // A trailing "**" is a plain "*", not a recursive descent, so it never
+                // collapses into the "**" before it: Dir["**/**"] is the whole tree while
+                // Dir["**"] is one level.
+                bool recursive = segments[i] == "**" && i < segments.Length - 1;
+                if (recursive && kept.Count > 0 && kept[kept.Count - 1] == "**") {
+                    continue;
+                }
+                kept.Add(segments[i]);
+            }
+            return (kept.Count == segments.Length) ? pattern : String.Join("/", kept.ToArray());
+        }
+
         public static IEnumerable<string>/*!*/ GetMatches(PlatformAdaptationLayer/*!*/ pal, string/*!*/ pattern, int flags) {
+            return GetMatches(pal, pattern, flags, null, true);
+        }
+
+        public static IEnumerable<string>/*!*/ GetMatches(PlatformAdaptationLayer/*!*/ pal, string/*!*/ pattern, int flags,
+            string baseDirectory, bool sort) {
+
             if (pattern.Length == 0) {
                 yield break;
             }
@@ -545,17 +728,32 @@ namespace IronRuby.Builtins {
             }
 
             foreach (string group in groups) {
-                GlobMatcher matcher = new GlobMatcher(pal, group, flags);
-                foreach (string filename in matcher.DoGlob()) {                 
+                GlobMatcher matcher = new GlobMatcher(pal, CollapseDoubleStars(group), flags, baseDirectory, sort);
+                foreach (string filename in matcher.DoGlob()) {
                     yield return filename;
                 }
             }
         }
 
         public static IEnumerable<MutableString>/*!*/ GetMatches(RubyContext/*!*/ context, MutableString/*!*/ pattern, int flags) {
+            return GetMatches(context, pattern, flags, null, true);
+        }
+
+        public static IEnumerable<MutableString>/*!*/ GetMatches(RubyContext/*!*/ context, MutableString/*!*/ pattern, int flags,
+            MutableString baseDirectory, bool sort) {
+
             string strPattern = context.DecodePath(pattern);
-            foreach (string strFileName in GetMatches(context.Platform, strPattern, flags)) {
-                yield return context.EncodePath(strFileName).TaintBy(pattern);
+            string strBase = (baseDirectory != null) ? context.DecodePath(baseDirectory) : null;
+            foreach (string strFileName in GetMatches(context.Platform, strPattern, flags, strBase, sort)) {
+                // The results carry the pattern's encoding, not the path encoding:
+                // Dir.glob("file".encode("EUC-JP")).first.encoding is EUC-JP. A name that
+                // cannot be represented in it falls back to the path encoding rather than
+                // raising.
+                var name = MutableString.Create(strFileName, pattern.Encoding);
+                if (name.ContainsInvalidCharacters()) {
+                    name = context.EncodePath(strFileName);
+                }
+                yield return name.TaintBy(pattern);
             }
         }
     }

@@ -463,6 +463,13 @@ namespace IronRuby.Builtins {
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, int c) {
+            // #5855: appending a 0x80-0xff code point to a US-ASCII string widens the receiver
+            // to BINARY instead of failing. Integer#chr is stricter - 0x80.chr("US-ASCII") is a
+            // RangeError - so this case cannot go through ToChr.
+            if (c >= 0x80 && c <= 0xff && self.Encoding == RubyEncoding.Ascii) {
+                self.ForceEncoding(RubyEncoding.Binary);
+                return self.Append((byte)c);
+            }
             return self.Append(Integer.ToChr(self.Encoding, self.Encoding, c));
         }
 
