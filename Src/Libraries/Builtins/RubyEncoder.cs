@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -140,7 +140,7 @@ namespace IronRuby.Builtins {
         private static void WriteBer(Stream/*!*/ stream, IntegerValue value) {
             if (value.IsFixnum) {
                 if (value.Fixnum < 0) {
-                    throw RubyExceptions.CreateArgumentError("can't compress negative numbers");
+                    throw RubyExceptions.CreateArgumentError("pack(w): value out of range");
                 }
                 int f = value.Fixnum;
                 bool write = false;
@@ -155,7 +155,7 @@ namespace IronRuby.Builtins {
             } else {
                 BigInteger bignum = value.Bignum;
                 if (bignum.Sign < 0) {
-                    throw RubyExceptions.CreateArgumentError("can't compress negative numbers");
+                    throw RubyExceptions.CreateArgumentError("pack(w): value out of range");
                 }
 
                 // not very efficient but good enough:
@@ -640,7 +640,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            var result = MutableString.CreateBinary(outputSize);
+            // The pieces are always '0' and '1', and MRI hands them back as US-ASCII rather than
+            // in the receiver's encoding or ASCII-8BIT.
+            var result = MutableString.CreateMutable(outputSize, RubyEncoding.Ascii);
             if (outputSize == 0) {
                 return result;
             }
@@ -782,21 +784,10 @@ namespace IronRuby.Builtins {
             return Int64BitsToDouble(unchecked((long)ReadUInt64(data, ref index, swap)));
         }
 
-        /// <summary>
-        /// The float directives use rb_to_float, which - unlike Float() - refuses a String
-        /// outright, so ["13"].pack("D") is a TypeError rather than 13.0.
-        /// </summary>
-        private static double ToPackFloat(ConversionStorage<double>/*!*/ floatConversion, object value) {
-            if (value is MutableString) {
-                throw RubyExceptions.CreateTypeError("can't convert String into Float");
-            }
-            return Protocols.CastToFloat(floatConversion, value);
-        }
-
         private static void WriteDouble(ConversionStorage<double>/*!*/ floatConversion,
             Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
             for (int j = 0; j < count; j++) {
-                Write(stream, unchecked((ulong)DoubleToInt64Bits(ToPackFloat(floatConversion, GetPackArg(self, i + j)))), swap);
+                Write(stream, unchecked((ulong)DoubleToInt64Bits(Protocols.CastToFloat(floatConversion, GetPackArg(self, i + j)))), swap);
             }
         }
 
@@ -817,7 +808,7 @@ namespace IronRuby.Builtins {
         private static void WriteSingle(ConversionStorage<double>/*!*/ floatConversion,
             Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
             for (int j = 0; j < count; j++) {
-                byte[] bytes = BitConverter.GetBytes((float)ToPackFloat(floatConversion, GetPackArg(self, i + j)));
+                byte[] bytes = BitConverter.GetBytes((float)Protocols.CastToFloat(floatConversion, GetPackArg(self, i + j)));
                 if (swap) {
                     stream.WriteByte(bytes[3]);
                     stream.WriteByte(bytes[2]);
@@ -829,15 +820,9 @@ namespace IronRuby.Builtins {
             }
         }
 
-        /// <summary>
-        /// pack never range-checks an integer: it writes the low <paramref name="width"/>
-        /// bytes of the two's-complement representation, however large the value.  MRI
-        /// does the same, so [2**64 + 1].pack("Q") is "\x01\0\0\0\0\0\0\0".
-        /// </summary>
-        private static void WriteInteger(ConversionStorage<IntegerValue>/*!*/ integerConversion,
-            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, int width, bool swap) {
+        private static void WriteUInt64(ConversionStorage<IntegerValue>/*!*/ integerConversion,
+            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
 
-            byte[] buffer = new byte[width];
             for (int j = 0; j < count; j++) {
                 object value = GetPackArg(self, i + j);
                 if (value == null) {
@@ -845,31 +830,39 @@ namespace IronRuby.Builtins {
                 }
 
                 IntegerValue integer = Protocols.CastToInteger(integerConversion, value);
+                ulong u;
                 if (integer.IsFixnum) {
-                    long n = integer.Fixnum;
-                    for (int b = 0; b < width; b++) {
-                        buffer[b] = unchecked((byte)(n >> (8 * Math.Min(b, 7))));
+                    Write(stream, unchecked((ulong)integer.Fixnum), swap);
+                } else if (integer.Bignum.Abs().AsUInt64(out u)) {
+                    if (integer.Bignum.Sign < 0) {
+                        u = unchecked(~u + 1);
                     }
-                    // Sign-extend past 8 bytes.
-                    byte fill = (byte)(n < 0 ? 0xff : 0x00);
-                    for (int b = 8; b < width; b++) {
-                        buffer[b] = fill;
-                    }
+                    Write(stream, u, swap);
                 } else {
-                    byte[] bytes = integer.Bignum.ToByteArray();   // little-endian two's complement
-                    byte fill = (byte)(integer.Bignum.Sign < 0 ? 0xff : 0x00);
-                    for (int b = 0; b < width; b++) {
-                        buffer[b] = b < bytes.Length ? bytes[b] : fill;
-                    }
+                    throw RubyExceptions.CreateRangeError("bignum out of range (-2**64, 2**64)");
                 }
+            }
+        }
 
-                if (swap) {
-                    for (int b = width - 1; b >= 0; b--) {
-                        stream.WriteByte(buffer[b]);
-                    }
-                } else {
-                    stream.Write(buffer, 0, width);
+        private static void WriteUInt32(ConversionStorage<IntegerValue>/*!*/ integerConversion,
+            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
+            for (int j = 0; j < count; j++) {
+                long value = Protocols.CastToInt64Unchecked(integerConversion, GetPackArg(self, i + j));
+                if (value <= -0x100000000L || value >= 0x100000000L) {
+                    throw RubyExceptions.CreateRangeError("bignum out of range (-2**32, 2**32)");
                 }
+                Write(stream, unchecked((uint)value), swap);
+            }
+        }
+
+        private static void WriteUInt16(ConversionStorage<IntegerValue>/*!*/ integerConversion,
+            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
+            for (int j = 0; j < count; j++) {
+                long value = Protocols.CastToInt64Unchecked(integerConversion, GetPackArg(self, i + j));
+                if (value <= -0x100000000L || value >= 0x100000000L) {
+                    throw RubyExceptions.CreateRangeError("bignum out of range (-2**32, 2**32)");
+                }
+                Write(stream, unchecked((ushort)value), swap);
             }
         }
 
@@ -885,45 +878,56 @@ namespace IronRuby.Builtins {
             }
         }
 
-        /// <summary>
-        /// pack's nibble conversion, which never fails: MRI maps a letter to
-        /// (c - 'a' + 10) &amp; 15 and anything else to c &amp; 15, so "zz" packs as 0x33.
-        /// (unpack, which really does need hexadecimal, uses its own reader.)
-        /// </summary>
+        // hexa digits -> values
         private static int FromHexDigit(int c) {
-            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
-                return (c - 'a' + 10) & 15;
-            }
-            return c & 15;
+            c = Tokenizer.ToDigit(c);
+            if (c < 16) return c;
+
+            // MRI does some magic here:
+            throw new NotSupportedException("directives `H' and `h' expect hexadecimal digits in input string");
         }
 
         #endregion
 
         #region FormatDirective
 
+        /// <summary>
+        /// Byte order asked for by a directive's '&lt;' or '&gt;' modifier. Most directives have no
+        /// choice: 'n' and 'N' are always big endian, 'v' and 'V' always little, and the rest take
+        /// the machine's order unless a modifier overrides it.
+        /// </summary>
+        private enum Endianness {
+            Native = 0,
+            Little = 1,
+            Big = 2,
+        }
+
         private struct FormatDirective {
             internal readonly char Directive;
             internal readonly int? Count; // null means *
-
-            /// <summary>
-            /// null when the directive carried no '&lt;' or '&gt;' modifier and the
-            /// platform's own order applies.
-            /// </summary>
-            internal readonly bool? BigEndian;
+            internal readonly Endianness Order;
 
             internal FormatDirective(char directive, int? count)
-                : this(directive, count, null) {
+                : this(directive, count, Endianness.Native) {
             }
 
-            internal FormatDirective(char directive, int? count, bool? bigEndian) {
+            internal FormatDirective(char directive, int? count, Endianness order) {
                 Directive = directive;
                 Count = count;
-                BigEndian = bigEndian;
+                Order = order;
             }
 
-            /// <summary>True when the bytes have to come out reversed on this machine.</summary>
-            internal bool Swap {
-                get { return BigEndian.HasValue && BigEndian.Value == BitConverter.IsLittleEndian; }
+            /// <summary>
+            /// True when this directive's bytes are to be read or written most significant first.
+            /// </summary>
+            internal bool IsBigEndian {
+                get {
+                    switch (Order) {
+                        case Endianness.Little: return false;
+                        case Endianness.Big: return true;
+                        default: return !BitConverter.IsLittleEndian;
+                    }
+                }
             }
 
             /// <summary>
@@ -936,20 +940,23 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            /// <summary>The types MRI lets '!', '_', '&lt;' and '&gt;' follow.</summary>
-            private const string NativeTypes = "sSiIlLqQjJ";
+            /// <summary>
+            /// The types '&lt;', '&gt;', '!' and '_' may follow. MRI spells the set out in the error
+            /// message, so the two have to stay in step.
+            /// </summary>
+            private const string ModifiableTypes = "sSiIlLqQjJ";
 
-            private static void RequireNativeType(char c, char modifier) {
-                if (NativeTypes.IndexOf(c) < 0) {
-                    throw RubyExceptions.CreateArgumentError("'{0}' allowed only after types {1}", modifier, NativeTypes);
+            private static void RequireModifiable(char directive, char modifier) {
+                if (ModifiableTypes.IndexOf(directive) < 0) {
+                    throw RubyExceptions.CreateArgumentError("'{0}' allowed only after types {1}", modifier, ModifiableTypes);
                 }
             }
 
             /// <summary>
-            /// Collapses a type onto the canonical directive of the same width: 'l' is
-            /// four bytes on LLP64 and eight on LP64, 'j'/'J' always follow the pointer.
+            /// Resolves a type whose width is the platform's rather than fixed: 'l'/'L' under '!'
+            /// or '_', and 'j'/'J', which are always pointer sized.
             /// </summary>
-            private static char MapWidth(char c) {
+            private static char MapNative(char c) {
                 switch (c) {
                     case 'l': return NativeLongSize == 4 ? 'i' : 'q';
                     case 'L': return NativeLongSize == 4 ? 'I' : 'Q';
@@ -959,14 +966,65 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            /// <summary>Every directive MRI understands; anything else is an error.</summary>
-            private const string KnownDirectives = "CcSsLlQqJjIiNnVvUwDdFfEeGgAaZBbHhuMmPp@Xx";
+            /// <summary>
+            /// MRI renders the offending format back into the message with escapes, so
+            /// "C\0C".unpack reports unknown unpack directive '\x00' in 'C\0C'.
+            /// </summary>
+            private static string/*!*/ Escape(string/*!*/ format) {
+                var result = new StringBuilder(format.Length);
+                foreach (char c in format) {
+                    switch (c) {
+                        case '\0': result.Append("\\0"); break;
+                        case '\n': result.Append("\\n"); break;
+                        case '\r': result.Append("\\r"); break;
+                        case '\t': result.Append("\\t"); break;
+                        case '\\': result.Append("\\\\"); break;
+                        default:
+                            if (c < ' ' || c > '~') {
+                                result.Append("\\x").Append(((int)c).ToString("X2"));
+                            } else {
+                                result.Append(c);
+                            }
+                            break;
+                    }
+                }
+                return result.ToString();
+            }
 
-            /// <param name="forPack">
-            /// '@' is the one directive whose default count differs between the two:
-            /// pack seeks to 1, unpack stays at 0.
-            /// </param>
-            internal static IEnumerable<FormatDirective>/*!*/ Enumerate(string/*!*/ format, bool forPack) {
+            private static string/*!*/ DescribeDirective(char c) {
+                if (c < ' ' || c > '~') {
+                    return "\\x" + ((int)c).ToString("X2");
+                }
+                return c.ToString();
+            }
+
+            internal static Exception/*!*/ UnknownDirective(char c, string/*!*/ format, bool packing) {
+                return RubyExceptions.CreateArgumentError("unknown {0} directive '{1}' in '{2}'",
+                    packing ? "pack" : "unpack", DescribeDirective(c), Escape(format)
+                );
+            }
+
+            /// <summary>Characters a format may contain freely; MRI skips anything ISSPACE.</summary>
+            private static bool IsFormatSpace(char c) {
+                return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
+            }
+
+            /// <summary>
+            /// The directive letters MRI knows. Both pack and unpack accept the same set; 'k',
+            /// 'o', 'r', 't', 'y' and their upper case forms are not directives, and a format
+            /// containing one is an error rather than something to skip over.
+            /// </summary>
+            private const string KnownDirectives = "aAZbBhHcCsSiIlLqQjJnNvVUwmMuPpDdFfEeGgxX@";
+
+            private static bool IsKnownDirective(char c) {
+                return KnownDirectives.IndexOf(c) >= 0;
+            }
+
+            internal static IEnumerable<FormatDirective>/*!*/ Enumerate(string/*!*/ format) {
+                return Enumerate(format, false);
+            }
+
+            internal static IEnumerable<FormatDirective>/*!*/ Enumerate(string/*!*/ format, bool packing) {
                 for (int i = 0; i < format.Length; i++) {
                     char c = format[i];
                     if (c == '%') {
@@ -978,48 +1036,50 @@ namespace IronRuby.Builtins {
                         continue;
                     }
 
-                    // Only whitespace is allowed between directives. Anything else - a stray
-                    // count, a NUL, an unimplemented letter - is an error, where this used to
-                    // skip it and quietly produce a short result.
-                    if (Char.IsWhiteSpace(c)) {
+                    if (IsFormatSpace(c)) {
                         continue;
                     }
 
-                    if (KnownDirectives.IndexOf(c) < 0) {
-                        throw RubyExceptions.CreateArgumentError("unknown pack directive '{0}' in '{1}'",
-                            UnprintableName(c), format);
+                    // Anything else that is not a directive is an error. Silently skipping it -
+                    // which is what this used to do - turned "abc".unpack("1") into [] instead of
+                    // the ArgumentError ruby/spec asks for, and hid every typo in a format.
+                    if (!IsKnownDirective(c)) {
+                        throw UnknownDirective(c, format, packing);
                     }
 
                     i++;
-                    int? count = 1;
-                    bool? bigEndian = null;
 
-                    // '!' and '_' mean "the native size of this C type"; '<' and '>' force an
-                    // endianness. MRI accepts them in any order and only after sSiIlLqQjJ.
+                    // Modifiers, in any order and any number: '<'/'>' choose a byte order and
+                    // '!'/'_' ask for the platform's width of the C type. MRI accepts "s!<" and
+                    // "s<!" alike but rejects a second byte order modifier, even a repeat.
+                    var order = Endianness.Native;
                     bool native = false;
                     while (i < format.Length) {
                         char modifier = format[i];
-                        if (modifier == '_' || modifier == '!') {
-                            RequireNativeType(c, modifier);
-                            native = true;
-                        } else if (modifier == '<' || modifier == '>') {
-                            RequireNativeType(c, modifier);
-                            if (bigEndian.HasValue) {
+                        if (modifier == '<' || modifier == '>') {
+                            RequireModifiable(c, modifier);
+                            if (order != Endianness.Native) {
                                 throw RubyExceptions.CreateRangeError("Can't use both '<' and '>'");
                             }
-                            bigEndian = modifier == '>';
+                            order = modifier == '<' ? Endianness.Little : Endianness.Big;
+                        } else if (modifier == '!' || modifier == '_') {
+                            // MRI treats ! and _ identically: both mean "the native size of this C
+                            // type". Dropping ! made pack('l!') four bytes wide on LP64, which is
+                            // how mspec's PlatformGuard::C_LONG_SIZE came out as 32 on Linux.
+                            RequireModifiable(c, modifier);
+                            native = true;
                         } else {
                             break;
                         }
                         i++;
                     }
 
-                    // 'j'/'J' are pointer-sized whether or not '!' was written; the rest only
-                    // change width when it was.
+                    // 'j' and 'J' are pointer sized whether or not a modifier says so.
                     if (native || c == 'j' || c == 'J') {
-                        c = MapWidth(c);
+                        c = MapNative(c);
                     }
 
+                    int? count = 1;
                     char c2 = (i < format.Length) ? format[i] : '\0';
 
                     if (Tokenizer.IsDecimalDigit(c2)) {
@@ -1042,20 +1102,13 @@ namespace IronRuby.Builtins {
                         count = null;
                     } else {
                         i--;
-                        if (c == '@' && !forPack) {
+                        if (c == '@') {
                             count = 0;
                         }
                     }
 
-                    yield return new FormatDirective(c, count, bigEndian);
+                    yield return new FormatDirective(c, count, order);
                 }
-            }
-
-            private static string/*!*/ UnprintableName(char c) {
-                if (c >= 0x20 && c < 0x7f) {
-                    return c.ToString();
-                }
-                return "\\x" + ((int)c).ToString("X2");
             }
         }
 
@@ -1068,46 +1121,20 @@ namespace IronRuby.Builtins {
             ConversionStorage<double>/*!*/ floatConversion,
             ConversionStorage<MutableString>/*!*/ stringCast,
             ConversionStorage<MutableString>/*!*/ tosConversion,
-            RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format, MutableString buffer) {
+            RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format) {
 
-            // With buffer: the result is appended to the string given, which is what comes
-            // back, keeping its own encoding.  '@' then addresses the buffer from its start.
-            MutableString basis = buffer ?? MutableString.CreateBinary();
-            using (MutableStringStream stream = new MutableStringStream(basis)) {
-                stream.Position = basis.GetByteCount();
+            // TODO: encodings
+
+            using (MutableStringStream stream = new MutableStringStream()) {
                 int i = 0;
-
-                // MRI decides the result encoding from the directives it used: US-ASCII
-                // until something can emit an arbitrary byte, UTF-8 if only 'U' did.
-                // 1 = still ASCII, 2 = UTF-8, 0 = binary.
-                int encodingInfo = 1;
-
                 foreach (FormatDirective directive in FormatDirective.Enumerate(format.ConvertToString(), true)) {
                     int count = directive.Count ?? self.Count - i;
-
-                    switch (directive.Directive) {
-                        case 'U':
-                            if (encodingInfo == 1) {
-                                encodingInfo = 2;
-                            }
-                            break;
-
-                        case 'm':
-                        case 'M':
-                        case 'u':
-                            break;
-
-                        default:
-                            encodingInfo = 0;
-                            break;
-                    }
 
                     MutableString str;
                     switch (directive.Directive) {
                         case '@':
                             count = 0;
-                            // "@*" means "seek to 0", "@" with no count means "seek to 1".
-                            stream.SetLength(stream.Position = directive.Count ?? 0);
+                            stream.SetLength(stream.Position = directive.Count.HasValue ? directive.Count.Value : 1);
                             break;
 
                         case 'A':
@@ -1126,6 +1153,13 @@ namespace IronRuby.Builtins {
                                 directive.Directive == 'b',
                                 str = GetPackArg(self, i) != null ? ToMutableString(stringCast, stream, GetPackArg(self, i)) : MutableString.FrozenEmpty
                             );
+                            break;
+
+                        case 'c':
+                        case 'C':
+                            for (int j = 0; j < count; j++) {
+                                stream.WriteByte(unchecked((byte)Protocols.CastToUInt32Unchecked(integerConversion, GetPackArg(self, i + j))));
+                            }
                             break;
 
                         case 'd': // 8-byte native-endian
@@ -1165,41 +1199,36 @@ namespace IronRuby.Builtins {
                             break;
 
                         case 'Q':
-                        case 'q': // (un)signed 8-byte, native order unless '<'/'>' said otherwise
-                            WriteInteger(integerConversion, stream, self, i, count, 8, directive.Swap);
+                        case 'q': // (un)signed 8-byte, byte order from the directive
+                            WriteUInt64(integerConversion, stream, self, i, count, directive.IsBigEndian);
                             break;
 
                         case 'l':
                         case 'i':
                         case 'L':
-                        case 'I': // (un)signed 4-byte
-                            WriteInteger(integerConversion, stream, self, i, count, 4, directive.Swap);
+                        case 'I': // (un)signed 4-byte, byte order from the directive
+                            WriteUInt32(integerConversion, stream, self, i, count, directive.IsBigEndian);
                             break;
 
                         case 'N': // (un)signed 4-byte big-endian
-                            WriteInteger(integerConversion, stream, self, i, count, 4, BitConverter.IsLittleEndian);
+                            WriteUInt32(integerConversion, stream, self, i, count, BitConverter.IsLittleEndian);
                             break;
 
                         case 'n': // (un)signed 2-byte big-endian
-                            WriteInteger(integerConversion, stream, self, i, count, 2, BitConverter.IsLittleEndian);
+                            WriteUInt16(integerConversion, stream, self, i, count, BitConverter.IsLittleEndian);
                             break;
 
                         case 'V': // (un)signed 4-byte little-endian
-                            WriteInteger(integerConversion, stream, self, i, count, 4, !BitConverter.IsLittleEndian);
+                            WriteUInt32(integerConversion, stream, self, i, count, !BitConverter.IsLittleEndian);
                             break;
 
                         case 'v': // (un)signed 2-byte little-endian
-                            WriteInteger(integerConversion, stream, self, i, count, 2, !BitConverter.IsLittleEndian);
+                            WriteUInt16(integerConversion, stream, self, i, count, !BitConverter.IsLittleEndian);
                             break;
 
-                        case 's': // (un)signed 2-byte
+                        case 's': // (un)signed 2-byte, byte order from the directive
                         case 'S':
-                            WriteInteger(integerConversion, stream, self, i, count, 2, directive.Swap);
-                            break;
-
-                        case 'c': // (un)signed 1-byte
-                        case 'C':
-                            WriteInteger(integerConversion, stream, self, i, count, 1, false);
+                            WriteUInt16(integerConversion, stream, self, i, count, directive.IsBigEndian);
                             break;
 
                         case 'm': // Base64
@@ -1244,19 +1273,7 @@ namespace IronRuby.Builtins {
 
                         case 'U': // UTF8 code point
                             for (int j = 0; j < count; j++) {
-                                IntegerValue codePoint = Protocols.CastToInteger(integerConversion, GetPackArg(self, i + j));
-                                long scalar;
-                                if (codePoint.IsFixnum) {
-                                    scalar = codePoint.Fixnum;
-                                } else if (!Int64.TryParse(codePoint.Bignum.ToString(), out scalar)) {
-                                    // MRI converts to long first, so a value that does not even fit
-                                    // there is reported as a conversion failure, not a bad code point.
-                                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
-                                }
-                                if (scalar < 0 || scalar > 0x7fffffff) {
-                                    throw RubyExceptions.CreateRangeError("pack(U): value out of range");
-                                }
-                                RubyEncoder.WriteUtf8CodePoint(stream, codePoint.Fixnum);
+                                RubyEncoder.WriteUtf8CodePoint(stream, Protocols.CastToInteger(integerConversion, GetPackArg(self, i + j)).ToInt32());
                             }
                             break;
 
@@ -1285,15 +1302,7 @@ namespace IronRuby.Builtins {
                     i += count;
                 }
                 stream.SetLength(stream.Position);
-                MutableString result = stream.String.TaintBy(format);
-                if (buffer == null) {
-                    if (encodingInfo == 1) {
-                        result.ForceEncoding(RubyEncoding.Ascii);
-                    } else if (encodingInfo == 2) {
-                        result.ForceEncoding(RubyEncoding.UTF8);
-                    }
-                }
-                return result;
+                return stream.String.TaintBy(format);
             }
         }
 
@@ -1342,12 +1351,16 @@ namespace IronRuby.Builtins {
         #region Unpack
 
         public static RubyArray/*!*/ Unpack(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format) {
+            return Unpack(self, format, 0);
+        }
+
+        public static RubyArray/*!*/ Unpack(MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset) {
             RubyArray result = new RubyArray(1 + self.Length / 2);
 
             // TODO: encodings
-            int position = 0;
+            int position = offset;
             int length = self.GetByteCount();
-            foreach (FormatDirective directive in FormatDirective.Enumerate(format.ToString(), false)) {
+            foreach (FormatDirective directive in FormatDirective.Enumerate(format.ToString())) {
                 int count, maxCount;
                 int nilCount = 0;
                 switch (directive.Directive) {
@@ -1432,18 +1445,18 @@ namespace IronRuby.Builtins {
                         break;
 
                     case 'i':
-                    case 'l': // signed 4-byte native-endian
+                    case 'l': // signed 4-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(int), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(unchecked((int)ReadUInt32(self, ref position, false)));
+                            result.Add(unchecked((int)ReadUInt32(self, ref position, directive.IsBigEndian)));
                         }
                         break;
 
                     case 'I':
-                    case 'L': // unsigned 4-byte native-endian
+                    case 'L': // unsigned 4-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(uint), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(Protocols.Normalize(ReadUInt32(self, ref position, false)));
+                            result.Add(Protocols.Normalize(ReadUInt32(self, ref position, directive.IsBigEndian)));
                         }
                         break;
 
@@ -1475,18 +1488,17 @@ namespace IronRuby.Builtins {
                         }
                         break;
 
-                    case 'q': // signed 8-byte native-endian
+                    case 'q': // signed 8-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(long), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(Protocols.Normalize(unchecked((long)ReadUInt64(self, ref position, false))));
+                            result.Add(Protocols.Normalize(unchecked((long)ReadUInt64(self, ref position, directive.IsBigEndian))));
                         }
                         break;
 
-                    case 'Q': // unsigned 8-byte native-endian
+                    case 'Q': // unsigned 8-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(ulong), out nilCount);
-                        nilCount = 0;
                         for (int j = 0; j < count; j++) {
-                            result.Add(Protocols.Normalize(ReadUInt64(self, ref position, false)));
+                            result.Add(Protocols.Normalize(ReadUInt64(self, ref position, directive.IsBigEndian)));
                         }
                         break;
 
@@ -1498,17 +1510,17 @@ namespace IronRuby.Builtins {
                         result.Add(ReadQuotedPrintable(self, ref position));
                         break;
 
-                    case 's':
+                    case 's': // signed 2-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(short), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(ScriptingRuntimeHelpers.Int32ToObject(unchecked((short)ReadUInt16(self, ref position, !BitConverter.IsLittleEndian))));
+                            result.Add(ScriptingRuntimeHelpers.Int32ToObject(unchecked((short)ReadUInt16(self, ref position, directive.IsBigEndian))));
                         }
                         break;
 
-                    case 'S':
+                    case 'S': // unsigned 2-byte, byte order from the directive
                         count = CalculateCounts(length - position, directive.Count, sizeof(ushort), out nilCount);
                         for (int j = 0; j < count; j++) {
-                            result.Add(ScriptingRuntimeHelpers.Int32ToObject(ReadUInt16(self, ref position, !BitConverter.IsLittleEndian)));
+                            result.Add(ScriptingRuntimeHelpers.Int32ToObject(ReadUInt16(self, ref position, directive.IsBigEndian)));
                         }
                         break;
 
@@ -1550,7 +1562,7 @@ namespace IronRuby.Builtins {
                     case 'x':
                         int newPos = directive.Count.HasValue ? (int)position + directive.Count.Value : (int)length;
                         if (newPos > length) {
-                            throw RubyExceptions.CreateArgumentError("X outside of string");
+                            throw RubyExceptions.CreateArgumentError("x outside of string");
                         }
                         position = newPos;
                         break;
@@ -1584,7 +1596,8 @@ namespace IronRuby.Builtins {
 
         private static MutableString/*!*/ ToHex(MutableString/*!*/ data, ref int index, int nibbleCount, bool swap) {
             int wholeChars = nibbleCount / 2;
-            MutableString hex = MutableString.CreateMutable(nibbleCount, RubyEncoding.Binary);
+            // Hex digits only, and MRI hands them back as US-ASCII.
+            MutableString hex = MutableString.CreateMutable(nibbleCount, RubyEncoding.Ascii);
 
             for (int i = 0; i < wholeChars; i++) {
                 byte b = data.GetByte(index++);

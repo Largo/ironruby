@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -1421,6 +1421,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("encode")]
         public static MutableString/*!*/ Encode(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ fallbackStorage,
             ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
             ConversionStorage<MutableString>/*!*/ toStr,
             MutableString/*!*/ self,
@@ -1429,11 +1430,12 @@ namespace IronRuby.Builtins {
             [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // TODO: optimize
-            return EncodeInPlace(toHash, toStr, self.Clone(), toEncoding, fromEncoding, options);
+            return EncodeInPlace(fallbackStorage, toHash, toStr, self.Clone(), toEncoding, fromEncoding, options);
         }
 
         [RubyMethod("encode!")]
         public static MutableString/*!*/ EncodeInPlace(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ fallbackStorage,
             ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
             ConversionStorage<MutableString>/*!*/ toStr,
             MutableString/*!*/ self,
@@ -1483,18 +1485,366 @@ namespace IronRuby.Builtins {
 
             self.RequireNotFrozen();
 
-            // options:
+            var settings = TranscodeSettings.Parse(toStr.Context, toHash, options, to);
 
+            if (from == to && !settings.ReplaceInvalid && settings.XmlMode == 0 && settings.Newline == 0) {
+                // Nothing to do, and in particular nothing to validate: MRI does not check the
+                // bytes when the source and target encodings are the same.
+                self.ForceEncoding(to);
+                return self;
+            }
 
-            // TODO: options
-            // :invalid => :replace
-            // :undef => :replace, :replace => ""
-            // :xml => :text
-            // :xml => :attr
+            var transcoded = Transcode(fallbackStorage, toStr, self, from, to, settings);
 
-            self.Transcode(from, to);
+            if (settings.XmlMode == 'a') {
+                // xml: :attr produces a quoted attribute value, quotes included.
+                var quoted = MutableString.CreateMutable(to);
+                quoted.Append('"').Append(transcoded).Append('"');
+                transcoded = quoted;
+            }
+
+            // The content is replaced wholesale rather than through Replace: the receiver still
+            // carries the source encoding at this point, and Replace would refuse to splice text
+            // in the target encoding into it.
+            self.Clear();
+            self.ForceEncoding(to);
+            self.Append(transcoded);
             return self;
         }
+
+        #region Transcoding with options
+
+        /// <summary>
+        /// The options #encode accepts, resolved once so the conversion loop does not have to
+        /// re-read the hash per character.
+        /// </summary>
+        private struct TranscodeSettings {
+            internal bool ReplaceInvalid;
+            internal bool ReplaceUndefined;
+            internal MutableString Replacement;
+            internal object Fallback;
+            internal int XmlMode;           // 0 none, 't' text, 'a' attr
+            internal int Newline;           // 0 none, 'u' universal, 'r' cr, 'c' crlf
+
+            internal bool IsPlain {
+                get {
+                    return !ReplaceInvalid && !ReplaceUndefined && Replacement == null
+                        && Fallback == null && XmlMode == 0 && Newline == 0;
+                }
+            }
+
+            /// <summary>
+            /// MRI's default replacement is U+FFFD when the target can hold it and "?" otherwise.
+            /// </summary>
+            internal MutableString/*!*/ GetReplacement(RubyEncoding/*!*/ to) {
+                if (Replacement != null) {
+                    return Replacement;
+                }
+                return to.IsUnicodeEncoding
+                    ? MutableString.Create("�", to)
+                    : MutableString.CreateAscii("?");
+            }
+
+            internal static TranscodeSettings Parse(RubyContext/*!*/ context,
+                ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+                IDictionary<object, object> options, RubyEncoding/*!*/ to) {
+
+                var result = new TranscodeSettings();
+                if (options == null) {
+                    return result;
+                }
+
+                foreach (var entry in options) {
+                    var key = entry.Key as RubySymbol;
+                    if (key == null) {
+                        continue;
+                    }
+
+                    switch (key.ToString()) {
+                        case "invalid":
+                            result.ReplaceInvalid = CheckReplaceOption(entry.Value, "invalid");
+                            break;
+
+                        case "undef":
+                            result.ReplaceUndefined = CheckReplaceOption(entry.Value, "undefined");
+                            break;
+
+                        case "replace":
+                            result.Replacement = entry.Value as MutableString;
+                            break;
+
+                        case "fallback":
+                            result.Fallback = entry.Value;
+                            break;
+
+                        case "xml":
+                            var xml = entry.Value as RubySymbol;
+                            if (xml != null && xml.ToString() == "text") {
+                                result.XmlMode = 't';
+                            } else if (xml != null && xml.ToString() == "attr") {
+                                result.XmlMode = 'a';
+                            } else {
+                                throw RubyExceptions.CreateArgumentError("unexpected value for xml option: {0}",
+                                    xml != null ? (object)xml.ToString() : context.Inspect(entry.Value));
+                            }
+                            // :xml implies escaping anything the target cannot hold.
+                            result.ReplaceUndefined = true;
+                            break;
+
+                        case "newline":
+                            var nl = entry.Value as RubySymbol;
+                            string nlName = nl != null ? nl.ToString() : null;
+                            if (nlName == "universal") {
+                                result.Newline = 'u';
+                            } else if (nlName == "cr") {
+                                result.Newline = 'r';
+                            } else if (nlName == "crlf") {
+                                result.Newline = 'c';
+                            } else if (nlName == "lf") {
+                                result.Newline = 'u';
+                            } else {
+                                throw RubyExceptions.CreateArgumentError("unexpected value for newline option: {0}",
+                                    (object)nlName ?? context.Inspect(entry.Value));
+                            }
+                            break;
+
+                        case "universal_newline":
+                            if (RubyOps.IsTrue(entry.Value)) { result.Newline = 'u'; }
+                            break;
+
+                        case "cr_newline":
+                            if (RubyOps.IsTrue(entry.Value)) { result.Newline = 'r'; }
+                            break;
+
+                        case "crlf_newline":
+                            if (RubyOps.IsTrue(entry.Value)) { result.Newline = 'c'; }
+                            break;
+                    }
+                }
+
+                return result;
+            }
+
+            /// <summary>
+            /// :invalid and :undef take :replace or nil and nothing else.
+            /// </summary>
+            private static bool CheckReplaceOption(object value, string/*!*/ name) {
+                if (value == null) {
+                    return false;
+                }
+                var symbol = value as RubySymbol;
+                if (symbol != null && symbol.ToString() == "replace") {
+                    return true;
+                }
+                throw RubyExceptions.CreateArgumentError("unknown value for {0} character option", name);
+            }
+        }
+
+        /// <summary>
+        /// The body of #encode once the encodings and options are known.
+        ///
+        /// This is deliberately a character at a time rather than a single Encoding.Convert: the
+        /// options are all about what to do with the characters that cannot be converted, and .NET's
+        /// fallbacks cannot express "ask this Ruby object what to substitute".
+        /// </summary>
+        private static MutableString/*!*/ Transcode(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ fallbackStorage,
+            ConversionStorage<MutableString>/*!*/ toStr,
+            MutableString/*!*/ self, RubyEncoding/*!*/ from, RubyEncoding/*!*/ to, TranscodeSettings settings) {
+
+            if (from == RubyEncoding.Binary && to != RubyEncoding.Binary) {
+                // The mirror of the rule above: MRI has no converter from a byte string to a
+                // character encoding, so any byte that is not ASCII is an undefined conversion.
+                byte[] raw = self.ToByteArray();
+                for (int j = 0; j < raw.Length; j++) {
+                    if (raw[j] > 0x7f && !settings.ReplaceUndefined && settings.Fallback == null) {
+                        // MRI converts through UTF-8 and names both legs when the target is not
+                        // UTF-8 itself.
+                        throw new UndefinedConversionError(to == RubyEncoding.UTF8
+                            ? RubyExceptions.FormatMessage("\"\\x{0:X2}\" from {1} to {2}", raw[j], from.Name, to.Name)
+                            : RubyExceptions.FormatMessage("\"\\x{0:X2}\" to UTF-8 in conversion from {1} to UTF-8 to {2}",
+                                raw[j], from.Name, to.Name)
+                        );
+                    }
+                }
+            }
+
+            string text = DecodeForTranscoding(self, from, to, settings);
+
+            if (settings.Newline != 0) {
+                text = NormalizeNewlines(text, settings.Newline);
+            }
+
+            var result = MutableString.CreateMutable(to);
+            // ASCII-8BIT as a *target* takes only ASCII: MRI has no converter from a character
+            // encoding to a byte string, so "\u00e9".encode("BINARY") is an undefined conversion
+            // even though the code point would fit in one byte.
+            var encoder = to.StrictEncoding;
+            var buffer = new char[2];
+
+            for (int i = 0; i < text.Length; i++) {
+                int charCount = 1;
+                if (Char.IsHighSurrogate(text[i]) && i + 1 < text.Length && Char.IsLowSurrogate(text[i + 1])) {
+                    charCount = 2;
+                }
+                buffer[0] = text[i];
+                if (charCount == 2) {
+                    buffer[1] = text[i + 1];
+                }
+                string piece = new string(buffer, 0, charCount);
+                i += charCount - 1;
+
+                string escaped = EscapeForXml(piece, settings.XmlMode);
+                if (escaped != null) {
+                    result.Append(escaped);
+                    continue;
+                }
+
+                if (CanEncode(encoder, buffer, charCount) && !(to == RubyEncoding.Binary && text[i] > 0x7f)) {
+                    result.Append(piece);
+                    continue;
+                }
+
+                // A character the target has no room for. :fallback gets first refusal, then
+                // :undef => :replace, and otherwise it is an error.
+                MutableString substitute = CallFallback(fallbackStorage, toStr, settings.Fallback, piece, from);
+                if (substitute != null) {
+                    result.Append(substitute.ConvertToString());
+                    continue;
+                }
+
+                if (settings.XmlMode != 0) {
+                    // xml: escapes anything left over as a numeric character reference.
+                    result.Append(CharacterReference(piece));
+                    continue;
+                }
+
+                if (!settings.ReplaceUndefined) {
+                    throw new UndefinedConversionError(RubyExceptions.FormatMessage(
+                        "U+{0:X4} from {1} to {2}", Char.ConvertToUtf32(piece, 0), from.Name, to.Name
+                    ));
+                }
+
+                result.Append(settings.GetReplacement(to).ConvertToString());
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Reads the receiver's bytes as characters of the source encoding, honouring
+        /// :invalid => :replace. A run of bytes that cannot start a character becomes one
+        /// replacement, the way MRI groups them, not one per byte.
+        /// </summary>
+        private static string/*!*/ DecodeForTranscoding(MutableString/*!*/ self, RubyEncoding/*!*/ from,
+            RubyEncoding/*!*/ to, TranscodeSettings settings) {
+
+            byte[] bytes = self.ToByteArray();
+            var strict = from.StrictEncoding;
+
+            if (!settings.ReplaceInvalid) {
+                try {
+                    return strict.GetString(bytes);
+                } catch (DecoderFallbackException e) {
+                    throw RubyExceptions.CreateInvalidByteSequenceError(e, from);
+                }
+            }
+
+            string replacement = settings.GetReplacement(to).ConvertToString();
+            var result = new StringBuilder(bytes.Length);
+            int i = 0;
+
+            while (i < bytes.Length) {
+                int length = 0;
+                // No encoding here needs more than four bytes for one character.
+                for (int candidate = 1; candidate <= 4 && i + candidate <= bytes.Length; candidate++) {
+                    try {
+                        string decoded = strict.GetString(bytes, i, candidate);
+                        result.Append(decoded);
+                        length = candidate;
+                        break;
+                    } catch (DecoderFallbackException) {
+                        // not a whole character yet
+                    }
+                }
+
+                if (length == 0) {
+                    // One replacement per byte: MRI only merges the bytes of a single truncated
+                    // character, not an arbitrary run of rubbish.
+                    result.Append(replacement);
+                    i++;
+                } else {
+                    i += length;
+                }
+            }
+
+            return result.ToString();
+        }
+
+        private static bool CanEncode(Encoding/*!*/ encoder, char[]/*!*/ buffer, int charCount) {
+            try {
+                encoder.GetByteCount(buffer, 0, charCount);
+                return true;
+            } catch (EncoderFallbackException) {
+                return false;
+            }
+        }
+
+        /// <summary>xml: :text escapes &amp;, &lt; and &gt;; xml: :attr also escapes the quote.</summary>
+        private static string EscapeForXml(string/*!*/ piece, int mode) {
+            if (mode == 0 || piece.Length != 1) {
+                return null;
+            }
+            switch (piece[0]) {
+                case '&': return "&amp;";
+                case '<': return "&lt;";
+                case '>': return "&gt;";
+                case '"': return mode == 'a' ? "&quot;" : null;
+                case '\'': return mode == 'a' ? "&apos;" : null;
+                default: return null;
+            }
+        }
+
+        private static string/*!*/ CharacterReference(string/*!*/ piece) {
+            return "&#x" + Char.ConvertToUtf32(piece, 0).ToString("X") + ";";
+        }
+
+        /// <summary>
+        /// The three decorators are not variations on one normalisation: :universal_newline folds
+        /// CRLF and CR down to LF, while :cr_newline and :crlf_newline only expand an LF and leave
+        /// a CR that was already there alone. Chaining them turns "\r\n" into "\r\r".
+        /// </summary>
+        private static string/*!*/ NormalizeNewlines(string/*!*/ text, int mode) {
+            switch (mode) {
+                case 'r': return text.Replace("\n", "\r");
+                case 'c': return text.Replace("\n", "\r\n");
+                default: return text.Replace("\r\n", "\n").Replace("\r", "\n");
+            }
+        }
+
+        /// <summary>
+        /// :fallback may be a Hash, a Proc, a Method or anything else answering to #[]. A nil
+        /// answer means "no substitute", which falls through to :undef.
+        /// </summary>
+        private static MutableString CallFallback(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ fallbackStorage,
+            ConversionStorage<MutableString>/*!*/ toStr, object fallback, string/*!*/ piece, RubyEncoding/*!*/ from) {
+
+            if (fallback == null) {
+                return null;
+            }
+
+            var key = MutableString.Create(piece, from);
+            var site = fallbackStorage.GetCallSite("[]", 1);
+            object answer = site.Target(site, fallback, key);
+            if (answer == null) {
+                return null;
+            }
+            return Protocols.CastToString(toStr, answer);
+        }
+
+        #endregion
+
 
         #endregion
 
@@ -1971,6 +2321,12 @@ namespace IronRuby.Builtins {
             self.RequireCompatibleEncoding(substring);
             substring.PrepareForCharacterRead();
             int subCharCount = substring.GetCharCount();
+
+            // Nothing can match a substring longer than the receiver. Without this the clamp below
+            // turns "".rindex("l", 0) into LastIndexOf(.., -1), which is a CLR ArgumentException.
+            if (subCharCount > charCount) {
+                return null;
+            }
 
             // LastIndexOf has CLR semantics: no characters of the substring are matched beyond start position.
             // Hence we need to increase start by the length of the substring - 1.
@@ -2968,9 +3324,52 @@ namespace IronRuby.Builtins {
         #region unpack
 
         [RubyMethod("unpack")]
-        public static RubyArray/*!*/ Unpack(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format) {
-            return RubyEncoder.Unpack(self, format);
+        public static RubyArray/*!*/ Unpack(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ format,
+            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            return RubyEncoder.Unpack(self, format, GetUnpackOffset(fixnumCast, context, self, options));
         }
+
+        [RubyMethod("unpack1")]
+        public static object Unpack1(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ format,
+            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            var result = RubyEncoder.Unpack(self, format, GetUnpackOffset(fixnumCast, context, self, options));
+            return result.Count > 0 ? result[0] : null;
+        }
+
+        /// <summary>
+        /// unpack(format, offset: n) - where in the receiver's *bytes* to start reading. MRI
+        /// rejects a negative offset and one past the end, but allows exactly the end, where every
+        /// directive yields nil.
+        /// </summary>
+        private static int GetUnpackOffset(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context,
+            MutableString/*!*/ self, IDictionary<object, object> options) {
+
+            if (options == null || options.Count == 0) {
+                return 0;
+            }
+
+            int offset = 0;
+            foreach (var entry in options) {
+                var key = entry.Key as RubySymbol;
+                if (key == null || key.ToString() != "offset") {
+                    throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(entry.Key));
+                }
+                offset = Protocols.CastToFixnum(fixnumCast, entry.Value);
+            }
+
+            if (offset < 0) {
+                throw RubyExceptions.CreateArgumentError("offset can't be negative");
+            }
+            if (offset > self.GetByteCount()) {
+                throw RubyExceptions.CreateArgumentError("offset outside of string");
+            }
+            return offset;
+        }
+
 
         #endregion
 
