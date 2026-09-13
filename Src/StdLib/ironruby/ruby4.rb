@@ -1254,6 +1254,26 @@ class Process::Status
   end unless method_defined?(:stopped?)
 end
 
+class IO
+  # What IO.popen adds to the IO it hands back: the child's pid, and a #close that reaps
+  # the child so that $? describes it. A module rather than singleton methods, because a
+  # singleton `def io.close` has no `super` to reach the library's IO#close with.
+  module PopenChild
+    def pid
+      @__popen_pid__
+    end
+
+    def close
+      result = super
+      begin
+        Process.waitpid(@__popen_pid__)
+      rescue SystemCallError
+      end
+      result
+    end
+  end
+end
+
 class << IO
   # IO.pipe used to be a queue between two threads of this process, whose "descriptors"
   # were indices into IronRuby's own table. Nothing outside the process could be handed
@@ -1339,17 +1359,7 @@ class << IO
          end
 
     io.instance_variable_set(:@__popen_pid__, pid)
-    def io.pid
-      @__popen_pid__
-    end
-    def io.close
-      result = super
-      begin
-        Process.waitpid(@__popen_pid__)
-      rescue SystemCallError
-      end
-      result
-    end
+    io.extend(IO::PopenChild)
 
     return io unless block
 
