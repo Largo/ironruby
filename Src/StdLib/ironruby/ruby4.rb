@@ -4372,6 +4372,140 @@ class Module
   private :ruby2_keywords rescue nil
 end
 
+# 3.2's Data: immutable value objects. The constant did not exist, so every
+# file in spec/core/data failed to load.
+class Data
+  class << self
+    def define(*members, &block)
+      members = members.map do |m|
+        unless m.is_a?(::Symbol) || m.is_a?(::String)
+          ::Kernel.raise(::TypeError, "#{m.inspect} is not a symbol nor a string")
+        end
+        m.to_sym
+      end
+      duplicate = members.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
+      ::Kernel.raise(::ArgumentError, "duplicate member: #{duplicate}") if duplicate
+
+      klass = ::Class.new(self) do
+        @__members__ = members
+
+        members.each do |name|
+          define_method(name) { instance_variable_get("@#{name}") }
+        end
+
+        class << self
+          def members
+            @__members__.dup
+          end
+
+          def [](*args, **kwargs)
+            new(*args, **kwargs)
+          end
+
+          def new(*args, **kwargs)
+            instance = allocate
+            instance.__send__(:__data_init__, @__members__, args, kwargs)
+            instance
+          end
+        end
+      end
+      klass.class_eval(&block) if block
+      klass
+    end
+
+    def members
+      @__members__ ? @__members__.dup : []
+    end
+  end
+
+  def __data_init__(names, args, kwargs)
+    if !args.empty? && !kwargs.empty?
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments")
+    end
+    if args.empty? && kwargs.empty? && !names.empty?
+      ::Kernel.raise(::ArgumentError, "missing keyword#{names.size > 1 ? 's' : ''}: #{names.map(&:inspect).join(', ')}")
+    end
+    if !args.empty?
+      if args.size > names.size
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..#{names.size})")
+      end
+      if args.size < names.size
+        missing = names[args.size..-1]
+        ::Kernel.raise(::ArgumentError, "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map(&:inspect).join(', ')}")
+      end
+      names.each_with_index { |n, i| instance_variable_set("@#{n}", args[i]) }
+    else
+      missing = names - kwargs.keys
+      unless missing.empty?
+        ::Kernel.raise(::ArgumentError, "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map(&:inspect).join(', ')}")
+      end
+      unknown = kwargs.keys - names
+      unless unknown.empty?
+        ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+      end
+      names.each { |n| instance_variable_set("@#{n}", kwargs[n]) }
+    end
+    freeze
+  end
+  private :__data_init__
+
+  def members
+    self.class.members
+  end
+
+  def to_h(&block)
+    result = {}
+    members.each { |n| result[n] = __send__(n) }
+    return result unless block
+    out = {}
+    result.each { |k, v| pair = block.call(k, v); out[pair[0]] = pair[1] }
+    out
+  end
+
+  def deconstruct
+    members.map { |n| __send__(n) }
+  end
+
+  def deconstruct_keys(keys)
+    return to_h if keys.nil?
+    all = members
+    result = {}
+    keys.each do |k|
+      return result unless all.include?(k)
+      result[k] = __send__(k)
+    end
+    result
+  end
+
+  def with(**kwargs)
+    return self if kwargs.empty?
+    unknown = kwargs.keys - members
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+    end
+    self.class.new(**to_h.merge(kwargs))
+  end
+
+  def ==(other)
+    other.class == self.class && other.deconstruct == deconstruct
+  end
+
+  def eql?(other)
+    other.class == self.class && members.all? { |n| __send__(n).eql?(other.__send__(n)) }
+  end
+
+  def hash
+    ([self.class] + deconstruct).hash
+  end
+
+  def inspect
+    name = self.class.name
+    body = members.map { |n| "#{n}=#{__send__(n).inspect}" }.join(", ")
+    "#<data #{name ? "#{name} " : ''}#{body}>"
+  end
+  alias_method :to_s, :inspect
+end unless defined?(Data)
+
 # ARGF was a plain Object carrying singleton methods, so it had no class to
 # speak of: `ARGF.class` answered Object and `ARGF.class.new("a", "b")` - which
 # is how mspec's argf helper builds an instance it can close afterwards - made
