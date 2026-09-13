@@ -390,6 +390,32 @@ namespace IronRuby.Builtins {
                 WriteModuleName(theClass);
             }
 
+            /// <summary>
+            /// An exception's message and backtrace live outside the instance variable table in
+            /// IronRuby, but MRI writes them as the "mesg" and "bt" instance variables.
+            /// </summary>
+            private void WriteException(Exception/*!*/ exception, string[]/*!*/ instanceNames) {
+                WriteObject(exception);
+                WriteInt32(2 + instanceNames.Length);
+
+                var data = RubyExceptionData.GetInstance(exception);
+                WriteSymbol("mesg", RubyEncoding.Binary);
+                object message = data.Message;
+                var messageString = message as MutableString;
+                if (messageString != null && messageString.Equals(
+                        RubyExceptionData.GetDefaultMessage(_context.GetClassOf(exception)))) {
+                    // MRI leaves "mesg" nil when #initialize was never given one; the class name it
+                    // reports from #message is synthesised on demand, exactly as IronRuby does.
+                    message = null;
+                }
+                WriteAnObject(message);
+
+                WriteSymbol("bt", RubyEncoding.Binary);
+                WriteAnObject(data.Backtrace);
+
+                WriteIVarPairs(exception, instanceNames);
+            }
+
             private void WriteUsingDump(object/*!*/ obj) {
                 MutableString dumpResult = _sites.Dump.Target(_sites.Dump, obj, _recursionLimit) as MutableString;
                 if (dumpResult == null) {
@@ -612,6 +638,8 @@ namespace IronRuby.Builtins {
                                 WriteStruct((RubyStruct)obj);
                             } else if (obj is Range) {
                                 WriteRange((Range)obj, instanceNames);
+                            } else if (obj is Exception) {
+                                WriteException((Exception)obj, instanceNames);
                             } else {
                                 WriteObject(obj);
                                 WriteIVars(obj, instanceNames, encoding);
@@ -1007,7 +1035,35 @@ namespace IronRuby.Builtins {
                     string name = ReadIdentifier();
                     attributes[name] = ReadAnObject(false);
                 }
+
+                if (typeof(Exception).IsAssignableFrom(theClass.GetUnderlyingSystemType())) {
+                    return CreateException(theClass, attributes);
+                }
+
                 return RubyUtils.CreateObject(theClass, attributes);
+            }
+
+            private object/*!*/ CreateException(RubyClass/*!*/ theClass, Dictionary<string, object>/*!*/ attributes) {
+                var exception = (Exception)RubyUtils.CreateObject(theClass);
+                var data = RubyExceptionData.GetInstance(exception);
+                foreach (var pair in attributes) {
+                    switch (pair.Key) {
+                        case "mesg":
+                            // A nil "mesg" is MRI's way of saying "no message was ever set"; #message
+                            // then answers the class name.
+                            data.Message = pair.Value ?? RubyExceptionData.GetDefaultMessage(theClass);
+                            break;
+
+                        case "bt":
+                            data.Backtrace = pair.Value as RubyArray;
+                            break;
+
+                        default:
+                            Context.SetInstanceVariable(exception, pair.Key, pair.Value);
+                            break;
+                    }
+                }
+                return exception;
             }
 
             private object/*!*/ ReadUsingLoad() {
