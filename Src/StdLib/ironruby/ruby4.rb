@@ -1116,6 +1116,10 @@ class Encoding
     __consts__ = []
     __consts__ << __name__ if __name__ =~ /\A[A-Z][A-Za-z0-9_]*\z/
     __custom__ = __name__.gsub(/[^A-Za-z0-9]/, '_')
+    # A constant cannot start with a lower case letter, so CRuby's set_encoding_const()
+    # capitalises the first character before it gives up on the name: "macCyrillic" becomes
+    # Encoding::MacCyrillic as well as Encoding::MACCYRILLIC, and "eucJP" becomes EucJP.
+    __custom__ = __custom__.sub(/\A[a-z]/) { |__ch__| __ch__.upcase }
     if __consts__.empty? || __custom__ =~ /[a-z]/
       __consts__ << __custom__ if __custom__ =~ /[A-Z]/
       __consts__ << __custom__.upcase if __custom__ =~ /[a-z]/

@@ -1407,7 +1407,19 @@ p __ENCODING__
                 Assert(reader.Encoding == BinaryEncoding.Instance);
             }
 
-            AssertOutput(() => source1.Execute(), @"#<Encoding:ASCII-8BIT>");
+            // The test used to expect "#<Encoding:ASCII-8BIT>", which no Ruby since 3.4 prints.
+            // Ruby 3.4 renamed the encoding to BINARY and made #inspect - and only #inspect,
+            // #name still answers "ASCII-8BIT" - show both spellings:
+            //
+            //   $ ruby -v
+            //   ruby 4.0.6 (2026-07-14 revision 03b6d3f889) +PRISM [x86_64-linux]
+            //   $ printf '#!/usr/bin/env ruby\n# enCoding = ascii-8BIT\n\np __ENCODING__\n' > /tmp/e.rb
+            //   $ ruby /tmp/e.rb
+            //   #<Encoding:BINARY (ASCII-8BIT)>
+            //
+            // ruby/spec asserts the same thing - spec/core/encoding/inspect_spec.rb, under
+            // ruby_version_is "3.4", special-cases ASCII-8BIT to "#<Encoding:BINARY (ASCII-8BIT)>".
+            AssertOutput(() => source1.Execute(), @"#<Encoding:BINARY (ASCII-8BIT)>");
 
             // default hosted encoding is UTF8:
             var source2 = Context.CreateSnippet("p __ENCODING__", SourceCodeKind.Expression);

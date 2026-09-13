@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -2320,7 +2320,20 @@ namespace IronRuby.Runtime {
         }
 
         public RubyEncoding/*!*/ GetPathEncoding() {
-            return RubyEncoding.UTF8;
+            // On everything but Windows the filesystem encoding follows the default external
+            // encoding, so Encoding.default_external= moves it too.
+            //
+            // Only as far as the path layer can carry it, though. Paths here round-trip through a
+            // .NET string, so the filesystem encoding has to be able to represent one: ASCII
+            // incompatible encodings cannot (MRI's answer to Encoding.default_external =
+            // Encoding::UTF_16BE is that every path operation raises
+            // Encoding::CompatibilityError, which this layer has no way to report), and neither
+            // can ASCII-8BIT, which rejects every character above U+00FF.
+            var external = _defaultExternalEncoding;
+            if (external == null || !external.IsAsciiIdentity || external == RubyEncoding.Binary) {
+                return RubyEncoding.UTF8;
+            }
+            return external;
         }
 
         /// <summary>
@@ -2897,6 +2910,33 @@ namespace IronRuby.Runtime {
                 // the encoding name doesn't correspond to its code page:
                 case "CP1025": return Encoding.GetEncoding(21025);
 
+                // Ruby's names for code pages .NET spells differently - see GetRubySpecificName.
+                case "MACROMAN": return Encoding.GetEncoding(10000);
+                case "MACJAPANESE": return Encoding.GetEncoding(10001);
+                case "MACGREEK": return Encoding.GetEncoding(10006);
+                case "MACROMANIA": return Encoding.GetEncoding(10010);
+                case "MACUKRAINE": return Encoding.GetEncoding(10017);
+                case "MACTHAI": return Encoding.GetEncoding(10021);
+                case "MACCENTEURO": return Encoding.GetEncoding(10029);
+                case "MACICELAND": return Encoding.GetEncoding(10079);
+                case "MACTURKISH": return Encoding.GetEncoding(10081);
+                case "MACCROATIAN": return Encoding.GetEncoding(10082);
+                case "IBM720": return Encoding.GetEncoding(720);
+                case "IBM862": return Encoding.GetEncoding(862);
+                case "CP949": return Encoding.GetEncoding(949);
+                case "GBK": return Encoding.GetEncoding(936);
+                case "GB2312": return Encoding.GetEncoding(51936);
+                case "EUC-KR": return Encoding.GetEncoding(51949);
+                case "GB18030": return Encoding.GetEncoding(54936);
+
+                // Encodings Ruby has and .NET does not. Without these, "UTF-16" and "UTF-32"
+                // resolved to .NET's utf-16/utf-32, which are Ruby's UTF-16LE and UTF-32LE, and
+                // "TIS-620" resolved to Windows-874, which has a larger repertoire.
+                case "UTF-16": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF16).StrictEncoding;
+                case "UTF-32": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32).StrictEncoding;
+                case "CESU-8": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8).StrictEncoding;
+                case "TIS-620": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageTIS620).StrictEncoding;
+
                 default:
                     string alias;
                     if (RubyEncoding.Aliases.TryGetValue(name, out alias)) {
@@ -2918,10 +2958,17 @@ namespace IronRuby.Runtime {
 
         /// <exception cref="ArgumentException">Unknown encoding.</exception>
         public RubyEncoding/*!*/ GetRubyEncoding(MutableString/*!*/ name) {
+            // These are the messages MRI gives, and they reach the user from #force_encoding,
+            // #encode, Integer#chr and IO as well as from Encoding.find. .NET's own message for an
+            // unknown name talks about Encoding.RegisterProvider, which means nothing in Ruby.
             if (!name.IsAscii()) {
-                throw new ArgumentException(String.Format("Unknown encoding: '{0}'", name.ToAsciiString()));
+                throw RubyExceptions.CreateArgumentError("invalid encoding name (non ASCII)");
             }
-            return RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name.ToString()));
+            try {
+                return RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name.ToString()));
+            } catch (ArgumentException) {
+                throw RubyExceptions.CreateArgumentError("unknown encoding name - {0}", name.ToAsciiString());
+            }
         }
 
         /// <exception cref="ArgumentException">Unknown encoding.</exception>
