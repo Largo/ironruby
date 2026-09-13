@@ -173,6 +173,35 @@ namespace IronRuby.Runtime {
             return CreateTypeError("{0}#{1} should return {2}", className, methodName, returnTypeName);
         }
 
+        /// <summary>
+        /// An object promised a conversion and then broke the promise: it answers #to_ary but what
+        /// came back is not an Array. MRI names both ends of the failed conversion and what was
+        /// actually handed over:
+        ///   "can't convert Foo to Array (Foo#to_ary gives NilClass)"
+        /// The class of the returned value is spelled as the class, not by value, so a nil result
+        /// reads NilClass - unlike the "no implicit conversion of nil into Array" message, which is
+        /// about the argument rather than about what a conversion method gave back.
+        /// </summary>
+        public static Exception/*!*/ CreateReturnTypeError(string/*!*/ className, string/*!*/ methodName, string/*!*/ returnTypeName,
+            object result) {
+
+            string resultClass;
+            if (result == null) {
+                resultClass = "NilClass";
+            } else {
+                var context = RubyContext._Default;
+                resultClass = (context != null) ? context.GetClassDisplayName(result) : result.GetType().Name;
+                // Fixnum and Bignum were unified into Integer in Ruby 2.4; IronRuby still has the
+                // split classes internally but must not say so.
+                if (resultClass == "Fixnum" || resultClass == "Bignum") {
+                    resultClass = "Integer";
+                }
+            }
+
+            return CreateTypeError("can't convert {0} to {1} ({0}#{2} gives {3})",
+                MessageTypeName(className), returnTypeName, methodName, resultClass);
+        }
+
         #endregion
 
         #region NameError (MemberAccessException)

@@ -227,7 +227,8 @@ namespace IronRuby.Runtime.Conversions {
             using (targetClass.Context.ClassHierarchyLocker()) {
                 // check for type version:
                 metaBuilder.AddTargetTypeTest(args.Target, targetClass, args.TargetExpression, args.MetaContext,
-                    ArrayUtils.Insert(Symbols.RespondTo, Symbols.MethodMissing, ArrayUtils.ConvertAll(conversions, (c) => c.ToMethodName))
+                    ArrayUtils.Insert(Symbols.RespondTo, Symbols.MethodMissing,
+                        ArrayUtils.Insert(Symbols.RespondToMissing, ArrayUtils.ConvertAll(conversions, (c) => c.ToMethodName)))
                 );
 
                 // we can optimize if Kernel#respond_to? method is not overridden, and we must take the same
@@ -257,8 +258,12 @@ namespace IronRuby.Runtime.Conversions {
 
             if (!respondToMethod.Found) {
                 if (conversionMethod == null) {
-                    // error:
-                    selectedConversion.SetError(metaBuilder, args, targetClassNameConstant, resultType);
+                    // No to_xxx method - but MRI does not give up there. It asks
+                    // respond_to_missing?, and if the object says yes it calls to_xxx anyway,
+                    // which lands in method_missing. That is how an object can offer a
+                    // conversion without defining the method, and the only way a mock can stand
+                    // in for one. Only a "no" from respond_to_missing? is the conversion error.
+                    metaBuilder.Result = MakeMethodMissingConversion(args, selectedConversion, targetClassNameConstant, resultType);
                     return;
                 } else {
                     // invoke target.to_xxx() and validate it; returns an instance of TTargetType:
@@ -309,6 +314,35 @@ namespace IronRuby.Runtime.Conversions {
                         conversions[i].MakeErrorExpression(args, targetClassNameConstant, resultType)
                 );
             }
+        }
+
+        /// <summary>
+        /// `target.respond_to_missing?(:to_xxx, true) ? target.to_xxx() : &lt;conversion error&gt;`.
+        /// Used where the conversion method is not defined: the call to to_xxx goes to
+        /// method_missing, which is exactly what MRI's rb_check_funcall does.
+        /// </summary>
+        private static Expression/*!*/ MakeMethodMissingConversion(CallArguments/*!*/ args, ProtocolConversionAction/*!*/ conversion,
+            Expression/*!*/ targetClassNameConstant, Type/*!*/ resultType) {
+
+            string toMethodName = conversion.ToMethodName;
+
+            var respondToMissing = AstUtils.LightDynamic(
+                RubyCallAction.Make(args.RubyContext, Symbols.RespondToMissing, RubyCallSignature.WithImplicitSelf(2)),
+                args.TargetExpression,
+                Ast.Constant(args.RubyContext.CreateSymbol(toMethodName, RubyEncoding.Binary)),
+                AstUtils.Constant(true, typeof(object))
+            );
+
+            var conversionCallSite = AstUtils.LightDynamic(
+                RubyCallAction.Make(args.RubyContext, toMethodName, RubyCallSignature.WithImplicitSelf(0)),
+                args.TargetExpression
+            );
+
+            return Ast.Condition(
+                Methods.IsTrue.OpCall(respondToMissing),
+                ConvertResult(conversion.MakeValidatorCall(args, targetClassNameConstant, conversionCallSite), resultType),
+                conversion.MakeErrorExpression(args, targetClassNameConstant, resultType)
+            );
         }
 
         internal protected abstract bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args);
@@ -530,14 +564,14 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class TryConvertToArrayAction : TryConvertToReferenceTypeAction<TryConvertToArrayAction, IList> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToAry; } }
         protected override string/*!*/ TargetTypeName { get { return "Array"; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToArrayValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.TryToArrayValidator; } }
     }
 
     // TODO: should be like to_s - default to_a is always called w/o call to respond_to?
     public sealed class TryConvertToAAction : TryConvertToReferenceTypeAction<TryConvertToAAction, IList> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToA; } }
         protected override string/*!*/ TargetTypeName { get { return "Array"; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToArrayValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.TryToArrayValidator; } }
     }
 
     public sealed class ConvertToHashAction : ConvertToReferenceTypeAction<ConvertToHashAction, IDictionary<object, object>> {
@@ -549,7 +583,7 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class TryConvertToHashAction : TryConvertToReferenceTypeAction<TryConvertToHashAction, IDictionary<object, object>> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToHash; } }
         protected override string/*!*/ TargetTypeName { get { return "Hash"; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.ToHashValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.TryToHashValidator; } }
     }
 
     /// <summary>

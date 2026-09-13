@@ -35,6 +35,7 @@ namespace IronRuby.Compiler {
         public static readonly string SingletonMethodUndefined = "singleton_method_undefined";
         public static readonly string Inherited = "inherited";
         public static readonly string RespondTo = "respond_to?";
+        public static readonly string RespondToMissing = "respond_to_missing?";
         public static readonly string Call = "call";
         public static readonly string ToProc = "to_proc";
         public static readonly string ToS = "to_s";
