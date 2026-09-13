@@ -8255,6 +8255,7 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadSymbol_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            module.UndefineMethodNoEvent("new");
             DefineLibraryMethod(module, "all_symbols", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.SymbolOps.GetAllSymbols)

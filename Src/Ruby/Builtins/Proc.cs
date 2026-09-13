@@ -42,6 +42,7 @@ namespace IronRuby.Builtins {
     using BlockCallTarget4 = Func<BlockParam, object, object, object, object, object, object>;
     using BlockCallTargetN = Func<BlockParam, object, object[], object>;
     using BlockCallTargetUnsplatN = Func<BlockParam, object, object[], RubyArray, object>;
+    using BlockCallTargetUnsplatProcN = Func<BlockParam, object, object[], RubyArray, Proc, object>;
 
     public enum ProcKind {
         Block,
@@ -316,25 +317,28 @@ namespace IronRuby.Builtins {
             // This should pass a proc parameter (use BlockDispatcherUnsplatProcN).
             // MRI 1.9.2 doesn't do so though (see http://redmine.ruby-lang.org/issues/show/3792).
 
-            var site = CallSite<Func<CallSite, object, object, object, object>>.Create(
+            // the block a symbol proc is called with goes on to the method it invokes:
+            // [1, 2].map(&:foo) { ... } passes the block through to #foo
+            var site = CallSite<Func<CallSite, object, object, Proc, object, object>>.Create(
                 RubyCallAction.Make(
                     scope.RubyContext, methodName,
-                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument)
+                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
                 )
             );
 
-            var block = new BlockCallTargetUnsplatN((blockParam, self, args, unsplat) => {
+            var block = new BlockCallTargetUnsplatProcN((blockParam, self, args, unsplat, procArg) => {
                 Debug.Assert(args.Length == 0);
                 if (unsplat.Count == 0) {
                     throw RubyExceptions.CreateArgumentError("no receiver given");
                 }
                 object target = unsplat[0];
                 unsplat.RemoveAt(0);
-                return site.Target(site, scope, target, unsplat);
+                return site.Target(site, scope, target, procArg, unsplat);
             });
 
-            var procDispatcher = new BlockDispatcherUnsplatN(0,
-                BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter, -1),
+            var procDispatcher = new BlockDispatcherUnsplatProcN(0,
+                BlockDispatcher.MakeAttributes(
+                    BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter, -1),
                 null, 0
             );
 
