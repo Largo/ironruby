@@ -183,6 +183,24 @@ namespace IronRuby.Builtins {
             get { return _strictEncoding; }
         }
 
+#if FEATURE_ENCODING
+        private Encoding _escapingEncoding;
+
+        /// <summary>
+        /// The encoding used to move a string between its byte and character representations.
+        /// Unlike StrictEncoding it never refuses a byte, so a Ruby string whose bytes are not
+        /// valid in its own encoding can still be reversed, indexed and sliced - see
+        /// EscapingEncoding for how the bytes survive the round trip.
+        /// </summary>
+        public Encoding/*!*/ EscapingEncoding {
+            get { return _escapingEncoding ?? (_escapingEncoding = new EscapingEncoding(_strictEncoding)); }
+        }
+#else
+        public Encoding/*!*/ EscapingEncoding {
+            get { return _strictEncoding; }
+        }
+#endif
+
         /// <summary>
         /// Name as displayed by MRI.
         /// </summary>

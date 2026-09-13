@@ -76,7 +76,7 @@ namespace IronRuby.Builtins {
 
             /// <exception cref="DecoderFallbackException">Invalid character.</exception>
             private CharArrayContent/*!*/ SwitchToChars(int additionalCapacity) {
-                char[] chars = DataToChars(additionalCapacity, _owner._encoding.StrictEncoding);
+                char[] chars = DataToChars(additionalCapacity, _owner._encoding.EscapingEncoding);
                 return WrapContent(chars, chars.Length - additionalCapacity);
             }
 
@@ -97,16 +97,16 @@ namespace IronRuby.Builtins {
                 if (_count == 0) {
                     return String.Empty;
                 } else {
-                    return _owner._encoding.StrictEncoding.GetString(_data, 0, _count);
+                    return _owner._encoding.EscapingEncoding.GetString(_data, 0, _count);
                 } 
             }
 
             internal void AppendBytes(string/*!*/ str, int start, int count) {
-                _count = Utils.Append(ref _data, _count, str, start, count, _owner._encoding.StrictEncoding);
+                _count = Utils.Append(ref _data, _count, str, start, count, _owner._encoding.EscapingEncoding);
             }
 
             internal void AppendBytes(char[]/*!*/ chars, int start, int count) {
-                _count = Utils.Append(ref _data, _count, chars, start, count, _owner._encoding.StrictEncoding);
+                _count = Utils.Append(ref _data, _count, chars, start, count, _owner._encoding.EscapingEncoding);
             }
 
             #region UpdateCharacterFlags, CalculateHashCode, Length, Clone, Count (read-only)
@@ -164,27 +164,11 @@ namespace IronRuby.Builtins {
                     return _count;
                 }
 
-                //
-                // We need to 
-                // 1) decode bytes to UTF16 chars replacing sequences of undecodable bytes with U+FFFF markers
-                //    (MRI counts each such sequence as 1 character),
-                // 2) subtract the number of surrogates in the resulting char sequence.
-                //
-                // Unfortunately, this is a bit complex and not very efficient. We might be able to amortize the cost 
-                // by caching the resulting char array via switching to char content in anticipation of subsequent 
-                // character based operations.
-                //
-                char[] chars;
-                List<byte[]> invalidCharacters;
-                Decode(out chars, out invalidCharacters);
-
-                // TODO: we can also cache invalid bytes if needed (maybe have a special content repr?)
-                // cache conversion result if there are not invalid characters (switching content to char array):
-                if (invalidCharacters == null) {
-                    return WrapContent(chars, chars.Length).GetCharacterCount();
-                } else {
-                    return chars.GetCharacterCount(chars.Length);
-                }
+                // This used to decode by hand so that a *run* of undecodable bytes could be counted
+                // as one character. MRI counts each such byte separately - "a\xE3\x81c" is four
+                // characters in UTF-8, not three - and the escaping decoder produces exactly one
+                // character per undecodable byte, so the ordinary path is both simpler and right.
+                return SwitchToChars().GetCharacterCount();
             }
 
             public override int GetByteCount() {
@@ -345,13 +329,12 @@ namespace IronRuby.Builtins {
                     return new MutableString.BinaryCharacterEnumerator(_owner.Encoding, _data, _count);
                 }
 
-                char[] allValid;
-                var result = MutableString.EnumerateAsCharacters(_data, _count, _owner.Encoding, out allValid);
-                if (allValid != null) {
-                    // we can switch the content type if all characters are valid:
-                    WrapContent(allValid, allValid.Length);
-                }
-                return result;
+                // EnumerateAsCharacters used to be needed here because the bytes might not decode;
+                // it grouped each run of undecodable bytes into one character, which is not how MRI
+                // counts them. The escaping decoder gives one character per undecodable byte and
+                // hands the byte back unchanged on the way out, so the ordinary character content
+                // now serves - and it gets cached for the next operation into the bargain.
+                return SwitchToChars().GetCharacters();
             }
 
             public override IEnumerable<byte>/*!*/ GetBytes() {
@@ -372,7 +355,7 @@ namespace IronRuby.Builtins {
                 }
 
                 byte[] bytes = new byte[_owner.Encoding.MaxBytesPerChar];
-                int byteCount = _owner.Encoding.StrictEncoding.GetBytes(new char[] { c }, 0, 1, bytes, 0);
+                int byteCount = _owner.Encoding.EscapingEncoding.GetBytes(new char[] { c }, 0, 1, bytes, 0);
                 if (byteCount > _count) {
                     return false;
                 }
@@ -511,7 +494,7 @@ namespace IronRuby.Builtins {
                 if (_owner.HasByteCharacters || c < 0x80 && _owner._encoding.IsAsciiIdentity) {
                     Append((byte)c, repeatCount);
                 } else {
-                    _count = Utils.Append(ref _data, _count, c, repeatCount, _owner._encoding.StrictEncoding);
+                    _count = Utils.Append(ref _data, _count, c, repeatCount, _owner._encoding.EscapingEncoding);
                 }
             }
 

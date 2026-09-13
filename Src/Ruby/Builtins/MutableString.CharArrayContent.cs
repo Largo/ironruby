@@ -58,7 +58,7 @@ namespace IronRuby.Builtins {
                 if (_count == 0) {
                     return (additionalCapacity == 0) ? Utils.EmptyBytes : new byte[additionalCapacity];
                 } else if (additionalCapacity == 0) {
-                    return _owner._encoding.StrictEncoding.GetBytes(_data, 0, _count);
+                    return _owner._encoding.EscapingEncoding.GetBytes(_data, 0, _count);
                 } else {
                     var result = new byte[GetDataByteCount() + additionalCapacity];
                     GetDataBytes(result, 0);
@@ -67,11 +67,11 @@ namespace IronRuby.Builtins {
             }
 
             internal int GetDataByteCount() {
-                return _owner._encoding.StrictEncoding.GetByteCount(_data, 0, _count);
+                return _owner._encoding.EscapingEncoding.GetByteCount(_data, 0, _count);
             }
 
             internal void GetDataBytes(byte[]/*!*/ bytes, int start) {
-                _owner._encoding.StrictEncoding.GetBytes(_data, 0, _count, bytes, start);
+                _owner._encoding.EscapingEncoding.GetBytes(_data, 0, _count, bytes, start);
             }
 
             public char DataGetChar(int index) {

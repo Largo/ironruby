@@ -56,15 +56,15 @@ namespace IronRuby.Builtins {
             }
 
             internal byte[]/*!*/ DataToBytes() {
-                return _data.Length > 0 ? _owner._encoding.StrictEncoding.GetBytes(_data) : Utils.EmptyBytes;
+                return _data.Length > 0 ? _owner._encoding.EscapingEncoding.GetBytes(_data) : Utils.EmptyBytes;
             }
 
             internal int GetDataByteCount() {
-                return _owner._encoding.StrictEncoding.GetByteCount(_data);
+                return _owner._encoding.EscapingEncoding.GetByteCount(_data);
             }
 
             internal void GetDataBytes(byte[]/*!*/ bytes, int start) {
-                _owner._encoding.StrictEncoding.GetBytes(_data, 0, _data.Length, bytes, start);
+                _owner._encoding.EscapingEncoding.GetBytes(_data, 0, _data.Length, bytes, start);
             }
 
             #region UpdateCharacterFlags, CalculateHashCode, Length, Clone, Count (read-only)
