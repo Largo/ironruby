@@ -258,6 +258,15 @@ namespace IronRuby.Builtins {
 
                 var encodingOptions = _options & RubyRegexOptions.EncodingMask;
                 if (encodingOptions == RubyRegexOptions.NONE && _pattern.IsAscii()) {
+                    // é is six ASCII characters that compile to one UTF-8 character, so the
+                    // regexp is UTF-8 even though its source is ASCII only. (A \xNN or octal escape
+                    // above 7 bits without /n is "invalid multibyte escape" in MRI; we don't raise,
+                    // and the pattern's own encoding is as good an answer as any.)
+                    bool isUnicode;
+                    if (HasNonAsciiEscape(_pattern, out isUnicode)) {
+                        return isUnicode ? RubyEncoding.UTF8 : _pattern.Encoding;
+                    }
+
                     return RubyEncoding.Ascii;
                 }
 
@@ -356,36 +365,6 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Whether an \xHH, \uHHHH or \u{...} escape in the pattern denotes a code point outside
-        /// 7-bit ASCII. The pattern text is ASCII either way, but the compiled regexp isn't.
-        /// </summary>
-        private static bool HasNonAsciiEscape(MutableString/*!*/ pattern) {
-            int length = pattern.GetCharCount();
-            for (int i = 0; i < length - 1; i++) {
-                if (pattern.GetChar(i) != '\\') {
-                    continue;
-                }
-
-                char kind = pattern.GetChar(i + 1);
-                if (kind == 'u') {
-                    return true;
-                }
-
-                if (kind == 'x') {
-                    // \x7F and below stay ASCII; \x80 and above don't.
-                    if (i + 2 < length && Tokenizer.ToDigit(pattern.GetChar(i + 2)) >= 8) {
-                        return true;
-                    }
-                }
-
-                // an escaped backslash isn't the start of an escape sequence
-                i++;
-            }
-
-            return false;
-        }
-
-        /// <summary>
         /// Whether the pattern contains a back reference (\1..\9, \k&lt;name&gt;, \k'name').
         /// Those are the constructs that force the matcher to backtrack in a way that can take
         /// more than linear time; see Regexp.linear_time?.
@@ -409,6 +388,90 @@ namespace IronRuby.Builtins {
             return false;
         }
 
+        /// <summary>
+        /// Whether the pattern contains an escape that denotes a character outside ASCII: \xNN or
+        /// \uNNNN or \NNN (octal) with a value above 0x7f.
+        ///
+        /// The pattern text of such a regexp is all ASCII, so String#ascii_only? says yes, but the
+        /// regexp still only matches one encoding's bytes - MRI's rb_reg_preprocess sets
+        /// ARG_ENCODING_FIXED for exactly this case.  Regexp.union has to know, or a /n regexp
+        /// written with byte escapes would silently lose its encoding when unioned with a plain
+        /// ASCII string.
+        /// </summary>
+        public static bool HasNonAsciiEscape(MutableString/*!*/ pattern) {
+            bool isUnicode;
+            return HasNonAsciiEscape(pattern, out isUnicode);
+        }
+
+        /// <summary>
+        /// As above, and tells whether the escape that decided it was a \u one.  \u names a code
+        /// point, so it compiles to UTF-8; \xNN and \NNN name a byte, so they compile to BINARY
+        /// (and MRI only allows them at all under /n).
+        /// </summary>
+        public static bool HasNonAsciiEscape(MutableString/*!*/ pattern, out bool isUnicode) {
+            isUnicode = false;
+            int length = pattern.GetCharCount();
+            for (int i = 0; i < length - 1; i++) {
+                if (pattern.GetChar(i) != '\\') {
+                    continue;
+                }
+
+                int value = -1;
+                char c = pattern.GetChar(i + 1);
+                if (c == 'x') {
+                    // \xN and \xNN; a lone \x is a syntax error the matcher will report.
+                    value = HexValue(pattern, i + 2, 2);
+                } else if (c == 'u') {
+                    // \uNNNN, or \u{...} whose first digit already decides it.
+                    value = (i + 2 < length && pattern.GetChar(i + 2) == '{')
+                        ? HexValue(pattern, i + 3, 6) : HexValue(pattern, i + 2, 4);
+                } else if (c >= '0' && c <= '7') {
+                    value = 0;
+                    for (int j = i + 1; j < length && j < i + 4; j++) {
+                        char digit = pattern.GetChar(j);
+                        if (digit < '0' || digit > '7') {
+                            break;
+                        }
+                        value = value * 8 + (digit - '0');
+                    }
+                }
+
+                if (value > 0x7f) {
+                    isUnicode = c == 'u';
+                    return true;
+                }
+
+                // an escaped backslash isn't the start of an escape
+                i++;
+            }
+
+            return false;
+        }
+
+        /// <summary>
+        /// Reads up to <paramref name="maxDigits"/> hex digits starting at <paramref name="start"/>,
+        /// or -1 when there isn't one.
+        /// </summary>
+        private static int HexValue(MutableString/*!*/ pattern, int start, int maxDigits) {
+            int length = pattern.GetCharCount();
+            int value = -1;
+            for (int i = start; i < length && i < start + maxDigits; i++) {
+                char c = pattern.GetChar(i);
+                int digit;
+                if (c >= '0' && c <= '9') {
+                    digit = c - '0';
+                } else if (c >= 'a' && c <= 'f') {
+                    digit = c - 'a' + 10;
+                } else if (c >= 'A' && c <= 'F') {
+                    digit = c - 'A' + 10;
+                } else {
+                    break;
+                }
+                value = (value < 0 ? 0 : value * 16) + digit;
+            }
+            return value;
+        }
+
         #endregion
 
         /// <summary>
@@ -418,7 +481,10 @@ namespace IronRuby.Builtins {
         public bool IsFixedEncoding {
             get {
                 if ((_options & RubyRegexOptions.FIXED) != 0) {
-                    return false;
+                    // /n on its own says nothing - /abc/n matches any ASCII compatible string. It
+                    // pins the encoding only once the pattern really compiles to non-ASCII bytes,
+                    // which it does for a byte escape as much as for a literal non-ASCII character.
+                    return !_pattern.IsAscii() || HasNonAsciiEscape(_pattern);
                 }
 
                 return (_options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0

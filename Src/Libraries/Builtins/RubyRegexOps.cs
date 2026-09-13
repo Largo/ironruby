@@ -510,59 +510,121 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("union", RubyMethodAttributes.PublicSingleton)]
-        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<IList>/*!*/ toAry, RubyClass/*!*/ self, [NotNull]object/*!*/ obj) {
+        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            UnaryOpStorage/*!*/ toRegexpStorage, ConversionStorage<IList>/*!*/ toAry, RubyClass/*!*/ self, [NotNull]object/*!*/ obj) {
+
             IList list = Protocols.TryCastToArray(toAry, obj);
             if (list != null) {
-                return Union(stringCast, list);
+                return Union(stringCast, respondToStorage, toRegexpStorage, list);
             }
 
-            // TODO: to_regexp
-            RubyRegex regex = obj as RubyRegex;
-            if (regex != null) {
-                return regex;
-            }
-
-            return new RubyRegex(RubyRegex.Escape(Protocols.CastToString(stringCast, obj)), RubyRegexOptions.NONE);
+            return Union(stringCast, respondToStorage, toRegexpStorage, new object[] { obj });
         }
 
         [RubyMethod("union", RubyMethodAttributes.PublicSingleton)]
-        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RubyClass/*!*/ self, [NotNull]IList/*!*/ objs) {
-            return Union(stringCast, objs);
+        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            UnaryOpStorage/*!*/ toRegexpStorage, RubyClass/*!*/ self, [NotNull]IList/*!*/ objs) {
+
+            return Union(stringCast, respondToStorage, toRegexpStorage, objs);
         }
 
         [RubyMethod("union", RubyMethodAttributes.PublicSingleton)]
-        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RubyClass/*!*/ self, [NotNullItems]params object/*!*/[]/*!*/ objs) {
-            return Union(stringCast, objs);
+        public static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            UnaryOpStorage/*!*/ toRegexpStorage, RubyClass/*!*/ self, [NotNullItems]params object/*!*/[]/*!*/ objs) {
+
+            return Union(stringCast, respondToStorage, toRegexpStorage, objs);
         }
 
-        private static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, ICollection/*!*/ objs) {
+        private static RubyRegex/*!*/ Union(ConversionStorage<MutableString>/*!*/ stringCast, RespondToStorage/*!*/ respondToStorage,
+            UnaryOpStorage/*!*/ toRegexpStorage, ICollection/*!*/ objs) {
+
             if (objs.Count == 0) {
                 return new RubyRegex(MutableString.CreateAscii("(?!)"), RubyRegexOptions.NONE);
             }
 
-            MutableString result = MutableString.CreateMutable(RubyEncoding.Binary);
-            int i = 0;
+            // Each part is either a Regexp, which contributes its (?opts:...) form, or a string
+            // whose metacharacters are escaped. The result's encoding is negotiated first, because
+            // a conflict there is an error rather than a regexp.
+            var parts = new List<object>(objs.Count);
             foreach (var obj in objs) {
+                var regex = obj as RubyRegex;
+                if (regex == null) {
+                    regex = TryConvert(respondToStorage, toRegexpStorage, null, obj);
+                }
+                parts.Add((object)regex ?? Protocols.CastToString(stringCast, obj));
+            }
+
+            if (parts.Count == 1) {
+                var single = parts[0] as RubyRegex;
+                if (single != null) {
+                    return single;
+                }
+            }
+
+            var encoding = NegotiateUnionEncoding(parts);
+
+            MutableString result = MutableString.CreateMutable(encoding);
+            for (int i = 0; i < parts.Count; i++) {
                 if (i > 0) {
                     result.Append('|');
                 }
 
-                // TODO: to_regexp
-                RubyRegex regex = obj as RubyRegex;
+                var regex = parts[i] as RubyRegex;
                 if (regex != null) {
-                    if (objs.Count == 1) {
-                        return regex;
-                    }
-
                     regex.AppendTo(result);
                 } else {
-                    result.Append(RubyRegex.Escape(Protocols.CastToString(stringCast, obj)));
+                    result.Append(RubyRegex.Escape((MutableString)parts[i]));
                 }
-
-                i++;
             }
 
             return new RubyRegex(result, RubyRegexOptions.NONE);
+        }
+
+        /// <summary>
+        /// MRI's rule for Regexp.union: only the parts that are not ASCII only get a say in the
+        /// result's encoding, they all have to agree, and an ASCII incompatible one cannot be
+        /// mixed with an ASCII only part at all.
+        /// </summary>
+        private static RubyEncoding/*!*/ NegotiateUnionEncoding(List<object>/*!*/ parts) {
+            RubyEncoding result = null;
+            bool hasAsciiOnlyPart = false;
+
+            foreach (var part in parts) {
+                RubyEncoding encoding;
+                var regex = part as RubyRegex;
+                if (regex != null) {
+                    encoding = IsAsciiOnly(regex.Pattern) && (regex.Options & RubyRegexOptions.FixedEncoding) == 0
+                        ? null : regex.Encoding;
+                } else {
+                    var str = (MutableString)part;
+                    encoding = IsAsciiOnly(str) ? null : str.Encoding;
+                }
+
+                if (encoding == null) {
+                    hasAsciiOnlyPart = true;
+                } else if (result == null) {
+                    result = encoding;
+                } else if (result != encoding) {
+                    throw RubyExceptions.CreateArgumentError("incompatible encodings: {0} and {1}",
+                        result.Name, encoding.Name);
+                }
+            }
+
+            if (result == null) {
+                return RubyEncoding.Ascii;
+            }
+
+            if (hasAsciiOnlyPart && !result.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", result.Name);
+            }
+
+            return result;
+        }
+
+        private static bool IsAsciiOnly(MutableString/*!*/ str) {
+            // An ASCII incompatible encoding is never "ASCII only" however plain its characters
+            // look: "a" in UTF-16LE is the two bytes 61 00.
+            return str.Encoding.IsAsciiIdentity && str.IsAscii() && !RubyRegex.HasNonAsciiEscape(str);
         }
     }
 }
