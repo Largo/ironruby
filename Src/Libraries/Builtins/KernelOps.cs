@@ -1986,29 +1986,33 @@ namespace IronRuby.Builtins {
             PrintOps.ReportWarning(writeStorage, tosConversion, message);
         }
 
+        // $_ is frame local, and the frame that has to see the line read is the caller's, not this
+        // one. IO#gets does set it, but the scope it sets it in is the one at its own call site -
+        // which here is inside this method, where nothing can read it again. So the assignment has
+        // to be repeated against the scope Kernel#gets was called from.
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
-        public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object>>/*!*/ storage, object self) {
+        public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self) {
             var site = storage.GetCallSite("gets", 0);
-            return site.Target(site, storage.Context.StandardInput);
+            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, storage.Context.StandardInput);
         }
 
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
-        public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, object self, 
+        public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self,
             [NotNull]MutableString/*!*/ separator) {
 
             var site = storage.GetCallSite("gets", 1);
-            return site.Target(site, storage.Context.StandardInput, separator);
+            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, storage.Context.StandardInput, separator);
         }
 
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
-        public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage, object self,
+        public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self,
             [NotNull]MutableString/*!*/ separator, [DefaultProtocol]int limit) {
 
             var site = storage.GetCallSite("gets", 2);
-            return site.Target(site, storage.Context.StandardInput, separator, limit);
+            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, storage.Context.StandardInput, separator, limit);
         }
 
         #endregion

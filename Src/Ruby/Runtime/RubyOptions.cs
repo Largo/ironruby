@@ -30,6 +30,11 @@ namespace IronRuby.Runtime {
         private readonly RubyEncoding _defaultEncoding;
         private readonly string _externalEncodingName;
         private readonly string _internalEncodingName;
+        private readonly bool _loopOverInput;
+        private readonly bool _printEachLine;
+        private readonly bool _autoSplit;
+        private readonly bool _chopLines;
+        private readonly string _inputRecordSeparator;
         private readonly string _standardLibraryPath;
         private readonly string _applicationBase;
         private readonly ReadOnlyCollection<string> _requirePaths;
@@ -77,6 +82,31 @@ namespace IronRuby.Runtime {
         /// </summary>
         public string InternalEncodingName {
             get { return _internalEncodingName; }
+        }
+
+        /// <summary>-n, and -p which implies it: run the program once per input line.</summary>
+        public bool LoopOverInput {
+            get { return _loopOverInput; }
+        }
+
+        /// <summary>-p: print $_ at the end of every iteration of the -n loop.</summary>
+        public bool PrintEachLine {
+            get { return _printEachLine; }
+        }
+
+        /// <summary>-a: split each input line into $F.</summary>
+        public bool AutoSplit {
+            get { return _autoSplit; }
+        }
+
+        /// <summary>-l: chomp each input line, and set $\ to $/.</summary>
+        public bool ChopLines {
+            get { return _chopLines; }
+        }
+
+        /// <summary>The initial $/ as given by -0, or null for the default newline.</summary>
+        public string InputRecordSeparator {
+            get { return _inputRecordSeparator; }
         }
 
         public string MainFile {
@@ -141,6 +171,12 @@ namespace IronRuby.Runtime {
             _defaultEncoding = GetOption<RubyEncoding>(options, "DefaultEncoding", null);
             _externalEncodingName = GetOption<string>(options, "ExternalEncoding", null);
             _internalEncodingName = GetOption<string>(options, "InternalEncoding", null);
+
+            _loopOverInput = GetOption(options, "LoopOverInput", false);
+            _printEachLine = GetOption(options, "PrintEachLine", false);
+            _autoSplit = GetOption(options, "AutoSplit", false);
+            _chopLines = GetOption(options, "ChopLines", false);
+            _inputRecordSeparator = GetOption<string>(options, "InputRecordSeparator", null);
 
             _mainFile = GetOption(options, "MainFile", (string)null);
             _verbosity = GetOption(options, "Verbosity", 1);

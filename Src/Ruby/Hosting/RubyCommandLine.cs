@@ -78,7 +78,50 @@ namespace IronRuby.Hosting {
         }
 
         protected override int RunFile(string fileName) {
+            var options = ((RubyContext)Language).RubyOptions;
+            if (options.LoopOverInput) {
+                // The program has to be read rather than handed to the compiler as a path, so
+                // that the -n loop can be wrapped around it.
+                string path = RubyUtils.CanonicalizePath(fileName);
+                string source = File.ReadAllText(path, GetSourceCodeEncoding());
+                return RunFile(Engine.CreateScriptSource(
+                    new BinaryContentProvider(GetSourceCodeEncoding().GetBytes(WrapInInputLoop(source, options))),
+                    path, GetSourceCodeEncoding(), SourceCodeKind.File
+                ));
+            }
+
             return RunFile(Engine.CreateScriptSourceFromFile(RubyUtils.CanonicalizePath(fileName), GetSourceCodeEncoding()));
+        }
+
+        /// <summary>
+        /// -n and -p run the program once per input line, as `while gets; ...; end`; -a splits the
+        /// line into $F and -l chomps it first.
+        ///
+        /// The loop header sits on the same line as the first line of the program rather than on a
+        /// line of its own, so that every line of the program keeps the number it has in the file
+        /// and backtraces still point at the right place.
+        ///
+        /// A BEGIN or END block in the program is rejected by the parser as "permitted only at
+        /// toplevel", because after the wrapping it no longer is one. MRI wraps the parsed program
+        /// instead, where the two have already been hoisted out; doing the same here needs the
+        /// same hoisting in the prism bridge.
+        /// </summary>
+        private static string/*!*/ WrapInInputLoop(string/*!*/ source, RubyOptions/*!*/ options) {
+            var header = new StringBuilder("while gets;");
+            if (options.ChopLines) {
+                header.Append("$_.chomp!($/);");
+            }
+            if (options.AutoSplit) {
+                header.Append("$F=$_.split;");
+            }
+
+            var footer = new StringBuilder();
+            if (options.PrintEachLine) {
+                footer.Append(";print $_");
+            }
+            footer.Append(";end");
+
+            return header.ToString() + source + footer.ToString();
         }
 
         protected override ScriptCodeParseResult GetCommandProperties(string code) {
@@ -90,6 +133,11 @@ namespace IronRuby.Hosting {
         }
 
         protected override int RunCommand(string/*!*/ command) {
+            var options = ((RubyContext)Language).RubyOptions;
+            if (options.LoopOverInput) {
+                command = WrapInInputLoop(command, options);
+            }
+
             return RunFile(CreateCommandSource(command, SourceCodeKind.Statements, "-e"));
         }
 

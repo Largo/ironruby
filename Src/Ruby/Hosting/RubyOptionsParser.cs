@@ -120,6 +120,14 @@ namespace IronRuby.Hosting {
 
             string mainFileFromPath = null;
 
+            // The flags that take no argument cluster with whatever follows them, so -ne 'code'
+            // is -n -e 'code'. Peeling one off at a time also covers -np, -nal and so on.
+            if (arg.Length > 2 && arg[0] == '-' && "nplad".IndexOf(arg[1]) >= 0) {
+                ParseArgument(arg.Substring(0, 2));
+                ParseArgument("-" + arg.Substring(2));
+                return;
+            }
+
             if (arg.StartsWith("-e", StringComparison.Ordinal)) {
                 string command;
                 if (arg == "-e") {
@@ -233,8 +241,20 @@ namespace IronRuby.Hosting {
                 return;
             }
 
-            if (arg.StartsWith("-0", StringComparison.Ordinal) ||
-                arg.StartsWith("-C", StringComparison.Ordinal) ||
+            // -0 alone means paragraph-less "\0", -0<octal> names the byte, as in -072 for ':'.
+            if (arg.StartsWith("-0", StringComparison.Ordinal)) {
+                int separator = 0;
+                for (int i = 2; i < arg.Length; i++) {
+                    if (arg[i] < '0' || arg[i] > '7') {
+                        throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));
+                    }
+                    separator = separator * 8 + (arg[i] - '0');
+                }
+                LanguageSetup.Options["InputRecordSeparator"] = ((char)separator).ToString();
+                return;
+            }
+
+            if (arg.StartsWith("-C", StringComparison.Ordinal) ||
                 arg.StartsWith("-F", StringComparison.Ordinal) ||
                 arg.StartsWith("-i", StringComparison.Ordinal) ||
                 arg.StartsWith("-T", StringComparison.Ordinal) ||
@@ -255,14 +275,27 @@ namespace IronRuby.Hosting {
             switch (optionName) {
                 #region Ruby options
 
-                case "-a":
                 case "-c":
                 case "--copyright":
-                case "-l":
-                case "-n":
-                case "-p":
                 case "-s":
                     throw new InvalidOptionException(String.Format("Option `{0}' not supported", optionName));
+
+                case "-n":
+                    LanguageSetup.Options["LoopOverInput"] = true;
+                    break;
+
+                case "-p":
+                    LanguageSetup.Options["LoopOverInput"] = true;
+                    LanguageSetup.Options["PrintEachLine"] = true;
+                    break;
+
+                case "-a":
+                    LanguageSetup.Options["AutoSplit"] = true;
+                    break;
+
+                case "-l":
+                    LanguageSetup.Options["ChopLines"] = true;
+                    break;
 
                 case "-d":
                     LanguageSetup.Options["DebugVariable"] = true; // $DEBUG = true

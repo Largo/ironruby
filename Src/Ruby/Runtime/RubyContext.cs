@@ -521,8 +521,10 @@ namespace IronRuby.Runtime {
             _currentException = null;
             _currentSafeLevel = 0;
             _childProcessExitStatus = null;
-            _inputSeparator = MutableString.CreateAscii("\n");
-            _outputSeparator = null;
+            // -0<octal> names the record separator; -l then copies it to $\ so that puts and
+            // print put back what the loop chomped off.
+            _inputSeparator = MutableString.CreateAscii(_options.InputRecordSeparator ?? "\n").Freeze();
+            _outputSeparator = _options.ChopLines ? _inputSeparator : null;
             _stringSeparator = null;
             _itemSeparator = null;
             _mainThread = Thread.CurrentThread;
@@ -598,8 +600,6 @@ namespace IronRuby.Runtime {
             // $-a
             // $F
             // $-i
-            // $-l
-            // $-p
 
             // $?
 
@@ -615,7 +615,11 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("LOADED_FEATURES", Runtime.GlobalVariables.LoadedFiles);
             DefineGlobalVariableNoLock("LOAD_PATH", Runtime.GlobalVariables.LoadPath);
             DefineGlobalVariableNoLock("-I", Runtime.GlobalVariables.LoadPath);
+            DefineGlobalVariableNoLock("-0", Runtime.GlobalVariables.InputSeparator);
             DefineGlobalVariableNoLock("-O", Runtime.GlobalVariables.InputSeparator);
+            DefineGlobalVariableNoLock("-a", new ReadOnlyGlobalVariableInfo(RubyOptions.AutoSplit));
+            DefineGlobalVariableNoLock("-l", new ReadOnlyGlobalVariableInfo(RubyOptions.ChopLines));
+            DefineGlobalVariableNoLock("-p", new ReadOnlyGlobalVariableInfo(RubyOptions.PrintEachLine));
             DefineGlobalVariableNoLock("-F", Runtime.GlobalVariables.StringSeparator);
             DefineGlobalVariableNoLock("FILENAME", Runtime.GlobalVariables.InputFileName);
 
