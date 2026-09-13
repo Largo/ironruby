@@ -4240,6 +4240,83 @@ class Module
   private :ruby2_keywords rescue nil
 end
 
+# ENV is Hash-shaped but was missing a third of the shape. Everything here is
+# written in terms of the accessors it does have, so it stays in step with the
+# real environment rather than a snapshot of it.
+class << ENV
+  def merge!(*others)
+    others.each do |other|
+      other.each do |key, value|
+        if block_given? && key?(key.to_s)
+          value = yield(key.to_s, self[key.to_s], value)
+        end
+        self[key.to_s] = value.nil? ? nil : value.to_s
+      end
+    end
+    self
+  end unless respond_to?(:merge!)
+
+  alias_method :update, :merge! unless respond_to?(:update)
+
+  def keep_if
+    return to_enum(:keep_if) unless block_given?
+    to_hash.each { |k, v| self[k] = nil unless yield(k, v) }
+    self
+  end unless respond_to?(:keep_if)
+
+  def select!
+    return to_enum(:select!) unless block_given?
+    changed = false
+    to_hash.each do |k, v|
+      unless yield(k, v)
+        self[k] = nil
+        changed = true
+      end
+    end
+    changed ? self : nil
+  end unless respond_to?(:select!)
+
+  alias_method :filter!, :select! unless respond_to?(:filter!)
+
+  def slice(*keys)
+    result = {}
+    keys.each do |k|
+      k = k.to_s
+      result[k] = self[k] if key?(k)
+    end
+    result
+  end unless respond_to?(:slice)
+
+  def except(*keys)
+    keys = keys.map { |k| k.to_s }
+    to_hash.reject { |k, _| keys.include?(k) }
+  end unless respond_to?(:except)
+
+  def assoc(key)
+    key = key.to_s
+    key?(key) ? [key, self[key]] : nil
+  end unless respond_to?(:assoc)
+
+  def rassoc(value)
+    value = value.to_s
+    to_hash.each { |k, v| return [k, v] if v == value }
+    nil
+  end unless respond_to?(:rassoc)
+
+  def key(value)
+    unless value.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into String")
+    end
+    to_hash.each { |k, v| return k if v == value }
+    nil
+  end unless respond_to?(:key)
+
+  def to_set(*args, &block)
+    require 'set'
+    ::Set.new(to_hash.to_a, *args, &block)
+  end unless respond_to?(:to_set)
+end
+
 class Proc
   def ruby2_keywords
     self
