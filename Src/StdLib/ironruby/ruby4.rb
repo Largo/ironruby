@@ -795,6 +795,13 @@ RUBY_COPYRIGHT = "ironruby - Apache License, Version 2.0" unless defined?(RUBY_C
 RUBY_DESCRIPTION = "ironruby #{RUBY_VERSION} (.NET)" unless defined?(RUBY_DESCRIPTION)
 
 class File
+  # True when the path is absolute without consulting the filesystem. "~/x" is
+  # not absolute: MRI does no tilde expansion here.
+  def self.absolute_path?(path)
+    path = ::Kernel.String(path) unless path.is_a?(::String)
+    !!(path =~ %r{\A(?:[A-Za-z]:)?[/\\]})
+  end unless respond_to?(:absolute_path?)
+
   def self.realpath(path, dir = nil)
     expand_path(path, dir)
   end unless respond_to?(:realpath)
@@ -4020,6 +4027,13 @@ class Enumerator
 end
 
 module Enumerable
+  # Every Enumerable gets #to_set, not just Array: Hash, Struct, Range and
+  # Enumerator are all asked for one by the specs.
+  def to_set(*args, &block)
+    require 'set'
+    ::Set.new(self, *args, &block)
+  end unless method_defined?(:to_set)
+
   def chain(*others)
     ::Enumerator::Chain.new(self, *others)
   end unless method_defined?(:chain)
