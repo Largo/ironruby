@@ -438,8 +438,14 @@ namespace IronRuby.Builtins {
 
                 // Signalling yourself with something that would end the process, and no handler to
                 // catch it, is a SignalException in MRI - the program gets to rescue it. Letting the
-                // real signal through would just kill us.
-                if (target == Environment.ProcessId && PosixSignals.TerminatesByDefault(signal) && !PosixSignals.HasHandler(signal)) {
+                // real signal through would just kill us. pid 0 and our own negated process group
+                // both include this process, so they count as "yourself" too - and sending a real
+                // signal to the whole group would take the test runner down with us.
+                bool targetsUs = target == Environment.ProcessId
+                    || target == 0
+                    || (target < 0 && -target == PosixSignals.ProcessGroupId);
+
+                if (targetsUs && PosixSignals.TerminatesByDefault(signal) && !PosixSignals.HasHandler(signal)) {
                     string name = PosixSignals.ToName(signal);
                     throw new SignalException((name != null) ? "SIG" + name : "SIG" + signal);
                 }

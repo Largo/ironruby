@@ -116,6 +116,21 @@ namespace IronRuby.Builtins {
             }
         }
 
+        [DllImport("libc", SetLastError = true, EntryPoint = "getpgid")]
+        private static extern int SysGetPgid(int pid);
+
+        /// <summary>This process's group, or 0 if the platform will not say.</summary>
+        internal static int ProcessGroupId {
+            get {
+                try {
+                    int pgid = SysGetPgid(0);
+                    return (pgid < 0) ? 0 : pgid;
+                } catch (Exception) {
+                    return 0;
+                }
+            }
+        }
+
         internal static bool HasHandler(int signal) {
             lock (_handlers) {
                 return _handlers.ContainsKey(signal);
