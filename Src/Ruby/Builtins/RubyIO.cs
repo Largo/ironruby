@@ -107,6 +107,13 @@ namespace IronRuby.Builtins {
             get { return _context; }
         }
 
+        /// <summary>
+        /// Whether an encoding was actually asked for - in the mode string, in the options
+        /// hash, or through #set_encoding - as opposed to being inherited from the context
+        /// defaults. MRI only reports an external encoding it was told about.
+        /// </summary>
+        public bool EncodingSpecified { get; set; }
+
         public RubyEncoding ExternalEncoding {
             get { return _externalEncoding; }
             set { _externalEncoding = value; }
