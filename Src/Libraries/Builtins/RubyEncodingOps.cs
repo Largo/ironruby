@@ -47,12 +47,13 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("source_encoding_name")]
             public static MutableString GetSourceEncodingName(UndefinedConversionError/*!*/ self) {
-                return self.SourceEncoding != null ? MutableString.CreateAscii(self.SourceEncoding.Name) : null;
+                // MRI hands back the name the transcoder tables carry, which is a byte string.
+                return self.SourceEncoding != null ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(self.SourceEncoding.Name)) : null;
             }
 
             [RubyMethod("destination_encoding_name")]
             public static MutableString GetDestinationEncodingName(UndefinedConversionError/*!*/ self) {
-                return self.DestinationEncoding != null ? MutableString.CreateAscii(self.DestinationEncoding.Name) : null;
+                return self.DestinationEncoding != null ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(self.DestinationEncoding.Name)) : null;
             }
 
             [RubyMethod("error_char")]
@@ -79,12 +80,12 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("source_encoding_name")]
             public static MutableString GetSourceEncodingName(InvalidByteSequenceError/*!*/ self) {
-                return self.SourceEncoding != null ? MutableString.CreateAscii(self.SourceEncoding.Name) : null;
+                return self.SourceEncoding != null ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(self.SourceEncoding.Name)) : null;
             }
 
             [RubyMethod("destination_encoding_name")]
             public static MutableString GetDestinationEncodingName(InvalidByteSequenceError/*!*/ self) {
-                return self.DestinationEncoding != null ? MutableString.CreateAscii(self.DestinationEncoding.Name) : null;
+                return self.DestinationEncoding != null ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(self.DestinationEncoding.Name)) : null;
             }
 
             [RubyMethod("error_bytes")]
