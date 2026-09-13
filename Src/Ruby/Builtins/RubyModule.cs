@@ -1039,6 +1039,17 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Get constant defined in this module or any of its ancestors, which is what
+        /// Module#const_defined? searches unless it is passed inherit: false.
+        /// </summary>
+        public bool TryResolveConstant(RubyGlobalScope autoloadScope, string/*!*/ name, out object value) {
+            ConstantStorage storage;
+            var result = TryResolveConstant(autoloadScope, name, out storage);
+            value = storage.Value;
+            return result;
+        }
+
+        /// <summary>
         /// Get constant defined in this module.
         /// </summary>
         internal bool TryGetConstant(RubyGlobalScope autoloadScope, string/*!*/ name, out ConstantStorage value) {
