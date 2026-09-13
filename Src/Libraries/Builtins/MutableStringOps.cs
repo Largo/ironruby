@@ -2373,12 +2373,42 @@ namespace IronRuby.Builtins {
         public static bool StartsWith(RubyScope/*!*/ scope, MutableString/*!*/ self,
             [DefaultProtocol, Optional]MutableString subString) {
 
-            // TODO: Deal with encodings
-
-            if (subString == null || (self.Length < subString.Length)) {
+            if (subString == null) {
                 return false;
             }
-            return self.GetSlice(0, subString.Length).Equals(subString);
+
+            int prefix = subString.GetByteCount();
+            if (self.GetByteCount() < prefix) {
+                return false;
+            }
+            for (int i = 0; i < prefix; i++) {
+                if (self.GetByte(i) != subString.GetByte(i)) {
+                    return false;
+                }
+            }
+
+            // The bytes match, but MRI also insists that they end on a character boundary:
+            // "\xC3\xA9" does not start with "\xC3" even though its first byte is one.
+            return EndsOnCharacterBoundary(self, prefix);
+        }
+
+        /// <summary>
+        /// True when <paramref name="byteOffset"/> is the start of a character of
+        /// <paramref name="self"/> (or its very end).
+        /// </summary>
+        private static bool EndsOnCharacterBoundary(MutableString/*!*/ self, int byteOffset) {
+            if (byteOffset == 0) {
+                return true;
+            }
+            int at = 0;
+            var characters = self.GetCharacters();
+            while (characters.MoveNext()) {
+                at += characters.Current.ToMutableString(self.Encoding).GetByteCount();
+                if (at >= byteOffset) {
+                    return at == byteOffset;
+                }
+            }
+            return at == byteOffset;
         }
 
         [RubyMethod("end_with?")]
