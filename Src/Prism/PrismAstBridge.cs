@@ -313,19 +313,19 @@ namespace IronRuby.Prism {
                         new InstanceVariable(ivarAnd.Name, span), Expr(ivarAnd.Value), "&&", span);
 
                 case Pm.GlobalVariableReadNode gvarRead:
-                    return new IronRuby.Compiler.Ast.GlobalVariable(gvarRead.Name.TrimStart('$'), span);
+                    return new IronRuby.Compiler.Ast.GlobalVariable(gvarRead.Name.Substring(1), span);
                 case Pm.GlobalVariableWriteNode gvarWrite:
                     return new SimpleAssignmentExpression(
-                        new IronRuby.Compiler.Ast.GlobalVariable(gvarWrite.Name.TrimStart('$'), span), Expr(gvarWrite.Value), null, span);
+                        new IronRuby.Compiler.Ast.GlobalVariable(gvarWrite.Name.Substring(1), span), Expr(gvarWrite.Value), null, span);
                 case Pm.GlobalVariableOperatorWriteNode gvarOp:
                     return new SimpleAssignmentExpression(
-                        new IronRuby.Compiler.Ast.GlobalVariable(gvarOp.Name.TrimStart('$'), span), Expr(gvarOp.Value), gvarOp.BinaryOperator, span);
+                        new IronRuby.Compiler.Ast.GlobalVariable(gvarOp.Name.Substring(1), span), Expr(gvarOp.Value), gvarOp.BinaryOperator, span);
                 case Pm.GlobalVariableOrWriteNode gvarOr:
                     return new SimpleAssignmentExpression(
-                        new IronRuby.Compiler.Ast.GlobalVariable(gvarOr.Name.TrimStart('$'), span), Expr(gvarOr.Value), "||", span);
+                        new IronRuby.Compiler.Ast.GlobalVariable(gvarOr.Name.Substring(1), span), Expr(gvarOr.Value), "||", span);
                 case Pm.GlobalVariableAndWriteNode gvarAnd:
                     return new SimpleAssignmentExpression(
-                        new IronRuby.Compiler.Ast.GlobalVariable(gvarAnd.Name.TrimStart('$'), span), Expr(gvarAnd.Value), "&&", span);
+                        new IronRuby.Compiler.Ast.GlobalVariable(gvarAnd.Name.Substring(1), span), Expr(gvarAnd.Value), "&&", span);
 
                 case Pm.ClassVariableReadNode cvarRead:
                     return new ClassVariable(cvarRead.Name, span);
@@ -439,7 +439,7 @@ namespace IronRuby.Prism {
                 }
 
                 case Pm.BackReferenceReadNode backRef: {
-                    switch (backRef.Name.TrimStart('$')) {
+                    switch (backRef.Name.Substring(1)) {
                         case "&": return new RegexMatchReference(0, span);
                         case "~": return new RegexMatchReference(-1, span);
                         case "+": return new RegexMatchReference(-2, span);
@@ -664,8 +664,8 @@ namespace IronRuby.Prism {
 
         private string/*!*/ GlobalAliasName(Pm.PmNode/*!*/ node) {
             switch (node) {
-                case Pm.GlobalVariableReadNode gvar: return gvar.Name.TrimStart('$');
-                case Pm.BackReferenceReadNode backRef: return backRef.Name.TrimStart('$');
+                case Pm.GlobalVariableReadNode gvar: return gvar.Name.Substring(1);
+                case Pm.BackReferenceReadNode backRef: return backRef.Name.Substring(1);
                 case Pm.NumberedReferenceReadNode numbered: return numbered.Number.ToString();
                 default: throw Unsupported(node);
             }
@@ -1040,7 +1040,7 @@ namespace IronRuby.Prism {
                 case Pm.InstanceVariableTargetNode ivar:
                     return new InstanceVariable(ivar.Name, span);
                 case Pm.GlobalVariableTargetNode gvar:
-                    return new IronRuby.Compiler.Ast.GlobalVariable(gvar.Name.TrimStart('$'), span);
+                    return new IronRuby.Compiler.Ast.GlobalVariable(gvar.Name.Substring(1), span);
                 case Pm.ClassVariableTargetNode cvar:
                     return new ClassVariable(cvar.Name, span);
                 case Pm.ConstantTargetNode constant:
