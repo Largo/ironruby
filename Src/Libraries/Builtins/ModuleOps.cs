@@ -859,11 +859,20 @@ namespace IronRuby.Builtins {
         // thread-safe:
         [RubyMethod("const_defined?")]
         public static bool IsConstantDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
+            return IsConstantDefined(self, constantName, true);
+        }
+
+        [RubyMethod("const_defined?")]
+        public static bool IsConstantDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName, bool inherit) {
             RubyUtils.CheckConstantName(constantName);
             object constant;
 
-            // MRI checks declared constans only and don't trigger autoload:
-            return self.TryGetConstant(null, constantName, out constant);
+            // Passing null as the autoload scope so that a registered autoload answers true
+            // without running: MRI reports the constant as defined but does not trigger it here.
+            // inherit defaults to true - the ancestors are searched unless it is explicitly false.
+            return inherit
+                ? self.TryResolveConstant(null, constantName, out constant)
+                : self.TryGetConstant(null, constantName, out constant);
         }
 
         // thread-safe:
