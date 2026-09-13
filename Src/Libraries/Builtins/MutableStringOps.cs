@@ -2286,6 +2286,10 @@ namespace IronRuby.Builtins {
         public static object Index(RubyScope/*!*/ scope, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol, Optional]int start) {
 
+            // A Regexp has to interpret characters, so unlike #index with a String this one does
+            // refuse a receiver whose bytes are not valid in its encoding, the way MRI does.
+            RequireValidEncoding(self);
+
             MatchData match = regex.Match(self, start, true);
             scope.GetInnerMostClosureScope().CurrentMatch = match;
             return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.Index) : null;
@@ -2369,12 +2373,42 @@ namespace IronRuby.Builtins {
         public static bool StartsWith(RubyScope/*!*/ scope, MutableString/*!*/ self,
             [DefaultProtocol, Optional]MutableString subString) {
 
-            // TODO: Deal with encodings
-
-            if (subString == null || (self.Length < subString.Length)) {
+            if (subString == null) {
                 return false;
             }
-            return self.GetSlice(0, subString.Length).Equals(subString);
+
+            int prefix = subString.GetByteCount();
+            if (self.GetByteCount() < prefix) {
+                return false;
+            }
+            for (int i = 0; i < prefix; i++) {
+                if (self.GetByte(i) != subString.GetByte(i)) {
+                    return false;
+                }
+            }
+
+            // The bytes match, but MRI also insists that they end on a character boundary:
+            // "\xC3\xA9" does not start with "\xC3" even though its first byte is one.
+            return EndsOnCharacterBoundary(self, prefix);
+        }
+
+        /// <summary>
+        /// True when <paramref name="byteOffset"/> is the start of a character of
+        /// <paramref name="self"/> (or its very end).
+        /// </summary>
+        private static bool EndsOnCharacterBoundary(MutableString/*!*/ self, int byteOffset) {
+            if (byteOffset == 0) {
+                return true;
+            }
+            int at = 0;
+            var characters = self.GetCharacters();
+            while (characters.MoveNext()) {
+                at += characters.Current.ToMutableString(self.Encoding).GetByteCount();
+                if (at >= byteOffset) {
+                    return at == byteOffset;
+                }
+            }
+            return at == byteOffset;
         }
 
         [RubyMethod("end_with?")]
@@ -2420,12 +2454,24 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        /// <summary>
+        /// Most operations get along fine with bytes that are not valid in the string's encoding -
+        /// see EscapingEncoding - but the ones that have to interpret characters do not, and MRI
+        /// refuses those up front rather than producing nonsense.
+        /// </summary>
+        private static void RequireValidEncoding(MutableString/*!*/ self) {
+            if (self.ContainsInvalidCharacters()) {
+                throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", self.Encoding.Name);
+            }
+        }
+
         [RubyMethod("delete")]
         public static MutableString/*!*/ Delete(MutableString/*!*/ self, 
             [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ strs) {
             if (strs.Length == 0) {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments");
             }
+            RequireValidEncoding(self);
             return InternalDelete(self, strs);
         }
 
@@ -2808,6 +2854,11 @@ namespace IronRuby.Builtins {
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, 
             [DefaultProtocol]MutableString separator, [DefaultProtocol, Optional]int limit) {
 
+            RequireValidEncoding(self);
+            if (separator != null) {
+                RequireValidEncoding(separator);
+            }
+
             if (separator == null) {
                 object defaultSeparator = stringCast.Context.StringSeparator;
                 RubyRegex regexSeparator = defaultSeparator as RubyRegex;
@@ -2832,7 +2883,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("split")]
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regexp, [DefaultProtocol, Optional]int limit) {
-            
+
+            RequireValidEncoding(self);
+
             if (regexp.IsEmpty) {
                 return InternalSplit(self, MutableString.FrozenEmpty, limit);
             }

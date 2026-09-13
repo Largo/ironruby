@@ -2823,19 +2823,52 @@ class String
     # String subclass over to the result.
     return __ir_plain_copy__ if valid_encoding?
     default = encoding == ::Encoding::UTF_8 ? "�" : "?"
+    if replacement && !replacement.valid_encoding?
+      ::Kernel.raise(::ArgumentError, "replacement must be valid byte sequence '#{replacement.inspect}'")
+    end
     out = +""
     out.force_encoding(encoding) if out.respond_to?(:force_encoding)
+    # A run of bad bytes that is the start of a character which simply ran out of input -
+    # a truncated one at the end of the string - is one replacement, not one per byte, so
+    # the bad characters are collected before being handed over.
+    pending = nil
+    flush = lambda do
+      next if pending.nil?
+      out << (block ? block.call(pending).to_s : (replacement || default))
+      pending = nil
+    end
     each_char do |ch|
       if ch.valid_encoding?
+        flush.call
         out << ch
-      elsif block
-        out << block.call(ch).to_s
+      elsif pending && __ir_starts_character__(pending)
+        pending += ch
       else
-        out << (replacement || default)
+        flush.call
+        pending = ch
       end
     end
+    flush.call
     out
   end unless method_defined?(:scrub)
+
+  # True when the bytes could be the beginning of a character in this encoding that ran
+  # out of input, as opposed to something that can never begin one.
+  def __ir_starts_character__(bytes)
+    return false if bytes.empty?
+    lead = bytes.getbyte(0)
+    case encoding
+    when ::Encoding::UTF_8
+      expected = if lead >= 0xF0 then 4 elsif lead >= 0xE0 then 3 elsif lead >= 0xC2 then 2 else 0 end
+      return false if expected == 0 || bytes.bytesize >= expected
+      (1...bytes.bytesize).all? { |i| (bytes.getbyte(i) & 0xC0) == 0x80 }
+    when ::Encoding::UTF_16LE, ::Encoding::UTF_16BE, ::Encoding::UTF_32LE, ::Encoding::UTF_32BE
+      bytes.bytesize < 4
+    else
+      false
+    end
+  end
+  private :__ir_starts_character__
 
   def scrub!(replacement = nil, &block)
     replace(scrub(replacement, &block))
