@@ -4883,8 +4883,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "method", 0x51, 
-                0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.KernelOps.GetMethod)
+                0x00040008U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.String, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.KernelOps.GetMethod)
             );
             
             DefineLibraryMethod(module, "methods", 0x51, 
@@ -5934,7 +5934,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "parameters", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetParameters)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetParameters)
             );
             
             DefineLibraryMethod(module, "receiver", 0x51, 
@@ -5945,6 +5945,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "source_location", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetSourceLocation)
+            );
+            
+            DefineLibraryMethod(module, "super_method", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.MethodOps.GetSuperMethod)
             );
             
             DefineLibraryMethod(module, "to_proc", 0x51, 

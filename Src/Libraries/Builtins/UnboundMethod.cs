@@ -154,6 +154,11 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static MutableString/*!*/ ToS(RubyContext/*!*/ context, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
             RubyModule targetModule, string/*!*/ classDisplayName) {
+            return ToS(context, methodName, info, targetModule, classDisplayName, false);
+        }
+
+        internal static MutableString/*!*/ ToS(RubyContext/*!*/ context, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
+            RubyModule targetModule, string/*!*/ classDisplayName, bool isMissingMethod) {
 
             RubyModule declaringModule = info.AliasOwner ?? info.DeclaringModule ?? targetModule;
 
@@ -189,18 +194,20 @@ namespace IronRuby.Builtins {
 
             result.Append(methodName);
 
-            if (info.OriginalName != null && info.OriginalName != methodName) {
+            if (!isMissingMethod && info.OriginalName != null && info.OriginalName != methodName) {
                 result.Append('(');
                 result.Append(info.OriginalName);
                 result.Append(')');
             }
 
-            var signature = info.GetParameterSignature();
-            if (signature != null) {
+            var signature = isMissingMethod ? null : info.GetParameterSignature();
+            if (isMissingMethod) {
+                result.Append("(*)");
+            } else if (signature != null) {
                 result.Append(signature.ToParameterListString());
             }
 
-            var location = GetSourceLocation(info);
+            var location = isMissingMethod ? null : GetSourceLocation(info);
             if (location != null) {
                 result.Append(' ');
                 result.Append(location[0] as MutableString);

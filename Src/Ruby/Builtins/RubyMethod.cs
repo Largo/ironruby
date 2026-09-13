@@ -26,6 +26,7 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Compiler;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
 using Microsoft.Scripting.Runtime;
@@ -137,18 +138,24 @@ namespace IronRuby.Builtins {
         public sealed class Curried : RubyMethod {
             private readonly string/*!*/ _methodNameArg;
 
-            internal Curried(object target, RubyMemberInfo/*!*/ info, string/*!*/ methodNameArg)
-                : base(target, info, "method_missing") {
+            /// <summary>
+            /// The method answers to the name that was asked for - that is what Method#name and
+            /// Method#to_s have to report - while the body it actually calls is method_missing,
+            /// with the name pushed in front of the arguments.
+            /// </summary>
+            public Curried(object target, RubyMemberInfo/*!*/ info, string/*!*/ methodNameArg)
+                : base(target, info, methodNameArg) {
                 _methodNameArg = methodNameArg;
             }
 
             internal override void BuildInvoke(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
-                args.InsertMethodName(_methodNameArg);
-                base.BuildInvoke(metaBuilder, args);
-            }
+                Assert.NotNull(metaBuilder, args);
+                Debug.Assert(args.Target == this);
 
-            public override Proc/*!*/ ToProc(RubyScope/*!*/ scope) {
-                throw new NotSupportedException();
+                metaBuilder.AddRestriction(Ast.Equal(args.TargetExpression, AstUtils.Constant(this)));
+                args.SetTarget(AstUtils.Constant(Target, CompilerHelpers.GetVisibleType(Target)), Target);
+                args.InsertMethodName(_methodNameArg);
+                Info.BuildCall(metaBuilder, args, Symbols.MethodMissing);
             }
 
             private string/*!*/ GetCurriedDebugView() {

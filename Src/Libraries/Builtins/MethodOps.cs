@@ -26,7 +26,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("==")]
         [RubyMethod("eql?")]
         public static bool Equal(RubyMethod/*!*/ self, [NotNull]RubyMethod/*!*/ other) {
-            return ReferenceEquals(self.Target, other.Target) && self.Info.IsEquivalentTo(other.Info);
+            // two method_missing-backed methods share one info, so only the name tells them apart
+            return ReferenceEquals(self.Target, other.Target) && self.Info.IsEquivalentTo(other.Info)
+                && (!(self is RubyMethod.Curried) || self.Name == other.Name);
         }
 
         // both names need both overloads, or `eql?' is not the same method as `==' and comparing
@@ -49,7 +51,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("arity")]
         public static int GetArity(RubyMethod/*!*/ self) {
-            return self.Info.GetArity();            
+            // nothing is known about a method only method_missing implements
+            return (self is RubyMethod.Curried) ? -1 : self.Info.GetArity();
         }
 
         [RubyMethod("name")]
@@ -94,12 +97,38 @@ namespace IronRuby.Builtins {
             // whether or not one had been created yet, and MRI's description says so
             var module = self.Target as RubyModule;
             return UnboundMethod.ToS(context, self.Name, self.Info,
-                module != null ? module.GetOrCreateSingletonClass() : self.GetTargetClass(), "Method");
+                module != null ? module.GetOrCreateSingletonClass() : self.GetTargetClass(), "Method",
+                (self is RubyMethod.Curried));
         }
 
         [RubyMethod("to_proc")]
         public static Proc/*!*/ ToProc(RubyScope/*!*/ scope, RubyMethod/*!*/ self) {
             return self.ToProc(scope);
+        }
+
+        /// <summary>
+        /// The method `super' would reach from inside this one: the same name, resolved from the
+        /// module that holds this body onwards through the receiver's ancestry. nil when there is
+        /// nothing further along.
+        /// </summary>
+        [RubyMethod("super_method")]
+        public static RubyMethod GetSuperMethod(RubyContext/*!*/ context, RubyMethod/*!*/ self) {
+            RubyModule owner = self.Info.DeclaringModule;
+            if (owner == null || self is RubyMethod.Curried) {
+                return null;
+            }
+
+            // an alias resolves super under the name the body was written with, which is the
+            // only name the module holding the body knows it by
+            string name = self.Info.OriginalName ?? self.Name;
+
+            var targetClass = context.GetImmediateClassOf(self.Target);
+            MethodResolutionResult result;
+            using (context.ClassHierarchyLocker()) {
+                result = targetClass.ResolveSuperMethodNoLock(name, owner);
+            }
+
+            return result.Found ? new RubyMethod(self.Target, result.Info, name) : null;
         }
 
         [RubyMethod("unbind")]
@@ -145,11 +174,14 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source_location")]
         public static RubyArray GetSourceLocation(RubyMethod/*!*/ self) {
-            return UnboundMethod.GetSourceLocation(self.Info);
+            return (self is RubyMethod.Curried) ? null : UnboundMethod.GetSourceLocation(self.Info);
         }
 
         [RubyMethod("parameters")]
-        public static RubyArray/*!*/ GetParameters(RubyMethod/*!*/ self) {
+        public static RubyArray/*!*/ GetParameters(RubyContext/*!*/ context, RubyMethod/*!*/ self) {
+            if ((self is RubyMethod.Curried)) {
+                return new RubyArray(1) { new RubyArray(1) { context.CreateAsciiSymbol("rest") } };
+            }
             return self.Info.GetRubyParameterArray();
         }
     }

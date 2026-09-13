@@ -1243,12 +1243,28 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("method")]
-        public static RubyMethod/*!*/ GetMethod(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ name) {
+        public static RubyMethod/*!*/ GetMethod(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ respondToMissingStorage,
+            RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ name) {
+
             RubyMemberInfo info = context.ResolveMethod(self, name, VisibilityContext.AllVisible).Info;
-            if (info == null) {
-                throw RubyExceptions.CreateUndefinedMethodError(context.GetClassOf(self), name);
+            if (info != null) {
+                return new RubyMethod(self, info, name);
             }
-            return new RubyMethod(self, info, name);
+
+            // MRI asks respond_to_missing? before giving up: an object may advertise a name that
+            // only method_missing implements, and then #method has to hand back something that
+            // calls method_missing with that name
+            var site = respondToMissingStorage.GetCallSite("respond_to_missing?", 2);
+            if (Protocols.IsTrue(site.Target(site, self, context.StringifyIdentifier(name),
+                ScriptingRuntimeHelpers.BooleanToObject(true)))) {
+
+                var missing = context.ResolveMethod(self, Symbols.MethodMissing, VisibilityContext.AllVisible).Info;
+                if (missing != null) {
+                    return new RubyMethod.Curried(self, missing, name);
+                }
+            }
+
+            throw RubyExceptions.CreateUndefinedMethodError(context.GetClassOf(self), name);
         }
 
         // 1.9: public: public_method
