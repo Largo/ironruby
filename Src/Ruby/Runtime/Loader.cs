@@ -589,7 +589,15 @@ namespace IronRuby.Runtime {
             lock (_unfinishedFiles) {
                 Thread owner;
                 while (_unfinishedFiles.TryGetValue(file.Path, out owner) && owner != Thread.CurrentThread) {
-                    Monitor.Wait(_unfinishedFiles);
+                    try {
+                        Monitor.Wait(_unfinishedFiles);
+                    } catch (ThreadInterruptedException) {
+                        // Thread#kill and Thread#raise deliver by parking an exception and interrupting the
+                        // target's wait, so an interrupt here is either that exception - in which case this
+                        // throws it, holding no claim on the file - or somebody else's, in which case the
+                        // wait simply resumes.
+                        RubyUtils.TranslateThreadInterrupt();
+                    }
                 }
 
                 claimed = !_unfinishedFiles.ContainsKey(file.Path) && !AlreadyLoaded(path, files, flags);
