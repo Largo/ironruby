@@ -143,7 +143,10 @@ namespace IronRuby.Builtins {
 
             if (info.HasEncoding) {
                 file.ExternalEncoding = info.ExternalEncoding;
-                file.InternalEncoding = info.InternalEncoding;
+                // An explicit external encoding on its own does not cancel the default
+                // internal encoding; MRI still transcodes to it.
+                file.InternalEncoding = info.InternalEncoding ?? file.Context.DefaultInternalEncoding;
+                file.EncodingSpecified = true;
             } else if ((info.Mode & IOMode.PreserveEndOfLines) != 0) {
                 // The "b" flag with no explicit encoding means BINARY.
                 file.ExternalEncoding = RubyEncoding.Binary;

@@ -141,7 +141,10 @@ namespace IronRuby.Builtins {
 
             if (info.HasEncoding) {
                 io.ExternalEncoding = info.ExternalEncoding;
-                io.InternalEncoding = info.InternalEncoding;
+                // An explicit external encoding on its own does not cancel the default
+                // internal encoding; MRI still transcodes to it.
+                io.InternalEncoding = info.InternalEncoding ?? io.Context.DefaultInternalEncoding;
+                io.EncodingSpecified = true;
             }
 
             return io;
@@ -157,6 +160,7 @@ namespace IronRuby.Builtins {
             self.Mode = source.Mode;
             self.ExternalEncoding = source.ExternalEncoding;
             self.InternalEncoding = source.InternalEncoding;
+            self.EncodingSpecified = source.EncodingSpecified;
             return self;
         }
 
@@ -198,7 +202,10 @@ namespace IronRuby.Builtins {
 
             if (info.HasEncoding) {
                 io.ExternalEncoding = info.ExternalEncoding;
-                io.InternalEncoding = info.InternalEncoding;
+                // An explicit external encoding on its own does not cancel the default
+                // internal encoding; MRI still transcodes to it.
+                io.InternalEncoding = info.InternalEncoding ?? io.Context.DefaultInternalEncoding;
+                io.EncodingSpecified = true;
             }
 
             return io;
@@ -674,14 +681,40 @@ namespace IronRuby.Builtins {
 
         #region external_encoding, internal_encoding, set_encoding
 
+        /// <summary>
+        /// MRI does not report the external encoding of every stream. It reports one that
+        /// was asked for, one that is binary because the mode said so, and the default for
+        /// a read-only stream or when a default internal encoding is in play - and answers
+        /// nil otherwise, which is what a plain "w" or "r+" gets. See
+        /// Util/io-encoding-matrix.rb, which is where these rules were read off CRuby.
+        /// </summary>
         [RubyMethod("external_encoding")]
         public static RubyEncoding GetExternalEncoding(RubyIO/*!*/ self) {
-            return self.ExternalEncoding;
+            if (self.EncodingSpecified
+                || self.ExternalEncoding == RubyEncoding.Binary
+                || self.Context.DefaultInternalEncoding != null
+                || !self.Mode.CanWrite()) {
+                return self.ExternalEncoding;
+            }
+            return null;
         }
 
+        /// <summary>
+        /// The internal encoding is what the bytes get transcoded *to*, so MRI answers nil
+        /// when there is no transcoding to do: when the external side is binary, and when
+        /// the two encodings are the same.
+        /// </summary>
         [RubyMethod("internal_encoding")]
         public static RubyEncoding GetInternalEncoding(RubyIO/*!*/ self) {
-            return self.InternalEncoding;
+            var result = self.InternalEncoding;
+            if (result == null) {
+                return null;
+            }
+            var external = self.ExternalEncoding;
+            if (external == RubyEncoding.Binary || external == result) {
+                return null;
+            }
+            return result;
         }
 
         // TODO: to-str, last param to-hash
@@ -708,6 +741,7 @@ namespace IronRuby.Builtins {
         public static RubyIO/*!*/ SetEncodings(RubyIO/*!*/ self, RubyEncoding external, [DefaultParameterValue(null)]RubyEncoding @internal) {
             self.ExternalEncoding = external ?? self.Context.RubyOptions.LocaleEncoding;
             self.InternalEncoding = @internal;
+            self.EncodingSpecified = true;
             return self;
         }
 

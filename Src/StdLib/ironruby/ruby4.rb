@@ -5828,6 +5828,10 @@ class IO
       @freed = false
     end
 
+    def __set_parent__(parent)
+      @parent = parent
+    end
+
     def __take_over__(data, offset, size, flags)
       @data = data
       @offset = offset
@@ -5848,12 +5852,20 @@ class IO
       size == 0
     end
 
+    # Freeing a buffer leaves it valid-but-null; what makes a buffer invalid is
+    # the storage underneath going away, which is what a slice of a transferred
+    # or freed buffer is looking at.
     def valid?
-      true
+      @parent.nil? || !@parent.__storage_dead__
     end
 
+    def __storage_dead__
+      defined?(@storage_dead) ? @storage_dead : false
+    end
+    protected :__storage_dead__
+
     def null?
-      @freed
+      @freed || @size == 0
     end
 
     def external?
@@ -5861,7 +5873,7 @@ class IO
     end
 
     def internal?
-      (@flags & INTERNAL) != 0
+      !null? && (@flags & INTERNAL) != 0
     end
 
     def mapped?
@@ -5904,6 +5916,7 @@ class IO
 
     def free
       @freed = true
+      @storage_dead = true
       @data = "".b
       @offset = 0
       @size = 0
@@ -5915,6 +5928,7 @@ class IO
       other = self.class.allocate
       other.__take_over__(@data, @offset, @size, @flags)
       @freed = true
+      @storage_dead = true
       @data = "".b
       @offset = 0
       @size = 0
@@ -5923,6 +5937,9 @@ class IO
 
     def resize(new_size)
       __check_writable__
+      if external? || mapped?
+        ::Kernel.raise(AccessError, "Cannot resize external buffer!")
+      end
       new_size = ::Kernel.Integer(new_size)
       ::Kernel.raise(::ArgumentError, "Size can't be negative!") if new_size < 0
       current = get_string
@@ -5946,6 +5963,7 @@ class IO
       end
       other = self.class.allocate
       other.__take_over__(@data, @offset + offset, length, @flags)
+      other.__set_parent__(self)
       other
     end
 
@@ -6069,7 +6087,7 @@ class IO
     def to_s
       parts = []
       parts << "EXTERNAL" if external?
-      parts << "INTERNAL" if internal?
+      parts << "INTERNAL" if internal? && !null?
       parts << "MAPPED" if mapped?
       parts << "SHARED" if shared?
       parts << "LOCKED" if locked?
@@ -6078,7 +6096,17 @@ class IO
       parts << "NULL" if null?
       "#<IO::Buffer 0x#{(object_id << 1).to_s(16).rjust(16, '0')}+#{@size} #{parts.join(' ')}>"
     end
-    alias_method :inspect, :to_s
+    # MRI's inspect is the header with the hexdump under it; to_s is the
+    # header on its own.
+    def inspect
+      return to_s if null? || size == 0
+      "#{to_s}#{nl_}#{hexdump}"
+    end
+
+    def nl_
+      "\n"
+    end
+    private :nl_
 
     def <=>(other)
       return nil unless other.is_a?(::IO::Buffer)
@@ -6089,16 +6117,94 @@ class IO
       other.is_a?(::IO::Buffer) && get_string == other.get_string
     end
 
+    # The copying operators also want a Buffer, and also work over the bytes
+    # the two have in common - the result is the size of the receiver.
     def __binary_op__(other, op)
+      __require_buffer__(other)
       a = get_string
-      b = other.is_a?(::IO::Buffer) ? other.get_string : other.to_s
-      ::Kernel.raise(::ArgumentError, "Buffers must be the same size!") if a.bytesize != b.bytesize
-      bytes = a.bytes.each_with_index.map { |x, i| x.__send__(op, b.getbyte(i)) & 0xff }
+      b = other.get_string
+      n = [a.bytesize, b.bytesize].min
+      bytes = a.bytes
+      n.times { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i)) & 0xff }
       result = ::IO::Buffer.new(bytes.size)
       result.set_string(bytes.pack("C*"))
       result
     end
     private :__binary_op__
+
+    # The in-place forms. MRI insists on a Buffer for the right-hand side of
+    # these, where the copying forms are happy with anything string-shaped, and
+    # it works over as many bytes as the two have in common rather than
+    # refusing a mismatch.
+    def __require_buffer__(other)
+      unless other.is_a?(::IO::Buffer)
+        ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (expected IO::Buffer)")
+      end
+      other
+    end
+    private :__require_buffer__
+
+    def __in_place_op__(other, op)
+      __check_writable__
+      __require_buffer__(other)
+      a = get_string
+      b = other.get_string
+      n = [a.bytesize, b.bytesize].min
+      bytes = a.bytes
+      n.times { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i)) & 0xff }
+      set_string(bytes.pack("C*"))
+      self
+    end
+    private :__in_place_op__
+
+    def and!(other)
+      __in_place_op__(other, :&)
+    end
+
+    def or!(other)
+      __in_place_op__(other, :|)
+    end
+
+    def xor!(other)
+      __in_place_op__(other, :^)
+    end
+
+    def not!
+      __check_writable__
+      set_string(get_string.bytes.map { |x| (~x) & 0xff }.pack("C*"))
+      self
+    end
+
+    # Moving bytes between the buffer and an IO. There is no scatter/gather
+    # underneath, so these are a plain read or write of the slice in question.
+    # MRI reads and writes as much as the buffer holds - the length argument is
+    # a minimum, not a cap - and answers how many bytes moved.
+    def read(io, length = nil, offset = 0)
+      want = size - offset
+      data = io.read(want)
+      return nil if data.nil?
+      set_string(data, offset)
+      data.bytesize
+    end
+
+    def write(io, length = nil, offset = 0)
+      io.write(get_string(offset, size - offset))
+    end
+
+    def pread(io, from, length = nil, offset = 0)
+      data = io.pread(size - offset, from)
+      set_string(data, offset)
+      data.bytesize
+    end
+
+    def pwrite(io, from, length = nil, offset = 0)
+      io.pwrite(get_string(offset, size - offset), from)
+    end
+
+    def copy(source, offset = 0, length = nil, source_offset = 0)
+      __require_buffer__(source)
+      set_string(source.get_string, offset, length, source_offset)
+    end
 
     def &(other)
       __binary_op__(other, :&)
@@ -6169,6 +6275,174 @@ class IO
       return __ir_set_encoding__(external, internal, *rest)
     end
     __ir_set_encoding__(*args)
+  end
+
+  # binmode is implemented for a File and throws for everything else - a pipe,
+  # a socket, the standard streams. On this platform it has nothing to do but
+  # say "these are bytes", so record that and set the external encoding, rather
+  # than throwing a CLR exception at anything that is not a File.
+  alias_method :__ir_binmode__, :binmode
+
+  def binmode
+    @__binmode__ = true
+    begin
+      __ir_binmode__
+    rescue ::Exception
+      begin
+        set_encoding(::Encoding::BINARY)
+      rescue ::Exception
+      end
+    end
+    self
+  end
+
+  # The line readers take a chomp: option, which the built-ins do not know
+  # about - the options hash landed in the separator or limit parameter and came
+  # back as "no implicit conversion of Hash into Integer". The option is split
+  # off here and the newline taken off each line afterwards.
+  def __take_chomp__(args)
+    return [args, false] unless !args.empty? && args.last.is_a?(::Hash)
+    options = args.last
+    return [args, false] unless options.key?(:chomp) || options.empty?
+    args = args[0...-1]
+    [args, !!options[:chomp]]
+  end
+  private :__take_chomp__
+
+  def __chomp_line__(line, separator)
+    return line if line.nil?
+    sep = separator.is_a?(::String) ? separator : $/
+    return line if sep.nil? || sep.empty?
+    line.end_with?(sep) ? line[0...(line.length - sep.length)] : line
+  end
+  private :__chomp_line__
+
+  alias_method :__ir_gets__, :gets
+
+  def gets(*args)
+    args, chomp = __take_chomp__(args)
+    line = __ir_gets__(*args)
+    chomp ? __chomp_line__(line, args[0]) : line
+  end
+
+  alias_method :__ir_readline__, :readline
+
+  def readline(*args)
+    args, chomp = __take_chomp__(args)
+    line = __ir_readline__(*args)
+    chomp ? __chomp_line__(line, args[0]) : line
+  end
+
+  alias_method :__ir_readlines__, :readlines
+
+  def readlines(*args)
+    args, chomp = __take_chomp__(args)
+    lines = __ir_readlines__(*args)
+    chomp ? lines.map { |l| __chomp_line__(l, args[0]) } : lines
+  end
+
+  alias_method :__ir_each_line__, :each_line
+
+  def each_line(*args, &block)
+    args, chomp = __take_chomp__(args)
+    unless block
+      return ::Enumerator.new { |y| each_line(*args, chomp: chomp) { |l| y << l } }
+    end
+    __ir_each_line__(*args) do |line|
+      block.call(chomp ? __chomp_line__(line, args[0]) : line)
+    end
+  end
+
+  if method_defined?(:each)
+    alias_method :__ir_each__, :each
+    def each(*args, &block)
+      each_line(*args, &block)
+    end
+  end
+
+  class << self
+    alias_method :__ir_class_readlines__, :readlines
+
+    def readlines(name, *args)
+      options = args.last.is_a?(::Hash) ? args.pop : nil
+      chomp = options && options[:chomp]
+      lines = __ir_class_readlines__(name, *args)
+      return lines unless chomp
+      sep = args[0].is_a?(::String) ? args[0] : $/
+      lines.map { |l| (sep && !sep.empty? && l.end_with?(sep)) ? l[0...(l.length - sep.length)] : l }
+    end
+
+    alias_method :__ir_foreach__, :foreach
+
+    def foreach(name, *args, &block)
+      options = args.last.is_a?(::Hash) ? args.pop : nil
+      chomp = options && options[:chomp]
+      unless block
+        return ::Enumerator.new { |y| foreach(name, *args, chomp: chomp) { |l| y << l } }
+      end
+      sep = args[0].is_a?(::String) ? args[0] : $/
+      __ir_foreach__(name, *args) do |line|
+        if chomp && sep && !sep.empty? && line.end_with?(sep)
+          line = line[0...(line.length - sep.length)]
+        end
+        block.call(line)
+      end
+    end
+  end
+
+  # readpartial reads what is there, up to maxlen bytes, and only blocks when
+  # nothing is there at all. Nothing here has a non-blocking read underneath, so
+  # on a stream that is already open this is a read of at most maxlen bytes -
+  # which is what MRI does on a regular file too. The result is bytes, so
+  # ASCII-8BIT, and end of file is an EOFError rather than nil.
+  def readpartial(maxlen, outbuf = nil)
+    maxlen = ::Kernel.Integer(maxlen)
+    ::Kernel.raise(::ArgumentError, "negative length #{maxlen} given") if maxlen < 0
+    if maxlen == 0
+      result = "".b
+      return outbuf ? outbuf.replace(result) : result
+    end
+    data = __ir_read__(maxlen)
+    if data.nil? || data.empty?
+      ::Kernel.raise(::EOFError, "end of file reached")
+    end
+    data.force_encoding(::Encoding::BINARY) if data.respond_to?(:force_encoding)
+    outbuf ? outbuf.replace(data) : data
+  end unless method_defined?(:readpartial)
+
+  class << self
+    # Nothing here multiplexes on descriptors, so a stream counts as readable
+    # when it is open and not at end of file, and writable when it is open.
+    # That is the honest answer for the file and pipe streams the specs use, and
+    # it is a great deal more useful than the NotSupportedException this was.
+    def select(reads = nil, writes = nil, errors = nil, timeout = nil)
+      [reads, writes, errors].each do |list|
+        next if list.nil?
+        unless list.respond_to?(:to_ary)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{list.class} into Array")
+        end
+      end
+      readable = (reads || []).select { |io| __select_readable__(io) }
+      writable = (writes || []).select { |io| !io.closed? }
+      failing = []
+      if readable.empty? && writable.empty? && failing.empty?
+        return nil
+      end
+      [readable, writable, failing]
+    end
+
+    # #eof? blocks on a pipe with nothing in it yet, and select is the one
+ # call that must never block, so only a regular file - where eof? is a
+      # position check - is asked. Anything else is reported readable, which
+      # is optimistic but cannot hang.
+    def __select_readable__(io)
+      return false if io.closed?
+      return !io.eof? if io.respond_to?(:stat) && io.stat.file?
+      true
+    rescue ::IOError, ::Errno::EBADF, ::NotImplementedError
+      false
+    end
+    private :__select_readable__
   end
 
   # Reads a byte-order mark, and if there is one, adopts the encoding it names
@@ -6278,9 +6552,18 @@ class IO
     defined?(@__close_on_exec__) && !@__close_on_exec__ ? false : true
   end unless method_defined?(:close_on_exec?)
 
+  # The built-in answers from the stream mode, which a pipe never gets set
+  # because the built-in binmode throws on one. Fall back to the flag that
+  # the binmode above records.
+  if method_defined?(:binmode?)
+    alias_method :__ir_binmode_p__, :binmode?
+    private :__ir_binmode_p__
+  end
+
   def binmode?
-    defined?(@__binmode__) ? !!@__binmode__ : false
-  end unless method_defined?(:binmode?)
+    return true if defined?(@__binmode__) && @__binmode__
+    respond_to?(:__ir_binmode_p__, true) ? __ir_binmode_p__ : false
+  end
 
   # A hint to the kernel about the access pattern; there is nothing to pass it
   # to here, but MRI still validates the arguments and answers nil.
