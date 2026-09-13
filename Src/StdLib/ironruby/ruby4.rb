@@ -9114,25 +9114,35 @@ class Range
   end
 
   def bsearch(&block)
-    return ::Enumerator.new { |y| each { |x| y << x } } unless block
     b = self.begin
     e = self.end
-    if (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer))
-      respond_to?(:__ir_bsearch__, true) ? __ir_bsearch__(&block) : __bsearch_int__(block)
-    elsif (b.nil? || b.is_a?(::Numeric)) && (e.nil? || e.is_a?(::Numeric))
-      __bsearch_float__(block)
-    else
+    integral = (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer))
+    numeric = (b.nil? || b.is_a?(::Numeric)) && (e.nil? || e.is_a?(::Numeric))
+    unless numeric
+      # MRI refuses before it would hand back an enumerator.
       ::Kernel.raise(::TypeError, "can't do binary search for #{(b || e).class}")
+    end
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    if integral
+      respond_to?(:__ir_bsearch__, true) ? __ir_bsearch__(&block) : __bsearch_int__(block)
+    else
+      __bsearch_float__(block)
     end
   end
 
-  # Answers :found, true (go left, remember) or false (go right).
+  # Answers :found, true (go left, remember) or false (go right). MRI accepts any
+  # Numeric from the block, not just an Integer, so a block that answers a Float
+  # difference - or +/-Float::INFINITY - steers the search rather than raising.
   def __bsearch_test__(block, value)
     r = block.call(value)
     case r
     when true then true
     when false, nil then false
     when ::Integer then r == 0 ? :found : r < 0
+    when ::Numeric
+      c = (r <=> 0)
+      ::Kernel.raise(::ArgumentError, "comparison of #{r.class} with 0 failed") if c.nil?
+      c == 0 ? :found : c < 0
     else
       ::Kernel.raise(::TypeError, "wrong argument type #{r.class} (must be numeric, true, false or nil)")
     end
@@ -9173,20 +9183,49 @@ class Range
   end
   private :__bsearch_int__
 
+  # MRI bisects a Float range over the IEEE bit patterns of the doubles rather
+  # than over the interval, so the search lands exactly on a representable value
+  # instead of converging near it - the difference between answering -0.2 and
+  # answering -0.19999999999999998 - and reaches infinity in 64 steps.
+  DOUBLE_MIN_INT64 = -9223372036854775808
+  private_constant :DOUBLE_MIN_INT64 rescue nil
+
+  def __double_as_int64__(d)
+    i = ::System::BitConverter.DoubleToInt64Bits(d)
+    i < 0 ? (-9223372036854775808 - i) : i
+  end
+  private :__double_as_int64__
+
+  def __int64_as_double__(i)
+    i = -9223372036854775808 - i if i < 0
+    ::System::BitConverter.Int64BitsToDouble(i)
+  end
+  private :__int64_as_double__
+
   def __bsearch_float__(block)
-    low = (self.begin || -::Float::MAX).to_f
-    high = (self.end || ::Float::MAX).to_f
-    result = nil
-    64.times do
-      mid = low + (high - low) / 2
-      break if mid == low || mid == high
-      case __bsearch_test__(block, mid)
-      when :found then return mid
-      when true then result = mid; high = mid
-      else low = mid
+    b = self.begin
+    e = self.end
+    low = __double_as_int64__(b.nil? ? -::Float::INFINITY : b.to_f)
+    high = __double_as_int64__(e.nil? ? ::Float::INFINITY : e.to_f)
+    high += 1 unless exclude_end?
+    org_high = high
+    while low < high
+      mid = if (high < 0) == (low < 0)
+              low + ((high - low) / 2)
+            elsif low < -high
+              -((-1 - low - high) / 2 + 1)
+            else
+              (low + high) / 2
+            end
+      value = __int64_as_double__(mid)
+      case __bsearch_test__(block, value)
+      when :found then return value
+      when true then high = mid
+      else low = mid + 1
       end
     end
-    result
+    return nil if low == org_high
+    __int64_as_double__(low)
   end
   private :__bsearch_float__
 
