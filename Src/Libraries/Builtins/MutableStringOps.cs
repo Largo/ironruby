@@ -1496,6 +1496,13 @@ namespace IronRuby.Builtins {
 
             var transcoded = Transcode(fallbackStorage, toStr, self, from, to, settings);
 
+            if (settings.XmlMode == 'a') {
+                // xml: :attr produces a quoted attribute value, quotes included.
+                var quoted = MutableString.CreateMutable(to);
+                quoted.Append('"').Append(transcoded).Append('"');
+                transcoded = quoted;
+            }
+
             // The content is replaced wholesale rather than through Replace: the receiver still
             // carries the source encoding at this point, and Replace would refuse to splice text
             // in the target encoding into it.
@@ -1577,7 +1584,7 @@ namespace IronRuby.Builtins {
                                 result.XmlMode = 'a';
                             } else {
                                 throw RubyExceptions.CreateArgumentError("unexpected value for xml option: {0}",
-                                    context.Inspect(entry.Value));
+                                    xml != null ? (object)xml.ToString() : context.Inspect(entry.Value));
                             }
                             // :xml implies escaping anything the target cannot hold.
                             result.ReplaceUndefined = true;
@@ -1778,6 +1785,7 @@ namespace IronRuby.Builtins {
                 case '<': return "&lt;";
                 case '>': return "&gt;";
                 case '"': return mode == 'a' ? "&quot;" : null;
+                case '\'': return mode == 'a' ? "&apos;" : null;
                 default: return null;
             }
         }
@@ -1786,13 +1794,16 @@ namespace IronRuby.Builtins {
             return "&#x" + Char.ConvertToUtf32(piece, 0).ToString("X") + ";";
         }
 
+        /// <summary>
+        /// The three decorators are not variations on one normalisation: :universal_newline folds
+        /// CRLF and CR down to LF, while :cr_newline and :crlf_newline only expand an LF and leave
+        /// a CR that was already there alone. Chaining them turns "\r\n" into "\r\r".
+        /// </summary>
         private static string/*!*/ NormalizeNewlines(string/*!*/ text, int mode) {
-            // Universal first in every case: the other two are defined as "LF, then expand".
-            var lf = text.Replace("\r\n", "\n").Replace("\r", "\n");
             switch (mode) {
-                case 'r': return lf.Replace("\n", "\r");
-                case 'c': return lf.Replace("\n", "\r\n");
-                default: return lf;
+                case 'r': return text.Replace("\n", "\r");
+                case 'c': return text.Replace("\n", "\r\n");
+                default: return text.Replace("\r\n", "\n").Replace("\r", "\n");
             }
         }
 
