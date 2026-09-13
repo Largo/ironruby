@@ -31,7 +31,7 @@ namespace IronRuby.Builtins {
     /// Process builtin module
     /// </summary>
     [RubyModule("Process", BuildConfig = "FEATURE_PROCESS")]
-    public static class RubyProcess {
+    public static partial class RubyProcess {
         #region Utils
 
         internal static Process/*!*/ CreateProcess(RubyContext/*!*/ context, MutableString/*!*/ command, MutableString[]/*!*/ args) {
@@ -438,13 +438,23 @@ namespace IronRuby.Builtins {
 
                 // Signalling yourself with something that would end the process, and no handler to
                 // catch it, is a SignalException in MRI - the program gets to rescue it. Letting the
-                // real signal through would just kill us.
-                if (target == Environment.ProcessId && PosixSignals.TerminatesByDefault(signal) && !PosixSignals.HasHandler(signal)) {
+                // real signal through would just kill us. pid 0 and our own negated process group
+                // both include this process, so they count as "yourself" too - and sending a real
+                // signal to the whole group would take the test runner down with us.
+                bool targetsUs = target == Environment.ProcessId
+                    || target == 0
+                    || (target < 0 && -target == PosixSignals.ProcessGroupId);
+
+                if (targetsUs && PosixSignals.TerminatesByDefault(signal) && !PosixSignals.HasHandler(signal)) {
                     string name = PosixSignals.ToName(signal);
                     throw new SignalException((name != null) ? "SIG" + name : "SIG" + signal);
                 }
 
-                PosixSignals.Kill(target, signal);
+                int error = PosixSignals.Kill(target, signal);
+                if (error < 0) {
+                    // Negative means -errno; the prelude's Process.kill turns it into an Errno class.
+                    return ScriptingRuntimeHelpers.Int32ToObject(error);
+                }
             }
             return ScriptingRuntimeHelpers.Int32ToObject(pids.Length);
         }
@@ -501,6 +511,9 @@ namespace IronRuby.Builtins {
             throw new NotImplementedError("uid=() function is unimplemented on this machine");
         }
 
+        // These three are what Process.wait/wait2/waitall were before there was any way to start a
+        // child without waiting for it. The prelude redefines all three on top of __waitpid__
+        // below; they stay registered so that an embedder that skips the prelude still has them.
         [RubyMethod("wait", RubyMethodAttributes.PublicSingleton)]
         public static void Wait(RubyModule/*!*/ self) {
             throw new Errno.ChildError();
@@ -513,11 +526,117 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("waitall", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray Waitall(RubyModule/*!*/ self) {
-            return new RubyArray(); //Process.waitall always returns an empty array on Windows?
+            return new RubyArray();
         }
 
-        // waitpid
-        // waitpid2  
+        #region spawn/wait primitives
+        // Process.spawn and the wait family are written in the prelude on top of these two:
+        // everything that is argument shuffling, conversion and validation is far shorter in
+        // Ruby, and all that is genuinely needed from the CLR is "start a child without
+        // waiting for it" and "wait for one we started".
+
+        private static readonly Dictionary<int, Process>/*!*/ _children = new Dictionary<int, Process>();
+
+        /// <summary>
+        /// Starts /bin/sh -c script detached and returns its pid. The caller has already folded
+        /// chdir, umask and any redirections into the script.
+        /// </summary>
+        [RubyMethod("__spawn__", RubyMethodAttributes.PublicSingleton)]
+        public static int SpawnPrimitive(RubyContext/*!*/ context, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ script, Hash env, bool unsetOthers) {
+
+            var p = new Process();
+            p.StartInfo.FileName = "/bin/sh";
+            p.StartInfo.ArgumentList.Add("-c");
+            p.StartInfo.ArgumentList.Add(script.ConvertToString());
+            p.StartInfo.UseShellExecute = false;
+
+            if (unsetOthers) {
+                p.StartInfo.Environment.Clear();
+            }
+            if (env != null) {
+                // The prelude has already run #to_str over both halves and rejected null bytes.
+                foreach (var entry in env) {
+                    var key = entry.Key as MutableString;
+                    if (key == null) {
+                        continue;
+                    }
+                    var value = entry.Value as MutableString;
+                    if (value == null) {
+                        p.StartInfo.Environment.Remove(key.ConvertToString());
+                    } else {
+                        p.StartInfo.Environment[key.ConvertToString()] = value.ConvertToString();
+                    }
+                }
+            }
+
+            try {
+                p.Start();
+            } catch (Exception e) {
+                throw RubyExceptions.CreateENOENT(p.StartInfo.FileName, e);
+            }
+
+            lock (_children) {
+                _children[p.Id] = p;
+            }
+            return p.Id;
+        }
+
+        /// <summary>
+        /// Waits for one of our children. pid -1 means "any"; a non-zero flags argument means
+        /// WNOHANG, i.e. return nil rather than block. Returns [pid, Process::Status] or nil.
+        /// </summary>
+        [RubyMethod("__waitpid__", RubyMethodAttributes.PublicSingleton)]
+        public static object WaitPidPrimitive(RubyContext/*!*/ context, RubyModule/*!*/ self, int pid, int flags) {
+            Process child = null;
+            lock (_children) {
+                if (pid > 0) {
+                    _children.TryGetValue(pid, out child);
+                } else {
+                    // "Any child": prefer one that has already exited so that repeated waits drain
+                    // the table instead of blocking on the longest-lived child.
+                    foreach (var candidate in _children.Values) {
+                        if (child == null || candidate.HasExited) {
+                            child = candidate;
+                            if (candidate.HasExited) {
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (child == null) {
+                throw new Errno.ChildError();
+            }
+
+            if ((flags & 1) != 0 && !child.HasExited) {   // WNOHANG
+                return null;
+            }
+
+            child.WaitForExit();
+            lock (_children) {
+                _children.Remove(child.Id);
+            }
+
+            var status = new Status(child);
+            context.ChildProcessExitStatus = status;
+            return new RubyArray { ScriptingRuntimeHelpers.Int32ToObject(child.Id), status };
+        }
+
+        /// <summary>Pids of the children we started that have not been waited for yet.</summary>
+        [RubyMethod("__children__", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ Children(RubyModule/*!*/ self) {
+            var result = new RubyArray();
+            lock (_children) {
+                foreach (var id in _children.Keys) {
+                    result.Add(ScriptingRuntimeHelpers.Int32ToObject(id));
+                }
+            }
+            return result;
+        }
+
+        #endregion
     }
 
     #region Struct::Tms
