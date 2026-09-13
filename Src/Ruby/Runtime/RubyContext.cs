@@ -270,20 +270,9 @@ namespace IronRuby.Runtime {
         internal RubyClass/*!*/ RefinementClass {
             get {
                 if (_refinementClass == null) {
-                    object value;
-                    RubyClass cls = ObjectClass.TryGetConstant(null, "Refinement", out value) ? value as RubyClass : null;
-                    if (cls == null) {
-                        return ModuleClass;
-                    }
-
-                    // A refinement is never spliced into anyone's ancestors, so the Module hooks that do the
-                    // splicing must not be callable on one.  CRuby removes them outright.
-                    cls.UndefineMethodNoEvent("append_features");
-                    cls.UndefineMethodNoEvent("prepend_features");
-                    cls.UndefineMethodNoEvent("extend_object");
-                    _refinementClass = cls;
+                    InitializeRefinementClass();
                 }
-                return _refinementClass;
+                return _refinementClass ?? ModuleClass;
             }
         }
 
@@ -560,6 +549,25 @@ namespace IronRuby.Runtime {
 
             InitializeGlobalConstants();
             InitializeGlobalVariables();
+
+            // Refinement inherits Module's ancestor-splicing hooks and must not keep them; they have to go
+            // before any user code can ask Refinement.private_instance_methods.
+            InitializeRefinementClass();
+        }
+
+        private void InitializeRefinementClass() {
+            object value;
+            RubyClass cls = ObjectClass.TryGetConstant(null, "Refinement", out value) ? value as RubyClass : null;
+            if (cls == null) {
+                return;
+            }
+
+            // A refinement is never spliced into anyone's ancestors, so the Module hooks that do the
+            // splicing must not be callable on one.  CRuby removes them outright.
+            cls.UndefineMethodNoEvent("append_features");
+            cls.UndefineMethodNoEvent("prepend_features");
+            cls.UndefineMethodNoEvent("extend_object");
+            _refinementClass = cls;
         }
 
         internal RubyBinder/*!*/ Binder {

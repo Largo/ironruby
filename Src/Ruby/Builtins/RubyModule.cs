@@ -379,6 +379,14 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Copies a member in as this module's own, so that #owner reports the refinement.  Used by
+        /// Refinement#import_methods, which cannot include the source module.
+        /// </summary>
+        public void ImportMethod(string/*!*/ name, RubyMemberInfo/*!*/ member) {
+            SetMethodNoEvent(Context, name, member.Copy(member.Flags, this));
+        }
+
+        /// <summary>
         /// Module#refine: returns the anonymous refinement module for <paramref name="refinedModule"/>,
         /// creating it on the first call.  Reopening the same class in the same holder yields the same
         /// module, which is what CRuby does.

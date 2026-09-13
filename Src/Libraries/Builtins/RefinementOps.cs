@@ -66,14 +66,35 @@ namespace IronRuby.Builtins {
 
             foreach (object obj in modules) {
                 RubyModule module = (RubyModule)obj;
+
+                // Only the module's own methods are imported; CRuby warns rather than following ancestors.
+                if (module.GetMixins().Length > 0 || module.GetPrepends().Length > 0) {
+                    self.Context.ReportWarning(String.Format(
+                        "{0} has ancestors, but Refinement#import_methods doesn't import their methods",
+                        self.Context.Inspect(module).ToString()
+                    ));
+                }
+
                 var members = new List<KeyValuePair<string, RubyMemberInfo>>();
                 using (self.Context.ClassHierarchyLocker()) {
                     module.ForEachMember(false, RubyMethodAttributes.DefaultVisibility, (name, owner, member) => {
                         members.Add(new KeyValuePair<string, RubyMemberInfo>(name, member));
                     });
                 }
+
                 foreach (var entry in members) {
-                    self.SetMethodNoEvent(self.Context, entry.Key, entry.Value);
+                    // A refinement's methods have to be re-compiled against the refinement, so a method with
+                    // no Ruby body (a library or CLR member) cannot be imported at all.
+                    if (!(entry.Value is RubyMethodInfo)) {
+                        throw RubyExceptions.CreateArgumentError(
+                            "Can't import method which is not defined with Ruby code: {0}#{1}",
+                            module.GetDisplayName(self.Context, false).ToString(), entry.Key
+                        );
+                    }
+                }
+
+                foreach (var entry in members) {
+                    self.ImportMethod(entry.Key, entry.Value);
                 }
             }
             return self;
