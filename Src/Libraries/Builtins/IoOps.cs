@@ -50,6 +50,16 @@ namespace IronRuby.Builtins {
         internal static Stream/*!*/ GetDescriptorStream(RubyContext/*!*/ context, int descriptor) {
             Stream stream = context.GetStream(descriptor);
             if (stream == null) {
+                // A descriptor this process was handed rather than opened - what a child of
+                // Process.spawn gets through a redirection - is not in IronRuby's table, so
+                // IO.new(fd) used to answer EBADF for exactly the descriptors a program has
+                // been told to use.
+                stream = RubyIO.TryAdoptDescriptor(descriptor);
+                if (stream != null) {
+                    context.SetOrAllocateDescriptor(descriptor, stream);
+                }
+            }
+            if (stream == null) {
                 throw RubyExceptions.CreateEBADF();
             }
             return stream;
@@ -136,7 +146,17 @@ namespace IronRuby.Builtins {
         }
 
         internal static RubyIO/*!*/ Reinitialize(RubyIO/*!*/ io, int descriptor, IOInfo info) {
-            io.Mode = info.Mode;
+            IOMode mode = info.Mode;
+
+            // A descriptor this process was handed rather than opened carries its own access
+            // mode, and that is the one to believe: Ruby's default of "r" is an answer about a
+            // path, and IO.new(fd) was not given one.
+            IOMode adopted;
+            if (io.Context.GetStream(descriptor) == null && RubyIO.TryGetDescriptorMode(descriptor, out adopted)) {
+                mode = (mode & ~IOMode.ReadWriteMask) | adopted;
+            }
+
+            io.Mode = mode;
             io.SetStream(GetDescriptorStream(io.Context, descriptor));
             io.SetFileDescriptor(descriptor);
 
@@ -154,7 +174,23 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static RubyIO/*!*/ InitializeCopy(RubyIO/*!*/ self, [NotNull]RubyIO/*!*/ source) {
             Stream stream = source.GetStream();
-            int descriptor = self.Context.DuplicateFileDescriptor(source.GetFileDescriptor());
+            int descriptor;
+
+            // #dup is dup(2): the copy gets a descriptor of its own, so that reopening the
+            // original and then reopening it back from the copy works - which is the whole
+            // point of saving a stream before redirecting it. Sharing the table entry meant
+            // the copy and the original were the same descriptor, so the save was a no-op.
+            int duplicated = RubyIO.TryDuplicateDescriptor(source);
+            if (duplicated >= 0) {
+                stream = new FileStream(
+                    new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)duplicated, true),
+                    source.Mode.CanWrite() ? (source.Mode.CanRead() ? FileAccess.ReadWrite : FileAccess.Write) : FileAccess.Read,
+                    1, false
+                );
+                descriptor = self.Context.AllocateFileDescriptor(stream);
+            } else {
+                descriptor = self.Context.DuplicateFileDescriptor(source.GetFileDescriptor());
+            }
 
             self.SetStream(stream);
             self.SetFileDescriptor(descriptor);
@@ -179,6 +215,17 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("reopen")]
         public static RubyIO/*!*/ Reopen(RubyIO/*!*/ self, [NotNull]RubyIO/*!*/ source) {
+            // MRI's reopen is dup2(2): it points *this descriptor* at the other one's file,
+            // which is why everything started afterwards inherits the redirection. Pointing
+            // IronRuby's table entry at the other stream only redirects reads and writes made
+            // from Ruby, so a redirected STDOUT went on reaching the terminal for every child
+            // process - and this IO kept working through the other one's stream, which broke
+            // as soon as that one was closed.
+            if (RubyIO.TryRedirectDescriptor(self, source)) {
+                self.Mode = source.Mode;
+                return self;
+            }
+
             self.Context.RedirectFileDescriptor(self.GetFileDescriptor(), source.GetFileDescriptor());
             self.SetStream(source.GetStream());
             self.Mode = source.Mode;

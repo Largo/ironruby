@@ -1648,38 +1648,119 @@ class Process::Status
   end unless method_defined?(:stopped?)
 end
 
+class IO
+  # What IO.popen adds to the IO it hands back: the child's pid, and a #close that reaps
+  # the child so that $? describes it. A module rather than singleton methods, because a
+  # singleton `def io.close` has no `super` to reach the library's IO#close with.
+  module PopenChild
+    def pid
+      @__popen_pid__
+    end
+
+    def close
+      result = super
+      begin
+        Process.waitpid(@__popen_pid__)
+      rescue SystemCallError
+      end
+      result
+    end
+  end
+end
+
 class << IO
-  # IO.popen(cmd, [mode,] opt) — the core method predates spawn options, so lower
-  # the redirection options we support onto the command line (the shell handles them).
-  alias_method :popen_without_options, :popen unless method_defined?(:popen_without_options)
+  # IO.pipe used to be a queue between two threads of this process, whose "descriptors"
+  # were indices into IronRuby's own table. Nothing outside the process could be handed
+  # one, which is the whole point of a pipe as soon as there is a child to talk to, so
+  # it is pipe(2) now. The block form is here too; the method it replaces took no block
+  # and quietly ignored one.
+  def pipe(*args)
+    read, write = Process.__os_pipe__
+    external, internal = args.reject { |a| a.respond_to?(:to_hash) }
+    read.set_encoding(external, internal) if external
 
-  def popen(command, mode = nil, options = nil, &block)
-    if mode.is_a?(Hash)
-      options = mode
-      mode = nil
+    return [read, write] unless block_given?
+    begin
+      yield(read, write)
+    ensure
+      write.close unless write.closed?
+      read.close unless read.closed?
+    end
+  end
+
+  # IO.popen on top of Process.spawn and a real pipe. The method it replaces started the
+  # child through System.Diagnostics.Process, which meant the redirection options had to
+  # be lowered onto the shell command line, there was no way to hand the child anything
+  # but the three standard streams, #pid did not exist, and $? was filled in when the
+  # child *started* - so every caller that looked at the exit status of a popen child,
+  # ruby_exe in mspec above all, was reading a status of zero no matter what happened.
+  def popen(*args, &block)
+    env = nil
+    if !args.empty? && !args.first.is_a?(String) && !args.first.is_a?(Array) &&
+       args.first.respond_to?(:to_hash)
+      env = args.shift
     end
 
-    if command.is_a?(Array)
-      # IO.popen(["cmd", "arg", ...]) -- no shell is involved in MRI, so quote every
-      # word before handing it to the shell the core popen does use.
-      command = command.map { |word| "'" + word.to_s.gsub("'", %q{'\\\\''}) + "'" }.join(' ')
+    options = {}
+    if args.size > 1 && !args.last.is_a?(String) && args.last.respond_to?(:to_hash)
+      options = args.pop.to_hash.dup
     end
 
-    if options
-      # brace-group so the redirect applies to the whole child, not just its last
-      # command (MRI redirects the process's fd, not a single command's)
-      if options[:err] == [:child, :out]
-        command = "{ #{command}\n} 2>&1"
-      end
-      if options[:out] == [:child, :err]
-        command = "{ #{command}\n} 1>&2"
-      end
+    command = args.shift
+    mode = args.shift
+    mode = "r" if mode.nil?
+    mode = mode.to_str if !mode.is_a?(String) && mode.respond_to?(:to_str)
+    mode = mode.to_s.sub(/:.*\z/, "")
+
+    if command == "-" || (command.is_a?(Array) && command.first == "-")
+      raise NotImplementedError, "fork() function is unimplemented on this machine"
     end
 
-    if mode
-      popen_without_options(command, mode, &block)
-    else
-      popen_without_options(command, &block)
+    readable = mode.include?("r") || mode.include?("+")
+    writable = mode.include?("w") || mode.include?("a") || mode.include?("+")
+
+    parent_read = child_write = parent_write = child_read = nil
+    if readable
+      parent_read, child_write = Process.__os_pipe__
+      options[:out] = child_write
+    end
+    if writable
+      child_read, parent_write = Process.__os_pipe__
+      options[:in] = child_read
+    end
+
+    spawn_args = []
+    spawn_args << env if env
+    command.is_a?(Array) ? spawn_args.concat(command) : spawn_args << command
+    spawn_args << options
+
+    begin
+      pid = Process.spawn(*spawn_args)
+    rescue Exception
+      [parent_read, child_write, parent_write, child_read].each { |io| io.close if io }
+      raise
+    end
+
+    # The child owns its ends now; holding them open here would keep a read from ever
+    # seeing end-of-file.
+    child_write.close if child_write
+    child_read.close if child_read
+
+    io = if readable && writable
+           Process.__duplex_io__(parent_read, parent_write)
+         else
+           readable ? parent_read : parent_write
+         end
+
+    io.instance_variable_set(:@__popen_pid__, pid)
+    io.extend(IO::PopenChild)
+
+    return io unless block
+
+    begin
+      block.call(io)
+    ensure
+      io.close unless io.closed?
     end
   end
 end
@@ -7001,12 +7082,60 @@ module Process
     module_function :maxgroups=
   end
 
+  # MRI's conversion of anything that claims to be a pid or an id, including the two
+  # different TypeErrors it reports for "no #to_int" and "#to_int gave something else".
+  def self.__integer_value__(value)
+    return value if value.is_a?(Integer)
+    unless value.respond_to?(:to_int)
+      raise TypeError, "no implicit conversion of #{value.class} into Integer"
+    end
+    result = value.to_int
+    unless result.is_a?(Integer)
+      raise TypeError, "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{result.class})"
+    end
+    result
+  end
+
+  # A user or group name is allowed wherever an id is, and is looked up the way MRI
+  # looks it up.
+  def self.__user_id__(value)
+    return __integer_value__(value) unless value.is_a?(String)
+    require "etc"
+    entry = begin
+              Etc.getpwnam(value)
+            rescue StandardError
+              nil
+            end
+    raise ArgumentError, "can't find user for #{value}" unless entry
+    entry.uid
+  end
+
+  def self.__group_id__(value)
+    return __integer_value__(value) unless value.is_a?(String)
+    require "etc"
+    entry = begin
+              Etc.getgrnam(value)
+            rescue StandardError
+              nil
+            end
+    raise ArgumentError, "can't find group for #{value}" unless entry
+    entry.gid
+  end
+
   unless respond_to?(:detach)
-    # A thread that reaps the child and whose #value is the exit status, plus the
-    # #pid reader MRI puts on it.
+    # A thread that reaps the child and whose #value is the exit status, plus the #pid
+    # reader and the :pid thread-local MRI puts on it. A pid that is not ours is not an
+    # error here: MRI's detach thread just ends with no status.
     def detach(pid)
-      pid = pid.to_int
-      thread = Thread.new(pid) { |p| Process.wait2(p)[1] }
+      pid = __integer_value__(pid)
+      thread = Thread.new(pid) do |p|
+        begin
+          Process.wait2(p)[1]
+        rescue SystemCallError
+          nil
+        end
+      end
+      thread[:pid] = pid
       thread.define_singleton_method(:pid) { pid }
       thread
     end
@@ -7022,14 +7151,49 @@ module Process
 
   # --- spawn and the wait family ------------------------------------------------
   #
-  # Process.__spawn__ starts "/bin/sh -c <script>" and hands back a pid without
-  # waiting; everything else - picking the command apart, converting and checking
-  # the arguments, and folding :chdir/:umask/redirections into the script - is here,
-  # because it is all protocol work that reads far better in Ruby.
+  # Process.__spawn__ is posix_spawn(3): an executable, an argv, an environment, a
+  # list of file actions and a process group, in exchange for a pid. Everything
+  # above that - picking the command apart, converting and checking the arguments,
+  # and turning the redirection options into file actions - is here, because it is
+  # protocol work that reads far better in Ruby than in C#.
+  #
+  # Redirections used to be lowered onto a /bin/sh command line. That could never be
+  # right: a descriptor a Ruby program hands us is close-on-exec, so `1>&7` in the
+  # shell finds nothing there, and a path with a quote in it had to survive being
+  # re-quoted. A file action is applied by posix_spawn in the child between fork and
+  # exec, which is exactly where MRI does the same work.
 
   SPAWN_OPTION_KEYS = [
     :unsetenv_others, :close_others, :pgroup, :new_pgroup, :chdir, :umask,
     :in, :out, :err, :rlimit_core, :rlimit_cpu, :rlimit_fsize, :exception,
+  ].freeze
+
+  # File action opcodes, shared with the C# side.
+  SPAWN_DUP2  = 0
+  SPAWN_CLOSE = 1
+  SPAWN_OPEN  = 2
+  SPAWN_CHDIR = 3
+
+  # open(2) flags; Linux spells them the same on every architecture we run on.
+  SPAWN_O_RDONLY = 0
+  SPAWN_O_WRONLY = 1
+  SPAWN_O_RDWR   = 2
+  SPAWN_O_CREAT  = 0o100
+  SPAWN_O_TRUNC  = 0o1000
+  SPAWN_O_APPEND = 0o2000
+
+  # A one-string command goes to the shell only if it contains one of these, exactly
+  # as in MRI's rb_exec_fillarg. Otherwise MRI splits the string itself and execs the
+  # result, which is what makes Process.spawn("no-such-command") raise Errno::ENOENT
+  # rather than quietly collect the shell's exit status 127.
+  SPAWN_SHELL_META = /[*?{}\[\]<>()~&|\\$;'"`\n#]/
+
+  # ...and the same goes for a command whose first word is a shell built-in, which
+  # there is no file to exec. `system("exit 29")` has to reach a shell to mean
+  # anything at all.
+  SPAWN_SHELL_BUILTINS = %w[
+    ! . : break case continue do done elif else esac eval exec exit export fi for
+    if in readonly return set shift then times trap unset until while
   ].freeze
 
   def self.__check_spawn_string__(value, what)
@@ -7039,61 +7203,154 @@ module Process
       end
       value = value.to_str
     end
-    raise ArgumentError, "#{what} contains null byte" if value.include?("\0")
+    raise ArgumentError, "string contains null byte" if value.include?("\0")
     value
   end
 
-  # Single-quote for /bin/sh: everything inside '' is literal, and a quote itself
-  # has to leave and re-enter the quoting.
-  def self.__shell_quote__(s)
-    "'" + s.to_s.gsub("'", "'\\\\''") + "'"
+  def self.__spawn_to_io__(value)
+    return value if value.is_a?(IO)
+    if value.respond_to?(:to_io)
+      io = value.to_io
+      return io if io.is_a?(IO)
+    end
+    nil
   end
 
-  def self.__spawn_redirect__(key, value)
-    fd = case key
-         when :in then 0
-         when :out then 1
-         when :err then 2
-         when Integer then key
-         when IO then key.fileno
-         when Array then nil
-         else return nil
-         end
-    return nil if fd.nil?
-
-    case value
-    when :close       then "#{fd}>&-"
-    when Integer      then "#{fd}>&#{value}"
-    when IO           then "#{fd}>&#{value.fileno}"
-    when Array
-      if value[0] == :child
-        "#{fd}>&#{value[1] == :out ? 1 : (value[1] == :err ? 2 : value[1])}"
-      else
-        name = __check_spawn_string__(value[0], "path name")
-        mode = value[1].to_s
-        op = mode.include?("a") ? ">>" : (mode.start_with?("r") ? "<" : ">")
-        "#{fd}#{op}#{__shell_quote__(name)}"
-      end
-    when String, Symbol
-      name = __check_spawn_string__(value.to_s, "path name")
-      fd == 0 ? "#{fd}<#{__shell_quote__(name)}" : "#{fd}>#{__shell_quote__(name)}"
+  # The descriptors a redirection key names. MRI lets the key be a symbol, a
+  # descriptor, an IO, or an array of any of those so that one value redirects
+  # several descriptors at once.
+  def self.__spawn_key_fds__(key)
+    case key
+    when :in  then [0]
+    when :out then [1]
+    when :err then [2]
+    when Integer then [key]
+    when Array then key.map { |part| __spawn_key_fds__(part) }.flatten
     else
-      nil
+      io = __spawn_to_io__(key)
+      raise ArgumentError, "wrong exec redirect: #{key.inspect}" if io.nil?
+      [io.fileno]
     end
   end
 
-  def self.__resolve_executable__(name)
-    if name.include?(File::SEPARATOR) || (File::ALT_SEPARATOR && name.include?(File::ALT_SEPARATOR))
+  def self.__spawn_redirect_key?(key)
+    case key
+    when :in, :out, :err, Integer, Array then true
+    else !__spawn_to_io__(key).nil?
+    end
+  end
+
+  def self.__spawn_open_flags__(mode, fd)
+    return mode if mode.is_a?(Integer)
+    if mode.nil?
+      return fd == 0 ? SPAWN_O_RDONLY : (SPAWN_O_WRONLY | SPAWN_O_CREAT | SPAWN_O_TRUNC)
+    end
+    mode = mode.to_str if !mode.is_a?(String) && mode.respond_to?(:to_str)
+    text = mode.to_s.sub(/:.*\z/, "")
+    plus = text.include?("+")
+    case text[0]
+    when "a" then (plus ? SPAWN_O_RDWR : SPAWN_O_WRONLY) | SPAWN_O_CREAT | SPAWN_O_APPEND
+    when "w" then (plus ? SPAWN_O_RDWR : SPAWN_O_WRONLY) | SPAWN_O_CREAT | SPAWN_O_TRUNC
+    else          (plus ? SPAWN_O_RDWR : SPAWN_O_RDONLY)
+    end
+  end
+
+  # Returns the file actions for one redirection. [:child, fd] cannot be resolved
+  # here - it names a descriptor of the child as it will be *after* the other
+  # redirections - so it is handed back separately to be appended last.
+  def self.__spawn_redirect__(fd, value, deferred)
+    case value
+    when :close
+      [[SPAWN_CLOSE, fd]]
+    when Integer
+      [[SPAWN_DUP2, fd, __spawn_native_fd__(value)]]
+    when String, Symbol
+      path = __check_spawn_string__(value.to_s, "path name")
+      [[SPAWN_OPEN, fd, path, __spawn_open_flags__(nil, fd), 0o644]]
+    when Array
+      if value[0] == :child
+        deferred << [SPAWN_DUP2, fd, __spawn_key_fds__(value[1]).first]
+        []
+      else
+        path = value[0]
+        path = path.to_path if !path.is_a?(String) && path.respond_to?(:to_path)
+        path = __check_spawn_string__(path, "path name")
+        [[SPAWN_OPEN, fd, path, __spawn_open_flags__(value[1], fd), value[2] || 0o644]]
+      end
+    else
+      io = __spawn_to_io__(value)
+      raise ArgumentError, "wrong exec redirect: #{value.inspect}" if io.nil?
+      [[SPAWN_DUP2, fd, __spawn_native_fd__(io.fileno)]]
+    end
+  end
+
+  def self.__spawn_native_fd__(fd)
+    native = __native_fd__(fd)
+    raise ArgumentError, "wrong exec redirect: #{fd.inspect}" if native < 0
+    native
+  end
+
+  def self.__spawn_actions__(options)
+    actions = []
+    deferred = []
+
+    if (dir = options[:chdir])
+      dir = dir.to_path if !dir.is_a?(String) && dir.respond_to?(:to_path)
+      dir = __check_spawn_string__(dir, "path name")
+      raise Errno::ENOENT, dir unless File.directory?(dir)
+      actions << [SPAWN_CHDIR, dir]
+    end
+
+    options.each do |key, value|
+      next unless __spawn_redirect_key?(key)
+      first = nil
+      __spawn_key_fds__(key).each do |fd|
+        if first.nil?
+          actions.concat(__spawn_redirect__(fd, value, deferred))
+          first = fd
+        else
+          # [:out, :err] => "file" opens the file once and points both descriptors at
+          # it; opening it twice would give them separate offsets, so whichever wrote
+          # second would overwrite the other.
+          actions << [SPAWN_DUP2, fd, first]
+        end
+      end
+    end
+
+    actions.concat(deferred)
+    actions
+  end
+
+  def self.__spawn_env__(env, unset_others)
+    result = unset_others ? {} : ENV.to_hash
+    if env
+      env.each do |key, value|
+        value.nil? ? result.delete(key) : result[key] = value
+      end
+    end
+    result.map { |key, value| "#{key}=#{value}" }
+  end
+
+  def self.__resolve_executable__(name, search_path = nil)
+    raise Errno::ENOENT, name if name.empty?
+
+    named = name.include?(File::SEPARATOR) || (File::ALT_SEPARATOR && name.include?(File::ALT_SEPARATOR))
+    if named
       candidates = [name]
     else
-      path = ENV["PATH"].to_s
+      path = (search_path || ENV["PATH"]).to_s
       candidates = path.split(File::PATH_SEPARATOR).map { |dir| File.join(dir.empty? ? "." : dir, name) }
     end
 
     candidates.each do |candidate|
       next unless File.exist?(candidate)
-      raise Errno::EACCES, candidate if File.directory?(candidate)
-      raise Errno::EACCES, candidate unless File.executable?(candidate)
+      # A file that cannot be run is a reason to refuse only when the caller named it. A
+      # PATH search that turns one up simply keeps looking, and ends in ENOENT if nothing
+      # runnable is there - naming the command, not the last unusable file that matched.
+      unless File.executable?(candidate) && !File.directory?(candidate)
+        next unless named
+        raise Errno::EACCES, candidate
+      end
       return candidate
     end
     raise Errno::ENOENT, name
@@ -7107,8 +7364,13 @@ module Process
     if !args.empty? && args.first.respond_to?(:to_hash) && !args.first.is_a?(String)
       env = args.shift.to_hash
     end
-    if args.size > 1 && args.last.respond_to?(:to_hash) && !args.last.is_a?(String)
-      options = args.pop.to_hash
+    # The options hash is only recognised behind a command, except that an env hash has
+    # already been taken off the front - so `spawn({}, {})` is env plus options and no
+    # command, not env plus a command that happens to be a Hash.
+    if args.size > 1 || (env && args.size == 1)
+      if !args.empty? && args.last.respond_to?(:to_hash) && !args.last.is_a?(String)
+        options = args.pop.to_hash
+      end
     end
     raise ArgumentError, "wrong number of arguments (given 0, expected 1+)" if args.empty?
 
@@ -7121,81 +7383,133 @@ module Process
     end
 
     options.each_key do |key|
-      next if key.is_a?(Integer) || key.is_a?(IO) || key.is_a?(Array)
-      raise ArgumentError, "wrong exec option: #{key.inspect}" if key.is_a?(String)
+      next if __spawn_redirect_key?(key)
+      raise ArgumentError, "wrong exec option" if key.is_a?(String)
       unless SPAWN_OPTION_KEYS.include?(key)
-        raise ArgumentError, "wrong exec option symbol: #{key.inspect}"
+        raise ArgumentError, "wrong exec option symbol: #{key}"
       end
     end
 
     [env, args, options]
   end
 
-  def self.__build_spawn_script__(args, options)
-    if args.size == 1 && !args.first.is_a?(Array)
-      # One string: the shell gets it verbatim, so expansion and whitespace splitting
-      # both behave the way MRI's shell form does.
-      command = __check_spawn_string__(args.first, "command")
-      raise Errno::ENOENT, "" if command.strip.empty?
-      body = command
-    else
-      first = args.first
-      if first.is_a?(Array) || (!first.is_a?(String) && first.respond_to?(:to_ary))
-        pair = first.to_ary
-        unless pair.size == 2
-          raise ArgumentError, "wrong first argument"
-        end
-        name = __check_spawn_string__(pair[0], "command")
-        argv0 = __check_spawn_string__(pair[1], "command")
-      else
-        name = __check_spawn_string__(first, "command")
-        argv0 = name
+  # [executable, argv] for the command part of a spawn call.
+  def self.__spawn_command__(args, env)
+    search_path = env && env["PATH"]
+    first = args.first
+    array_form = first.is_a?(Array) || (!first.is_a?(String) && first.respond_to?(:to_ary))
+
+    if args.size == 1 && !array_form
+      command = __check_spawn_string__(first, "command")
+      if command =~ SPAWN_SHELL_META
+        return ["/bin/sh", ["sh", "-c", command]]
       end
-      rest = args[1..-1].map { |a| __check_spawn_string__(a, "string") }
-      # Resolve before running so that a missing or unusable command is ENOENT/EACCES
-      # from Process.spawn itself, not a 127 from the shell.
-      resolved = __resolve_executable__(name)
-      body = ([__shell_quote__(resolved)] + rest.map { |a| __shell_quote__(a) }).join(" ")
-      body = "exec -a #{__shell_quote__(argv0)} #{body}" if argv0 != name
+      words = command.split(" ")
+      raise Errno::ENOENT, command if words.empty?
+      if SPAWN_SHELL_BUILTINS.include?(words.first)
+        return ["/bin/sh", ["sh", "-c", command]]
+      end
+      return [__resolve_executable__(words.first, search_path), words]
     end
 
-    prefix = []
-    if (dir = options[:chdir])
-      dir = dir.respond_to?(:to_path) ? dir.to_path : dir
-      dir = __check_spawn_string__(dir, "path name")
-      raise Errno::ENOENT, dir unless File.directory?(dir)
-      prefix << "cd #{__shell_quote__(dir)}"
-    end
-    if (mask = options[:umask])
-      prefix << format("umask %o", mask.to_int)
+    if array_form
+      pair = first.to_ary
+      raise ArgumentError, "wrong first argument" unless pair.size == 2
+      name  = __check_spawn_string__(pair[0], "command")
+      argv0 = __check_spawn_string__(pair[1], "command")
+    else
+      name = __check_spawn_string__(first, "command")
+      argv0 = name
     end
 
-    redirects = options.map { |k, v| __spawn_redirect__(k, v) }.compact
-    script = body
-    script = "#{script} #{redirects.join(' ')}" unless redirects.empty?
-    script = "exec #{script}" unless script.start_with?("exec ")
-    script = (prefix + [script]).join(" && ") unless prefix.empty?
-    script
+    rest = args[1..-1].map { |a| __check_spawn_string__(a, "string") }
+    [__resolve_executable__(name, search_path), [argv0] + rest]
   end
 
-  def self.spawn(*args)
+  # Everything posix_spawn needs, plus the options the caller still has to act on.
+  def self.__spawn_setup__(args)
     env, command, options = __parse_spawn_args__(args)
 
     [:unsetenv_others, :close_others, :new_pgroup].each do |key|
       next unless options.key?(key)
       value = options[key]
       unless value.nil? || value == true || value == false
-        raise ArgumentError, "wrong exec option: #{key.inspect}"
+        raise ArgumentError, "expected true or false as #{key}: #{value}"
       end
     end
+
+    pgroup = nil
     if options.key?(:pgroup)
-      pgroup = options[:pgroup]
-      raise TypeError, "wrong exec option" if pgroup.is_a?(Symbol)
-      raise ArgumentError, "negative process group ID : #{pgroup}" if pgroup.is_a?(Integer) && pgroup < 0
+      value = options[:pgroup]
+      case value
+      when true
+        pgroup = 0
+      when false, nil
+        pgroup = nil
+      else
+        unless value.is_a?(Integer)
+          unless value.respond_to?(:to_int) && !value.is_a?(Symbol)
+            raise TypeError, "no implicit conversion of #{value.class} into Integer"
+          end
+          value = value.to_int
+        end
+        raise ArgumentError, "negative process group ID : #{value}" if value < 0
+        pgroup = value
+      end
     end
 
-    script = __build_spawn_script__(command, options)
-    __spawn__(script, env, options[:unsetenv_others] ? true : false)
+    file, argv = __spawn_command__(command, env)
+    [file, argv, __spawn_env__(env, options[:unsetenv_others]), __spawn_actions__(options), pgroup, options]
+  end
+
+  # :umask has no posix_spawn equivalent, and the value is inherited, so set it here
+  # and put it back afterwards.
+  def self.__with_umask__(mask)
+    return yield if mask.nil?
+    previous = File.umask(mask.to_int)
+    begin
+      yield
+    ensure
+      File.umask(previous)
+    end
+  end
+
+  def self.spawn(*args)
+    file, argv, envp, actions, pgroup, options = __spawn_setup__(args)
+    __with_umask__(options[:umask]) do
+      __check__(__spawn__(file, argv, envp, actions, pgroup, options[:close_others] ? true : false), file)
+    end
+  rescue SystemCallError
+    # MRI forks first and only then discovers that the command cannot be run, so the child
+    # it already has exits with 127 and $? says so even though spawn itself raises.
+    __set_last_status__(__make_status__(-1, 127 << 8))
+    raise
+  end
+
+  # Process.exec really does replace this process: execve(2) only returns on failure.
+  # Anything Ruby still has buffered would be lost with the address space, so it is
+  # flushed first.
+  def self.exec(*args)
+    # MRI takes close-on-exec off every descriptor the options name before it so much as
+    # looks at the command, so that one named in a redirection is still usable if the exec
+    # turns out to be impossible.
+    args.each do |argument|
+      next if argument.is_a?(String) || argument.is_a?(Array) || !argument.respond_to?(:to_hash)
+      argument.to_hash.each_key do |key|
+        next unless __spawn_redirect_key?(key)
+        __spawn_key_fds__(key).each { |fd| __set_cloexec__(fd, false) }
+      end
+    end
+
+    file, argv, envp, actions, _pgroup, options = __spawn_setup__(args)
+    File.umask(options[:umask].to_int) if options[:umask]
+    [$stdout, $stderr].each do |io|
+      begin
+        io.flush
+      rescue StandardError
+      end
+    end
+    __check__(__exec__(file, argv, envp, actions), file)
   end
 
   # --- POSIX calls that come back as -errno ---------------------------------------
@@ -7214,7 +7528,14 @@ module Process
   end
 
   def self.__check__(result, message = nil)
-    raise __errno_class__(-result), message if result.is_a?(Integer) && result < 0
+    if result.is_a?(Integer) && result < 0
+      klass = __errno_class__(-result)
+      # `raise klass, nil` is not the same call as `raise klass`: the two-argument form
+      # goes looking for Exception.exception(message) and the runtime cannot pick an
+      # overload for a nil argument.
+      raise klass, message if message
+      raise klass
+    end
     result
   end
 
@@ -7304,6 +7625,53 @@ module Process
     module_function :setsid
   end
 
+  unless respond_to?(:getpgrp)
+    def getpgrp
+      __check__(__getpgid__(0))
+    end
+    module_function :getpgrp
+
+    def setpgrp
+      __check__(__setpgid__(0, 0))
+      0
+    end
+    module_function :setpgrp
+  end
+
+  # The real and effective ids. MRI takes a name as well as a number for the ones that
+  # name a user or a group, and the C# side hands back -errno so that EPERM comes out as
+  # Errno::EPERM rather than as a bare failure.
+  def self.uid=(value)
+    __check__(__setuid__(__user_id__(value)))
+    value
+  end
+
+  def self.euid=(value)
+    __check__(__seteuid__(__user_id__(value)))
+    value
+  end
+
+  def self.gid=(value)
+    __check__(__setgid__(__group_id__(value)))
+    value
+  end
+
+  def self.egid=(value)
+    __check__(__setegid__(__group_id__(value)))
+    value
+  end
+
+  def self.groups=(list)
+    gids = list.to_ary.map { |gid| __group_id__(gid) }
+    __check__(__setgroups__(gids))
+    list
+  end
+
+  def self.initgroups(user, group)
+    __check__(__initgroups__(user.to_s, __group_id__(group)))
+    groups
+  end
+
   unless respond_to?(:getpriority)
     def getpriority(which, who)
       __check__(__getpriority__(which.to_int, who.to_int))
@@ -7346,28 +7714,36 @@ module Process
     end
   end
 
-  def self.waitpid2(pid = -1, flags = 0)
-    __waitpid__(pid.to_int, flags.to_int)
-  end
-
-  def self.waitpid(pid = -1, flags = 0)
-    result = waitpid2(pid, flags)
-    result && result[0]
+  # waitpid(2) itself, so that a child that was killed is reported as killed rather
+  # than as having exited with 128 plus the signal number.
+  def self.__wait2__(pid, flags)
+    result = __waitpid__(__integer_value__(pid), __integer_value__(flags))
+    return nil if result.nil?
+    __check__(result)
+    result
   end
 
   def self.wait(pid = -1, flags = 0)
-    waitpid(pid, flags)
+    result = __wait2__(pid, flags)
+    result && result[0]
   end
 
   def self.wait2(pid = -1, flags = 0)
-    waitpid2(pid, flags)
+    __wait2__(pid, flags)
+  end
+
+  # Not four methods that call one another: MRI defines two and aliases them, and a spec
+  # compares Process.method(:waitpid) with Process.method(:wait).
+  class << self
+    alias_method :waitpid, :wait
+    alias_method :waitpid2, :wait2
   end
 
   def self.waitall
     results = []
     loop do
       begin
-        pair = __waitpid__(-1, 0)
+        pair = __wait2__(-1, 0)
       rescue SystemCallError
         break
       end
@@ -7376,6 +7752,92 @@ module Process
     end
     results
   end
+
+  # Daemonising means forking, and there is no fork on the CLR. MRI defines the method
+  # on platforms that cannot do it too, as the function that raises NotImplementedError,
+  # and that function is exactly the case respond_to? answers false for - so portable
+  # code asks whether the feature is there rather than whether the name is.
+  NOT_IMPLEMENTED_METHODS = [:daemon, :fork].freeze unless const_defined?(:NOT_IMPLEMENTED_METHODS)
+
+  unless respond_to?(:daemon)
+    def daemon(nochdir = nil, noclose = nil)
+      raise NotImplementedError, "daemon() function is unimplemented on this machine"
+    end
+    module_function :daemon
+  end
+
+  def self.respond_to?(name, include_all = false)
+    return false if NOT_IMPLEMENTED_METHODS.include?(name.to_sym)
+    Module.instance_method(:respond_to?).bind(self).call(name, include_all)
+  end
+end
+
+class Process::Status
+  # Process::Status.wait is Process.wait2 without the side effect on $?; it is what a
+  # library uses when it must not disturb the status the program is looking at. Having
+  # no children at all is not an error here - it answers with a status whose pid is -1.
+  def self.wait(pid = -1, flags = 0)
+    previous = $?
+    begin
+      pair = Process.waitpid2(pid, flags)
+      pair && pair[1]
+    rescue Errno::ECHILD
+      Process.__make_status__(-1, 0)
+    ensure
+      Process.__set_last_status__(previous)
+    end
+  end unless respond_to?(:wait)
+end
+
+module Kernel
+  # system, exec, spawn and the backquotes are all Process.spawn underneath; they
+  # differ only in what they do with the child once it is running. Doing the argument
+  # handling once, in Process, is what gives all four the env hash, the
+  # [command, argv0] form and the options hash - the implementations they replace
+  # understood only "a string, optionally followed by more strings", so every one of
+  # them raised or silently mis-ran anything else.
+
+  def spawn(*args)
+    Process.spawn(*args)
+  end
+  module_function :spawn
+
+  def exec(*args)
+    Process.exec(*args)
+  end
+  module_function :exec
+
+  def system(*args)
+    options = (args.size > 1 && args.last.respond_to?(:to_hash) && !args.last.is_a?(String)) ? args.last.to_hash : {}
+    exception = options[:exception]
+
+    begin
+      pid = Process.spawn(*args)
+    rescue SystemCallError
+      # MRI reports "could not even start it" as nil rather than as false.
+      raise if exception
+      return nil
+    end
+
+    Process.waitpid(pid)
+    status = $?
+    return true if status.success?
+    if exception
+      if status.exitstatus
+        raise RuntimeError, "Command failed with status (#{status.exitstatus}): #{args.first}"
+      else
+        raise RuntimeError, "Command failed with signal #{status.termsig}: #{args.first}"
+      end
+    end
+    false
+  end
+  module_function :system
+
+  def `(command)
+    file, argv, envp, actions, = Process.__spawn_setup__([command])
+    Process.__backquote__(file, argv, envp, actions)
+  end
+  module_function :`
 end
 
 class SignalException
@@ -8587,13 +9049,20 @@ class IO
   # There is no exec here to leak a descriptor into, and no way to unset
   # binmode once set, so these record what they are told and answer it back.
 
+  # Real FD_CLOEXEC, not a remembered flag: whether a child sees the descriptor is the
+  # kernel's business, and a spawned child was the only thing that ever asked.
   def close_on_exec=(value)
-    @__close_on_exec__ = !!value
-  end unless method_defined?(:close_on_exec=)
+    flag = value ? true : false
+    Process.__set_cloexec__(fileno, flag)
+    @__close_on_exec__ = flag
+    value
+  end
 
   def close_on_exec?
+    actual = Process.__get_cloexec__(fileno)
+    return actual unless actual.nil?
     defined?(@__close_on_exec__) && !@__close_on_exec__ ? false : true
-  end unless method_defined?(:close_on_exec?)
+  end
 
   # The built-in answers from the stream mode, which a pipe never gets set
   # because the built-in binmode throws on one. Fall back to the flag that

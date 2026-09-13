@@ -163,11 +163,74 @@ namespace IronRuby.Hosting {
             return scope;
         }
 
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "signal")]
+        private static extern IntPtr SysSignal(int signal, IntPtr handler);
+
+        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "raise")]
+        private static extern int SysRaise(int signal);
+
         protected override void UnhandledException(Exception e) {
             // Kernel#at_exit can access $!. So we need to publish the uncaught exception
             ((RubyContext)Language).CurrentException = e;
 
+            // A SignalException that nobody rescued is not a program error: MRI puts the
+            // default disposition back and re-raises the signal, so the process dies the way
+            // it would have if the signal had never been turned into an exception. Reporting
+            // it instead would tell the parent "exited with 1" where it is watching for
+            // "killed by SIGTERM", which is what every Process::Status predicate is about.
+            if (RaiseAsSignal(e)) {
+                return;
+            }
+
             base.UnhandledException(e);
+        }
+
+        private bool RaiseAsSignal(Exception/*!*/ e) {
+            if (Path.DirectorySeparatorChar != '/') {
+                return false;
+            }
+
+            var context = (RubyContext)Language;
+
+            // SignalException and its #signo both live in the library assembly, which this one
+            // cannot reference, so both are reached through the object model instead.
+            bool isSignal = false;
+            for (var cls = context.GetClassOf(e); cls != null; cls = cls.SuperClass) {
+                if (cls.Name == "SignalException") {
+                    isSignal = true;
+                    break;
+                }
+            }
+            if (!isSignal) {
+                return false;
+            }
+
+            object number;
+            try {
+                number = Engine.Operations.InvokeMember(e, "signo");
+            } catch (Exception) {
+                return false;
+            }
+            if (!(number is int) || (int)number <= 0) {
+                return false;
+            }
+
+            Flush(context.StandardOutput);
+            Flush(context.StandardErrorOutput);
+            SysSignal((int)number, IntPtr.Zero);   // SIG_DFL
+            SysRaise((int)number);
+            return true;
+        }
+
+        private void Flush(object io) {
+            if (io == null) {
+                return;
+            }
+            try {
+                Engine.Operations.InvokeMember(io, "flush");
+            } catch (Exception) {
+                // nothing useful to do while the process is on its way out
+            }
         }
 
         protected override void Shutdown() {

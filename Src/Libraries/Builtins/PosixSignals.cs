@@ -62,6 +62,13 @@ namespace IronRuby.Builtins {
                     signalId == null ? "NilClass" : signalId.GetType().Name);
             }
 
+            // "-TERM" and "-SIGTERM" are the spelled-out forms of a negative signal number,
+            // which Process.kill reads as "to the process group".
+            bool negated = name.StartsWith("-", StringComparison.Ordinal);
+            if (negated) {
+                name = name.Substring(1);
+            }
+
             string bare = name.StartsWith("SIG", StringComparison.Ordinal) ? name.Substring(3) : name;
             if (bare == "EXIT") {
                 return 0;
@@ -72,7 +79,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("unsupported signal `{0}'",
                     name.StartsWith("SIG", StringComparison.Ordinal) ? name : "SIG" + name);
             }
-            return number;
+            return negated ? -number : number;
         }
 
         internal static string ToName(int number) {

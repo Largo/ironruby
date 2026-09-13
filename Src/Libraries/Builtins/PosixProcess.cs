@@ -57,6 +57,24 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "issetugid")]
         private static extern int SysIsSetUgid();
 
+        [DllImport("libc", SetLastError = true, EntryPoint = "setuid")]
+        private static extern int SysSetUid(int uid);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "seteuid")]
+        private static extern int SysSetEuid(int uid);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "setgid")]
+        private static extern int SysSetGid(int gid);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "setegid")]
+        private static extern int SysSetEgid(int gid);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "setgroups")]
+        private static extern int SysSetGroups(IntPtr count, int[] groups);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "initgroups")]
+        private static extern int SysInitGroups(string user, int group);
+
         private static int Failure() {
             int error = Marshal.GetLastWin32Error();
             return -(error == 0 ? 1 : error);
@@ -137,6 +155,41 @@ namespace IronRuby.Builtins {
         [RubyMethod("__getegid__", RubyMethodAttributes.PublicSingleton)]
         public static int GetEgid(RubyModule/*!*/ self) {
             return SysGetEgid();
+        }
+
+        [RubyMethod("__setuid__", RubyMethodAttributes.PublicSingleton)]
+        public static int SetUid(RubyModule/*!*/ self, [DefaultProtocol]int uid) {
+            return (SysSetUid(uid) != 0) ? Failure() : 0;
+        }
+
+        [RubyMethod("__seteuid__", RubyMethodAttributes.PublicSingleton)]
+        public static int SetEuid(RubyModule/*!*/ self, [DefaultProtocol]int uid) {
+            return (SysSetEuid(uid) != 0) ? Failure() : 0;
+        }
+
+        [RubyMethod("__setgid__", RubyMethodAttributes.PublicSingleton)]
+        public static int SetGid(RubyModule/*!*/ self, [DefaultProtocol]int gid) {
+            return (SysSetGid(gid) != 0) ? Failure() : 0;
+        }
+
+        [RubyMethod("__setegid__", RubyMethodAttributes.PublicSingleton)]
+        public static int SetEgid(RubyModule/*!*/ self, [DefaultProtocol]int gid) {
+            return (SysSetEgid(gid) != 0) ? Failure() : 0;
+        }
+
+        [RubyMethod("__setgroups__", RubyMethodAttributes.PublicSingleton)]
+        public static int SetGroups(RubyModule/*!*/ self, [NotNull]RubyArray/*!*/ groups) {
+            int[] gids = new int[groups.Count];
+            for (int i = 0; i < gids.Length; i++) {
+                gids[i] = Convert.ToInt32(groups[i]);
+            }
+            return (SysSetGroups((IntPtr)gids.Length, gids) != 0) ? Failure() : 0;
+        }
+
+        [RubyMethod("__initgroups__", RubyMethodAttributes.PublicSingleton)]
+        public static int InitGroups(RubyModule/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ user,
+            [DefaultProtocol]int group) {
+            return (SysInitGroups(user.ConvertToString(), group) != 0) ? Failure() : 0;
         }
 
         [RubyMethod("__issetugid__", RubyMethodAttributes.PublicSingleton)]

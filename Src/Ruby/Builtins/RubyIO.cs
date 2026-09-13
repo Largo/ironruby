@@ -447,11 +447,107 @@ namespace IronRuby.Builtins {
                 if (buffered == null) {
                     return -1;
                 }
-                var fs = buffered.BaseStream as System.IO.FileStream;
-                if (fs == null) {
-                    return -1;
+                return DescriptorOf(buffered.BaseStream);
+            }
+        }
+
+        /// <summary>
+        /// The descriptor the kernel knows this IO by. The standard streams are the three it
+        /// reserves whatever IronRuby's table says, because the table index and the descriptor
+        /// agree there by construction and the stream behind them is a console stream rather
+        /// than a FileStream.
+        /// </summary>
+        public int KernelDescriptor {
+            get {
+                int descriptor = _fileDescriptor;
+                if (_hasFileControl && descriptor >= 0 && descriptor <= 2) {
+                    return descriptor;
                 }
-                return (int)fs.SafeFileHandle.DangerousGetHandle();
+                return NativeDescriptor;
+            }
+        }
+
+        [DllImport("libc", EntryPoint = "dup", SetLastError = true)]
+        private static extern int sys_dup(int fd);
+
+        [DllImport("libc", EntryPoint = "dup2", SetLastError = true)]
+        private static extern int sys_dup2(int fd, int newFd);
+
+        /// <summary>
+        /// dup2(2) of another IO's descriptor onto this one's, which is what Ruby's #reopen
+        /// is. Returns false when either side has no descriptor the kernel knows about, and
+        /// the caller then falls back to swapping streams in IronRuby's table.
+        /// </summary>
+        public static bool TryRedirectDescriptor(RubyIO/*!*/ io, RubyIO/*!*/ source) {
+            int target = io.KernelDescriptor;
+            int from = source.KernelDescriptor;
+            if (target < 0 || from < 0) {
+                return false;
+            }
+            io.Flush();
+            source.Flush();
+            return target == from || sys_dup2(from, target) >= 0;
+        }
+
+        /// <summary>dup(2), so that a copy of an IO survives its original being reopened.</summary>
+        public static int TryDuplicateDescriptor(RubyIO/*!*/ io) {
+            int descriptor = io.KernelDescriptor;
+            return (descriptor < 0) ? -1 : sys_dup(descriptor);
+        }
+
+        /// <summary>The operating system descriptor a stream reads and writes, or -1.</summary>
+        public static int DescriptorOf(System.IO.Stream stream) {
+            var known = stream as IDescriptorStream;
+            if (known != null) {
+                return known.Descriptor;
+            }
+            var file = stream as System.IO.FileStream;
+            return (file != null) ? (int)file.SafeFileHandle.DangerousGetHandle() : -1;
+        }
+
+        /// <summary>
+        /// Whether the descriptor is open, and how. The low two bits of IOMode are O_ACCMODE
+        /// by construction. Ruby's default mode of "r" is an answer about a path; a descriptor
+        /// already knows what it was opened for, which is what MRI reports for one handed to
+        /// IO.new without a mode.
+        /// </summary>
+        public static bool TryGetDescriptorMode(int descriptor, out IOMode mode) {
+            mode = IOMode.ReadOnly;
+            if (!_hasFileControl || descriptor < 0) {
+                return false;
+            }
+            int flags = sys_fcntl(descriptor, F_GETFL, 0);
+            if (flags < 0) {
+                return false;
+            }
+            mode = (IOMode)(flags & (int)IOMode.ReadWriteMask);
+            return true;
+        }
+
+        /// <summary>
+        /// A stream over a descriptor this process was handed rather than opened - the way a
+        /// child of Process.spawn receives one through a redirection. IronRuby's descriptor
+        /// table knows nothing about it, so IO.new(fd) could only ever answer EBADF for it.
+        /// </summary>
+        public static System.IO.Stream TryAdoptDescriptor(int descriptor) {
+            IOMode mode;
+            if (!TryGetDescriptorMode(descriptor, out mode)) {
+                return null;
+            }
+            System.IO.FileAccess access;
+            switch (mode) {
+                case IOMode.WriteOnly: access = System.IO.FileAccess.Write; break;
+                case IOMode.ReadWrite: access = System.IO.FileAccess.ReadWrite; break;
+                default: access = System.IO.FileAccess.Read; break;
+            }
+            try {
+                // ownsHandle: false - the descriptor belongs to whoever passed it in, and a
+                // finalizer closing, say, the inherited standard output would be a disaster.
+                return new System.IO.FileStream(
+                    new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)descriptor, false), access, 1, false
+                );
+            } catch (Exception) {
+                return null;
             }
         }
 
