@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -50,7 +50,16 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("owner")]
         public static RubyModule/*!*/ GetOwner(RubyMethod/*!*/ self) {
-            return self.Info.DeclaringModule ?? self.GetTargetClass();
+            return self.Info.AliasOwner ?? self.Info.DeclaringModule ?? self.GetTargetClass();
+        }
+
+        /// <summary>
+        /// The name the body was written with, which differs from #name once `alias' or
+        /// define_method has given the same body a second name.
+        /// </summary>
+        [RubyMethod("original_name")]
+        public static RubySymbol/*!*/ GetOriginalName(RubyContext/*!*/ context, RubyMethod/*!*/ self) {
+            return context.EncodeIdentifier(self.Info.OriginalName ?? self.Name);
         }
 
         [RubyMethod("receiver")]

@@ -251,6 +251,16 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
+        /// For a method entry that `alias' or `define_method' created out of another method: the
+        /// module the new name was defined in, and the name the body was originally given.
+        /// #owner and #original_name report these; dispatch and `super' deliberately do not look
+        /// at them, because `super' has to keep resolving from the module that holds the body.
+        /// </summary>
+        public RubyModule AliasOwner { get; internal set; }
+
+        public string OriginalName { get; internal set; }
+
+        /// <summary>
         /// The parameter list the method was written with, or null if it is not known (a CLR
         /// method, an attribute accessor, anything not defined by Ruby source).
         /// </summary>

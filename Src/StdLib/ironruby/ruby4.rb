@@ -6013,10 +6013,6 @@ class Method
     self.Name.to_s.to_sym
   end unless method_defined?(:name)
 
-  def original_name
-    name
-  end unless method_defined?(:original_name)
-
   def receiver
     self.Target
   end unless method_defined?(:receiver)

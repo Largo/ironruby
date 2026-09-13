@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -372,7 +372,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
-            DefineMethod(scope, self, methodName, method.Info,  method.GetTargetClass());
+            DefineMethod(scope, self, methodName, method.Info,  method.GetTargetClass(), method.Name);
             return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
         }
 
@@ -393,7 +393,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
-            DefineMethod(scope, self, methodName, method.Info, method.TargetConstraint);
+            DefineMethod(scope, self, methodName, method.Info, method.TargetConstraint, method.Name);
             return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
         }
 
@@ -410,7 +410,7 @@ namespace IronRuby.Builtins {
         }
 
         private static void DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
-            RubyModule/*!*/ targetConstraint) {
+            RubyModule/*!*/ targetConstraint, string sourceName = null) {
 
             var visibility = GetDefinedMethodVisibility(scope, self, methodName);
             using (self.Context.ClassHierarchyLocker()) {
@@ -423,7 +423,7 @@ namespace IronRuby.Builtins {
                     );
                 }
 
-                self.SetDefinedMethodNoEventNoLock(self.Context, methodName, info, visibility);
+                self.SetDefinedMethodNoEventNoLock(self.Context, methodName, info, visibility, sourceName);
             }
 
             self.MethodAdded(methodName);
