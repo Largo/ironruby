@@ -922,9 +922,69 @@ end
 module Math
   # MRI raises Math::DomainError out of Math.sqrt/log/... and Integer#digits.
   class DomainError < StandardError; end unless const_defined?(:DomainError)
+
+  class << self
+    alias_method :__ir_frexp__, :frexp
+
+    # frexp answered the magnitude for a negative argument - Math.frexp(-0.5)
+    # came back [0.5, 0] where MRI says [-0.5, 0] - and 0.0 came back with the
+    # smallest exponent instead of [0.0, 0].
+    def frexp(value)
+      value = ::Kernel.Float(value)
+      return [value, 0] if value == 0.0 || value.nan? || value.infinite?
+      fraction, exponent = __ir_frexp__(value.abs)
+      [value < 0 ? -fraction : fraction, exponent]
+    end
+  end
 end
 
 class Integer
+  # pow(n) is **, but pow(n, m) is modular exponentiation, which has to be done
+  # by squaring rather than by computing the full power and then taking it mod m.
+  def pow(other, modulo = nil)
+    return self**other if modulo.nil?
+    unless modulo.is_a?(::Integer) && other.is_a?(::Integer)
+      ::Kernel.raise(::TypeError, "Integer#pow() 2nd argument not allowed unless all arguments are integers")
+    end
+    ::Kernel.raise(::RangeError, "Integer#pow() 1st argument cannot be negative when 2nd argument specified") if other < 0
+    ::Kernel.raise(::ZeroDivisionError, "divided by 0") if modulo == 0
+    negative = modulo < 0
+    m = modulo.abs
+    result = 1
+    base = self % m
+    exponent = other
+    while exponent > 0
+      result = (result * base) % m if exponent.odd?
+      base = (base * base) % m
+      exponent >>= 1
+    end
+    result = result - m if negative && result != 0
+    result
+  end unless method_defined?(:pow)
+
+  def ceildiv(other)
+    -(-self / other)
+  end unless method_defined?(:ceildiv)
+
+  # Newton's method on integers: the largest i with i*i <= n.
+  def self.sqrt(n)
+    unless n.is_a?(::Integer)
+      unless n.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{n.class} into Integer")
+      end
+      n = n.to_int
+    end
+    ::Kernel.raise(::Math::DomainError, 'Numerical argument is out of domain - "isqrt"') if n < 0
+    return n if n < 2
+    guess = 1 << ((n.bit_length + 1) / 2)
+    loop do
+      better = (guess + n / guess) / 2
+      break if better >= guess
+      guess = better
+    end
+    guess
+  end unless respond_to?(:sqrt)
+
   def digits(base = 10)
     unless base.is_a?(Integer)
       unless base.respond_to?(:to_int)
@@ -1001,6 +1061,13 @@ class IO
 end
 
 class File
+  # True when the path is absolute without consulting the filesystem. "~/x" is
+  # not absolute: MRI does no tilde expansion here.
+  def self.absolute_path?(path)
+    path = ::Kernel.String(path) unless path.is_a?(::String)
+    !!(path =~ %r{\A(?:[A-Za-z]:)?[/\\]})
+  end unless respond_to?(:absolute_path?)
+
   # File.size, File.size? and File.directory? take an IO, or anything that
   # converts to one with #to_io, as well as a path; the C# implementations only
   # know about paths.
@@ -1995,6 +2062,118 @@ unless defined?(Fiber)
   end
 end
 
+# Kernel#Complex and Kernel#Rational never learned to read a String - they went
+# straight for #real and #numerator on it - so every `Complex("1+2i")` in the
+# specs was a NoMethodError. Parsing is String#to_c / String#to_r; what these
+# add is MRI's strictness, because Complex("abc") is an ArgumentError where
+# "abc".to_c is (0+0i).
+module Kernel
+  NUMERIC_STRING__ = /\A[+-]?[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?(?:\/[0-9][0-9_]*)?\z/
+  COMPLEX_STRING__ = /\A[0-9+\-._eE\/i@]+\z/
+
+  def __convert_error__(value)
+    ::Kernel.raise(::ArgumentError, "invalid value for convert(): #{value.inspect}")
+  end
+  private :__convert_error__
+
+  def __string_to_c__(str)
+    t = str.strip
+    __convert_error__(str) if t.empty? || t !~ COMPLEX_STRING__ || t !~ /[0-9]/
+    t.to_c
+  end
+  private :__string_to_c__
+
+  def __string_to_r__(str)
+    t = str.strip
+    __convert_error__(str) unless t =~ NUMERIC_STRING__
+    t.to_r
+  end
+  private :__string_to_r__
+
+  # The built-in Complex/Rational are stubs that load complex18.rb and then
+  # redefine themselves, so they have to be run once before they can be wrapped
+  # - otherwise the first call through the wrapper replaces the wrapper.
+  begin
+    require 'complex18'
+    require 'rational18'
+    Complex(0, 0)
+    Rational(0, 1)
+  rescue ::Exception
+  end
+
+  if private_method_defined?(:Complex) || method_defined?(:Complex)
+    alias_method :__ir_Complex__, :Complex
+    private :__ir_Complex__
+
+    def Complex(real, imaginary = nil, exception: true)
+      if real.is_a?(::String) || imaginary.is_a?(::String)
+        begin
+          r = real.is_a?(::String) ? __string_to_c__(real) : real
+          return r if imaginary.nil?
+          i = imaginary.is_a?(::String) ? __string_to_c__(imaginary) : imaginary
+        rescue ::ArgumentError
+          raise if exception
+          return nil
+        end
+        return r + i * ::Complex.new(0, 1)
+      end
+      begin
+        imaginary.nil? ? __ir_Complex__(real) : __ir_Complex__(real, imaginary)
+      rescue ::ArgumentError, ::TypeError
+        raise if exception
+        nil
+      end
+    end
+    module_function :Complex
+  end
+
+  if private_method_defined?(:Rational) || method_defined?(:Rational)
+    alias_method :__ir_Rational__, :Rational
+    private :__ir_Rational__
+
+    def Rational(numerator, denominator = nil, exception: true)
+      if numerator.is_a?(::String) || denominator.is_a?(::String)
+        begin
+          n = numerator.is_a?(::String) ? __string_to_r__(numerator) : numerator
+          return n if denominator.nil?
+          d = denominator.is_a?(::String) ? __string_to_r__(denominator) : denominator
+        rescue ::ArgumentError
+          raise if exception
+          return nil
+        end
+        return n / d
+      end
+      begin
+        denominator.nil? ? __ir_Rational__(numerator) : __ir_Rational__(numerator, denominator)
+      rescue ::ArgumentError, ::TypeError
+        raise if exception
+        nil
+      end
+    end
+    module_function :Rational
+  end
+end
+
+# A non-blocking fiber does not sleep on the thread: it hands the wait to the
+# fiber scheduler, which is free to run something else in the meantime. Without
+# this, `sleep` with no duration inside a non-blocking fiber blocks the whole
+# process for ever - spec/core/kernel/sleep_spec.rb stops dead there.
+module Kernel
+  if private_method_defined?(:sleep) || method_defined?(:sleep)
+    alias_method :__ir_sleep__, :sleep
+    private :__ir_sleep__
+
+    def sleep(*args)
+      scheduler = ::Fiber.current_scheduler
+      if scheduler && scheduler.respond_to?(:kernel_sleep)
+        return scheduler.kernel_sleep(*args)
+      end
+      __ir_sleep__(*args)
+    end
+    module_function :sleep
+  end
+end
+
 # --- constants and core methods the 1.9 snapshot predates -------------------
 
 class Float
@@ -2209,252 +2388,221 @@ class String
   private :__ir_byte_search__
 
   def byteindex(needle, offset = 0)
-    __ir_byte_search__(false, needle, offset)
-  end
+    binary = dup
+    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
+    needle = needle.dup
+    needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
+    binary.index(needle, offset)
+  end unless method_defined?(:byteindex)
 
-  def byterindex(needle, offset = nil)
-    __ir_byte_search__(true, needle, offset.nil? ? bytesize : offset)
+  def byterindex(needle, offset = -1)
+    binary = dup
+    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
+    needle = needle.dup
+    needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
+    binary.rindex(needle, offset)
   end unless method_defined?(:byterindex)
 
-  # ------------------------------------------------------------------
-  # partition / rpartition
-  # ------------------------------------------------------------------
-
-  def __ir_partition_bounds__(sep)
-    if sep.is_a?(Regexp)
-      m = sep.match(self)
-      m && [m.begin(0), m.end(0)]
-    else
-      unless sep.is_a?(String)
-        if sep.respond_to?(:to_str)
-          sep = sep.to_str
-        else
-          raise TypeError, "wrong argument type #{sep.nil? ? 'nil' : sep.class} (expected Regexp)"
-        end
-      end
-      i = index(sep)
-      i && [i, i + sep.length]
-    end
-  end
-  private :__ir_partition_bounds__
-
-  def partition(sep)
-    bounds = __ir_partition_bounds__(sep)
-    return [self[0..-1], self[0, 0], self[0, 0]] if bounds.nil?
-    [self[0, bounds[0]], self[bounds[0], bounds[1] - bounds[0]], self[bounds[1]..-1]]
-  end unless method_defined?(:partition)
-
-  def rpartition(sep)
-    if sep.is_a?(Regexp)
-      # #rindex already searches backwards for a Regexp and leaves the match in
-      # $~, which is where the end of it comes from.
-      i = rindex(sep)
-      bounds = i && [i, i + ($~ ? $~[0].length : 0)]
-    else
-      unless sep.is_a?(String)
-        if sep.respond_to?(:to_str)
-          sep = sep.to_str
-        else
-          raise TypeError, "wrong argument type #{sep.nil? ? 'nil' : sep.class} (expected Regexp)"
-        end
-      end
-      i = rindex(sep)
-      bounds = i && [i, i + sep.length]
-    end
-    return [self[0, 0], self[0, 0], self[0..-1]] if bounds.nil?
-    [self[0, bounds[0]], self[bounds[0], bounds[1] - bounds[0]], self[bounds[1]..-1]]
-  end unless method_defined?(:rpartition)
-
-  # ------------------------------------------------------------------
-  # prepend / append_as_bytes
-  # ------------------------------------------------------------------
-
-  def prepend(*others)
-    return self if others.empty?
-    joined = others.map { |o| String.try_convert(o) || raise(TypeError, "no implicit conversion of #{o.nil? ? 'nil' : o.class} into String") }
-    replace(joined.join + self)
-  end unless method_defined?(:prepend)
-
-  # Ruby 3.4: concatenation that copies bytes and never transcodes, so the
-  # receiver's encoding is kept whatever the arguments were in.  Integers are
-  # single bytes, taken modulo 256.
-  def append_as_bytes(*objects)
-    return self if objects.empty?
-    enc = encoding
-    tail = +""
-    tail.force_encoding(Encoding::BINARY)
-    objects.each do |o|
-      case o
-      when String  then tail << o.dup.force_encoding(Encoding::BINARY)
-      when Integer then tail << (o % 256).chr(Encoding::BINARY)
-      else raise TypeError, "wrong argument type #{o.nil? ? 'nil' : o.class} (expected String or Integer)"
-      end
-    end
-    binary = dup.force_encoding(Encoding::BINARY)
-    binary << tail
-    replace(binary.force_encoding(enc))
-  end unless method_defined?(:append_as_bytes)
-
-  # ------------------------------------------------------------------
-  # casecmp? - casecmp compares byte by byte after a simple ASCII fold;
-  # casecmp? asks whether the two are equal under full Unicode case folding.
-  # ------------------------------------------------------------------
-
-  def casecmp?(other)
-    other = String.try_convert(other)
-    return nil if other.nil?
-    return nil unless Encoding.compatible?(self, other)
-    downcase(:fold) == other.downcase(:fold)
-  rescue ArgumentError
-    downcase == other.downcase
-  end unless method_defined?(:casecmp?)
-
-  # ------------------------------------------------------------------
-  # bytesplice - #[]= in byte space.
-  # ------------------------------------------------------------------
-
+  # Replaces a byte range in place. Every index here is a byte index, so the
+  # work is done on a binary copy and tagged back afterwards, like bytesplice.
   def bytesplice(*args)
-    if args.first.is_a?(Range)
-      range, replacement = args
-      rest = args[2, 2]
-      index = range.begin || 0
-      index += bytesize if index < 0
-      last = range.end
-      if last.nil?
-        length = bytesize - index
-      else
-        last += bytesize if last < 0
-        last += 1 unless range.exclude_end?
-        length = last - index
-        length = 0 if length < 0
+    str = args.pop
+    unless str.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{str.class} into String")
+    end
+    case args.size
+    when 1
+      range = args[0]
+      unless range.is_a?(::Range)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{range.class} into Integer")
       end
+      index, length = __byte_range__(range)
+    when 2
+      index = ::Kernel.Integer(args[0])
+      length = ::Kernel.Integer(args[1])
+      index += bytesize if index < 0
+      ::Kernel.raise(::IndexError, "index #{args[0]} out of string") if index < 0 || index > bytesize
+      ::Kernel.raise(::IndexError, "negative length #{length}") if length < 0
     else
-      index, length, replacement = args
-      rest = args[3, 2]
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 2..5)")
     end
-
-    replacement = String.try_convert(replacement) ||
-      raise(TypeError, "no implicit conversion of #{replacement.nil? ? 'nil' : replacement.class} into String")
-
-    if rest && rest.size == 2
-      sub_index, sub_length = rest
-      sub_index += replacement.bytesize if sub_index < 0
-      raise IndexError, "index #{rest[0]} out of string" if sub_index < 0 || sub_index > replacement.bytesize
-      raise IndexError, "negative length #{sub_length}" if sub_length < 0
-      replacement = replacement.byteslice(sub_index, sub_length) || replacement[0, 0]
-    end
-
-    original = index
-    index += bytesize if index < 0
-    raise IndexError, "index #{original} out of string" if index < 0 || index > bytesize
-    raise IndexError, "negative length #{length}" if length < 0
     length = bytesize - index if index + length > bytesize
 
-    enc = encoding
-    binary = dup.force_encoding(Encoding::BINARY)
-    head = binary[0, index]
-    tail = binary[index + length, binary.bytesize - index - length] || binary[0, 0]
-    replace((head + replacement.dup.force_encoding(Encoding::BINARY) + tail).force_encoding(enc))
+    binary = dup
+    binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
+    piece = str.dup
+    piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
+    result = binary[0, index] + piece + binary[(index + length)..-1].to_s
+    result.force_encoding(encoding) if result.respond_to?(:force_encoding)
+    replace(result)
   end unless method_defined?(:bytesplice)
 
-  # ------------------------------------------------------------------
-  # scrub / scrub! - replace the byte runs that are not valid in the
-  # receiver's encoding.  A single byte encoding has no invalid sequences, so
-  # the receiver comes back untouched.
-  # ------------------------------------------------------------------
-
-  def __ir_scrub__(replacement, &block)
-    return dup if valid_encoding?
-    enc = encoding
-    replacement = String.try_convert(replacement) unless replacement.nil?
-
-    out = +""
-    out.force_encoding(Encoding::BINARY)
-    binary = dup.force_encoding(Encoding::BINARY)
-    pending = +""
-    pending.force_encoding(Encoding::BINARY)
-
-    flush_bad = lambda do
-      next if pending.empty?
-      if block
-        out << block.call(pending.dup.force_encoding(enc)).to_s.dup.force_encoding(Encoding::BINARY)
-      elsif replacement
-        out << replacement.dup.force_encoding(Encoding::BINARY)
-      else
-        out << "�".dup.force_encoding(Encoding::BINARY)
-      end
-      pending.clear
+  def __byte_range__(range)
+    size = bytesize
+    first = range.begin
+    first = 0 if first.nil?
+    first = ::Kernel.Integer(first)
+    first += size if first < 0
+    ::Kernel.raise(::RangeError, "#{range} out of range") if first < 0 || first > size
+    last = range.end
+    if last.nil?
+      length = size - first
+    else
+      last = ::Kernel.Integer(last)
+      last += size if last < 0
+      last -= 1 if range.exclude_end?
+      length = last - first + 1
+      length = 0 if length < 0
     end
-
-    # Walk forward over maximal valid prefixes.  Anything that cannot start a
-    # character joins the pending bad run, which is emitted as one replacement
-    # the way MRI does rather than one per byte.
-    i = 0
-    n = binary.bytesize
-    while i < n
-      matched = nil
-      # The longest sequence any encoding here uses is 4 bytes.
-      (1..4).each do |len|
-        break if i + len > n
-        candidate = binary[i, len].force_encoding(enc)
-        if candidate.valid_encoding?
-          matched = len
-          break
-        end
-      end
-      if matched
-        flush_bad.call
-        out << binary[i, matched]
-        i += matched
-      else
-        pending << binary[i]
-        i += 1
-      end
-    end
-    flush_bad.call
-    out.force_encoding(enc)
+    [first, length]
   end
-  private :__ir_scrub__
+  private :__byte_range__
 
-  def scrub(replacement = nil, &block)
-    __ir_scrub__(replacement, &block)
-  end unless method_defined?(:scrub)
-
-  def scrub!(replacement = nil, &block)
-    replace(__ir_scrub__(replacement, &block))
-    self
-  end unless method_defined?(:scrub!)
-
-  # ------------------------------------------------------------------
-  # undump - the inverse of #dump.
-  # ------------------------------------------------------------------
-
-  def undump
-    src = self
-    unless src.start_with?('"')
-      raise RuntimeError, %q{invalid dumped string; not wrapped with '"' nor '"...".force_encoding("...")' form}
+  # Appends the bytes of each argument without any encoding negotiation: an
+  # Integer contributes one byte, a String contributes its bytes as they are.
+  def append_as_bytes(*objects)
+    objects.each do |o|
+      bytes =
+        case o
+        when ::Integer then [o & 0xff].pack("C")
+        when ::String then o
+        else ::Kernel.raise(::TypeError, "wrong argument type #{o.class} (expected String or Integer)")
+        end
+      piece = bytes.dup
+      piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
+      binary = dup
+      binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
+      binary << piece
+      binary.force_encoding(encoding) if binary.respond_to?(:force_encoding)
+      replace(binary)
     end
+    self
+  end unless method_defined?(:append_as_bytes)
 
-    out = +""
-    out.force_encoding(Encoding::BINARY)
-    i = 1
-    n = src.bytesize
-    binary = src.dup.force_encoding(Encoding::BINARY)
-    closed = false
+  def partition(pattern)
+    if pattern.is_a?(::Regexp)
+      m = pattern.match(self)
+      return [dup, "", ""] unless m
+      [m.pre_match, m[0], m.post_match]
+    else
+      pattern = ::Kernel.String(pattern) unless pattern.is_a?(::String)
+      i = index(pattern)
+      return [dup, "", ""] unless i
+      [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
+    end
+  end unless method_defined?(:partition)
+
+  def rpartition(pattern)
+    if pattern.is_a?(::Regexp)
+      start = nil
+      pos = 0
+      # Regexp#match takes no start offset here, so walk forward keeping the
+      # last match that begins at or after each position.
+      while pos <= length && (i = index(pattern, pos))
+        start = i
+        pos = i + 1
+      end
+      return ["", "", dup] unless start
+      m = pattern.match(self[start..-1])
+      [self[0, start], m[0], self[(start + m[0].length)..-1]]
+    else
+      pattern = ::Kernel.String(pattern) unless pattern.is_a?(::String)
+      i = rindex(pattern)
+      return ["", "", dup] unless i
+      [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
+    end
+  end unless method_defined?(:rpartition)
+
+  def prepend(*others)
+    others = others.map { |o| o.is_a?(::String) ? o : ::Kernel.String(o) }
+    replace(others.join + self)
+  end unless method_defined?(:prepend)
+
+  def casecmp?(other)
+    return nil unless other.is_a?(::String)
+    c = casecmp(other)
+    c.nil? ? nil : c == 0
+  end unless method_defined?(:casecmp?)
+
+  def delete_prefix!(prefix)
+    result = delete_prefix(prefix)
+    result == self ? nil : replace(result)
+  end unless method_defined?(:delete_prefix!)
+
+  def delete_suffix!(suffix)
+    result = delete_suffix(suffix)
+    result == self ? nil : replace(result)
+  end unless method_defined?(:delete_suffix!)
+
+  # 3.4's name for -@. Spelled out rather than aliased: String#-@ is itself
+  # defined further down this file.
+  def dedup
+    frozen? ? self : dup.freeze
+  end unless method_defined?(:dedup)
+
+  # Parses as much of a complex number as it can and answers (0+0i) for the
+  # rest, the way Kernel#Complex(str, exception: false) does. The grammar is
+  # MRI's: [real][sign imaginary"i"], or "real@angle" for polar form, with the
+  # real and imaginary parts each an integer, a float or a rational.
+  NUMBER__ = '[+-]?(?:\d[\d_]*)?(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?(?:\/\d[\d_]*)?'
+
+  def to_c
+    s = strip
+    if (m = /\A(#{NUMBER__})@(#{NUMBER__})/o.match(s)) && !m[1].empty? && !m[2].empty?
+      return ::Complex.polar(__to_num__(m[1]), __to_num__(m[2]))
+    end
+    if (m = /\A(#{NUMBER__})?([+-](?:\d[\d_]*)?(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?(?:\/\d[\d_]*)?)i/o.match(s))
+      real = m[1].nil? || m[1].empty? ? 0 : __to_num__(m[1])
+      imag = m[2] == "+" ? 1 : (m[2] == "-" ? -1 : __to_num__(m[2]))
+      return ::Complex.new(real, imag)
+    end
+    if (m = /\A(#{NUMBER__})i/o.match(s)) && !m[1].empty? && m[1] != "+" && m[1] != "-"
+      return ::Complex.new(0, __to_num__(m[1]))
+    end
+    if (m = /\A(#{NUMBER__})/o.match(s)) && !m[1].empty?
+      return ::Complex.new(__to_num__(m[1]), 0)
+    end
+    ::Complex.new(0, 0)
+  end unless method_defined?(:to_c)
+
+  def __to_num__(text)
+    text = text.delete("_")
+    if text.include?("/")
+      text.to_r
+    elsif text.include?(".") || text.include?("e") || text.include?("E")
+      text.to_f
+    else
+      text.to_i
+    end
+  end
+  private :__to_num__
+
+  # The inverse of #dump. Anything that is not something #dump could have
+  # produced is a RuntimeError, which is what MRI raises here.
+  def undump
+    s = self
     forced = nil
-
-    while i < n
-      ch = binary[i]
-      if ch == '"'
-        closed = true
+    if (m = /\A(".*")\.force_encoding\("([^"]+)"\)\z/m.match(s))
+      s = m[1]
+      forced = m[2]
+    end
+    unless s.start_with?('"') && s.end_with?('"') && s.length >= 2
+      ::Kernel.raise(::RuntimeError, "invalid dumped string; not wrapped with '\"' nor '\"...\".force_encoding(\"...\")' form")
+    end
+    body = s[1...-1]
+    ::Kernel.raise(::RuntimeError, "invalid dumped string") if body.nil?
+    out = +""
+    forced = nil
+    i = 0
+    while i < body.length
+      c = body[i]
+      if c == '"'
+        ::Kernel.raise(::RuntimeError, "invalid dumped string")
+      elsif c == "\\"
         i += 1
-        break
-      elsif ch == "\\"
-        i += 1
-        raise RuntimeError, "unterminated dumped string" if i >= n
-        esc = binary[i]
-        i += 1
-        case esc
+        e = body[i]
+        ::Kernel.raise(::RuntimeError, "invalid dumped string") if e.nil?
+        case e
         when "n" then out << "\n"
         when "t" then out << "\t"
         when "r" then out << "\r"
@@ -2463,83 +2611,224 @@ class String
         when "b" then out << "\b"
         when "a" then out << "\a"
         when "e" then out << "\e"
-        when "0" then out << "\0"
+        when "s" then out << " "
         when "\\" then out << "\\"
         when '"' then out << '"'
         when "#" then out << "#"
+        when "0" then out << "\0"
         when "x"
-          hex = binary[i, 2]
-          raise RuntimeError, "invalid hex escape" unless hex =~ /\A[0-9a-fA-F]{2}\z/
-          out << hex.to_i(16).chr(Encoding::BINARY)
+          hex = body[(i + 1), 2]
+          ::Kernel.raise(::RuntimeError, "invalid hex escape") unless hex =~ /\A[0-9a-fA-F]{2}\z/
+          out << hex.to_i(16).chr
           i += 2
         when "u"
-          if binary[i] == "{"
-            close = binary.index("}", i)
-            raise RuntimeError, "unterminated Unicode escape" if close.nil?
-            body = binary[i + 1, close - i - 1]
-            body.split(/\s+/).each do |cp|
-              next if cp.empty?
-              out << [cp.to_i(16)].pack("U").dup.force_encoding(Encoding::BINARY)
-            end
-            i = close + 1
+          if body[i + 1] == "{"
+            close = body.index("}", i + 1)
+            ::Kernel.raise(::RuntimeError, "unterminated Unicode escape") unless close
+            body[(i + 2)...close].split(" ").each { |cp| out << __undump_cp__(cp) }
+            i = close
           else
-            hex = binary[i, 4]
-            raise RuntimeError, "invalid Unicode escape" unless hex =~ /\A[0-9a-fA-F]{4}\z/
-            out << [hex.to_i(16)].pack("U").dup.force_encoding(Encoding::BINARY)
+            cp = body[(i + 1), 4]
+            ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless cp =~ /\A[0-9a-fA-F]{4}\z/
+            out << __undump_cp__(cp)
             i += 4
           end
         else
-          # MRI leaves an escape it does not know alone, backslash and all.
-          out << "\\" << esc
+          # MRI passes an escape it does not recognise through untouched.
+          out << "\\" << e
         end
       else
-        out << ch
-        i += 1
+        out << c
       end
+      i += 1
     end
-
-    raise RuntimeError, "unterminated dumped string" unless closed
-
-    rest = binary[i, n - i].to_s
-    unless rest.empty?
-      m = /\A\.force_encoding\("([^"]+)"\)\z/.match(rest)
-      unless m
-        raise RuntimeError, %q{invalid dumped string; not wrapped with '"' nor '"...".force_encoding("...")' form}
-      end
-      forced = m[1]
-    end
-
-    out.force_encoding(forced || encoding)
+    out.force_encoding(forced) if forced && out.respond_to?(:force_encoding)
     out
   end unless method_defined?(:undump)
 
-  # ------------------------------------------------------------------
-  # unicode_normalize - .NET already has the four normalisation forms.
-  # ------------------------------------------------------------------
-
-  UNICODE_NORMALIZE_FORMS = {
-    nfc:  System::Text::NormalizationForm.FormC,
-    nfd:  System::Text::NormalizationForm.FormD,
-    nfkc: System::Text::NormalizationForm.FormKC,
-    nfkd: System::Text::NormalizationForm.FormKD,
-  }.freeze
-
-  def __ir_normalization_form__(form)
-    UNICODE_NORMALIZE_FORMS[form] ||
-      raise(ArgumentError, ":#{form} is neither :nfc, :nfd, :nfkc, nor :nfkd")
+  def __undump_cp__(hex)
+    ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless hex =~ /\A[0-9a-fA-F]+\z/
+    cp = hex.to_i(16)
+    ::Kernel.raise(::RuntimeError, "invalid Unicode codepoint") if cp > 0x10ffff
+    # pack("U") hands back an ASCII-8BIT string here; the bytes are UTF-8.
+    ch = [cp].pack("U")
+    ch.force_encoding(::Encoding::UTF_8) if ch.respond_to?(:force_encoding)
+    ch
   end
-  private :__ir_normalization_form__
+  private :__undump_cp__
+
+  # Replaces every byte that is not part of a valid character with the given
+  # replacement (the encoding's own replacement character by default).
+  def scrub(replacement = nil, &block)
+    return dup if valid_encoding?
+    default = encoding == ::Encoding::UTF_8 ? "�" : "?"
+    out = +""
+    out.force_encoding(encoding) if out.respond_to?(:force_encoding)
+    each_char do |ch|
+      if ch.valid_encoding?
+        out << ch
+      elsif block
+        out << block.call(ch).to_s
+      else
+        out << (replacement || default)
+      end
+    end
+    out
+  end unless method_defined?(:scrub)
+
+  def scrub!(replacement = nil, &block)
+    replace(scrub(replacement, &block))
+  end unless method_defined?(:scrub!)
+
+  # ---- case mapping options (2.4) and strip selectors (4.0) ---------------
+  #
+  # The built-ins take no arguments, so every `upcase(:ascii)` and
+  # `strip("a-c")` in the specs came back as a wrong-number-of-arguments error.
+
+  CASE_OPTIONS__ = [:ascii, :turkic, :lithuanian, :fold]
+
+  def __case_options__(options, folding_allowed)
+    ::Kernel.raise(::ArgumentError, "too many options") if options.size > 2
+    options.each do |o|
+      ::Kernel.raise(::ArgumentError, "invalid option") unless CASE_OPTIONS__.include?(o)
+      if o == :fold && !folding_allowed
+        ::Kernel.raise(::ArgumentError, "option :fold only allowed for downcasing")
+      end
+    end
+    # :turkic and :lithuanian are the only pair MRI accepts together.
+    if options.size == 2 && !(options.include?(:turkic) && options.include?(:lithuanian))
+      ::Kernel.raise(::ArgumentError, "too many options")
+    end
+    options
+  end
+  private :__case_options__
+
+  # Turkic keeps the dot: I/ı and İ/i are separate letters.
+  def __turkic__(up)
+    if up
+      gsub("i", "İ")
+    else
+      gsub("I", "ı")
+    end
+  end
+  private :__turkic__
+
+  [[:upcase, true], [:downcase, false], [:capitalize, true], [:swapcase, true]].each do |name, upward|
+    plain = :"__ir_#{name}__"
+    alias_method plain, name
+    private plain
+
+    define_method(name) do |*options|
+      __case_options__(options, name == :downcase)
+      return __send__(plain) if options.empty?
+      if options.include?(:ascii)
+        # Only a-z/A-Z move; everything else is left alone.
+        case name
+        when :upcase then gsub(/[a-z]/) { |c| c.__send__(plain) }
+        when :downcase then gsub(/[A-Z]/) { |c| c.__send__(plain) }
+        when :swapcase then gsub(/[a-zA-Z]/) { |c| c.__send__(plain) }
+        else
+          rest = self[1..-1].to_s
+          self[0, 1].to_s.gsub(/[a-z]/) { |c| c.__send__(:__ir_upcase__) } +
+            rest.gsub(/[A-Z]/) { |c| c.__send__(:__ir_downcase__) }
+        end
+      elsif options.include?(:turkic)
+        __turkic__(upward).__send__(plain)
+      else
+        # :lithuanian and :fold: MRI currently does plain full case mapping.
+        __send__(plain)
+      end
+    end
+
+    bang = :"#{name}!"
+    if method_defined?(bang)
+      plain_bang = :"__ir_#{name}_bang__"
+      alias_method plain_bang, bang
+      private plain_bang
+      define_method(bang) do |*options|
+        return __send__(plain_bang) if options.empty?
+        result = __send__(name, *options)
+        result == self ? nil : replace(result)
+      end
+    end
+  end
+
+  # A character is stripped when it is in every one of the given sets, which is
+  # exactly what String#count answers for a one-character string.
+  def __selected__(ch, selectors)
+    ch.count(*selectors) > 0
+  end
+  private :__selected__
+
+  alias_method :__ir_strip__, :strip
+  alias_method :__ir_lstrip__, :lstrip
+  alias_method :__ir_rstrip__, :rstrip
+  private :__ir_strip__, :__ir_lstrip__, :__ir_rstrip__
+
+  def lstrip(*selectors)
+    return __ir_lstrip__ if selectors.empty?
+    i = 0
+    i += 1 while i < length && __selected__(self[i, 1], selectors)
+    self[i..-1] || self[0, 0]
+  end
+
+  def rstrip(*selectors)
+    return __ir_rstrip__ if selectors.empty?
+    i = length
+    i -= 1 while i > 0 && __selected__(self[i - 1, 1], selectors)
+    self[0, i]
+  end
+
+  def strip(*selectors)
+    return __ir_strip__ if selectors.empty?
+    lstrip(*selectors).rstrip(*selectors)
+  end
+
+  [:strip, :lstrip, :rstrip].each do |name|
+    bang = :"#{name}!"
+    next unless method_defined?(bang)
+    plain_bang = :"__ir_#{name}_bang__"
+    alias_method plain_bang, bang
+    private plain_bang
+    define_method(bang) do |*selectors|
+      return __send__(plain_bang) if selectors.empty?
+      result = __send__(name, *selectors)
+      result == self ? nil : replace(result)
+    end
+  end
+
+  # ---- Unicode normalisation and grapheme clusters ------------------------
+  #
+  # Both are handed to the CLR, which has the Unicode tables: normalisation to
+  # System.String#Normalize and segmentation to StringInfo's text elements,
+  # which are grapheme clusters by another name.
+
+  NORMALIZATION_FORMS__ = {
+    nfc: :FormC, nfd: :FormD, nfkc: :FormKC, nfkd: :FormKD
+  }
+
+  def __normalization_form__(form)
+    name = NORMALIZATION_FORMS__[form]
+    ::Kernel.raise(::ArgumentError, "Invalid normalization form #{form}.") unless name
+    ::System::Text::NormalizationForm.__send__(name)
+  end
+  private :__normalization_form__
+
+  def __require_unicode__
+    unless [::Encoding::UTF_8, ::Encoding::US_ASCII].include?(encoding)
+      ::Kernel.raise(::Encoding::CompatibilityError, "Unicode Normalization not appropriate for #{encoding}")
+    end
+    unless valid_encoding?
+      ::Kernel.raise(::ArgumentError, "invalid byte sequence in #{encoding}")
+    end
+  end
+  private :__require_unicode__
 
   def unicode_normalize(form = :nfc)
-    net_form = __ir_normalization_form__(form)
-    unless encoding == Encoding::UTF_8 || encoding == Encoding::US_ASCII ||
-           encoding == Encoding::UTF_16LE || encoding == Encoding::UTF_16BE ||
-           encoding == Encoding::UTF_32LE || encoding == Encoding::UTF_32BE
-      raise Encoding::CompatibilityError, "Unicode Normalization not appropriate for #{encoding.name}"
-    end
-    utf8 = encoding == Encoding::UTF_8 ? self : encode(Encoding::UTF_8)
-    result = utf8.to_clr_string.Normalize(net_form).to_s.dup.force_encoding(Encoding::UTF_8)
-    encoding == Encoding::UTF_8 ? result : result.encode(encoding)
+    __require_unicode__
+    result = to_clr_string.Normalize(__normalization_form__(form)).to_s
+    result.force_encoding(encoding) if result.respond_to?(:force_encoding)
+    result
   end unless method_defined?(:unicode_normalize)
 
   def unicode_normalize!(form = :nfc)
@@ -2547,8 +2836,214 @@ class String
   end unless method_defined?(:unicode_normalize!)
 
   def unicode_normalized?(form = :nfc)
-    unicode_normalize(form) == self
+    __require_unicode__
+    to_clr_string.IsNormalized(__normalization_form__(form))
   end unless method_defined?(:unicode_normalized?)
+
+  def each_grapheme_cluster
+    return ::Enumerator.new(grapheme_clusters.size) { |y| grapheme_clusters.each { |g| y << g } } unless block_given?
+    grapheme_clusters.each { |g| yield g }
+    self
+  end unless method_defined?(:each_grapheme_cluster)
+
+  def grapheme_clusters
+    return chars unless valid_encoding?
+    result = []
+    e = ::System::Globalization::StringInfo.GetTextElementEnumerator(to_clr_string)
+    while e.MoveNext
+      piece = e.GetTextElement.to_s
+      piece.force_encoding(encoding) if piece.respond_to?(:force_encoding)
+      result << piece
+    end
+    result
+  end unless method_defined?(:grapheme_clusters)
+
+  # `str =~ x` is `x =~ str` for a Regexp and a TypeError for anything that is
+  # not, which is how MRI stops the common `"a" =~ "b"` mistake.
+  def =~(other)
+    if other.is_a?(::Regexp)
+      other =~ self
+    elsif other.respond_to?(:=~)
+      other =~ self
+    else
+      ::Kernel.raise(::TypeError, "type mismatch: #{other.class} given")
+    end
+  end unless method_defined?(:=~)
+end
+
+# Numeric#step never learned the keyword form - `1.step(by: 2, to: 7)` handed
+# the options hash to the positional parameter and came back with "can't convert
+# Hash into Float", which was 70 of spec/core/numeric's 123 errors. The
+# positional form still goes to the built-in.
+class Numeric
+  alias_method :__ir_step__, :step
+
+  def step(*args, &block)
+    kw = nil
+    if !args.empty? && args.last.is_a?(::Hash)
+      last = args.last
+      unless last.empty?
+        unknown = last.keys - [:to, :by]
+        unless unknown.empty?
+          ::Kernel.raise(::ArgumentError, "unknown keyword: #{unknown[0].inspect}")
+        end
+        kw = args.pop
+      end
+    end
+    if kw.nil?
+      # The built-in only has the block form.
+      return ::Enumerator.new { |y| __ir_step__(*args) { |v| y << v } } unless block
+      return __ir_step__(*args, &block)
+    end
+    unless args.empty?
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 0..2)")
+    end
+
+    limit = kw[:to]
+    increment = kw.key?(:by) ? kw[:by] : 1
+    unless block
+      return ::Enumerator.new { |y| step(**kw) { |v| y << v } }
+    end
+    ::Kernel.raise(::ArgumentError, "step can't be 0") if increment == 0
+
+    if limit.nil?
+      value = self
+      loop do
+        block.call(value)
+        value += increment
+      end
+      return self
+    end
+
+    if is_a?(::Float) || limit.is_a?(::Float) || increment.is_a?(::Float)
+      # MRI multiplies rather than accumulates so the rounding does not drift.
+      base = to_f
+      stop = limit.to_f
+      unit = increment.to_f
+      n = (stop - base) / unit
+      err = ((base.abs + stop.abs + (stop - base).abs) / unit.abs) * ::Float::EPSILON
+      err = 0.5 if err.nan? || err > 0.5
+      n = (n + err).floor
+      i = 0
+      while i <= n
+        block.call(base + i * unit)
+        i += 1
+      end
+    else
+      value = self
+      if increment > 0
+        while value <= limit
+          block.call(value)
+          value += increment
+        end
+      else
+        while value >= limit
+          block.call(value)
+          value += increment
+        end
+      end
+    end
+    self
+  end
+end
+
+class Numeric
+  def i
+    ::Complex.new(0, self)
+  end unless method_defined?(:i)
+
+  def to_c
+    ::Complex.new(self, 0)
+  end unless method_defined?(:to_c)
+
+  def numerator
+    to_r.numerator
+  end unless method_defined?(:numerator)
+
+  def denominator
+    to_r.denominator
+  end unless method_defined?(:denominator)
+
+  def fdiv(other)
+    to_f / other
+  end unless method_defined?(:fdiv)
+
+  alias_method :magnitude, :abs unless method_defined?(:magnitude)
+end
+
+class Float
+  # The neighbouring representable Floats. The CLR walks the IEEE bit pattern
+  # for us; MRI's next_float of +Infinity is +Infinity, where BitIncrement
+  # answers NaN, so the ends are special-cased.
+  def next_float
+    return ::Float::NAN if nan?
+    return self if self == ::Float::INFINITY
+    ::System::Math.BitIncrement(self)
+  end unless method_defined?(:next_float)
+
+  def prev_float
+    return ::Float::NAN if nan?
+    return self if self == -::Float::INFINITY
+    ::System::Math.BitDecrement(self)
+  end unless method_defined?(:prev_float)
+
+  # The exact value of the Float, which is always a dyadic rational.
+  def to_r
+    ::Kernel.raise(::FloatDomainError, to_s) if nan? || infinite?
+    fraction, exponent = ::Math.frexp(abs)
+    numerator = ::Math.ldexp(fraction, 53).to_i
+    numerator = -numerator if self < 0
+    exponent -= 53
+    if exponent >= 0
+      ::Kernel.Rational(numerator * (2**exponent), 1)
+    else
+      ::Kernel.Rational(numerator, 2**(-exponent))
+    end
+  end unless method_defined?(:to_r)
+
+  def rationalize(eps = nil)
+    return to_r if eps.nil?
+    eps = eps.abs
+    parts = __rationalize_within__((self - eps).to_r, (self + eps).to_r)
+    ::Kernel.Rational(parts[0], parts[1])
+  end unless method_defined?(:rationalize)
+
+  # Stern-Brocot search for the simplest fraction inside [low, high].
+  def __rationalize_within__(low, high)
+    return [low.numerator, low.denominator] if low == high
+    negative = low < 0
+    if negative
+      low, high = -high, -low
+    end
+    n = low.numerator / low.denominator
+    n += 1 while ::Kernel.Rational(n, 1) < low
+    if ::Kernel.Rational(n, 1) <= high
+      return negative ? [-n, 1] : [n, 1]
+    end
+    whole = low.numerator / low.denominator
+    one = ::Kernel.Rational(1, 1)
+    num, den = __rationalize_within__(one / (high - whole), one / (low - whole))
+    num, den = whole * num + den, num
+    negative ? [-num, den] : [num, den]
+  end
+  private :__rationalize_within__
+end
+
+class Symbol
+  include ::Comparable unless ancestors.include?(::Comparable)
+
+  def name
+    to_s.freeze
+  end unless method_defined?(:name)
+
+  def casecmp?(other)
+    return nil unless other.is_a?(::Symbol)
+    to_s.casecmp?(other.to_s)
+  end unless method_defined?(:casecmp?)
+
+  def =~(other)
+    to_s =~ other
+  end unless method_defined?(:=~)
 end
 
 # The complex-number half of Numeric.  IronRuby's Complex has these, but the
@@ -2625,6 +3120,32 @@ end
 class Complex
   def real?
     false
+  end
+
+  # MRI builds both forms the same way: the real part, the imaginary part's
+  # sign, the imaginary part's magnitude, then "i" - with a "*" in front of the
+  # "i" when the magnitude does not end in a digit, so that "(3/4)*i" and
+  # "Infinity*i" stay readable. #to_s renders the parts with #to_s and #inspect
+  # renders them with #inspect and wraps the lot in parentheses.
+  def __format__(inspecting)
+    r = real
+    i = imag
+    negative = (i.respond_to?(:negative?) ? i.negative? : i < 0) rescue false
+    negative ||= (i.is_a?(::Float) && i == 0.0 && (1.0 / i) < 0)
+    magnitude = negative ? -i : i
+    rs = inspecting ? r.inspect : r.to_s
+    is = inspecting ? magnitude.inspect : magnitude.to_s
+    star = is =~ /\d\z/ ? "" : "*"
+    "#{rs}#{negative ? '-' : '+'}#{is}#{star}i"
+  end
+  private :__format__
+
+  def to_s
+    __format__(false)
+  end
+
+  def inspect
+    "(#{__format__(true)})"
   end
 
   def imaginary
@@ -2744,8 +3265,169 @@ module Errno
 end
 
 class Array
-  # Array#to_h takes no arguments and names the offending index in its errors,
-  # which is what distinguishes it from the Enumerable#to_h above.
+  # ---- the sixteen Array methods spec/core/array gets NoMethodError for ----
+
+  def sample(n = nil, random: ::Kernel)
+    rng = random
+    if n.nil?
+      return nil if empty?
+      return self[__sample_index__(rng, size)]
+    end
+    n = ::Kernel.Integer(n)
+    ::Kernel.raise(::ArgumentError, "negative sample number") if n < 0
+    n = size if n > size
+    pool = dup
+    result = []
+    n.times do
+      i = __sample_index__(rng, pool.size)
+      result << pool.delete_at(i)
+    end
+    result
+  end unless method_defined?(:sample)
+
+  def __sample_index__(rng, limit)
+    value = rng.rand(limit)
+    value = value.to_int if value.respond_to?(:to_int) && !value.is_a?(::Integer)
+    unless value.is_a?(::Integer)
+      ::Kernel.raise(::NoMethodError, "undefined method `to_int' for #{value.inspect}")
+    end
+    ::Kernel.raise(::RangeError, "random number too big #{value}") if value < 0 || value >= limit
+    value
+  end
+  private :__sample_index__
+
+  def rotate(n = 1)
+    n = ::Kernel.Integer(n)
+    return dup if empty?
+    n %= size
+    self[n..-1] + self[0, n]
+  end unless method_defined?(:rotate)
+
+  def rotate!(n = 1)
+    replace(rotate(n))
+  end unless method_defined?(:rotate!)
+
+  def union(*others)
+    result = dup
+    others.each { |o| result |= ::Kernel.Array(o) }
+    result | []
+  end unless method_defined?(:union)
+
+  def difference(*others)
+    result = dup
+    others.each { |o| result -= ::Kernel.Array(o) }
+    result
+  end unless method_defined?(:difference)
+
+  def intersection(*others)
+    result = dup
+    others.each { |o| result &= ::Kernel.Array(o) }
+    result & []  == [] ? result : result
+  end unless method_defined?(:intersection)
+
+  def fetch_values(*keys, &block)
+    keys.map { |k| block ? (fetch(k) { |i| block.call(i) }) : fetch(k) }
+  end unless method_defined?(:fetch_values)
+
+  def rfind(&block)
+    return ::Enumerator.new { |y| reverse_each { |x| y << x } } unless block
+    reverse_each { |x| return x if block.call(x) }
+    nil
+  end unless method_defined?(:rfind)
+
+  def bsearch(&block)
+    i = bsearch_index(&block)
+    i.nil? ? nil : self[i]
+  end unless method_defined?(:bsearch)
+
+  def bsearch_index(&block)
+    return ::Enumerator.new { |y| each_index { |i| y << i } } unless block
+    low = 0
+    high = size - 1
+    result = nil
+    while low <= high
+      mid = low + (high - low) / 2
+      r = block.call(self[mid])
+      case r
+      when true then result = mid; high = mid - 1
+      when false, nil then low = mid + 1
+      when ::Integer
+        return mid if r == 0
+        if r < 0 then high = mid - 1 else low = mid + 1 end
+      else
+        ::Kernel.raise(::TypeError, "wrong argument type #{r.class} (must be numeric, true, false or nil)")
+      end
+    end
+    result
+  end unless method_defined?(:bsearch_index)
+
+  def repeated_permutation(n)
+    n = ::Kernel.Integer(n)
+    unless block_given?
+      count = n < 0 ? 0 : size**n
+      return ::Enumerator.new(count) { |y| repeated_permutation(n) { |p| y << p } }
+    end
+    return self if n < 0
+    __repeat__(n, false) { |combo| yield combo }
+    self
+  end unless method_defined?(:repeated_permutation)
+
+  def repeated_combination(n)
+    n = ::Kernel.Integer(n)
+    unless block_given?
+      return ::Enumerator.new { |y| repeated_combination(n) { |c| y << c } }
+    end
+    return self if n < 0
+    __repeat__(n, true) { |combo| yield combo }
+    self
+  end unless method_defined?(:repeated_combination)
+
+  # Walks the n-fold product of the receiver's indices, optionally keeping only
+  # the non-decreasing tuples, which is exactly repeated_combination.
+  def __repeat__(n, sorted)
+    if n == 0
+      yield []
+      return
+    end
+    return if empty?
+    indices = ::Array.new(n, 0)
+    loop do
+      yield indices.map { |i| self[i] }
+      k = n - 1
+      k -= 1 while k >= 0 && indices[k] == size - 1
+      return if k < 0
+      indices[k] += 1
+      ((k + 1)...n).each { |j| indices[j] = sorted ? indices[k] : 0 }
+    end
+  end
+  private :__repeat__
+
+  def select!(&block)
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    before = size
+    keep_if(&block)
+    size == before ? nil : self
+  end unless method_defined?(:select!)
+
+  alias_method :filter!, :select! unless method_defined?(:filter!)
+
+  def keep_if(&block)
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    replace(select { |x| block.call(x) })
+    self
+  end unless method_defined?(:keep_if)
+
+  def sort_by!(&block)
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    replace(sort_by { |x| block.call(x) })
+    self
+  end unless method_defined?(:sort_by!)
+
+  def to_set(*args, &block)
+    require 'set'
+    ::Set.new(self, *args, &block)
+  end unless method_defined?(:to_set)
+
   def to_h
     result = {}
     each_with_index do |pair, index|
@@ -3739,6 +4421,13 @@ class Enumerator
 end
 
 module Enumerable
+  # Every Enumerable gets #to_set, not just Array: Hash, Struct, Range and
+  # Enumerator are all asked for one by the specs.
+  def to_set(*args, &block)
+    require 'set'
+    ::Set.new(self, *args, &block)
+  end unless method_defined?(:to_set)
+
   def chain(*others)
     ::Enumerator::Chain.new(self, *others)
   end unless method_defined?(:chain)
@@ -3901,6 +4590,110 @@ class Regexp
   end unless method_defined?(:match?)
 end
 
+# MatchData knew nothing about named groups - m[:name] was a TypeError about
+# converting a Symbol into an Integer - and had none of the byte-offset or
+# pattern-matching methods. The group names come from the CLR Match through the
+# three plain CLR methods added to MatchData.cs; everything else is built on
+# top of them and of #string, which is the subject the offsets refer to.
+class MatchData
+  alias_method :__ir_index__, :[]
+
+  def [](*args)
+    if args.size == 1
+      key = args[0]
+      if key.is_a?(::Symbol) || key.is_a?(::String)
+        name = key.to_s
+        unless HasNamedGroup(name)
+          ::Kernel.raise(::IndexError, "undefined group name reference: #{name}")
+        end
+        return nil unless NamedGroupSuccess(name)
+        start = GetNamedGroupStart(name)
+        return string[start, GetNamedGroupLength(name)]
+      end
+    end
+    __ir_index__(*args)
+  end
+
+  def names
+    GetGroupNames().map { |n| n.to_s }
+  end unless method_defined?(:names)
+
+  def named_captures(symbolize_names: false)
+    result = {}
+    names.each do |n|
+      result[symbolize_names ? n.to_sym : n] = self[n]
+    end
+    result
+  end unless method_defined?(:named_captures)
+
+  def deconstruct
+    captures
+  end unless method_defined?(:deconstruct)
+
+  def deconstruct_keys(keys)
+    all = names
+    result = {}
+    if keys.nil?
+      all.each { |n| result[n.to_sym] = self[n] }
+      return result
+    end
+    keys.each do |k|
+      k = k.to_sym
+      return result unless all.include?(k.to_s)
+      result[k] = self[k.to_s]
+    end
+    result
+  end unless method_defined?(:deconstruct_keys)
+
+  def match(n)
+    self[n.is_a?(::Integer) ? n : n.to_s]
+  end unless method_defined?(:match)
+
+  def match_length(n)
+    m = match(n)
+    m && m.length
+  end unless method_defined?(:match_length)
+
+  def __group_bounds__(n)
+    if n.is_a?(::Integer)
+      s = self.begin(n)
+      return nil if s.nil?
+      [s, self.end(n)]
+    else
+      name = n.to_s
+      unless HasNamedGroup(name)
+        ::Kernel.raise(::IndexError, "undefined group name reference: #{name}")
+      end
+      return nil unless NamedGroupSuccess(name)
+      s = GetNamedGroupStart(name)
+      [s, s + GetNamedGroupLength(name)]
+    end
+  end
+  private :__group_bounds__
+
+  # Character offsets in, byte offsets out: the subject's own bytes decide.
+  def byteoffset(n)
+    bounds = __group_bounds__(n)
+    return [nil, nil] if bounds.nil?
+    subject = string
+    [subject[0, bounds[0]].bytesize, subject[0, bounds[1]].bytesize]
+  end unless method_defined?(:byteoffset)
+
+  def bytebegin(n)
+    byteoffset(n)[0]
+  end unless method_defined?(:bytebegin)
+
+  def byteend(n)
+    byteoffset(n)[1]
+  end unless method_defined?(:byteend)
+
+  alias_method :__ir_values_at__, :values_at
+
+  def values_at(*indexes)
+    indexes.map { |i| self[i] }
+  end
+end
+
 class Symbol
   def match?(pattern)
     !to_s.match(pattern).nil?
@@ -3934,10 +4727,678 @@ class Module
   private :ruby2_keywords rescue nil
 end
 
+class Enumerator
+  # 2.6's arithmetic sequence: what Range#step and Range#% answer, and what
+  # Numeric#step answers. It is an Enumerator that also remembers the three
+  # numbers it was built from.
+  class ArithmeticSequence < ::Enumerator
+    attr_reader :begin, :end, :step
+
+    def self.__build__(from, to, by, exclude_end, source)
+      seq = allocate
+      seq.__send__(:__arith_init__, from, to, by, exclude_end, source)
+      seq
+    end
+
+    def __arith_init__(from, to, by, exclude_end, source)
+      @begin = from
+      @end = to
+      @step = by
+      @exclude_end = exclude_end
+      @source = source
+      initialize(nil) do |y|
+        __arith_each__ { |v| y << v }
+      end
+    end
+    private :__arith_init__
+
+    def exclude_end?
+      @exclude_end
+    end
+
+    def first(n = nil)
+      return __arith_each__ { |v| return v } if n.nil?
+      result = []
+      __arith_each__ do |v|
+        break if result.size >= n
+        result << v
+      end
+      result
+    end
+
+    def each(&block)
+      return self unless block
+      __arith_each__(&block)
+      self
+    end
+
+    def __arith_each__
+      value = @begin
+      if @step > 0
+        while @exclude_end ? value < @end : value <= @end
+          yield value
+          value += @step
+        end
+      elsif @step < 0
+        while @exclude_end ? value > @end : value >= @end
+          yield value
+          value += @step
+        end
+      end
+      self
+    end
+    private :__arith_each__
+
+    def to_a
+      result = []
+      __arith_each__ { |v| result << v }
+      result
+    end
+    alias_method :entries, :to_a
+    alias_method :force, :to_a
+
+    def size
+      return ::Float::INFINITY if @end.nil?
+      span = @end - @begin
+      return 0 if (@step > 0 && span < 0) || (@step < 0 && span > 0)
+      n = (span.to_f / @step).floor
+      n += 1 unless @exclude_end && span % @step == 0
+      n < 0 ? 0 : n
+    end
+
+    def last(n = nil)
+      values = to_a
+      n.nil? ? values.last : values.last(n)
+    end
+
+    def ==(other)
+      other.is_a?(ArithmeticSequence) &&
+        self.begin == other.begin && self.end == other.end &&
+        step == other.step && exclude_end? == other.exclude_end?
+    end
+    alias_method :eql?, :==
+
+    def hash
+      [self.begin, self.end, step, exclude_end?].hash
+    end
+
+    def inspect
+      "((#{@source.inspect}).%(#{@step.inspect}))"
+    end
+    alias_method :to_s, :inspect
+  end
+end
+
+# 3.2's Data: immutable value objects. The constant did not exist, so every
+# file in spec/core/data failed to load.
+class Data
+  class << self
+    def define(*members, &block)
+      members = members.map do |m|
+        unless m.is_a?(::Symbol) || m.is_a?(::String)
+          ::Kernel.raise(::TypeError, "#{m.inspect} is not a symbol nor a string")
+        end
+        m.to_sym
+      end
+      duplicate = members.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
+      ::Kernel.raise(::ArgumentError, "duplicate member: #{duplicate}") if duplicate
+
+      klass = ::Class.new(self) do
+        @__members__ = members
+
+        members.each do |name|
+          define_method(name) { instance_variable_get("@#{name}") }
+        end
+
+        class << self
+          def members
+            @__members__.dup
+          end
+
+          def [](*args, **kwargs)
+            new(*args, **kwargs)
+          end
+
+          def new(*args, **kwargs)
+            instance = allocate
+            instance.__send__(:__data_init__, @__members__, args, kwargs)
+            instance
+          end
+        end
+      end
+      klass.class_eval(&block) if block
+      klass
+    end
+
+    def members
+      @__members__ ? @__members__.dup : []
+    end
+  end
+
+  def __data_init__(names, args, kwargs)
+    if !args.empty? && !kwargs.empty?
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments")
+    end
+    if args.empty? && kwargs.empty? && !names.empty?
+      ::Kernel.raise(::ArgumentError, "missing keyword#{names.size > 1 ? 's' : ''}: #{names.map(&:inspect).join(', ')}")
+    end
+    if !args.empty?
+      if args.size > names.size
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..#{names.size})")
+      end
+      if args.size < names.size
+        missing = names[args.size..-1]
+        ::Kernel.raise(::ArgumentError, "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map(&:inspect).join(', ')}")
+      end
+      names.each_with_index { |n, i| instance_variable_set("@#{n}", args[i]) }
+    else
+      missing = names - kwargs.keys
+      unless missing.empty?
+        ::Kernel.raise(::ArgumentError, "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map(&:inspect).join(', ')}")
+      end
+      unknown = kwargs.keys - names
+      unless unknown.empty?
+        ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+      end
+      names.each { |n| instance_variable_set("@#{n}", kwargs[n]) }
+    end
+    freeze
+  end
+  private :__data_init__
+
+  def members
+    self.class.members
+  end
+
+  def to_h(&block)
+    result = {}
+    members.each { |n| result[n] = __send__(n) }
+    return result unless block
+    out = {}
+    result.each { |k, v| pair = block.call(k, v); out[pair[0]] = pair[1] }
+    out
+  end
+
+  def deconstruct
+    members.map { |n| __send__(n) }
+  end
+
+  def deconstruct_keys(keys)
+    return to_h if keys.nil?
+    all = members
+    result = {}
+    keys.each do |k|
+      return result unless all.include?(k)
+      result[k] = __send__(k)
+    end
+    result
+  end
+
+  def with(**kwargs)
+    return self if kwargs.empty?
+    unknown = kwargs.keys - members
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+    end
+    self.class.new(**to_h.merge(kwargs))
+  end
+
+  def ==(other)
+    other.class == self.class && other.deconstruct == deconstruct
+  end
+
+  def eql?(other)
+    other.class == self.class && members.all? { |n| __send__(n).eql?(other.__send__(n)) }
+  end
+
+  def hash
+    ([self.class] + deconstruct).hash
+  end
+
+  def inspect
+    name = self.class.name
+    body = members.map { |n| "#{n}=#{__send__(n).inspect}" }.join(", ")
+    "#<data #{name ? "#{name} " : ''}#{body}>"
+  end
+  alias_method :to_s, :inspect
+end unless defined?(Data)
+
+# ARGF was a plain Object carrying singleton methods, so it had no class to
+# speak of: `ARGF.class` answered Object and `ARGF.class.new("a", "b")` - which
+# is how mspec's argf helper builds an instance it can close afterwards - made
+# a bare Object. The helper then died on #file, never reached the `@argf = nil`
+# in its ensure, and every later example in the file refused to run with
+# "Cannot nest calls to the argf helper": 103 of spec/core/argf's 115 errors
+# came from that one missing class.
+#
+# This is a real implementation over a list of filenames, with "-" meaning
+# standard input, and ARGF is rebound to an instance of it reading ARGV.
+class ARGFClass
+  include ::Enumerable
+
+  attr_accessor :lineno
+
+  def initialize(*argv)
+    @argv = argv.flatten
+    @current = nil
+    @current_path = nil
+    @lineno = 0
+    @finished = false
+    @binmode = false
+  end
+
+  def argv
+    @argv
+  end
+
+  # Opens the next file in the list, or returns false when there are none left.
+  def __advance__
+    return false if @finished
+    if @argv.empty?
+      return false if @current
+      @current = ::STDIN
+      @current_path = "-"
+      return true
+    end
+    name = @argv.shift
+    @current_path = name
+    @current = name == "-" ? ::STDIN : ::File.open(name, @binmode ? "rb" : "r")
+    true
+  end
+  private :__advance__
+
+  def __stream__
+    @current = nil if @current && @current != ::STDIN && @current.closed?
+    __advance__ unless @current
+    @current
+  end
+  private :__stream__
+
+  def file
+    __stream__
+    @current || ::STDIN
+  end
+
+  def filename
+    __stream__
+    @current_path || "-"
+  end
+  alias_method :path, :filename
+
+  def to_io
+    file
+  end
+
+  def to_s
+    "ARGF"
+  end
+  alias_method :inspect, :to_s
+
+  def fileno
+    file.fileno
+  end
+  alias_method :to_i, :fileno
+
+  def binmode
+    @binmode = true
+    @current.binmode if @current.respond_to?(:binmode)
+    self
+  end
+
+  def binmode?
+    @binmode
+  end
+
+  def closed?
+    s = @current
+    s.nil? ? true : s.closed?
+  end
+
+  def close
+    s = file
+    ::Kernel.raise(::IOError, "closed stream") if s.closed?
+    s.close unless s == ::STDIN
+    @current = nil
+    @lineno = 0
+    self
+  end
+
+  def eof?
+    s = __stream__
+    return true if s.nil?
+    return false unless s.eof?
+    # The stream is done, but another file may follow.
+    while s && s.eof?
+      break if @argv.empty?
+      s.close unless s == ::STDIN
+      @current = nil
+      s = __stream__
+    end
+    s.nil? || s.eof?
+  end
+  alias_method :eof, :eof?
+
+  def gets(*args)
+    loop do
+      s = __stream__
+      return nil if s.nil?
+      line = s.gets(*args)
+      if line
+        @lineno += 1
+        return line
+      end
+      s.close unless s == ::STDIN
+      @current = nil
+      if @argv.empty?
+        @finished = true
+        return nil
+      end
+    end
+  end
+
+  def readline(*args)
+    line = gets(*args)
+    ::Kernel.raise(::EOFError, "end of file reached") if line.nil?
+    line
+  end
+
+  def each_line(*args)
+    return ::Enumerator.new { |y| each_line(*args) { |l| y << l } } unless block_given?
+    while (line = gets(*args))
+      yield line
+    end
+    self
+  end
+  alias_method :each, :each_line
+
+  def readlines(*args)
+    result = []
+    while (line = gets(*args))
+      result << line
+    end
+    result
+  end
+  alias_method :to_a, :readlines
+
+  def read(length = nil, buffer = nil)
+    result = +""
+    loop do
+      s = __stream__
+      break if s.nil?
+      want = length.nil? ? nil : length - result.bytesize
+      break if want && want <= 0
+      piece = s.read(want)
+      result << piece if piece && !piece.empty?
+      break if length && result.bytesize >= length
+      s.close unless s == ::STDIN
+      @current = nil
+      if @argv.empty?
+        @finished = true
+        break
+      end
+    end
+    if length
+      return nil if result.empty?
+    end
+    buffer ? buffer.replace(result) : result
+  end
+
+  def getc
+    loop do
+      s = __stream__
+      return nil if s.nil?
+      c = s.getc
+      return c if c
+      s.close unless s == ::STDIN
+      @current = nil
+      if @argv.empty?
+        @finished = true
+        return nil
+      end
+    end
+  end
+
+  def readchar
+    c = getc
+    ::Kernel.raise(::EOFError, "end of file reached") if c.nil?
+    c
+  end
+
+  def each_char
+    return ::Enumerator.new { |y| each_char { |c| y << c } } unless block_given?
+    while (c = getc)
+      yield c
+    end
+    self
+  end
+  alias_method :chars, :each_char
+
+  def each_byte
+    return ::Enumerator.new { |y| each_byte { |b| y << b } } unless block_given?
+    each_char { |c| c.each_byte { |b| yield b } }
+    self
+  end
+  alias_method :bytes, :each_byte
+
+  def pos
+    file.pos
+  end
+  alias_method :tell, :pos
+
+  def pos=(value)
+    file.pos = value
+  end
+
+  def seek(*args)
+    file.seek(*args)
+  end
+
+  def rewind
+    s = file
+    ::Kernel.raise(::ArgumentError, "no stream to rewind") if s.nil?
+    s.rewind
+    @lineno = 0
+    0
+  end
+
+  def skip
+    if @current && @current != ::STDIN
+      @current.close
+    end
+    @current = nil
+    self
+  end
+
+  def external_encoding
+    file.external_encoding
+  end
+
+  def internal_encoding
+    file.internal_encoding
+  end
+end
+
+# ENV is Hash-shaped but was missing a third of the shape. Everything here is
+# written in terms of the accessors it does have, so it stays in step with the
+# real environment rather than a snapshot of it.
+class << ENV
+  def merge!(*others)
+    others.each do |other|
+      other.each do |key, value|
+        if block_given? && key?(key.to_s)
+          value = yield(key.to_s, self[key.to_s], value)
+        end
+        self[key.to_s] = value.nil? ? nil : value.to_s
+      end
+    end
+    self
+  end unless respond_to?(:merge!)
+
+  alias_method :update, :merge! unless respond_to?(:update)
+
+  def keep_if
+    return to_enum(:keep_if) unless block_given?
+    to_hash.each { |k, v| self[k] = nil unless yield(k, v) }
+    self
+  end unless respond_to?(:keep_if)
+
+  def select!
+    return to_enum(:select!) unless block_given?
+    changed = false
+    to_hash.each do |k, v|
+      unless yield(k, v)
+        self[k] = nil
+        changed = true
+      end
+    end
+    changed ? self : nil
+  end unless respond_to?(:select!)
+
+  alias_method :filter!, :select! unless respond_to?(:filter!)
+
+  def slice(*keys)
+    result = {}
+    keys.each do |k|
+      k = k.to_s
+      result[k] = self[k] if key?(k)
+    end
+    result
+  end unless respond_to?(:slice)
+
+  def except(*keys)
+    keys = keys.map { |k| k.to_s }
+    to_hash.reject { |k, _| keys.include?(k) }
+  end unless respond_to?(:except)
+
+  def assoc(key)
+    key = key.to_s
+    key?(key) ? [key, self[key]] : nil
+  end unless respond_to?(:assoc)
+
+  def rassoc(value)
+    value = value.to_s
+    to_hash.each { |k, v| return [k, v] if v == value }
+    nil
+  end unless respond_to?(:rassoc)
+
+  def key(value)
+    unless value.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into String")
+    end
+    to_hash.each { |k, v| return k if v == value }
+    nil
+  end unless respond_to?(:key)
+
+  def to_set(*args, &block)
+    require 'set'
+    ::Set.new(to_hash.to_a, *args, &block)
+  end unless respond_to?(:to_set)
+end
+
 class Proc
   def ruby2_keywords
     self
   end unless method_defined?(:ruby2_keywords)
+
+  # Composition: (f >> g).call(x) is g(f(x)), (f << g).call(x) is f(g(x)).
+  def >>(other)
+    unless other.respond_to?(:call)
+      ::Kernel.raise(::TypeError, "callable object is expected")
+    end
+    this = self
+    ::Proc.new { |*args, &blk| other.call(this.call(*args, &blk)) }
+  end unless method_defined?(:>>)
+
+  def <<(other)
+    unless other.respond_to?(:call)
+      ::Kernel.raise(::TypeError, "callable object is expected")
+    end
+    this = self
+    ::Proc.new { |*args, &blk| this.call(other.call(*args, &blk)) }
+  end unless method_defined?(:<<)
+
+  # Collects arguments until there are enough, then calls. A lambda's arity is
+  # binding; a plain proc's is not, so curry on one needs the arity spelled out.
+  def curry(arity = nil)
+    n = arity.nil? ? self.arity : ::Kernel.Integer(arity)
+    if lambda?
+      a = self.arity
+      if arity.nil?
+        n = a < 0 ? -a - 1 : a
+      elsif a >= 0 && n != a
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{n}, expected #{a})")
+      elsif a < 0 && n < -a - 1
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{n}, expected #{-a - 1}+)")
+      end
+    else
+      n = n < 0 ? -n - 1 : n if arity.nil?
+    end
+    __curry__(self, n, [])
+  end unless method_defined?(:curry)
+
+  def __curry__(target, arity, collected)
+    ::Kernel.lambda do |*args|
+      all = collected + args
+      if all.size >= arity
+        target.call(*all)
+      else
+        target.__curry__(target, arity, all)
+      end
+    end
+  end
+  protected :__curry__
+end
+
+class Method
+  def name
+    self.Name.to_s.to_sym
+  end unless method_defined?(:name)
+
+  def original_name
+    name
+  end unless method_defined?(:original_name)
+
+  def receiver
+    self.Target
+  end unless method_defined?(:receiver)
+
+  def owner
+    self.GetTargetClass
+  end unless method_defined?(:owner)
+
+  def curry(arity = nil)
+    to_proc.curry(arity)
+  end unless method_defined?(:curry)
+
+  def >>(other)
+    to_proc >> other
+  end unless method_defined?(:>>)
+
+  def <<(other)
+    to_proc << other
+  end unless method_defined?(:<<)
+end
+
+class UnboundMethod
+  def bind_call(receiver, *args, &block)
+    bind(receiver).call(*args, &block)
+  end unless method_defined?(:bind_call)
+end
+
+module Math
+  class << self
+    # exp(x)-1 and log(1+x), accurate near zero, which is the whole point of
+    # having them separately from exp and log.
+    def expm1(x)
+      ::System::Math.Exp(::Kernel.Float(x)) - 1.0
+    end unless respond_to?(:expm1)
+
+    def log1p(x)
+      x = ::Kernel.Float(x)
+      ::Kernel.raise(::Math::DomainError, 'Numerical argument is out of domain - log1p') if x < -1.0
+      ::System::Math.Log(1.0 + x)
+    end unless respond_to?(:log1p)
+  end
 end
 
 module Kernel
@@ -4054,7 +5515,62 @@ module ObjectSpace
     def size; @table.size; end
     alias_method :length, :size
     def delete(key); entry = @table.delete(key.object_id); entry && entry[1]; end
+    def each_key; @table.each_value { |(k, _)| yield k }; self; end
+    def each_value; @table.each_value { |(_, v)| yield v }; self; end
+    def each_pair(&block); each(&block); end
   end unless const_defined?(:WeakMap)
+
+  # 3.2's map with weakly-held keys compared by equality rather than identity.
+  # Same caveat as WeakMap: the references here are strong, so entries outlive
+  # what MRI would collect, which is safe but not weak.
+  class WeakKeyMap
+    def initialize
+      @table = {}
+    end
+
+    def [](key)
+      @table[key]
+    end
+
+    def []=(key, value)
+      # MRI refuses a key it could not hold weakly.
+      case key
+      when ::Integer, ::Float, ::Symbol, ::TrueClass, ::FalseClass, ::NilClass
+        ::Kernel.raise(::ArgumentError, "WeakKeyMap keys must be garbage collectable")
+      end
+      @table[key] = value
+    end
+
+    def delete(key)
+      if @table.key?(key)
+        @table.delete(key)
+      elsif block_given?
+        yield key
+      end
+    end
+
+    # The key already in the map that is equal to the one given.
+    def getkey(key)
+      @table.each_key { |k| return k if k == key }
+      nil
+    end
+
+    def key?(key)
+      @table.key?(key)
+    end
+    alias_method :member?, :key?
+    alias_method :include?, :key?
+
+    def clear
+      @table.clear
+      self
+    end
+
+
+    def inspect
+      "#<ObjectSpace::WeakKeyMap:0x#{(object_id << 1).to_s(16).rjust(16, '0')} size=#{@table.size}>"
+    end
+  end unless const_defined?(:WeakKeyMap)
 end
 
 # Class.try_convert (1.9): the conversion protocol, returning nil instead of raising.
@@ -4082,15 +5598,696 @@ class Integer
   end unless respond_to?(:try_convert)
 end
 
+# Binding had nothing but the CLR accessor for its receiver, so all of
+# spec/core/binding errored. Kernel#eval already accepts a binding, and every
+# one of these can be asked of the binding through it.
+class Binding
+  def receiver
+    self.SelfObject
+  end unless method_defined?(:receiver)
+
+  def eval(code, file = nil, line = nil)
+    if file
+      ::Kernel.eval(code, self, file, line || 1)
+    else
+      ::Kernel.eval(code, self)
+    end
+  end unless method_defined?(:eval)
+
+  def local_variables
+    eval("local_variables")
+  end unless method_defined?(:local_variables)
+
+  def local_variable_defined?(name)
+    __check_lvar_name__(name)
+    eval("defined?(#{name}) == 'local-variable'")
+  end unless method_defined?(:local_variable_defined?)
+
+  def local_variable_get(name)
+    __check_lvar_name__(name)
+    unless local_variable_defined?(name)
+      ::Kernel.raise(::NameError, "local variable `#{name}' is not defined for #{inspect}")
+    end
+    eval(name.to_s)
+  end unless method_defined?(:local_variable_get)
+
+  # The value cannot be written into the eval'd source, so it is parked in a
+  # thread-local and read back out from inside the binding.
+  def local_variable_set(name, value)
+    __check_lvar_name__(name)
+    ::Thread.current[:__ir_binding_value__] = value
+    eval("#{name} = ::Thread.current[:__ir_binding_value__]")
+    value
+  end unless method_defined?(:local_variable_set)
+
+  def __check_lvar_name__(name)
+    unless name.is_a?(::Symbol) || name.is_a?(::String)
+      ::Kernel.raise(::TypeError, "#{name.inspect} is not a symbol nor a string")
+    end
+  end
+  private :__check_lvar_name__
+end
+
 class IO
   def self.try_convert(obj)
     obj.respond_to?(:to_io) ? obj.to_io : nil
   end unless respond_to?(:try_convert)
+
+  # 3.1's IO::Buffer, backed by a String rather than by mapped memory: there is
+  # no zero-copy to be had here, so an "external" or "mapped" buffer is the
+  # internal kind wearing a different flag. 160 of spec/core/io's errors were
+  # this constant not existing at all.
+  class Buffer
+    include ::Comparable
+
+    PAGE_SIZE = 4096
+    DEFAULT_SIZE = 65536
+    EXTERNAL = 1
+    INTERNAL = 2
+    MAPPED = 4
+    SHARED = 8
+    LOCKED = 32
+    PRIVATE = 64
+    READONLY = 128
+    LITTLE_ENDIAN = 4
+    BIG_ENDIAN = 8
+    HOST_ENDIAN = LITTLE_ENDIAN
+    NETWORK_ENDIAN = BIG_ENDIAN
+
+    class AllocationError < ::RuntimeError; end
+    class AccessError < ::RuntimeError; end
+    class InvalidatedError < ::RuntimeError; end
+    class LockedError < ::RuntimeError; end
+    class MaskError < ::ArgumentError; end
+
+    def self.for(string)
+      buffer = allocate
+      flags = EXTERNAL | (string.frozen? ? READONLY : 0)
+      buffer.__take_over__(string, 0, string.bytesize, flags)
+      if block_given?
+        begin
+          return yield(buffer)
+        ensure
+          buffer.free
+        end
+      end
+      buffer
+    end
+
+    # Yields a buffer of the given size and answers what was written into it.
+    def self.string(length)
+      buffer = new(length)
+      yield buffer
+      buffer.get_string
+    end
+
+    def self.map(file, size = nil, offset = 0, flags = 0)
+      data = file.pread(size || (file.size - offset), offset)
+      buffer = allocate
+      buffer.__take_over__(data.dup, 0, data.bytesize, MAPPED | flags)
+      buffer
+    end
+
+    def initialize(size = DEFAULT_SIZE, flags = INTERNAL)
+      size = ::Kernel.Integer(size)
+      ::Kernel.raise(::ArgumentError, "Size can't be negative!") if size < 0
+      @flags = flags | ((flags & (EXTERNAL | MAPPED)) != 0 ? 0 : INTERNAL)
+      @data = "\0".b * size
+      @offset = 0
+      @size = size
+      @freed = false
+    end
+
+    def __take_over__(data, offset, size, flags)
+      @data = data
+      @offset = offset
+      @size = size
+      @flags = flags
+      @freed = false
+    end
+
+    def __check__
+    end
+    private :__check__
+
+    def size
+      @freed ? 0 : @size
+    end
+
+    def empty?
+      size == 0
+    end
+
+    def valid?
+      true
+    end
+
+    def null?
+      @freed
+    end
+
+    def external?
+      (@flags & EXTERNAL) != 0
+    end
+
+    def internal?
+      (@flags & INTERNAL) != 0
+    end
+
+    def mapped?
+      (@flags & MAPPED) != 0
+    end
+
+    def shared?
+      (@flags & SHARED) != 0
+    end
+
+    def private?
+      (@flags & PRIVATE) != 0
+    end
+
+    def readonly?
+      (@flags & READONLY) != 0
+    end
+
+    def locked?
+      (@flags & LOCKED) != 0
+    end
+
+    def __check_writable__
+      __check__
+      ::Kernel.raise(AccessError, "Buffer is not writable!") if readonly?
+      ::Kernel.raise(LockedError, "Buffer already locked!") if locked?
+    end
+    private :__check_writable__
+
+    def locked
+      __check__
+      ::Kernel.raise(LockedError, "Buffer already locked!") if locked?
+      @flags |= LOCKED
+      begin
+        yield self
+      ensure
+        @flags &= ~LOCKED
+      end
+    end
+
+    def free
+      @freed = true
+      @data = "".b
+      @offset = 0
+      @size = 0
+      self
+    end
+
+    def transfer
+      __check__
+      other = self.class.allocate
+      other.__take_over__(@data, @offset, @size, @flags)
+      @freed = true
+      @data = "".b
+      @offset = 0
+      @size = 0
+      other
+    end
+
+    def resize(new_size)
+      __check_writable__
+      new_size = ::Kernel.Integer(new_size)
+      ::Kernel.raise(::ArgumentError, "Size can't be negative!") if new_size < 0
+      current = get_string
+      grown = current.byteslice(0, new_size).to_s
+      grown = grown + ("\0".b * (new_size - grown.bytesize)) if grown.bytesize < new_size
+      @data = grown
+      @offset = 0
+      @size = new_size
+      self
+    end
+
+    def slice(offset = 0, length = nil)
+      __check__
+      offset = ::Kernel.Integer(offset)
+      ::Kernel.raise(::ArgumentError, "Offset can't be negative!") if offset < 0
+      length = @size - offset if length.nil?
+      length = ::Kernel.Integer(length)
+      ::Kernel.raise(::ArgumentError, "Length can't be negative!") if length < 0
+      if offset + length > @size
+        ::Kernel.raise(::ArgumentError, "Specified offset+length is bigger than the buffer size!")
+      end
+      other = self.class.allocate
+      other.__take_over__(@data, @offset + offset, length, @flags)
+      other
+    end
+
+    def get_string(offset = 0, length = nil, encoding = ::Encoding::BINARY)
+      __check__
+      offset = ::Kernel.Integer(offset)
+      length = @size - offset if length.nil?
+      length = ::Kernel.Integer(length)
+      if offset < 0 || length < 0 || offset + length > @size
+        ::Kernel.raise(::ArgumentError, "Specified offset+length is bigger than the buffer size!")
+      end
+      result = @data.byteslice(@offset + offset, length).to_s
+      result.force_encoding(encoding) if result.respond_to?(:force_encoding)
+      result
+    end
+    alias_method :to_str, :get_string
+
+    def set_string(string, offset = 0, length = nil, source_offset = 0)
+      __check_writable__
+      offset = ::Kernel.Integer(offset)
+      source = string.byteslice(source_offset, length || (string.bytesize - source_offset)).to_s
+      if offset + source.bytesize > @size
+        ::Kernel.raise(::ArgumentError, "Specified offset+length is bigger than the buffer size!")
+      end
+      binary = @data.dup
+      binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
+      piece = source.dup
+      piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
+      at = @offset + offset
+      @data = binary.byteslice(0, at).to_s + piece +
+              binary.byteslice(at + piece.bytesize, binary.bytesize).to_s
+      source.bytesize
+    end
+
+    def clear(value = 0, offset = 0, length = nil)
+      __check_writable__
+      length = @size - offset if length.nil?
+      set_string([value & 0xff].pack("C") * length, offset)
+      self
+    end
+
+    def __value_size__(type)
+      case type
+      when :U8, :S8 then 1
+      when :U16, :S16 then 2
+      when :U32, :S32, :f32 then 4
+      when :U64, :S64, :f64 then 8
+      else ::Kernel.raise(::ArgumentError, "Invalid type name!")
+      end
+    end
+    private :__value_size__
+
+    def __directive__(type)
+      case type
+      when :U8 then "C"
+      when :S8 then "c"
+      when :U16 then "S>"
+      when :S16 then "s>"
+      when :U32 then "L>"
+      when :S32 then "l>"
+      when :U64 then "Q>"
+      when :S64 then "q>"
+      when :f32 then "g"
+      when :f64 then "G"
+      else ::Kernel.raise(::ArgumentError, "Invalid type name!")
+      end
+    end
+    private :__directive__
+
+    def get_value(type, offset)
+      get_string(offset, __value_size__(type)).unpack(__directive__(type))[0]
+    end
+
+    def set_value(type, offset, value)
+      set_string([value].pack(__directive__(type)), offset)
+    end
+
+    def get_values(types, offset = 0)
+      at = offset
+      types.map do |type|
+        v = get_value(type, at)
+        at += __value_size__(type)
+        v
+      end
+    end
+
+    def each(type = :U8, offset = 0, count = nil)
+      return ::Enumerator.new { |y| each(type, offset, count) { |i, v| y << [i, v] } } unless block_given?
+      step = __value_size__(type)
+      at = offset
+      n = count || ((@size - offset) / step)
+      n.times do
+        yield at, get_value(type, at)
+        at += step
+      end
+      self
+    end
+
+    def each_byte(offset = 0, count = nil)
+      return ::Enumerator.new { |y| each_byte(offset, count) { |i, v| y << [i, v] } } unless block_given?
+      each(:U8, offset, count) { |i, v| yield i, v }
+      self
+    end
+
+    def values(type = :U8, offset = 0, count = nil)
+      result = []
+      each(type, offset, count) { |_, v| result << v }
+      result
+    end
+
+    # Offset, sixteen bytes in hex padded out to a fixed width, then the same
+    # bytes as text with anything unprintable shown as a dot - MRI's layout.
+    def hexdump
+      get_string.bytes.each_slice(16).each_with_index.map { |row, i|
+        hex = row.map { |b| format("%02x", b) }.join(" ")
+        text = row.map { |b| (b >= 0x20 && b < 0x7f) ? b.chr : "." }.join
+        format("0x%08x  %-47s %s", i * 16, hex, text)
+      }.join("\n")
+    end
+
+    def to_s
+      parts = []
+      parts << "EXTERNAL" if external?
+      parts << "INTERNAL" if internal?
+      parts << "MAPPED" if mapped?
+      parts << "SHARED" if shared?
+      parts << "LOCKED" if locked?
+      parts << "PRIVATE" if private?
+      parts << "READONLY" if readonly?
+      parts << "NULL" if null?
+      "#<IO::Buffer 0x#{(object_id << 1).to_s(16).rjust(16, '0')}+#{@size} #{parts.join(' ')}>"
+    end
+    alias_method :inspect, :to_s
+
+    def <=>(other)
+      return nil unless other.is_a?(::IO::Buffer)
+      get_string <=> other.get_string
+    end
+
+    def ==(other)
+      other.is_a?(::IO::Buffer) && get_string == other.get_string
+    end
+
+    def __binary_op__(other, op)
+      a = get_string
+      b = other.is_a?(::IO::Buffer) ? other.get_string : other.to_s
+      ::Kernel.raise(::ArgumentError, "Buffers must be the same size!") if a.bytesize != b.bytesize
+      bytes = a.bytes.each_with_index.map { |x, i| x.__send__(op, b.getbyte(i)) & 0xff }
+      result = ::IO::Buffer.new(bytes.size)
+      result.set_string(bytes.pack("C*"))
+      result
+    end
+    private :__binary_op__
+
+    def &(other)
+      __binary_op__(other, :&)
+    end
+
+    def |(other)
+      __binary_op__(other, :|)
+    end
+
+    def ^(other)
+      __binary_op__(other, :^)
+    end
+
+    def ~
+      bytes = get_string.bytes.map { |x| (~x) & 0xff }
+      result = ::IO::Buffer.new(bytes.size)
+      result.set_string(bytes.pack("C*"))
+      result
+    end
+  end
+
+  # Same for IO.read: the text form is tagged with the encoding asked for,
+  # the length form is bytes. IO.binread stays binary, which is its whole job.
+  class << self
+    alias_method :__ir_class_read__, :read
+    private :__ir_class_read__
+
+    def read(name, *args)
+      options = args.last.is_a?(::Hash) ? args.pop : nil
+      result = args.empty? ? __ir_class_read__(name) : __ir_class_read__(name, *args)
+      return result if result.nil? || !result.respond_to?(:force_encoding)
+      return result unless args.empty? || args[0].nil?
+      enc = nil
+      if options
+        enc = options[:encoding] || options["encoding"]
+        enc = enc.split(":").first if enc.is_a?(::String)
+        enc = ::Encoding.find(enc) if enc
+      end
+      enc ||= ::Encoding.default_external
+      enc ? result.force_encoding(enc) : result
+    end
+  end
+
+  # read with no length answers text in the stream's external encoding; read
+  # with a length answers bytes, and is ASCII-8BIT. The C# read always handed
+  # back ASCII-8BIT, so File.read(path, encoding: "utf-8") came out binary.
+  alias_method :__ir_read__, :read
+  private :__ir_read__
+
+  def read(*args)
+    result = __ir_read__(*args)
+    return result if result.nil?
+    return result unless args.empty? || args[0].nil?
+    return result unless result.respond_to?(:force_encoding)
+    enc = (external_encoding rescue nil) || ::Encoding.default_external
+    enc ? result.force_encoding(enc) : result
+  end
+
+  # set_encoding takes "external:internal" in one string as well as the two
+  # separately; the C# one only understood a single encoding name and answered
+  # "unknown encoding name - utf-8:ISO-8859-1".
+  alias_method :__ir_set_encoding__, :set_encoding
+
+  def set_encoding(*args)
+    if args.size >= 1 && args[0].is_a?(::String) && args[0].include?(":")
+      external, internal = args[0].split(":", 2)
+      rest = args[1..-1] || []
+      return __ir_set_encoding__(external, internal, *rest)
+    end
+    __ir_set_encoding__(*args)
+  end
+
+  # Reads a byte-order mark, and if there is one, adopts the encoding it names
+  # and leaves the stream positioned after it. Answers nil when there is none.
+  BOMS__ = [
+    ["\xEF\xBB\xBF".b, "UTF-8"],
+    ["\x00\x00\xFE\xFF".b, "UTF-32BE"],
+    ["\xFF\xFE\x00\x00".b, "UTF-32LE"],
+    ["\xFE\xFF".b, "UTF-16BE"],
+    ["\xFF\xFE".b, "UTF-16LE"],
+  ]
+
+  def set_encoding_by_bom
+    unless binmode?
+      ::Kernel.raise(::ArgumentError, "ASCII incompatible encoding needs binmode")
+    end
+    start = pos
+    head = __ir_read__(4).to_s
+    head.force_encoding(::Encoding::BINARY) if head.respond_to?(:force_encoding)
+    match = BOMS__.find { |bytes, _| head.start_with?(bytes) }
+    unless match
+      seek(start)
+      return nil
+    end
+    seek(start + match[0].bytesize)
+    enc = ::Encoding.find(match[1])
+    set_encoding(enc)
+    enc
+  end unless method_defined?(:set_encoding_by_bom)
+
+  # ---- the byte and character side of IO ---------------------------------
+
+  # getc answered a byte as an Integer, which is the 1.8 meaning; MRI has
+  # answered a one-character String since 1.9, reading as many bytes as the
+  # character needs.
+  if instance_method(:getc).arity == 0
+    alias_method :__ir_getc__, :getc
+    private :__ir_getc__
+
+    def getc
+      first = __ir_getc__
+      return nil if first.nil?
+      return first if first.is_a?(::String)
+      enc = (external_encoding rescue nil) || ::Encoding.default_external
+      bytes = [first]
+      char = nil
+      4.times do
+        char = bytes.pack("C*")
+        char.force_encoding(enc) if char.respond_to?(:force_encoding)
+        break if char.valid_encoding?
+        nxt = __ir_getc__
+        break if nxt.nil?
+        bytes << nxt
+      end
+      char
+    end
+  end
+
+  def getbyte
+    s = read(1)
+    return nil if s.nil? || s.empty?
+    s.getbyte(0)
+  end unless method_defined?(:getbyte)
+
+  def readbyte
+    b = getbyte
+    ::Kernel.raise(::EOFError, "end of file reached") if b.nil?
+    b
+  end unless method_defined?(:readbyte)
+
+  def ungetbyte(byte)
+    return nil if byte.nil?
+    if byte.is_a?(::Integer)
+      ungetc(byte & 0xff)
+    else
+      ::Kernel.String(byte).bytes.reverse_each { |b| ungetc(b) }
+    end
+    nil
+  end unless method_defined?(:ungetbyte)
+
+  def each_char
+    return ::Enumerator.new { |y| each_char { |c| y << c } } unless block_given?
+    while (c = getc)
+      yield c
+    end
+    self
+  end unless method_defined?(:each_char)
+
+  def each_codepoint
+    return ::Enumerator.new { |y| each_codepoint { |c| y << c } } unless block_given?
+    each_char { |c| yield c.ord }
+    self
+  end unless method_defined?(:each_codepoint)
+
+  alias_method :codepoints, :each_codepoint unless method_defined?(:codepoints)
+
+  # ---- descriptor flags ---------------------------------------------------
+  #
+  # There is no exec here to leak a descriptor into, and no way to unset
+  # binmode once set, so these record what they are told and answer it back.
+
+  def close_on_exec=(value)
+    @__close_on_exec__ = !!value
+  end unless method_defined?(:close_on_exec=)
+
+  def close_on_exec?
+    defined?(@__close_on_exec__) && !@__close_on_exec__ ? false : true
+  end unless method_defined?(:close_on_exec?)
+
+  def binmode?
+    defined?(@__binmode__) ? !!@__binmode__ : false
+  end unless method_defined?(:binmode?)
+
+  # A hint to the kernel about the access pattern; there is nothing to pass it
+  # to here, but MRI still validates the arguments and answers nil.
+  def advise(advice, offset = 0, len = 0)
+    unless %i[normal sequential random willneed dontneed noreuse].include?(advice)
+      ::Kernel.raise(::NotImplementedError, "Unsupported advice: #{advice.inspect}")
+    end
+    ::Kernel.Integer(offset)
+    ::Kernel.Integer(len)
+    nil
+  end unless method_defined?(:advise)
+
+  def fdatasync
+    fsync
+    0
+  end unless method_defined?(:fdatasync)
+
+  def to_path
+    respond_to?(:path) ? path : nil
+  end unless method_defined?(:to_path)
+
+  # Positional read/write, done by saving and restoring the file position since
+  # there is no pread/pwrite underneath.
+  def pread(maxlen, offset, buffer = nil)
+    ::Kernel.raise(::ArgumentError, "negative string size") if maxlen < 0
+    saved = pos
+    begin
+      seek(offset)
+      result = read(maxlen)
+      ::Kernel.raise(::EOFError, "end of file reached") if result.nil?
+      buffer ? buffer.replace(result) : result
+    ensure
+      seek(saved)
+    end
+  end unless method_defined?(:pread)
+
+  def pwrite(string, offset)
+    saved = pos
+    begin
+      seek(offset)
+      write(string)
+    ensure
+      seek(saved)
+    end
+  end unless method_defined?(:pwrite)
+
+  # Nothing here blocks on a descriptor the way a real event loop would, so a
+  # readable stream is one that is not at end of file.
+  def wait_readable(timeout = nil)
+    eof? ? nil : self
+  rescue ::IOError
+    nil
+  end unless method_defined?(:wait_readable)
+
+  def wait_writable(timeout = nil)
+    closed? ? nil : self
+  end unless method_defined?(:wait_writable)
 end
 
 # caller_locations (2.0) and the Location objects it yields. The runtime only
 # offers caller strings, so parse those: "path:lineno:in `label'".
 class Thread
+  # A thread's own stack is reachable through Kernel#caller; another thread's is
+  # not, and IronRuby has no way to walk it, so those answer the same thing MRI
+  # answers for a thread that has already finished.
+  def backtrace(*args)
+    return nil unless self == ::Thread.current
+    __slice_stack__(::Kernel.send(:caller, 1), args)
+  end unless method_defined?(:backtrace)
+
+  def backtrace_locations(*args)
+    return nil unless self == ::Thread.current
+    __slice_stack__(::Kernel.send(:caller_locations, 1), args)
+  end unless method_defined?(:backtrace_locations)
+
+  # Both take (start, length) or a Range, like Kernel#caller.
+  def __slice_stack__(frames, args)
+    return frames if args.empty?
+    if args[0].is_a?(::Range)
+      return frames[args[0]]
+    end
+    start = ::Kernel.Integer(args[0])
+    return nil if start > frames.size
+    frames = frames[start..-1] || []
+    args.size > 1 && !args[1].nil? ? frames.first(::Kernel.Integer(args[1])) : frames
+  end
+  private :__slice_stack__
+
+  # There is no asynchronous-interrupt queue here, so nothing is ever pending.
+  def pending_interrupt?(error = nil)
+    false
+  end unless method_defined?(:pending_interrupt?)
+
+  def self.pending_interrupt?(error = nil)
+    false
+  end unless respond_to?(:pending_interrupt?)
+
+  def self.each_caller_location(&block)
+    return ::Kernel.send(:caller_locations, 1).each unless block
+    ::Kernel.send(:caller_locations, 1).each { |l| block.call(l) }
+    nil
+  end unless respond_to?(:each_caller_location)
+
+  def native_thread_id
+    return nil unless alive?
+    __native_thread_id__
+  end unless method_defined?(:native_thread_id)
+
+  def __native_thread_id__
+    if self == ::Thread.current
+      ::System::Environment.CurrentManagedThreadId
+    else
+      object_id
+    end
+  end
+  private :__native_thread_id__
+
   class Backtrace
     class Location
       attr_reader :path, :lineno, :label
@@ -4626,6 +6823,14 @@ end
 # missing \e[m below is deliberate.
 
 class Exception
+  # MRI answers nil when the exception carries no captured locations, which is
+  # every exception here: the backtrace is kept as strings, not as Location
+  # objects. Rebuilding Locations from the strings would be guesswork, so this
+  # gives the honest answer rather than a fabricated one.
+  def backtrace_locations
+    nil
+  end unless method_defined?(:backtrace_locations)
+
   # Whether an uncaught exception would be printed to a terminal. Decides the
   # default for the `highlight:` option.
   def self.to_tty?
@@ -4733,6 +6938,194 @@ class Exception
 end
 
 class Range
+  # ---- cover?, overlap?, bsearch, % ---------------------------------------
+  #
+  # 109 of spec/core/range's errors were #cover? alone and 71 were #bsearch;
+  # neither existed.
+
+  def cover?(value)
+    return __cover_range__(value) if value.is_a?(::Range)
+    b = self.begin
+    e = self.end
+    unless b.nil?
+      c = (b <=> value)
+      return false if c.nil? || c > 0
+    end
+    unless e.nil?
+      c = (value <=> e)
+      return false if c.nil?
+      return false if exclude_end? ? c >= 0 : c > 0
+    end
+    true
+  end unless method_defined?(:cover?)
+
+  def __cover_range__(other)
+    ob = other.begin
+    oe = other.end
+    # An empty range is covered by nothing.
+    if !ob.nil? && !oe.nil?
+      c = (ob <=> oe)
+      return false if c.nil?
+      return false if c > 0 || (c == 0 && other.exclude_end?)
+    end
+    return false if ob.nil? && !self.begin.nil?
+    return false if oe.nil? && !self.end.nil?
+    return false unless ob.nil? || cover?(ob)
+    se = self.end
+    return true if se.nil?
+    cmp = (se <=> oe)
+    return false if cmp.nil?
+    # MRI's r_cover_range_p: when the two ranges agree about their end being
+    # exclusive the comparison is enough, and when they disagree the inclusive
+    # one has to be measured against the other's last element instead.
+    if exclude_end? == other.exclude_end?
+      cmp >= 0
+    elsif exclude_end?
+      cmp > 0
+    elsif cmp >= 0
+      true
+    else
+      vmax = (other.max rescue nil)
+      return false if vmax.nil?
+      c = (se <=> vmax)
+      !c.nil? && c >= 0
+    end
+  end
+  private :__cover_range__
+
+  def overlap?(other)
+    unless other.is_a?(::Range)
+      ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (expected Range)")
+    end
+    return false if __empty_range__(self) || __empty_range__(other)
+    sb, se = self.begin, self.end
+    ob, oe = other.begin, other.end
+    unless se.nil? || ob.nil?
+      c = (ob <=> se)
+      return false if c.nil?
+      return false if exclude_end? ? c >= 0 : c > 0
+    end
+    unless oe.nil? || sb.nil?
+      c = (sb <=> oe)
+      return false if c.nil?
+      return false if other.exclude_end? ? c >= 0 : c > 0
+    end
+    true
+  end unless method_defined?(:overlap?)
+
+  def __empty_range__(r)
+    b, e = r.begin, r.end
+    return false if b.nil? || e.nil?
+    c = (b <=> e)
+    c.nil? || c > 0 || (c == 0 && r.exclude_end?)
+  end
+  private :__empty_range__
+
+  # Binary search over a numeric range, in MRI's two modes: a block answering
+  # true/false finds the smallest element it says true for, a block answering
+  # an Integer finds the element it answers 0 for.
+  # The built-in handles an Integer range; a Float one it refuses outright,
+  # and MRI searches those too - bisecting the interval rather than the
+  # integers in it.
+  if method_defined?(:bsearch)
+    alias_method :__ir_bsearch__, :bsearch
+    private :__ir_bsearch__
+  end
+
+  def bsearch(&block)
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    b = self.begin
+    e = self.end
+    if (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer))
+      respond_to?(:__ir_bsearch__, true) ? __ir_bsearch__(&block) : __bsearch_int__(block)
+    elsif (b.nil? || b.is_a?(::Numeric)) && (e.nil? || e.is_a?(::Numeric))
+      __bsearch_float__(block)
+    else
+      ::Kernel.raise(::TypeError, "can't do binary search for #{(b || e).class}")
+    end
+  end
+
+  # Answers :found, true (go left, remember) or false (go right).
+  def __bsearch_test__(block, value)
+    r = block.call(value)
+    case r
+    when true then true
+    when false, nil then false
+    when ::Integer then r == 0 ? :found : r < 0
+    else
+      ::Kernel.raise(::TypeError, "wrong argument type #{r.class} (must be numeric, true, false or nil)")
+    end
+  end
+  private :__bsearch_test__
+
+  def __bsearch_int__(block)
+    low = self.begin
+    high = self.end
+    high -= 1 if !high.nil? && exclude_end?
+    # An endless or beginless range is widened until the answer is bracketed.
+    if low.nil? || high.nil?
+      span = 1
+      if high.nil?
+        high = low + span
+        while __bsearch_test__(block, high) == false
+          span *= 2
+          high = low + span
+        end
+      else
+        low = high - span
+        while __bsearch_test__(block, low) != false
+          span *= 2
+          low = high - span
+        end
+      end
+    end
+    result = nil
+    while low <= high
+      mid = low + (high - low) / 2
+      case __bsearch_test__(block, mid)
+      when :found then return mid
+      when true then result = mid; high = mid - 1
+      else low = mid + 1
+      end
+    end
+    result
+  end
+  private :__bsearch_int__
+
+  def __bsearch_float__(block)
+    low = (self.begin || -::Float::MAX).to_f
+    high = (self.end || ::Float::MAX).to_f
+    result = nil
+    64.times do
+      mid = low + (high - low) / 2
+      break if mid == low || mid == high
+      case __bsearch_test__(block, mid)
+      when :found then return mid
+      when true then result = mid; high = mid
+      else low = mid
+      end
+    end
+    result
+  end
+  private :__bsearch_float__
+
+  def %(n)
+    ::Enumerator::ArithmeticSequence.__build__(self.begin, self.end, n, exclude_end?, self)
+  end
+
+  alias_method :__ir_step__, :step
+
+  # Without a block, MRI answers an arithmetic sequence rather than a plain
+  # Enumerator, and the specs check the class.
+  def step(n = 1, &block)
+    return __ir_step__(n, &block) if block
+    if self.begin.is_a?(::Numeric) && (self.end.nil? || self.end.is_a?(::Numeric))
+      ::Enumerator::ArithmeticSequence.__build__(self.begin, self.end, n, exclude_end?, self)
+    else
+      __ir_step__(n)
+    end
+  end
+
   # Range#min/#max/#minmax are specialised in MRI: without a block they answer from the
   # endpoints instead of enumerating. IronRuby inherited Enumerable's versions, so
   # (0...2**64).max walked eighteen quintillion integers and never came back.
@@ -4841,4 +7234,13 @@ class Range
     super
   end
   alias_method :entries, :to_a
+end
+
+# Rebind ARGF to a real instance so ARGF.class is a class. Done at the very end
+# of the prelude so that the class above and File are both in place.
+begin
+  argf_instance = ARGFClass.new(*ARGV)
+  Object.send(:remove_const, :ARGF) if Object.const_defined?(:ARGF)
+  Object.const_set(:ARGF, argf_instance)
+rescue ::Exception
 end

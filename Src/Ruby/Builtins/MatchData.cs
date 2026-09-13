@@ -17,6 +17,7 @@ using Microsoft.Scripting.Utils;
 using System.Text.RegularExpressions;
 using IronRuby.Runtime;
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Text;
 
@@ -139,6 +140,46 @@ namespace IronRuby.Builtins {
         public MutableString AppendGroupValue(int index, MutableString/*!*/ result) {
             // we don't need to check index range, Groups indexer returns an unsuccessful group if out of range:
             return GroupSuccess(index) ? result.Append(_originalString, GetGroupStart(index), GetGroupLength(index)).TaintBy(this) : null;
+        }
+
+        /// <summary>
+        /// The names of the pattern's named groups, in the order the pattern declares them.
+        /// The CLR reports the numbered groups through the same collection, so those are
+        /// filtered out here. Not a [RubyMethod]: MatchData's named-group methods are
+        /// written in Ruby in the prelude and reach these two as plain CLR methods.
+        /// </summary>
+        public string[]/*!*/ GetGroupNames() {
+            var names = _match.Groups.Keys;
+            var result = new List<string>();
+            foreach (var name in names) {
+                int ignored;
+                if (!Int32.TryParse(name, out ignored)) {
+                    result.Add(name);
+                }
+            }
+            return result.ToArray();
+        }
+
+        public bool HasNamedGroup(string/*!*/ name) {
+            foreach (var groupName in _match.Groups.Keys) {
+                if (groupName == name) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        public bool NamedGroupSuccess(string/*!*/ name) {
+            return HasNamedGroup(name) && _match.Groups[name].Success;
+        }
+
+        /// <summary>Character index where a named group matched, or -1.</summary>
+        public int GetNamedGroupStart(string/*!*/ name) {
+            return NamedGroupSuccess(name) ? _match.Groups[name].Index : -1;
+        }
+
+        public int GetNamedGroupLength(string/*!*/ name) {
+            return NamedGroupSuccess(name) ? _match.Groups[name].Length : -1;
         }
 
         public int GetGroupStart(int groupIndex) {
