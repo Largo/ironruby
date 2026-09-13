@@ -321,66 +321,134 @@ namespace IronRuby.Builtins {
 
         #region Status
 
+        /// <summary>
+        /// What wait(2) reported about a child: the pid plus the raw status word. Every
+        /// predicate MRI documents is a bit pattern in that word, so keeping the word is what
+        /// lets us distinguish "exited with 137" from "killed by signal 9" - a distinction
+        /// System.Diagnostics.Process throws away when it folds a signal into ExitCode.
+        /// </summary>
         [RubyClass("Status", BuildConfig = "FEATURE_PROCESS")]
         [HideMethod("new", IsStatic = true)]
         public sealed class Status {
-            private readonly Process/*!*/ _process;
+            private readonly int _pid;
+            private readonly int _status;
 
-            internal Status(Process/*!*/ process) {
-                _process = process;
+            internal Status(int pid, int status) {
+                _pid = pid;
+                _status = status;
+            }
+
+            internal Status(Process/*!*/ process)
+                : this(process.Id, process.HasExited ? (process.ExitCode & 0xff) << 8 : 0) {
+            }
+
+            private bool IsExited {
+                get { return (_status & 0x7f) == 0; }
+            }
+
+            private bool IsSignaled {
+                // WIFSIGNALED: a termination signal in the low seven bits, and not the 0x7f
+                // that marks a stop.
+                get { return ((sbyte)(((_status & 0x7f) + 1) >> 1)) > 0; }
+            }
+
+            private bool IsStopped {
+                get { return (_status & 0xff) == 0x7f; }
             }
 
             [RubyMethod("coredump?")]
             public static bool CoreDump(Status/*!*/ self) {
-                // Always false on Windows
-                return false;
+                return (self._status & 0x80) != 0;
             }
 
             [RubyMethod("exitstatus")]
-            public static int ExitStatus(Status/*!*/ self) {
-                return self._process.ExitCode;
+            public static object ExitStatus(Status/*!*/ self) {
+                return self.IsExited ? ScriptingRuntimeHelpers.Int32ToObject((self._status >> 8) & 0xff) : null;
             }
 
             [RubyMethod("exited?")]
             public static bool Exited(Status/*!*/ self) {
-                return self._process.HasExited;
+                return self.IsExited;
             }
 
             [RubyMethod("pid")]
             public static int Pid(Status/*!*/ self) {
-                return self._process.Id;
+                return self._pid;
             }
 
             [RubyMethod("stopped?")]
             public static bool Stopped(Status/*!*/ self) {
-                // Always false on Windows
-                return false;
+                return self.IsStopped;
             }
 
             [RubyMethod("stopsig")]
             public static object StopSig(Status/*!*/ self) {
-                // Always nil on Windows
-                return null;
+                return self.IsStopped ? ScriptingRuntimeHelpers.Int32ToObject((self._status >> 8) & 0xff) : null;
             }
 
-            [RubyMethod("success?")]
-            public static bool Success(Status/*!*/ self) {
-                return self._process.ExitCode == 0;
+            [RubyMethod("signaled?")]
+            public static bool Signaled(Status/*!*/ self) {
+                return self.IsSignaled;
             }
 
             [RubyMethod("termsig")]
             public static object TermSig(Status/*!*/ self) {
-                // Always nil on Windows
-                return null;
+                return self.IsSignaled ? ScriptingRuntimeHelpers.Int32ToObject(self._status & 0x7f) : null;
+            }
+
+            /// <summary>
+            /// true when the child exited with 0, false when it exited with anything else, and
+            /// nil when it did not exit at all - a killed child neither succeeded nor failed.
+            /// </summary>
+            [RubyMethod("success?")]
+            public static object Success(Status/*!*/ self) {
+                if (!self.IsExited) {
+                    return null;
+                }
+                return ScriptingRuntimeHelpers.BooleanToObject(((self._status >> 8) & 0xff) == 0);
+            }
+
+            [RubyMethod("to_i")]
+            public static int ToInt(Status/*!*/ self) {
+                return self._status;
+            }
+
+            [RubyMethod("==")]
+            public static bool Equals(Status/*!*/ self, object other) {
+                var status = other as Status;
+                if (status != null) {
+                    return self._pid == status._pid && self._status == status._status;
+                }
+                return (other is int) && (int)other == self._status;
+            }
+
+            private static string/*!*/ Describe(Status/*!*/ self) {
+                if (self.IsStopped) {
+                    int signal = (self._status >> 8) & 0xff;
+                    string name = PosixSignals.ToName(signal);
+                    return String.Format(CultureInfo.InvariantCulture, "stopped {0} (signal {1})",
+                        (name != null) ? "SIG" + name : signal.ToString(CultureInfo.InvariantCulture), signal);
+                }
+                if (self.IsSignaled) {
+                    int signal = self._status & 0x7f;
+                    string name = PosixSignals.ToName(signal);
+                    return String.Format(CultureInfo.InvariantCulture, "{0} (signal {1}){2}",
+                        (name != null) ? "SIG" + name : signal.ToString(CultureInfo.InvariantCulture), signal,
+                        CoreDump(self) ? " (core dumped)" : "");
+                }
+                return String.Format(CultureInfo.InvariantCulture, "exit {0}", (self._status >> 8) & 0xff);
+            }
+
+            [RubyMethod("to_s")]
+            public static MutableString/*!*/ ToStr(Status/*!*/ self) {
+                return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture, "pid {0} {1}",
+                    self._pid, Describe(self)));
             }
 
             [RubyMethod("inspect")]
             public static MutableString/*!*/ Inspect(Status/*!*/ self) {
-                return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture, "#<Process::Status: pid={0},{1}({2})>", 
-                    Pid(self),
-                    Exited(self) ? "exited" : "running",
-                    ExitStatus(self)
-                ));
+                return MutableString.CreateAscii(String.Format(CultureInfo.InvariantCulture, "#<Process::Status: pid {0} {1}>",
+                    self._pid, Describe(self)));
             }
         }
 
@@ -469,7 +537,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("ppid", RubyMethodAttributes.PublicSingleton)]
         public static int GetParentPid(RubyModule/*!*/ self) {
-            return 0;
+            return SysGetPpid();
         }
 
         // setpgid
@@ -529,114 +597,6 @@ namespace IronRuby.Builtins {
             return new RubyArray();
         }
 
-        #region spawn/wait primitives
-        // Process.spawn and the wait family are written in the prelude on top of these two:
-        // everything that is argument shuffling, conversion and validation is far shorter in
-        // Ruby, and all that is genuinely needed from the CLR is "start a child without
-        // waiting for it" and "wait for one we started".
-
-        private static readonly Dictionary<int, Process>/*!*/ _children = new Dictionary<int, Process>();
-
-        /// <summary>
-        /// Starts /bin/sh -c script detached and returns its pid. The caller has already folded
-        /// chdir, umask and any redirections into the script.
-        /// </summary>
-        [RubyMethod("__spawn__", RubyMethodAttributes.PublicSingleton)]
-        public static int SpawnPrimitive(RubyContext/*!*/ context, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ script, Hash env, bool unsetOthers) {
-
-            var p = new Process();
-            p.StartInfo.FileName = "/bin/sh";
-            p.StartInfo.ArgumentList.Add("-c");
-            p.StartInfo.ArgumentList.Add(script.ConvertToString());
-            p.StartInfo.UseShellExecute = false;
-
-            if (unsetOthers) {
-                p.StartInfo.Environment.Clear();
-            }
-            if (env != null) {
-                // The prelude has already run #to_str over both halves and rejected null bytes.
-                foreach (var entry in env) {
-                    var key = entry.Key as MutableString;
-                    if (key == null) {
-                        continue;
-                    }
-                    var value = entry.Value as MutableString;
-                    if (value == null) {
-                        p.StartInfo.Environment.Remove(key.ConvertToString());
-                    } else {
-                        p.StartInfo.Environment[key.ConvertToString()] = value.ConvertToString();
-                    }
-                }
-            }
-
-            try {
-                p.Start();
-            } catch (Exception e) {
-                throw RubyExceptions.CreateENOENT(p.StartInfo.FileName, e);
-            }
-
-            lock (_children) {
-                _children[p.Id] = p;
-            }
-            return p.Id;
-        }
-
-        /// <summary>
-        /// Waits for one of our children. pid -1 means "any"; a non-zero flags argument means
-        /// WNOHANG, i.e. return nil rather than block. Returns [pid, Process::Status] or nil.
-        /// </summary>
-        [RubyMethod("__waitpid__", RubyMethodAttributes.PublicSingleton)]
-        public static object WaitPidPrimitive(RubyContext/*!*/ context, RubyModule/*!*/ self, int pid, int flags) {
-            Process child = null;
-            lock (_children) {
-                if (pid > 0) {
-                    _children.TryGetValue(pid, out child);
-                } else {
-                    // "Any child": prefer one that has already exited so that repeated waits drain
-                    // the table instead of blocking on the longest-lived child.
-                    foreach (var candidate in _children.Values) {
-                        if (child == null || candidate.HasExited) {
-                            child = candidate;
-                            if (candidate.HasExited) {
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-
-            if (child == null) {
-                throw new Errno.ChildError();
-            }
-
-            if ((flags & 1) != 0 && !child.HasExited) {   // WNOHANG
-                return null;
-            }
-
-            child.WaitForExit();
-            lock (_children) {
-                _children.Remove(child.Id);
-            }
-
-            var status = new Status(child);
-            context.ChildProcessExitStatus = status;
-            return new RubyArray { ScriptingRuntimeHelpers.Int32ToObject(child.Id), status };
-        }
-
-        /// <summary>Pids of the children we started that have not been waited for yet.</summary>
-        [RubyMethod("__children__", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ Children(RubyModule/*!*/ self) {
-            var result = new RubyArray();
-            lock (_children) {
-                foreach (var id in _children.Keys) {
-                    result.Add(ScriptingRuntimeHelpers.Int32ToObject(id));
-                }
-            }
-            return result;
-        }
-
-        #endregion
     }
 
     #region Struct::Tms

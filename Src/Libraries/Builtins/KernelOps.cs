@@ -1382,61 +1382,10 @@ namespace IronRuby.Builtins {
         #region `, exec, system, fork, 1.9: spawn
 
 #if FEATURE_PROCESS
-        [RubyMethod("`", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]
-        [RubyMethod("`", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
-        public static MutableString/*!*/ ExecuteCommand(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]MutableString/*!*/ command) {
-            Process p = RubyProcess.CreateProcess(context, command, true);
-
-            string output = p.StandardOutput.ReadToEnd();
-            if (Environment.NewLine != "\n") {
-                output = output.Replace(Environment.NewLine, "\n");
-            }
-            MutableString result = MutableString.Create(output, RubyEncoding.GetRubyEncoding(p.StandardOutput.CurrentEncoding));
-            return result;
-        }
-
-        // Overloads of exec and system will always execute using the Windows shell if there is only the command parameter
-        // If args parameter is passed, it will execute the command directly without going to the shell.
-
-        [RubyMethod("exec", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]
-        [RubyMethod("exec", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
-        public static void Execute(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]MutableString/*!*/ command) {
-            Process p = RubyProcess.CreateProcess(context, command, false);
-            p.WaitForExit();
-            Exit(self, p.ExitCode);
-        }
-
-        [RubyMethod("exec", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]
-        [RubyMethod("exec", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
-        public static void Execute(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]MutableString/*!*/ command,
-            [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ args) {
-            Process p = RubyProcess.CreateProcess(context, command, args);
-            Exit(self, p.ExitCode);
-        }
-
-        [RubyMethod("system", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]
-        [RubyMethod("system", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
-        public static bool System(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]MutableString/*!*/ command) {
-            try {
-                Process p = RubyProcess.CreateProcess(context, command, false);
-                p.WaitForExit();
-                return p.ExitCode == 0;
-            } catch (FileNotFoundException) {
-                return false;
-            }
-        }
-
-        [RubyMethod("system", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]
-        [RubyMethod("system", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
-        public static bool System(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]MutableString/*!*/ command,
-            [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ args) {
-            try {
-                Process p = RubyProcess.CreateProcess(context, command, args);
-                return p.ExitCode == 0;
-            } catch (FileNotFoundException) {
-                return false;
-            }
-        }
+        // Kernel#`, #exec, #system and #spawn are in the prelude, on top of Process.spawn:
+        // they are the same call with different treatment of the child, and the argument
+        // handling they share - an env hash, a [command, argv0] pair, an options hash - is
+        // all protocol work that belongs in Ruby.
 
         // There is no fork on the CLR. MRI defines the method on platforms that cannot fork too and has it
         // raise NotImplementedError; Process.respond_to?(:fork) is what portable code tests instead.
