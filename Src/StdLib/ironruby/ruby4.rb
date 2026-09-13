@@ -5062,6 +5062,43 @@ class IO
     obj.respond_to?(:to_io) ? obj.to_io : nil
   end unless respond_to?(:try_convert)
 
+  # Same for IO.read: the text form is tagged with the encoding asked for,
+  # the length form is bytes. IO.binread stays binary, which is its whole job.
+  class << self
+    alias_method :__ir_class_read__, :read
+    private :__ir_class_read__
+
+    def read(name, *args)
+      options = args.last.is_a?(::Hash) ? args.pop : nil
+      result = args.empty? ? __ir_class_read__(name) : __ir_class_read__(name, *args)
+      return result if result.nil? || !result.respond_to?(:force_encoding)
+      return result unless args.empty? || args[0].nil?
+      enc = nil
+      if options
+        enc = options[:encoding] || options["encoding"]
+        enc = enc.split(":").first if enc.is_a?(::String)
+        enc = ::Encoding.find(enc) if enc
+      end
+      enc ||= ::Encoding.default_external
+      enc ? result.force_encoding(enc) : result
+    end
+  end
+
+  # read with no length answers text in the stream's external encoding; read
+  # with a length answers bytes, and is ASCII-8BIT. The C# read always handed
+  # back ASCII-8BIT, so File.read(path, encoding: "utf-8") came out binary.
+  alias_method :__ir_read__, :read
+  private :__ir_read__
+
+  def read(*args)
+    result = __ir_read__(*args)
+    return result if result.nil?
+    return result unless args.empty? || args[0].nil?
+    return result unless result.respond_to?(:force_encoding)
+    enc = (external_encoding rescue nil) || ::Encoding.default_external
+    enc ? result.force_encoding(enc) : result
+  end
+
   # ---- the byte and character side of IO ---------------------------------
 
   # getc answered a byte as an Integer, which is the 1.8 meaning; MRI has
