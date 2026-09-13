@@ -687,6 +687,78 @@ class Array
   # summation MRI does, and this was a second, naive copy that Array never
   # reached anyway - method_defined? saw the included Enumerable#sum and skipped it.
 
+  # a[(0..).step(2)]: the sequence describes a stretch of the array and a stride
+  # through it. The stretch is normalized like a Range, except that a stride of
+  # more than one element makes the normalization strict - a stretch that does
+  # not fit is a RangeError rather than a silent clamp - and a negative stride
+  # reads the same stretch from its far end.
+  def __arithmetic_slice__(sequence)
+    unless sequence.is_a?(::Enumerator::ArithmeticSequence)
+      raise TypeError, "no implicit conversion of #{sequence.class} into Integer"
+    end
+
+    step = sequence.step
+    step = 1 if step.nil?
+    step = step.to_int unless step.is_a?(::Integer)
+    raise ArgumentError, "step can't be 0" if step == 0
+
+    first = sequence.begin
+    last = sequence.end
+    exclude_end = sequence.exclude_end?
+    if step < 0
+      # Reading backwards swaps the ends, and the exclusion travels with the
+      # element it excluded: it was the last one, it is now the first. The
+      # arithmetic is done on the index as written, before it is normalized, so
+      # that (0...-1) starts at 0 rather than at the element before the last.
+      first, last = last, first
+      if exclude_end && !first.nil?
+        first += 1
+        exclude_end = false
+      end
+    end
+
+    count = size
+    strict = step > 1 || step < -1
+
+    begin_index = first.nil? ? 0 : first.to_int
+    begin_index += count if begin_index < 0
+    if begin_index < 0 || begin_index > count
+      raise RangeError, "#{sequence.inspect} out of range" if strict
+      return nil
+    end
+
+    if last.nil?
+      end_index = count
+    else
+      end_index = last.to_int
+      end_index += count if end_index < 0
+      end_index += 1 unless exclude_end
+      end_index = count if end_index > count && !strict
+    end
+
+    length = end_index - begin_index
+    length = 0 if length < 0
+    raise RangeError, "#{sequence.inspect} out of range" if strict && length > count
+    # Whatever the stretch says, only elements that are really there come out.
+    length = count - begin_index if begin_index + length > count
+
+    result = []
+    if step > 0
+      i = begin_index
+      while i < begin_index + length
+        result << self[i]
+        i += step
+      end
+    else
+      i = begin_index + length - 1
+      while i >= begin_index
+        result << self[i]
+        i += step
+      end
+    end
+    result
+  end
+
   # Array has its own #max, #min and #sum in MRI rather than inheriting Enumerable's,
   # and code in the wild checks which one it gets. The bodies are Enumerable's.
   def max(*args, &block) = super
@@ -4883,17 +4955,40 @@ class Enumerator
     alias_method :each_with_object, :with_object
 
     def zip(*others, &block)
-      # MRI only stays lazy when every argument is a plain Array; anything else
-      # (and the block form) falls back to the eager Enumerable#zip.
-      if block || others.any? { |other| !other.is_a?(::Array) }
-        return eager.zip(*others, &block)
+      # Only the block form falls back to the eager Enumerable#zip. Everything
+      # else stays lazy, including arguments that are not Arrays: those are
+      # iterated with #each, which is what lets an endless receiver be zipped
+      # with a Range and cut short by #first.
+      return eager.zip(*others, &block) if block
+
+      sources = others.map do |other|
+        if other.is_a?(::Array)
+          other
+        elsif other.respond_to?(:to_ary) && (converted = other.to_ary).is_a?(::Array)
+          converted
+        elsif other.respond_to?(:each)
+          other.to_enum(:each)
+        else
+          ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (must respond to :each)")
+        end
       end
+
       source = self
       __chain__(size) do |y|
         index = 0
         source.each do |*values|
           row = [values.size <= 1 ? values[0] : values]
-          others.each { |other| row << other[index] }
+          sources.each do |other|
+            row << if other.is_a?(::Array)
+                     other[index]
+                   else
+                     begin
+                       other.next
+                     rescue ::StopIteration
+                       nil
+                     end
+                   end
+          end
           index += 1
           y << row
         end
@@ -9180,7 +9275,9 @@ class Range
   # Enumerator, and the specs check the class.
   def step(n = 1, &block)
     return __ir_step__(n, &block) if block
-    if self.begin.is_a?(::Numeric) && (self.end.nil? || self.end.is_a?(::Numeric))
+    # A beginless numeric range steps too; only its beginning is unknown, which
+    # is exactly what an arithmetic sequence used as an array index needs.
+    if (self.begin.nil? || self.begin.is_a?(::Numeric)) && (self.end.nil? || self.end.is_a?(::Numeric))
       ::Enumerator::ArithmeticSequence.__build__(self.begin, self.end, n, exclude_end?, self)
     else
       __ir_step__(n)

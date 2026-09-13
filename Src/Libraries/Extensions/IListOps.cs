@@ -549,6 +549,22 @@ namespace IronRuby.Builtins {
             return GetResultRange(allocateStorage, self, index, count);
         }
 
+        /// <summary>
+        /// Since 2.6 an Enumerator::ArithmeticSequence - what (0..).step(2) answers - can be used
+        /// to slice an array, taking every step'th element of the stretch it describes. The class
+        /// is written in Ruby and so is the index arithmetic; this overload exists only so that the
+        /// sequence reaches it instead of being offered to the Integer conversion, which is the one
+        /// thing it cannot do.
+        /// </summary>
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static object GetElements(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slice,
+            IList/*!*/ self, [NotNull]Enumerator/*!*/ sequence) {
+
+            var site = slice.GetCallSite("__arithmetic_slice__", 1);
+            return site.Target(site, self, sequence);
+        }
+
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static IList GetElements(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ allocateStorage, 
