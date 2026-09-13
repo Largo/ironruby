@@ -6840,6 +6840,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, System.Object[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ProcOps.GetParameters)
             );
             
+            DefineLibraryMethod(module, "ruby2_keywords", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Ruby2Keywords)
+            );
+            
             DefineLibraryMethod(module, "source_location", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ProcOps.GetSourceLocation)

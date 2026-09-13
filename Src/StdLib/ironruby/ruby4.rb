@@ -5954,13 +5954,6 @@ class << ENV
   end unless respond_to?(:to_set)
 end
 
-class Proc
-  def ruby2_keywords
-    self
-  end unless method_defined?(:ruby2_keywords)
-
-end
-
 class Method
   def name
     self.Name.to_s.to_sym

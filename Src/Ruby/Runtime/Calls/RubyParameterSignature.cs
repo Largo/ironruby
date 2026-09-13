@@ -88,6 +88,15 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
+        /// Whether the ruby2_keywords flag means anything for this signature: a trailing hash can
+        /// only be passed on untouched by a plain rest parameter, so keywords, a keyword splat or
+        /// post parameters all rule it out, as does having no rest parameter at all.
+        /// </summary>
+        public bool AcceptsRuby2Keywords {
+            get { return _hasRest && !_hasKeywords && !_hasKeywordRest && _postCount == 0; }
+        }
+
+        /// <summary>
         /// The most arguments a call can supply, or -1 when a rest parameter makes that unbounded.
         /// </summary>
         public int MaxArgumentCount {

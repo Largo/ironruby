@@ -178,6 +178,22 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        /// <summary>
+        /// The flag only means something for a proc whose whole argument list is a rest parameter,
+        /// since that is the only shape that can hand a trailing hash on untouched. MRI warns and
+        /// does nothing for anything else.
+        /// </summary>
+        [RubyMethod("ruby2_keywords")]
+        public static Proc/*!*/ Ruby2Keywords(RubyContext/*!*/ context, Proc/*!*/ self) {
+            var signature = self.Dispatcher.ParameterSignature;
+            if (signature == null || !signature.AcceptsRuby2Keywords) {
+                context.ReportWarning(
+                    "Skipping set of ruby2_keywords flag for proc (proc accepts keywords or post arguments or proc does not accept argument splat)"
+                );
+            }
+            return self;
+        }
+
         #endregion
 
         #region call, [],  ===, yield (TODO)
