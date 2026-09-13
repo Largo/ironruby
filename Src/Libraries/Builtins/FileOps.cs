@@ -85,14 +85,15 @@ namespace IronRuby.Builtins {
             Protocols.TryConvertToOptions(toHash, ref options, ref optionsOrMode, ref optionsOrPermissions);
             var toIntSite = toInt.GetSite(TryConvertToFixnumAction.Make(toInt.Context));
 
+            // A nil mode or permission means "not given", as in CRuby.
             IOInfo info = new IOInfo();
-            if (optionsOrMode != Missing.Value) {
+            if (optionsOrMode != Missing.Value && optionsOrMode != null) {
                 int? m = toIntSite.Target(toIntSite, optionsOrMode);
                 info = m.HasValue ? new IOInfo((IOMode)m) : IOInfo.Parse(context, Protocols.CastToString(toStr, optionsOrMode));
             }
 
             int permissions = 0;
-            if (optionsOrPermissions != Missing.Value) {
+            if (optionsOrPermissions != Missing.Value && optionsOrPermissions != null) {
                 int? p = toIntSite.Target(toIntSite, optionsOrPermissions);
                 if (!p.HasValue) {
                     throw RubyExceptions.CreateImplicitConversionError(context.GetClassName(optionsOrPermissions), "Integer");
