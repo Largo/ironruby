@@ -885,7 +885,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("const_set")]
         public static object SetConstantValue(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName, object value) {
             RubyUtils.CheckConstantName(constantName);
-            RubyUtils.SetConstant(self, constantName, value);
+            string sourcePath;
+            int sourceLine;
+            RubyUtils.TryGetCallerSourceLocation(self.Context, out sourcePath, out sourceLine);
+            RubyUtils.SetConstant(self, constantName, value, sourcePath, sourceLine);
             return value;
         }
 
@@ -1039,6 +1042,13 @@ namespace IronRuby.Builtins {
             }
 
             self.SetAutoloadedConstant(constantName, path);
+
+            string sourcePath;
+            int sourceLine;
+            if (RubyUtils.TryGetCallerSourceLocation(self.Context, out sourcePath, out sourceLine)) {
+                self.SetConstantLocation(constantName, sourcePath, sourceLine);
+            }
+
             self.ConstantAdded(constantName);
         }
 

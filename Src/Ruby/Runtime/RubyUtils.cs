@@ -565,6 +565,49 @@ namespace IronRuby.Runtime {
             SetConstant(owner, name, value, null, 0);
         }
 
+        /// <summary>
+        /// Location of the Ruby frame that called the currently executing builtin, taken from the CLR stack.
+        /// Only for cold paths (Module#const_set, Module#autoload): capturing a stack trace with file info
+        /// costs on the order of a millisecond.
+        /// </summary>
+        public static bool TryGetCallerSourceLocation(RubyContext/*!*/ context, out string sourcePath, out int sourceLine) {
+            sourcePath = null;
+            sourceLine = 0;
+
+            RubyArray trace;
+            try {
+                trace = RubyExceptionData.CreateBacktrace(context, 0);
+            } catch (Exception) {
+                return false;
+            }
+
+            if (trace.Count == 0) {
+                return false;
+            }
+
+            string entry = trace[0].ToString();
+
+            // "<path>:<line>" optionally followed by ":in `<method>'"
+            int end = entry.IndexOf(":in ", StringComparison.Ordinal);
+            if (end < 0) {
+                end = entry.Length;
+            }
+
+            int colon = entry.LastIndexOf(':', end - 1);
+            if (colon <= 0) {
+                return false;
+            }
+
+            int line;
+            if (!Int32.TryParse(entry.Substring(colon + 1, end - colon - 1), out line)) {
+                return false;
+            }
+
+            sourcePath = entry.Substring(0, colon);
+            sourceLine = line;
+            return true;
+        }
+
         public static void SetConstant(RubyModule/*!*/ owner, string/*!*/ name, object value, string sourcePath, int sourceLine) {
             Assert.NotNull(owner, name);
 
