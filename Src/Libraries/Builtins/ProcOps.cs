@@ -24,6 +24,7 @@ using Microsoft.Scripting.Generation;
 using System.Globalization;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
 
@@ -39,6 +40,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("=="), RubyMethod("eql?")]
         public static bool Equal(Proc/*!*/ self, [NotNull]Proc/*!*/ other) {
+            // two procs made from the same symbol are the same proc in MRI, which hands out a
+            // cached one per symbol; here each Symbol#to_proc builds its own dispatcher
+            if (self.SymbolName != null || other.SymbolName != null) {
+                return self.SymbolName == other.SymbolName;
+            }
             return self.Dispatcher == other.Dispatcher && self.LocalScope == other.LocalScope;
         }
 
@@ -49,6 +55,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("hash")]
         public static int GetHash(Proc/*!*/ self) {
+            if (self.SymbolName != null) {
+                return self.SymbolName.GetHashCode();
+            }
             return self.Dispatcher.GetHashCode() ^ self.LocalScope.GetHashCode();
         }
 
@@ -68,8 +77,13 @@ namespace IronRuby.Builtins {
         /// can be forced with the `lambda:` keyword (anything but nil or false means a lambda).
         /// </summary>
         [RubyMethod("parameters")]
-        public static RubyArray/*!*/ GetParameters(RubyContext/*!*/ context, Proc/*!*/ self, [DefaultParameterValue(null)]IDictionary<object, object> options) {
+        public static RubyArray/*!*/ GetParameters(RubyContext/*!*/ context, Proc/*!*/ self, params object[]/*!*/ args) {
             bool isLambda = self.Kind == ProcKind.Lambda;
+            // the only argument is the `lambda:` keyword, which arrives as a trailing hash
+            var options = args.Length == 1 ? args[0] as IDictionary<object, object> : null;
+            if (args.Length > 0 && options == null) {
+                throw RubyOps.MakeWrongNumberOfArgumentsError(args.Length, 0);
+            }
             if (options != null) {
                 foreach (var entry in options) {
                     var key = entry.Key as RubySymbol;
@@ -103,6 +117,10 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binding")]
         public static Binding/*!*/ GetLocalScope(Proc/*!*/ self) {
+            // a curried or composed proc has no Ruby scope of its own to hand out
+            if (self.LocalScope.IsEmpty) {
+                throw RubyExceptions.CreateArgumentError("Can't create Binding from C level Proc");
+            }
             return new Binding(self.LocalScope);
         }
 
@@ -216,8 +234,83 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region TODO: curry
+        #region curry, >>, <<
 
+        /// <summary>
+        /// Collects arguments until there are enough of them and then calls. A lambda's arity is
+        /// binding, so currying one to a different number of arguments is an error; a plain proc's
+        /// is not, so any count is allowed and an unbounded arity is read as its minimum.
+        /// </summary>
+        [RubyMethod("curry")]
+        public static Proc/*!*/ Curry(RubyContext/*!*/ context, Proc/*!*/ self) {
+            int arity = GetArity(self);
+            return MakeCurried(context, self, arity < 0 ? -arity - 1 : arity, null);
+        }
+
+        [RubyMethod("curry")]
+        public static Proc/*!*/ Curry(RubyContext/*!*/ context, Proc/*!*/ self, [DefaultProtocol]int arity) {
+            if (self.Kind == ProcKind.Lambda) {
+                int declared = GetArity(self);
+                if (declared >= 0) {
+                    if (arity != declared) {
+                        throw RubyOps.MakeWrongNumberOfArgumentsError(arity, declared);
+                    }
+                } else if (arity < -declared - 1) {
+                    throw RubyOps.MakeWrongNumberOfArgumentsErrorN(arity,
+                        (-declared - 1).ToString(CultureInfo.InvariantCulture) + "+");
+                }
+            }
+            return MakeCurried(context, self, arity, null);
+        }
+
+        private static Proc/*!*/ MakeCurried(RubyContext/*!*/ context, Proc/*!*/ target, int arity, RubyArray collected) {
+            return Proc.CreateNative(context, target.Kind, (blockParam, self, args, unsplat, procArg) => {
+                var all = collected != null ? new RubyArray(collected) : new RubyArray();
+                all.AddRange(unsplat);
+                if (all.Count >= arity) {
+                    return target.Call(procArg, all.ToArray());
+                }
+                return MakeCurried(context, target, arity, all);
+            });
+        }
+
+        /// <summary>
+        /// (f &gt;&gt; g).(x) is g(f(x)) and (f &lt;&lt; g).(x) is f(g(x)). The composition is a lambda when
+        /// the function it applies first is one, since that is the one that sees the arguments.
+        /// </summary>
+        [RubyMethod(">>")]
+        public static Proc/*!*/ ComposeForward(RespondToStorage/*!*/ respondTo,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage, Proc/*!*/ self, object other) {
+
+            RequireCallable(respondTo, other);
+            return Proc.CreateNative(respondTo.Context, self.Kind, (blockParam, s, args, unsplat, procArg) => {
+                object intermediate = self.Call(procArg, unsplat.ToArray());
+                var site = callStorage.GetCallSite("call", 1);
+                return site.Target(site, other, intermediate);
+            });
+        }
+
+        [RubyMethod("<<")]
+        public static Proc/*!*/ ComposeBackward(RespondToStorage/*!*/ respondTo,
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>/*!*/ splatStorage, Proc/*!*/ self, object other) {
+
+            RequireCallable(respondTo, other);
+            var kind = (other as Proc)?.Kind ?? ProcKind.Lambda;
+            return Proc.CreateNative(respondTo.Context, kind, (blockParam, s, args, unsplat, procArg) => {
+                // the block goes to whichever function is applied first, which for << is `other'
+                var splatSite = splatStorage.GetCallSite("call",
+                    new RubyCallSignature(0, RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock));
+                object intermediate = splatSite.Target(splatSite, other, procArg, unsplat);
+                return self.Call(null, intermediate);
+            });
+        }
+
+        private static void RequireCallable(RespondToStorage/*!*/ respondTo, object other) {
+            if (!Protocols.RespondTo(respondTo, other, "call")) {
+                throw RubyExceptions.CreateTypeError("callable object is expected");
+            }
+        }
 
         #endregion
 

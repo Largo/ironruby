@@ -6754,6 +6754,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object[], System.Object>(IronRuby.Builtins.ProcOps.Call)
             );
             
+            DefineLibraryMethod(module, "<<", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Builtins.Proc, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.ComposeBackward)
+            );
+            
             DefineLibraryMethod(module, "==", 0x51, 
                 0x00000002U, 0x00000000U, 
                 new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.Proc, System.Boolean>(IronRuby.Builtins.ProcOps.Equal), 
@@ -6768,6 +6773,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.ProcOps.Call), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.ProcOps.Call), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object[], System.Object>(IronRuby.Builtins.ProcOps.Call)
+            );
+            
+            DefineLibraryMethod(module, ">>", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Proc, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.ComposeForward)
             );
             
             DefineLibraryMethod(module, "arity", 0x51, 
@@ -6788,6 +6798,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.ProcOps.Call), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.ProcOps.Call), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object[], System.Object>(IronRuby.Builtins.ProcOps.Call)
+            );
+            
+            DefineLibraryMethod(module, "curry", 0x51, 
+                0x00000000U, 0x00020000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Curry), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, System.Int32, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Curry)
             );
             
             DefineLibraryMethod(module, "eql?", 0x51, 
@@ -6812,8 +6828,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "parameters", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ProcOps.GetParameters)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, System.Object[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ProcOps.GetParameters)
             );
             
             DefineLibraryMethod(module, "source_location", 0x51, 

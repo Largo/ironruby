@@ -2,8 +2,8 @@
 # and #lambda? for procs, lambdas, methods, unbound methods, define_method
 # bodies, Symbol#to_proc, Method#to_proc and curried procs.
 #
-#   ruby Util/callable-parameters-matrix.rb > /tmp/mri.txt
-#   ./ir.sh Util/callable-parameters-matrix.rb > /tmp/ir.txt
+#   ruby Util/callable-parameters-matrix.rb > /tmp/mri.txt 2>/dev/null
+#   ./ir.sh Util/callable-parameters-matrix.rb > /tmp/ir.txt 2>/dev/null
 #   diff /tmp/mri.txt /tmp/ir.txt
 #
 # The cross-product that matters is the parameter shape: required / optional /
@@ -14,12 +14,14 @@
 # shape in a lambda reports :req, and #arity counts keywords only when at
 # least one of them is required.
 
+# Object addresses differ between the two runtimes by construction, so they are
+# blanked out of every answer.
 def t(label)
   print label.ljust(58), ' => '
   begin
-    puts(yield.inspect)
+    puts(yield.inspect.gsub(/0x\h+/, '0xX'))
   rescue ::Exception => e
-    puts "#{e.class}: #{e.message}"
+    puts "#{e.class}: #{e.message.gsub(/0x\h+/, '0xX')}"
   end
 end
 

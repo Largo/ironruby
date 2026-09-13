@@ -5959,53 +5959,6 @@ class Proc
     self
   end unless method_defined?(:ruby2_keywords)
 
-  # Composition: (f >> g).call(x) is g(f(x)), (f << g).call(x) is f(g(x)).
-  def >>(other)
-    unless other.respond_to?(:call)
-      ::Kernel.raise(::TypeError, "callable object is expected")
-    end
-    this = self
-    ::Proc.new { |*args, &blk| other.call(this.call(*args, &blk)) }
-  end unless method_defined?(:>>)
-
-  def <<(other)
-    unless other.respond_to?(:call)
-      ::Kernel.raise(::TypeError, "callable object is expected")
-    end
-    this = self
-    ::Proc.new { |*args, &blk| this.call(other.call(*args, &blk)) }
-  end unless method_defined?(:<<)
-
-  # Collects arguments until there are enough, then calls. A lambda's arity is
-  # binding; a plain proc's is not, so curry on one needs the arity spelled out.
-  def curry(arity = nil)
-    n = arity.nil? ? self.arity : ::Kernel.Integer(arity)
-    if lambda?
-      a = self.arity
-      if arity.nil?
-        n = a < 0 ? -a - 1 : a
-      elsif a >= 0 && n != a
-        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{n}, expected #{a})")
-      elsif a < 0 && n < -a - 1
-        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{n}, expected #{-a - 1}+)")
-      end
-    else
-      n = n < 0 ? -n - 1 : n if arity.nil?
-    end
-    __curry__(self, n, [])
-  end unless method_defined?(:curry)
-
-  def __curry__(target, arity, collected)
-    ::Kernel.lambda do |*args|
-      all = collected + args
-      if all.size >= arity
-        target.call(*all)
-      else
-        target.__curry__(target, arity, all)
-      end
-    end
-  end
-  protected :__curry__
 end
 
 class Method
@@ -6021,8 +5974,8 @@ class Method
     self.GetTargetClass
   end unless method_defined?(:owner)
 
-  def curry(arity = nil)
-    to_proc.curry(arity)
+  def curry(*arity)
+    to_proc.curry(*arity)
   end unless method_defined?(:curry)
 
   def >>(other)

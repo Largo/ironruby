@@ -346,6 +346,28 @@ namespace IronRuby.Builtins {
             return new Proc(ProcKind.Lambda, scope.SelfObject, scope, procDispatcher) { SymbolName = methodName };
         }
 
+        /// <summary>
+        /// A proc with no Ruby source behind it. MRI's Proc#curry, Proc#>> and Proc#<< all answer
+        /// with one of these: it takes *args, so it reports [[:rest]] and arity -1, it has no
+        /// #source_location, and there is no scope for it to hand out as a #binding.
+        /// </summary>
+        public static Proc/*!*/ CreateNative(RubyContext/*!*/ context, ProcKind kind,
+            Func<BlockParam, object, object[], RubyArray, Proc, object>/*!*/ body) {
+
+            // the proc parameter matters: without one, a block passed to the composed or curried
+            // proc cannot be handed on to the proc underneath it
+            var result = Create(context, 0, BlockDispatcher.MakeAttributes(
+                BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter, -1), body);
+            result.Kind = kind;
+            result.Dispatcher.ParameterSignature = NativeProcSignature;
+            return result;
+        }
+
+        private static readonly RubyParameterSignature/*!*/ NativeProcSignature = new RubyParameterSignature(
+            new[] { new RubyParameterSignature.Parameter("rest", null) },
+            0, 0, 0, true, 0, false, false
+        );
+
         private static readonly RubyParameterSignature/*!*/ SymbolProcSignature = new RubyParameterSignature(
             new[] {
                 new RubyParameterSignature.Parameter("req", null),
