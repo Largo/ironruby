@@ -141,6 +141,12 @@ namespace IronRuby.Builtins {
         // name of the module or null for anonymous modules:
         private string _name;
 
+        // True if _name is a "temporary" name in MRI's sense: either set by Module#set_temporary_name or
+        // derived from an outer module that doesn't have a permanent name itself. A temporary name can be
+        // replaced (by set_temporary_name, or when the module is reachable from a permanently named one),
+        // a permanent name can't.
+        private bool _isTemporaryName;
+
         // Lazy interlocked init'd.
         private RubyInstanceData _instanceData;
         
@@ -304,12 +310,23 @@ namespace IronRuby.Builtins {
 
         // RubyModule, symbol -> object
         private CallSite<Func<CallSite, object, object, object>> _constantMissingCallbackSite;
+        private CallSite<Func<CallSite, object, object, object>> _constantAddedCallbackSite;
         private CallSite<Func<CallSite, object, object, object>> _methodAddedCallbackSite;
         private CallSite<Func<CallSite, object, object, object>> _methodRemovedCallbackSite;
         private CallSite<Func<CallSite, object, object, object>> _methodUndefinedCallbackSite;
 
         internal object ConstantMissing(string/*!*/ name) {
             return Context.Send(ref _constantMissingCallbackSite, "const_missing", this, name);
+        }
+
+        /// <summary>
+        /// Fires the Module#const_added hook. Called after the constant has been stored so that the callback
+        /// can read it back with const_get, and - for `class X < Y` - after the superclass is known but before
+        /// the "inherited" event, which is the order MRI documents.
+        /// </summary>
+        public void ConstantAdded(string/*!*/ name) {
+            Assert.NotNull(name);
+            Context.Send(ref _constantAddedCallbackSite, Symbols.ConstantAdded, this, name);
         }
 
         // Ruby 1.8: called after method is added, except for alias_method which calls it before
@@ -352,6 +369,65 @@ namespace IronRuby.Builtins {
         public string Name {
             get { return _name; }
             internal set { _name = value; }
+        }
+
+        /// <summary>
+        /// True if the module has a name that cannot be changed any more - i.e. it is (transitively) reachable
+        /// from Object via constants. MRI calls this a "permanent" name; Module#set_temporary_name refuses to
+        /// touch one and a module that acquires one hands permanent names down to its nested modules.
+        /// </summary>
+        public bool HasPermanentName {
+            get { return _name != null && !_isTemporaryName; }
+        }
+
+        internal bool HasTemporaryName {
+            get { return _name != null && _isTemporaryName; }
+        }
+
+        /// <summary>
+        /// Sets the module's name and propagates the change to nested modules that don't have a permanent name
+        /// of their own, the way MRI's rb_set_class_path/set_sub_temporary_name do.
+        /// </summary>
+        public void SetName(string name, bool permanent) {
+            SetName(name, permanent, null);
+        }
+
+        private void SetName(string name, bool permanent, Dictionary<object, bool> visited) {
+            _name = name;
+            _isTemporaryName = name != null && !permanent;
+            Version.SetName(name);
+
+            // Collect first: the recursive call re-enters the constant tables.
+            List<KeyValuePair<string, RubyModule>> nested = null;
+            using (Context.ClassHierarchyLocker()) {
+                EnumerateConstants((module, constName, value) => {
+                    var m = value as RubyModule;
+                    if (m != null && m != this && m.HasTemporaryName) {
+                        if (nested == null) {
+                            nested = new List<KeyValuePair<string, RubyModule>>();
+                        }
+                        nested.Add(new KeyValuePair<string, RubyModule>(constName, m));
+                    }
+                    return false;
+                });
+            }
+
+            if (nested == null) {
+                return;
+            }
+
+            if (visited == null) {
+                visited = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
+                visited[this] = true;
+            }
+
+            foreach (var entry in nested) {
+                if (visited.ContainsKey(entry.Value)) {
+                    continue;
+                }
+                visited[entry.Value] = true;
+                entry.Value.SetName(name == null ? null : MakeNestedModuleName(entry.Key), permanent, visited);
+            }
         }
 
         public RubyContext/*!*/ Context {

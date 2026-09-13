@@ -571,13 +571,21 @@ namespace IronRuby.Runtime {
             // Initializes anonymous module's name, publishes the module:
             RubyModule module = value as RubyModule;
             if (module != null) {
-                if (module.Name == null) {
-                    module.Name = owner.MakeNestedModuleName(name);
+                // A module reachable from Object gets a permanent name; one stored in a constant of an anonymous
+                // module only gets a temporary one, which a later set_temporary_name (or the outer module becoming
+                // permanently named) may replace. A name that is already permanent never changes.
+                if (!module.HasPermanentName) {
+                    bool permanent = owner.IsObjectClass || owner.HasPermanentName;
+                    if (permanent || module.Name == null) {
+                        module.SetName(owner.MakeNestedModuleName(name), permanent);
+                    }
                 }
                 if (owner.IsObjectClass) {
                     module.Publish(name);
                 }
             }
+
+            owner.ConstantAdded(name);
         }
 
         #endregion

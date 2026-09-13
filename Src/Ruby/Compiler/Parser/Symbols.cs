@@ -26,6 +26,7 @@ namespace IronRuby.Compiler {
         public static readonly string RestArgsLocal = "?rest?";
         
         public static readonly string MethodMissing = "method_missing";
+        public static readonly string ConstantAdded = "const_added";
         public static readonly string MethodAdded = "method_added";
         public static readonly string MethodRemoved = "method_removed";
         public static readonly string MethodUndefined = "method_undefined";

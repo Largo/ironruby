@@ -905,6 +905,11 @@ namespace IronRuby.Builtins {
             return self.Context.ResolveMissingConstant(self, name);
         }
 
+        [RubyMethod("const_added", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
+        public static void ConstantAdded(RubyModule/*!*/ self, object name) {
+            // nop
+        }
+
         #endregion
 
         #region autoload, autoload?
@@ -920,6 +925,7 @@ namespace IronRuby.Builtins {
             }
 
             self.SetAutoloadedConstant(constantName, path);
+            self.ConstantAdded(constantName);
         }
 
         // thread-safe:
@@ -978,6 +984,22 @@ namespace IronRuby.Builtins {
         [RubyMethod("public_instance_methods")]
         public static RubyArray/*!*/ GetPublicInstanceMethods(RubyModule/*!*/ self, bool inherited) {
             return GetMethods(self, inherited, RubyMethodAttributes.PublicInstance);
+        }
+
+        // thread-safe:
+        // Names that this module (not its ancestors) undefines with undef_method.
+        [RubyMethod("undefined_instance_methods")]
+        public static RubyArray/*!*/ GetUndefinedInstanceMethods(RubyModule/*!*/ self) {
+            var result = new RubyArray();
+            using (self.Context.ClassHierarchyLocker()) {
+                self.EnumerateMethods((module, name, member) => {
+                    if (member.IsUndefined) {
+                        result.Add(self.Context.StringifyIdentifier(name));
+                    }
+                    return false;
+                });
+            }
+            return result;
         }
 
         internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes) {
@@ -1083,6 +1105,43 @@ namespace IronRuby.Builtins {
         [RubyMethod("freeze")]
         public static RubyModule/*!*/ Freeze(RubyContext/*!*/ context, RubyModule/*!*/ self) {
             self.Freeze();
+            return self;
+        }
+
+        // True if the string is a constant path ("A", "A::B", "::A::B"), which set_temporary_name rejects
+        // to keep temporary names distinguishable from real ones.
+        private static bool IsConstantPath(string/*!*/ name) {
+            if (name.StartsWith("::", StringComparison.Ordinal)) {
+                name = name.Substring(2);
+            }
+            foreach (string segment in name.Split(new[] { "::" }, StringSplitOptions.None)) {
+                if (!Tokenizer.IsConstantName(segment)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        [RubyMethod("set_temporary_name")]
+        public static RubyModule/*!*/ SetTemporaryName(RubyContext/*!*/ context, RubyModule/*!*/ self, [DefaultProtocol]MutableString name) {
+            if (self.HasPermanentName) {
+                throw RubyExceptions.CreateRuntimeError("can't change permanent name");
+            }
+
+            if (name == null) {
+                self.SetName(null, false);
+                return self;
+            }
+
+            string str = name.ConvertToString();
+            if (str.Length == 0) {
+                throw RubyExceptions.CreateArgumentError("empty class/module name");
+            }
+            if (IsConstantPath(str)) {
+                throw RubyExceptions.CreateArgumentError("the temporary name must not be a constant path to avoid confusion");
+            }
+
+            self.SetName(str, false);
             return self;
         }
 

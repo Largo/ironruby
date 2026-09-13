@@ -6096,6 +6096,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.ClassVariables)
             );
             
+            DefineLibraryMethod(module, "const_added", 0x5a, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule, System.Object>(IronRuby.Builtins.ModuleOps.ConstantAdded)
+            );
+            
             DefineLibraryMethod(module, "const_defined?", 0x51, 
                 0x00010002U, 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.IsConstantDefined), 
@@ -6330,6 +6335,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.RemoveMethod)
             );
             
+            DefineLibraryMethod(module, "set_temporary_name", 0x51, 
+                0x00020000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.SetTemporaryName)
+            );
+            
             DefineLibraryMethod(module, "to_clr_ref", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.ToClrRef)
@@ -6348,6 +6358,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "undef_method", 0x52, 
                 0x80010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.UndefineMethod)
+            );
+            
+            DefineLibraryMethod(module, "undefined_instance_methods", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetUndefinedInstanceMethods)
             );
             
         }
