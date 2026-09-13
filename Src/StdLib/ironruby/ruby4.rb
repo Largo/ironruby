@@ -5357,12 +5357,12 @@ class Enumerator
         if inf
           loop { block.call(i); i += unit }
         elsif desc
-          while i >= to
+          while excl ? i > to : i >= to
             block.call(i)
             i += unit
           end
         else
-          while i <= to
+          while excl ? i < to : i <= to
             block.call(i)
             i += unit
           end
@@ -9071,22 +9071,103 @@ class Range
   end
   private :__bsearch_float__
 
-  def %(n)
-    ::Enumerator::ArithmeticSequence.__build__(self.begin, self.end, n, exclude_end?, self)
+  # Range#step as MRI 3.4 rewrote it. A numeric range steps arithmetically,
+  # sharing ruby_float_step with Numeric#step so that a Float range lands on
+  # its end point rather than drifting; a range whose elements have #succ still
+  # walks them when the step is an Integer, which is what keeps ("A".."G")
+  # .step(2) answering letters; and anything else - a Time, a String step, an
+  # object that only knows #+ and #<=> - advances by asking the current element
+  # for `element + step`. A beginless range has nowhere to start.
+  #
+  # The old version just handed every stepping job to the 1.9 built-in, which
+  # knows only #succ, so a Float step, a negative step, a String step and a
+  # step given as an object answering #coerce were all wrong or raised.
+  def step(n = nil, &block)
+    b = self.begin
+    e = self.end
+    unit = n.nil? ? 1 : n
+    numeric = b.is_a?(::Numeric) && (e.nil? || e.is_a?(::Numeric)) && unit.is_a?(::Numeric)
+
+    if b.nil?
+      unless e.is_a?(::Numeric) && unit.is_a?(::Numeric)
+        ::Kernel.raise(::ArgumentError, "#step for non-numeric beginless ranges is meaningless")
+      end
+      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+      if block
+        ::Kernel.raise(::ArgumentError, "#step iteration for beginless ranges is meaningless")
+      end
+      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self)
+    end
+
+    ::Kernel.raise(::ArgumentError, "step can't be 0") if numeric && unit == 0
+
+    unless block
+      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self) if numeric
+      range = self
+      return ::Enumerator.new { |y| range.step(n) { |x| y << x } }
+    end
+
+    if numeric
+      ::Enumerator::ArithmeticSequence.__step_each__(b, e, unit, exclude_end?, &block)
+    elsif unit.is_a?(::Integer) && b.respond_to?(:succ)
+      if unit > 0
+        i = 0
+        each do |x|
+          block.call(x) if i % unit == 0
+          i += 1
+        end
+      end
+    else
+      __step_by_plus__(b, e, unit, &block)
+    end
+    self
   end
 
-  alias_method :__ir_step__, :step
+  def %(n)
+    step(n)
+  end
 
-  # Without a block, MRI answers an arithmetic sequence rather than a plain
-  # Enumerator, and the specs check the class.
-  def step(n = 1, &block)
-    return __ir_step__(n, &block) if block
-    if self.begin.is_a?(::Numeric) && (self.end.nil? || self.end.is_a?(::Numeric))
-      ::Enumerator::ArithmeticSequence.__build__(self.begin, self.end, n, exclude_end?, self)
-    else
-      __ir_step__(n)
+  # The generic walk: decide which way the range runs, check that adding the
+  # step moves that way, then advance with #+ until #<=> says the end has been
+  # passed. A step that does not move, or moves against the range, yields
+  # nothing instead of looping forever.
+  def __step_by_plus__(b, e, unit, &block)
+    if e.nil?
+      v = b
+      loop do
+        block.call(v)
+        v = v + unit
+      end
+      return
+    end
+    dir = (b <=> e)
+    return if dir.nil?
+    c = (b <=> e)
+    return if c.nil? || __step_past_end__(c, dir)
+    sdir = (b <=> (b + unit))
+    return if sdir.nil? || sdir == 0
+    return unless dir == 0 || (dir < 0) == (sdir < 0)
+    v = b
+    loop do
+      block.call(v)
+      break if c == 0
+      v = v + unit
+      c = (v <=> e)
+      break if c.nil? || __step_past_end__(c, dir)
     end
   end
+  private :__step_by_plus__
+
+  def __step_past_end__(c, dir)
+    if dir < 0
+      exclude_end? ? c >= 0 : c > 0
+    elsif dir > 0
+      exclude_end? ? c <= 0 : c < 0
+    else
+      exclude_end?
+    end
+  end
+  private :__step_past_end__
 
   # Range#min/#max/#minmax are specialised in MRI: without a block they answer from the
   # endpoints instead of enumerating. IronRuby inherited Enumerable's versions, so
