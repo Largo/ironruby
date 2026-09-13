@@ -7643,12 +7643,6 @@ class IO
     self
   end
 
-  # A stream opened "r:external:internal" is asking for the bytes to be read as
-  # the external encoding and handed back as the internal one. Nothing did that,
-  # so the text came back tagged external and untranslated. #internal_encoding
-  # already answers nil unless there is really a conversion to do - the external
-  # side binary, or the two the same, both mean no - so its answer is the whole
-  # condition here.
   # The conversion options the stream was opened with, reduced to the ones
   # String#encode understands. The hash also carries :mode, :binmode and the
   # rest of IO.open's own options, which #encode would reject.
@@ -7667,13 +7661,11 @@ class IO
   end
   private :__encode_options__
 
-  # Whether the options ask for a newline decorator, which is a conversion in
-  # its own right: it happens even when the two encodings are the same, so it
-  # cannot be short-circuited away with them.
   # The newline decorators work on the bytes, not on the characters: MRI runs
   # them beside the conversion rather than through it, so they apply to text
-  # whose bytes are not valid in its own encoding, and :universal_newline is a
-  # decorator for the way in only.
+  # whose bytes are not valid characters of its own encoding. They are a
+  # conversion in their own right, so they happen even when the two encodings
+  # are the same; and :universal_newline is a decorator for the way in only.
   def __decorate_newlines__(text, options, reading)
     newline = options[:newline]
     if reading && (options[:universal_newline] || newline == :universal || newline == :lf)
@@ -7692,6 +7684,11 @@ class IO
   end
   private :__decorated__
 
+  # A stream opened "r:external:internal" is asking for the bytes to be read as
+  # the external encoding and handed back as the internal one. #internal_encoding
+  # already answers nil unless there is really a conversion to do - the external
+  # side binary, or the two the same, both mean no - so its answer is the whole
+  # condition here, once the decorators have had their turn.
   def __transcode__(text)
     return text if text.nil?
     return text unless text.respond_to?(:encode)
@@ -7732,9 +7729,9 @@ class IO
     args.each do |arg|
       # Anything that is not already a String is left to the built-in write to
       # convert, which is the only thing that knows how MRI complains about an
-      # object that cannot become one.
-      # String === arg rather than arg.is_a?(String): the argument may be a
-      # BasicObject, which has no #is_a? to call.
+      # object that cannot become one. String === arg rather than
+      # arg.is_a?(String) because the argument may be a BasicObject, which has
+      # no #is_a? to call.
       total += __ir_write__(::String === arg ? __encode_for_write__(arg) : arg)
     end
     total
