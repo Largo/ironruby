@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -248,6 +248,14 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public virtual MemberInfo/*!*/[]/*!*/ GetMembers() {
             throw Assert.Unreachable;
+        }
+
+        /// <summary>
+        /// The parameter list the method was written with, or null if it is not known (a CLR
+        /// method, an attribute accessor, anything not defined by Ruby source).
+        /// </summary>
+        public virtual RubyParameterSignature GetParameterSignature() {
+            return null;
         }
 
         /// <summary>

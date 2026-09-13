@@ -52,12 +52,6 @@ namespace IronRuby.Builtins {
             return self.Dispatcher.GetHashCode() ^ self.LocalScope.GetHashCode();
         }
 
-        [RubyMethod("dup"), RubyMethod("clone")]
-        public static Proc/*!*/ Clone(Proc/*!*/ self) {
-            return self.Copy();
-        }
-
-
         #endregion
 
         #region arity, lambda?, binding, source_location
@@ -113,7 +107,12 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("source_location")]
-        public static RubyArray/*!*/ GetSourceLocation(Proc/*!*/ self) {
+        public static RubyArray GetSourceLocation(Proc/*!*/ self) {
+            // a proc that no Ruby source produced - Symbol#to_proc, Method#to_proc, a curried
+            // proc - has no location to report
+            if (self.Dispatcher.SourcePath == null) {
+                return null;
+            }
             return new RubyArray(2) {
                 self.LocalScope.RubyContext.EncodePath(self.Dispatcher.SourcePath),
                 self.Dispatcher.SourceLine
@@ -124,14 +123,24 @@ namespace IronRuby.Builtins {
 
         #region to_s, to_proc
 
-        [RubyMethod("to_s")]
+        /// <summary>
+        /// MRI's format is "#&lt;Proc:0xADDRESS file:line (lambda)&gt;", with the location separated
+        /// by a space rather than by the '@' this used to print, omitted entirely when the proc has
+        /// no Ruby source, and replaced by "(&amp;:name)" for a proc a Symbol produced. The result is
+        /// a binary string, as every #inspect-ish description in MRI is.
+        /// </summary>
+        [RubyMethod("to_s"), RubyMethod("inspect")]
         public static MutableString/*!*/ ToS(Proc/*!*/ self) {
             var context = self.LocalScope.RubyContext;
 
             var str = RubyUtils.ObjectToMutableStringPrefix(context, self);
-            if (self.SourcePath != null || self.SourceLine != 0) {
-                str.Append('@');
-                str.Append(self.SourcePath ?? "(unknown)");
+            if (self.SymbolName != null) {
+                str.Append("(&:");
+                str.Append(self.SymbolName);
+                str.Append(')');
+            } else if (self.SourcePath != null) {
+                str.Append(' ');
+                str.Append(self.SourcePath);
                 str.Append(':');
                 str.Append(self.SourceLine.ToString(CultureInfo.InvariantCulture));
             }
@@ -141,6 +150,7 @@ namespace IronRuby.Builtins {
             }
 
             str.Append('>');
+            str.ForceEncoding(RubyEncoding.Binary);
 
             return str;
         }

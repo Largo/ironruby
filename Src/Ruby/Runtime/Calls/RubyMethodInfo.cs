@@ -79,6 +79,10 @@ namespace IronRuby.Runtime.Calls {
             return new MemberInfo[] { GetDelegate().GetMethodInfo() };
         }
 
+        public override RubyParameterSignature GetParameterSignature() {
+            return _body.Ast.Parameters.Signature;
+        }
+
         public override int GetArity() {
             // the declared signature, when the front end recorded one, is the only thing that
             // knows about keywords: they are not in Parameters, having been lowered away

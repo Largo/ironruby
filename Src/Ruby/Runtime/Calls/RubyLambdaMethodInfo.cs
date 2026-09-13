@@ -49,6 +49,10 @@ namespace IronRuby.Runtime.Calls {
             _id = Interlocked.Increment(ref _Id);
         }
 
+        public override RubyParameterSignature GetParameterSignature() {
+            return _lambda.Dispatcher.ParameterSignature;
+        }
+
         public override int GetArity() {
             var signature = _lambda.Dispatcher.ParameterSignature;
             // define_method turns the block into a method, and a method's parameters bind the

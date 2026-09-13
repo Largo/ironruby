@@ -95,11 +95,15 @@ namespace IronRuby.Builtins {
                 );
 
                 _procDispatcher.SetMethod(block);
+                _procDispatcher.ParameterSignature = _info.GetParameterSignature();
             }
 
+            // A method binds its arguments strictly and `return` from it returns from the
+            // method, both of which are lambda behaviour, so MRI's Method#to_proc answers
+            // #lambda? with true.
             // TODO: 
             // MRI: source file/line are that of the to_proc method call:
-            return new Proc(ProcKind.Block, scope.SelfObject, scope, _procDispatcher);
+            return new Proc(ProcKind.Lambda, scope.SelfObject, scope, _procDispatcher);
         }
 
         #region Dynamic Operations

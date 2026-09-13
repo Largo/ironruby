@@ -6730,16 +6730,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object[], System.Object>(IronRuby.Builtins.ProcOps.Call)
             );
             
-            DefineLibraryMethod(module, "clone", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Clone)
-            );
-            
-            DefineLibraryMethod(module, "dup", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Clone)
-            );
-            
             DefineLibraryMethod(module, "eql?", 0x51, 
                 0x00000002U, 0x00000000U, 
                 new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.Proc, System.Boolean>(IronRuby.Builtins.ProcOps.Equal), 
@@ -6749,6 +6739,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "hash", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.Proc, System.Int32>(IronRuby.Builtins.ProcOps.GetHash)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ProcOps.ToS)
             );
             
             DefineLibraryMethod(module, "lambda?", 0x51, 

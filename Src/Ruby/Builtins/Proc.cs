@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -96,6 +96,12 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal RefinementActivation RefinementOverride;
 
+        /// <summary>
+        /// The symbol this proc came from, for a proc Symbol#to_proc built; null otherwise.
+        /// Proc#to_s prints it as "(&amp;:name)".
+        /// </summary>
+        public string SymbolName { get; internal set; }
+
         public string SourcePath {
             get { return _dispatcher.SourcePath; }
         }
@@ -118,6 +124,7 @@ namespace IronRuby.Builtins {
         protected Proc(Proc/*!*/ proc)
             : this(proc.Kind, proc.Self, proc.LocalScope, proc.Dispatcher) {
             Converter = proc.Converter;
+            SymbolName = proc.SymbolName;
         }
 
         /// <summary>
@@ -332,8 +339,20 @@ namespace IronRuby.Builtins {
             );
 
             procDispatcher.SetMethod(block);
-            return new Proc(ProcKind.Proc, scope.SelfObject, scope, procDispatcher);
+            procDispatcher.ParameterSignature = SymbolProcSignature;
+
+            // MRI's symbol proc is a lambda: it reports #lambda? true, arity -2 and
+            // [[:req], [:rest]] for #parameters
+            return new Proc(ProcKind.Lambda, scope.SelfObject, scope, procDispatcher) { SymbolName = methodName };
         }
+
+        private static readonly RubyParameterSignature/*!*/ SymbolProcSignature = new RubyParameterSignature(
+            new[] {
+                new RubyParameterSignature.Parameter("req", null),
+                new RubyParameterSignature.Parameter("rest", null)
+            },
+            1, 0, 0, true, 0, false, false
+        );
 
         #endregion
 

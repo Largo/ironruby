@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -2056,11 +2056,11 @@ p Proc.new {}
 p method(:foo).to_proc          # TODO: source info not available
 p C.new {}                      
 "), @"
-#<Proc:0x*@*ProcPosition1.rb:9>
-#<Proc:0x*@*ProcPosition1.rb:10 (lambda)>
-#<Proc:0x*@*ProcPosition1.rb:11>
-#<Proc:0x*>
-#<C:0x*@*ProcPosition1.rb:13>
+#<Proc:0x* *ProcPosition1.rb:9>
+#<Proc:0x* *ProcPosition1.rb:10 (lambda)>
+#<Proc:0x* *ProcPosition1.rb:11>
+#<Proc:0x* (lambda)>
+#<C:0x* *ProcPosition1.rb:13>
 ", OutputFlags.Match);
         }
 
