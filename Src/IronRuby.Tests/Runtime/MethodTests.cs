@@ -692,7 +692,7 @@ class A
   alias_method :xxx, :foo           # should find foo
 end
 "), @"
-#<UnboundMethod: A(M)#foo>
+#<UnboundMethod: M#foo(bar)() Visibility1.rb:8>
 ");
         }
 
@@ -730,7 +730,7 @@ end
 
 C.new.foo
 ", @"
-#<UnboundMethod: C(A)#foo>
+#<UnboundMethod: A#foo() Visibility2A.rb:4>
 B::foo
 ");
         }
@@ -1190,9 +1190,9 @@ m[1,2]
 n[1,2]
 ");
             }, @"
-#<Method: C#foo>
-#<UnboundMethod: C#foo>
-#<Method: D(C)#foo>
+#<Method: C#foo Methods1.rb:3>
+#<UnboundMethod: C#foo Methods1.rb:3>
+#<Method: D(C)#foo Methods1.rb:3>
 3
 3
 ");

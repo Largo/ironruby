@@ -187,7 +187,10 @@ namespace IronRuby.Builtins {
         internal static MutableString/*!*/ ToS(RubyContext/*!*/ context, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
             RubyModule targetModule, string/*!*/ classDisplayName, bool isMissingMethod) {
 
-            RubyModule declaringModule = info.AliasOwner ?? info.DeclaringModule ?? targetModule;
+            // the module that holds the body, even for an alias: MRI's description of an alias
+            // names the module the original was written in and puts the original name in
+            // parentheses after the new one
+            RubyModule declaringModule = info.DeclaringModule ?? targetModule;
 
             MutableString result = MutableString.CreateMutable(context.GetIdentifierEncoding());
 

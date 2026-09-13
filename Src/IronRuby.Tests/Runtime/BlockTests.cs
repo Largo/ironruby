@@ -1829,18 +1829,25 @@ ok
 ");
         }
 
+        /// <summary>
+        /// Ruby 3.0 removed Proc.new's habit of adopting the enclosing method's block, so these
+        /// two now raise instead of producing that block.
+        /// </summary>
         public void ProcNew1() {
-            AssertOutput(delegate() {
-                CompilerTest(@"
+            TestOutput(@"
 def foo
   1.times { |x| $x = Proc.new }
 end
 
 y = lambda { puts 'foo' }
-foo(&y)
-p $x.object_id == y.object_id
+begin
+  foo(&y)
+rescue ArgumentError => e
+  puts e.message
+end
+", @"
+tried to create Proc object without a block
 ");
-            }, @"true");
         }
 
         public void ProcNew2() {
@@ -1853,12 +1860,13 @@ def foo
 end
 
 y = lambda { puts 'foo' }
-foo(&y)
-p $x.object_id == y.object_id
-p $x.class
+begin
+  foo(&y)
+rescue ArgumentError => e
+  puts e.message
+end
 ", @"
-false
-P
+tried to create Proc object without a block
 ");
         }
 
@@ -1917,13 +1925,14 @@ def foo
   P.new(*arg)
 end
 
-foo { puts 1 }
+begin
+  foo { puts 1 }
+rescue ArgumentError => e
+  puts e.message
+end
 ", @"
 arg
-[]
-NilClass
-P
-false
+tried to create Proc object without a block
 ");
         }
         
