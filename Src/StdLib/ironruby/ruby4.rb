@@ -5803,6 +5803,154 @@ module Process
     __spawn__(script, env, options[:unsetenv_others] ? true : false)
   end
 
+  # --- POSIX calls that come back as -errno ---------------------------------------
+  #
+  # Most of the Errno family is defined in Ruby further up this file, so there is no
+  # CLR class for the runtime to throw. Mapping the number here instead gives every
+  # one of them - ESRCH, EPERM, EINVAL and the rest - without any C# counterpart.
+
+  def self.__errno_class__(errno)
+    @errno_classes ||= Errno.constants.each_with_object({}) do |name, h|
+      klass = Errno.const_get(name)
+      number = (klass.const_get(:Errno) rescue nil) if klass.is_a?(Class)
+      h[number] ||= klass if number.is_a?(Integer)
+    end
+    @errno_classes[errno] || SystemCallError
+  end
+
+  def self.__check__(result, message = nil)
+    raise __errno_class__(-result), message if result.is_a?(Integer) && result < 0
+    result
+  end
+
+  # The CLR half of kill hands back -errno rather than throwing, for the same reason.
+  class << self
+    unless method_defined?(:__clr_kill__) || private_method_defined?(:__clr_kill__)
+      alias_method :__clr_kill__, :kill
+
+      def kill(signal, *pids)
+        Process.__check__(__clr_kill__(signal, *pids))
+      end
+    end
+  end
+
+  unless respond_to?(:getrlimit)
+    def getrlimit(resource)
+      resource = __rlimit_resource__(resource)
+      result = __getrlimit__(resource)
+      __check__(result) if result.is_a?(Integer)
+      result
+    end
+    module_function :getrlimit
+
+    def setrlimit(resource, soft, hard = nil)
+      resource = __rlimit_resource__(resource)
+      soft = __rlimit_value__(soft)
+      hard = hard.nil? ? soft : __rlimit_value__(hard)
+      __check__(__setrlimit__(resource, soft, hard))
+      nil
+    end
+    module_function :setrlimit
+
+    # MRI takes the number, or the constant's name with or without the RLIMIT_ prefix.
+    def __rlimit_resource__(resource)
+      case resource
+      when Integer then resource
+      when Symbol, String
+        name = resource.to_s
+        name = "RLIMIT_#{name}" unless name.start_with?("RLIMIT_")
+        unless const_defined?(name)
+          raise ArgumentError, "invalid resource name: #{resource}"
+        end
+        const_get(name)
+      else
+        unless resource.respond_to?(:to_int)
+          raise TypeError, "no implicit conversion of #{resource.class} into Integer"
+        end
+        value = resource.to_int
+        unless value.is_a?(Integer)
+          raise TypeError, "can't convert #{resource.class} to Integer"
+        end
+        value
+      end
+    end
+    module_function :__rlimit_resource__
+
+    def __rlimit_value__(value)
+      return value if value.is_a?(Integer)
+      unless value.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{value.class} into Integer"
+      end
+      value.to_int
+    end
+    module_function :__rlimit_value__
+  end
+
+  unless respond_to?(:getpgid)
+    def getpgid(pid)
+      __check__(__getpgid__(pid.to_int))
+    end
+    module_function :getpgid
+
+    def setpgid(pid, pgid)
+      __check__(__setpgid__(pid.to_int, pgid.to_int))
+      0
+    end
+    module_function :setpgid
+
+    def getsid(pid = 0)
+      __check__(__getsid__(pid.to_int))
+    end
+    module_function :getsid
+
+    def setsid
+      __check__(__setsid__)
+    end
+    module_function :setsid
+  end
+
+  unless respond_to?(:getpriority)
+    def getpriority(which, who)
+      __check__(__getpriority__(which.to_int, who.to_int))
+    end
+    module_function :getpriority
+
+    def setpriority(which, who, priority)
+      __check__(__setpriority__(which.to_int, who.to_int, priority.to_int))
+      0
+    end
+    module_function :setpriority
+  end
+
+  unless const_defined?(:Sys)
+    module Sys
+      def getuid;   Process.uid;  end
+      def geteuid;  Process.__geteuid__; end
+      def getgid;   Process.gid;  end
+      def getegid;  Process.__getegid__; end
+      def issetugid; Process.__issetugid__; end
+      module_function :getuid, :geteuid, :getgid, :getegid, :issetugid
+    end
+  end
+
+  unless const_defined?(:UID)
+    module UID
+      def rid;  Process.uid; end
+      def eid;  Process.euid; end
+      def sid_available?; false; end
+      module_function :rid, :eid, :sid_available?
+    end
+  end
+
+  unless const_defined?(:GID)
+    module GID
+      def rid;  Process.gid; end
+      def eid;  Process.egid; end
+      def sid_available?; false; end
+      module_function :rid, :eid, :sid_available?
+    end
+  end
+
   def self.waitpid2(pid = -1, flags = 0)
     __waitpid__(pid.to_int, flags.to_int)
   end

@@ -31,7 +31,7 @@ namespace IronRuby.Builtins {
     /// Process builtin module
     /// </summary>
     [RubyModule("Process", BuildConfig = "FEATURE_PROCESS")]
-    public static class RubyProcess {
+    public static partial class RubyProcess {
         #region Utils
 
         internal static Process/*!*/ CreateProcess(RubyContext/*!*/ context, MutableString/*!*/ command, MutableString[]/*!*/ args) {
@@ -444,7 +444,11 @@ namespace IronRuby.Builtins {
                     throw new SignalException((name != null) ? "SIG" + name : "SIG" + signal);
                 }
 
-                PosixSignals.Kill(target, signal);
+                int error = PosixSignals.Kill(target, signal);
+                if (error < 0) {
+                    // Negative means -errno; the prelude's Process.kill turns it into an Errno class.
+                    return ScriptingRuntimeHelpers.Int32ToObject(error);
+                }
             }
             return ScriptingRuntimeHelpers.Int32ToObject(pids.Length);
         }

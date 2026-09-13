@@ -122,20 +122,21 @@ namespace IronRuby.Builtins {
             }
         }
 
-        internal static void Kill(int pid, int signal) {
+        /// <summary>
+        /// Sends the signal and returns 0, or -errno. Errno::ESRCH and most of its siblings are
+        /// defined in Ruby by the prelude and have no CLR type to throw, so the number goes back
+        /// to the prelude, which knows how to turn it into the right class.
+        /// </summary>
+        internal static int Kill(int pid, int signal) {
             if (SysKill(pid, signal) == 0) {
-                return;
+                return 0;
             }
 
             int error = Marshal.GetLastWin32Error();
-            switch (error) {
-                // Errno::ESRCH is one of the classes the prelude defines in Ruby, so there is no CLR
-                // type to throw here; SystemCallError with the right message is as close as we get.
-                case ESRCH: throw RubyExceptions.CreateSystemCallError("No such process");
-                case EPERM: throw new Errno.OperationNotPermittedError();
-                case EINVAL: throw RubyExceptions.CreateArgumentError("invalid signal number ({0})", signal);
-                default: throw RubyExceptions.CreateSystemCallError("kill({0}, {1}) failed with errno {2}", pid, signal, error);
+            if (error == EINVAL) {
+                throw RubyExceptions.CreateArgumentError("invalid signal number ({0})", signal);
             }
+            return -(error == 0 ? 1 : error);
         }
 
         #endregion

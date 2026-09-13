@@ -6754,6 +6754,61 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyProcess.Children)
             );
             
+            DefineLibraryMethod(module, "__getegid__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.Builtins.RubyProcess.GetEgid)
+            );
+            
+            DefineLibraryMethod(module, "__geteuid__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.Builtins.RubyProcess.GetEuid)
+            );
+            
+            DefineLibraryMethod(module, "__getpgid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.GetPgid)
+            );
+            
+            DefineLibraryMethod(module, "__getpriority__", 0x61, 
+                0x00030000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.GetPriority)
+            );
+            
+            DefineLibraryMethod(module, "__getrlimit__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Object>(IronRuby.Builtins.RubyProcess.GetRLimit)
+            );
+            
+            DefineLibraryMethod(module, "__getsid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.GetSid)
+            );
+            
+            DefineLibraryMethod(module, "__issetugid__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object>(IronRuby.Builtins.RubyProcess.IsSetUgid)
+            );
+            
+            DefineLibraryMethod(module, "__setpgid__", 0x61, 
+                0x00030000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetPgid)
+            );
+            
+            DefineLibraryMethod(module, "__setpriority__", 0x61, 
+                0x00070000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetPriority)
+            );
+            
+            DefineLibraryMethod(module, "__setrlimit__", 0x61, 
+                0x00070000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int64, System.Int64, System.Int32>(IronRuby.Builtins.RubyProcess.SetRLimit)
+            );
+            
+            DefineLibraryMethod(module, "__setsid__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.Builtins.RubyProcess.SetSid)
+            );
+            
             DefineLibraryMethod(module, "__spawn__", 0x61, 
                 0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash, System.Boolean, System.Int32>(IronRuby.Builtins.RubyProcess.SpawnPrimitive)
