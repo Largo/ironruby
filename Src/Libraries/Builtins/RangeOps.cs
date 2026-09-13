@@ -256,16 +256,19 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
+            int selfEndToOtherEnd;
             if (self.End == null) {
-                return true;
+                // An unbounded end sits past any bounded one; two unbounded ends finish in
+                // the same place, so only the exclusivity below can still separate them -
+                // which is why (0...) does not cover (4..).
+                selfEndToOtherEnd = (other.End == null) ? 0 : 1;
+            } else {
+                object result = compare.Target(compare, self.End, other.End);
+                if (result == null) {
+                    return false;
+                }
+                selfEndToOtherEnd = Protocols.ConvertCompareResult(comparisonStorage, result);
             }
-
-            object result = compare.Target(compare, self.End, other.End);
-            if (result == null) {
-                return false;
-            }
-
-            int selfEndToOtherEnd = Protocols.ConvertCompareResult(comparisonStorage, result);
             if (self.ExcludeEnd == other.ExcludeEnd) {
                 return selfEndToOtherEnd >= 0;
             }

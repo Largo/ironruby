@@ -429,7 +429,12 @@ class Range
   # can be counted down from forever, which is how a beginless range works;
   # anything else has to be materialised first.
   def reverse_each(&block)
-    return ::Enumerator.new(-> { __reverse_each_size__ }) { |y| reverse_each { |x| y << x } } unless block
+    unless block
+      range = self
+      enum = ::Enumerator.new { |y| range.reverse_each { |x| y << x } }
+      enum.__set_size__(lambda { range.__send__(:__reverse_each_size__) })
+      return enum
+    end
     to = self.end
     raise TypeError, "can't iterate from NilClass" if to.nil?
     from = self.begin
@@ -452,14 +457,18 @@ class Range
     from = self.begin
     to = self.end
     raise TypeError, "can't iterate from NilClass" if to.nil?
-    if to.is_a?(::Integer)
-      return ::Float::INFINITY if from.nil?
-      return size if from.is_a?(::Integer)
+    if from.is_a?(::Integer)
+      size
+    elsif from.nil?
+      return ::Float::INFINITY if to.is_a?(::Integer)
+      raise TypeError, "can't iterate from #{to.class}"
+    elsif to.is_a?(::Integer)
       raise TypeError, "can't iterate from Integer"
+    elsif from.respond_to?(:succ)
+      nil
+    else
+      raise TypeError, "can't iterate from #{from.class}"
     end
-    raise TypeError, "can't iterate from #{to.class}" if from.nil?
-    return nil if from.respond_to?(:succ)
-    raise TypeError, "can't iterate from #{from.class}"
   end
   private :__reverse_each_size__
 
@@ -9027,7 +9036,7 @@ class Range
   def include?(value)
     b = self.begin
     e = self.end
-    if value.is_a?(::Numeric) || __linear__(b) || __linear__(e) ||
+    if __linear__(value) || __linear__(b) || __linear__(e) ||
        __integerish__(b) || __integerish__(e)
       return cover?(value)
     end
@@ -9056,7 +9065,13 @@ class Range
   # MRI's rb_str_include_range_p: single ASCII characters compare directly,
   # everything else walks #succ and looks for an equal string.
   def __string_include__(b, e, value)
-    return false unless value.is_a?(::String)
+    unless value.is_a?(::String)
+      return false unless value.respond_to?(:to_str)
+      value = value.to_str
+      unless value.is_a?(::String)
+        ::Kernel.raise(::TypeError, "can't convert #{value.class} to String")
+      end
+    end
     if b.bytesize == 1 && e.bytesize == 1 && b.ascii_only? && e.ascii_only? && value.ascii_only?
       return false unless value.bytesize == 1
       return true if b <= value && value < e
@@ -9136,13 +9151,13 @@ class Range
   def __bsearch_test__(block, value)
     r = block.call(value)
     case r
-    when true then true
-    when false, nil then false
-    when ::Integer then r == 0 ? :found : r < 0
+    when true then :satisfied
+    when false, nil then :greater
+    when ::Integer then r == 0 ? :found : (r < 0 ? :smaller : :greater)
     when ::Numeric
       c = (r <=> 0)
       ::Kernel.raise(::ArgumentError, "comparison of #{r.class} with 0 failed") if c.nil?
-      c == 0 ? :found : c < 0
+      c == 0 ? :found : (c < 0 ? :smaller : :greater)
     else
       ::Kernel.raise(::TypeError, "wrong argument type #{r.class} (must be numeric, true, false or nil)")
     end
@@ -9158,13 +9173,13 @@ class Range
       span = 1
       if high.nil?
         high = low + span
-        while __bsearch_test__(block, high) == false
+        while __bsearch_test__(block, high) == :greater
           span *= 2
           high = low + span
         end
       else
         low = high - span
-        while __bsearch_test__(block, low) != false
+        while __bsearch_test__(block, low) != :greater
           span *= 2
           low = high - span
         end
@@ -9175,7 +9190,8 @@ class Range
       mid = low + (high - low) / 2
       case __bsearch_test__(block, mid)
       when :found then return mid
-      when true then result = mid; high = mid - 1
+      when :satisfied then result = mid; high = mid - 1
+      when :smaller then high = mid - 1
       else low = mid + 1
       end
     end
@@ -9208,7 +9224,7 @@ class Range
     low = __double_as_int64__(b.nil? ? -::Float::INFINITY : b.to_f)
     high = __double_as_int64__(e.nil? ? ::Float::INFINITY : e.to_f)
     high += 1 unless exclude_end?
-    org_high = high
+    satisfied = nil
     while low < high
       mid = if (high < 0) == (low < 0)
               low + ((high - low) / 2)
@@ -9220,12 +9236,14 @@ class Range
       value = __int64_as_double__(mid)
       case __bsearch_test__(block, value)
       when :found then return value
-      when true then high = mid
+      when :satisfied then satisfied = value; high = mid
+      when :smaller then high = mid
       else low = mid + 1
       end
     end
-    return nil if low == org_high
-    __int64_as_double__(low)
+    # find-minimum mode answers the smallest element the block accepted; find-any
+    # mode has already returned, so reaching here means it never found its zero.
+    satisfied
   end
   private :__bsearch_float__
 
