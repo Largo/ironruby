@@ -5456,6 +5456,20 @@ class IO
     enc ? result.force_encoding(enc) : result
   end
 
+  # set_encoding takes "external:internal" in one string as well as the two
+  # separately; the C# one only understood a single encoding name and answered
+  # "unknown encoding name - utf-8:ISO-8859-1".
+  alias_method :__ir_set_encoding__, :set_encoding
+
+  def set_encoding(*args)
+    if args.size >= 1 && args[0].is_a?(::String) && args[0].include?(":")
+      external, internal = args[0].split(":", 2)
+      rest = args[1..-1] || []
+      return __ir_set_encoding__(external, internal, *rest)
+    end
+    __ir_set_encoding__(*args)
+  end
+
   # Reads a byte-order mark, and if there is one, adopts the encoding it names
   # and leaves the stream positioned after it. Answers nil when there is none.
   BOMS__ = [
