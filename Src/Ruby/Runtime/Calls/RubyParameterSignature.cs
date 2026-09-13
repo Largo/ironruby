@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Text;
 using IronRuby.Builtins;
 
 namespace IronRuby.Runtime.Calls {
@@ -93,6 +94,37 @@ namespace IronRuby.Runtime.Calls {
             }
             int max = _leadingCount + _optionalCount + _postCount + ((_hasKeywords || _hasKeywordRest) ? 1 : 0);
             return min == max ? min : -min - 1;
+        }
+
+        /// <summary>
+        /// How Method#to_s spells the parameter list: "(a, b=..., *c, &blk)". MRI writes an
+        /// anonymous block parameter as "..." and collapses the `*, **, &` triple that `def m(...)`
+        /// produces into the same "...".
+        /// </summary>
+        public string/*!*/ ToParameterListString() {
+            var result = new StringBuilder("(");
+            bool first = true;
+            foreach (var parameter in _parameters) {
+                string text;
+                switch (parameter.Kind) {
+                    case "req": text = parameter.Name ?? "_"; break;
+                    case "opt": text = parameter.Name + "=..."; break;
+                    case "rest": text = "*" + (parameter.Name == "*" ? null : parameter.Name); break;
+                    case "keyreq": text = parameter.Name + ":"; break;
+                    case "key": text = parameter.Name + ": ..."; break;
+                    case "keyrest": text = "**" + (parameter.Name == "**" ? null : parameter.Name); break;
+                    case "nokey": text = "**nil"; break;
+                    case "block": text = parameter.Name == "&" ? "..." : "&" + parameter.Name; break;
+                    default: continue;
+                }
+                if (!first) {
+                    result.Append(", ");
+                }
+                result.Append(text);
+                first = false;
+            }
+            result.Append(')');
+            return result.ToString() == "(*, **, ...)" ? "(...)" : result.ToString();
         }
 
         /// <summary>

@@ -78,9 +78,13 @@ namespace IronRuby.Builtins {
             return new RuleGenerator(RuleGenerators.MethodCall);
         }
 
-        [RubyMethod("to_s")]
+        [RubyMethod("to_s"), RubyMethod("inspect")]
         public static MutableString/*!*/ ToS(RubyContext/*!*/ context, RubyMethod/*!*/ self) {
-            return UnboundMethod.ToS(context, self.Name, self.Info.DeclaringModule, self.GetTargetClass(), "Method");
+            // a method looked up on a class or a module was looked up on its singleton class,
+            // whether or not one had been created yet, and MRI's description says so
+            var module = self.Target as RubyModule;
+            return UnboundMethod.ToS(context, self.Name, self.Info,
+                module != null ? module.GetOrCreateSingletonClass() : self.GetTargetClass(), "Method");
         }
 
         [RubyMethod("to_proc")]

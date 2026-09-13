@@ -125,13 +125,28 @@ namespace IronRuby.Builtins {
             return context.EncodeIdentifier(self._info.OriginalName ?? self._name);
         }
 
-        [RubyMethod("to_s")]
+        [RubyMethod("to_s"), RubyMethod("inspect")]
         public static MutableString/*!*/ ToS(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
-            return ToS(context, self.Name, self._info.DeclaringModule, self._targetConstraint, "UnboundMethod");
+            return ToS(context, self.Name, self._info, null, "UnboundMethod");
         }
 
-        internal static MutableString/*!*/ ToS(RubyContext/*!*/ context, string/*!*/ methodName, RubyModule/*!*/ declaringModule, RubyModule/*!*/ targetModule, 
-            string/*!*/ classDisplayName) {
+        /// <summary>
+        /// MRI's description is
+        ///
+        ///   #&lt;Method: Origin(Owner)#name(original_name)(parameters) file:line&gt;
+        ///
+        /// of which this used to print only the first half.  The origin is the module the method
+        /// was looked up on and is dropped when it is the owner itself; an UnboundMethod has no
+        /// receiver to have looked it up on, so it prints the owner alone.  A method that lives in
+        /// a singleton class is spelled "object.name" instead, and a singleton class that a method
+        /// merely passed through on its way to an ancestor is replaced by the object's real class,
+        /// unless the object is a class or a module - which is why String.method(:include) still
+        /// says #&lt;Class:String&gt;.
+        /// </summary>
+        internal static MutableString/*!*/ ToS(RubyContext/*!*/ context, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
+            RubyModule targetModule, string/*!*/ classDisplayName) {
+
+            RubyModule declaringModule = info.AliasOwner ?? info.DeclaringModule ?? targetModule;
 
             MutableString result = MutableString.CreateMutable(context.GetIdentifierEncoding());
 
@@ -139,17 +154,51 @@ namespace IronRuby.Builtins {
             result.Append(classDisplayName);
             result.Append(": ");
 
-            if (ReferenceEquals(targetModule, declaringModule)) {
-                result.Append(declaringModule.GetDisplayName(context, true));
+            RubyClass declaringSingleton = declaringModule as RubyClass;
+            if (targetModule != null && declaringSingleton != null && declaringSingleton.IsSingletonClass) {
+                var attached = declaringSingleton.SingletonClassOf;
+                var attachedModule = attached as RubyModule;
+                result.Append(attachedModule != null
+                    ? attachedModule.GetDisplayName(context, false)
+                    : context.Inspect(attached));
+                result.Append('.');
             } else {
-                result.Append(targetModule.GetDisplayName(context, true));
+                RubyModule origin = targetModule ?? declaringModule;
+                var originSingleton = origin as RubyClass;
+                if (originSingleton != null && originSingleton.IsSingletonClass && !(originSingleton.SingletonClassOf is RubyModule)) {
+                    origin = context.GetClassOf(originSingleton.SingletonClassOf);
+                }
+
+                result.Append(origin.GetDisplayName(context, false));
+                if (!ReferenceEquals(origin, declaringModule)) {
+                    result.Append('(');
+                    result.Append(declaringModule.GetDisplayName(context, false));
+                    result.Append(')');
+                }
+                result.Append('#');
+            }
+
+            result.Append(methodName);
+
+            if (info.OriginalName != null && info.OriginalName != methodName) {
                 result.Append('(');
-                result.Append(declaringModule.GetDisplayName(context, true));
+                result.Append(info.OriginalName);
                 result.Append(')');
             }
 
-            result.Append('#');
-            result.Append(methodName);
+            var signature = info.GetParameterSignature();
+            if (signature != null) {
+                result.Append(signature.ToParameterListString());
+            }
+
+            var location = GetSourceLocation(info);
+            if (location != null) {
+                result.Append(' ');
+                result.Append(location[0] as MutableString);
+                result.Append(':');
+                result.Append(location[1].ToString());
+            }
+
             result.Append('>');
             return result; 
         }

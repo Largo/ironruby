@@ -2682,7 +2682,15 @@ namespace IronRuby.Builtins {
 
                     RubyModule module = singletonOf as RubyModule;
 
-                    if (module == null || !module.IsSingletonClass && module.Name == null) {
+                    if (module != null && !module.IsSingletonClass && module.Name == null) {
+                        // the singleton class of an anonymous class or module: the inner half is
+                        // that module's own description, "#<Class:0x...>", not the name of its
+                        // superclass - which for a singleton class is itself nameless
+                        result.Append(module.GetDisplayName(context, false));
+                        break;
+                    }
+
+                    if (module == null) {
                         nestings++;
                         result.Append("#<");
                         result.Append(c.SuperClass.GetName(context));
