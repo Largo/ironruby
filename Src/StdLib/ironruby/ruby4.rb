@@ -7637,3 +7637,32 @@ begin
   Object.const_set(:ARGF, argf_instance)
 rescue ::Exception
 end
+
+# Marshal support for the numeric tower. MRI dumps Rational and Complex through
+# #marshal_dump/#marshal_load (a two element array), not as plain objects with
+# instance variables, and the loaded value is frozen like every other numeric.
+class Rational
+  def marshal_dump
+    [numerator, denominator]
+  end
+
+  def marshal_load(pair)
+    instance_variable_set(:@numerator, pair[0])
+    instance_variable_set(:@denominator, pair[1])
+    freeze
+    self
+  end
+end
+
+class Complex
+  def marshal_dump
+    [real, imaginary]
+  end
+
+  def marshal_load(pair)
+    instance_variable_set(:@real, pair[0])
+    instance_variable_set(:@image, pair[1])
+    freeze
+    self
+  end
+end

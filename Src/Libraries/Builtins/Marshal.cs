@@ -308,12 +308,19 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteSymbol(string/*!*/ value, RubyEncoding/*!*/ encoding) {
+                WriteSymbol(value, encoding.StrictEncoding.GetBytes(value), encoding);
+            }
+
+            private void WriteSymbol(RubySymbol/*!*/ symbol) {
+                WriteSymbol(symbol.ToString(), symbol.String.ToByteArray(), symbol.Encoding);
+            }
+
+            private void WriteSymbol(string/*!*/ value, byte[]/*!*/ data, RubyEncoding/*!*/ encoding) {
                 int position;
                 if (_symbols.TryGetValue(value, out position)) {
                     _writer.Write((byte)';');
                     WriteInt32(position);
                 } else {
-                    byte[] data = encoding.StrictEncoding.GetBytes(value);
                     // MRI only records an encoding for a symbol whose name is not ASCII only.
                     bool writeEncoding = NeedsEncodingIVar(encoding) && !IsAscii(data);
                     if (writeEncoding) {
@@ -534,7 +541,7 @@ namespace IronRuby.Builtins {
                 } else if (obj is int) {
                     WriteFixnum((int)obj);
                 } else if ((sym = obj as RubySymbol) != null) {
-                    WriteSymbol(sym.ToString(), sym.Encoding);
+                    WriteSymbol(sym);
                 } else {
                     int objectRef;
                     if (_objects.TryGetValue(obj, out objectRef)) {
@@ -547,18 +554,20 @@ namespace IronRuby.Builtins {
                         bool implementsDump = _context.ResolveMethod(obj, "_dump", VisibilityContext.AllVisible).Found;
                         bool implementsMarshalDump = _context.ResolveMethod(obj, "marshal_dump", VisibilityContext.AllVisible).Found;
 
-                        if (implementsDump) {
+                        if (implementsMarshalDump) {
+                            _objects[obj] = _objects.Count;
+                            WriteUsingMarshalDump(obj);
+                        } else if (implementsDump) {
                             // MRI indexes the object *after* whatever the string returned by #_dump pulls in.
                             WriteUsingDump(obj);
                             _objects[obj] = _objects.Count;
-                        } else if (implementsMarshalDump) {
-                            _objects[obj] = _objects.Count;
-                            WriteUsingMarshalDump(obj);
                         } else {
                             objectRef = _objects.Count;
                             _objects[obj] = objectRef;
 
-                            CheckSingleton(obj);
+                            if (!(obj is RubyModule)) {
+                                CheckSingleton(obj);
+                            }
 
                             RubyEncoding encoding = GetMarshalEncoding(obj);
                             string[] instanceNames = _context.GetInstanceVariableNames(obj);
@@ -577,7 +586,9 @@ namespace IronRuby.Builtins {
                                 _writer.Write((byte)'I');
                             }
 
-                            WriteExtendedModules(obj);
+                            if (!(obj is RubyModule)) {
+                                WriteExtendedModules(obj);
+                            }
 
                             if (obj is double) {
                                 WriteFloat((double)obj);

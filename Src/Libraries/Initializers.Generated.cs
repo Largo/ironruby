@@ -6983,8 +6983,10 @@ namespace IronRuby.Builtins {
         
         private static void LoadRegexp_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
             SetBuiltinConstant(module, "EXTENDED", IronRuby.Builtins.RegexpOps.EXTENDED);
+            SetBuiltinConstant(module, "FIXEDENCODING", IronRuby.Builtins.RegexpOps.FIXEDENCODING);
             SetBuiltinConstant(module, "IGNORECASE", IronRuby.Builtins.RegexpOps.IGNORECASE);
             SetBuiltinConstant(module, "MULTILINE", IronRuby.Builtins.RegexpOps.MULTILINE);
+            SetBuiltinConstant(module, "NOENCODING", IronRuby.Builtins.RegexpOps.NOENCODING);
             
         }
         

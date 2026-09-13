@@ -173,6 +173,18 @@ namespace IronRuby.Builtins {
         public const int MULTILINE = (int)RubyRegexOptions.Multiline;
 
         /// <summary>
+        /// Set on a regexp whose encoding is fixed by its source or by an /u, /e or /s modifier.
+        /// </summary>
+        [RubyConstant]
+        public const int FIXEDENCODING = (int)RubyRegexOptions.FIXED;
+
+        /// <summary>
+        /// Set by the /n modifier: the regexp matches bytes rather than characters.
+        /// </summary>
+        [RubyConstant]
+        public const int NOENCODING = 32;
+
+        /// <summary>
         /// Returns "(?{enabled-options}-{disabled-options}:{pattern-with-forward-slash-escaped})".
         /// Doesn't escape forward slashes that are already escaped.
         /// </summary>
