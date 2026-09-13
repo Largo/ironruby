@@ -85,8 +85,23 @@ namespace IronRuby.Builtins {
             return new RuleGenerator(RuleGenerators.InstanceConstructor);
         }
 
+        /// <summary>
+        /// A Regexp is initialized once. MRI rejects a second #initialize rather than quietly
+        /// rewriting a pattern other code may already have matched with.
+        /// </summary>
+        private static void RequireUninitialized(RubyContext/*!*/ context, RubyRegex/*!*/ self) {
+            if (context.IsObjectFrozen(self)) {
+                throw RubyExceptions.CreateObjectFrozenError(context, self);
+            }
+
+            if (self.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("already initialized regexp");
+            }
+        }
+
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyRegex/*!*/ Reinitialize(RubyRegex/*!*/ self, [NotNull]RubyRegex/*!*/ other) {
+        public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self, [NotNull]RubyRegex/*!*/ other) {
+            RequireUninitialized(context, self);
             self.Set(other.Pattern, other.Options);
             return self;
         }
@@ -96,7 +111,7 @@ namespace IronRuby.Builtins {
             [NotNull]RubyRegex/*!*/ regex, int options, [Optional]object encoding) {
 
             ReportParametersIgnoredWarning(context, encoding);
-            return Reinitialize(self, regex);
+            return Reinitialize(context, self, regex);
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
@@ -104,13 +119,14 @@ namespace IronRuby.Builtins {
             [NotNull]RubyRegex/*!*/ regex, [DefaultParameterValue(null)]object ignoreCase, [Optional]object encoding) {
 
             ReportParametersIgnoredWarning(context, encoding);
-            return Reinitialize(self, regex);
+            return Reinitialize(context, self, regex);
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
 
+            RequireUninitialized(context, self);
             self.Set(pattern, MakeOptions(context, options, encoding));
             return self;
         }
@@ -284,12 +300,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("fixed_encoding?")]
         public static bool IsFixedEncoding(RubyRegex/*!*/ self) {
-            if ((self.Options & RubyRegexOptions.FIXED) != 0) {
-                return false;
-            }
-
-            return (self.Options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0
-                || self.Encoding != RubyEncoding.Ascii;
+            return self.IsFixedEncoding;
         }
 
         [RubyMethod("names")]
@@ -329,9 +340,42 @@ namespace IronRuby.Builtins {
             return (self.Options & RubyRegexOptions.IgnoreCase) != 0;
         }
 
-        [RubyMethod("match")]
-        public static MatchData Match(RubyScope/*!*/ scope, RubyRegex/*!*/ self, [DefaultProtocol]MutableString str) {
+        /// <summary>
+        /// Plain match used by the CLR callers (String#=~, String#index, ...): no block, no start
+        /// offset, and it still sets $~.
+        /// </summary>
+        internal static MatchData Match(RubyScope/*!*/ scope, RubyRegex/*!*/ self, MutableString str) {
             return RubyRegex.SetCurrentMatchData(scope, self, str);
+        }
+
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, RubyRegex/*!*/ self,
+            [DefaultProtocol]MutableString str, [DefaultProtocol, DefaultParameterValue(0)]int start) {
+
+            if (!self.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("uninitialized Regexp");
+            }
+
+            MatchData match;
+            if (str == null) {
+                match = null;
+            } else {
+                int length = str.GetCharCount();
+                if (start < 0) {
+                    start += length;
+                }
+                match = (start >= 0 && start <= length) ? self.Match(str, start, false) : null;
+            }
+
+            scope.GetInnerMostClosureScope().CurrentMatch = match;
+
+            if (match != null && block != null) {
+                object blockResult;
+                block.Yield(match, out blockResult);
+                return blockResult;
+            }
+
+            return match;
         }
 
         [RubyMethod("hash")]
@@ -435,8 +479,34 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("last_match", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ LastMatch(RubyScope/*!*/ scope, RubyClass/*!*/ self, [DefaultProtocol]int groupIndex) {
-            return scope.GetInnerMostClosureScope().CurrentMatch.GetGroupValue(groupIndex);
+        public static MutableString LastMatch(ConversionStorage<int>/*!*/ fixnumCast, RubyScope/*!*/ scope, RubyClass/*!*/ self,
+            object groupIndex) {
+
+            MatchData match = scope.GetInnerMostClosureScope().CurrentMatch;
+            if (match == null) {
+                // With no match at all MRI answers nil for any argument, without converting it.
+                return null;
+            }
+
+            string name = GroupName(groupIndex);
+            if (name != null) {
+                if (!match.HasNamedGroup(name)) {
+                    throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", name);
+                }
+                return match.GetNamedGroupValue(name);
+            }
+
+            return match.GetGroupValue(Protocols.CastToFixnum(fixnumCast, groupIndex));
+        }
+
+        private static string GroupName(object groupIndex) {
+            var symbol = groupIndex as RubySymbol;
+            if (symbol != null) {
+                return symbol.ToString();
+            }
+
+            var str = groupIndex as MutableString;
+            return str != null ? str.ToString() : null;
         }
 
         [RubyMethod("union", RubyMethodAttributes.PublicSingleton)]

@@ -411,9 +411,40 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        /// <summary>
+        /// Whether the regexp can only match strings of one particular encoding: an encoding
+        /// modifier other than /n was given, or the pattern itself isn't ASCII only.
+        /// </summary>
+        public bool IsFixedEncoding {
+            get {
+                if ((_options & RubyRegexOptions.FIXED) != 0) {
+                    return false;
+                }
+
+                return (_options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0
+                    || Encoding != RubyEncoding.Ascii;
+            }
+        }
+
+        // The flags that make two regexps behave differently. /n is not one of them: it only says
+        // the pattern's bytes are not to be reinterpreted, so // and //n are the same regexp, while
+        // /abc/u and /abc/n differ because only the former pins an encoding (see IsFixedEncoding).
+        private const RubyRegexOptions BehaviouralOptions =
+            RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline;
+
         public bool Equals(RubyRegex other) {
-            return ReferenceEquals(this, other) 
-                || other != null && _options.Equals(other._options) && _pattern.Equals(other._pattern);
+            return ReferenceEquals(this, other)
+                || other != null
+                && (_options & BehaviouralOptions) == (other._options & BehaviouralOptions)
+                && IsFixedEncoding == other.IsFixedEncoding
+                && Encoding == other.Encoding
+                && PatternEquals(_pattern, other._pattern);
+        }
+
+        private static bool PatternEquals(MutableString/*!*/ x, MutableString/*!*/ y) {
+            // /n keeps the pattern as binary where the same literal without it keeps the source
+            // encoding, so the two hold the same characters in differently tagged strings.
+            return x.Equals(y) || x.IsAscii() && y.IsAscii() && x.ToString() == y.ToString();
         }
 
         public override bool Equals(object other) {
@@ -421,7 +452,8 @@ namespace IronRuby.Builtins {
         }
 
         public override int GetHashCode() {
-            return _pattern.GetHashCode() ^ _options.GetHashCode();
+            int pattern = _pattern.IsAscii() ? _pattern.ToString().GetHashCode() : _pattern.GetHashCode();
+            return pattern ^ (int)(_options & BehaviouralOptions);
         }
 
         public static RegexOptions ToClrOptions(RubyRegexOptions options) {
@@ -616,6 +648,9 @@ namespace IronRuby.Builtins {
             AppendEscapeForwardSlash(result, _pattern);
             result.Append('/');
             AppendOptionString(result, true);
+            if ((_options & RubyRegexOptions.FIXED) != 0) {
+                result.Append('n');
+            }
             return result;
         }
 
@@ -662,7 +697,14 @@ namespace IronRuby.Builtins {
                     return i;
                 }
 
-                if (pattern.GetChar(i - 1) != '\\') {
+                // An odd number of backslashes escapes the slash; an even number (\\/) does not,
+                // so that pattern doesn't get a third backslash added to it.
+                int backslashes = 0;
+                for (int j = i - 1; j >= 0 && pattern.GetChar(j) == '\\'; j--) {
+                    backslashes++;
+                }
+
+                if (backslashes % 2 == 0) {
                     return i;
                 }
 
@@ -677,7 +719,7 @@ namespace IronRuby.Builtins {
             int i = SkipToUnescapedForwardSlash(pattern, patternLength, 0);
             while (i >= 0) {
                 Debug.Assert(i < patternLength);
-                Debug.Assert(pattern.GetChar(i) == '/' && (i == 0 || pattern.GetChar(i - 1) != '\\'));
+                Debug.Assert(pattern.GetChar(i) == '/');
 
                 result.Append(pattern, first, i - first);
                 result.Append('\\');

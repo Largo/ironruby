@@ -182,6 +182,12 @@ namespace IronRuby.Builtins {
             return NamedGroupSuccess(name) ? _match.Groups[name].Length : -1;
         }
 
+        public MutableString GetNamedGroupValue(string/*!*/ name) {
+            return NamedGroupSuccess(name)
+                ? _originalString.GetSlice(GetNamedGroupStart(name), GetNamedGroupLength(name)).TaintBy(this)
+                : null;
+        }
+
         public int GetGroupStart(int groupIndex) {
             ContractUtils.Requires(groupIndex >= 0);
             return _match.Groups[groupIndex].Index;
