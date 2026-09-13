@@ -77,8 +77,11 @@ namespace IronRuby.Builtins {
         }
 
         internal static bool NormalizeRange(ConversionStorage<int>/*!*/ fixnumCast, int listCount, Range/*!*/ range, out int begin, out int count) {
-            begin = Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = Protocols.CastToFixnum(fixnumCast, range.End);
+            // A beginless range starts at 0 and an endless one runs to the end; both
+            // endpoints became nil-able in 2.6/2.7 and used to raise TypeError here.
+            begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            bool endless = range.End == null;
+            int end = endless ? listCount : Protocols.CastToFixnum(fixnumCast, range.End);
 
             begin = NormalizeIndex(listCount, begin);
 
@@ -87,9 +90,14 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            end = NormalizeIndex(listCount, end);
+            if (!endless) {
+                end = NormalizeIndex(listCount, end);
+            }
 
-            count = range.ExcludeEnd ? end - begin : end - begin + 1;
+            count = (range.ExcludeEnd && !endless) ? end - begin : end - begin + 1;
+            if (endless) {
+                count = listCount - begin;
+            }
             return true;
         }
 
@@ -169,10 +177,12 @@ namespace IronRuby.Builtins {
         }
 
         private static IList/*!*/ CreateResultArray(UnaryOpStorage/*!*/ allocateStorage, IList/*!*/ list) {
-            // RubyArray:
+            // Since Ruby 3.0 none of these methods hand back the receiver's subclass:
+            // MyArray[1, 2, 3].reverse, #uniq, #flatten, #[0, 2] and the rest are all
+            // plain Arrays.
             var array = list as RubyArray;
             if (array != null) {
-                return array.CreateInstance();
+                return new RubyArray();
             }
             
             // interop - call a default ctor to get an instance:
@@ -622,12 +632,18 @@ namespace IronRuby.Builtins {
         }
 
         private static void RangeToStartAndCount(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length, out int start, out int count) {
-            start = Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = Protocols.CastToFixnum(fixnumCast, range.End);
+            start = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            bool endless = range.End == null;
+            int end = endless ? length : Protocols.CastToFixnum(fixnumCast, range.End);
 
             start = start < 0 ? start + length : start;
             if (start < 0) {
                 throw RubyExceptions.CreateRangeError("{0}..{1} out of range", start, end);
+            }
+
+            if (endless) {
+                count = Math.Max(length - start, 0);
+                return;
             }
 
             end = end < 0 ? end + length : end;
@@ -1034,9 +1050,12 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fill")]
         public static IList/*!*/ Fill(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, object obj, [NotNull]Range/*!*/ range) {
-            int begin = NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.Begin));
-            int end = NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.End));
-            int length = Math.Max(0, end - begin + (range.ExcludeEnd ? 0 : 1));
+            int begin = (range.Begin == null) ? 0 : NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.Begin));
+            bool endless = range.End == null;
+            int end = endless ? self.Count - 1 : NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.End));
+            int length = endless
+                ? Math.Max(0, self.Count - begin)
+                : Math.Max(0, end - begin + (range.ExcludeEnd ? 0 : 1));
 
             return Fill(self, obj, begin, length);
         }
@@ -1091,9 +1110,12 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fill")]
         public static object Fill(ConversionStorage<int>/*!*/ fixnumCast, [NotNull]BlockParam/*!*/ block, IList/*!*/ self, [NotNull]Range/*!*/ range) {
-            int begin = NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.Begin));
-            int end = NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.End));
-            int length = Math.Max(0, end - begin + (range.ExcludeEnd ? 0 : 1));
+            int begin = (range.Begin == null) ? 0 : NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.Begin));
+            bool endless = range.End == null;
+            int end = endless ? self.Count - 1 : NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.End));
+            int length = endless
+                ? Math.Max(0, self.Count - begin)
+                : Math.Max(0, end - begin + (range.ExcludeEnd ? 0 : 1));
 
             return Fill(block, self, begin, length);
         }
