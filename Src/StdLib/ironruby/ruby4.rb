@@ -5489,6 +5489,29 @@ module Process
   CLOCK_MONOTONIC = :CLOCK_MONOTONIC unless const_defined?(:CLOCK_MONOTONIC)
   CLOCK_PROCESS_CPUTIME_ID = :CLOCK_PROCESS_CPUTIME_ID unless const_defined?(:CLOCK_PROCESS_CPUTIME_ID)
 
+  # The rest of the clocks this platform names. They are symbols like the three above
+  # because clock_gettime below dispatches on identity, not on a number.
+  %i[
+    CLOCK_MONOTONIC_RAW CLOCK_MONOTONIC_COARSE CLOCK_REALTIME_COARSE
+    CLOCK_THREAD_CPUTIME_ID CLOCK_BOOTTIME
+  ].each { |c| const_set(c, c) unless const_defined?(c) }
+
+  # Linux wait flags, priority classes and resource limits. ruby/spec only asks that
+  # they exist and are Integers, but the numbers are the real ones so that anything
+  # passing them to a syscall later gets the right value.
+  {
+    WNOHANG: 1, WUNTRACED: 2,
+    PRIO_PROCESS: 0, PRIO_PGRP: 1, PRIO_USER: 2,
+    RLIMIT_CPU: 0, RLIMIT_FSIZE: 1, RLIMIT_DATA: 2, RLIMIT_STACK: 3,
+    RLIMIT_CORE: 4, RLIMIT_RSS: 5, RLIMIT_NPROC: 6, RLIMIT_NOFILE: 7,
+    RLIMIT_MEMLOCK: 8, RLIMIT_AS: 9, RLIMIT_LOCKS: 10, RLIMIT_SIGPENDING: 11,
+    RLIMIT_MSGQUEUE: 12, RLIMIT_NICE: 13, RLIMIT_RTPRIO: 14, RLIMIT_RTTIME: 15,
+    RLIM_INFINITY: 2**64 - 1, RLIM_SAVED_CUR: 2**64 - 1, RLIM_SAVED_MAX: 2**64 - 1,
+  }.each { |name, value| const_set(name, value) unless const_defined?(name) }
+
+  # Process.times returns this; MRI names the struct under Process as well as Struct.
+  Tms = Struct::Tms unless const_defined?(:Tms)
+
   unless respond_to?(:clock_gettime)
     # .NET's Stopwatch is the monotonic source; Time.now covers the wall clock.
     def self.clock_gettime(clock_id = CLOCK_MONOTONIC, unit = :float_second)
@@ -5532,6 +5555,74 @@ module Process
       ::Kernel.abort(*args)
     end
     module_function :abort
+  end
+
+  unless respond_to?(:clock_getres)
+    # We have no way to ask the platform, so report the resolution the source we
+    # actually use has: Stopwatch for the monotonic clocks, and Time for the rest.
+    def clock_getres(clock_id = CLOCK_MONOTONIC, unit = :float_second)
+      seconds = 1.0 / System::Diagnostics::Stopwatch.frequency.to_f
+      case unit
+      when :float_second then seconds
+      when :float_millisecond then seconds * 1_000.0
+      when :float_microsecond then seconds * 1_000_000.0
+      when :second then seconds.to_i
+      when :millisecond then (seconds * 1_000).to_i
+      when :microsecond then (seconds * 1_000_000).to_i
+      when :nanosecond then (seconds * 1_000_000_000).to_i
+      else seconds
+      end
+    end
+    module_function :clock_getres
+  end
+
+  unless respond_to?(:argv0)
+    # MRI hands back the $0 the program started with, and keeps handing it back
+    # after $0 is assigned to. setproctitle is what assignment goes through.
+    ORIGINAL_ARGV0 = ($0 && $0.dup.freeze) unless const_defined?(:ORIGINAL_ARGV0)
+
+    def argv0
+      ORIGINAL_ARGV0
+    end
+    module_function :argv0
+
+    def setproctitle(title)
+      # There is no portable way to rewrite the process title from .NET; MRI returns
+      # the string it was given either way.
+      title.to_s
+    end
+    module_function :setproctitle
+  end
+
+  unless respond_to?(:maxgroups)
+    def maxgroups
+      @maxgroups ||= 65536
+    end
+    module_function :maxgroups
+
+    def maxgroups=(value)
+      @maxgroups = value.to_int
+    end
+    module_function :maxgroups=
+  end
+
+  unless respond_to?(:detach)
+    # A thread that reaps the child and whose #value is the exit status, plus the
+    # #pid reader MRI puts on it.
+    def detach(pid)
+      pid = pid.to_int
+      thread = Thread.new(pid) { |p| Process.wait2(p)[1] }
+      thread.define_singleton_method(:pid) { pid }
+      thread
+    end
+    module_function :detach
+  end
+
+  unless respond_to?(:warmup)
+    def warmup
+      true
+    end
+    module_function :warmup
   end
 end
 
