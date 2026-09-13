@@ -62,8 +62,20 @@ namespace IronRuby.Builtins {
             // MRI takes a block, a Proc, a Method - anything that answers #call - so dispatch
             // dynamically rather than insisting on a Proc.
             var site = callStorage.GetCallSite("call", 1);
-            return PosixSignals.Trap(number, command,
-                signalNumber => site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber)));
+            var mainThread = context.MainThread;
+            return PosixSignals.Trap(number, command, signalNumber => {
+                try {
+                    site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber));
+                } catch (Exception e) {
+                    // MRI runs trap handlers on the main thread, so an exception out of one - a
+                    // NoMethodError from a handler that turned out not to be callable, say -
+                    // surfaces there.  We run them on the signal thread, where throwing would only
+                    // lose the exception, so hand it to the main thread instead.
+                    if (mainThread != null && mainThread != System.Threading.Thread.CurrentThread) {
+                        RubyUtils.RaiseAsyncException(mainThread, e);
+                    }
+                }
+            });
         }
 
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
