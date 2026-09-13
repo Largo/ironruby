@@ -33,7 +33,9 @@ namespace IronRuby.Compiler.Ast {
 
     // <leading-mandatory>, <optional>, *<array>, <trailing-mandatory>, &block
     public partial class Parameters : Node {
-        internal static readonly Parameters/*!*/ Empty = new Parameters(null, 0, null, null, null, SourceSpan.None);
+        internal static readonly Parameters/*!*/ Empty = new Parameters(null, 0, null, null, null, SourceSpan.None) {
+            Signature = RubyParameterSignature.Empty
+        };
 
         // all mandatory parameters:
         private readonly LeftValue/*!*/[]/*!*/ _mandatory;
@@ -44,6 +46,19 @@ namespace IronRuby.Compiler.Ast {
         private readonly SimpleAssignmentExpression/*!*/[]/*!*/ _optional;
         private readonly LeftValue _unsplat;
         private readonly LocalVariable _block;
+
+        // the parameter list as it was written, before keywords were lowered onto positionals;
+        // null when the front end did not record one (the 1.9 parser never does)
+        private RubyParameterSignature _signature;
+
+        /// <summary>
+        /// What #parameters and #arity should report, which is the declaration rather than the
+        /// lowered parameter list above. Null if unknown.
+        /// </summary>
+        public RubyParameterSignature Signature {
+            get { return _signature; }
+            set { _signature = value; }
+        }
 
         public LeftValue/*!*/[]/*!*/ Mandatory {
             get { return _mandatory; }

@@ -6756,6 +6756,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.Proc, System.Boolean>(IronRuby.Builtins.ProcOps.IsLambda)
             );
             
+            DefineLibraryMethod(module, "parameters", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ProcOps.GetParameters)
+            );
+            
             DefineLibraryMethod(module, "source_location", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ProcOps.GetSourceLocation)

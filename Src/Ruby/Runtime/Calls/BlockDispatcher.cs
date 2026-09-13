@@ -141,6 +141,18 @@ namespace IronRuby.Runtime.Calls {
 
         private readonly BlockSignatureAttributes _attributesAndArity;
 
+        // the block's parameter list as it was written; null if the front end did not record one
+        private RubyParameterSignature _parameterSignature;
+
+        /// <summary>
+        /// What Proc#parameters and Proc#arity report: the declared parameter list rather than
+        /// the lowered one the attributes above describe.
+        /// </summary>
+        public RubyParameterSignature ParameterSignature {
+            get { return _parameterSignature; }
+            set { _parameterSignature = value; }
+        }
+
         public bool HasUnsplatParameter {
             get { return (_attributesAndArity & BlockSignatureAttributes.HasUnsplatParameter) != 0; }
         }

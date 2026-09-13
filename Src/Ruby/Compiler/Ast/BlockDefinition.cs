@@ -207,9 +207,10 @@ namespace IronRuby.Compiler.Ast {
             int parameterCount = ParameterCount;
             var attributes = _parameters.GetBlockSignatureAttributes();
 
-            var dispatcher = Ast.Constant(
-                BlockDispatcher.Create(parameterCount, attributes, gen.SourcePath, Location.Start.Line), typeof(BlockDispatcher)
-            );
+            var blockDispatcher = BlockDispatcher.Create(parameterCount, attributes, gen.SourcePath, Location.Start.Line);
+            blockDispatcher.ParameterSignature = _parameters.Signature;
+
+            var dispatcher = Ast.Constant(blockDispatcher, typeof(BlockDispatcher));
 
             return Ast.Coalesce(
                 (isLambda ? Methods.InstantiateLambda : Methods.InstantiateBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher),

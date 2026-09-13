@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -80,6 +80,13 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public override int GetArity() {
+            // the declared signature, when the front end recorded one, is the only thing that
+            // knows about keywords: they are not in Parameters, having been lowered away
+            var signature = _body.Ast.Parameters.Signature;
+            if (signature != null) {
+                return signature.GetArity(true);
+            }
+
             if (Parameters.Unsplat != null || Parameters.Optional.Length > 0) {
                 return -Parameters.Mandatory.Length - 1;
             } else {
@@ -89,6 +96,12 @@ namespace IronRuby.Runtime.Calls {
 
         public override RubyArray/*!*/ GetRubyParameterArray() {
             var context = _declaringScope.RubyContext;
+
+            var signature = _body.Ast.Parameters.Signature;
+            if (signature != null) {
+                return signature.GetParameterArray(context, true);
+            }
+
             var reqSymbol = context.CreateAsciiSymbol("req");
             var optSymbol = context.CreateAsciiSymbol("opt");
             var ps =_body.Ast.Parameters;

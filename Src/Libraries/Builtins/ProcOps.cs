@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -22,6 +22,8 @@ using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
 using System.Globalization;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
 
 namespace IronRuby.Builtins {
 
@@ -62,7 +64,42 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("arity")]
         public static int GetArity(Proc/*!*/ self) {
-            return self.Dispatcher.Arity;
+            var signature = self.Dispatcher.ParameterSignature;
+            return signature != null ? signature.GetArity(self.Kind == ProcKind.Lambda) : self.Dispatcher.Arity;
+        }
+
+        /// <summary>
+        /// How the block was written. Whether a positional parameter counts as required depends
+        /// on how the proc binds its arguments, so a lambda-ness that disagrees with the receiver
+        /// can be forced with the `lambda:` keyword (anything but nil or false means a lambda).
+        /// </summary>
+        [RubyMethod("parameters")]
+        public static RubyArray/*!*/ GetParameters(RubyContext/*!*/ context, Proc/*!*/ self, [DefaultParameterValue(null)]IDictionary<object, object> options) {
+            bool isLambda = self.Kind == ProcKind.Lambda;
+            if (options != null) {
+                foreach (var entry in options) {
+                    var key = entry.Key as RubySymbol;
+                    if (key == null || key.ToString() != "lambda") {
+                        throw RubyExceptions.CreateArgumentError(
+                            String.Format(CultureInfo.InvariantCulture, "unknown keyword: {0}",
+                                context.Inspect(entry.Key).ToString()));
+                    }
+                    // an explicit nil means "do not override", matching MRI
+                    if (entry.Value != null) {
+                        isLambda = RubyOps.IsTrue(entry.Value);
+                    }
+                }
+            }
+
+            var signature = self.Dispatcher.ParameterSignature;
+            if (signature == null) {
+                // a proc with no Ruby source behind it (Symbol#to_proc, a CLR method) takes
+                // whatever it is given
+                var result = new RubyArray(1);
+                result.Add(new RubyArray(1) { context.CreateAsciiSymbol("rest") });
+                return result;
+            }
+            return signature.GetParameterArray(context, isLambda);
         }
 
         [RubyMethod("lambda?")]
