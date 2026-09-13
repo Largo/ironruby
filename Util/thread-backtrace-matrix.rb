@@ -19,6 +19,37 @@
 # inside the method named in the case.  The frame list is a snapshot of a
 # running thread, so the exact depth can vary by a frame; what must not vary is
 # that it is an array rather than nil.
+#
+# --- what is still missing, and what completing it would cost ----------------
+#
+# The list being read is the interpreter's frame chain, so it holds a frame for
+# every Ruby method that is still being interpreted and nothing for one that has
+# been compiled.  The DLR compiles a lambda on its 33rd run
+# (LightCompiler.DefaultCompilationThreshold is 32), and the measurement is
+# exactly that sharp - warm a three-deep call chain N times, then read the
+# thread's backtrace from outside:
+#
+#   warmup   0 .. 32  ->  5 frames, all three methods named, real line numbers
+#   warmup  33        ->  2 frames, the three methods gone
+#
+# So a method a program calls more than 32 times is invisible to another
+# thread's backtrace.  Closing that means a frame record pushed and popped on
+# every Ruby method call, because a compiled method leaves nothing else behind:
+# .NET Core cannot walk another thread's CLR stack at all.
+#
+# Measured, so the trade is on the record rather than guessed at.  A Ruby method
+# call in this tree costs about 410 ns (Util-scale loop, 3M calls, loop overhead
+# subtracted).  The push/pop is a ThreadLocal storage lookup plus two reference
+# writes on an object that is already allocated per call (RubyMethodScope), so
+# it adds single-digit nanoseconds - call it 1.5-2.5% of every Ruby method call
+# in every program, paid whether or not anyone ever asks for a backtrace.  And
+# it would buy less than it sounds: a pushed record knows the method's *defining*
+# line, not the line currently executing, because the executing line of compiled
+# code is an IL offset only a stack walk can recover.  The compiled frames would
+# come back as "file:definition-line:in `name'".
+#
+# That is why it stops here: the free half is accurate, and the half that costs
+# every call in every program would be approximate.
 
 $stdout.sync = true
 

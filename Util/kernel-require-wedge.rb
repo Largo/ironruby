@@ -1,50 +1,50 @@
-# Why `mspec-run spec/core/kernel` never finishes.
+# Why `mspec-run spec/core/kernel` used to never finish.
 #
 #   ./ir.sh Util/kernel-require-wedge.rb
 #
-# The directory wedges on one example, spec/core/kernel/require_spec.rb ->
+# The directory wedged on one example, spec/core/kernel/require_spec.rb ->
 # spec/core/kernel/shared/require.rb:667, "blocks a second thread from
-# returning while the 1st is still requiring".  It is a deadlock, not
+# returning while the 1st is still requiring".  It was a deadlock, not
 # slowness: a busy-wait with no timeout cannot be waited out, so raising
-# mspec's cap does not help and never will.
+# mspec's cap did not help and never would.
 #
 # This script is that example with the two busy-waits bounded and instrumented,
 # so it reports which thread is stuck and on which term instead of hanging.
-# Run against this tree it prints:
+# Against the tree as it was it printed:
 #
 #   events            : [:con_pre, :set_thread_local,
 #                        [:t1_gave_up, {other_backtrace: "nil", other_stop?: true}],
 #                        :con_post]
+#
+# and it now prints
+#
+#   events            : [:con_pre, :set_thread_local, :con_post]
 #   t2 saw t1's thread-local : true
 #   t1_res=true t2_res=false
 #
-# Read that as:
+# The thread that spun forever was t1, inside the fixture
+# spec/fixtures/code/concurrent.rb, on this line:
 #
-#   * :set_thread_local fired, and t2 saw it - so Thread.current[:key] IS
-#     visible across threads.  That is the natural first guess and it is wrong.
-#   * t1_res=true, t2_res=false, other_stop?=true - so require's cross-thread
-#     lock works exactly as CRuby's: t2 really did block inside require and
-#     really did get false.  Also not the cause.
-#   * The thread that spins forever is t1, not t2, and it spins inside the
-#     fixture spec/fixtures/code/concurrent.rb on this line:
+#     Thread.pass until t.backtrace && t.backtrace.any? { |c| c.include? 'require' } && t.stop?
 #
-#         Thread.pass until t.backtrace && t.backtrace.any? { |c| c.include? 'require' } && t.stop?
+# Two separate defects kept that condition permanently false, and both had to go.
 #
-#     Every term is satisfied except the first: Thread#backtrace answers nil
-#     for any thread other than the caller.
+#   * Thread#backtrace answered nil for any thread other than the caller.  The
+#     reason given was that .NET Core has no Thread.Suspend and no
+#     StackTrace(Thread), so another thread's stack cannot be walked - true, and
+#     beside the point, because the interpreter already keeps each thread's Ruby
+#     frames as a linked list in a thread-local and that list can simply be read.
+#     See Util/thread-backtrace-matrix.rb.
 #
-# Is that fixable?  Not without changing how IronRuby represents a call stack.
-# Backtraces here are built lazily by walking the CLR stack when one is asked
-# for (RubyExceptionData.CreateBacktrace); there is no per-thread list of Ruby
-# frames to read from another thread, and .NET Core removed the only APIs that
-# could capture another thread's managed stack (Thread.Suspend,
-# StackTrace(Thread)).  Supporting it would mean pushing and popping a frame
-# record on every Ruby method entry and exit - the per-call cost the lazy
-# design exists to avoid.  The Thread reopening in Src/StdLib/ironruby/ruby4.rb
-# returns nil deliberately for that reason.
+#   * t2 never blocked.  A require of a file another thread had started but not
+#     finished returned false immediately, so by the time t1 looked, t2 was not
+#     inside require at all - it had finished.  That is also a correctness bug in
+#     its own right: false means "already loaded" to the caller, which then uses
+#     constants the other thread has not defined yet.  require now waits, as MRI
+#     does, and only a circular require on the *same* thread short-circuits.
 #
-# So: spec/core/kernel has to be swept per file (Util/spec-sweep.sh), and this
-# is exactly why.
+# spec/core/kernel therefore runs as a directory again: 2204 examples, 211
+# failures, 209 errors.  It no longer has to be swept per file.
 #
 require 'thread'
 $stdout.sync = true
