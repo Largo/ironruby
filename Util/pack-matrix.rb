@@ -14,9 +14,9 @@
 # <hh> - followed by the encoding, because pack's result encoding is part of its
 # contract and a raw binary result would otherwise make the diff unreadable.
 #
-# Expected differences, as of the last run (66 lines out of 26,520):
+# Expected differences, as of the last run (62 lines out of 26,520):
 #
-#   41  "coerce ..." - the TypeError for a value that cannot become an Integer
+#   37  "coerce ..." - the TypeError for a value that cannot become an Integer
 #       reads "can't convert X into Integer" where CRuby says "no implicit
 #       conversion of X into Integer".  That wording lives in
 #       Protocols.CastToInteger and belongs to the Fixnum/Integer unification

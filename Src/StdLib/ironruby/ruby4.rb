@@ -2413,6 +2413,34 @@ class Array
   end
 
   private :__uniq_without_block__, :__uniq_in_place_without_block__
+
+  # #zip takes anything that responds to #each, not just arrays: an Enumerator
+  # (including an infinite one, which is why this reads lazily and stops at the
+  # receiver's size) or any object with #each.
+  alias_method :__zip_arrays__, :zip
+
+  def zip(*others, &block)
+    length = size
+    converted = others.map do |other|
+      if other.is_a?(Array)
+        other
+      elsif other.respond_to?(:to_ary)
+        other.to_ary
+      elsif other.respond_to?(:each)
+        collected = []
+        other.each do |element|
+          break if collected.size >= length
+          collected << element
+        end
+        collected
+      else
+        raise TypeError, "wrong argument type #{other.class} (must respond to :each)"
+      end
+    end
+    __zip_arrays__(*converted, &block)
+  end
+
+  private :__zip_arrays__
 end
 
 class String
