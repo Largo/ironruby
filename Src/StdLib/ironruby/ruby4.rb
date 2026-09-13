@@ -5724,41 +5724,63 @@ module Math
   module_function :__log__
   private_class_method :__log__
 
+  # MRI's math_log_split. Math.log2(2**10001) has to be 10001.0, but the
+  # argument does not survive the trip through a double: shift the exponent
+  # out first and add it back afterwards.
+  def __log_split__(x)
+    if x.is_a?(::Integer) && x > 0
+      bits = x.bit_length
+      if bits > 1024
+        n = bits - 53
+        return [(x >> n).to_f, n]
+      end
+    end
+    [__flt__(x), 0]
+  end
+  module_function :__log_split__
+  private_class_method :__log_split__
+
   # Math.log(x) and Math.log(x, nil) are different calls - the second is a
   # TypeError - so the base cannot be an optional parameter defaulting to nil.
   def log(x, *rest)
     if rest.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{rest.size + 1}, expected 1..2)")
     end
-    x = __flt__(x)
+    x, bits = __log_split__(x)
     r = __log__(x, "log")
     return r if r
-    v = ::System::Math.Log(x)
+    v = ::System::Math.Log(x) + bits * ::System::Math.Log(2.0)
     return v if rest.empty?
-    b = __flt__(rest[0])
+    b, bbits = __log_split__(rest[0])
     r = __log__(b, "log")
     return r if r
-    v / ::System::Math.Log(b)
+    v / (::System::Math.Log(b) + bbits * ::System::Math.Log(2.0))
   end
 
   def log2(x)
-    x = __flt__(x)
+    x, bits = __log_split__(x)
     r = __log__(x, "log2")
     return r if r
-    ::System::Math.Log2(x)
+    ::System::Math.Log2(x) + bits
   end
 
   def log10(x)
-    x = __flt__(x)
+    x, bits = __log_split__(x)
     r = __log__(x, "log10")
     return r if r
-    ::System::Math.Log10(x)
+    ::System::Math.Log10(x) + bits * ::System::Math.Log10(2.0)
   end
 
   # exp(x)-1 and log(1+x), accurate near zero, which is the whole point of
   # having them separately from exp and log.
   def expm1(x)
-    ::System::Math.Exp(__flt__(x)) - 1.0
+    x = __flt__(x)
+    # exp(1e-16) - 1.0 is exactly 0; the identity (u-1)*x/log(u) keeps the
+    # significant digits that the subtraction cancels away.
+    u = ::System::Math.Exp(x)
+    return x if u == 1.0
+    return u - 1.0 if u - 1.0 == -1.0 || u.infinite? || u.nan?
+    (u - 1.0) * x / ::System::Math.Log(u)
   end
 
   def log1p(x)
