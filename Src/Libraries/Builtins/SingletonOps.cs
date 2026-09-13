@@ -76,6 +76,26 @@ namespace IronRuby.Builtins {
             return module;
         }
 
+        /// <summary>
+        /// main.using activates a module's refinements for the rest of the current file or eval string.
+        /// It is only legal at the top level: CRuby refuses to let a method body activate refinements,
+        /// because the activation would be for the caller's lexical scope rather than its own.
+        /// </summary>
+        [RubyMethod("using", RubyMethodAttributes.PrivateInstance)]
+        public static object Using(RubyScope/*!*/ scope, object/*!*/ self, object module) {
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                if (s.Kind == ScopeKind.Method || s.Kind == ScopeKind.BlockMethod) {
+                    throw RubyExceptions.CreateRuntimeError("main.using is permitted only at toplevel");
+                }
+                if (s.Kind == ScopeKind.TopLevel) {
+                    break;
+                }
+            }
+
+            ModuleOps.ActivateRefinements(scope, module);
+            return self;
+        }
+
         // thread-safe:
         [RubyMethod("include", RubyMethodAttributes.PublicInstance)]
         public static RubyClass/*!*/ Include(RubyContext/*!*/ context, object/*!*/ self, params RubyModule[]/*!*/ modules) {

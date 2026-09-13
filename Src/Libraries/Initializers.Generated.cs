@@ -448,6 +448,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MainSingletonOps.ToS)
             );
             
+            DefineLibraryMethod(module, "using", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>(IronRuby.Builtins.MainSingletonOps.Using)
+            );
+            
         }
         
         private static void Load__MainSingleton_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -6315,6 +6320,16 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.PublicMethodDefined)
             );
             
+            DefineLibraryMethod(module, "refine", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Refine)
+            );
+            
+            DefineLibraryMethod(module, "refinements", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetRefinements)
+            );
+            
             DefineLibraryMethod(module, "remove_class_variable", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.RemoveClassVariable)
@@ -6350,6 +6365,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.UndefineMethod)
             );
             
+            DefineLibraryMethod(module, "using", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Using)
+            );
+            
         }
         
         private static void LoadModule_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -6361,6 +6381,16 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "nesting", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetLexicalModuleNesting)
+            );
+            
+            DefineLibraryMethod(module, "used_modules", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetUsedModules)
+            );
+            
+            DefineLibraryMethod(module, "used_refinements", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetUsedRefinements)
             );
             
         }

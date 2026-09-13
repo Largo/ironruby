@@ -297,6 +297,21 @@ namespace IronRuby.Builtins {
         // A list of extension methods included into this type or null if none were included.
         // { method-name -> methods }
         internal Dictionary<string, List<ExtensionMethodInfo>> _extensionMethods;
+
+        //
+        // Refinements (Module#refine).  Two independent roles:
+        //
+        // - _refinements is set on the module that *calls* refine: { refined module -> refinement module }.
+        //   It is what Module#refinements reports and what `using' walks.
+        // - _refinedModule is set on the anonymous module that refine *returns*: the module it refines.
+        //   It is what Refinement#target reports, and it is what tells ResolveSuperMethodNoLock where
+        //   `super' from inside a refinement continues.
+        //
+        // Neither participates in the MRO: a refinement is spliced in front of the module it refines only
+        // for calls whose lexical scope has activated it, which happens in RubyCallAction.Resolve.
+        //
+        private Dictionary<RubyModule/*!*/, RubyModule/*!*/> _refinements;
+        private RubyModule _refinedModule;
         
         #endregion
 
@@ -348,6 +363,89 @@ namespace IronRuby.Builtins {
         internal RubyModule[]/*!*/ Prepends {
             get { return _prepends; }
         }
+
+        #region Refinements
+
+        /// <summary>
+        /// Non-null if this module is a refinement, i.e. was created by Module#refine.  Then this is the
+        /// module being refined (Refinement#target).
+        /// </summary>
+        public RubyModule RefinedModule {
+            get { return _refinedModule; }
+        }
+
+        public bool IsRefinement {
+            get { return _refinedModule != null; }
+        }
+
+        /// <summary>
+        /// Module#refine: returns the anonymous refinement module for <paramref name="refinedModule"/>,
+        /// creating it on the first call.  Reopening the same class in the same holder yields the same
+        /// module, which is what CRuby does.
+        /// </summary>
+        public RubyModule/*!*/ GetOrCreateRefinement(RubyModule/*!*/ refinedModule) {
+            ContractUtils.RequiresNotNull(refinedModule, "refinedModule");
+            using (Context.ClassHierarchyLocker()) {
+                if (_refinements == null) {
+                    _refinements = new Dictionary<RubyModule, RubyModule>();
+                }
+                RubyModule existing;
+                if (_refinements.TryGetValue(refinedModule, out existing)) {
+                    return existing;
+                }
+                RubyModule refinement = new RubyModule(Context.ModuleClass, null);
+                refinement._refinedModule = refinedModule;
+                _refinements.Add(refinedModule, refinement);
+                Context.RegisterRefinedModule(refinedModule);
+                return refinement;
+            }
+        }
+
+        /// <summary>
+        /// The refinements this module declared itself, in no particular order.  Module#refinements does
+        /// not report refinements of included modules.
+        /// </summary>
+        public void GetOwnRefinements(List<RubyModule/*!*/>/*!*/ result) {
+            using (Context.ClassHierarchyLocker()) {
+                if (_refinements != null) {
+                    result.AddRange(_refinements.Values);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The refinements `using this' would activate: this module's own plus those of every module it
+        /// includes (CRuby does follow includes for activation, only Module#refinements is own-only).
+        /// </summary>
+        internal void GetAllRefinements(List<RubyModule/*!*/>/*!*/ result) {
+            ForEachAncestor(false, (m) => {
+                if (m._refinements != null) {
+                    foreach (RubyModule r in m._refinements.Values) {
+                        if (!result.Contains(r)) {
+                            result.Add(r);
+                        }
+                    }
+                }
+                return false;
+            });
+        }
+
+        /// <summary>
+        /// Appends this module's (and its includes') refinement of <paramref name="refinedModule"/>, if any.
+        /// </summary>
+        internal void GetActiveRefinementsOf(RubyModule/*!*/ refinedModule, List<RubyModule/*!*/>/*!*/ result) {
+            ForEachAncestor(false, (m) => {
+                RubyModule refinement;
+                if (m._refinements != null && m._refinements.TryGetValue(refinedModule, out refinement)) {
+                    if (!result.Contains(refinement)) {
+                        result.Add(refinement);
+                    }
+                }
+                return false;
+            });
+        }
+
+        #endregion
 
         public string Name {
             get { return _name; }
@@ -1602,6 +1700,19 @@ namespace IronRuby.Builtins {
         }
 
         public MethodResolutionResult ResolveMethodNoLock(string/*!*/ name, VisibilityContext visibility, MethodLookup options) {
+            return ResolveMethodNoLock(name, visibility, options, null);
+        }
+
+        /// <summary>
+        /// <paramref name="refinements"/> is the refinement activation of the *caller's lexical scope*, or
+        /// null for a lookup that is not on behalf of a lexical position (reflection, send, protocol calls).
+        /// A refinement of module M is searched immediately ahead of M itself, which is the only place the
+        /// MRO changes; nothing is spliced into _prepends/_mixins, so the ancestors a program can observe
+        /// stay exactly what CRuby reports.
+        /// </summary>
+        internal MethodResolutionResult ResolveMethodNoLock(string/*!*/ name, VisibilityContext visibility, MethodLookup options,
+            RefinementActivation refinements) {
+
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(name);
 
@@ -1611,8 +1722,19 @@ namespace IronRuby.Builtins {
             bool skipHidden = false;
             bool foundCallerSelf = false;
             MethodResolutionResult result;
+            List<RubyModule> refinementBuffer = (refinements != null && !refinements.IsEmpty) ? new List<RubyModule>() : null;
 
             if (ForEachAncestor((module) => {
+                if (refinementBuffer != null) {
+                    refinementBuffer.Clear();
+                    refinements.GetRefinementsOf(module, refinementBuffer);
+                    foreach (RubyModule refinement in refinementBuffer) {
+                        owner = refinement;
+                        if (refinement.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
+                            return true;
+                        }
+                    }
+                }
                 owner = module;
                 foundCallerSelf |= module == visibility.Class;
                 return module.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info);
@@ -1638,7 +1760,7 @@ namespace IronRuby.Builtins {
             // TODO: BasicObject
             // Note: all classes include Object in ancestors, so we don't need to search it again:
             if (!result.Found && (options & MethodLookup.FallbackToObject) != 0 && !IsClass) {
-                return _context.ObjectClass.ResolveMethodNoLock(name, visibility, options & ~MethodLookup.FallbackToObject);
+                return _context.ObjectClass.ResolveMethodNoLock(name, visibility, options & ~MethodLookup.FallbackToObject, refinements);
             }
 
             return result;
@@ -1676,6 +1798,23 @@ namespace IronRuby.Builtins {
             RubyModule owner = null;
             bool foundModule = false;
             bool skipHidden = false;
+
+            // `super' from inside a refinement: the refinement behaves as if it were prepended to the
+            // module it refines, so super continues at that module *inclusive* rather than skipping it.
+            RubyModule refined = callerModule.RefinedModule;
+            if (refined != null) {
+                if (ForEachAncestor((module) => {
+                    foundModule |= module == refined;
+                    if (!foundModule) {
+                        return false;
+                    }
+                    owner = module;
+                    return module.TryGetMethod(name, ref skipHidden, out info) && !info.IsSuperForwarder;
+                }) && info != null && !info.IsUndefined) {
+                    return new MethodResolutionResult(info, owner, true);
+                }
+                return MethodResolutionResult.NotFound;
+            }
 
             // start searching for the method in the MRO parent of the declaringModule:
             if (ForEachAncestor((module) => {

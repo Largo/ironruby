@@ -113,6 +113,12 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
+            // A precompiled dispatcher carries no conditions beyond the class version, so it cannot hold
+            // the lexical refinement guard.  Once anything has been refined we fall back to rule building.
+            if (Context.HasRefinements) {
+                return null;
+            }
+
             RubyScope scope;
             object target;
             if (Signature.HasScope) {
@@ -223,17 +229,26 @@ namespace IronRuby.Runtime.Calls {
             MethodResolutionResult method;
             var targetClass = args.TargetClass;
             var visibilityContext = GetVisibilityContext(args.Signature, args.Scope);
+            RefinementActivation refinements = null;
             using (targetClass.Context.ClassHierarchyLocker()) {
                 metaBuilder.AddTargetTypeTest(args.Target, targetClass, args.TargetExpression, args.MetaContext, 
                     new[] { methodName, Symbols.MethodMissing }
                 );
+
+                // Refinements are lexically scoped, so resolution has to consult the scope the call site was
+                // compiled in - which IronRuby hands to every source-level call site as argument 0.  Sites
+                // whose target class has never been refined are built exactly as before and pay nothing.
+                if (args.Signature.HasScope && !args.Signature.IsSuperCall && targetClass.Context.HasRefinements
+                    && targetClass.Context.IsRefinementSensitive(targetClass)) {
+                    refinements = args.Scope.GetActiveRefinements();
+                }
 
                 if (args.Signature.IsSuperCall) {
                     Debug.Assert(!args.Signature.IsVirtualCall && args.Signature.HasImplicitSelf);
                     method = targetClass.ResolveSuperMethodNoLock(methodName, targetClass).InvalidateSitesOnOverride();
                 } else {
                     var options = args.Signature.IsVirtualCall ? MethodLookup.Virtual : MethodLookup.Default;
-                    method = targetClass.ResolveMethodForSiteNoLock(methodName, visibilityContext, options);
+                    method = targetClass.ResolveMethodNoLock(methodName, visibilityContext, options, refinements).InvalidateSitesOnOverride();
                 }
 
                 if (!method.Found) {
@@ -241,6 +256,17 @@ namespace IronRuby.Runtime.Calls {
                 } else {
                     methodMissing = null;
                 }
+            }
+
+            // The rule is only valid while the caller's lexical activation is the one it was bound against.
+            // RefinementActivation instances are canonical per lexical position, so reference equality is
+            // enough; a `using' anywhere bumps RubyContext.RefinementVersion, every scope recomputes a fresh
+            // table and this condition fails, forcing a re-bind.
+            if (refinements != null) {
+                metaBuilder.AddCondition(Ast.Equal(
+                    Methods.GetActiveRefinements.OpCall(AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope))),
+                    Ast.Constant(refinements, typeof(RefinementActivation))
+                ));
             }
 
             // Whenever the current self's class changes we need to invalidate the rule, if a protected method is being called.

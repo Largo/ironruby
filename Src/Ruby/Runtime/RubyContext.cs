@@ -244,6 +244,51 @@ namespace IronRuby.Runtime {
         [Emitted]
         public int ConstantAccessVersion = 1;
 
+        #region Refinements
+
+        // Bumped by every successful `using'.  RubyScope memoizes its effective RefinementActivation and
+        // recomputes it when this changes, so a `using' anywhere invalidates every memoized table - and
+        // with it every call-site rule guarded on a table instance.  `using' is rare; correctness first.
+        internal int RefinementVersion = 1;
+
+        // Every module that Module#refine has ever been called on, plus - transitively at query time -
+        // the classes that inherit from them.  Empty in a program that never calls refine, which is what
+        // keeps the whole feature off the fast path: RubyCallAction only looks at scopes when this is
+        // non-empty.
+        private readonly Dictionary<RubyModule, bool> _refinedModules = new Dictionary<RubyModule, bool>();
+
+        internal bool HasRefinements {
+            get { return _refinedModules.Count > 0; }
+        }
+
+        internal void RegisterRefinedModule(RubyModule/*!*/ refinedModule) {
+            RequiresClassHierarchyLock();
+            if (_refinedModules.ContainsKey(refinedModule)) {
+                return;
+            }
+            _refinedModules.Add(refinedModule, true);
+
+            // Every call site that targets this module or a descendant of it must re-bind, because from
+            // now on its rule needs the refinement guard.  This mirrors what RubyClass.PrependsUpdated
+            // does for a prepend: the MRO the site cached is no longer the whole story.
+            refinedModule.MethodsUpdated("Refine");
+        }
+
+        /// <summary>
+        /// True if a call whose target is <paramref name="cls"/> could be affected by a refinement, i.e.
+        /// the class or one of its ancestors has been refined.  Call sites for classes that answer false
+        /// are built exactly as they were before refinements existed and pay nothing.
+        /// </summary>
+        internal bool IsRefinementSensitive(RubyModule/*!*/ cls) {
+            RequiresClassHierarchyLock();
+            if (_refinedModules.Count == 0) {
+                return false;
+            }
+            return cls.ForEachAncestor(true, (m) => _refinedModules.ContainsKey(m));
+        }
+
+        #endregion
+
         [Conditional("DEBUG")]
         internal void RequiresClassHierarchyLock() {
             Debug.Assert(_classHierarchyLock.IsLocked, "Code can only be executed while holding class hierarchy lock.");
