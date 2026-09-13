@@ -318,6 +318,68 @@ namespace IronRuby.Runtime {
             return error;
         }
 
+        /// <summary>
+        /// The encodings a conversion actually passes through. MRI's transcoder table has a direct
+        /// converter between UTF-8 and nearly everything else and routes the rest through UTF-8, so
+        /// a pair with UTF-8 at one end is one hop and any other pair is two.
+        /// </summary>
+        public static RubyEncoding/*!*/[]/*!*/ ConversionPath(RubyEncoding/*!*/ source, RubyEncoding/*!*/ destination) {
+            if (source == RubyEncoding.UTF8 || destination == RubyEncoding.UTF8) {
+                return new[] { source, destination };
+            }
+            return new[] { source, RubyEncoding.UTF8, destination };
+        }
+
+        /// <summary>
+        /// The name MRI's transcoder tables give an encoding. The Windows and Macintosh code pages
+        /// are spelled in upper case there while Encoding#name spells them in mixed case, and MRI
+        /// compares the two spellings byte for byte when it chooses between the short and the long
+        /// form of a conversion-error message, so the difference is visible from Ruby.
+        /// </summary>
+        public static string/*!*/ TranscoderName(RubyEncoding/*!*/ encoding) {
+            string name = encoding.Name;
+            return name.StartsWith("Windows-", StringComparison.Ordinal) || name.StartsWith("mac", StringComparison.Ordinal)
+                ? name.ToUpperInvariant() : name;
+        }
+
+        /// <summary>
+        /// MRI names only the failing leg of a conversion when that leg is the whole conversion,
+        /// and otherwise spells out the entire path: "U+65E5 from UTF-8 to EUC-JP" but "U+65E5 to
+        /// US-ASCII in conversion from UTF-16BE to UTF-8 to US-ASCII".  <paramref name="stage"/> is
+        /// the index in <paramref name="path"/> of the leg that failed.
+        /// </summary>
+        public static string/*!*/ UndefinedConversionMessage(string/*!*/ dumped, RubyEncoding/*!*/[]/*!*/ path, int stage) {
+            string stageSource = TranscoderName(path[stage]);
+            string stageDestination = TranscoderName(path[stage + 1]);
+
+            if (stageSource == path[0].Name && stageDestination == path[path.Length - 1].Name) {
+                return FormatMessage("{0} from {1} to {2}", dumped, stageSource, stageDestination);
+            }
+
+            var text = new StringBuilder(dumped);
+            text.Append(" to ").Append(stageDestination).Append(" in conversion from ").Append(path[0].Name);
+            for (int i = 1; i < path.Length; i++) {
+                text.Append(" to ").Append(TranscoderName(path[i]));
+            }
+            return text.ToString();
+        }
+
+        /// <summary>
+        /// The error MRI raises for a character no leg of the conversion can represent.
+        /// <paramref name="dumped"/> is how MRI spells the character: U+XXXX when the failing leg
+        /// reads UTF-8 and can therefore talk about code points, and an inspected byte string when
+        /// it cannot.
+        /// </summary>
+        public static Exception/*!*/ CreateUndefinedConversionError(string/*!*/ dumped, byte[] errorCharBytes,
+            RubyEncoding/*!*/[]/*!*/ path, int stage) {
+
+            var error = new UndefinedConversionError(UndefinedConversionMessage(dumped, path, stage));
+            error.SourceEncoding = path[stage];
+            error.DestinationEncoding = path[stage + 1];
+            error.ErrorCharBytes = errorCharBytes;
+            return error;
+        }
+
         public static Exception/*!*/ CreateTranscodingError(EncoderFallbackException/*!*/ e, RubyEncoding/*!*/ fromEncoding, RubyEncoding/*!*/ toEncoding) {
             return new UndefinedConversionError(
                 FormatMessage(

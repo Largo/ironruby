@@ -182,27 +182,13 @@ namespace IronRuby.Builtins {
 
             #region Conversion path
 
-            /// <summary>
-            /// CRuby's transcoder table has a direct converter between UTF-8 and (almost) every
-            /// other encoding and routes everything else through UTF-8. .NET can only convert
-            /// through UTF-16, so the only pairs we can honestly call "direct" are those with
-            /// UTF-8 at one end.
-            /// </summary>
-            private static bool HasDirectConverter(RubyEncoding/*!*/ source, RubyEncoding/*!*/ destination) {
-                return source == RubyEncoding.UTF8 || destination == RubyEncoding.UTF8;
-            }
-
             internal static RubyEncoding/*!*/[]/*!*/ SearchPath(RubyEncoding/*!*/ source, RubyEncoding/*!*/ destination) {
                 if (source == destination) {
                     throw new ConverterNotFoundError(String.Format(CultureInfo.InvariantCulture,
                         "code converter not found ({0} to {1})", source.Name, destination.Name));
                 }
 
-                if (HasDirectConverter(source, destination)) {
-                    return new[] { source, destination };
-                }
-
-                return new[] { source, RubyEncoding.UTF8, destination };
+                return RubyExceptions.ConversionPath(source, destination);
             }
 
             internal static RubyArray/*!*/ MakeConvPath(RubyEncoding/*!*/[]/*!*/ path, int flags) {
@@ -263,45 +249,13 @@ namespace IronRuby.Builtins {
 
             #region Error bookkeeping
 
-            private static string/*!*/ InspectBytes(byte[]/*!*/ bytes) {
-                var result = new StringBuilder(bytes.Length + 2);
-                result.Append('"');
-                foreach (byte b in bytes) {
-                    if (b >= 0x20 && b < 0x7f && b != (byte)'"' && b != (byte)'\\') {
-                        result.Append((char)b);
-                    } else {
-                        result.Append("\\x").Append(b.ToString("X2", CultureInfo.InvariantCulture));
-                    }
-                }
-                result.Append('"');
-                return result.ToString();
-            }
-
             private string/*!*/ UndefinedConversionMessage(int codepoint) {
                 string u = "U+" + codepoint.ToString(codepoint > 0xffff ? "X" : "X4", CultureInfo.InvariantCulture);
-                if (_path.Length == 2) {
-                    return String.Format(CultureInfo.InvariantCulture, "{0} from {1} to {2}", u, _path[0].Name, _path[1].Name);
-                }
-
-                var names = new string[_path.Length];
-                for (int i = 0; i < _path.Length; i++) {
-                    names[i] = _path[i].Name;
-                }
-                return String.Format(CultureInfo.InvariantCulture, "{0} to {1} in conversion from {2}",
-                    u, DestinationEncoding.Name, String.Join(" to ", names));
+                return RubyExceptions.UndefinedConversionMessage(u, _path, _path.Length - 2);
             }
 
             private string/*!*/ InvalidByteSequenceMessage(byte[]/*!*/ errorBytes, byte[]/*!*/ readAgain, bool incomplete) {
-                if (incomplete) {
-                    return String.Format(CultureInfo.InvariantCulture, "incomplete {0} on {1}",
-                        InspectBytes(errorBytes), DecodeStageSource.Name);
-                }
-                if (readAgain.Length == 0) {
-                    return String.Format(CultureInfo.InvariantCulture, "{0} on {1}",
-                        InspectBytes(errorBytes), DecodeStageSource.Name);
-                }
-                return String.Format(CultureInfo.InvariantCulture, "{0} followed by {1} on {2}",
-                    InspectBytes(errorBytes), InspectBytes(readAgain), DecodeStageSource.Name);
+                return RubyExceptions.InvalidByteSequenceMessage(DecodeStageSource, errorBytes, readAgain, incomplete);
             }
 
             private void RecordSuccess(string/*!*/ status) {
