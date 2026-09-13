@@ -823,6 +823,13 @@ var closureScope = scope as RubyClosureScope;
         internal string/*!*/ DefinitionName {
             get { return _definitionName; }
         }
+
+        /// <summary>
+        /// The name the method was defined under - what Kernel#__method__ answers.
+        /// </summary>
+        public string/*!*/ MethodName {
+            get { return _definitionName; }
+        }
         
         public Proc BlockParameter {
             get { return _blockParameter; }

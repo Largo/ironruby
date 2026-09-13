@@ -341,8 +341,23 @@ namespace IronRuby.Builtins {
         }
 
         //callcc
-        // 1.9 private instance/singleton __callee__
-        // 1.9 private instance/singleton __method__
+
+        /// <summary>
+        /// The name of the method the call is running inside, or nil at the top level.
+        /// Without it every library method written as `block or return enum_for(__method__)`
+        /// - which is how the standard library returns an enumerator - raised NoMethodError.
+        /// </summary>
+        [RubyMethod("__method__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__method__", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("__callee__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__callee__", RubyMethodAttributes.PublicSingleton)]
+        public static object GetCurrentMethodName(RubyScope/*!*/ scope, object self) {
+            var methodScope = scope.GetInnerMostMethodScope();
+            if (methodScope == null) {
+                return null;
+            }
+            return scope.RubyContext.CreateAsciiSymbol(methodScope.MethodName);
+        }
 
         #endregion
 
@@ -833,8 +848,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("frozen?")]
         public static bool Frozen(RubyContext/*!*/ context, object self) {
-            if (!RubyUtils.HasObjectState(self)) {
-                return false; // can't freeze value types
+            if (!RubyUtils.HasObjectState(self) || self is double || self is float) {
+                // Immediate values - Integer, Float, Symbol, nil, true, false - cannot hold
+                // state, and Ruby reports exactly that by calling them frozen. Answering
+                // false said the opposite of the truth: nothing can modify them at all.
+                return true;
             }
             return context.IsObjectFrozen(self);
         }
