@@ -770,7 +770,9 @@ namespace IronRuby.Builtins {
             string result = RubyUtils.ExpandPath(
                 context.Platform,
                 ExpandTilde(context, context.DecodePath(pathStr)),
-                (basePath == null) ? context.Platform.CurrentDirectory : context.DecodePath(Protocols.CastToPath(toPath, basePath)),
+                (basePath == null)
+                    ? context.Platform.CurrentDirectory
+                    : ExpandTilde(context, context.DecodePath(Protocols.CastToPath(toPath, basePath))),
                 false
             );
 
