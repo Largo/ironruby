@@ -452,6 +452,27 @@ namespace IronRuby.Runtime {
             return fallbackModule;
         }
 
+        /// <summary>
+        /// The name the enclosing method was defined under, or null outside any method. A block
+        /// reports the method it was written in, and a block define_method turned into a method
+        /// body reports the name it was given.
+        /// </summary>
+        public string GetCurrentMethodName() {
+            for (RubyScope scope = this; scope != null; scope = scope.Parent) {
+                switch (scope.Kind) {
+                    case ScopeKind.Method:
+                        return ((RubyMethodScope)scope).DefinitionName;
+
+                    case ScopeKind.BlockMethod:
+                        return ((RubyBlockScope)scope).BlockFlowControl.Proc.Method.DefinitionName;
+
+                    case ScopeKind.TopLevel:
+                        return null;
+                }
+            }
+            return null;
+        }
+
         public RubyMethodScope GetInnerMostMethodScope() {
             RubyScope scope = this;
             while (scope != null && scope.Kind != ScopeKind.Method) {

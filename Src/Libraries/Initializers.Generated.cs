@@ -4572,9 +4572,19 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[], System.Exception>(IronRuby.Builtins.KernelOps.BuildException)
             );
             
+            DefineLibraryMethod(module, "__callee__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
+            );
+            
             DefineLibraryMethod(module, "__id__", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetObjectId)
+            );
+            
+            DefineLibraryMethod(module, "__method__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
             );
             
             DefineLibraryMethod(module, "!~", 0x51, 
@@ -5148,6 +5158,16 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadKernel_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__callee__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
+            );
+            
+            DefineLibraryMethod(module, "__method__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
+            );
+            
             #if FEATURE_PROCESS
             DefineLibraryMethod(module, "`", 0x61, 
                 0x00020004U, 

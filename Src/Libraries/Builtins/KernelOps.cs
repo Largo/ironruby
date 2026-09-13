@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -341,8 +341,20 @@ namespace IronRuby.Builtins {
         }
 
         //callcc
-        // 1.9 private instance/singleton __callee__
-        // 1.9 private instance/singleton __method__
+
+        /// <summary>
+        /// The name the enclosing method was defined under, or nil outside any method. A block
+        /// reports the method it was written in, which is why this walks the scope chain rather
+        /// than only looking at the innermost scope.
+        /// </summary>
+        [RubyMethod("__method__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__method__", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("__callee__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__callee__", RubyMethodAttributes.PublicSingleton)]
+        public static object GetCurrentMethodName(RubyScope/*!*/ scope, object self) {
+            string name = scope.GetCurrentMethodName();
+            return name != null ? scope.RubyContext.EncodeIdentifier(name) : null;
+        }
 
         #endregion
 
