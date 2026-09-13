@@ -6773,6 +6773,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, System.Object>(IronRuby.Builtins.RubyProcess.ExecPrimitive)
             );
             
+            DefineLibraryMethod(module, "__get_cloexec__", 0x61, 
+                0x00020000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Int32, System.Object>(IronRuby.Builtins.RubyProcess.GetCloseOnExec)
+            );
+            
             DefineLibraryMethod(module, "__getegid__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.Builtins.RubyProcess.GetEgid)
@@ -6821,6 +6826,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__os_pipe__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RubyProcess.OsPipe)
+            );
+            
+            DefineLibraryMethod(module, "__set_cloexec__", 0x61, 
+                0x00020000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Int32, System.Boolean, System.Object>(IronRuby.Builtins.RubyProcess.SetCloseOnExec)
             );
             
             DefineLibraryMethod(module, "__set_last_status__", 0x61, 

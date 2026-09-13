@@ -1255,6 +1255,25 @@ class Process::Status
 end
 
 class << IO
+  # IO.pipe used to be a queue between two threads of this process, whose "descriptors"
+  # were indices into IronRuby's own table. Nothing outside the process could be handed
+  # one, which is the whole point of a pipe as soon as there is a child to talk to, so
+  # it is pipe(2) now. The block form is here too; the method it replaces took no block
+  # and quietly ignored one.
+  def pipe(*args)
+    read, write = Process.__os_pipe__
+    external, internal = args.reject { |a| a.respond_to?(:to_hash) }
+    read.set_encoding(external, internal) if external
+
+    return [read, write] unless block_given?
+    begin
+      yield(read, write)
+    ensure
+      write.close unless write.closed?
+      read.close unless read.closed?
+    end
+  end
+
   # IO.popen on top of Process.spawn and a real pipe. The method it replaces started the
   # child through System.Diagnostics.Process, which meant the redirection options had to
   # be lowered onto the shell command line, there was no way to hand the child anything
@@ -6613,7 +6632,7 @@ module Process
       end
       value = value.to_str
     end
-    raise ArgumentError, "#{what} contains null byte" if value.include?("\0")
+    raise ArgumentError, "string contains null byte" if value.include?("\0")
     value
   end
 
@@ -6713,8 +6732,17 @@ module Process
 
     options.each do |key, value|
       next unless __spawn_redirect_key?(key)
+      first = nil
       __spawn_key_fds__(key).each do |fd|
-        actions.concat(__spawn_redirect__(fd, value, deferred))
+        if first.nil?
+          actions.concat(__spawn_redirect__(fd, value, deferred))
+          first = fd
+        else
+          # [:out, :err] => "file" opens the file once and points both descriptors at
+          # it; opening it twice would give them separate offsets, so whichever wrote
+          # second would overwrite the other.
+          actions << [SPAWN_DUP2, fd, first]
+        end
       end
     end
 
@@ -6759,8 +6787,13 @@ module Process
     if !args.empty? && args.first.respond_to?(:to_hash) && !args.first.is_a?(String)
       env = args.shift.to_hash
     end
-    if args.size > 1 && args.last.respond_to?(:to_hash) && !args.last.is_a?(String)
-      options = args.pop.to_hash
+    # The options hash is only recognised behind a command, except that an env hash has
+    # already been taken off the front - so `spawn({}, {})` is env plus options and no
+    # command, not env plus a command that happens to be a Hash.
+    if args.size > 1 || (env && args.size == 1)
+      if !args.empty? && args.last.respond_to?(:to_hash) && !args.last.is_a?(String)
+        options = args.pop.to_hash
+      end
     end
     raise ArgumentError, "wrong number of arguments (given 0, expected 1+)" if args.empty?
 
@@ -6774,9 +6807,9 @@ module Process
 
     options.each_key do |key|
       next if __spawn_redirect_key?(key)
-      raise ArgumentError, "wrong exec option: #{key.inspect}" if key.is_a?(String)
+      raise ArgumentError, "wrong exec option" if key.is_a?(String)
       unless SPAWN_OPTION_KEYS.include?(key)
-        raise ArgumentError, "wrong exec option symbol: #{key.inspect}"
+        raise ArgumentError, "wrong exec option symbol: #{key}"
       end
     end
 
@@ -6824,24 +6857,27 @@ module Process
       next unless options.key?(key)
       value = options[key]
       unless value.nil? || value == true || value == false
-        raise ArgumentError, "wrong exec option: #{key.inspect}, expected true or false"
+        raise ArgumentError, "expected true or false as #{key}: #{value}"
       end
     end
 
     pgroup = nil
     if options.key?(:pgroup)
       value = options[:pgroup]
-      raise TypeError, "wrong exec option" if value.is_a?(Symbol)
       case value
-      when Integer
-        raise ArgumentError, "negative process group ID : #{value}" if value < 0
-        pgroup = value
       when true
         pgroup = 0
       when false, nil
         pgroup = nil
       else
-        raise ArgumentError, "wrong exec option"
+        unless value.is_a?(Integer)
+          unless value.respond_to?(:to_int) && !value.is_a?(Symbol)
+            raise TypeError, "no implicit conversion of #{value.class} into Integer"
+          end
+          value = value.to_int
+        end
+        raise ArgumentError, "negative process group ID : #{value}" if value < 0
+        pgroup = value
       end
     end
 
@@ -8281,13 +8317,20 @@ class IO
   # There is no exec here to leak a descriptor into, and no way to unset
   # binmode once set, so these record what they are told and answer it back.
 
+  # Real FD_CLOEXEC, not a remembered flag: whether a child sees the descriptor is the
+  # kernel's business, and a spawned child was the only thing that ever asked.
   def close_on_exec=(value)
-    @__close_on_exec__ = !!value
-  end unless method_defined?(:close_on_exec=)
+    flag = value ? true : false
+    Process.__set_cloexec__(fileno, flag)
+    @__close_on_exec__ = flag
+    value
+  end
 
   def close_on_exec?
+    actual = Process.__get_cloexec__(fileno)
+    return actual unless actual.nil?
     defined?(@__close_on_exec__) && !@__close_on_exec__ ? false : true
-  end unless method_defined?(:close_on_exec?)
+  end
 
   # The built-in answers from the stream mode, which a pipe never gets set
   # because the built-in binmode throws on one. Fall back to the flag that

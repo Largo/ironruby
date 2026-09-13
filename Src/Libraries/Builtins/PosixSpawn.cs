@@ -88,6 +88,9 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "open")]
         private static extern int SysOpen(IntPtr path, int flags, uint mode);
 
+        [DllImport("libc", SetLastError = true, EntryPoint = "fcntl")]
+        private static extern int SysFcntl(int fd, int command, int argument);
+
         [DllImport("libc", EntryPoint = "getppid")]
         private static extern int SysGetPpid();
 
@@ -99,6 +102,9 @@ namespace IronRuby.Builtins {
 
         private const short POSIX_SPAWN_SETPGROUP = 0x02;
         private const int O_CLOEXEC = 0x80000;
+        private const int F_GETFD = 1;
+        private const int F_SETFD = 2;
+        private const int FD_CLOEXEC = 1;
         private const int X_OK = 1;
         private const int EINTR = 4;
         private const int ENOEXEC = 8;
@@ -368,6 +374,37 @@ namespace IronRuby.Builtins {
             var childStatus = new Status(result, status);
             context.ChildProcessExitStatus = childStatus;
             return new RubyArray { ScriptingRuntimeHelpers.Int32ToObject(result), childStatus };
+        }
+
+        /// <summary>
+        /// FD_CLOEXEC for a descriptor, which is what IO#close_on_exec really is. Answering
+        /// from an instance variable, as the prelude used to, told the truth about nothing:
+        /// whether the child sees the descriptor is decided by the kernel flag.
+        /// </summary>
+        [RubyMethod("__get_cloexec__", RubyMethodAttributes.PublicSingleton)]
+        public static object GetCloseOnExec(RubyContext/*!*/ context, RubyModule/*!*/ self, [DefaultProtocol]int descriptor) {
+            int native = NativeDescriptor(context, self, descriptor);
+            if (native < 0) {
+                return null;
+            }
+            int flags = SysFcntl(native, F_GETFD, 0);
+            return (flags < 0) ? null : (object)((flags & FD_CLOEXEC) != 0);
+        }
+
+        [RubyMethod("__set_cloexec__", RubyMethodAttributes.PublicSingleton)]
+        public static object SetCloseOnExec(RubyContext/*!*/ context, RubyModule/*!*/ self,
+            [DefaultProtocol]int descriptor, bool value) {
+
+            int native = NativeDescriptor(context, self, descriptor);
+            if (native < 0) {
+                return null;
+            }
+            int flags = SysFcntl(native, F_GETFD, 0);
+            if (flags < 0) {
+                return null;
+            }
+            flags = value ? (flags | FD_CLOEXEC) : (flags & ~FD_CLOEXEC);
+            return (SysFcntl(native, F_SETFD, flags) < 0) ? null : (object)value;
         }
 
         /// <summary>A Process::Status that did not come from a wait, for Process::Status.wait's
