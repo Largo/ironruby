@@ -1972,6 +1972,12 @@ namespace IronRuby.Builtins {
             substring.PrepareForCharacterRead();
             int subCharCount = substring.GetCharCount();
 
+            // Nothing can match a substring longer than the receiver. Without this the clamp below
+            // turns "".rindex("l", 0) into LastIndexOf(.., -1), which is a CLR ArgumentException.
+            if (subCharCount > charCount) {
+                return null;
+            }
+
             // LastIndexOf has CLR semantics: no characters of the substring are matched beyond start position.
             // Hence we need to increase start by the length of the substring - 1.
             if (start > charCount - subCharCount) {

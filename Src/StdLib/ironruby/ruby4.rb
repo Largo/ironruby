@@ -2060,6 +2060,247 @@ class String
   rescue ArgumentError
     downcase == other.downcase
   end unless method_defined?(:casecmp?)
+
+  # ------------------------------------------------------------------
+  # bytesplice - #[]= in byte space.
+  # ------------------------------------------------------------------
+
+  def bytesplice(*args)
+    if args.first.is_a?(Range)
+      range, replacement = args
+      rest = args[2, 2]
+      index = range.begin || 0
+      index += bytesize if index < 0
+      last = range.end
+      if last.nil?
+        length = bytesize - index
+      else
+        last += bytesize if last < 0
+        last += 1 unless range.exclude_end?
+        length = last - index
+        length = 0 if length < 0
+      end
+    else
+      index, length, replacement = args
+      rest = args[3, 2]
+    end
+
+    replacement = String.try_convert(replacement) ||
+      raise(TypeError, "no implicit conversion of #{replacement.nil? ? 'nil' : replacement.class} into String")
+
+    if rest && rest.size == 2
+      sub_index, sub_length = rest
+      sub_index += replacement.bytesize if sub_index < 0
+      raise IndexError, "index #{rest[0]} out of string" if sub_index < 0 || sub_index > replacement.bytesize
+      raise IndexError, "negative length #{sub_length}" if sub_length < 0
+      replacement = replacement.byteslice(sub_index, sub_length) || replacement[0, 0]
+    end
+
+    original = index
+    index += bytesize if index < 0
+    raise IndexError, "index #{original} out of string" if index < 0 || index > bytesize
+    raise IndexError, "negative length #{length}" if length < 0
+    length = bytesize - index if index + length > bytesize
+
+    enc = encoding
+    binary = dup.force_encoding(Encoding::BINARY)
+    head = binary[0, index]
+    tail = binary[index + length, binary.bytesize - index - length] || binary[0, 0]
+    replace((head + replacement.dup.force_encoding(Encoding::BINARY) + tail).force_encoding(enc))
+  end unless method_defined?(:bytesplice)
+
+  # ------------------------------------------------------------------
+  # scrub / scrub! - replace the byte runs that are not valid in the
+  # receiver's encoding.  A single byte encoding has no invalid sequences, so
+  # the receiver comes back untouched.
+  # ------------------------------------------------------------------
+
+  def __ir_scrub__(replacement, &block)
+    return dup if valid_encoding?
+    enc = encoding
+    replacement = String.try_convert(replacement) unless replacement.nil?
+
+    out = +""
+    out.force_encoding(Encoding::BINARY)
+    binary = dup.force_encoding(Encoding::BINARY)
+    pending = +""
+    pending.force_encoding(Encoding::BINARY)
+
+    flush_bad = lambda do
+      next if pending.empty?
+      if block
+        out << block.call(pending.dup.force_encoding(enc)).to_s.dup.force_encoding(Encoding::BINARY)
+      elsif replacement
+        out << replacement.dup.force_encoding(Encoding::BINARY)
+      else
+        out << "�".dup.force_encoding(Encoding::BINARY)
+      end
+      pending.clear
+    end
+
+    # Walk forward over maximal valid prefixes.  Anything that cannot start a
+    # character joins the pending bad run, which is emitted as one replacement
+    # the way MRI does rather than one per byte.
+    i = 0
+    n = binary.bytesize
+    while i < n
+      matched = nil
+      # The longest sequence any encoding here uses is 4 bytes.
+      (1..4).each do |len|
+        break if i + len > n
+        candidate = binary[i, len].force_encoding(enc)
+        if candidate.valid_encoding?
+          matched = len
+          break
+        end
+      end
+      if matched
+        flush_bad.call
+        out << binary[i, matched]
+        i += matched
+      else
+        pending << binary[i]
+        i += 1
+      end
+    end
+    flush_bad.call
+    out.force_encoding(enc)
+  end
+  private :__ir_scrub__
+
+  def scrub(replacement = nil, &block)
+    __ir_scrub__(replacement, &block)
+  end unless method_defined?(:scrub)
+
+  def scrub!(replacement = nil, &block)
+    replace(__ir_scrub__(replacement, &block))
+    self
+  end unless method_defined?(:scrub!)
+
+  # ------------------------------------------------------------------
+  # undump - the inverse of #dump.
+  # ------------------------------------------------------------------
+
+  def undump
+    src = self
+    unless src.start_with?('"')
+      raise RuntimeError, %q{invalid dumped string; not wrapped with '"' nor '"...".force_encoding("...")' form}
+    end
+
+    out = +""
+    out.force_encoding(Encoding::BINARY)
+    i = 1
+    n = src.bytesize
+    binary = src.dup.force_encoding(Encoding::BINARY)
+    closed = false
+    forced = nil
+
+    while i < n
+      ch = binary[i]
+      if ch == '"'
+        closed = true
+        i += 1
+        break
+      elsif ch == "\\"
+        i += 1
+        raise RuntimeError, "unterminated dumped string" if i >= n
+        esc = binary[i]
+        i += 1
+        case esc
+        when "n" then out << "\n"
+        when "t" then out << "\t"
+        when "r" then out << "\r"
+        when "f" then out << "\f"
+        when "v" then out << "\v"
+        when "b" then out << "\b"
+        when "a" then out << "\a"
+        when "e" then out << "\e"
+        when "0" then out << "\0"
+        when "\\" then out << "\\"
+        when '"' then out << '"'
+        when "#" then out << "#"
+        when "x"
+          hex = binary[i, 2]
+          raise RuntimeError, "invalid hex escape" unless hex =~ /\A[0-9a-fA-F]{2}\z/
+          out << hex.to_i(16).chr(Encoding::BINARY)
+          i += 2
+        when "u"
+          if binary[i] == "{"
+            close = binary.index("}", i)
+            raise RuntimeError, "unterminated Unicode escape" if close.nil?
+            body = binary[i + 1, close - i - 1]
+            body.split(/\s+/).each do |cp|
+              next if cp.empty?
+              out << [cp.to_i(16)].pack("U").dup.force_encoding(Encoding::BINARY)
+            end
+            i = close + 1
+          else
+            hex = binary[i, 4]
+            raise RuntimeError, "invalid Unicode escape" unless hex =~ /\A[0-9a-fA-F]{4}\z/
+            out << [hex.to_i(16)].pack("U").dup.force_encoding(Encoding::BINARY)
+            i += 4
+          end
+        else
+          # MRI leaves an escape it does not know alone, backslash and all.
+          out << "\\" << esc
+        end
+      else
+        out << ch
+        i += 1
+      end
+    end
+
+    raise RuntimeError, "unterminated dumped string" unless closed
+
+    rest = binary[i, n - i].to_s
+    unless rest.empty?
+      m = /\A\.force_encoding\("([^"]+)"\)\z/.match(rest)
+      unless m
+        raise RuntimeError, %q{invalid dumped string; not wrapped with '"' nor '"...".force_encoding("...")' form}
+      end
+      forced = m[1]
+    end
+
+    out.force_encoding(forced || encoding)
+    out
+  end unless method_defined?(:undump)
+
+  # ------------------------------------------------------------------
+  # unicode_normalize - .NET already has the four normalisation forms.
+  # ------------------------------------------------------------------
+
+  UNICODE_NORMALIZE_FORMS = {
+    nfc:  System::Text::NormalizationForm.FormC,
+    nfd:  System::Text::NormalizationForm.FormD,
+    nfkc: System::Text::NormalizationForm.FormKC,
+    nfkd: System::Text::NormalizationForm.FormKD,
+  }.freeze
+
+  def __ir_normalization_form__(form)
+    UNICODE_NORMALIZE_FORMS[form] ||
+      raise(ArgumentError, ":#{form} is neither :nfc, :nfd, :nfkc, nor :nfkd")
+  end
+  private :__ir_normalization_form__
+
+  def unicode_normalize(form = :nfc)
+    net_form = __ir_normalization_form__(form)
+    unless encoding == Encoding::UTF_8 || encoding == Encoding::US_ASCII ||
+           encoding == Encoding::UTF_16LE || encoding == Encoding::UTF_16BE ||
+           encoding == Encoding::UTF_32LE || encoding == Encoding::UTF_32BE
+      raise Encoding::CompatibilityError, "Unicode Normalization not appropriate for #{encoding.name}"
+    end
+    utf8 = encoding == Encoding::UTF_8 ? self : encode(Encoding::UTF_8)
+    result = utf8.to_clr_string.Normalize(net_form).to_s.dup.force_encoding(Encoding::UTF_8)
+    encoding == Encoding::UTF_8 ? result : result.encode(encoding)
+  end unless method_defined?(:unicode_normalize)
+
+  def unicode_normalize!(form = :nfc)
+    replace(unicode_normalize(form))
+  end unless method_defined?(:unicode_normalize!)
+
+  def unicode_normalized?(form = :nfc)
+    unicode_normalize(form) == self
+  end unless method_defined?(:unicode_normalized?)
 end
 
 # The complex-number half of Numeric.  IronRuby's Complex has these, but the
