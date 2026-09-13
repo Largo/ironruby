@@ -5624,6 +5624,215 @@ module Process
     end
     module_function :warmup
   end
+
+  # --- spawn and the wait family ------------------------------------------------
+  #
+  # Process.__spawn__ starts "/bin/sh -c <script>" and hands back a pid without
+  # waiting; everything else - picking the command apart, converting and checking
+  # the arguments, and folding :chdir/:umask/redirections into the script - is here,
+  # because it is all protocol work that reads far better in Ruby.
+
+  SPAWN_OPTION_KEYS = [
+    :unsetenv_others, :close_others, :pgroup, :new_pgroup, :chdir, :umask,
+    :in, :out, :err, :rlimit_core, :rlimit_cpu, :rlimit_fsize, :exception,
+  ].freeze
+
+  def self.__check_spawn_string__(value, what)
+    unless value.is_a?(String)
+      unless value.respond_to?(:to_str)
+        raise TypeError, "no implicit conversion of #{value.class} into String"
+      end
+      value = value.to_str
+    end
+    raise ArgumentError, "#{what} contains null byte" if value.include?("\0")
+    value
+  end
+
+  # Single-quote for /bin/sh: everything inside '' is literal, and a quote itself
+  # has to leave and re-enter the quoting.
+  def self.__shell_quote__(s)
+    "'" + s.to_s.gsub("'", "'\\\\''") + "'"
+  end
+
+  def self.__spawn_redirect__(key, value)
+    fd = case key
+         when :in then 0
+         when :out then 1
+         when :err then 2
+         when Integer then key
+         when IO then key.fileno
+         when Array then nil
+         else return nil
+         end
+    return nil if fd.nil?
+
+    case value
+    when :close       then "#{fd}>&-"
+    when Integer      then "#{fd}>&#{value}"
+    when IO           then "#{fd}>&#{value.fileno}"
+    when Array
+      if value[0] == :child
+        "#{fd}>&#{value[1] == :out ? 1 : (value[1] == :err ? 2 : value[1])}"
+      else
+        name = __check_spawn_string__(value[0], "path name")
+        mode = value[1].to_s
+        op = mode.include?("a") ? ">>" : (mode.start_with?("r") ? "<" : ">")
+        "#{fd}#{op}#{__shell_quote__(name)}"
+      end
+    when String, Symbol
+      name = __check_spawn_string__(value.to_s, "path name")
+      fd == 0 ? "#{fd}<#{__shell_quote__(name)}" : "#{fd}>#{__shell_quote__(name)}"
+    else
+      nil
+    end
+  end
+
+  def self.__resolve_executable__(name)
+    if name.include?(File::SEPARATOR) || (File::ALT_SEPARATOR && name.include?(File::ALT_SEPARATOR))
+      candidates = [name]
+    else
+      path = ENV["PATH"].to_s
+      candidates = path.split(File::PATH_SEPARATOR).map { |dir| File.join(dir.empty? ? "." : dir, name) }
+    end
+
+    candidates.each do |candidate|
+      next unless File.exist?(candidate)
+      raise Errno::EACCES, candidate if File.directory?(candidate)
+      raise Errno::EACCES, candidate unless File.executable?(candidate)
+      return candidate
+    end
+    raise Errno::ENOENT, name
+  end
+
+  def self.__parse_spawn_args__(args)
+    args = args.dup
+    env = nil
+    options = {}
+
+    if !args.empty? && args.first.respond_to?(:to_hash) && !args.first.is_a?(String)
+      env = args.shift.to_hash
+    end
+    if args.size > 1 && args.last.respond_to?(:to_hash) && !args.last.is_a?(String)
+      options = args.pop.to_hash
+    end
+    raise ArgumentError, "wrong number of arguments (given 0, expected 1+)" if args.empty?
+
+    if env
+      env = env.each_with_object({}) do |(k, v), h|
+        key = __check_spawn_string__(k, "environment name")
+        raise ArgumentError, "environment name contains a equal : #{key}" if key.include?("=")
+        h[key] = v.nil? ? nil : __check_spawn_string__(v, "environment value")
+      end
+    end
+
+    options.each_key do |key|
+      next if key.is_a?(Integer) || key.is_a?(IO) || key.is_a?(Array)
+      raise ArgumentError, "wrong exec option: #{key.inspect}" if key.is_a?(String)
+      unless SPAWN_OPTION_KEYS.include?(key)
+        raise ArgumentError, "wrong exec option symbol: #{key.inspect}"
+      end
+    end
+
+    [env, args, options]
+  end
+
+  def self.__build_spawn_script__(args, options)
+    if args.size == 1 && !args.first.is_a?(Array)
+      # One string: the shell gets it verbatim, so expansion and whitespace splitting
+      # both behave the way MRI's shell form does.
+      command = __check_spawn_string__(args.first, "command")
+      raise Errno::ENOENT, "" if command.strip.empty?
+      body = command
+    else
+      first = args.first
+      if first.is_a?(Array) || (!first.is_a?(String) && first.respond_to?(:to_ary))
+        pair = first.to_ary
+        unless pair.size == 2
+          raise ArgumentError, "wrong first argument"
+        end
+        name = __check_spawn_string__(pair[0], "command")
+        argv0 = __check_spawn_string__(pair[1], "command")
+      else
+        name = __check_spawn_string__(first, "command")
+        argv0 = name
+      end
+      rest = args[1..-1].map { |a| __check_spawn_string__(a, "string") }
+      # Resolve before running so that a missing or unusable command is ENOENT/EACCES
+      # from Process.spawn itself, not a 127 from the shell.
+      resolved = __resolve_executable__(name)
+      body = ([__shell_quote__(resolved)] + rest.map { |a| __shell_quote__(a) }).join(" ")
+      body = "exec -a #{__shell_quote__(argv0)} #{body}" if argv0 != name
+    end
+
+    prefix = []
+    if (dir = options[:chdir])
+      dir = dir.respond_to?(:to_path) ? dir.to_path : dir
+      dir = __check_spawn_string__(dir, "path name")
+      raise Errno::ENOENT, dir unless File.directory?(dir)
+      prefix << "cd #{__shell_quote__(dir)}"
+    end
+    if (mask = options[:umask])
+      prefix << format("umask %o", mask.to_int)
+    end
+
+    redirects = options.map { |k, v| __spawn_redirect__(k, v) }.compact
+    script = body
+    script = "#{script} #{redirects.join(' ')}" unless redirects.empty?
+    script = "exec #{script}" unless script.start_with?("exec ")
+    script = (prefix + [script]).join(" && ") unless prefix.empty?
+    script
+  end
+
+  def self.spawn(*args)
+    env, command, options = __parse_spawn_args__(args)
+
+    [:unsetenv_others, :close_others, :new_pgroup].each do |key|
+      next unless options.key?(key)
+      value = options[key]
+      unless value.nil? || value == true || value == false
+        raise ArgumentError, "wrong exec option: #{key.inspect}"
+      end
+    end
+    if options.key?(:pgroup)
+      pgroup = options[:pgroup]
+      raise TypeError, "wrong exec option" if pgroup.is_a?(Symbol)
+      raise ArgumentError, "negative process group ID : #{pgroup}" if pgroup.is_a?(Integer) && pgroup < 0
+    end
+
+    script = __build_spawn_script__(command, options)
+    __spawn__(script, env, options[:unsetenv_others] ? true : false)
+  end
+
+  def self.waitpid2(pid = -1, flags = 0)
+    __waitpid__(pid.to_int, flags.to_int)
+  end
+
+  def self.waitpid(pid = -1, flags = 0)
+    result = waitpid2(pid, flags)
+    result && result[0]
+  end
+
+  def self.wait(pid = -1, flags = 0)
+    waitpid(pid, flags)
+  end
+
+  def self.wait2(pid = -1, flags = 0)
+    waitpid2(pid, flags)
+  end
+
+  def self.waitall
+    results = []
+    loop do
+      begin
+        pair = __waitpid__(-1, 0)
+      rescue SystemCallError
+        break
+      end
+      break if pair.nil?
+      results << pair
+    end
+    results
+  end
 end
 
 class SignalException
