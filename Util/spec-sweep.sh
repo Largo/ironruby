@@ -25,16 +25,20 @@
 #
 #   spec/core/kernel/require_spec.rb
 #       "Kernel#require (concurrently) blocks a second thread from returning
-#       while the 1st is still requiring" hangs forever.  The fixture
-#       spec/fixtures/code/concurrent.rb spins on
-#           Thread.pass until t.backtrace && t.backtrace.any? {...} && t.stop?
-#       and IronRuby's Thread#backtrace answers nil for any thread other than
-#       the caller (see the Thread reopening in Src/StdLib/ironruby/ruby4.rb).
-#       Walking another thread's Ruby stack would mean keeping a per-thread
-#       frame list; IronRuby builds backtraces lazily from the CLR stack
-#       instead, and .NET Core has no supported way to capture another thread's
-#       managed stack.  So this is not a missing method, it is a design
-#       consequence, and the file stays excluded until that changes.
+#       while the 1st is still requiring" deadlocks - a busy-wait with no
+#       timeout, so raising mspec's cap does not help and never will.
+#
+#       Run Util/kernel-require-wedge.rb for the measured diagnosis.  In
+#       short, and because these are the natural guesses and all three are
+#       wrong: thread-locals ARE visible across threads, require's
+#       cross-thread lock DOES work (the second thread really blocks and
+#       really gets false), and the first thread DOES reach the required
+#       file's body.  The thread that spins forever is the *first* one, on
+#       the one term left: Thread#backtrace answers nil for any thread but
+#       the caller.  IronRuby builds backtraces by walking the CLR stack on
+#       demand rather than keeping a per-thread frame list, and .NET Core
+#       removed the APIs that could capture another thread's managed stack,
+#       so this is structural rather than a missing method.
 #
 #   spec/core/kernel/abort_spec.rb, spec/core/kernel/exit_spec.rb
 #       process termination; owned elsewhere.
