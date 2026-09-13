@@ -4586,8 +4586,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "autoload", 0x52, 
-                0x0006000cU, 
-                new Action<IronRuby.Runtime.RubyScope, System.Object, System.String, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.SetAutoloadedConstant)
+                0x00040008U, 
+                new Action<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.SetAutoloadedConstant)
             );
             
             DefineLibraryMethod(module, "autoload?", 0x52, 
@@ -5136,8 +5136,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "autoload", 0x61, 
-                0x0006000cU, 
-                new Action<IronRuby.Runtime.RubyScope, System.Object, System.String, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.SetAutoloadedConstant)
+                0x00040008U, 
+                new Action<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.SetAutoloadedConstant)
             );
             
             DefineLibraryMethod(module, "autoload?", 0x61, 
@@ -6056,13 +6056,14 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "autoload", 0x51, 
-                0x00030006U, 
-                new Action<IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ModuleOps.SetAutoloadedConstant)
+                0x00020004U, 
+                new Action<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.SetAutoloadedConstant)
             );
             
             DefineLibraryMethod(module, "autoload?", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ModuleOps.GetAutoloadedConstantPath)
+                0x00010002U, 0x00010002U, 
+                new Func<IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ModuleOps.GetAutoloadedConstantPath), 
+                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ModuleOps.GetAutoloadedConstantPath)
             );
             
             DefineLibraryMethod(module, "class_eval", 0x51, 

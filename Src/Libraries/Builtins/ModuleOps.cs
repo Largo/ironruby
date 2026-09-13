@@ -1033,10 +1033,11 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("autoload")]
-        public static void SetAutoloadedConstant(RubyModule/*!*/ self,
-            [DefaultProtocol, NotNull]string/*!*/ constantName, [DefaultProtocol, NotNull]MutableString/*!*/ path) {
+        public static void SetAutoloadedConstant(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ constantName, object pathArg) {
 
             RubyUtils.CheckConstantName(constantName);
+            MutableString path = Protocols.CastToPath(toPath, pathArg);
             if (path.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("empty file name");
             }
@@ -1055,7 +1056,14 @@ namespace IronRuby.Builtins {
         // thread-safe:
         [RubyMethod("autoload?")]
         public static MutableString GetAutoloadedConstantPath(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            return self.GetAutoloadedConstantPath(constantName);
+            return self.GetAutoloadedConstantPath(constantName, true);
+        }
+
+        // thread-safe:
+        [RubyMethod("autoload?")]
+        public static MutableString GetAutoloadedConstantPath(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName,
+            bool inherit) {
+            return self.GetAutoloadedConstantPath(constantName, inherit);
         }
 
         #endregion

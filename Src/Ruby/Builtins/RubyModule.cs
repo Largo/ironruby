@@ -1069,11 +1069,15 @@ namespace IronRuby.Builtins {
                 return;
             }
             using (Context.ClassHierarchyLocker()) {
-                if (_constantLocations == null) {
-                    _constantLocations = new Dictionary<string, KeyValuePair<string, int>>();
-                }
-                _constantLocations[name] = new KeyValuePair<string, int>(sourcePath, sourceLine);
+                SetConstantLocationNoLock(name, sourcePath, sourceLine);
             }
+        }
+
+        private void SetConstantLocationNoLock(string/*!*/ name, string/*!*/ sourcePath, int sourceLine) {
+            if (_constantLocations == null) {
+                _constantLocations = new Dictionary<string, KeyValuePair<string, int>>();
+            }
+            _constantLocations[name] = new KeyValuePair<string, int>(sourcePath, sourceLine);
         }
 
         public bool TryGetConstantLocation(string/*!*/ name, out string sourcePath, out int sourceLine) {
@@ -1129,21 +1133,41 @@ namespace IronRuby.Builtins {
         
         // thread-safe:
         public void SetAutoloadedConstant(string/*!*/ name, MutableString/*!*/ path) {
-            ConstantStorage dummy;
-            if (!TryGetConstant(null, name, out dummy)) {
-                SetConstant(name, new AutoloadedConstant(MutableString.Create(path).Freeze()));
+            using (Context.ClassHierarchyLocker()) {
+                ConstantStorage existing;
+                if (TryGetConstantNoAutoloadCheck(name, out existing)) {
+                    var autoloaded = existing.Value as AutoloadedConstant;
+                    // A real constant wins - autoload is a nop. A pending autoload is replaced by the new one.
+                    if (autoloaded == null || autoloaded.Loaded) {
+                        return;
+                    }
+                }
+                SetConstantNoLock(name, new AutoloadedConstant(MutableString.Create(path).Freeze()));
             }
         }
 
         // thread-safe:
         public MutableString GetAutoloadedConstantPath(string/*!*/ name) {
+            return GetAutoloadedConstantPath(name, false);
+        }
+
+        // thread-safe:
+        public MutableString GetAutoloadedConstantPath(string/*!*/ name, bool inherit) {
             using (Context.ClassHierarchyLocker()) {
-                ConstantStorage storage;
-                AutoloadedConstant autoloaded;
-                return (TryGetConstantNoAutoloadCheck(name, out storage)
-                    && (autoloaded = storage.Value as AutoloadedConstant) != null
-                    && !autoloaded.Loaded) ?
-                    autoloaded.Path : null;
+                MutableString result = null;
+                ForEachAncestor(inherit, (module) => {
+                    ConstantStorage storage;
+                    AutoloadedConstant autoloaded;
+                    if (module.TryGetConstantNoAutoloadCheck(name, out storage)) {
+                        if ((autoloaded = storage.Value as AutoloadedConstant) != null && !autoloaded.Loaded) {
+                            result = autoloaded.Path;
+                        }
+                        // a constant found in this module ends the search whether it is an autoload or not
+                        return true;
+                    }
+                    return false;
+                });
+                return result;
             }
         }
 
@@ -1248,11 +1272,29 @@ namespace IronRuby.Builtins {
                 }
 
                 // autoloaded constants are removed before the associated file is loaded:
+                string autoloadPath;
+                int autoloadLine;
+                bool hadLocation = owner.TryGetConstantLocation(name, out autoloadPath, out autoloadLine);
+
                 object _;
                 owner.TryRemoveConstantNoLock(name, out _);
-                               
+
                 // load file and try lookup again (releases the class hierarchy lock when loading the file):
-                if (!autoloaded.Load(autoloadScope)) {
+                bool loaded;
+                try {
+                    loaded = autoloaded.Load(autoloadScope);
+                } catch (Exception) {
+                    // MRI keeps the constant registered as an autoload when the file fails to load, so that
+                    // referencing it again retries the load. A fresh AutoloadedConstant is needed because the
+                    // old one already marked itself as loaded.
+                    owner.SetConstantNoMutateNoLock(name, new AutoloadedConstant(autoloaded.Path));
+                    if (hadLocation) {
+                        owner.SetConstantLocationNoLock(name, autoloadPath, autoloadLine);
+                    }
+                    throw;
+                }
+
+                if (!loaded) {
                     return ConstantLookupResult.NotFound;
                 }
             }
