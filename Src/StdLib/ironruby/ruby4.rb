@@ -1992,16 +1992,10 @@ class String
 
   def rpartition(sep)
     if sep.is_a?(Regexp)
-      # Regexp#match has no "last match" mode, so the last one is found by
-      # walking the matches forward and keeping the final one.
-      last = nil
-      at = 0
-      while (m = sep.match(self, at))
-        last = [m.begin(0), m.end(0)]
-        at = m.end(0) > m.begin(0) ? m.end(0) : m.begin(0) + 1
-        break if at > length
-      end
-      bounds = last
+      # #rindex already searches backwards for a Regexp and leaves the match in
+      # $~, which is where the end of it comes from.
+      i = rindex(sep)
+      bounds = i && [i, i + ($~ ? $~[0].length : 0)]
     else
       unless sep.is_a?(String)
         if sep.respond_to?(:to_str)
