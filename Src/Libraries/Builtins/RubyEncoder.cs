@@ -140,7 +140,7 @@ namespace IronRuby.Builtins {
         private static void WriteBer(Stream/*!*/ stream, IntegerValue value) {
             if (value.IsFixnum) {
                 if (value.Fixnum < 0) {
-                    throw RubyExceptions.CreateArgumentError("pack(w): value out of range");
+                    throw RubyExceptions.CreateArgumentError("can't compress negative numbers");
                 }
                 int f = value.Fixnum;
                 bool write = false;
@@ -155,7 +155,7 @@ namespace IronRuby.Builtins {
             } else {
                 BigInteger bignum = value.Bignum;
                 if (bignum.Sign < 0) {
-                    throw RubyExceptions.CreateArgumentError("pack(w): value out of range");
+                    throw RubyExceptions.CreateArgumentError("can't compress negative numbers");
                 }
 
                 // not very efficient but good enough:
@@ -787,7 +787,7 @@ namespace IronRuby.Builtins {
         private static void WriteDouble(ConversionStorage<double>/*!*/ floatConversion,
             Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
             for (int j = 0; j < count; j++) {
-                Write(stream, unchecked((ulong)DoubleToInt64Bits(Protocols.CastToFloat(floatConversion, GetPackArg(self, i + j)))), swap);
+                Write(stream, unchecked((ulong)DoubleToInt64Bits(ToPackFloat(floatConversion, GetPackArg(self, i + j)))), swap);
             }
         }
 
@@ -808,7 +808,7 @@ namespace IronRuby.Builtins {
         private static void WriteSingle(ConversionStorage<double>/*!*/ floatConversion,
             Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, bool swap) {
             for (int j = 0; j < count; j++) {
-                byte[] bytes = BitConverter.GetBytes((float)Protocols.CastToFloat(floatConversion, GetPackArg(self, i + j)));
+                byte[] bytes = BitConverter.GetBytes((float)ToPackFloat(floatConversion, GetPackArg(self, i + j)));
                 if (swap) {
                     stream.WriteByte(bytes[3]);
                     stream.WriteByte(bytes[2]);
@@ -866,6 +866,50 @@ namespace IronRuby.Builtins {
             }
         }
 
+        private static double ToPackFloat(ConversionStorage<double>/*!*/ floatConversion, object value) {
+            if (value is MutableString) {
+                throw RubyExceptions.CreateTypeError("can't convert String into Float");
+            }
+            return Protocols.CastToFloat(floatConversion, value);
+        }
+        private static void WriteInteger(ConversionStorage<IntegerValue>/*!*/ integerConversion,
+            Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, int width, bool swap) {
+
+            byte[] buffer = new byte[width];
+            for (int j = 0; j < count; j++) {
+                object value = GetPackArg(self, i + j);
+                if (value == null) {
+                    throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+                }
+
+                IntegerValue integer = Protocols.CastToInteger(integerConversion, value);
+                if (integer.IsFixnum) {
+                    long n = integer.Fixnum;
+                    for (int b = 0; b < width; b++) {
+                        buffer[b] = unchecked((byte)(n >> (8 * Math.Min(b, 7))));
+                    }
+                    // Sign-extend past 8 bytes.
+                    byte fill = (byte)(n < 0 ? 0xff : 0x00);
+                    for (int b = 8; b < width; b++) {
+                        buffer[b] = fill;
+                    }
+                } else {
+                    byte[] bytes = integer.Bignum.ToByteArray();   // little-endian two's complement
+                    byte fill = (byte)(integer.Bignum.Sign < 0 ? 0xff : 0x00);
+                    for (int b = 0; b < width; b++) {
+                        buffer[b] = b < bytes.Length ? bytes[b] : fill;
+                    }
+                }
+
+                if (swap) {
+                    for (int b = width - 1; b >= 0; b--) {
+                        stream.WriteByte(buffer[b]);
+                    }
+                } else {
+                    stream.Write(buffer, 0, width);
+                }
+            }
+        }
         private static void FromHex(Stream/*!*/ stream, MutableString/*!*/ str, int nibbleCount, bool swap) {
             int maxCount = Math.Min(nibbleCount, str.GetByteCount());
             for (int i = 0, j = 0; i < (nibbleCount + 1) / 2; i++, j += 2) {
@@ -880,11 +924,10 @@ namespace IronRuby.Builtins {
 
         // hexa digits -> values
         private static int FromHexDigit(int c) {
-            c = Tokenizer.ToDigit(c);
-            if (c < 16) return c;
-
-            // MRI does some magic here:
-            throw new NotSupportedException("directives `H' and `h' expect hexadecimal digits in input string");
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')) {
+                return (c - 'a' + 10) & 15;
+            }
+            return c & 15;
         }
 
         #endregion
@@ -920,6 +963,11 @@ namespace IronRuby.Builtins {
             /// <summary>
             /// True when this directive's bytes are to be read or written most significant first.
             /// </summary>
+            /// <summary>True when the bytes have to come out reversed on this machine.</summary>
+            internal bool Swap {
+                get { return IsBigEndian == BitConverter.IsLittleEndian; }
+            }
+
             internal bool IsBigEndian {
                 get {
                     switch (Order) {
@@ -1121,20 +1169,46 @@ namespace IronRuby.Builtins {
             ConversionStorage<double>/*!*/ floatConversion,
             ConversionStorage<MutableString>/*!*/ stringCast,
             ConversionStorage<MutableString>/*!*/ tosConversion,
-            RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format) {
+            RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format, MutableString buffer) {
 
-            // TODO: encodings
-
-            using (MutableStringStream stream = new MutableStringStream()) {
+            // With buffer: the result is appended to the string given, which is what comes
+            // back, keeping its own encoding.  '@' then addresses the buffer from its start.
+            MutableString basis = buffer ?? MutableString.CreateBinary();
+            using (MutableStringStream stream = new MutableStringStream(basis)) {
+                stream.Position = basis.GetByteCount();
                 int i = 0;
+
+                // MRI decides the result encoding from the directives it used: US-ASCII
+                // until something can emit an arbitrary byte, UTF-8 if only 'U' did.
+                // 1 = still ASCII, 2 = UTF-8, 0 = binary.
+                int encodingInfo = 1;
+
                 foreach (FormatDirective directive in FormatDirective.Enumerate(format.ConvertToString(), true)) {
                     int count = directive.Count ?? self.Count - i;
+
+                    switch (directive.Directive) {
+                        case 'U':
+                            if (encodingInfo == 1) {
+                                encodingInfo = 2;
+                            }
+                            break;
+
+                        case 'm':
+                        case 'M':
+                        case 'u':
+                            break;
+
+                        default:
+                            encodingInfo = 0;
+                            break;
+                    }
 
                     MutableString str;
                     switch (directive.Directive) {
                         case '@':
                             count = 0;
-                            stream.SetLength(stream.Position = directive.Count.HasValue ? directive.Count.Value : 1);
+                            // "@*" means "seek to 0", "@" with no count means "seek to 1".
+                            stream.SetLength(stream.Position = directive.Count ?? 0);
                             break;
 
                         case 'A':
@@ -1153,13 +1227,6 @@ namespace IronRuby.Builtins {
                                 directive.Directive == 'b',
                                 str = GetPackArg(self, i) != null ? ToMutableString(stringCast, stream, GetPackArg(self, i)) : MutableString.FrozenEmpty
                             );
-                            break;
-
-                        case 'c':
-                        case 'C':
-                            for (int j = 0; j < count; j++) {
-                                stream.WriteByte(unchecked((byte)Protocols.CastToUInt32Unchecked(integerConversion, GetPackArg(self, i + j))));
-                            }
                             break;
 
                         case 'd': // 8-byte native-endian
@@ -1199,36 +1266,41 @@ namespace IronRuby.Builtins {
                             break;
 
                         case 'Q':
-                        case 'q': // (un)signed 8-byte, byte order from the directive
-                            WriteUInt64(integerConversion, stream, self, i, count, directive.IsBigEndian);
+                        case 'q': // (un)signed 8-byte, native order unless '<'/'>' said otherwise
+                            WriteInteger(integerConversion, stream, self, i, count, 8, directive.Swap);
                             break;
 
                         case 'l':
                         case 'i':
                         case 'L':
-                        case 'I': // (un)signed 4-byte, byte order from the directive
-                            WriteUInt32(integerConversion, stream, self, i, count, directive.IsBigEndian);
+                        case 'I': // (un)signed 4-byte
+                            WriteInteger(integerConversion, stream, self, i, count, 4, directive.Swap);
                             break;
 
                         case 'N': // (un)signed 4-byte big-endian
-                            WriteUInt32(integerConversion, stream, self, i, count, BitConverter.IsLittleEndian);
+                            WriteInteger(integerConversion, stream, self, i, count, 4, BitConverter.IsLittleEndian);
                             break;
 
                         case 'n': // (un)signed 2-byte big-endian
-                            WriteUInt16(integerConversion, stream, self, i, count, BitConverter.IsLittleEndian);
+                            WriteInteger(integerConversion, stream, self, i, count, 2, BitConverter.IsLittleEndian);
                             break;
 
                         case 'V': // (un)signed 4-byte little-endian
-                            WriteUInt32(integerConversion, stream, self, i, count, !BitConverter.IsLittleEndian);
+                            WriteInteger(integerConversion, stream, self, i, count, 4, !BitConverter.IsLittleEndian);
                             break;
 
                         case 'v': // (un)signed 2-byte little-endian
-                            WriteUInt16(integerConversion, stream, self, i, count, !BitConverter.IsLittleEndian);
+                            WriteInteger(integerConversion, stream, self, i, count, 2, !BitConverter.IsLittleEndian);
                             break;
 
-                        case 's': // (un)signed 2-byte, byte order from the directive
+                        case 's': // (un)signed 2-byte
                         case 'S':
-                            WriteUInt16(integerConversion, stream, self, i, count, directive.IsBigEndian);
+                            WriteInteger(integerConversion, stream, self, i, count, 2, directive.Swap);
+                            break;
+
+                        case 'c': // (un)signed 1-byte
+                        case 'C':
+                            WriteInteger(integerConversion, stream, self, i, count, 1, false);
                             break;
 
                         case 'm': // Base64
@@ -1273,7 +1345,19 @@ namespace IronRuby.Builtins {
 
                         case 'U': // UTF8 code point
                             for (int j = 0; j < count; j++) {
-                                RubyEncoder.WriteUtf8CodePoint(stream, Protocols.CastToInteger(integerConversion, GetPackArg(self, i + j)).ToInt32());
+                                IntegerValue codePoint = Protocols.CastToInteger(integerConversion, GetPackArg(self, i + j));
+                                long scalar;
+                                if (codePoint.IsFixnum) {
+                                    scalar = codePoint.Fixnum;
+                                } else if (!Int64.TryParse(codePoint.Bignum.ToString(), out scalar)) {
+                                    // MRI converts to long first, so a value that does not even fit
+                                    // there is reported as a conversion failure, not a bad code point.
+                                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+                                }
+                                if (scalar < 0 || scalar > 0x7fffffff) {
+                                    throw RubyExceptions.CreateRangeError("pack(U): value out of range");
+                                }
+                                RubyEncoder.WriteUtf8CodePoint(stream, codePoint.Fixnum);
                             }
                             break;
 
@@ -1302,7 +1386,15 @@ namespace IronRuby.Builtins {
                     i += count;
                 }
                 stream.SetLength(stream.Position);
-                return stream.String.TaintBy(format);
+                MutableString result = stream.String.TaintBy(format);
+                if (buffer == null) {
+                    if (encodingInfo == 1) {
+                        result.ForceEncoding(RubyEncoding.Ascii);
+                    } else if (encodingInfo == 2) {
+                        result.ForceEncoding(RubyEncoding.UTF8);
+                    }
+                }
+                return result;
             }
         }
 
