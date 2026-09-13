@@ -35,6 +35,23 @@ namespace IronRuby.Runtime.Calls {
             _ruleGenerator(metaBuilder, args, name);
         }
 
+        /// <summary>
+        /// Like a library method registered under several names, one rule generator registered
+        /// under several - Method#call, #[] and #=== - gets an info each, and Ruby considers the
+        /// names to be the same method.
+        /// </summary>
+        public override bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
+            if (ReferenceEquals(this, other)) {
+                return true;
+            }
+            var info = other as RubyCustomMethodInfo;
+            return info != null && Equals(_ruleGenerator, info._ruleGenerator);
+        }
+
+        public override int GetEquivalenceHashCode() {
+            return _ruleGenerator.GetHashCode();
+        }
+
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
             return new RubyCustomMethodInfo(_ruleGenerator, flags, module);
         }

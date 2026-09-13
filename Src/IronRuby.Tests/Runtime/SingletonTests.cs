@@ -388,7 +388,7 @@ class << C
   new rescue p $!
 end
 ", @"
-#<Method: Class#new>
+#<Method: #<Class:#<Class:C>>(Class)#new>
 #<TypeError: can't create instance of virtual class>
 ");
         }

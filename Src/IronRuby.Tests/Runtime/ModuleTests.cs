@@ -227,7 +227,7 @@ end
 D = C.dup
 p D.instance_method(:foo)
 ", @"
-#<UnboundMethod: D#foo>
+#<UnboundMethod: D#foo() ClassDuplication7.rb:3>
 ");
         }
 

@@ -189,8 +189,8 @@ end
 p method(:m_kernel) rescue p $!
 p method(:m_object) rescue p $!
 ", @"
-#<Method: Object(Kernel)#m_kernel>
-#<Method: Object#m_object>
+#<Method: Object(Kernel)#m_kernel() UndefMethodLookup2.rb:2>
+#<Method: Object#m_object() UndefMethodLookup2.rb:3>
 #<NameError: undefined method `m_kernel' for class `Object'>
 #<NameError: undefined method `m_object' for class `Object'>
 ");
@@ -219,9 +219,9 @@ puts '---'
 p D.instance_method(:f)
 p d.method(:f) rescue p $!
 ", @"
-#<Method: D#f>
+#<Method: D#f() UndefMethodLookup3.rb:3>
 ---
-#<UnboundMethod: D#f>
+#<UnboundMethod: D#f() UndefMethodLookup3.rb:3>
 #<NameError: undefined method `f' for class `D'>
 ");
         }
@@ -251,8 +251,8 @@ p D.instance_method(:f) rescue p $!
 C
 #<NameError: undefined method `f' for class `Class'>
 ---
-#<UnboundMethod: C#f>
-#<UnboundMethod: D#f>
+#<UnboundMethod: C#f() UndefMethodLookup4.rb:3>
+#<UnboundMethod: D#f() UndefMethodLookup4.rb:7>
 ");
         }
 

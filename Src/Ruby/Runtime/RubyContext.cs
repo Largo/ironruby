@@ -1865,7 +1865,7 @@ namespace IronRuby.Runtime {
         // If the source has a singleton class it's members are copied to the target as well.
         // Assumes a fresh instance of target, with no instance data.
         //
-        internal void CopyInstanceData(object source, object target, bool copySingletonMembers) {
+        public void CopyInstanceData(object source, object target, bool copySingletonMembers) {
             RubyInstanceData targetData = null;
             Debug.Assert(!copySingletonMembers || !(source is RubyModule));
             Debug.Assert(TryGetInstanceData(target) == null);

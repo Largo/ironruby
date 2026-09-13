@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -28,6 +28,9 @@ namespace IronRuby.Builtins {
 
     [RubyClass("Symbol", Extends = typeof(RubySymbol), Inherits = typeof(Object))]
     [HideMethod("==")]
+    // a Symbol is never constructed, and MRI says so with a NoMethodError rather than by
+    // letting the default allocator raise a TypeError
+    [UndefineMethod("new", IsStatic = true)]
     public static class SymbolOps {
 
         #region to_s, inspect, to_sym, to_clr_string, to_proc

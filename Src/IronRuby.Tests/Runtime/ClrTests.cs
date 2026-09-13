@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -2780,7 +2780,7 @@ puts c = Thread.clr_ctor
 puts c.overload(System::Threading::ThreadStart).call(lambda { puts 'hello' }).status
 puts Thread.clr_new(System::Threading::ThreadStart.new(lambda { puts 'hello' })).status
 ", @"
-#<Method: Class(Thread)#.ctor>
+#<Method: #<Class:Thread>(Thread)#.ctor>
 unstarted
 unstarted
 ");

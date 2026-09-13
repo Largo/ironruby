@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -69,6 +69,10 @@ namespace IronRuby.Runtime.Calls {
             return info != null && ReferenceEquals(_body, info._body);
         }
         
+        public override int GetEquivalenceHashCode() {
+            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_body);
+        }
+
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
             return parameterTypes.Length >= Parameters.Mandatory.Length
                 && (Parameters.Unsplat != null || parameterTypes.Length <= Parameters.Mandatory.Length + Parameters.Optional.Length)
@@ -79,7 +83,18 @@ namespace IronRuby.Runtime.Calls {
             return new MemberInfo[] { GetDelegate().GetMethodInfo() };
         }
 
+        public override RubyParameterSignature GetParameterSignature() {
+            return _body.Ast.Parameters.Signature;
+        }
+
         public override int GetArity() {
+            // the declared signature, when the front end recorded one, is the only thing that
+            // knows about keywords: they are not in Parameters, having been lowered away
+            var signature = _body.Ast.Parameters.Signature;
+            if (signature != null) {
+                return signature.GetArity(true);
+            }
+
             if (Parameters.Unsplat != null || Parameters.Optional.Length > 0) {
                 return -Parameters.Mandatory.Length - 1;
             } else {
@@ -89,6 +104,12 @@ namespace IronRuby.Runtime.Calls {
 
         public override RubyArray/*!*/ GetRubyParameterArray() {
             var context = _declaringScope.RubyContext;
+
+            var signature = _body.Ast.Parameters.Signature;
+            if (signature != null) {
+                return signature.GetParameterArray(context, true);
+            }
+
             var reqSymbol = context.CreateAsciiSymbol("req");
             var optSymbol = context.CreateAsciiSymbol("opt");
             var ps =_body.Ast.Parameters;

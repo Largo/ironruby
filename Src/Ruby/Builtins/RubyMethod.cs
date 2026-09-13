@@ -26,8 +26,10 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Compiler;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
+using Microsoft.Scripting.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Builtins {
@@ -35,7 +37,7 @@ namespace IronRuby.Builtins {
     using BlockCallTargetUnsplatN = Func<BlockParam, object, object[], RubyArray, object>;
 
     [DebuggerDisplay("{GetDebugView(), nq}")]
-    public partial class RubyMethod {
+    public partial class RubyMethod : IDuplicable {
         private readonly object _target;
         private readonly string/*!*/ _name;
         private readonly RubyMemberInfo/*!*/ _info;
@@ -60,6 +62,12 @@ namespace IronRuby.Builtins {
             _target = target;
             _info = info;
             _name = name;
+        }
+
+        object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
+            var result = new RubyMethod(_target, _info, _name);
+            context.CopyInstanceData(this, result, copySingletonMembers);
+            return result;
         }
 
         public RubyClass/*!*/ GetTargetClass() {
@@ -89,17 +97,36 @@ namespace IronRuby.Builtins {
                     return site.Target(site, this, unsplat);
                 });
 
+                // MRI's proc reports the location of the method it wraps, not of the to_proc call
+                string sourcePath = null;
+                int sourceLine = 0;
+                var rubyInfo = _info as RubyMethodInfo;
+                if (rubyInfo != null) {
+                    sourcePath = rubyInfo.Document.FileName;
+                    sourceLine = rubyInfo.SourceSpan.Start.Line;
+                } else {
+                    var lambdaInfo = _info as RubyLambdaMethodInfo;
+                    if (lambdaInfo != null) {
+                        sourcePath = lambdaInfo.Lambda.Dispatcher.SourcePath;
+                        sourceLine = lambdaInfo.Lambda.Dispatcher.SourceLine;
+                    }
+                }
+
                 _procDispatcher = new BlockDispatcherUnsplatN(0, 
                     BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter, _info.GetArity()),
-                    null, 0
+                    sourcePath, sourceLine
                 );
 
                 _procDispatcher.SetMethod(block);
+                _procDispatcher.ParameterSignature = _info.GetParameterSignature();
             }
 
+            // A method binds its arguments strictly and `return` from it returns from the
+            // method, both of which are lambda behaviour, so MRI's Method#to_proc answers
+            // #lambda? with true.
             // TODO: 
             // MRI: source file/line are that of the to_proc method call:
-            return new Proc(ProcKind.Block, scope.SelfObject, scope, _procDispatcher);
+            return new Proc(ProcKind.Lambda, scope.SelfObject, scope, _procDispatcher);
         }
 
         #region Dynamic Operations
@@ -126,18 +153,24 @@ namespace IronRuby.Builtins {
         public sealed class Curried : RubyMethod {
             private readonly string/*!*/ _methodNameArg;
 
-            internal Curried(object target, RubyMemberInfo/*!*/ info, string/*!*/ methodNameArg)
-                : base(target, info, "method_missing") {
+            /// <summary>
+            /// The method answers to the name that was asked for - that is what Method#name and
+            /// Method#to_s have to report - while the body it actually calls is method_missing,
+            /// with the name pushed in front of the arguments.
+            /// </summary>
+            public Curried(object target, RubyMemberInfo/*!*/ info, string/*!*/ methodNameArg)
+                : base(target, info, methodNameArg) {
                 _methodNameArg = methodNameArg;
             }
 
             internal override void BuildInvoke(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
-                args.InsertMethodName(_methodNameArg);
-                base.BuildInvoke(metaBuilder, args);
-            }
+                Assert.NotNull(metaBuilder, args);
+                Debug.Assert(args.Target == this);
 
-            public override Proc/*!*/ ToProc(RubyScope/*!*/ scope) {
-                throw new NotSupportedException();
+                metaBuilder.AddRestriction(Ast.Equal(args.TargetExpression, AstUtils.Constant(this)));
+                args.SetTarget(AstUtils.Constant(Target, CompilerHelpers.GetVisibleType(Target)), Target);
+                args.InsertMethodName(_methodNameArg);
+                Info.BuildCall(metaBuilder, args, Symbols.MethodMissing);
             }
 
             private string/*!*/ GetCurriedDebugView() {

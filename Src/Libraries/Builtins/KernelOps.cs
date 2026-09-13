@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -341,8 +341,20 @@ namespace IronRuby.Builtins {
         }
 
         //callcc
-        // 1.9 private instance/singleton __callee__
-        // 1.9 private instance/singleton __method__
+
+        /// <summary>
+        /// The name the enclosing method was defined under, or nil outside any method. A block
+        /// reports the method it was written in, which is why this walks the scope chain rather
+        /// than only looking at the innermost scope.
+        /// </summary>
+        [RubyMethod("__method__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__method__", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("__callee__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__callee__", RubyMethodAttributes.PublicSingleton)]
+        public static object GetCurrentMethodName(RubyScope/*!*/ scope, object self) {
+            string name = scope.GetCurrentMethodName();
+            return name != null ? scope.RubyContext.EncodeIdentifier(name) : null;
+        }
 
         #endregion
 
@@ -1231,12 +1243,28 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("method")]
-        public static RubyMethod/*!*/ GetMethod(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ name) {
+        public static RubyMethod/*!*/ GetMethod(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ respondToMissingStorage,
+            RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ name) {
+
             RubyMemberInfo info = context.ResolveMethod(self, name, VisibilityContext.AllVisible).Info;
-            if (info == null) {
-                throw RubyExceptions.CreateUndefinedMethodError(context.GetClassOf(self), name);
+            if (info != null) {
+                return new RubyMethod(self, info, name);
             }
-            return new RubyMethod(self, info, name);
+
+            // MRI asks respond_to_missing? before giving up: an object may advertise a name that
+            // only method_missing implements, and then #method has to hand back something that
+            // calls method_missing with that name
+            var site = respondToMissingStorage.GetCallSite("respond_to_missing?", 2);
+            if (Protocols.IsTrue(site.Target(site, self, context.StringifyIdentifier(name),
+                ScriptingRuntimeHelpers.BooleanToObject(true)))) {
+
+                var missing = context.ResolveMethod(self, Symbols.MethodMissing, VisibilityContext.AllVisible).Info;
+                if (missing != null) {
+                    return new RubyMethod.Curried(self, missing, name);
+                }
+            }
+
+            throw RubyExceptions.CreateUndefinedMethodError(context.GetClassOf(self), name);
         }
 
         // 1.9: public: public_method

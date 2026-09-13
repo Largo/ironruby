@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Numerics;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Pm = IronRuby.Prism.Ast;
 
@@ -1183,15 +1184,31 @@ namespace IronRuby.Prism {
                 case Pm.NumberedParametersNode numbered: {
                     var span = Span(numbered);
                     var mandatory = new LeftValue[numbered.Maximum];
+                    var declared = new RubyParameterSignature.Parameter[numbered.Maximum];
                     for (int i = 0; i < numbered.Maximum; i++) {
                         mandatory[i] = DefineParameter("_" + (i + 1), span);
+                        declared[i] = new RubyParameterSignature.Parameter("req", "_" + (i + 1));
                     }
-                    return new Parameters(mandatory, mandatory.Length, null, null, null, span);
+                    var numberedNames = new string[numbered.Maximum];
+                    for (int i = 0; i < numbered.Maximum; i++) {
+                        numberedNames[i] = "_" + (i + 1);
+                    }
+                    return new Parameters(mandatory, mandatory.Length, null, null, null, span) {
+                        Signature = new RubyParameterSignature(declared, declared.Length, 0, 0, false, 0, false, false) {
+                            ImplicitParameterNames = numberedNames
+                        }
+                    };
                 }
                 case Pm.ItParametersNode it: {
                     var span = Span(it);
                     var mandatory = new LeftValue[] { DefineParameter("it", span) };
-                    return new Parameters(mandatory, 1, null, null, null, span);
+                    // `it` is a parameter without a name as far as #parameters is concerned
+                    var declared = new[] { new RubyParameterSignature.Parameter("req", null) };
+                    return new Parameters(mandatory, 1, null, null, null, span) {
+                        Signature = new RubyParameterSignature(declared, 1, 0, 0, false, 0, false, false) {
+                            ImplicitParameterNames = new[] { "it" }
+                        }
+                    };
                 }
                 default:
                     throw Unsupported(parametersNode);
@@ -1241,6 +1258,80 @@ namespace IronRuby.Prism {
         // ---- parameters (including keyword-argument lowering) ----
 
         private Parameters/*!*/ BuildParameters(Pm.ParametersNode/*!*/ node, bool autoSplat, out Statements prologue) {
+            var result = BuildParametersWorker(node, autoSplat, out prologue);
+            result.Signature = BuildSignature(node);
+            return result;
+        }
+
+        /// <summary>
+        /// The declared parameter list, which is what #parameters and #arity have to report.
+        /// It is recorded separately because the lowering below rewrites keywords - and in the
+        /// general case the whole positional list - into something else entirely.
+        /// </summary>
+        private static RubyParameterSignature/*!*/ BuildSignature(Pm.ParametersNode/*!*/ node) {
+            var parameters = new List<RubyParameterSignature.Parameter>();
+
+            foreach (var required in node.Requireds) {
+                // a destructured parameter is still one required parameter, but it has no name
+                parameters.Add(new RubyParameterSignature.Parameter("req",
+                    (required as Pm.RequiredParameterNode)?.Name));
+            }
+            int leadingCount = parameters.Count;
+
+            foreach (var opt in node.Optionals) {
+                parameters.Add(new RubyParameterSignature.Parameter("opt", ((Pm.OptionalParameterNode)opt).Name));
+            }
+
+            // `|a,|` is an implicit rest: MRI leaves it out of #parameters and does not let it
+            // make the arity variadic, so only an explicit `*` counts here
+            bool hasRest = node.Rest is Pm.RestParameterNode;
+            if (hasRest) {
+                parameters.Add(new RubyParameterSignature.Parameter("rest",
+                    ((Pm.RestParameterNode)node.Rest).Name ?? "*"));
+            }
+
+            foreach (var post in node.Posts) {
+                parameters.Add(new RubyParameterSignature.Parameter("req",
+                    (post as Pm.RequiredParameterNode)?.Name));
+            }
+
+            int requiredKeywordCount = 0;
+            foreach (var keyword in node.Keywords) {
+                switch (keyword) {
+                    case Pm.RequiredKeywordParameterNode required:
+                        parameters.Add(new RubyParameterSignature.Parameter("keyreq", required.Name));
+                        requiredKeywordCount++;
+                        break;
+                    case Pm.OptionalKeywordParameterNode optional:
+                        parameters.Add(new RubyParameterSignature.Parameter("key", optional.Name));
+                        break;
+                }
+            }
+
+            bool hasKeywordRest = false;
+            if (node.KeywordRest is Pm.KeywordRestParameterNode keywordRest) {
+                parameters.Add(new RubyParameterSignature.Parameter("keyrest", keywordRest.Name ?? "**"));
+                hasKeywordRest = true;
+            } else if (node.KeywordRest is Pm.NoKeywordsParameterNode) {
+                parameters.Add(new RubyParameterSignature.Parameter("nokey", null));
+            } else if (node.KeywordRest is Pm.ForwardingParameterNode) {
+                // `def m(...)` forwards everything, and reports itself as `*, **, &`
+                parameters.Add(new RubyParameterSignature.Parameter("rest", "*"));
+                parameters.Add(new RubyParameterSignature.Parameter("keyrest", "**"));
+                parameters.Add(new RubyParameterSignature.Parameter("block", "&"));
+                hasRest = true;
+                hasKeywordRest = true;
+            }
+
+            if (node.Block is Pm.BlockParameterNode block) {
+                parameters.Add(new RubyParameterSignature.Parameter("block", block.Name ?? "&"));
+            }
+
+            return new RubyParameterSignature(parameters.ToArray(), leadingCount, node.Optionals.Length,
+                node.Posts.Length, hasRest, requiredKeywordCount, node.Keywords.Length > 0, hasKeywordRest);
+        }
+
+        private Parameters/*!*/ BuildParametersWorker(Pm.ParametersNode/*!*/ node, bool autoSplat, out Statements prologue) {
             var span = Span(node);
             prologue = null;
 

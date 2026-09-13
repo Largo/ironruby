@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -1593,21 +1593,30 @@ namespace IronRuby.Builtins {
                     flags = (flags & ~RubyMemberFlags.VisibilityMask) | RubyMemberFlags.Private;
                 }
 
-                if (!method.IsRubyMember || flags != method.Flags) {
-                    SetMethodNoEventNoLock(Context, newName, method.Copy(flags, method.DeclaringModule));
-                } else {
-                    SetMethodNoEventNoLock(Context, newName, method);
-                }
+                // The alias is its own method entry even when nothing about it differs, because
+                // #owner and #original_name have to be able to tell it apart from the method it
+                // aliases: MRI reports the module the alias was written in and the name the body
+                // was originally given.  DeclaringModule stays put so that `super' inside the
+                // body keeps resolving from where the body lives.
+                var alias = method.Copy(flags, method.DeclaringModule);
+                alias.AliasOwner = this;
+                alias.OriginalName = method.OriginalName ?? oldName;
+                SetMethodNoEventNoLock(Context, newName, alias);
             }
 
             MethodAdded(newName);
         }
 
         // Module#define_method:
-        public void SetDefinedMethodNoEventNoLock(RubyContext/*!*/ callerContext, string/*!*/ name, RubyMemberInfo/*!*/ method, RubyMethodVisibility visibility) {
+        public void SetDefinedMethodNoEventNoLock(RubyContext/*!*/ callerContext, string/*!*/ name, RubyMemberInfo/*!*/ method, RubyMethodVisibility visibility,
+            string sourceName = null) {
             // CLR members: Detaches the member from its underlying type (by creating a copy).
             // Note: Method#== returns false on defined methods and redefining the original method doesn't affect the new one:
-            SetMethodNoEventNoLock(callerContext, name, method.Copy((RubyMemberFlags)visibility, this));
+            var defined = method.Copy((RubyMemberFlags)visibility, this);
+            // define_method(:new_name, some_method) keeps reporting the name the body was
+            // written with, exactly as an alias does
+            defined.OriginalName = method.OriginalName ?? sourceName;
+            SetMethodNoEventNoLock(callerContext, name, defined);
         }
 
         // Module#module_function/private/protected/public:
@@ -2673,7 +2682,15 @@ namespace IronRuby.Builtins {
 
                     RubyModule module = singletonOf as RubyModule;
 
-                    if (module == null || !module.IsSingletonClass && module.Name == null) {
+                    if (module != null && !module.IsSingletonClass && module.Name == null) {
+                        // the singleton class of an anonymous class or module: the inner half is
+                        // that module's own description, "#<Class:0x...>", not the name of its
+                        // superclass - which for a singleton class is itself nameless
+                        result.Append(module.GetDisplayName(context, false));
+                        break;
+                    }
+
+                    if (module == null) {
                         nestings++;
                         result.Append("#<");
                         result.Append(c.SuperClass.GetName(context));

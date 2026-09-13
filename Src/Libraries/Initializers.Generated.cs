@@ -792,6 +792,36 @@ namespace IronRuby.Builtins {
         
         private static void LoadBinding_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             module.UndefineMethodNoEvent("LocalScope");
+            DefineLibraryMethod(module, "__ir_variable_name__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.Binding, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.BindingOps.VariableName)
+            );
+            
+            DefineLibraryMethod(module, "implicit_parameter_defined?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.Binding, System.Object, System.Boolean>(IronRuby.Builtins.BindingOps.IsImplicitParameterDefined)
+            );
+            
+            DefineLibraryMethod(module, "implicit_parameter_get", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.Binding, System.Object, System.Object>(IronRuby.Builtins.BindingOps.GetImplicitParameter)
+            );
+            
+            DefineLibraryMethod(module, "implicit_parameters", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Binding, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.BindingOps.GetImplicitParameters)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Binding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.BindingOps.ToS)
+            );
+            
+            DefineLibraryMethod(module, "to_s", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Binding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.BindingOps.ToS)
+            );
+            
         }
         
         private static void LoadBinding_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -4542,9 +4572,19 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[], System.Exception>(IronRuby.Builtins.KernelOps.BuildException)
             );
             
+            DefineLibraryMethod(module, "__callee__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
+            );
+            
             DefineLibraryMethod(module, "__id__", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetObjectId)
+            );
+            
+            DefineLibraryMethod(module, "__method__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
             );
             
             DefineLibraryMethod(module, "!~", 0x51, 
@@ -4843,8 +4883,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "method", 0x51, 
-                0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.KernelOps.GetMethod)
+                0x00040008U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.String, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.KernelOps.GetMethod)
             );
             
             DefineLibraryMethod(module, "methods", 0x51, 
@@ -5118,6 +5158,16 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadKernel_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__callee__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
+            );
+            
+            DefineLibraryMethod(module, "__method__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
+            );
+            
             #if FEATURE_PROCESS
             DefineLibraryMethod(module, "`", 0x61, 
                 0x00020004U, 
@@ -5822,6 +5872,8 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyMethod, System.Object, System.Boolean>(IronRuby.Builtins.MethodOps.Equal)
             );
             
+            DefineRuleGenerator(module, "===", 0x51, IronRuby.Builtins.MethodOps.Call());
+            
             DefineLibraryMethod(module, "arity", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyMethod, System.Int32>(IronRuby.Builtins.MethodOps.GetArity)
@@ -5829,19 +5881,25 @@ namespace IronRuby.Builtins {
             
             DefineRuleGenerator(module, "call", 0x51, IronRuby.Builtins.MethodOps.Call());
             
-            DefineLibraryMethod(module, "clone", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.MethodOps.Clone)
-            );
-            
             DefineLibraryMethod(module, "clr_members", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetClrMembers)
             );
             
             DefineLibraryMethod(module, "eql?", 0x51, 
-                0x00000002U, 
-                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod, System.Boolean>(IronRuby.Builtins.MethodOps.Equal)
+                0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod, System.Boolean>(IronRuby.Builtins.MethodOps.Equal), 
+                new Func<IronRuby.Builtins.RubyMethod, System.Object, System.Boolean>(IronRuby.Builtins.MethodOps.Equal)
+            );
+            
+            DefineLibraryMethod(module, "hash", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyMethod, System.Int32>(IronRuby.Builtins.MethodOps.GetHash)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MethodOps.ToS)
             );
             
             DefineLibraryMethod(module, "name", 0x51, 
@@ -5852,6 +5910,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "of", 0x51, 
                 0x80000004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, System.Object[], IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.MethodOps.BindGenericParameters)
+            );
+            
+            DefineLibraryMethod(module, "original_name", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.MethodOps.GetOriginalName)
             );
             
             DefineLibraryMethod(module, "overload", 0x51, 
@@ -5871,7 +5934,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "parameters", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetParameters)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetParameters)
             );
             
             DefineLibraryMethod(module, "receiver", 0x51, 
@@ -5882,6 +5945,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "source_location", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetSourceLocation)
+            );
+            
+            DefineLibraryMethod(module, "super_method", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.MethodOps.GetSuperMethod)
             );
             
             DefineLibraryMethod(module, "to_proc", 0x51, 
@@ -6694,6 +6762,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object[], System.Object>(IronRuby.Builtins.ProcOps.Call)
             );
             
+            DefineLibraryMethod(module, "<<", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Builtins.Proc, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.ComposeBackward)
+            );
+            
             DefineLibraryMethod(module, "==", 0x51, 
                 0x00000002U, 0x00000000U, 
                 new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.Proc, System.Boolean>(IronRuby.Builtins.ProcOps.Equal), 
@@ -6708,6 +6781,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.ProcOps.Call), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.ProcOps.Call), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object[], System.Object>(IronRuby.Builtins.ProcOps.Call)
+            );
+            
+            DefineLibraryMethod(module, ">>", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.Proc, System.Object, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.ComposeForward)
             );
             
             DefineLibraryMethod(module, "arity", 0x51, 
@@ -6730,14 +6808,10 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.Proc, System.Object[], System.Object>(IronRuby.Builtins.ProcOps.Call)
             );
             
-            DefineLibraryMethod(module, "clone", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Clone)
-            );
-            
-            DefineLibraryMethod(module, "dup", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Clone)
+            DefineLibraryMethod(module, "curry", 0x51, 
+                0x00000000U, 0x00020000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Curry), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, System.Int32, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Curry)
             );
             
             DefineLibraryMethod(module, "eql?", 0x51, 
@@ -6751,9 +6825,24 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.Proc, System.Int32>(IronRuby.Builtins.ProcOps.GetHash)
             );
             
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.Proc, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ProcOps.ToS)
+            );
+            
             DefineLibraryMethod(module, "lambda?", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.Proc, System.Boolean>(IronRuby.Builtins.ProcOps.IsLambda)
+            );
+            
+            DefineLibraryMethod(module, "parameters", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, System.Object[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ProcOps.GetParameters)
+            );
+            
+            DefineLibraryMethod(module, "ruby2_keywords", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.Ruby2Keywords)
             );
             
             DefineLibraryMethod(module, "source_location", 0x51, 
@@ -6785,9 +6874,8 @@ namespace IronRuby.Builtins {
         
         private static void LoadProc_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "new", 0x61, 
-                0x00000000U, 0x00000000U, 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyClass, IronRuby.Builtins.Proc>(IronRuby.Builtins.ProcOps.CreateNew), 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object>(IronRuby.Builtins.ProcOps.CreateNew)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object[], System.Object>(IronRuby.Builtins.ProcOps.CreateNew)
             );
             
         }
@@ -8167,6 +8255,7 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadSymbol_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            module.UndefineMethodNoEvent("new");
             DefineLibraryMethod(module, "all_symbols", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.SymbolOps.GetAllSymbols)
@@ -9888,19 +9977,25 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.UnboundMethod, System.Object, System.Object[], System.Object>(IronRuby.Builtins.UnboundMethod.BindCall)
             );
             
-            DefineLibraryMethod(module, "clone", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.UnboundMethod.Clone)
-            );
-            
             DefineLibraryMethod(module, "clr_members", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.UnboundMethod.GetClrMembers)
             );
             
             DefineLibraryMethod(module, "eql?", 0x51, 
-                0x00000002U, 
-                new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod, System.Boolean>(IronRuby.Builtins.UnboundMethod.Equal)
+                0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod, System.Boolean>(IronRuby.Builtins.UnboundMethod.Equal), 
+                new Func<IronRuby.Builtins.UnboundMethod, System.Object, System.Boolean>(IronRuby.Builtins.UnboundMethod.Equal)
+            );
+            
+            DefineLibraryMethod(module, "hash", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.UnboundMethod, System.Int32>(IronRuby.Builtins.UnboundMethod.GetHash)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.MutableString>(IronRuby.Builtins.UnboundMethod.ToS)
             );
             
             DefineLibraryMethod(module, "name", 0x51, 
@@ -9911,6 +10006,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "of", 0x51, 
                 0x80000004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, System.Object[], IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.UnboundMethod.BingGenericParameters)
+            );
+            
+            DefineLibraryMethod(module, "original_name", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.UnboundMethod.GetOriginalName)
             );
             
             DefineLibraryMethod(module, "overload", 0x51, 
@@ -9936,6 +10036,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "source_location", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.UnboundMethod.GetSourceLocation)
+            );
+            
+            DefineLibraryMethod(module, "super_method", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.UnboundMethod.GetSuperMethod)
             );
             
             DefineLibraryMethod(module, "to_s", 0x51, 

@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -24,7 +24,7 @@ using IronRuby.Runtime.Calls;
 namespace IronRuby.Builtins {
 
     [RubyClass("UnboundMethod")]
-    public class UnboundMethod {
+    public class UnboundMethod : IDuplicable {
         private readonly string/*!*/ _name;
         private readonly RubyMemberInfo/*!*/ _info;
         private readonly RubyModule/*!*/ _targetConstraint;
@@ -49,6 +49,12 @@ namespace IronRuby.Builtins {
             _targetConstraint = targetConstraint;
         }
 
+        object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
+            var result = new UnboundMethod(_targetConstraint, _name, _info);
+            context.CopyInstanceData(this, result, copySingletonMembers);
+            return result;
+        }
+
         #region Public Instance Methods
 
         [RubyMethod("==")]
@@ -57,9 +63,17 @@ namespace IronRuby.Builtins {
             return self.Info.IsEquivalentTo(other.Info);
         }
 
+        // both names need both overloads, or the two are not the same method and the specs that
+        // check `eql?' is an alias of `==' by comparing the two UnboundMethods fail
         [RubyMethod("==")]
+        [RubyMethod("eql?")]
         public static bool Equal(UnboundMethod/*!*/ self, object other) {
             return false;
+        }
+
+        [RubyMethod("hash")]
+        public static int GetHash(UnboundMethod/*!*/ self) {
+            return self.Info.GetEquivalenceHashCode();
         }
 
         [RubyMethod("arity")]
@@ -67,19 +81,46 @@ namespace IronRuby.Builtins {
             return self.Info.GetArity();
         }
 
+        /// <summary>
+        /// The receiver has to be a kind of the module the method is *defined* in, not of the one
+        /// it was extracted from: Child.instance_method(:inherited_one) binds to any Parent, which
+        /// constraining on Child would refuse. Since Ruby 3.0 (Feature #15608) a method whose owner
+        /// is a module rather than a class binds to anything at all.
+        /// </summary>
         [RubyMethod("bind")]
         public static RubyMethod/*!*/ Bind(UnboundMethod/*!*/ self, object target) {
             RubyContext context = self._targetConstraint.Context;
+            RubyModule constraint = self._info.DeclaringModule ?? self._targetConstraint;
 
-            // Since Ruby 3.0 (Feature #15608) an unbound method whose owner is a module rather than a class
-            // may be bound to any receiver:
-            if (self._targetConstraint.IsClass && !context.IsKindOf(target, self._targetConstraint)) {
+            if (constraint.IsClass && !context.IsKindOf(target, constraint)) {
                 throw RubyExceptions.CreateTypeError(
-                    "bind argument must be an instance of {0}", self._targetConstraint.GetName(context)
+                    "bind argument must be an instance of {0}", constraint.GetName(context)
                 );
             }
             
             return new RubyMethod(target, self._info, self._name);
+        }
+
+        /// <summary>
+        /// The method `super' would reach from inside this one, resolved from the module holding
+        /// this body onwards through the ancestry of the module the method was extracted from.
+        /// </summary>
+        [RubyMethod("super_method")]
+        public static UnboundMethod GetSuperMethod(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
+            RubyModule owner = self._info.DeclaringModule;
+            if (owner == null) {
+                return null;
+            }
+
+            // an alias resolves super under the name the body was written with
+            string name = self._info.OriginalName ?? self._name;
+
+            MethodResolutionResult result;
+            using (context.ClassHierarchyLocker()) {
+                result = self._targetConstraint.ResolveSuperMethodNoLock(name, owner);
+            }
+
+            return result.Found ? new UnboundMethod(self._targetConstraint, name, result.Info) : null;
         }
 
         /// <summary>
@@ -97,11 +138,6 @@ namespace IronRuby.Builtins {
             return site.Target(site, scope, bound, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
         }
 
-        [RubyMethod("clone")]
-        public static UnboundMethod/*!*/ Clone(UnboundMethod/*!*/ self) {
-            return new UnboundMethod(self._targetConstraint, self._name, self._info);
-        }
-
         [RubyMethod("name")]
         public static RubySymbol/*!*/ GetName(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
             // EncodeIdentifier rather than StringifyIdentifier: both return a Symbol, but the latter
@@ -113,16 +149,48 @@ namespace IronRuby.Builtins {
         // the class the method was looked up on.
         [RubyMethod("owner")]
         public static RubyModule/*!*/ GetOwner(UnboundMethod/*!*/ self) {
-            return self._info.DeclaringModule ?? self._targetConstraint;
+            return self._info.AliasOwner ?? self._info.DeclaringModule ?? self._targetConstraint;
         }
 
-        [RubyMethod("to_s")]
+        /// <summary>
+        /// The name the body was written with, which differs from #name once `alias' or
+        /// define_method has given the same body a second name.
+        /// </summary>
+        [RubyMethod("original_name")]
+        public static RubySymbol/*!*/ GetOriginalName(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
+            return context.EncodeIdentifier(self._info.OriginalName ?? self._name);
+        }
+
+        [RubyMethod("to_s"), RubyMethod("inspect")]
         public static MutableString/*!*/ ToS(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
-            return ToS(context, self.Name, self._info.DeclaringModule, self._targetConstraint, "UnboundMethod");
+            return ToS(context, self.Name, self._info, null, "UnboundMethod");
         }
 
-        internal static MutableString/*!*/ ToS(RubyContext/*!*/ context, string/*!*/ methodName, RubyModule/*!*/ declaringModule, RubyModule/*!*/ targetModule, 
-            string/*!*/ classDisplayName) {
+        /// <summary>
+        /// MRI's description is
+        ///
+        ///   #&lt;Method: Origin(Owner)#name(original_name)(parameters) file:line&gt;
+        ///
+        /// of which this used to print only the first half.  The origin is the module the method
+        /// was looked up on and is dropped when it is the owner itself; an UnboundMethod has no
+        /// receiver to have looked it up on, so it prints the owner alone.  A method that lives in
+        /// a singleton class is spelled "object.name" instead, and a singleton class that a method
+        /// merely passed through on its way to an ancestor is replaced by the object's real class,
+        /// unless the object is a class or a module - which is why String.method(:include) still
+        /// says #&lt;Class:String&gt;.
+        /// </summary>
+        internal static MutableString/*!*/ ToS(RubyContext/*!*/ context, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
+            RubyModule targetModule, string/*!*/ classDisplayName) {
+            return ToS(context, methodName, info, targetModule, classDisplayName, false);
+        }
+
+        internal static MutableString/*!*/ ToS(RubyContext/*!*/ context, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
+            RubyModule targetModule, string/*!*/ classDisplayName, bool isMissingMethod) {
+
+            // the module that holds the body, even for an alias: MRI's description of an alias
+            // names the module the original was written in and puts the original name in
+            // parentheses after the new one
+            RubyModule declaringModule = info.DeclaringModule ?? targetModule;
 
             MutableString result = MutableString.CreateMutable(context.GetIdentifierEncoding());
 
@@ -130,17 +198,53 @@ namespace IronRuby.Builtins {
             result.Append(classDisplayName);
             result.Append(": ");
 
-            if (ReferenceEquals(targetModule, declaringModule)) {
-                result.Append(declaringModule.GetDisplayName(context, true));
+            RubyClass declaringSingleton = declaringModule as RubyClass;
+            if (targetModule != null && declaringSingleton != null && declaringSingleton.IsSingletonClass) {
+                var attached = declaringSingleton.SingletonClassOf;
+                var attachedModule = attached as RubyModule;
+                result.Append(attachedModule != null
+                    ? attachedModule.GetDisplayName(context, false)
+                    : context.Inspect(attached));
+                result.Append('.');
             } else {
-                result.Append(targetModule.GetDisplayName(context, true));
+                RubyModule origin = targetModule ?? declaringModule;
+                var originSingleton = origin as RubyClass;
+                if (originSingleton != null && originSingleton.IsSingletonClass && !(originSingleton.SingletonClassOf is RubyModule)) {
+                    origin = context.GetClassOf(originSingleton.SingletonClassOf);
+                }
+
+                result.Append(origin.GetDisplayName(context, false));
+                if (!ReferenceEquals(origin, declaringModule)) {
+                    result.Append('(');
+                    result.Append(declaringModule.GetDisplayName(context, false));
+                    result.Append(')');
+                }
+                result.Append('#');
+            }
+
+            result.Append(methodName);
+
+            if (!isMissingMethod && info.OriginalName != null && info.OriginalName != methodName) {
                 result.Append('(');
-                result.Append(declaringModule.GetDisplayName(context, true));
+                result.Append(info.OriginalName);
                 result.Append(')');
             }
 
-            result.Append('#');
-            result.Append(methodName);
+            var signature = isMissingMethod ? null : info.GetParameterSignature();
+            if (isMissingMethod) {
+                result.Append("(*)");
+            } else if (signature != null) {
+                result.Append(signature.ToParameterListString());
+            }
+
+            var location = isMissingMethod ? null : GetSourceLocation(info);
+            if (location != null) {
+                result.Append(' ');
+                result.Append(location[0] as MutableString);
+                result.Append(':');
+                result.Append(location[1].ToString());
+            }
+
             result.Append('>');
             return result; 
         }
@@ -177,10 +281,23 @@ namespace IronRuby.Builtins {
 
         internal static RubyArray GetSourceLocation(RubyMemberInfo/*!*/ info) {
             RubyMethodInfo rubyInfo = info as RubyMethodInfo;
-            return (rubyInfo == null) ? null : new RubyArray(2) {
-                rubyInfo.DeclaringModule.Context.EncodePath(rubyInfo.Document.FileName),
-                rubyInfo.SourceSpan.Start.Line
-            };
+            if (rubyInfo != null) {
+                return new RubyArray(2) {
+                    rubyInfo.DeclaringModule.Context.EncodePath(rubyInfo.Document.FileName),
+                    rubyInfo.SourceSpan.Start.Line
+                };
+            }
+
+            // a method define_method made out of a block is located where the block was written
+            var lambdaInfo = info as RubyLambdaMethodInfo;
+            if (lambdaInfo != null && lambdaInfo.Lambda.Dispatcher.SourcePath != null) {
+                return new RubyArray(2) {
+                    lambdaInfo.Context.EncodePath(lambdaInfo.Lambda.Dispatcher.SourcePath),
+                    lambdaInfo.Lambda.Dispatcher.SourceLine
+                };
+            }
+
+            return null;
         }
 
         #endregion

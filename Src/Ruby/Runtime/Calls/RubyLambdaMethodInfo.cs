@@ -49,8 +49,20 @@ namespace IronRuby.Runtime.Calls {
             _id = Interlocked.Increment(ref _Id);
         }
 
+        public override RubyParameterSignature GetParameterSignature() {
+            return _lambda.Dispatcher.ParameterSignature;
+        }
+
         public override int GetArity() {
-            return _lambda.Dispatcher.Arity;
+            var signature = _lambda.Dispatcher.ParameterSignature;
+            // define_method turns the block into a method, and a method's parameters bind the
+            // way a lambda's do, so the block reports itself as a lambda here
+            return signature != null ? signature.GetArity(true) : _lambda.Dispatcher.Arity;
+        }
+
+        public override RubyArray/*!*/ GetRubyParameterArray() {
+            var signature = _lambda.Dispatcher.ParameterSignature;
+            return signature != null ? signature.GetParameterArray(Context, true) : base.GetRubyParameterArray();
         }
 
         public Proc/*!*/ Lambda {
@@ -67,6 +79,10 @@ namespace IronRuby.Runtime.Calls {
             }
             var info = other as RubyLambdaMethodInfo;
             return info != null && info._id == _id;
+        }
+
+        public override int GetEquivalenceHashCode() {
+            return _id;
         }
 
         public string/*!*/ DefinitionName {

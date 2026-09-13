@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -42,6 +42,7 @@ namespace IronRuby.Builtins {
     using BlockCallTarget4 = Func<BlockParam, object, object, object, object, object, object>;
     using BlockCallTargetN = Func<BlockParam, object, object[], object>;
     using BlockCallTargetUnsplatN = Func<BlockParam, object, object[], RubyArray, object>;
+    using BlockCallTargetUnsplatProcN = Func<BlockParam, object, object[], RubyArray, Proc, object>;
 
     public enum ProcKind {
         Block,
@@ -96,6 +97,12 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal RefinementActivation RefinementOverride;
 
+        /// <summary>
+        /// The symbol this proc came from, for a proc Symbol#to_proc built; null otherwise.
+        /// Proc#to_s prints it as "(&amp;:name)".
+        /// </summary>
+        public string SymbolName { get; internal set; }
+
         public string SourcePath {
             get { return _dispatcher.SourcePath; }
         }
@@ -118,6 +125,7 @@ namespace IronRuby.Builtins {
         protected Proc(Proc/*!*/ proc)
             : this(proc.Kind, proc.Self, proc.LocalScope, proc.Dispatcher) {
             Converter = proc.Converter;
+            SymbolName = proc.SymbolName;
         }
 
         /// <summary>
@@ -309,31 +317,68 @@ namespace IronRuby.Builtins {
             // This should pass a proc parameter (use BlockDispatcherUnsplatProcN).
             // MRI 1.9.2 doesn't do so though (see http://redmine.ruby-lang.org/issues/show/3792).
 
-            var site = CallSite<Func<CallSite, object, object, object, object>>.Create(
+            // the block a symbol proc is called with goes on to the method it invokes:
+            // [1, 2].map(&:foo) { ... } passes the block through to #foo
+            var site = CallSite<Func<CallSite, object, object, Proc, object, object>>.Create(
                 RubyCallAction.Make(
                     scope.RubyContext, methodName,
-                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument)
+                    new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
                 )
             );
 
-            var block = new BlockCallTargetUnsplatN((blockParam, self, args, unsplat) => {
+            var block = new BlockCallTargetUnsplatProcN((blockParam, self, args, unsplat, procArg) => {
                 Debug.Assert(args.Length == 0);
                 if (unsplat.Count == 0) {
                     throw RubyExceptions.CreateArgumentError("no receiver given");
                 }
                 object target = unsplat[0];
                 unsplat.RemoveAt(0);
-                return site.Target(site, scope, target, unsplat);
+                return site.Target(site, scope, target, procArg, unsplat);
             });
 
-            var procDispatcher = new BlockDispatcherUnsplatN(0,
-                BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter, -1),
+            var procDispatcher = new BlockDispatcherUnsplatProcN(0,
+                BlockDispatcher.MakeAttributes(
+                    BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter, -1),
                 null, 0
             );
 
             procDispatcher.SetMethod(block);
-            return new Proc(ProcKind.Proc, scope.SelfObject, scope, procDispatcher);
+            procDispatcher.ParameterSignature = SymbolProcSignature;
+
+            // MRI's symbol proc is a lambda: it reports #lambda? true, arity -2 and
+            // [[:req], [:rest]] for #parameters
+            return new Proc(ProcKind.Lambda, scope.SelfObject, scope, procDispatcher) { SymbolName = methodName };
         }
+
+        /// <summary>
+        /// A proc with no Ruby source behind it. MRI's Proc#curry, Proc#>> and Proc#<< all answer
+        /// with one of these: it takes *args, so it reports [[:rest]] and arity -1, it has no
+        /// #source_location, and there is no scope for it to hand out as a #binding.
+        /// </summary>
+        public static Proc/*!*/ CreateNative(RubyContext/*!*/ context, ProcKind kind,
+            Func<BlockParam, object, object[], RubyArray, Proc, object>/*!*/ body) {
+
+            // the proc parameter matters: without one, a block passed to the composed or curried
+            // proc cannot be handed on to the proc underneath it
+            var result = Create(context, 0, BlockDispatcher.MakeAttributes(
+                BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter, -1), body);
+            result.Kind = kind;
+            result.Dispatcher.ParameterSignature = NativeProcSignature;
+            return result;
+        }
+
+        private static readonly RubyParameterSignature/*!*/ NativeProcSignature = new RubyParameterSignature(
+            new[] { new RubyParameterSignature.Parameter("rest", null) },
+            0, 0, 0, true, 0, false, false
+        );
+
+        private static readonly RubyParameterSignature/*!*/ SymbolProcSignature = new RubyParameterSignature(
+            new[] {
+                new RubyParameterSignature.Parameter("req", null),
+                new RubyParameterSignature.Parameter("rest", null)
+            },
+            1, 0, 0, true, 0, false, false
+        );
 
         #endregion
 
