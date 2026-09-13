@@ -5062,6 +5062,356 @@ class IO
     obj.respond_to?(:to_io) ? obj.to_io : nil
   end unless respond_to?(:try_convert)
 
+  # 3.1's IO::Buffer, backed by a String rather than by mapped memory: there is
+  # no zero-copy to be had here, so an "external" or "mapped" buffer is the
+  # internal kind wearing a different flag. 160 of spec/core/io's errors were
+  # this constant not existing at all.
+  class Buffer
+    include ::Comparable
+
+    PAGE_SIZE = 4096
+    DEFAULT_SIZE = 65536
+    EXTERNAL = 1
+    INTERNAL = 2
+    MAPPED = 4
+    SHARED = 8
+    LOCKED = 32
+    PRIVATE = 64
+    READONLY = 128
+    LITTLE_ENDIAN = 4
+    BIG_ENDIAN = 8
+    HOST_ENDIAN = LITTLE_ENDIAN
+    NETWORK_ENDIAN = BIG_ENDIAN
+
+    class AllocationError < ::RuntimeError; end
+    class AccessError < ::RuntimeError; end
+    class InvalidatedError < ::RuntimeError; end
+    class LockedError < ::RuntimeError; end
+    class MaskError < ::ArgumentError; end
+
+    def self.for(string)
+      buffer = allocate
+      flags = EXTERNAL | (string.frozen? ? READONLY : 0)
+      buffer.__take_over__(string, 0, string.bytesize, flags)
+      if block_given?
+        begin
+          return yield(buffer)
+        ensure
+          buffer.free
+        end
+      end
+      buffer
+    end
+
+    def self.map(file, size = nil, offset = 0, flags = 0)
+      data = file.pread(size || (file.size - offset), offset)
+      buffer = allocate
+      buffer.__take_over__(data.dup, 0, data.bytesize, MAPPED | flags)
+      buffer
+    end
+
+    def initialize(size = DEFAULT_SIZE, flags = INTERNAL)
+      size = ::Kernel.Integer(size)
+      ::Kernel.raise(::ArgumentError, "Size can't be negative!") if size < 0
+      @flags = flags | ((flags & (EXTERNAL | MAPPED)) != 0 ? 0 : INTERNAL)
+      @data = "\0".b * size
+      @offset = 0
+      @size = size
+      @freed = false
+    end
+
+    def __take_over__(data, offset, size, flags)
+      @data = data
+      @offset = offset
+      @size = size
+      @flags = flags
+      @freed = false
+    end
+
+    def __check__
+    end
+    private :__check__
+
+    def size
+      @freed ? 0 : @size
+    end
+
+    def empty?
+      size == 0
+    end
+
+    def valid?
+      true
+    end
+
+    def null?
+      @freed
+    end
+
+    def external?
+      (@flags & EXTERNAL) != 0
+    end
+
+    def internal?
+      (@flags & INTERNAL) != 0
+    end
+
+    def mapped?
+      (@flags & MAPPED) != 0
+    end
+
+    def shared?
+      (@flags & SHARED) != 0
+    end
+
+    def private?
+      (@flags & PRIVATE) != 0
+    end
+
+    def readonly?
+      (@flags & READONLY) != 0
+    end
+
+    def locked?
+      (@flags & LOCKED) != 0
+    end
+
+    def __check_writable__
+      __check__
+      ::Kernel.raise(AccessError, "Buffer is not writable!") if readonly?
+      ::Kernel.raise(LockedError, "Buffer already locked!") if locked?
+    end
+    private :__check_writable__
+
+    def locked
+      __check__
+      ::Kernel.raise(LockedError, "Buffer already locked!") if locked?
+      @flags |= LOCKED
+      begin
+        yield self
+      ensure
+        @flags &= ~LOCKED
+      end
+    end
+
+    def free
+      @freed = true
+      @data = "".b
+      @offset = 0
+      @size = 0
+      self
+    end
+
+    def transfer
+      __check__
+      other = self.class.allocate
+      other.__take_over__(@data, @offset, @size, @flags)
+      @freed = true
+      @data = "".b
+      @offset = 0
+      @size = 0
+      other
+    end
+
+    def resize(new_size)
+      __check_writable__
+      new_size = ::Kernel.Integer(new_size)
+      ::Kernel.raise(::ArgumentError, "Size can't be negative!") if new_size < 0
+      current = get_string
+      grown = current.byteslice(0, new_size).to_s
+      grown = grown + ("\0".b * (new_size - grown.bytesize)) if grown.bytesize < new_size
+      @data = grown
+      @offset = 0
+      @size = new_size
+      self
+    end
+
+    def slice(offset = 0, length = nil)
+      __check__
+      offset = ::Kernel.Integer(offset)
+      ::Kernel.raise(::ArgumentError, "Offset can't be negative!") if offset < 0
+      length = @size - offset if length.nil?
+      length = ::Kernel.Integer(length)
+      ::Kernel.raise(::ArgumentError, "Length can't be negative!") if length < 0
+      if offset + length > @size
+        ::Kernel.raise(::ArgumentError, "Specified offset+length is bigger than the buffer size!")
+      end
+      other = self.class.allocate
+      other.__take_over__(@data, @offset + offset, length, @flags)
+      other
+    end
+
+    def get_string(offset = 0, length = nil, encoding = ::Encoding::BINARY)
+      __check__
+      offset = ::Kernel.Integer(offset)
+      length = @size - offset if length.nil?
+      length = ::Kernel.Integer(length)
+      if offset < 0 || length < 0 || offset + length > @size
+        ::Kernel.raise(::ArgumentError, "Specified offset+length is bigger than the buffer size!")
+      end
+      result = @data.byteslice(@offset + offset, length).to_s
+      result.force_encoding(encoding) if result.respond_to?(:force_encoding)
+      result
+    end
+    alias_method :to_str, :get_string
+
+    def set_string(string, offset = 0, length = nil, source_offset = 0)
+      __check_writable__
+      offset = ::Kernel.Integer(offset)
+      source = string.byteslice(source_offset, length || (string.bytesize - source_offset)).to_s
+      if offset + source.bytesize > @size
+        ::Kernel.raise(::ArgumentError, "Specified offset+length is bigger than the buffer size!")
+      end
+      binary = @data.dup
+      binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
+      piece = source.dup
+      piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
+      at = @offset + offset
+      @data = binary.byteslice(0, at).to_s + piece +
+              binary.byteslice(at + piece.bytesize, binary.bytesize).to_s
+      source.bytesize
+    end
+
+    def clear(value = 0, offset = 0, length = nil)
+      __check_writable__
+      length = @size - offset if length.nil?
+      set_string([value & 0xff].pack("C") * length, offset)
+      self
+    end
+
+    def __value_size__(type)
+      case type
+      when :U8, :S8 then 1
+      when :U16, :S16 then 2
+      when :U32, :S32, :f32 then 4
+      when :U64, :S64, :f64 then 8
+      else ::Kernel.raise(::ArgumentError, "Invalid type name!")
+      end
+    end
+    private :__value_size__
+
+    def __directive__(type)
+      case type
+      when :U8 then "C"
+      when :S8 then "c"
+      when :U16 then "S>"
+      when :S16 then "s>"
+      when :U32 then "L>"
+      when :S32 then "l>"
+      when :U64 then "Q>"
+      when :S64 then "q>"
+      when :f32 then "g"
+      when :f64 then "G"
+      else ::Kernel.raise(::ArgumentError, "Invalid type name!")
+      end
+    end
+    private :__directive__
+
+    def get_value(type, offset)
+      get_string(offset, __value_size__(type)).unpack(__directive__(type))[0]
+    end
+
+    def set_value(type, offset, value)
+      set_string([value].pack(__directive__(type)), offset)
+    end
+
+    def get_values(types, offset = 0)
+      at = offset
+      types.map do |type|
+        v = get_value(type, at)
+        at += __value_size__(type)
+        v
+      end
+    end
+
+    def each(type = :U8, offset = 0, count = nil)
+      return ::Enumerator.new { |y| each(type, offset, count) { |i, v| y << [i, v] } } unless block_given?
+      step = __value_size__(type)
+      at = offset
+      n = count || ((@size - offset) / step)
+      n.times do
+        yield at, get_value(type, at)
+        at += step
+      end
+      self
+    end
+
+    def each_byte(offset = 0, count = nil)
+      return ::Enumerator.new { |y| each_byte(offset, count) { |i, v| y << [i, v] } } unless block_given?
+      each(:U8, offset, count) { |i, v| yield i, v }
+      self
+    end
+
+    def values(type = :U8, offset = 0, count = nil)
+      result = []
+      each(type, offset, count) { |_, v| result << v }
+      result
+    end
+
+    # Offset, sixteen bytes in hex padded out to a fixed width, then the same
+    # bytes as text with anything unprintable shown as a dot - MRI's layout.
+    def hexdump
+      get_string.bytes.each_slice(16).each_with_index.map { |row, i|
+        hex = row.map { |b| format("%02x", b) }.join(" ")
+        text = row.map { |b| (b >= 0x20 && b < 0x7f) ? b.chr : "." }.join
+        format("0x%08x  %-47s %s", i * 16, hex, text)
+      }.join("\n")
+    end
+
+    def to_s
+      parts = []
+      parts << "EXTERNAL" if external?
+      parts << "INTERNAL" if internal?
+      parts << "MAPPED" if mapped?
+      parts << "SHARED" if shared?
+      parts << "LOCKED" if locked?
+      parts << "PRIVATE" if private?
+      parts << "READONLY" if readonly?
+      parts << "NULL" if null?
+      "#<IO::Buffer 0x#{(object_id << 1).to_s(16).rjust(16, '0')}+#{@size} #{parts.join(' ')}>"
+    end
+    alias_method :inspect, :to_s
+
+    def <=>(other)
+      return nil unless other.is_a?(::IO::Buffer)
+      get_string <=> other.get_string
+    end
+
+    def ==(other)
+      other.is_a?(::IO::Buffer) && get_string == other.get_string
+    end
+
+    def __binary_op__(other, op)
+      a = get_string
+      b = other.is_a?(::IO::Buffer) ? other.get_string : other.to_s
+      ::Kernel.raise(::ArgumentError, "Buffers must be the same size!") if a.bytesize != b.bytesize
+      bytes = a.bytes.each_with_index.map { |x, i| x.__send__(op, b.getbyte(i)) & 0xff }
+      result = ::IO::Buffer.new(bytes.size)
+      result.set_string(bytes.pack("C*"))
+      result
+    end
+    private :__binary_op__
+
+    def &(other)
+      __binary_op__(other, :&)
+    end
+
+    def |(other)
+      __binary_op__(other, :|)
+    end
+
+    def ^(other)
+      __binary_op__(other, :^)
+    end
+
+    def ~
+      bytes = get_string.bytes.map { |x| (~x) & 0xff }
+      result = ::IO::Buffer.new(bytes.size)
+      result.set_string(bytes.pack("C*"))
+      result
+    end
+  end
+
   # Same for IO.read: the text form is tagged with the encoding asked for,
   # the length form is bytes. IO.binread stays binary, which is its whole job.
   class << self
