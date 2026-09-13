@@ -2479,20 +2479,36 @@ class String
     self
   end unless method_defined?(:append_as_bytes)
 
+  # MRI takes a String or a Regexp here and nothing else - Kernel.String would happily
+  # accept anything with a #to_s - and the empty pieces carry the receiver's encoding.
+  def __ir_separator__(pattern)
+    return pattern if pattern.is_a?(::Regexp) || pattern.is_a?(::String)
+    if pattern.respond_to?(:to_str)
+      converted = pattern.to_str
+      return converted if converted.is_a?(::String)
+    end
+    ::Kernel.raise(::TypeError,
+      "wrong argument type #{pattern.nil? ? 'nil' : pattern.class} (expected Regexp)")
+  end
+  private :__ir_separator__
+
   def partition(pattern)
+    pattern = __ir_separator__(pattern)
+    empty = self[0, 0]
     if pattern.is_a?(::Regexp)
       m = pattern.match(self)
-      return [dup, "", ""] unless m
+      return [self[0..-1], empty, empty] unless m
       [m.pre_match, m[0], m.post_match]
     else
-      pattern = ::Kernel.String(pattern) unless pattern.is_a?(::String)
       i = index(pattern)
-      return [dup, "", ""] unless i
+      return [self[0..-1], empty, empty] unless i
       [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
     end
   end unless method_defined?(:partition)
 
   def rpartition(pattern)
+    pattern = __ir_separator__(pattern)
+    empty = self[0, 0]
     if pattern.is_a?(::Regexp)
       start = nil
       pos = 0
@@ -2502,19 +2518,23 @@ class String
         start = i
         pos = i + 1
       end
-      return ["", "", dup] unless start
+      return [empty, empty, self[0..-1]] unless start
       m = pattern.match(self[start..-1])
       [self[0, start], m[0], self[(start + m[0].length)..-1]]
     else
-      pattern = ::Kernel.String(pattern) unless pattern.is_a?(::String)
       i = rindex(pattern)
-      return ["", "", dup] unless i
+      return [empty, empty, self[0..-1]] unless i
       [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
     end
   end unless method_defined?(:rpartition)
 
   def prepend(*others)
-    others = others.map { |o| o.is_a?(::String) ? o : ::Kernel.String(o) }
+    others = others.map do |o|
+      # #to_str only: MRI will not call #to_s to find something to prepend.
+      converted = o.is_a?(::String) ? o : ::String.try_convert(o)
+      converted || ::Kernel.raise(::TypeError,
+        "no implicit conversion of #{o.nil? ? 'nil' : o.class} into String")
+    end
     replace(others.join + self)
   end unless method_defined?(:prepend)
 
