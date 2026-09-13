@@ -10028,6 +10028,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.UnboundMethod.GetSourceLocation)
             );
             
+            DefineLibraryMethod(module, "super_method", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.UnboundMethod.GetSuperMethod)
+            );
+            
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.MutableString>(IronRuby.Builtins.UnboundMethod.ToS)

@@ -81,19 +81,46 @@ namespace IronRuby.Builtins {
             return self.Info.GetArity();
         }
 
+        /// <summary>
+        /// The receiver has to be a kind of the module the method is *defined* in, not of the one
+        /// it was extracted from: Child.instance_method(:inherited_one) binds to any Parent, which
+        /// constraining on Child would refuse. Since Ruby 3.0 (Feature #15608) a method whose owner
+        /// is a module rather than a class binds to anything at all.
+        /// </summary>
         [RubyMethod("bind")]
         public static RubyMethod/*!*/ Bind(UnboundMethod/*!*/ self, object target) {
             RubyContext context = self._targetConstraint.Context;
+            RubyModule constraint = self._info.DeclaringModule ?? self._targetConstraint;
 
-            // Since Ruby 3.0 (Feature #15608) an unbound method whose owner is a module rather than a class
-            // may be bound to any receiver:
-            if (self._targetConstraint.IsClass && !context.IsKindOf(target, self._targetConstraint)) {
+            if (constraint.IsClass && !context.IsKindOf(target, constraint)) {
                 throw RubyExceptions.CreateTypeError(
-                    "bind argument must be an instance of {0}", self._targetConstraint.GetName(context)
+                    "bind argument must be an instance of {0}", constraint.GetName(context)
                 );
             }
             
             return new RubyMethod(target, self._info, self._name);
+        }
+
+        /// <summary>
+        /// The method `super' would reach from inside this one, resolved from the module holding
+        /// this body onwards through the ancestry of the module the method was extracted from.
+        /// </summary>
+        [RubyMethod("super_method")]
+        public static UnboundMethod GetSuperMethod(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
+            RubyModule owner = self._info.DeclaringModule;
+            if (owner == null) {
+                return null;
+            }
+
+            // an alias resolves super under the name the body was written with
+            string name = self._info.OriginalName ?? self._name;
+
+            MethodResolutionResult result;
+            using (context.ClassHierarchyLocker()) {
+                result = self._targetConstraint.ResolveSuperMethodNoLock(name, owner);
+            }
+
+            return result.Found ? new UnboundMethod(self._targetConstraint, name, result.Info) : null;
         }
 
         /// <summary>
@@ -251,10 +278,23 @@ namespace IronRuby.Builtins {
 
         internal static RubyArray GetSourceLocation(RubyMemberInfo/*!*/ info) {
             RubyMethodInfo rubyInfo = info as RubyMethodInfo;
-            return (rubyInfo == null) ? null : new RubyArray(2) {
-                rubyInfo.DeclaringModule.Context.EncodePath(rubyInfo.Document.FileName),
-                rubyInfo.SourceSpan.Start.Line
-            };
+            if (rubyInfo != null) {
+                return new RubyArray(2) {
+                    rubyInfo.DeclaringModule.Context.EncodePath(rubyInfo.Document.FileName),
+                    rubyInfo.SourceSpan.Start.Line
+                };
+            }
+
+            // a method define_method made out of a block is located where the block was written
+            var lambdaInfo = info as RubyLambdaMethodInfo;
+            if (lambdaInfo != null && lambdaInfo.Lambda.Dispatcher.SourcePath != null) {
+                return new RubyArray(2) {
+                    lambdaInfo.Context.EncodePath(lambdaInfo.Lambda.Dispatcher.SourcePath),
+                    lambdaInfo.Lambda.Dispatcher.SourceLine
+                };
+            }
+
+            return null;
         }
 
         #endregion
