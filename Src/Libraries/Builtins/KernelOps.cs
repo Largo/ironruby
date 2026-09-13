@@ -56,6 +56,31 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+
+        /// <summary>
+        /// #dup and #clone dispatch through these rather than calling #initialize_copy
+        /// themselves, so that a class can do different work for the two. The defaults
+        /// just forward, which is what MRI's Kernel#initialize_dup does.
+        /// </summary>
+        [RubyMethod("initialize_dup", RubyMethodAttributes.PrivateInstance)]
+        public static object InitializeDuplicate(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage, object self, object source) {
+
+            var site = initializeCopyStorage.GetCallSite("initialize_copy", 1);
+            site.Target(site, self, source);
+            return self;
+        }
+
+        [RubyMethod("initialize_clone", RubyMethodAttributes.PrivateInstance)]
+        public static object InitializeClone(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage, object self, object source,
+            [Optional]object options) {
+
+            var site = initializeCopyStorage.GetCallSite("initialize_copy", 1);
+            site.Target(site, self, source);
+            return self;
+        }
+
         #endregion
 
         #region Array, Float, Integer, String, Complex, Rational

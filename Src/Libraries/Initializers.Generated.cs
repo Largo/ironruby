@@ -4770,9 +4770,19 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetId)
             );
             
+            DefineLibraryMethod(module, "initialize_clone", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.InitializeClone)
+            );
+            
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.InitializeCopy)
+            );
+            
+            DefineLibraryMethod(module, "initialize_dup", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.InitializeDuplicate)
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 

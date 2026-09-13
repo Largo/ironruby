@@ -17,21 +17,6 @@ class Object
     self
   end unless method_defined?(:itself)
 
-  # #dup and #clone call these rather than #initialize_copy directly, and a class
-  # that has to do different work for the two - Set clones its backing Hash so
-  # that the clone of a frozen set is frozen too - overrides only one of them.
-  def initialize_dup(orig)
-    initialize_copy(orig)
-    self
-  end unless private_method_defined?(:initialize_dup) || method_defined?(:initialize_dup)
-
-  def initialize_clone(orig, freeze: nil)
-    initialize_copy(orig)
-    self
-  end unless private_method_defined?(:initialize_clone) || method_defined?(:initialize_clone)
-
-  private :initialize_dup, :initialize_clone
-
   # The Method object for a method defined only on this object. Kernel#method
   # would happily answer one inherited from the class.
   def singleton_method(name)
