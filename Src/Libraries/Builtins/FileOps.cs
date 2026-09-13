@@ -769,7 +769,7 @@ namespace IronRuby.Builtins {
                 false
             );
 
-            return EncodePathLike(result, pathStr);
+            return EncodePathLike(context, result, pathStr);
         }
 
         /// <summary>
@@ -812,8 +812,13 @@ namespace IronRuby.Builtins {
         /// The path methods hand back a string in the encoding of the path they were
         /// given, not in the filesystem encoding.
         /// </summary>
-        private static MutableString/*!*/ EncodePathLike(string/*!*/ result, MutableString/*!*/ original) {
-            return MutableString.CreateMutable(result, original.Encoding).TaintBy(original);
+        private static MutableString/*!*/ EncodePathLike(RubyContext/*!*/ context, string/*!*/ result, MutableString/*!*/ original) {
+            // Encode with the filesystem encoding and then relabel, rather than transcode:
+            // the bytes came from the OS, and a path whose bytes are not representable in
+            // the argument's encoding still has to come back (CRuby "forces" the encoding).
+            MutableString encoded = context.EncodePath(result);
+            encoded.ForceEncoding(original.Encoding);
+            return encoded.TaintBy(original);
         }
 
         [RubyMethod("absolute_path", RubyMethodAttributes.PublicSingleton)]
@@ -829,7 +834,7 @@ namespace IronRuby.Builtins {
                 false
             );
 
-            return EncodePathLike(result, pathStr);
+            return EncodePathLike(context, result, pathStr);
         }
 
         [RubyMethod("absolute_path?", RubyMethodAttributes.PublicSingleton)]
@@ -1158,7 +1163,7 @@ namespace IronRuby.Builtins {
                 return ExpandPath(toPath, self, path, basedir == Missing.Value ? null : basedir);
             }
 
-            return EncodePathLike(ResolvePath(self.Context, strPath, strBase, strict), pathStr);
+            return EncodePathLike(self.Context, ResolvePath(self.Context, strPath, strBase, strict), pathStr);
         }
 
         #endregion

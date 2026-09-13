@@ -243,11 +243,12 @@ namespace IronRuby.Builtins {
         /// Dir.glob("a\0b") is an ArgumentError, not a two pattern glob.
         /// </summary>
         private static MutableString/*!*/ ToGlobPattern(ConversionStorage<MutableString>/*!*/ toPath, object pattern) {
-            var result = Protocols.CastToPath(toPath, pattern);
-            if (result.IndexOf('\0') >= 0) {
+            try {
+                return Protocols.CastToPath(toPath, pattern);
+            } catch (ArgumentException e) when (e.Message == "path name contains null byte") {
+                // A glob pattern reports an embedded NUL in its own words.
                 throw RubyExceptions.CreateArgumentError("nul-separated glob pattern is deprecated");
             }
-            return result;
         }
 
         private static IEnumerable<MutableString>/*!*/ GlobMatches(ConversionStorage<MutableString>/*!*/ toPath, RubyContext/*!*/ context,
