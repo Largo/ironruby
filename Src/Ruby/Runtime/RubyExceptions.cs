@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -261,9 +261,15 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateInvalidByteSequenceError(DecoderFallbackException/*!*/ e, RubyEncoding/*!*/ encoding) {
-            return new InvalidByteSequenceError(
-                FormatMessage("invalid byte sequence {0} on {1}", BitConverter.ToString(e.BytesUnknown), encoding)
-            );
+            // MRI spells the offending bytes the way String#inspect would - "\xFF" on UTF-8 -
+            // and reports only the first one, however many followed it.
+            var bytes = e.BytesUnknown;
+            var text = new StringBuilder("\"");
+            if (bytes != null && bytes.Length > 0) {
+                text.Append("\\x").Append(bytes[0].ToString("X2"));
+            }
+            text.Append('"');
+            return new InvalidByteSequenceError(FormatMessage("{0} on {1}", text.ToString(), encoding));
         }
 
         public static Exception/*!*/ CreateTranscodingError(EncoderFallbackException/*!*/ e, RubyEncoding/*!*/ fromEncoding, RubyEncoding/*!*/ toEncoding) {

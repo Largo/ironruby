@@ -1651,6 +1651,9 @@ namespace IronRuby.Builtins {
             }
 
             var result = MutableString.CreateMutable(to);
+            // ASCII-8BIT as a *target* takes only ASCII: MRI has no converter from a character
+            // encoding to a byte string, so "\u00e9".encode("BINARY") is an undefined conversion
+            // even though the code point would fit in one byte.
             var encoder = to.StrictEncoding;
             var buffer = new char[2];
 
@@ -1672,7 +1675,7 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                if (CanEncode(encoder, buffer, charCount)) {
+                if (CanEncode(encoder, buffer, charCount) && !(to == RubyEncoding.Binary && text[i] > 0x7f)) {
                     result.Append(piece);
                     continue;
                 }
