@@ -101,6 +101,8 @@ CONVERT_SOURCES = {
   "invalid"   => in_enc(b(0x61, 0xff, 0x62), "UTF-8"),
   "truncated" => in_enc(b(0x61, 0xe3, 0x81), "UTF-8"),
   "newlines"  => in_enc(+"a\nb\r\nc\rd", "UTF-8"),
+  "xmlish"    => in_enc(+"a<b>c&d\"e'f", "UTF-8"),
+  "xmlundef"  => in_enc(b(0x3c, 0xe6, 0x97, 0xa5, 0x3e), "UTF-8"),
   "empty"     => in_enc(+"", "UTF-8"),
 }
 
@@ -146,6 +148,8 @@ PRIMITIVE_SOURCES = {
   "overlong"   => in_enc(b(0xe0, 0x80), "UTF-8"),
   "unstartable"=> in_enc(b(0xf5, 0x80, 0x80), "UTF-8"),
   "newlines"   => in_enc(+"a\nb\r\nc\rd", "UTF-8"),
+  "xmlish"     => in_enc(+"a<b>c&d\"e'f", "UTF-8"),
+  "xmlundef"   => in_enc(b(0x3c, 0xe6, 0x97, 0xa5, 0x3e), "UTF-8"),
   "empty"      => in_enc(+"", "UTF-8"),
 }
 

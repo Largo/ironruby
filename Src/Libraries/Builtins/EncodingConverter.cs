@@ -128,6 +128,10 @@ namespace IronRuby.Builtins {
             // calls is still collapsed by the universal-newline decorator
             private bool _pendingCarriageReturn;
 
+            // set once the :xml => :attr decorator has written its opening quote, and once it has
+            // written the closing one
+            private bool _xmlQuoteOpened, _decoratorsFinished;
+
             #endregion
 
             #region Construction
@@ -503,7 +507,16 @@ namespace IronRuby.Builtins {
                 }
 
                 // rewrite the destination buffer: content up to the offset plus what we produced
-                var converted = ApplyNewlineDecorators(written.ToArray());
+                var converted = ApplyOutputDecorators(written.ToArray());
+                if (status == "finished") {
+                    var tail = FinishDecorators();
+                    if (tail.Length > 0) {
+                        var whole = new byte[converted.Length + tail.Length];
+                        Array.Copy(converted, 0, whole, 0, converted.Length);
+                        Array.Copy(tail, 0, whole, converted.Length, tail.Length);
+                        converted = whole;
+                    }
+                }
                 destination.Clear();
                 if (offset > 0) {
                     destination.Append(existing, 0, offset);
@@ -525,6 +538,15 @@ namespace IronRuby.Builtins {
                 while (i < count) {
                     int size = (Char.IsHighSurrogate(chars[i]) && i + 1 < count && Char.IsLowSurrogate(chars[i + 1])) ? 2 : 1;
                     int codepoint = size == 2 ? Char.ConvertToUtf32(chars[i], chars[i + 1]) : chars[i];
+
+                    string escape = XmlEscape(codepoint);
+                    if (escape != null) {
+                        if (!Emit(Encoding.ASCII.GetBytes(escape), written, limit)) {
+                            return "destination_buffer_full";
+                        }
+                        i += size;
+                        continue;
+                    }
 
                     byte[] bytes;
                     try {
@@ -626,9 +648,64 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
-            /// Newline decorators operate on the converted bytes. They are only meaningful for
-            /// ASCII-compatible destinations; anything else passes through unchanged.
+            /// The decorators all work on the converted bytes rather than on characters. They are
+            /// only meaningful for ASCII-compatible destinations; anything else passes through
+            /// unchanged.
             /// </summary>
+            private byte[]/*!*/ ApplyOutputDecorators(byte[]/*!*/ bytes) {
+                return ApplyNewlineDecorators(ApplyXmlDecorators(bytes));
+            }
+
+            /// <summary>
+            /// The :xml => :attr decorator supplies the quotes around the attribute value. The
+            /// opening one goes in front of the first byte the converter ever produces, so a
+            /// converter finished without ever having converted anything writes both at once.
+            /// </summary>
+            private byte[]/*!*/ ApplyXmlDecorators(byte[]/*!*/ bytes) {
+                if (bytes.Length == 0 || (_flags & XmlAttrQuoteFlag) == 0 ||
+                    !DestinationEncoding.IsAsciiIdentity || _xmlQuoteOpened) {
+                    return bytes;
+                }
+
+                _xmlQuoteOpened = true;
+                var result = new byte[bytes.Length + 1];
+                result[0] = (byte)'"';
+                Array.Copy(bytes, 0, result, 1, bytes.Length);
+                return result;
+            }
+
+            /// <summary>
+            /// The escape a character needs before it can go into a text node or an attribute
+            /// value, or null if it can be converted as it stands. This runs on the characters
+            /// rather than on the converted bytes so that the ampersand of a numeric character
+            /// reference the converter itself produced is not escaped a second time.
+            /// </summary>
+            private string XmlEscape(int codepoint) {
+                if ((_flags & (XmlTextFlag | XmlAttrContentFlag)) == 0 || !DestinationEncoding.IsAsciiIdentity) {
+                    return null;
+                }
+                bool attribute = (_flags & XmlAttrContentFlag) != 0;
+                switch (codepoint) {
+                    case '&': return "&amp;";
+                    case '<': return "&lt;";
+                    case '>': return "&gt;";
+                    case '"': return attribute ? "&quot;" : null;
+                    case '\'': return attribute ? "&apos;" : null;
+                    default: return null;
+                }
+            }
+
+            /// <summary>The bytes a decorator still owes the output once the input is exhausted.</summary>
+            private byte[]/*!*/ FinishDecorators() {
+                if ((_flags & XmlAttrQuoteFlag) == 0 || !DestinationEncoding.IsAsciiIdentity || _decoratorsFinished) {
+                    return EmptyBytes;
+                }
+                _decoratorsFinished = true;
+                byte[] result = _xmlQuoteOpened ? new byte[] { (byte)'"' } : new byte[] { (byte)'"', (byte)'"' };
+                _xmlQuoteOpened = true;
+                return result;
+            }
+
             private byte[]/*!*/ ApplyNewlineDecorators(byte[]/*!*/ bytes) {
                 if ((_flags & (UniversalNewlineFlag | CrlfNewlineFlag | CrNewlineFlag)) == 0 ||
                     !DestinationEncoding.IsAsciiIdentity) {
@@ -711,6 +788,12 @@ namespace IronRuby.Builtins {
                 _encoder.Convert(EmptyChars, 0, 0, buffer, 0, buffer.Length, true, out charsUsed, out bytesUsed, out completed);
                 if (bytesUsed > 0) {
                     destination.Append(buffer, 0, bytesUsed);
+                    destination.ForceEncoding(DestinationEncoding);
+                }
+
+                var tail = FinishDecorators();
+                if (tail.Length > 0) {
+                    destination.Append(tail);
                     destination.ForceEncoding(DestinationEncoding);
                 }
 
@@ -806,10 +889,13 @@ namespace IronRuby.Builtins {
                             break;
 
                         case "xml":
+                            // :xml also decides what happens to a character the destination
+                            // cannot hold: it becomes a numeric character reference, which is
+                            // always representable, so :xml never raises on undefined input.
                             if (SymbolName(entry.Value) == "text") {
-                                flags |= XmlTextFlag;
+                                flags |= XmlTextFlag | UndefHexCharRefFlag;
                             } else if (SymbolName(entry.Value) == "attr") {
-                                flags |= XmlAttrContentFlag | XmlAttrQuoteFlag;
+                                flags |= XmlAttrContentFlag | XmlAttrQuoteFlag | UndefHexCharRefFlag;
                             }
                             break;
 
