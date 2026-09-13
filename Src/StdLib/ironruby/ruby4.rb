@@ -6007,11 +6007,15 @@ class IO
       other.is_a?(::IO::Buffer) && get_string == other.get_string
     end
 
+    # The copying operators also want a Buffer, and also work over the bytes
+    # the two have in common - the result is the size of the receiver.
     def __binary_op__(other, op)
+      __require_buffer__(other)
       a = get_string
-      b = other.is_a?(::IO::Buffer) ? other.get_string : other.to_s
-      ::Kernel.raise(::ArgumentError, "Buffers must be the same size!") if a.bytesize != b.bytesize
-      bytes = a.bytes.each_with_index.map { |x, i| x.__send__(op, b.getbyte(i)) & 0xff }
+      b = other.get_string
+      n = [a.bytesize, b.bytesize].min
+      bytes = a.bytes
+      n.times { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i)) & 0xff }
       result = ::IO::Buffer.new(bytes.size)
       result.set_string(bytes.pack("C*"))
       result
