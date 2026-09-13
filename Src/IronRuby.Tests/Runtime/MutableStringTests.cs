@@ -802,10 +802,10 @@ namespace IronRuby.Tests {
             Test_Reverse(sjis, SJIS, sjis);
             Test_Reverse(ascii, RubyEncoding.UTF8, rev_ascii);
             
-            // TODO: surrogates
-            AssertExceptionThrown<EncoderFallbackException>(
-                () => Test_Reverse(u12345, RubyEncoding.UTF8, u12345)
-            );
+            // A character outside the BMP reverses to itself, like any other single character.
+            // This used to throw EncoderFallbackException: the two UTF-16 halves were reversed
+            // independently, and the resulting low-then-high pair had no UTF-8 spelling.
+            Test_Reverse(u12345, RubyEncoding.UTF8, u12345);
 
             // Bytes that are not valid UTF-8 reverse like any others - the TODO that used to
             // stand here is done:

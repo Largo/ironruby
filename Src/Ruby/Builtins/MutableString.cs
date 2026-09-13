@@ -2026,7 +2026,6 @@ namespace IronRuby.Builtins {
             MutatePreserveAsciiness();
             PrepareForCharacterWrite();
 
-            // TODO: surrogates
             var content = _content;
 
             int length = content.Count;
@@ -2039,6 +2038,19 @@ namespace IronRuby.Builtins {
                 char b = content.GetChar(length - i - 1);
                 content.SetChar(i, b);
                 content.SetChar(length - i - 1, a);
+            }
+
+            // A character outside the BMP is one Ruby character but two UTF-16 chars, and the
+            // swap above left its halves the wrong way round.  Put each pair back: after the
+            // reversal a surrogate pair reads low-then-high, which is exactly the pattern to
+            // look for.  An unpaired surrogate has no partner to swap with and stays put.
+            for (int i = 0; i < length - 1; i++) {
+                if (Char.IsLowSurrogate(content.GetChar(i)) && Char.IsHighSurrogate(content.GetChar(i + 1))) {
+                    char low = content.GetChar(i);
+                    content.SetChar(i, content.GetChar(i + 1));
+                    content.SetChar(i + 1, low);
+                    i++;
+                }
             }
 
             Debug.Assert(content == _content);
