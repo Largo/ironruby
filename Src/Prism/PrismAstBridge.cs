@@ -473,16 +473,13 @@ namespace IronRuby.Prism {
                     return new MemberAssignmentExpression(Expr(callAnd.Receiver), callAnd.ReadName, "&&", Expr(callAnd.Value), span);
 
                 case Pm.IndexOperatorWriteNode indexOp:
-                    return new SimpleAssignmentExpression(
-                        new ArrayItemAccess(Expr(indexOp.Receiver), BuildArguments(indexOp.Arguments), null, span),
+                    return IndexOperatorAssignment(Expr(indexOp.Receiver), indexOp.Arguments,
                         Expr(indexOp.Value), indexOp.BinaryOperator, span);
                 case Pm.IndexOrWriteNode indexOr:
-                    return new SimpleAssignmentExpression(
-                        new ArrayItemAccess(Expr(indexOr.Receiver), BuildArguments(indexOr.Arguments), null, span),
+                    return IndexOperatorAssignment(Expr(indexOr.Receiver), indexOr.Arguments,
                         Expr(indexOr.Value), "||", span);
                 case Pm.IndexAndWriteNode indexAnd:
-                    return new SimpleAssignmentExpression(
-                        new ArrayItemAccess(Expr(indexAnd.Receiver), BuildArguments(indexAnd.Arguments), null, span),
+                    return IndexOperatorAssignment(Expr(indexAnd.Receiver), indexAnd.Arguments,
                         Expr(indexAnd.Value), "&&", span);
 
                 case Pm.DefNode def: return Def(def, span);
@@ -1226,6 +1223,45 @@ namespace IronRuby.Prism {
             } finally {
                 _scopes.Pop();
             }
+        }
+
+        private int _indexTempCount;
+
+        /// <summary>
+        /// recv[i] op= value. An operator assignment reads through the left value and then
+        /// writes through it, and both halves transform the index expressions again - so an
+        /// index with a side effect ran twice, and `h[k] ||= v` called k a second time on
+        /// its way to storing the default. Evaluating the indexes into temporaries first
+        /// leaves one evaluation, which is what MRI does.
+        /// </summary>
+        private Expression/*!*/ IndexOperatorAssignment(Expression/*!*/ receiver, Pm.PmNode argumentsNode,
+            Expression/*!*/ value, string operation, SourceSpan span) {
+
+            Arguments arguments = argumentsNode is Pm.ArgumentsNode args
+                ? BuildArguments(args) : new Arguments();
+            var expressions = arguments.Expressions;
+
+            var statements = new Statements();
+            var hoisted = new Expression[expressions.Length];
+            for (int i = 0; i < expressions.Length; i++) {
+                // A splat or a keyword splat is not a plain value and cannot be lifted out.
+                if (expressions[i] is Literal || expressions[i] is SplattedArgument) {
+                    hoisted[i] = expressions[i];
+                    continue;
+                }
+                var temp = CurrentScope.AddVariable("?index" + _indexTempCount++ + "?", span);
+                statements.Add(new SimpleAssignmentExpression(temp, expressions[i], null, span));
+                hoisted[i] = temp;
+            }
+
+            if (statements.Count == 0) {
+                return new SimpleAssignmentExpression(
+                    new ArrayItemAccess(receiver, arguments, null, span), value, operation, span);
+            }
+
+            statements.Add(new SimpleAssignmentExpression(
+                new ArrayItemAccess(receiver, new Arguments(hoisted), null, span), value, operation, span));
+            return new BlockExpression(statements, span);
         }
 
         // ---- parameters (including keyword-argument lowering) ----
