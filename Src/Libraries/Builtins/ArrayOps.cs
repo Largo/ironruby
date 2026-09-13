@@ -44,15 +44,27 @@ namespace IronRuby.Builtins {
         #region Constructors
 
         [RubyConstructor]
-        public static RubyArray/*!*/ CreateArray(RubyClass/*!*/ self) {
+        public static RubyArray/*!*/ CreateArray(BlockParam block, RubyClass/*!*/ self) {
+            WarnUnusedBlock(block, self.Context);
             return new RubyArray();
         }
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyArray/*!*/ Reinitialize(RubyContext/*!*/ context, RubyArray/*!*/ self) {
+        public static RubyArray/*!*/ Reinitialize(RubyContext/*!*/ context, BlockParam block, RubyArray/*!*/ self) {
+            WarnUnusedBlock(block, context);
             self.Clear();
             return self;
+        }
+
+        /// <summary>
+        /// Array.new takes a block to fill the array with, so a block passed alongside no size at
+        /// all is a mistake worth warning about - MRI does.
+        /// </summary>
+        private static void WarnUnusedBlock(BlockParam block, RubyContext/*!*/ context) {
+            if (block != null) {
+                context.ReportWarning("given block not used");
+            }
         }
 
         [RubyConstructor]
@@ -153,7 +165,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("negative array size");
             }
 
-            if (IntPtr.Size == 4 && size > Int32.MaxValue / 4) {
+            if (size > Int32.MaxValue / 8) {
                 throw RubyExceptions.CreateArgumentError("array size too big");
             }
         }

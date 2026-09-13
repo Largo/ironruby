@@ -142,14 +142,19 @@ module Enumerable
     alias_method :none_without_pattern?, :none?
     alias_method :one_without_pattern?, :one?
 
-    def __check_pattern_args__(args)
-      return if args.size <= 1
-      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    def __check_pattern_args__(args, block = nil)
+      if args.size > 1
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+      end
+      # The pattern wins and the block is never called, which is worth saying out loud.
+      if block && !args.empty? && !$VERBOSE.nil?
+        warn "warning: given block not used"
+      end
     end
     private :__check_pattern_args__
 
     def all?(*args, &block)
-      __check_pattern_args__(args)
+      __check_pattern_args__(args, block)
       return all_without_pattern?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false unless pattern === __enum_item__(values) }
@@ -157,7 +162,7 @@ module Enumerable
     end
 
     def any?(*args, &block)
-      __check_pattern_args__(args)
+      __check_pattern_args__(args, block)
       return any_without_pattern?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return true if pattern === __enum_item__(values) }
@@ -165,7 +170,7 @@ module Enumerable
     end
 
     def none?(*args, &block)
-      __check_pattern_args__(args)
+      __check_pattern_args__(args, block)
       return none_without_pattern?(&block) if args.empty?
       pattern = args[0]
       each { |*values| return false if pattern === __enum_item__(values) }
@@ -173,7 +178,7 @@ module Enumerable
     end
 
     def one?(*args, &block)
-      __check_pattern_args__(args)
+      __check_pattern_args__(args, block)
       return one_without_pattern?(&block) if args.empty?
       pattern = args[0]
       found = false
@@ -4424,6 +4429,14 @@ class Enumerator
   end
   private :__source_count__
 
+  # n * (n-1) * ... * (n-k+1), which is 1 when k is 0.
+  def __enum_falling_factorial__(n, k)
+    result = 1
+    k.times { |i| result *= (n - i) }
+    result
+  end
+  private :__enum_falling_factorial__
+
   def __size_from_info__(source, op, arg)
     case op
     when :same
@@ -4438,6 +4451,20 @@ class Enumerator
       n ? (n - arg + 1 < 0 ? 0 : n - arg + 1) : nil
     when :cycle
       __cycle_size__(__source_count__(source), arg)
+    when :combination, :permutation
+      # Arithmetic, not iteration: C(n, k) and n!/(n-k)!, and zero when k elements
+      # cannot be taken out of n at all.
+      n = __source_count__(source)
+      if n
+        k = arg.nil? ? n : arg
+        if k < 0 || k > n
+          0
+        elsif op == :combination
+          __enum_falling_factorial__(n, k) / __enum_falling_factorial__(k, k)
+        else
+          __enum_falling_factorial__(n, k)
+        end
+      end
     when :upto
       arg < source ? 0 : arg - source + 1
     when :downto

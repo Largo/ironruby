@@ -1431,7 +1431,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("index")]
         public static Enumerator/*!*/ GetFindIndexEnumerator(BlockParam predicate, IList/*!*/ self) {
             Debug.Assert(predicate == null);
-            throw new NotImplementedError("TODO: find_index enumerator");
+            // The Enumerator finds the index once it is given a block, so it reports no size:
+            // it answers one number, not one element per element of the receiver.
+            return new Enumerator(self, "find_index");
+        }
+
+        [RubyMethod("rindex")]
+        public static Enumerator/*!*/ GetReverseIndexEnumerator(BlockParam predicate, IList/*!*/ self) {
+            Debug.Assert(predicate == null);
+            return new Enumerator(self, "rindex");
         }
 
         [RubyMethod("find_index")]
@@ -2277,21 +2285,39 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// The optional length is converted with the usual Integer protocol - it was being taken as
+        /// "no length given" whenever it was not already a Fixnum, so #combination("2") silently
+        /// behaved like #combination.
+        /// </summary>
+        private static int? PermutationLength(ConversionStorage<int>/*!*/ fixnumCast, object size) {
+            return (size == Missing.Value) ? (int?)null : Protocols.CastToFixnum(fixnumCast, size);
+        }
+
         [RubyMethod("permutation")]
-        public static object GetPermutations(BlockParam block, IList/*!*/ self, [DefaultProtocol, Optional]int? size) {
-            var enumerator = new PermutationEnumerator(self, size);
+        public static object GetPermutations(ConversionStorage<int>/*!*/ fixnumCast, BlockParam block, IList/*!*/ self,
+            [Optional]object size) {
+
+            int? length = PermutationLength(fixnumCast, size);
+            var enumerator = new PermutationEnumerator(self, length);
             if (block == null) {
-                return new Enumerator(enumerator);
+                // How many permutations there will be is arithmetic, not iteration, so the
+                // Enumerator can answer #size without running: n!/(n-k)!, and none at all when the
+                // requested length cannot be taken from the array.
+                return new Enumerator(enumerator) { SizeSource = self, SizeOp = "permutation", SizeArg = length };
             }
 
             return enumerator.Each(null, block);
         }
         
         [RubyMethod("combination")]
-        public static object GetCombinations(BlockParam block, IList/*!*/ self, [DefaultProtocol, Optional]int? size) {
-            var enumerator = new CombinationEnumerator(self, size);
+        public static object GetCombinations(ConversionStorage<int>/*!*/ fixnumCast, BlockParam block, IList/*!*/ self,
+            [Optional]object size) {
+
+            int? length = PermutationLength(fixnumCast, size);
+            var enumerator = new CombinationEnumerator(self, length);
             if (block == null) {
-                return new Enumerator(enumerator);
+                return new Enumerator(enumerator) { SizeSource = self, SizeOp = "combination", SizeArg = length };
             }
 
             return enumerator.Each(null, block);
