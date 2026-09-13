@@ -91,10 +91,24 @@ namespace IronRuby.Builtins {
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
         public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value) {
+            return ToInteger(self, value, 0);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value, [DefaultProtocol]int radix) {
             var str = value.ConvertToString();
 
+            // A negative radix means "this is only a hint, a prefix wins"; zero and the
+            // absent argument both mean "work it out from the prefix".
+            // Only a positive radix is range-checked; a negative one is a hint, and an
+            // unusable magnitude just falls back to 10.
+            if (radix > 0 && (radix < 2 || radix > 36)) {
+                throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
+            }
+
             object result;
-            if (TryParseRubyInteger(str, out result)) {
+            if (TryParseRubyInteger(str, radix, out result)) {
                 return result;
             }
 
@@ -125,7 +139,7 @@ namespace IronRuby.Builtins {
             return -1;
         }
 
-        private static bool TryParseRubyInteger(string/*!*/ str, out object result) {
+        private static bool TryParseRubyInteger(string/*!*/ str, int requestedRadix, out object result) {
             result = null;
 
             int index = 0;
@@ -146,23 +160,43 @@ namespace IronRuby.Builtins {
                 index++;
             }
 
-            int radix = 10;
+            // requestedRadix 0 (or absent) means "infer from the prefix"; a negative one
+            // means "prefer the prefix, fall back to |radix|".
+            bool inferRadix = requestedRadix <= 0;
+            int radix = inferRadix ? 0 : requestedRadix;
             int digits = 0;
+
             if (index < end && str[index] == '0') {
                 char prefix = (index + 1 < end) ? str[index + 1] : '\0';
+                int prefixRadix;
                 switch (prefix) {
-                    case 'x': case 'X': radix = 16; index += 2; break;
-                    case 'b': case 'B': radix = 2; index += 2; break;
-                    case 'o': case 'O': radix = 8; index += 2; break;
-                    case 'd': case 'D': radix = 10; index += 2; break;
-                    default:
-                        // A bare leading zero is octal, and counts as a digit in its own right so
-                        // that "0" and "0_0" parse while "08" does not.
-                        radix = 8;
-                        digits = 1;
-                        index++;
-                        break;
+                    case 'x': case 'X': prefixRadix = 16; break;
+                    case 'b': case 'B': prefixRadix = 2; break;
+                    case 'o': case 'O': prefixRadix = 8; break;
+                    case 'd': case 'D': prefixRadix = 10; break;
+                    default: prefixRadix = 0; break;
                 }
+
+                if (prefixRadix != 0) {
+                    if (!inferRadix && radix != prefixRadix) {
+                        // "0x1f" asked for in base 10 is not a number.
+                        return false;
+                    }
+                    radix = prefixRadix;
+                    index += 2;
+                } else if (inferRadix) {
+                    // A bare leading zero is octal, and counts as a digit in its own right so
+                    // that "0" and "0_0" parse while "08" does not.
+                    radix = 8;
+                    digits = 1;
+                    index++;
+                }
+                // With an explicit radix a leading zero is just another digit.
+            }
+
+            if (radix <= 0) {
+                int hinted = -requestedRadix;
+                radix = (requestedRadix < 0 && hinted >= 2 && hinted <= 36) ? hinted : 10;
             }
 
             BigInteger magnitude = BigInteger.Zero;
