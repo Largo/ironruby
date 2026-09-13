@@ -501,8 +501,8 @@ namespace IronRuby.Builtins {
             if (descriptor >= 0 && descriptor <= 2) {
                 return descriptor;
             }
-            var file = context.GetStream(descriptor) as System.IO.FileStream;
-            return (file != null) ? (int)file.SafeFileHandle.DangerousGetHandle() : -1;
+            var stream = context.GetStream(descriptor);
+            return (stream != null) ? RubyIO.DescriptorOf(stream) : -1;
         }
 
         #endregion
@@ -522,8 +522,10 @@ namespace IronRuby.Builtins {
             if (SysPipe2(fds, O_CLOEXEC) != 0) {
                 throw RubyExceptions.CreateEINVAL("pipe");
             }
-            var reader = new FileStream(new SafeFileHandle((IntPtr)fds[0], true), FileAccess.Read, 1, false);
-            var writer = new FileStream(new SafeFileHandle((IntPtr)fds[1], true), FileAccess.Write, 1, false);
+            // Not a FileStream: a read that is already blocked has to be interruptible by a
+            // close from another thread, which is what Ruby's IO#close promises.
+            var reader = new DescriptorStream(fds[0], true, false, true);
+            var writer = new DescriptorStream(fds[1], false, true, true);
             return new RubyArray {
                 new RubyIO(context, reader, Adopt(context, fds[0], reader), IOMode.ReadOnly),
                 new RubyIO(context, writer, Adopt(context, fds[1], writer), IOMode.WriteOnly)
@@ -552,7 +554,11 @@ namespace IronRuby.Builtins {
 
             var input = context.GetStream(reader.GetFileDescriptor());
             var output = context.GetStream(writer.GetFileDescriptor());
-            return new RubyIO(context, new StreamReader(input), new StreamWriter(output), IOMode.ReadWrite);
+            // Autoflush: the other end of this pipe is a process waiting to be spoken to, so
+            // a write that sits in a buffer is a deadlock rather than a saving.
+            var sink = new StreamWriter(output);
+            sink.AutoFlush = true;
+            return new RubyIO(context, new StreamReader(input), sink, IOMode.ReadWrite);
         }
 
         #endregion

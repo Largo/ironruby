@@ -437,11 +437,7 @@ namespace IronRuby.Builtins {
                 if (buffered == null) {
                     return -1;
                 }
-                var fs = buffered.BaseStream as System.IO.FileStream;
-                if (fs == null) {
-                    return -1;
-                }
-                return (int)fs.SafeFileHandle.DangerousGetHandle();
+                return DescriptorOf(buffered.BaseStream);
             }
         }
 
@@ -487,6 +483,16 @@ namespace IronRuby.Builtins {
         public static int TryDuplicateDescriptor(RubyIO/*!*/ io) {
             int descriptor = io.KernelDescriptor;
             return (descriptor < 0) ? -1 : sys_dup(descriptor);
+        }
+
+        /// <summary>The operating system descriptor a stream reads and writes, or -1.</summary>
+        public static int DescriptorOf(System.IO.Stream stream) {
+            var known = stream as IDescriptorStream;
+            if (known != null) {
+                return known.Descriptor;
+            }
+            var file = stream as System.IO.FileStream;
+            return (file != null) ? (int)file.SafeFileHandle.DangerousGetHandle() : -1;
         }
 
         /// <summary>

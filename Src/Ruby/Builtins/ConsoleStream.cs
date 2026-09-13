@@ -118,10 +118,11 @@ namespace IronRuby.Builtins {
                     if (output ? !Console.IsOutputRedirected : !Console.IsErrorRedirected) {
                         return null;
                     }
-                    cache = new FileStream(
-                        new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)(output ? 1 : 2), false),
-                        FileAccess.Write, 1
-                    );
+                    // Sequential write(2) rather than a FileStream: when standard output and
+                    // standard error have both been redirected to the same file they share one
+                    // open file description, and FileStream's positional writes would have each
+                    // of them overwrite the other instead of appending.
+                    cache = new DescriptorStream(output ? 1 : 2, false, true, false);
                 } catch (Exception) {
                     return null;
                 }
