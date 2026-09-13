@@ -609,9 +609,6 @@ namespace IronRuby.Builtins {
                     _content = _content.SwitchToStringContent();
                 } catch (DecoderFallbackException e) {
                     throw RubyExceptions.CreateInvalidByteSequenceError(e, fromEncoding);
-                } catch (ArgumentException) {
-                    throw new InvalidByteSequenceError(
-                        RubyExceptions.FormatMessage("invalid byte sequence in {0}", fromEncoding.Name));
                 }
             }
 
@@ -849,8 +846,6 @@ namespace IronRuby.Builtins {
             try {
                 return ToString();
             } catch (DecoderFallbackException) {
-                return ToStringWithEscapedInvalidCharacters(_encoding);
-            } catch (ArgumentException) {
                 return ToStringWithEscapedInvalidCharacters(_encoding);
             }
         }
@@ -1150,26 +1145,19 @@ namespace IronRuby.Builtins {
         public bool EndsWith(char value) {
             try {
                 return GetLastChar() == value;
-            } catch (ArgumentException) {
-                // DecoderFallbackException is itself an ArgumentException, so this covers both the
-                // raw .NET failure and the "invalid byte sequence" ArgumentError raised for it.
-                return EndsWithByte(value);
+            } catch (DecoderFallbackException) {
+                // The string holds bytes that are not a valid character sequence in its encoding.
+                // MRI still answers this question - it looks at the trailing bytes rather than
+                // decoding the whole string - and IO#puts asks it about every string it writes,
+                // so a string with a stray byte in it must not take the process down.
+                // In an ASCII compatible encoding an ASCII character is always encoded as itself,
+                // so the last byte decides.
+                if (value < 0x80 && _encoding.IsAsciiIdentity) {
+                    int byteCount = GetByteCount();
+                    return byteCount > 0 && GetByte(byteCount - 1) == (byte)value;
+                }
+                return false;
             }
-        }
-
-        /// <summary>
-        /// The string holds bytes that are not a valid character sequence in its encoding. MRI
-        /// still answers this question - it looks at the trailing bytes rather than decoding the
-        /// whole string - and IO#puts asks it about every string it writes, so a string with a
-        /// stray byte in it must not take the process down. In an ASCII compatible encoding an
-        /// ASCII character is always encoded as itself, so the last byte decides.
-        /// </summary>
-        private bool EndsWithByte(char value) {
-            if (value < 0x80 && _encoding.IsAsciiIdentity) {
-                int byteCount = GetByteCount();
-                return byteCount > 0 && GetByte(byteCount - 1) == (byte)value;
-            }
-            return false;
         }
 
         public bool EndsWith(string/*!*/ value) {
