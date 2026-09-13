@@ -1510,7 +1510,8 @@ namespace IronRuby.Builtins {
             self.ForceEncoding(to);
             self.Append(transcoded);
             return self;
-        }
+        }
+
         #region Transcoding with options
 
         /// <summary>
