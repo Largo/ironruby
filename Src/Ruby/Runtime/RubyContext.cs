@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -2899,9 +2899,6 @@ namespace IronRuby.Runtime {
                 // the encoding name doesn't correspond to its code page:
                 case "CP1025": return Encoding.GetEncoding(21025);
 
-                // encodings Ruby has and .NET does not. Without these, "UTF-16" and "UTF-32"
-                // resolved to .NET's utf-16/utf-32, which are Ruby's UTF-16LE and UTF-32LE, and
-                // "TIS-620" resolved to Windows-874, which has a larger repertoire.
                 // Ruby's names for code pages .NET spells differently - see GetRubySpecificName.
                 case "MACROMAN": return Encoding.GetEncoding(10000);
                 case "MACJAPANESE": return Encoding.GetEncoding(10001);
@@ -2921,6 +2918,9 @@ namespace IronRuby.Runtime {
                 case "EUC-KR": return Encoding.GetEncoding(51949);
                 case "GB18030": return Encoding.GetEncoding(54936);
 
+                // Encodings Ruby has and .NET does not. Without these, "UTF-16" and "UTF-32"
+                // resolved to .NET's utf-16/utf-32, which are Ruby's UTF-16LE and UTF-32LE, and
+                // "TIS-620" resolved to Windows-874, which has a larger repertoire.
                 case "UTF-16": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF16).StrictEncoding;
                 case "UTF-32": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32).StrictEncoding;
                 case "CESU-8": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8).StrictEncoding;
