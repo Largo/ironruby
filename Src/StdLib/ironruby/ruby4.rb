@@ -6186,6 +6186,100 @@ class IO
     self
   end
 
+  # The line readers take a chomp: option, which the built-ins do not know
+  # about - the options hash landed in the separator or limit parameter and came
+  # back as "no implicit conversion of Hash into Integer". The option is split
+  # off here and the newline taken off each line afterwards.
+  def __take_chomp__(args)
+    return [args, false] unless !args.empty? && args.last.is_a?(::Hash)
+    options = args.last
+    return [args, false] unless options.key?(:chomp) || options.empty?
+    args = args[0...-1]
+    [args, !!options[:chomp]]
+  end
+  private :__take_chomp__
+
+  def __chomp_line__(line, separator)
+    return line if line.nil?
+    sep = separator.is_a?(::String) ? separator : $/
+    return line if sep.nil? || sep.empty?
+    line.end_with?(sep) ? line[0...(line.length - sep.length)] : line
+  end
+  private :__chomp_line__
+
+  alias_method :__ir_gets__, :gets
+
+  def gets(*args)
+    args, chomp = __take_chomp__(args)
+    line = __ir_gets__(*args)
+    chomp ? __chomp_line__(line, args[0]) : line
+  end
+
+  alias_method :__ir_readline__, :readline
+
+  def readline(*args)
+    args, chomp = __take_chomp__(args)
+    line = __ir_readline__(*args)
+    chomp ? __chomp_line__(line, args[0]) : line
+  end
+
+  alias_method :__ir_readlines__, :readlines
+
+  def readlines(*args)
+    args, chomp = __take_chomp__(args)
+    lines = __ir_readlines__(*args)
+    chomp ? lines.map { |l| __chomp_line__(l, args[0]) } : lines
+  end
+
+  alias_method :__ir_each_line__, :each_line
+
+  def each_line(*args, &block)
+    args, chomp = __take_chomp__(args)
+    unless block
+      return ::Enumerator.new { |y| each_line(*args, chomp: chomp) { |l| y << l } }
+    end
+    __ir_each_line__(*args) do |line|
+      block.call(chomp ? __chomp_line__(line, args[0]) : line)
+    end
+  end
+
+  if method_defined?(:each)
+    alias_method :__ir_each__, :each
+    def each(*args, &block)
+      each_line(*args, &block)
+    end
+  end
+
+  class << self
+    alias_method :__ir_class_readlines__, :readlines
+
+    def readlines(name, *args)
+      options = args.last.is_a?(::Hash) ? args.pop : nil
+      chomp = options && options[:chomp]
+      lines = __ir_class_readlines__(name, *args)
+      return lines unless chomp
+      sep = args[0].is_a?(::String) ? args[0] : $/
+      lines.map { |l| (sep && !sep.empty? && l.end_with?(sep)) ? l[0...(l.length - sep.length)] : l }
+    end
+
+    alias_method :__ir_foreach__, :foreach
+
+    def foreach(name, *args, &block)
+      options = args.last.is_a?(::Hash) ? args.pop : nil
+      chomp = options && options[:chomp]
+      unless block
+        return ::Enumerator.new { |y| foreach(name, *args, chomp: chomp) { |l| y << l } }
+      end
+      sep = args[0].is_a?(::String) ? args[0] : $/
+      __ir_foreach__(name, *args) do |line|
+        if chomp && sep && !sep.empty? && line.end_with?(sep)
+          line = line[0...(line.length - sep.length)]
+        end
+        block.call(line)
+      end
+    end
+  end
+
   # readpartial reads what is there, up to maxlen bytes, and only blocks when
   # nothing is there at all. Nothing here has a non-blocking read underneath, so
   # on a stream that is already open this is a read of at most maxlen bytes -
