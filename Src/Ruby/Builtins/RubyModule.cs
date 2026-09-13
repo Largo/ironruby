@@ -1735,6 +1735,8 @@ namespace IronRuby.Builtins {
                     refinementBuffer.Clear();
                     refinements.GetRefinementsOf(module, refinementBuffer);
                     foreach (RubyModule refinement in refinementBuffer) {
+                        // a refinement is not in anyone's ancestors, so nothing else initializes it
+                        refinement.InitializeMethodsNoLock();
                         owner = refinement;
                         if (refinement.TryGetMethod(name, ref skipHidden, (options & MethodLookup.Virtual) != 0, out info)) {
                             return true;
@@ -1809,6 +1811,7 @@ namespace IronRuby.Builtins {
             // module it refines, so super continues at that module *inclusive* rather than skipping it.
             RubyModule refined = callerModule.RefinedModule;
             if (refined != null) {
+                InitializeMethodsNoLock();
                 if (ForEachAncestor((module) => {
                     foundModule |= module == refined;
                     if (!foundModule) {
