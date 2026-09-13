@@ -418,6 +418,12 @@ namespace IronRuby.Builtins {
         /// includes (CRuby does follow includes for activation, only Module#refinements is own-only).
         /// </summary>
         internal void GetAllRefinements(List<RubyModule/*!*/>/*!*/ result) {
+            using (Context.ClassHierarchyLocker()) {
+                GetAllRefinementsNoLock(result);
+            }
+        }
+
+        internal void GetAllRefinementsNoLock(List<RubyModule/*!*/>/*!*/ result) {
             ForEachAncestor(false, (m) => {
                 if (m._refinements != null) {
                     foreach (RubyModule r in m._refinements.Values) {
