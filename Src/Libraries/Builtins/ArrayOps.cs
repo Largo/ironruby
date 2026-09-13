@@ -20,6 +20,7 @@ using System.Diagnostics;
 using System.Dynamic;
 using System.IO;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using IronRuby.Compiler;
 using IronRuby.Runtime;
@@ -197,9 +198,23 @@ namespace IronRuby.Builtins {
             ConversionStorage<double>/*!*/ floatConversion,
             ConversionStorage<MutableString>/*!*/ stringCast,
             ConversionStorage<MutableString>/*!*/ tosConversion,
-            RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format) {
+            RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format,
+            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            return RubyEncoder.Pack(integerConversion, floatConversion, stringCast, tosConversion, self, format);
+            MutableString buffer = null;
+            if (options != null) {
+                object value;
+                if (options.TryGetValue(integerConversion.Context.CreateAsciiSymbol("buffer"), out value)) {
+                    buffer = value as MutableString;
+                    if (buffer == null) {
+                        throw RubyExceptions.CreateTypeError("buffer must be String, not {0}",
+                            integerConversion.Context.GetClassDisplayName(value));
+                    }
+                    buffer.RequireNotFrozen();
+                }
+            }
+
+            return RubyEncoder.Pack(integerConversion, floatConversion, stringCast, tosConversion, self, format, buffer);
         }
 
         #endregion
