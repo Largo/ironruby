@@ -4372,6 +4372,108 @@ class Module
   private :ruby2_keywords rescue nil
 end
 
+class Enumerator
+  # 2.6's arithmetic sequence: what Range#step and Range#% answer, and what
+  # Numeric#step answers. It is an Enumerator that also remembers the three
+  # numbers it was built from.
+  class ArithmeticSequence < ::Enumerator
+    attr_reader :begin, :end, :step
+
+    def self.__build__(from, to, by, exclude_end, source)
+      seq = allocate
+      seq.__send__(:__arith_init__, from, to, by, exclude_end, source)
+      seq
+    end
+
+    def __arith_init__(from, to, by, exclude_end, source)
+      @begin = from
+      @end = to
+      @step = by
+      @exclude_end = exclude_end
+      @source = source
+      initialize(nil) do |y|
+        __arith_each__ { |v| y << v }
+      end
+    end
+    private :__arith_init__
+
+    def exclude_end?
+      @exclude_end
+    end
+
+    def first(n = nil)
+      return __arith_each__ { |v| return v } if n.nil?
+      result = []
+      __arith_each__ do |v|
+        break if result.size >= n
+        result << v
+      end
+      result
+    end
+
+    def each(&block)
+      return self unless block
+      __arith_each__(&block)
+      self
+    end
+
+    def __arith_each__
+      value = @begin
+      if @step > 0
+        while @exclude_end ? value < @end : value <= @end
+          yield value
+          value += @step
+        end
+      elsif @step < 0
+        while @exclude_end ? value > @end : value >= @end
+          yield value
+          value += @step
+        end
+      end
+      self
+    end
+    private :__arith_each__
+
+    def to_a
+      result = []
+      __arith_each__ { |v| result << v }
+      result
+    end
+    alias_method :entries, :to_a
+    alias_method :force, :to_a
+
+    def size
+      return ::Float::INFINITY if @end.nil?
+      span = @end - @begin
+      return 0 if (@step > 0 && span < 0) || (@step < 0 && span > 0)
+      n = (span.to_f / @step).floor
+      n += 1 unless @exclude_end && span % @step == 0
+      n < 0 ? 0 : n
+    end
+
+    def last(n = nil)
+      values = to_a
+      n.nil? ? values.last : values.last(n)
+    end
+
+    def ==(other)
+      other.is_a?(ArithmeticSequence) &&
+        self.begin == other.begin && self.end == other.end &&
+        step == other.step && exclude_end? == other.exclude_end?
+    end
+    alias_method :eql?, :==
+
+    def hash
+      [self.begin, self.end, step, exclude_end?].hash
+    end
+
+    def inspect
+      "((#{@source.inspect}).%(#{@step.inspect}))"
+    end
+    alias_method :to_s, :inspect
+  end
+end
+
 # 3.2's Data: immutable value objects. The constant did not exist, so every
 # file in spec/core/data failed to load.
 class Data
@@ -6645,8 +6747,21 @@ class Range
   private :__bsearch_float__
 
   def %(n)
-    step(n)
-  end unless method_defined?(:%)
+    ::Enumerator::ArithmeticSequence.__build__(self.begin, self.end, n, exclude_end?, self)
+  end
+
+  alias_method :__ir_step__, :step
+
+  # Without a block, MRI answers an arithmetic sequence rather than a plain
+  # Enumerator, and the specs check the class.
+  def step(n = 1, &block)
+    return __ir_step__(n, &block) if block
+    if self.begin.is_a?(::Numeric) && (self.end.nil? || self.end.is_a?(::Numeric))
+      ::Enumerator::ArithmeticSequence.__build__(self.begin, self.end, n, exclude_end?, self)
+    else
+      __ir_step__(n)
+    end
+  end
 
   # Range#min/#max/#minmax are specialised in MRI: without a block they answer from the
   # endpoints instead of enumerating. IronRuby inherited Enumerable's versions, so
