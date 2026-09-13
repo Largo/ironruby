@@ -75,16 +75,9 @@ namespace IronRuby.Builtins {
                 
         [RubyConstructor]
         public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, int options, [DefaultProtocol, Optional]MutableString encoding) {
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
 
-            return new RubyRegex(pattern, MakeOptions(options, encoding));
-        }
-
-        [RubyConstructor]
-        public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]bool ignoreCase, [DefaultProtocol, Optional]MutableString encoding) {
-
-            return new RubyRegex(pattern, MakeOptions(ignoreCase, encoding));
+            return new RubyRegex(pattern, MakeOptions(self.Context, options, encoding));
         }
 
         [RubyMethod("compile", RubyMethodAttributes.PublicSingleton)]
@@ -115,18 +108,10 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyRegex/*!*/ Reinitialize(RubyRegex/*!*/ self, 
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, int options, [DefaultProtocol, Optional]MutableString encoding) {
+        public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
 
-            self.Set(pattern, MakeOptions(options, encoding));
-            return self;
-        }
-
-        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyRegex/*!*/ Reinitialize(RubyRegex/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]bool ignoreCase, [DefaultProtocol, Optional]MutableString encoding) {
-
-            self.Set(pattern, MakeOptions(ignoreCase, encoding));
+            self.Set(pattern, MakeOptions(context, options, encoding));
             return self;
         }
 
@@ -136,6 +121,50 @@ namespace IronRuby.Builtins {
 
         internal static RubyRegexOptions MakeOptions(bool ignoreCase, MutableString encoding) {
             return (ignoreCase ? RubyRegexOptions.IgnoreCase : RubyRegexOptions.NONE) | StringToRegexEncoding(encoding);
+        }
+
+        /// <summary>
+        /// Regexp.new's second argument. MRI takes an Integer bit vector, a String of i/m/x flags,
+        /// nil/false for none, and treats anything else as "true" after warning - notably it never
+        /// calls #to_int or #to_str on it.
+        /// </summary>
+        internal static RubyRegexOptions MakeOptions(RubyContext/*!*/ context, object options, MutableString encoding) {
+            RubyRegexOptions result;
+
+            if (options == null || options is bool && !(bool)options || options == Missing.Value) {
+                result = RubyRegexOptions.NONE;
+            } else if (options is bool) {
+                result = RubyRegexOptions.IgnoreCase;
+            } else if (options is int) {
+                result = PublicToInternalOptions((int)options);
+            } else {
+                var str = options as MutableString;
+                if (str != null) {
+                    result = ParseOptionString(str);
+                } else {
+                    context.ReportWarning("expected true or false as ignorecase: " + context.Inspect(options));
+                    result = RubyRegexOptions.IgnoreCase;
+                }
+            }
+
+            return result | StringToRegexEncoding(encoding);
+        }
+
+        private static RubyRegexOptions ParseOptionString(MutableString/*!*/ flags) {
+            var result = RubyRegexOptions.NONE;
+            int count = flags.GetCharCount();
+
+            for (int i = 0; i < count; i++) {
+                switch (flags.GetChar(i)) {
+                    case 'i': result |= RubyRegexOptions.IgnoreCase; break;
+                    case 'm': result |= RubyRegexOptions.Multiline; break;
+                    case 'x': result |= RubyRegexOptions.Extended; break;
+                    default:
+                        throw RubyExceptions.CreateArgumentError("unknown regexp option: {0}", flags.ToString());
+                }
+            }
+
+            return result;
         }
 
         internal static RubyRegexOptions MakeOptions(int options, MutableString encoding) {
@@ -340,7 +369,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source")]
         public static MutableString/*!*/ Source(RubyRegex/*!*/ self) {
-            return self.Pattern.Clone();
+            // The source carries the regexp's own encoding, not the encoding of whatever string it
+            // was built from: Regexp.new("abc") is US-ASCII even when "abc" was BINARY.
+            var result = self.Pattern.Clone();
+            result.ForceEncoding(self.Encoding);
+            return result;
         }
 
         [RubyMethod("escape", RubyMethodAttributes.PublicSingleton)]

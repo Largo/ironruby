@@ -248,12 +248,23 @@ namespace IronRuby.Builtins {
                 // ASCII only is US-ASCII, whatever the encoding of the file it was written in, so
                 // that it can match a string in any ASCII compatible encoding.
                 //
-                // /n is deliberately not included: MRI decides it on the bytes the pattern
-                // compiles to, where an \xFF escape is one non-ASCII byte, while _pattern still
-                // holds the four ASCII characters of the escape itself.
-                if (_initialized && (_options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.NONE && _pattern.IsAscii()) {
+                // /n needs the extra escape check: MRI decides it on the bytes the pattern compiles
+                // to, where an \xFF escape is one non-ASCII byte, while _pattern still holds the
+                // four ASCII characters of the escape itself. So /ASCII/n is US-ASCII but
+                // /\xc2\xa1/n is BINARY.
+                if (!_initialized) {
+                    return _pattern.Encoding;
+                }
+
+                var encodingOptions = _options & RubyRegexOptions.EncodingMask;
+                if (encodingOptions == RubyRegexOptions.NONE && _pattern.IsAscii()) {
                     return RubyEncoding.Ascii;
                 }
+
+                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !HasNonAsciiEscape(_pattern)) {
+                    return RubyEncoding.Ascii;
+                }
+
                 return _pattern.Encoding;
             }
         }
@@ -342,6 +353,36 @@ namespace IronRuby.Builtins {
             }
 
             return names != null ? names.ToArray() : EmptyNames;
+        }
+
+        /// <summary>
+        /// Whether an \xHH, \uHHHH or \u{...} escape in the pattern denotes a code point outside
+        /// 7-bit ASCII. The pattern text is ASCII either way, but the compiled regexp isn't.
+        /// </summary>
+        private static bool HasNonAsciiEscape(MutableString/*!*/ pattern) {
+            int length = pattern.GetCharCount();
+            for (int i = 0; i < length - 1; i++) {
+                if (pattern.GetChar(i) != '\\') {
+                    continue;
+                }
+
+                char kind = pattern.GetChar(i + 1);
+                if (kind == 'u') {
+                    return true;
+                }
+
+                if (kind == 'x') {
+                    // \x7F and below stay ASCII; \x80 and above don't.
+                    if (i + 2 < length && Tokenizer.ToDigit(pattern.GetChar(i + 2)) >= 8) {
+                        return true;
+                    }
+                }
+
+                // an escaped backslash isn't the start of an escape sequence
+                i++;
+            }
+
+            return false;
         }
 
         /// <summary>

@@ -151,7 +151,8 @@ namespace IronRuby.Builtins {
         #endregion
 
         private Exception/*!*/ MakeError(string/*!*/ message) {
-            return new RegexpError(message + ": " + _rubyPattern);
+            // MRI quotes the offending pattern as a regexp literal: "invalid hex escape: /\xn/".
+            return new RegexpError(message + ": /" + _rubyPattern + "/");
         }
 
         private string/*!*/ Transform() {
@@ -737,6 +738,13 @@ namespace IronRuby.Builtins {
             if (i == 0) {
                 throw MakeError("invalid Unicode list");
             }
+
+            // \u{} takes at most six hexadecimal digits; more is a range error even when the
+            // leading digits are zeros, which is what MRI reports for \u{0ffffff}.
+            if (i > 6) {
+                throw MakeError("invalid Unicode range");
+            }
+
             return codepoint;
         }
 
