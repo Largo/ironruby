@@ -501,6 +501,199 @@ class Array
     self
   end unless method_defined?(:deconstruct)
 
+  # --- methods the 1.8-era core never grew -------------------------------
+  #
+  # All of these hand back a plain Array, never the receiver's subclass, which
+  # is what MRI does and what ruby/spec asserts.
+
+  def rotate(count = 1)
+    count = __array_to_int__(count)
+    return [].concat(self) if empty?
+    count %= size
+    [].concat(self[count..-1]).concat(self[0, count])
+  end unless method_defined?(:rotate)
+
+  def rotate!(count = 1)
+    __array_check_frozen__
+    replace(rotate(count))
+  end unless method_defined?(:rotate!)
+
+  def select!(&block)
+    return to_enum(:select!) { size } unless block
+    __array_check_frozen__
+    kept = []
+    each { |element| kept << element if block.call(element) }
+    return nil if kept.size == size
+    replace(kept)
+  end unless method_defined?(:select!)
+
+  def keep_if(&block)
+    return to_enum(:keep_if) { size } unless block
+    select!(&block)
+    self
+  end unless method_defined?(:keep_if)
+
+  def sort_by!(&block)
+    return to_enum(:sort_by!) { size } unless block
+    __array_check_frozen__
+    replace(sort_by(&block))
+  end unless method_defined?(:sort_by!)
+
+  # Two modes, as in MRI: find-minimum when the block answers true/false/nil,
+  # find-any when it answers a number (negative = look left, 0 = found).
+  def bsearch_index(&block)
+    return to_enum(:bsearch_index) unless block
+    low = 0
+    high = size
+    satisfied = nil
+    while low < high
+      middle = low + (high - low) / 2
+      answer = block.call(self[middle])
+      case answer
+      when true
+        satisfied = middle
+        high = middle
+      when false, nil
+        low = middle + 1
+      when Numeric
+        return middle if answer == 0
+        if answer < 0
+          high = middle
+        else
+          low = middle + 1
+        end
+      else
+        raise TypeError, "wrong argument type #{answer.class} (must be numeric, true, false or nil)"
+      end
+    end
+    satisfied
+  end unless method_defined?(:bsearch_index)
+
+  def bsearch(&block)
+    return to_enum(:bsearch) unless block
+    index = bsearch_index(&block)
+    index && self[index]
+  end unless method_defined?(:bsearch)
+
+  def rfind(ifnone = nil, &block)
+    return to_enum(:rfind, ifnone) unless block
+    index = size - 1
+    while index >= 0
+      element = self[index]
+      return element if block.call(element)
+      index -= 1
+    end
+    ifnone && ifnone.call
+  end unless method_defined?(:rfind)
+
+  def difference(*others)
+    others.inject([].concat(self)) { |result, other| result - other }
+  end unless method_defined?(:difference)
+
+  # #union uniques the receiver even with no arguments; #intersection does not.
+  def union(*others)
+    others.inject([].concat(self).uniq) { |result, other| result | other }
+  end unless method_defined?(:union)
+
+  def intersection(*others)
+    others.inject([].concat(self)) { |result, other| result & other }
+  end unless method_defined?(:intersection)
+
+  def repeated_permutation(count, &block)
+    count = __array_to_int__(count)
+    return to_enum(:repeated_permutation, count) unless block
+    __array_repeat__(count, false, &block)
+  end unless method_defined?(:repeated_permutation)
+
+  def repeated_combination(count, &block)
+    count = __array_to_int__(count)
+    return to_enum(:repeated_combination, count) unless block
+    __array_repeat__(count, true, &block)
+  end unless method_defined?(:repeated_combination)
+
+  def fetch_values(*indexes, &block)
+    indexes.map { |index| block ? fetch(index, &block) : fetch(index) }
+  end unless method_defined?(:fetch_values)
+
+  def sample(count = nil, random: Random)
+    if count.nil?
+      return nil if empty?
+      return self[__array_rand_index__(random, size)]
+    end
+
+    count = __array_to_int__(count)
+    raise ArgumentError, "negative sample number" if count < 0
+    total = size
+    count = total if count > total
+
+    pool = [].concat(self)
+    result = []
+    index = 0
+    while index < count
+      swap = index + __array_rand_index__(random, total - index)
+      pool[index], pool[swap] = pool[swap], pool[index]
+      result << pool[index]
+      index += 1
+    end
+    result
+  end unless method_defined?(:sample)
+
+  # --- helpers -----------------------------------------------------------
+
+  private
+
+  def __array_check_frozen__
+    raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
+  end
+
+  def __array_to_int__(value)
+    return value if value.is_a?(Integer)
+    unless value.respond_to?(:to_int)
+      raise TypeError, "no implicit conversion of #{value.nil? ? 'nil' : value.class} into Integer"
+    end
+    converted = value.to_int
+    unless converted.is_a?(Integer)
+      raise TypeError, "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{converted.class})"
+    end
+    converted
+  end
+
+  # MRI's rb_random_ulong_limited: ask the generator, coerce with #to_int, and
+  # insist the answer addresses an existing element.
+  def __array_rand_index__(random, limit)
+    value = random.rand(limit)
+    value = value.to_int unless value.is_a?(Integer)
+    raise RangeError, "random number too big #{value}" if value < 0 || value >= limit
+    value
+  end
+
+  def __array_repeat__(count, sorted, &block)
+    return self if count < 0
+    if count == 0
+      block.call([])
+      return self
+    end
+    return self if empty?
+
+    indexes = Array.new(count, 0)
+    total = size
+    loop do
+      block.call(indexes.map { |i| self[i] })
+
+      position = count - 1
+      position -= 1 while position >= 0 && indexes[position] == total - 1
+      return self if position < 0
+      indexes[position] += 1
+      if sorted
+        (position + 1...count).each { |i| indexes[i] = indexes[position] }
+      else
+        (position + 1...count).each { |i| indexes[i] = 0 }
+      end
+    end
+  end
+
+  public
+
   alias_method :filter, :select unless method_defined?(:filter)
   alias_method :filter!, :select! if method_defined?(:select!) && !method_defined?(:filter!)
   alias_method :append, :push unless method_defined?(:append)
