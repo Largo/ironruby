@@ -250,17 +250,37 @@ namespace IronRuby.Builtins {
         [RubyMethod("curry")]
         public static Proc/*!*/ Curry(RubyContext/*!*/ context, Proc/*!*/ self, [DefaultProtocol]int arity) {
             if (self.Kind == ProcKind.Lambda) {
-                int declared = GetArity(self);
-                if (declared >= 0) {
-                    if (arity != declared) {
-                        throw RubyOps.MakeWrongNumberOfArgumentsError(arity, declared);
-                    }
-                } else if (arity < -declared - 1) {
-                    throw RubyOps.MakeWrongNumberOfArgumentsErrorN(arity,
-                        (-declared - 1).ToString(CultureInfo.InvariantCulture) + "+");
+                int min, max;
+                GetArgumentCountRange(self, out min, out max);
+                if (arity < min || (max >= 0 && arity > max)) {
+                    throw (min == max) ? RubyOps.MakeWrongNumberOfArgumentsError(arity, min)
+                        : RubyOps.MakeWrongNumberOfArgumentsErrorN(arity,
+                            min.ToString(CultureInfo.InvariantCulture) +
+                            (max < 0 ? "+" : ".." + max.ToString(CultureInfo.InvariantCulture)));
                 }
             }
             return MakeCurried(context, self, arity, null);
+        }
+
+        /// <summary>
+        /// How many arguments a call may supply: -1 as the maximum means a rest parameter absorbs
+        /// any number of them.
+        /// </summary>
+        private static void GetArgumentCountRange(Proc/*!*/ self, out int min, out int max) {
+            var signature = self.Dispatcher.ParameterSignature;
+            if (signature != null) {
+                min = signature.MinArgumentCount;
+                max = signature.MaxArgumentCount;
+                return;
+            }
+
+            int arity = self.Dispatcher.Arity;
+            if (arity >= 0) {
+                min = max = arity;
+            } else {
+                min = -arity - 1;
+                max = -1;
+            }
         }
 
         private static Proc/*!*/ MakeCurried(RubyContext/*!*/ context, Proc/*!*/ target, int arity, RubyArray collected) {
@@ -268,6 +288,8 @@ namespace IronRuby.Builtins {
                 var all = collected != null ? new RubyArray(collected) : new RubyArray();
                 all.AddRange(unsplat);
                 if (all.Count >= arity) {
+                    // a lambda still objects to being handed more arguments than it takes
+                    RequireParameterCount(target, all.Count);
                     return target.Call(procArg, all.ToArray());
                 }
                 return MakeCurried(context, target, arity, all);

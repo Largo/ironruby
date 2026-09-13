@@ -97,9 +97,24 @@ namespace IronRuby.Builtins {
                     return site.Target(site, this, unsplat);
                 });
 
+                // MRI's proc reports the location of the method it wraps, not of the to_proc call
+                string sourcePath = null;
+                int sourceLine = 0;
+                var rubyInfo = _info as RubyMethodInfo;
+                if (rubyInfo != null) {
+                    sourcePath = rubyInfo.Document.FileName;
+                    sourceLine = rubyInfo.SourceSpan.Start.Line;
+                } else {
+                    var lambdaInfo = _info as RubyLambdaMethodInfo;
+                    if (lambdaInfo != null) {
+                        sourcePath = lambdaInfo.Lambda.Dispatcher.SourcePath;
+                        sourceLine = lambdaInfo.Lambda.Dispatcher.SourceLine;
+                    }
+                }
+
                 _procDispatcher = new BlockDispatcherUnsplatN(0, 
                     BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter, _info.GetArity()),
-                    null, 0
+                    sourcePath, sourceLine
                 );
 
                 _procDispatcher.SetMethod(block);

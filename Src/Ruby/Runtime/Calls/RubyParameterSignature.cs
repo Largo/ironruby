@@ -83,8 +83,18 @@ namespace IronRuby.Runtime.Calls {
         /// MRI's rb_iseq_min_max_arity: the fewest arguments a call can supply. All the required
         /// keywords together count as the single hash they arrive in.
         /// </summary>
-        private int MinArgumentCount {
+        public int MinArgumentCount {
             get { return _leadingCount + _postCount + (_requiredKeywordCount > 0 ? 1 : 0); }
+        }
+
+        /// <summary>
+        /// The most arguments a call can supply, or -1 when a rest parameter makes that unbounded.
+        /// </summary>
+        public int MaxArgumentCount {
+            get {
+                return _hasRest ? -1 :
+                    _leadingCount + _optionalCount + _postCount + ((_hasKeywords || _hasKeywordRest) ? 1 : 0);
+            }
         }
 
         /// <summary>
