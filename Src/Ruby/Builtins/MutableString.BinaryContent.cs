@@ -80,25 +80,43 @@ namespace IronRuby.Builtins {
                 return WrapContent(chars, chars.Length - additionalCapacity);
             }
 
-            /// <exception cref="DecoderFallbackException">Invalid character.</exception>
+            /// <summary>
+            /// Every character based operation funnels through here, so this is where a string
+            /// whose bytes are not valid in its own encoding is caught. MRI reports that as
+            /// ArgumentError; letting .NET's DecoderFallbackException out instead surfaced in Ruby
+            /// as a bare System::Text::DecoderFallbackException from #upcase, #strip, #center and
+            /// a dozen others.
+            /// </summary>
+            private Exception/*!*/ InvalidBytes() {
+                return RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", _owner._encoding.Name);
+            }
+
+            /// <exception cref="ArgumentException">Invalid character.</exception>
             private char[]/*!*/ DataToChars(int additionalCapacity, Encoding/*!*/ encoding) {
-                if (_count == 0) {
-                    return (additionalCapacity == 0) ? Utils.EmptyChars : new char[additionalCapacity];
-                } else if (additionalCapacity == 0) {
-                    return encoding.GetChars(_data, 0, _count);
-                } else {
-                    var result = new char[encoding.GetCharCount(_data, 0, _count) + additionalCapacity];
-                    encoding.GetChars(_data, 0, _count, result, 0);
-                    return result;
+                try {
+                    if (_count == 0) {
+                        return (additionalCapacity == 0) ? Utils.EmptyChars : new char[additionalCapacity];
+                    } else if (additionalCapacity == 0) {
+                        return encoding.GetChars(_data, 0, _count);
+                    } else {
+                        var result = new char[encoding.GetCharCount(_data, 0, _count) + additionalCapacity];
+                        encoding.GetChars(_data, 0, _count, result, 0);
+                        return result;
+                    }
+                } catch (DecoderFallbackException) {
+                    throw InvalidBytes();
                 }
             }
 
             private string/*!*/ DataToString() {
                 if (_count == 0) {
                     return String.Empty;
-                } else {
+                }
+                try {
                     return _owner._encoding.StrictEncoding.GetString(_data, 0, _count);
-                } 
+                } catch (DecoderFallbackException) {
+                    throw InvalidBytes();
+                }
             }
 
             internal void AppendBytes(string/*!*/ str, int start, int count) {
