@@ -1444,6 +1444,13 @@ namespace IronRuby.Builtins {
                     if (Tokenizer.IsHighSurrogate(c) && index + 1 < _data.Length && Tokenizer.IsLowSurrogate(d = _data[index + 1])) {
                         _current = new Character(c, d);
                         _index = index + 2;
+#if FEATURE_ENCODING
+                    } else if (EscapingEncoding.IsEscapedByte(c)) {
+                        // See StringCharacterEnumerator: a byte that is not valid in the string's
+                        // encoding is a character, but not a valid one.
+                        _current = new Character(new byte[] { (byte)(c - EscapingEncoding.EscapeBase) });
+                        _index = index + 1;
+#endif
                     } else {
                         _current = new Character(c);
                         _index = index + 1;
