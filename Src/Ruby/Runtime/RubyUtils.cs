@@ -975,6 +975,25 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
+        /// <summary>
+        /// Runs a Module#refine block.  Inside it the refinements of <paramref name="holder"/> are active -
+        /// all of them, including ones added by later refine calls on the same module, which is why the
+        /// activation names the module rather than snapshotting its refinements.  The activation rides on
+        /// the Proc because a refine block's lexical extent has no scope object until the block is entered.
+        /// </summary>
+        public static object EvaluateRefinementBlock(RubyModule/*!*/ holder, RubyModule/*!*/ refinement, BlockParam/*!*/ block) {
+            Proc proc = block.Proc;
+            RefinementActivation saved = proc.RefinementOverride;
+            proc.RefinementOverride = RefinementActivation.CreateSingle(proc.LocalScope.GetActiveRefinements(), holder);
+            holder.Context.RefinementVersion++;
+            try {
+                return EvaluateInModule(refinement, block, null);
+            } finally {
+                proc.RefinementOverride = saved;
+                holder.Context.RefinementVersion++;
+            }
+        }
+
         public static object EvaluateInModule(RubyModule/*!*/ self, BlockParam/*!*/ block, object[] args) {
             object result;
             EvaluateBlock(block, self, self, args, out result);

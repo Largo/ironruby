@@ -184,8 +184,9 @@ namespace IronRuby.Builtins {
             RubyModule refinement = self.GetOrCreateRefinement(refinedModule);
 
             // The block runs with self set to the refinement, like module_eval, so `def' inside it defines
-            // a method on the refinement rather than on the refined class.
-            RubyUtils.EvaluateInModule(refinement, block, null);
+            // a method on the refinement rather than on the refined class; and the enclosing module's
+            // refinements are active inside it.
+            RubyUtils.EvaluateRefinementBlock(self, refinement, block);
             return refinement;
         }
 

@@ -384,7 +384,14 @@ namespace IronRuby.Runtime {
                 return _refinements;
             }
 
-            RefinementActivation outer = (_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty;
+            RefinementActivation outer;
+            var blockScope = this as RubyBlockScope;
+            RefinementActivation blockOverride = (blockScope != null) ? blockScope.BlockFlowControl.Proc.RefinementOverride : null;
+            if (blockOverride != null) {
+                outer = blockOverride;
+            } else {
+                outer = (_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty;
+            }
             RefinementActivation result = (_usedModules != null) ? RefinementActivation.Create(outer, _usedModules) : outer;
 
             _refinements = result;

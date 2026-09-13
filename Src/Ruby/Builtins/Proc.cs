@@ -88,6 +88,14 @@ namespace IronRuby.Builtins {
             get { return _scope; }
         }
 
+        /// <summary>
+        /// Set while Module#refine runs this block: the refinements the block body sees, instead of the
+        /// ones its defining scope sees.  A refine block implicitly activates the refinements of the module
+        /// it is being defined in, and only for the duration of the block - which is a lexical extent that
+        /// exists only at runtime, so it rides on the Proc rather than on a scope object.
+        /// </summary>
+        internal RefinementActivation RefinementOverride;
+
         public string SourcePath {
             get { return _dispatcher.SourcePath; }
         }

@@ -50,6 +50,11 @@ namespace IronRuby.Runtime {
             _usedModules = usedModules;
         }
 
+        internal static RefinementActivation/*!*/ CreateSingle(RefinementActivation/*!*/ outer, RubyModule/*!*/ usedModule) {
+            Assert.NotNull(outer, usedModule);
+            return new RefinementActivation(outer, new RubyModule[] { usedModule });
+        }
+
         internal static RefinementActivation/*!*/ Create(RefinementActivation/*!*/ outer, List<RubyModule/*!*/>/*!*/ usedModules) {
             Assert.NotNull(outer, usedModules);
             if (usedModules.Count == 0) {
