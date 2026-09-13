@@ -8836,6 +8836,15 @@ class Struct
     keyword_init = self.class.respond_to?(:keyword_init?) ? self.class.keyword_init? : nil
     args.pop if args.size > 0 && args.last.is_a?(Hash) && args.last.empty? && !keyword_init
 
+    # Since 3.2 a struct built without keyword_init: takes keywords as well as
+    # positional values. Keywords reach this method as a trailing Hash, so the
+    # only thing that distinguishes them from a Hash meant as a member value is
+    # that every key names a member.
+    if keyword_init.nil? && args.size == 1 && args[0].is_a?(Hash) &&
+       !args[0].empty? && (args[0].keys - names).empty?
+      keyword_init = true
+    end
+
     if keyword_init
       unless args.size <= 1 && (args.empty? || args[0].is_a?(Hash))
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)"
