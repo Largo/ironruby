@@ -2406,26 +2406,47 @@ class String
   # Replaces a byte range in place. Every index here is a byte index, so the
   # work is done on a binary copy and tagged back afterwards, like bytesplice.
   def bytesplice(*args)
-    str = args.pop
-    unless str.is_a?(::String)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{str.class} into String")
-    end
+    # Three shapes: (index, length, str), (range, str) and the five argument
+    # (index, length, str, str_index, str_length), which splices only part of the
+    # replacement. Four arguments is not one of them, even with a Range first.
     case args.size
-    when 1
-      range = args[0]
+    when 2 then index_args, str, sub_args = args[0, 1], args[1], nil
+    when 3 then index_args, str, sub_args = args[0, 2], args[2], nil
+    when 5 then index_args, str, sub_args = args[0, 2], args[2], args[3, 2]
+    when 4 then ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 4, expected 2, 3, or 5)")
+    else ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 2..5)")
+    end
+
+    unless str.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{str.nil? ? 'nil' : str.class} into String")
+    end
+
+    if index_args.size == 1
+      range = index_args[0]
       unless range.is_a?(::Range)
         ::Kernel.raise(::TypeError, "no implicit conversion of #{range.class} into Integer")
       end
       index, length = __byte_range__(range)
-    when 2
-      index = ::Kernel.Integer(args[0])
-      length = ::Kernel.Integer(args[1])
-      index += bytesize if index < 0
-      ::Kernel.raise(::IndexError, "index #{args[0]} out of string") if index < 0 || index > bytesize
-      ::Kernel.raise(::IndexError, "negative length #{length}") if length < 0
     else
-      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 2..5)")
+      index = ::Kernel.Integer(index_args[0])
+      length = ::Kernel.Integer(index_args[1])
+      # A negative length is rejected before the index is even bounds checked.
+      ::Kernel.raise(::IndexError, "negative length #{length}") if length < 0
+      index += bytesize if index < 0
+      ::Kernel.raise(::IndexError, "index #{index_args[0]} out of string") if index < 0 || index > bytesize
     end
+
+    if sub_args
+      sub_index = ::Kernel.Integer(sub_args[0])
+      sub_length = ::Kernel.Integer(sub_args[1])
+      ::Kernel.raise(::IndexError, "negative length #{sub_length}") if sub_length < 0
+      sub_index += str.bytesize if sub_index < 0
+      if sub_index < 0 || sub_index > str.bytesize
+        ::Kernel.raise(::IndexError, "index #{sub_args[0]} out of string")
+      end
+      str = str.byteslice(sub_index, sub_length) || str[0, 0]
+    end
+
     length = bytesize - index if index + length > bytesize
 
     binary = dup
@@ -2540,6 +2561,9 @@ class String
 
   def casecmp?(other)
     return nil unless other.is_a?(::String)
+    # Two strings in encodings that cannot be compared are not unequal, they are
+    # incomparable, and #casecmp? answers nil for them just as #casecmp does.
+    return nil if ::Encoding.compatible?(self, other).nil?
     c = casecmp(other)
     c.nil? ? nil : c == 0
   end unless method_defined?(:casecmp?)
