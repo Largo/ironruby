@@ -6983,8 +6983,10 @@ namespace IronRuby.Builtins {
         
         private static void LoadRegexp_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
             SetBuiltinConstant(module, "EXTENDED", IronRuby.Builtins.RegexpOps.EXTENDED);
+            SetBuiltinConstant(module, "FIXEDENCODING", IronRuby.Builtins.RegexpOps.FIXEDENCODING);
             SetBuiltinConstant(module, "IGNORECASE", IronRuby.Builtins.RegexpOps.IGNORECASE);
             SetBuiltinConstant(module, "MULTILINE", IronRuby.Builtins.RegexpOps.MULTILINE);
+            SetBuiltinConstant(module, "NOENCODING", IronRuby.Builtins.RegexpOps.NOENCODING);
             
         }
         
@@ -7026,6 +7028,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubyRegex, System.Boolean>(IronRuby.Builtins.RegexpOps.Equals)
             );
             
+            DefineLibraryMethod(module, "fixed_encoding?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyRegex, System.Boolean>(IronRuby.Builtins.RegexpOps.IsFixedEncoding)
+            );
+            
             DefineLibraryMethod(module, "hash", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyRegex, System.Int32>(IronRuby.Builtins.RegexpOps.GetHash)
@@ -7048,6 +7055,16 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "match", 0x51, 
                 0x00020000U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.MutableString, IronRuby.Builtins.MatchData>(IronRuby.Builtins.RegexpOps.Match)
+            );
+            
+            DefineLibraryMethod(module, "named_captures", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.Hash>(IronRuby.Builtins.RegexpOps.GetNamedCaptures)
+            );
+            
+            DefineLibraryMethod(module, "names", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.RegexpOps.GetNames)
             );
             
             DefineLibraryMethod(module, "options", 0x51, 
@@ -7081,9 +7098,20 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyClass, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RegexpOps.LastMatch)
             );
             
+            DefineLibraryMethod(module, "linear_time?", 0x61, 
+                0x00000004U, 0x00010002U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyRegex, System.Object, System.Boolean>(IronRuby.Builtins.RegexpOps.IsLinearTime), 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Object, System.Boolean>(IronRuby.Builtins.RegexpOps.IsLinearTime)
+            );
+            
             DefineLibraryMethod(module, "quote", 0x61, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RegexpOps.Escape)
+            );
+            
+            DefineLibraryMethod(module, "try_convert", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Builtins.RubyClass, System.Object, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.RegexpOps.TryConvert)
             );
             
             DefineLibraryMethod(module, "union", 0x61, 

@@ -139,7 +139,43 @@ namespace IronRuby.Builtins {
         }
 
         internal static RubyRegexOptions MakeOptions(int options, MutableString encoding) {
-            return (RubyRegexOptions)options | StringToRegexEncoding(encoding);
+            return PublicToInternalOptions(options) | StringToRegexEncoding(encoding);
+        }
+
+        /// <summary>
+        /// Maps the bit vector Ruby exposes (IGNORECASE|EXTENDED|MULTILINE|FIXEDENCODING|NOENCODING)
+        /// onto the internal flags. The two encoding bits collide with IronRuby's historical
+        /// EUC/SJIS/UTF8 numbering, so they have to be translated rather than cast.
+        /// </summary>
+        internal static RubyRegexOptions PublicToInternalOptions(int options) {
+            var result = (RubyRegexOptions)(options & (IGNORECASE | EXTENDED | MULTILINE));
+
+            if ((options & NOENCODING) != 0) {
+                result |= RubyRegexOptions.FIXED;
+            }
+
+            if ((options & FIXEDENCODING) != 0) {
+                result |= RubyRegexOptions.FixedEncoding;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// The inverse of <see cref="PublicToInternalOptions"/>: what Regexp#options returns.
+        /// </summary>
+        internal static int InternalToPublicOptions(RubyRegexOptions options) {
+            int result = (int)(options & (RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline));
+
+            if ((options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0) {
+                result |= FIXEDENCODING;
+            }
+
+            if ((options & RubyRegexOptions.FIXED) != 0) {
+                result |= NOENCODING;
+            }
+
+            return result;
         }
 
         internal static RubyRegexOptions StringToRegexEncoding(MutableString encoding) {
@@ -172,6 +208,12 @@ namespace IronRuby.Builtins {
         [RubyConstant]
         public const int MULTILINE = (int)RubyRegexOptions.Multiline;
 
+        [RubyConstant]
+        public const int FIXEDENCODING = 16;
+
+        [RubyConstant]
+        public const int NOENCODING = 32;
+
         /// <summary>
         /// Returns "(?{enabled-options}-{disabled-options}:{pattern-with-forward-slash-escaped})".
         /// Doesn't escape forward slashes that are already escaped.
@@ -196,12 +238,61 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("options")]
         public static int GetOptions(RubyRegex/*!*/ self) {
-            return (int)self.Options;
+            if (!self.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("uninitialized Regexp");
+            }
+            return InternalToPublicOptions(self.Options);
         }
 
         [RubyMethod("encoding", Compatibility = RubyCompatibility.Ruby19)]
         public static RubyEncoding/*!*/ GetEncoding(RubyRegex/*!*/ self) {
             return self.Encoding;
+        }
+
+        /// <summary>
+        /// True when the regexp can only match strings of one particular encoding, i.e. when an
+        /// encoding modifier other than /n was given or the pattern itself isn't ASCII only.
+        /// </summary>
+        [RubyMethod("fixed_encoding?")]
+        public static bool IsFixedEncoding(RubyRegex/*!*/ self) {
+            if ((self.Options & RubyRegexOptions.FIXED) != 0) {
+                return false;
+            }
+
+            return (self.Options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0
+                || self.Encoding != RubyEncoding.Ascii;
+        }
+
+        [RubyMethod("names")]
+        public static RubyArray/*!*/ GetNames(RubyRegex/*!*/ self) {
+            var result = new RubyArray();
+            var seen = new List<string>();
+            foreach (var name in self.GetGroupNames()) {
+                if (!seen.Contains(name)) {
+                    seen.Add(name);
+                    result.Add(MutableString.Create(name, self.Encoding));
+                }
+            }
+            return result;
+        }
+
+        [RubyMethod("named_captures")]
+        public static Hash/*!*/ GetNamedCaptures(RubyContext/*!*/ context, RubyRegex/*!*/ self) {
+            var result = new Hash(context);
+            var names = self.GetGroupNames();
+            for (int i = 0; i < names.Length; i++) {
+                var key = MutableString.Create(names[i], self.Encoding).Freeze();
+                RubyArray indices;
+                object existing;
+                if (result.TryGetValue(key, out existing)) {
+                    indices = (RubyArray)existing;
+                } else {
+                    indices = new RubyArray();
+                    result[key] = indices;
+                }
+                indices.Add(ScriptingRuntimeHelpers.Int32ToObject(i + 1));
+            }
+            return result;
         }
 
         [RubyMethod("casefold?")]
@@ -256,6 +347,53 @@ namespace IronRuby.Builtins {
         [RubyMethod("quote", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ Escape(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ str) {
             return RubyRegex.Escape(str).TaintBy(str);
+        }
+
+        [RubyMethod("try_convert", RubyMethodAttributes.PublicSingleton)]
+        public static RubyRegex TryConvert(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ toRegexpStorage,
+            RubyClass/*!*/ self, object obj) {
+
+            var regex = obj as RubyRegex;
+            if (regex != null) {
+                return regex;
+            }
+
+            if (!Protocols.RespondTo(respondToStorage, obj, "to_regexp")) {
+                return null;
+            }
+
+            var site = toRegexpStorage.GetCallSite("to_regexp");
+            object result = site.Target(site, obj);
+
+            regex = result as RubyRegex;
+            if (regex == null) {
+                var context = respondToStorage.Context;
+                throw RubyExceptions.CreateTypeError("can't convert {0} into Regexp ({0}#to_regexp gives {1})",
+                    context.GetClassDisplayName(obj), context.GetClassDisplayName(result)
+                );
+            }
+
+            return regex;
+        }
+
+        /// <summary>
+        /// Whether the pattern is free of the backtracking-only constructs (back references) that
+        /// can make matching take more than linear time. Everything else IronRuby compiles is
+        /// handled by a bounded automaton walk.
+        /// </summary>
+        [RubyMethod("linear_time?", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsLinearTime(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [Optional]object options) {
+            if (options != Missing.Value && options != null) {
+                context.ReportWarning("flags ignored");
+            }
+            return !RubyRegex.HasBackReference(regex.Pattern);
+        }
+
+        [RubyMethod("linear_time?", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsLinearTime(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern,
+            [Optional]object options) {
+
+            return !RubyRegex.HasBackReference(pattern);
         }
 
         [RubyMethod("last_match", RubyMethodAttributes.PublicSingleton)]

@@ -235,6 +235,13 @@ namespace IronRuby.Builtins {
             get { return _options; }
         }
 
+        /// <summary>
+        /// False only for a Regexp produced by Regexp.allocate, which has no pattern yet.
+        /// </summary>
+        public bool IsInitialized {
+            get { return _initialized; }
+        }
+
         public RubyEncoding/*!*/ Encoding {
             get {
                 // MRI's rb_reg_encoding. A regexp with no encoding flag whose source happens to be
@@ -254,6 +261,114 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ Pattern {
             get { return _pattern; }
         }
+
+        #region Pattern inspection (group names, back references)
+
+        private static readonly string[] EmptyNames = new string[0];
+
+        /// <summary>
+        /// The names of the pattern's named groups, in the order they open, with duplicates kept so
+        /// that the position in the array is the group's Ruby index - 1. When a pattern uses named
+        /// groups the plain parenthesised groups don't capture, so those are exactly the capture
+        /// group numbers.
+        /// </summary>
+        public string[]/*!*/ GetGroupNames() {
+            return ScanGroupNames(_pattern);
+        }
+
+        internal static string[]/*!*/ ScanGroupNames(MutableString/*!*/ pattern) {
+            List<string> names = null;
+            int length = pattern.GetCharCount();
+            bool inClass = false;
+
+            for (int i = 0; i < length; i++) {
+                char c = pattern.GetChar(i);
+
+                if (c == '\\') {
+                    i++;
+                    continue;
+                }
+
+                if (inClass) {
+                    if (c == ']') {
+                        inClass = false;
+                    }
+                    continue;
+                }
+
+                if (c == '[') {
+                    inClass = true;
+                    continue;
+                }
+
+                if (c != '(' || i + 2 >= length || pattern.GetChar(i + 1) != '?') {
+                    continue;
+                }
+
+                char kind = pattern.GetChar(i + 2);
+                char terminator;
+                if (kind == '<') {
+                    // (?<= and (?<! are look-behind, not a named group
+                    if (i + 3 < length) {
+                        char next = pattern.GetChar(i + 3);
+                        if (next == '=' || next == '!') {
+                            continue;
+                        }
+                    }
+                    terminator = '>';
+                } else if (kind == '\'') {
+                    terminator = '\'';
+                } else {
+                    continue;
+                }
+
+                int start = i + 3;
+                int end = start;
+                while (end < length && pattern.GetChar(end) != terminator) {
+                    end++;
+                }
+
+                if (end >= length) {
+                    break;
+                }
+
+                var name = new StringBuilder(end - start);
+                for (int j = start; j < end; j++) {
+                    name.Append(pattern.GetChar(j));
+                }
+
+                (names ?? (names = new List<string>())).Add(name.ToString());
+                i = end;
+            }
+
+            return names != null ? names.ToArray() : EmptyNames;
+        }
+
+        /// <summary>
+        /// Whether the pattern contains a back reference (\1..\9, \k&lt;name&gt;, \k'name').
+        /// Those are the constructs that force the matcher to backtrack in a way that can take
+        /// more than linear time; see Regexp.linear_time?.
+        /// </summary>
+        public static bool HasBackReference(MutableString/*!*/ pattern) {
+            int length = pattern.GetCharCount();
+            for (int i = 0; i < length - 1; i++) {
+                if (pattern.GetChar(i) != '\\') {
+                    continue;
+                }
+
+                char c = pattern.GetChar(i + 1);
+                if (c >= '1' && c <= '9' || c == 'k') {
+                    return true;
+                }
+
+                // an escaped backslash isn't the start of a back reference
+                i++;
+            }
+
+            return false;
+        }
+
+        #endregion
 
         public bool Equals(RubyRegex other) {
             return ReferenceEquals(this, other) 
