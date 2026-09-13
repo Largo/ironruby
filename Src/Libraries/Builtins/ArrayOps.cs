@@ -234,6 +234,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("sort!")]
         public static object SortInPlace(ComparisonStorage/*!*/ comparisonStorage, BlockParam block, RubyArray/*!*/ self) {
+            // An array with fewer than two elements is already sorted, but MRI still refuses
+            // to sort a frozen one.
+            self.RequireNotFrozen();
             StrongBox<object> breakResult;
             RubyArray result = SortInPlace(comparisonStorage, block, self, out breakResult);
             if (breakResult != null) {

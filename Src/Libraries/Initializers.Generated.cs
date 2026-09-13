@@ -8563,8 +8563,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "concat", 0x51, 
-                0x00010002U, 
-                new Func<System.Collections.IList, System.Collections.IList, System.Collections.IList>(IronRuby.Builtins.IListOps.Concat)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, System.Collections.IList, System.Object[], System.Collections.IList>(IronRuby.Builtins.IListOps.Concat)
             );
             
             DefineLibraryMethod(module, "count", 0x51, 

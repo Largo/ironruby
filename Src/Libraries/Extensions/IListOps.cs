@@ -17,6 +17,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -40,8 +41,8 @@ namespace IronRuby.Builtins {
         // MRI: Some operations check frozen flag even if they don't change the array content.
         private static void RequireNotFrozen(IList/*!*/ self) {
             RubyArray array = self as RubyArray;
-            if (array != null && array.IsFrozen) {
-                throw RubyExceptions.CreateObjectFrozenError("Array");
+            if (array != null) {
+                array.RequireNotFrozen();
             }
         }
 
@@ -99,6 +100,42 @@ namespace IronRuby.Builtins {
                 count = listCount - begin;
             }
             return true;
+        }
+
+        /// <summary>
+        /// MRI's rb_range_beg_len with errors ON (Array#values_at): a beginning past the end of
+        /// the list is kept rather than clamped, so the caller can pad the answer with nil out to
+        /// the range's full length, while a beginning before the first element is a RangeError.
+        /// </summary>
+        internal static void NormalizeRangeNoClamp(ConversionStorage<int>/*!*/ fixnumCast, int listCount, Range/*!*/ range,
+            out int begin, out int count) {
+
+            object rawBegin = range.Begin;
+            begin = (rawBegin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, rawBegin);
+            bool endless = range.End == null;
+            int end = endless ? -1 : Protocols.CastToFixnum(fixnumCast, range.End);
+            bool excludeEnd = range.ExcludeEnd && !endless;
+
+            int originalBegin = begin;
+            if (begin < 0) {
+                begin += listCount;
+                if (begin < 0) {
+                    throw RubyExceptions.CreateRangeError("{0}{1}{2} out of range",
+                        originalBegin, excludeEnd ? "..." : "..", endless ? "" : end.ToString(CultureInfo.InvariantCulture));
+                }
+            }
+
+            if (end < 0) {
+                end += listCount;
+            }
+            if (!excludeEnd) {
+                end++;
+            }
+
+            count = end - begin;
+            if (count < 0) {
+                count = 0;
+            }
         }
 
         private static bool InRangeNormalized(IList/*!*/ list, ref int index) {
@@ -282,9 +319,26 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// Since 2.4 #concat takes any number of arrays. They are all converted before anything is
+        /// appended, which is what makes `a.concat(a, a)` append the original contents twice rather
+        /// than chasing its own tail.
+        /// </summary>
         [RubyMethod("concat")]
-        public static IList/*!*/ Concat(IList/*!*/ self, [DefaultProtocol, NotNull]IList/*!*/ other) {
-            AddRange(self, other);
+        public static IList/*!*/ Concat(ConversionStorage<IList>/*!*/ arrayCast, IList/*!*/ self, params object[]/*!*/ others) {
+            RequireNotFrozen(self);
+
+            var converted = new IList[others.Length];
+            for (int i = 0; i < others.Length; i++) {
+                IList other = Protocols.CastToArray(arrayCast, others[i]);
+                // A snapshot, not the receiver itself: the first append would otherwise make
+                // the second one see what the first one wrote.
+                converted[i] = ReferenceEquals(other, self) ? new RubyArray(other) : other;
+            }
+
+            foreach (var other in converted) {
+                AddRange(self, other);
+            }
             return self;
         }
 
@@ -636,9 +690,12 @@ namespace IronRuby.Builtins {
             bool endless = range.End == null;
             int end = endless ? length : Protocols.CastToFixnum(fixnumCast, range.End);
 
+            int originalStart = start;
             start = start < 0 ? start + length : start;
             if (start < 0) {
-                throw RubyExceptions.CreateRangeError("{0}..{1} out of range", start, end);
+                // The range is reported as it was written, not as it was normalized: MRI says
+                // "-9..0 out of range" for a[-9..0], not "-6..0".
+                throw RubyExceptions.CreateRangeError("{0}..{1} out of range", originalStart, end);
             }
 
             if (endless) {
@@ -744,7 +801,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("collect!")]
         [RubyMethod("map!")]
         public static object CollectInPlace(BlockParam collector, IList/*!*/ self) {
-            return (collector != null) ? CollectInPlaceImpl(collector, self) : new Enumerator(self, "collect!");
+            if (collector == null) {
+                // The Enumerator itself is fine to hand out; its #each comes back through here
+                // with a block and raises then, which is what MRI does.
+                return new Enumerator(self, "collect!");
+            }
+            // The check belongs to the method rather than to the loop, so that an empty frozen
+            // array - where the loop never runs - raises too.
+            RequireNotFrozen(self);
+            return CollectInPlaceImpl(collector, self);
         }
 
         private static object CollectInPlaceImpl(BlockParam/*!*/ collector, IList/*!*/ self) {
@@ -1013,6 +1078,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fill")]
         public static IList/*!*/ Fill(IList/*!*/ self, object obj, [DefaultParameterValue(0)]int start) {
+            RequireNotFrozen(self);
             // Note: Array#fill(obj, start) is not equivalent to Array#fill(obj, start, 0)
             // (as per MRI behavior, the latter can expand the array if start > length, but the former doesn't)
             start = Math.Max(0, NormalizeIndex(self, start));
@@ -1025,6 +1091,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fill")]
         public static IList/*!*/ Fill(IList/*!*/ self, object obj, int start, int length) {
+            RequireNotFrozen(self);
             // Note: Array#fill(obj, start) is not equivalent to Array#fill(obj, start, 0)
             // (as per MRI behavior, the latter can expand the array if start > length, but the former doesn't)
             start = Math.Max(0, NormalizeIndex(self, start));
@@ -1048,20 +1115,39 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("fill")]
-        public static IList/*!*/ Fill(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, object obj, [NotNull]Range/*!*/ range) {
-            int begin = (range.Begin == null) ? 0 : NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.Begin));
+        /// <summary>
+        /// MRI normalizes the range against the current length and refuses one whose beginning
+        /// lies before the first element - #fill does not extend an array backwards.
+        /// </summary>
+        private static void FillRange(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, Range/*!*/ range,
+            out int begin, out int length) {
+
+            int rawBegin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
             bool endless = range.End == null;
-            int end = endless ? self.Count - 1 : NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.End));
-            int length = endless
+            int rawEnd = endless ? self.Count - 1 : Protocols.CastToFixnum(fixnumCast, range.End);
+
+            begin = NormalizeIndex(self, rawBegin);
+            if (begin < 0) {
+                throw RubyExceptions.CreateRangeError("{0}..{1} out of range", rawBegin, rawEnd);
+            }
+
+            int end = endless ? self.Count - 1 : NormalizeIndex(self, rawEnd);
+            length = endless
                 ? Math.Max(0, self.Count - begin)
                 : Math.Max(0, end - begin + (range.ExcludeEnd ? 0 : 1));
+        }
+
+        [RubyMethod("fill")]
+        public static IList/*!*/ Fill(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, object obj, [NotNull]Range/*!*/ range) {
+            int begin, length;
+            FillRange(fixnumCast, self, range, out begin, out length);
 
             return Fill(self, obj, begin, length);
         }
 
         [RubyMethod("fill")]
         public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, [DefaultParameterValue(0)]int start) {
+            RequireNotFrozen(self);
             start = Math.Max(0, NormalizeIndex(self, start));
 
             // MRI fixes the end of the range before it starts yielding, so a block that appends to
@@ -1083,6 +1169,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fill")]
         public static object Fill([NotNull]BlockParam/*!*/ block, IList/*!*/ self, int start, int length) {
+            RequireNotFrozen(self);
             start = Math.Max(0, NormalizeIndex(self, start));
 
             ExpandList(self, Math.Min(start, start + length));
@@ -1110,12 +1197,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fill")]
         public static object Fill(ConversionStorage<int>/*!*/ fixnumCast, [NotNull]BlockParam/*!*/ block, IList/*!*/ self, [NotNull]Range/*!*/ range) {
-            int begin = (range.Begin == null) ? 0 : NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.Begin));
-            bool endless = range.End == null;
-            int end = endless ? self.Count - 1 : NormalizeIndex(self, Protocols.CastToFixnum(fixnumCast, range.End));
-            int length = endless
-                ? Math.Max(0, self.Count - begin)
-                : Math.Max(0, end - begin + (range.ExcludeEnd ? 0 : 1));
+            int begin, length;
+            FillRange(fixnumCast, self, range, out begin, out length);
 
             return Fill(block, self, begin, length);
         }
@@ -1132,7 +1215,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("first")]
         public static IList/*!*/ First(IList/*!*/ self, [DefaultProtocol]int count) {
             if (count < 0) {
-                throw RubyExceptions.CreateArgumentError("negative array size (or size too big)");
+                throw RubyExceptions.CreateArgumentError("negative array size");
             }
 
             if (count > self.Count) {
@@ -1149,7 +1232,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("last")]
         public static IList/*!*/ Last(IList/*!*/ self, [DefaultProtocol]int count) {
             if (count < 0) {
-                throw RubyExceptions.CreateArgumentError("negative array size (or size too big)");
+                throw RubyExceptions.CreateArgumentError("negative array size");
             }
 
             if (count > self.Count) {
@@ -1450,14 +1533,20 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < values.Length; i++) {
                 Range range = values[i] as Range;
                 if (range != null) {
+                    // MRI asks for the range with errors on: a range reaching past the end of
+                    // the array is padded with nil out to its full length (values_at(0..9) on a
+                    // three-element array answers ten elements), but one that starts before the
+                    // first element is a RangeError rather than an empty stretch.
                     int start, count;
-                    if (!NormalizeRange(fixnumCast, self.Count, range, out start, out count)) {
-                        continue;
-                    }
+                    NormalizeRangeNoClamp(fixnumCast, self.Count, range, out start, out count);
 
                     if (count > 0) {
-                        result.AddRange(GetElements(allocateStorage, self, start, count));
-                        if (start + count >= self.Count) {
+                        int filled = result.Count + count;
+                        if (start < self.Count) {
+                            int available = start + count > self.Count ? self.Count - start : count;
+                            result.AddRange(GetElements(allocateStorage, self, start, available));
+                        }
+                        while (result.Count < filled) {
                             result.Add(null);
                         }
                     }
@@ -1718,6 +1807,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("pop")]
         public static object Pop(IList/*!*/ self) {
+            // MRI checks the frozen flag before it checks for an empty array, so popping
+            // nothing off a frozen [] still raises.
+            RequireNotFrozen(self);
             if (self.Count == 0) {
                 return null;
             }
@@ -1749,6 +1841,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("shift")]
         public static object Shift(IList/*!*/ self) {
+            RequireNotFrozen(self);
             if (self.Count == 0) {
                 return null;
             }
@@ -1782,10 +1875,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("slice!")]
         public static object SliceInPlace(IList/*!*/ self, [DefaultProtocol]int index) {
+            RequireNotFrozen(self);
             index = index < 0 ? index + self.Count : index;
             if (index >= 0 && index < self.Count) {
                 object result = self[index];
-                DeleteElements(self, index, 1);
+                self.RemoveAt(index);
                 return result;
             } else {
                 return null;
@@ -1793,31 +1887,55 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("slice!")]
-        public static IList SliceInPlace(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ allocateStorage, 
+        public static IList SliceInPlace(ConversionStorage<int>/*!*/ fixnumCast, UnaryOpStorage/*!*/ allocateStorage,
             IList/*!*/ self, [NotNull]Range/*!*/ range) {
 
-            IList result = GetElements(fixnumCast, allocateStorage, self, range);
+            RequireNotFrozen(self);
             int start, count;
-            RangeToStartAndCount(fixnumCast, range, self.Count, out start, out count);
-            DeleteElements(self, start, count);
-            return result;
+            if (!NormalizeRange(fixnumCast, self.Count, range, out start, out count)) {
+                // MRI asks for the range with errors off here, so a range that starts
+                // before the array answers nil rather than raising RangeError.
+                return null;
+            }
+            return CutOut(allocateStorage, self, start, count);
         }
 
         [RubyMethod("slice!")]
-        public static IList SliceInPlace(UnaryOpStorage/*!*/ allocateStorage, 
+        public static IList SliceInPlace(UnaryOpStorage/*!*/ allocateStorage,
             IList/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int length) {
 
-            IList result = GetElements(allocateStorage, self, start, length);
-            DeleteElements(self, start, length);
-            return result;
+            RequireNotFrozen(self);
+            return CutOut(allocateStorage, self, start, length);
         }
 
-        private static void DeleteElements(IList/*!*/ self, int start, int count) {
-            if (count < 0) {
-                throw RubyExceptions.CreateIndexError("negative length ({0})", count);
+        /// <summary>
+        /// Removes and returns a stretch of the list. MRI's #slice! never grows the receiver
+        /// and never raises for an index it cannot use: a negative length, a start before the
+        /// first element or one past the last simply answers nil and leaves the list alone.
+        /// </summary>
+        private static IList CutOut(UnaryOpStorage/*!*/ allocateStorage, IList/*!*/ self, int start, int length) {
+            if (length < 0) {
+                return null;
             }
 
-            DeleteItems(self, NormalizeIndexThrowIfNegative(self, start), count);
+            if (start < 0) {
+                start += self.Count;
+                if (start < 0) {
+                    return null;
+                }
+            } else if (start > self.Count) {
+                return null;
+            }
+
+            if (start + length > self.Count) {
+                length = self.Count - start;
+            }
+
+            IList result = GetResultRange(allocateStorage, self, start, length);
+            if (length > 0) {
+                RemoveRange(self, start, length);
+            }
+            return result;
         }
 
         #endregion
@@ -1843,6 +1961,7 @@ namespace IronRuby.Builtins {
         public static object SortInPlace(ComparisonStorage/*!*/ comparisonStorage, BlockParam block, IList/*!*/ self) {
             // this should always call ArrayOps.SortInPlace instead
             Debug.Assert(!(self is RubyArray));
+            RequireNotFrozen(self);
 
             // TODO: this is not optimal because it makes an extra array copy
             // (only affects sorting of .NET types, do we need our own quicksort?)
