@@ -655,6 +655,52 @@ module Math
 end
 
 class Integer
+  # pow(n) is **, but pow(n, m) is modular exponentiation, which has to be done
+  # by squaring rather than by computing the full power and then taking it mod m.
+  def pow(other, modulo = nil)
+    return self**other if modulo.nil?
+    unless modulo.is_a?(::Integer) && other.is_a?(::Integer)
+      ::Kernel.raise(::TypeError, "Integer#pow() 2nd argument not allowed unless all arguments are integers")
+    end
+    ::Kernel.raise(::RangeError, "Integer#pow() 1st argument cannot be negative when 2nd argument specified") if other < 0
+    ::Kernel.raise(::ZeroDivisionError, "divided by 0") if modulo == 0
+    negative = modulo < 0
+    m = modulo.abs
+    result = 1
+    base = self % m
+    exponent = other
+    while exponent > 0
+      result = (result * base) % m if exponent.odd?
+      base = (base * base) % m
+      exponent >>= 1
+    end
+    result = result - m if negative && result != 0
+    result
+  end unless method_defined?(:pow)
+
+  def ceildiv(other)
+    -(-self / other)
+  end unless method_defined?(:ceildiv)
+
+  # Newton's method on integers: the largest i with i*i <= n.
+  def self.sqrt(n)
+    unless n.is_a?(::Integer)
+      unless n.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{n.class} into Integer")
+      end
+      n = n.to_int
+    end
+    ::Kernel.raise(::Math::DomainError, 'Numerical argument is out of domain - "isqrt"') if n < 0
+    return n if n < 2
+    guess = 1 << ((n.bit_length + 1) / 2)
+    loop do
+      better = (guess + n / guess) / 2
+      break if better >= guess
+      guess = better
+    end
+    guess
+  end unless respond_to?(:sqrt)
+
   def digits(base = 10)
     unless base.is_a?(Integer)
       unless base.respond_to?(:to_int)
