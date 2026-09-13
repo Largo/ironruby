@@ -2322,7 +2322,18 @@ namespace IronRuby.Runtime {
         public RubyEncoding/*!*/ GetPathEncoding() {
             // On everything but Windows the filesystem encoding follows the default external
             // encoding, so Encoding.default_external= moves it too.
-            return _defaultExternalEncoding ?? RubyEncoding.UTF8;
+            //
+            // Only as far as the path layer can carry it, though. Paths here round-trip through a
+            // .NET string, so the filesystem encoding has to be able to represent one: ASCII
+            // incompatible encodings cannot (MRI's answer to Encoding.default_external =
+            // Encoding::UTF_16BE is that every path operation raises
+            // Encoding::CompatibilityError, which this layer has no way to report), and neither
+            // can ASCII-8BIT, which rejects every character above U+00FF.
+            var external = _defaultExternalEncoding;
+            if (external == null || !external.IsAsciiIdentity || external == RubyEncoding.Binary) {
+                return RubyEncoding.UTF8;
+            }
+            return external;
         }
 
         /// <summary>
