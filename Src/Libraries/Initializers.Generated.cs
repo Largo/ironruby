@@ -6122,6 +6122,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.SetConstantValue)
             );
             
+            DefineLibraryMethod(module, "const_source_location", 0x51, 
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.GetConstantSourceLocation), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.ModuleOps.GetConstantSourceLocation)
+            );
+            
             DefineLibraryMethod(module, "constants", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetDefinedConstants)

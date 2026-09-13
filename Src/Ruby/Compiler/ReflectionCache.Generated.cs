@@ -172,21 +172,21 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CreateVectorWithValues;
         public static MethodInfo/*!*/ DefineBlock { get { return _DefineBlock ?? (_DefineBlock = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, System.Object, IronRuby.Builtins.Proc>(RubyOps.DefineBlock)); } }
         private static MethodInfo _DefineBlock;
-        public static MethodInfo/*!*/ DefineClass { get { return _DefineClass ?? (_DefineClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.String, System.Object, IronRuby.Builtins.RubyModule>(RubyOps.DefineClass)); } }
+        public static MethodInfo/*!*/ DefineClass { get { return _DefineClass ?? (_DefineClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.String, System.Object, System.String, System.Int32, IronRuby.Builtins.RubyModule>(RubyOps.DefineClass)); } }
         private static MethodInfo _DefineClass;
-        public static MethodInfo/*!*/ DefineGlobalClass { get { return _DefineGlobalClass ?? (_DefineGlobalClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.Object, IronRuby.Builtins.RubyModule>(RubyOps.DefineGlobalClass)); } }
+        public static MethodInfo/*!*/ DefineGlobalClass { get { return _DefineGlobalClass ?? (_DefineGlobalClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.Object, System.String, System.Int32, IronRuby.Builtins.RubyModule>(RubyOps.DefineGlobalClass)); } }
         private static MethodInfo _DefineGlobalClass;
-        public static MethodInfo/*!*/ DefineGlobalModule { get { return _DefineGlobalModule ?? (_DefineGlobalModule = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyModule>(RubyOps.DefineGlobalModule)); } }
+        public static MethodInfo/*!*/ DefineGlobalModule { get { return _DefineGlobalModule ?? (_DefineGlobalModule = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, IronRuby.Builtins.RubyModule>(RubyOps.DefineGlobalModule)); } }
         private static MethodInfo _DefineGlobalModule;
         public static MethodInfo/*!*/ DefineLambda { get { return _DefineLambda ?? (_DefineLambda = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.BlockDispatcher, System.Object, IronRuby.Builtins.Proc>(RubyOps.DefineLambda)); } }
         private static MethodInfo _DefineLambda;
         public static MethodInfo/*!*/ DefineMethod { get { return _DefineMethod ?? (_DefineMethod = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, IronRuby.Runtime.Calls.RubyMethodBody, System.Object>(RubyOps.DefineMethod)); } }
         private static MethodInfo _DefineMethod;
-        public static MethodInfo/*!*/ DefineModule { get { return _DefineModule ?? (_DefineModule = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.String, IronRuby.Builtins.RubyModule>(RubyOps.DefineModule)); } }
+        public static MethodInfo/*!*/ DefineModule { get { return _DefineModule ?? (_DefineModule = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.String, System.String, System.Int32, IronRuby.Builtins.RubyModule>(RubyOps.DefineModule)); } }
         private static MethodInfo _DefineModule;
-        public static MethodInfo/*!*/ DefineNestedClass { get { return _DefineNestedClass ?? (_DefineNestedClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.Object, IronRuby.Builtins.RubyModule>(RubyOps.DefineNestedClass)); } }
+        public static MethodInfo/*!*/ DefineNestedClass { get { return _DefineNestedClass ?? (_DefineNestedClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.Object, System.String, System.Int32, IronRuby.Builtins.RubyModule>(RubyOps.DefineNestedClass)); } }
         private static MethodInfo _DefineNestedClass;
-        public static MethodInfo/*!*/ DefineNestedModule { get { return _DefineNestedModule ?? (_DefineNestedModule = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, IronRuby.Builtins.RubyModule>(RubyOps.DefineNestedModule)); } }
+        public static MethodInfo/*!*/ DefineNestedModule { get { return _DefineNestedModule ?? (_DefineNestedModule = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, IronRuby.Builtins.RubyModule>(RubyOps.DefineNestedModule)); } }
         private static MethodInfo _DefineNestedModule;
         public static MethodInfo/*!*/ DefineSingletonClass { get { return _DefineSingletonClass ?? (_DefineSingletonClass = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyClass>(RubyOps.DefineSingletonClass)); } }
         private static MethodInfo _DefineSingletonClass;
@@ -486,7 +486,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SetCurrentException;
         public static MethodInfo/*!*/ SetDataConstant { get { return _SetDataConstant ?? (_SetDataConstant = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.String, System.Int32>(RubyOps.SetDataConstant)); } }
         private static MethodInfo _SetDataConstant;
-        public static MethodInfo/*!*/ SetGlobalConstant { get { return _SetGlobalConstant ?? (_SetGlobalConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetGlobalConstant)); } }
+        public static MethodInfo/*!*/ SetGlobalConstant { get { return _SetGlobalConstant ?? (_SetGlobalConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, System.Object>(RubyOps.SetGlobalConstant)); } }
         private static MethodInfo _SetGlobalConstant;
         public static MethodInfo/*!*/ SetGlobalVariable { get { return _SetGlobalVariable ?? (_SetGlobalVariable = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetGlobalVariable)); } }
         private static MethodInfo _SetGlobalVariable;
@@ -498,9 +498,9 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SetObjectTaint;
         public static MethodInfo/*!*/ SetObjectTrustiness { get { return _SetObjectTrustiness ?? (_SetObjectTrustiness = GetMethod(typeof(RubyOps), "SetObjectTrustiness")); } }
         private static MethodInfo _SetObjectTrustiness;
-        public static MethodInfo/*!*/ SetQualifiedConstant { get { return _SetQualifiedConstant ?? (_SetQualifiedConstant = CallInstruction.CacheFunc<System.Object, System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetQualifiedConstant)); } }
+        public static MethodInfo/*!*/ SetQualifiedConstant { get { return _SetQualifiedConstant ?? (_SetQualifiedConstant = CallInstruction.CacheFunc<System.Object, System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, System.Object>(RubyOps.SetQualifiedConstant)); } }
         private static MethodInfo _SetQualifiedConstant;
-        public static MethodInfo/*!*/ SetUnqualifiedConstant { get { return _SetUnqualifiedConstant ?? (_SetUnqualifiedConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetUnqualifiedConstant)); } }
+        public static MethodInfo/*!*/ SetUnqualifiedConstant { get { return _SetUnqualifiedConstant ?? (_SetUnqualifiedConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, System.Object>(RubyOps.SetUnqualifiedConstant)); } }
         private static MethodInfo _SetUnqualifiedConstant;
         public static MethodInfo/*!*/ Splat { get { return _Splat ?? (_Splat = CallInstruction.CacheFunc<System.Collections.IList, System.Object>(RubyOps.Splat)); } }
         private static MethodInfo _Splat;

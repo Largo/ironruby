@@ -562,7 +562,13 @@ namespace IronRuby.Runtime {
         }
 
         public static void SetConstant(RubyModule/*!*/ owner, string/*!*/ name, object value) {
+            SetConstant(owner, name, value, null, 0);
+        }
+
+        public static void SetConstant(RubyModule/*!*/ owner, string/*!*/ name, object value, string sourcePath, int sourceLine) {
             Assert.NotNull(owner, name);
+
+            owner.SetConstantLocation(name, sourcePath, sourceLine);
 
             if (owner.SetConstantChecked(name, value)) {
                 owner.Context.ReportWarning(String.Format("already initialized constant {0}", name));

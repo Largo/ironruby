@@ -905,6 +905,120 @@ namespace IronRuby.Builtins {
             return self.Context.ResolveMissingConstant(self, name);
         }
 
+        /// <summary>
+        /// Splits a constant name given to const_get/const_source_location into its path segments.
+        /// A Symbol must be a plain constant name; a String may be a scoped path ("A::B") and may be
+        /// rooted at Object ("::A::B"), in which case <paramref name="isTopLevel"/> is set.
+        /// </summary>
+        private static string/*!*/[]/*!*/ SplitConstantName(ConversionStorage<MutableString>/*!*/ stringCast, object name, out bool isTopLevel) {
+            isTopLevel = false;
+
+            var symbol = name as RubySymbol;
+            string str;
+            if (symbol != null) {
+                str = symbol.ToString();
+            } else {
+                var mstr = name as MutableString ?? Protocols.CastToString(stringCast, name);
+                str = mstr.ToString();
+            }
+
+            if (symbol == null && str.StartsWith("::", StringComparison.Ordinal)) {
+                isTopLevel = true;
+                str = str.Substring(2);
+            }
+
+            string[] parts = (symbol == null) ? str.Split(new[] { "::" }, StringSplitOptions.None) : new[] { str };
+            foreach (string part in parts) {
+                RubyUtils.CheckConstantName(part);
+            }
+            return parts;
+        }
+
+        // thread-safe:
+        [RubyMethod("const_source_location")]
+        public static object GetConstantSourceLocation(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName) {
+            return GetConstantSourceLocation(stringCast, scope, self, constantName, true);
+        }
+
+        // thread-safe:
+        [RubyMethod("const_source_location")]
+        public static object GetConstantSourceLocation(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName, bool inherit) {
+
+            bool isTopLevel;
+            string[] parts = SplitConstantName(stringCast, constantName, out isTopLevel);
+            var context = self.Context;
+
+            RubyModule owner = isTopLevel ? context.ObjectClass : self;
+
+            // Resolve everything but the last segment; only the last one's location is reported.
+            for (int i = 0; i < parts.Length - 1; i++) {
+                object value;
+                bool found = (inherit || i > 0)
+                    ? owner.TryResolveConstant(scope.GlobalScope, parts[i], out value)
+                    : owner.TryGetConstant(scope.GlobalScope, parts[i], out value);
+
+                if (!found && (inherit || i > 0) && !owner.IsObjectClass && owner.IsClass) {
+                    found = context.ObjectClass.TryResolveConstant(scope.GlobalScope, parts[i], out value);
+                }
+                if (!found) {
+                    return null;
+                }
+                owner = value as RubyModule;
+                if (owner == null) {
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                }
+                inherit = true;
+            }
+
+            string lastName = parts[parts.Length - 1];
+            RubyModule definingModule = FindConstantOwner(context, scope, owner, lastName, inherit);
+            if (definingModule == null) {
+                return null;
+            }
+
+            string sourcePath;
+            int sourceLine;
+            var result = new RubyArray();
+            if (definingModule.TryGetConstantLocation(lastName, out sourcePath, out sourceLine)) {
+                result.Add(context.EncodePath(sourcePath));
+                result.Add(sourceLine);
+            }
+            return result;
+        }
+
+        // Returns the module in the lookup path of <paramref name="owner"/> that defines the constant, or null.
+        private static RubyModule FindConstantOwner(RubyContext/*!*/ context, RubyScope/*!*/ scope, RubyModule/*!*/ owner,
+            string/*!*/ name, bool inherit) {
+
+            RubyModule result = null;
+            using (context.ClassHierarchyLocker()) {
+                owner.ForEachConstant(inherit, (module, constantName, value) => {
+                    if (constantName == name) {
+                        result = module;
+                        return true;
+                    }
+                    return false;
+                });
+            }
+
+            if (result == null && inherit && !owner.IsObjectClass && !owner.IsClass) {
+                // A Module's lookup path ends at Object for reads (MRI searches Object last for modules too).
+                using (context.ClassHierarchyLocker()) {
+                    context.ObjectClass.ForEachConstant(true, (module, constantName, value) => {
+                        if (constantName == name) {
+                            result = module;
+                            return true;
+                        }
+                        return false;
+                    });
+                }
+            }
+
+            return result;
+        }
+
         [RubyMethod("const_added", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
         public static void ConstantAdded(RubyModule/*!*/ self, object name) {
             // nop

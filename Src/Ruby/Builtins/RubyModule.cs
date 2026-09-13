@@ -274,7 +274,11 @@ namespace IronRuby.Builtins {
         private MemberTableState _constantsState = MemberTableState.Uninitialized;
         private Action<RubyModule> _constantsInitializer;
         private Dictionary<string, ConstantStorage> _constants;
-        
+
+        // { constant-name -> (source path, source line) }; lazily allocated, only holds constants
+        // whose definition site is known (Module#const_source_location).
+        private Dictionary<string, KeyValuePair<string, int>> _constantLocations;
+
         // method table:
         private MemberTableState _methodsState = MemberTableState.Uninitialized;
         private Dictionary<string, RubyMemberInfo> _methods;
@@ -651,6 +655,8 @@ namespace IronRuby.Builtins {
             }
 
             _constants = (module._constants != null) ? new Dictionary<string, ConstantStorage>(module._constants) : null;
+            _constantLocations = (module._constantLocations != null) ?
+                new Dictionary<string, KeyValuePair<string, int>>(module._constantLocations) : null;
 
             // copy namespace members:
             if (module._namespaceTracker != null) {
@@ -1053,6 +1059,41 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Records where a constant of this module was defined, for Module#const_source_location.
+        /// Constants defined by libraries have no location (MRI reports [] for those).
+        /// The table is allocated lazily so modules whose constants all come from C#/library code pay nothing.
+        /// </summary>
+        public void SetConstantLocation(string/*!*/ name, string sourcePath, int sourceLine) {
+            if (sourcePath == null) {
+                return;
+            }
+            using (Context.ClassHierarchyLocker()) {
+                if (_constantLocations == null) {
+                    _constantLocations = new Dictionary<string, KeyValuePair<string, int>>();
+                }
+                _constantLocations[name] = new KeyValuePair<string, int>(sourcePath, sourceLine);
+            }
+        }
+
+        public bool TryGetConstantLocation(string/*!*/ name, out string sourcePath, out int sourceLine) {
+            KeyValuePair<string, int> location;
+            if (_constantLocations != null && _constantLocations.TryGetValue(name, out location)) {
+                sourcePath = location.Key;
+                sourceLine = location.Value;
+                return true;
+            }
+            sourcePath = null;
+            sourceLine = 0;
+            return false;
+        }
+
+        private void RemoveConstantLocationNoLock(string/*!*/ name) {
+            if (_constantLocations != null) {
+                _constantLocations.Remove(name);
+            }
+        }
+
         internal void Publish(string/*!*/ name) {
             RubyOps.ScopeSetMember(_context.TopGlobalScope, name, this);
         }
@@ -1306,6 +1347,10 @@ namespace IronRuby.Builtins {
             } else if (result) {
                 _constants.Remove(name);
                 _context.ConstantAccessVersion++;
+            }
+
+            if (result) {
+                RemoveConstantLocationNoLock(name);
             }
 
             return result;

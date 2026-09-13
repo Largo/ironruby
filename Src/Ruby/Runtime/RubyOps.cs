@@ -636,22 +636,23 @@ namespace IronRuby.Runtime {
         #region Modules
 
         [Emitted]
-        public static RubyModule/*!*/ DefineGlobalModule(RubyScope/*!*/ scope, string/*!*/ name) {
-            return DefineModule(scope, scope.Top.TopModuleOrObject, name);
+        public static RubyModule/*!*/ DefineGlobalModule(RubyScope/*!*/ scope, string/*!*/ name, string sourcePath, int sourceLine) {
+            return DefineModule(scope, scope.Top.TopModuleOrObject, name, sourcePath, sourceLine);
         }
 
         [Emitted]
-        public static RubyModule/*!*/ DefineNestedModule(RubyScope/*!*/ scope, string/*!*/ name) {
-            return DefineModule(scope, scope.GetInnerMostModuleForConstantLookup(), name);
+        public static RubyModule/*!*/ DefineNestedModule(RubyScope/*!*/ scope, string/*!*/ name, string sourcePath, int sourceLine) {
+            return DefineModule(scope, scope.GetInnerMostModuleForConstantLookup(), name, sourcePath, sourceLine);
         }
 
         [Emitted]
-        public static RubyModule/*!*/ DefineModule(RubyScope/*!*/ scope, object target, string/*!*/ name) {
-            return DefineModule(scope, RubyUtils.GetModuleFromObject(scope, target), name);
+        public static RubyModule/*!*/ DefineModule(RubyScope/*!*/ scope, object target, string/*!*/ name, string sourcePath, int sourceLine) {
+            return DefineModule(scope, RubyUtils.GetModuleFromObject(scope, target), name, sourcePath, sourceLine);
         }
 
         // thread-safe:
-        private static RubyModule/*!*/ DefineModule(RubyScope/*!*/ scope, RubyModule/*!*/ owner, string/*!*/ name) {
+        private static RubyModule/*!*/ DefineModule(RubyScope/*!*/ scope, RubyModule/*!*/ owner, string/*!*/ name,
+            string sourcePath, int sourceLine) {
             Assert.NotNull(scope, owner);
 
             ConstantStorage existing;
@@ -663,7 +664,9 @@ namespace IronRuby.Runtime {
                 return module;
             } else {
                 // create class/module object:
-                return owner.Context.DefineModule(owner, name);
+                var result = owner.Context.DefineModule(owner, name);
+                owner.SetConstantLocation(name, sourcePath, sourceLine);
+                return result;
             }
         }
 
@@ -680,22 +683,26 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted] 
-        public static RubyModule/*!*/ DefineGlobalClass(RubyScope/*!*/ scope, string/*!*/ name, object superClassObject) {
-            return DefineClass(scope, scope.Top.TopModuleOrObject, name, superClassObject);
+        public static RubyModule/*!*/ DefineGlobalClass(RubyScope/*!*/ scope, string/*!*/ name, object superClassObject,
+            string sourcePath, int sourceLine) {
+            return DefineClass(scope, scope.Top.TopModuleOrObject, name, superClassObject, sourcePath, sourceLine);
         }
 
         [Emitted]
-        public static RubyModule/*!*/ DefineNestedClass(RubyScope/*!*/ scope, string/*!*/ name, object superClassObject) {
-            return DefineClass(scope, scope.GetInnerMostModuleForConstantLookup(), name, superClassObject);
+        public static RubyModule/*!*/ DefineNestedClass(RubyScope/*!*/ scope, string/*!*/ name, object superClassObject,
+            string sourcePath, int sourceLine) {
+            return DefineClass(scope, scope.GetInnerMostModuleForConstantLookup(), name, superClassObject, sourcePath, sourceLine);
         }
 
         [Emitted]
-        public static RubyModule/*!*/ DefineClass(RubyScope/*!*/ scope, object target, string/*!*/ name, object superClassObject) {
-            return DefineClass(scope, RubyUtils.GetModuleFromObject(scope, target), name, superClassObject);
+        public static RubyModule/*!*/ DefineClass(RubyScope/*!*/ scope, object target, string/*!*/ name, object superClassObject,
+            string sourcePath, int sourceLine) {
+            return DefineClass(scope, RubyUtils.GetModuleFromObject(scope, target), name, superClassObject, sourcePath, sourceLine);
         }
 
         // thread-safe:
-        private static RubyClass/*!*/ DefineClass(RubyScope/*!*/ scope, RubyModule/*!*/ owner, string/*!*/ name, object superClassObject) {
+        private static RubyClass/*!*/ DefineClass(RubyScope/*!*/ scope, RubyModule/*!*/ owner, string/*!*/ name, object superClassObject,
+            string sourcePath, int sourceLine) {
             Assert.NotNull(owner);
             RubyClass superClass = ToSuperClass(owner.Context, superClassObject);
 
@@ -714,7 +721,9 @@ namespace IronRuby.Runtime {
                 }
                 return cls;
             } else {
-                return owner.Context.DefineClass(owner, name, superClass, null);
+                var result = owner.Context.DefineClass(owner, name, superClass, null);
+                owner.SetConstantLocation(name, sourcePath, sourceLine);
+                return result;
             }
         }
 
@@ -1056,20 +1065,21 @@ namespace IronRuby.Runtime {
 
 
         [Emitted] // ConstantVariable:
-        public static object SetGlobalConstant(object value, RubyScope/*!*/ scope, string/*!*/ name) {
-            RubyUtils.SetConstant(scope.RubyContext.ObjectClass, name, value);
+        public static object SetGlobalConstant(object value, RubyScope/*!*/ scope, string/*!*/ name, string sourcePath, int sourceLine) {
+            RubyUtils.SetConstant(scope.RubyContext.ObjectClass, name, value, sourcePath, sourceLine);
             return value;
         }
 
         [Emitted] // ConstantVariable:
-        public static object SetUnqualifiedConstant(object value, RubyScope/*!*/ scope, string/*!*/ name) {
-            RubyUtils.SetConstant(scope.GetInnerMostModuleForConstantLookup(), name, value);
+        public static object SetUnqualifiedConstant(object value, RubyScope/*!*/ scope, string/*!*/ name, string sourcePath, int sourceLine) {
+            RubyUtils.SetConstant(scope.GetInnerMostModuleForConstantLookup(), name, value, sourcePath, sourceLine);
             return value;
         }
 
         [Emitted] // ConstantVariable:
-        public static object SetQualifiedConstant(object value, object target, RubyScope/*!*/ scope, string/*!*/ name) {
-            RubyUtils.SetConstant(RubyUtils.GetModuleFromObject(scope, target), name, value);
+        public static object SetQualifiedConstant(object value, object target, RubyScope/*!*/ scope, string/*!*/ name,
+            string sourcePath, int sourceLine) {
+            RubyUtils.SetConstant(RubyUtils.GetModuleFromObject(scope, target), name, value, sourcePath, sourceLine);
             return value;
         }
 
