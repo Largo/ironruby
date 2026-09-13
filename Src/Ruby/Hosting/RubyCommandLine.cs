@@ -99,7 +99,8 @@ namespace IronRuby.Hosting {
         }
 
         private Encoding/*!*/ GetSourceCodeEncoding() {
-            return (((RubyContext)Language).RubyOptions.DefaultEncoding ?? RubyEncoding.Ascii).Encoding;
+            // Ruby 2.0 made UTF-8 the default script encoding; only -K overrides it.
+            return (((RubyContext)Language).RubyOptions.DefaultEncoding ?? RubyEncoding.UTF8).Encoding;
         }
         
         protected override Scope/*!*/ CreateScope() {
