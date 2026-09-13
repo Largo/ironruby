@@ -284,18 +284,18 @@ namespace IronRuby.Builtins {
         #region define_method (thread-safe)
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static RubyMethod/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
             DefineMethod(scope, self, methodName, method.Info,  method.GetTargetClass());
-            return method;
+            return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
         }
 
         // thread-safe:
         // Defines method using mangled CLR name and aliases that method with the actual CLR name.
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static RubyMethod/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
             var result = DefineMethod(scope, self, methodName.MangledName, method);
             if (methodName.HasMangledName) {
@@ -305,18 +305,18 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static UnboundMethod/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
             DefineMethod(scope, self, methodName, method.Info, method.TargetConstraint);
-            return method;
+            return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
         }
 
         // thread-safe:
         // Defines method using mangled CLR name and aliases that method with the actual CLR name.
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static UnboundMethod/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
             var result = DefineMethod(scope, self, methodName.MangledName, method);
             if (methodName.HasMangledName) {
@@ -346,8 +346,8 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static Proc/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block, 
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block, 
             RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
 
             return DefineMethod(scope, self, methodName, block.Proc);
@@ -355,8 +355,8 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         // Defines method using mangled CLR name and aliases that method with the actual CLR name.
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static Proc/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
             RubyModule/*!*/ self, [NotNull]ClrName/*!*/ methodName) {
 
             var result = DefineMethod(scope, block, self, methodName.MangledName);
@@ -367,19 +367,19 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static Proc/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
             var visibility = GetDefinedMethodVisibility(scope, self, methodName);
             var info = Proc.ToLambdaMethodInfo(block, methodName, visibility, self);
             self.AddMethod(scope.RubyContext, methodName, info);
-            return info.Lambda;
+            return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
         }
 
         // thread-safe:
-        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
-        public static Proc/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
             var result = DefineMethod(scope, self, methodName.MangledName, block);
