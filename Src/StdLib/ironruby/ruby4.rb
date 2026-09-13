@@ -405,24 +405,63 @@ module Enumerable
 end
 
 class Range
-  # The number of elements a numeric range iterates. Non-numeric beginnings
-  # cannot be counted without walking the range, which MRI refuses to do.
+  # The number of elements the range iterates. MRI 3.4 only counts a range that
+  # begins at an Integer; a Float beginning cannot be walked at all (1.0..2.0
+  # has no elements to count), and a beginning that has #succ can be walked but
+  # not counted in advance, so it answers nil rather than guessing.
   def size
     from = self.begin
     to = self.end
-    raise TypeError, "can't iterate from #{from.class}" unless from.is_a?(Numeric)
-    return Float::INFINITY if to.nil?
-    return Float::INFINITY if to.is_a?(Float) && to.infinite? == 1
-    span = to - from
-    return 0 if span < 0
-    # Half-open ranges lose the last element only when it lands exactly on the
-    # end, so 1...3 has two elements but 1.0...3.5 still has three.
-    if exclude_end? && span == span.floor
-      span.to_i
-    else
-      span.floor.to_i + 1
+    if from.is_a?(::Integer)
+      if to.is_a?(::Numeric)
+        return ::Enumerator::ArithmeticSequence.__interval_step_size__(from, to, 1, exclude_end?)
+      end
+      return ::Float::INFINITY if to.nil?
+    elsif from.nil?
+      raise TypeError, "can't iterate from NilClass"
+    elsif !from.respond_to?(:succ)
+      raise TypeError, "can't iterate from #{from.class}"
     end
-  end unless method_defined?(:size)
+    nil
+  end
+
+  # Walking a range backwards needs a finite end to start from. An Integer end
+  # can be counted down from forever, which is how a beginless range works;
+  # anything else has to be materialised first.
+  def reverse_each(&block)
+    return ::Enumerator.new(-> { __reverse_each_size__ }) { |y| reverse_each { |x| y << x } } unless block
+    to = self.end
+    raise TypeError, "can't iterate from NilClass" if to.nil?
+    from = self.begin
+    if from.nil?
+      raise TypeError, "can't iterate from NilClass" unless to.is_a?(::Integer)
+      i = exclude_end? ? to - 1 : to
+      loop do
+        block.call(i)
+        i -= 1
+      end
+      return self
+    end
+    to_a.reverse_each(&block)
+    self
+  end
+
+  # Matches MRI's range_reverse_each_size, quirks included: the class it names
+  # when it refuses is the end's unless the beginning is the unwalkable one.
+  def __reverse_each_size__
+    from = self.begin
+    to = self.end
+    raise TypeError, "can't iterate from NilClass" if to.nil?
+    if to.is_a?(::Integer)
+      return ::Float::INFINITY if from.nil?
+      return size if from.is_a?(::Integer)
+      raise TypeError, "can't iterate from Integer"
+    end
+    raise TypeError, "can't iterate from #{to.class}" if from.nil?
+    return nil if from.respond_to?(:succ)
+    raise TypeError, "can't iterate from #{from.class}"
+  end
+  private :__reverse_each_size__
 
   # The built-in #first/#last only answer the no-argument form, and because they
   # are defined on Range they hide Enumerable#first(n) rather than falling
@@ -432,9 +471,11 @@ class Range
     alias_method :last_without_count, :last
 
     def first(*args)
-      return first_without_count if args.empty?
-      n = args[0]
-      n = n.to_int unless n.is_a?(Integer)
+      if args.empty?
+        raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
+        return first_without_count
+      end
+      n = __to_count__(args[0])
       raise ArgumentError, "negative array size (or size too big)" if n < 0
       result = []
       return result if n == 0
@@ -446,12 +487,29 @@ class Range
     end
 
     def last(*args)
-      return last_without_count if args.empty?
-      n = args[0]
-      n = n.to_int unless n.is_a?(Integer)
+      if args.empty?
+        raise RangeError, "cannot get the last element of endless range" if self.end.nil?
+        return last_without_count
+      end
+      n = __to_count__(args[0])
       raise ArgumentError, "negative array size (or size too big)" if n < 0
       to_a.last(n)
     end
+
+    # #first and #last take a count, not an arbitrary object: anything that is
+    # not an Integer has to offer #to_int and have it answer one.
+    def __to_count__(n)
+      return n if n.is_a?(::Integer)
+      unless n.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{n.nil? ? "nil" : n.class} into Integer"
+      end
+      converted = n.to_int
+      unless converted.is_a?(::Integer)
+        raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{converted.class})"
+      end
+      converted
+    end
+    private :__to_count__
   end
 end
 
@@ -8934,9 +8992,14 @@ class Range
     return false if oe.nil? && !self.end.nil?
     return false unless ob.nil? || cover?(ob)
     se = self.end
-    return true if se.nil?
-    cmp = (se <=> oe)
-    return false if cmp.nil?
+    if se.nil?
+      # Two ranges that both run to infinity end at the same place; only the
+      # exclusive/inclusive disagreement below can still separate them.
+      cmp = oe.nil? ? 0 : 1
+    else
+      cmp = (se <=> oe)
+      return false if cmp.nil?
+    end
     # MRI's r_cover_range_p: when the two ranges agree about their end being
     # exclusive the comparison is enough, and when they disagree the inclusive
     # one has to be measured against the other's last element instead.
@@ -8954,6 +9017,62 @@ class Range
     end
   end
   private :__cover_range__
+
+  # Range#include? is not Range#cover?. For a range of numbers or times - or
+  # when the value asked about is itself a number - the two agree and the
+  # comparison is enough. A range of Strings answers whether the value turns up
+  # in the #succ walk from begin to end, which is why ("a".."z") does not
+  # include "cc". Anything else has to be walked, and a range with no beginning
+  # or no end cannot be walked at all.
+  def include?(value)
+    b = self.begin
+    e = self.end
+    if value.is_a?(::Numeric) || __linear__(b) || __linear__(e) ||
+       __integerish__(b) || __integerish__(e)
+      return cover?(value)
+    end
+    return __string_include__(b, e, value) if b.is_a?(::String) && e.is_a?(::String)
+    if b.nil? || e.nil?
+      ::Kernel.raise(::TypeError, "cannot determine inclusion in beginless/endless ranges")
+    end
+    each { |x| return true if x == value }
+    false
+  end
+  alias_method :member?, :include?
+
+  def __linear__(x)
+    x.is_a?(::Numeric) || x.is_a?(::Time)
+  end
+  private :__linear__
+
+  # MRI's rb_check_to_integer: an endpoint that converts to an Integer is
+  # treated as a point on a line even if its class is something else entirely.
+  def __integerish__(x)
+    return false unless x.respond_to?(:to_int)
+    (x.to_int rescue nil).is_a?(::Integer)
+  end
+  private :__integerish__
+
+  # MRI's rb_str_include_range_p: single ASCII characters compare directly,
+  # everything else walks #succ and looks for an equal string.
+  def __string_include__(b, e, value)
+    return false unless value.is_a?(::String)
+    if b.bytesize == 1 && e.bytesize == 1 && b.ascii_only? && e.ascii_only? && value.ascii_only?
+      return false unless value.bytesize == 1
+      return true if b <= value && value < e
+      return !exclude_end? && value == e
+    end
+    found = false
+    b.upto(e) do |s|
+      next if exclude_end? && s == e
+      if s == value
+        found = true
+        break
+      end
+    end
+    found
+  end
+  private :__string_include__
 
   def overlap?(other)
     unless other.is_a?(::Range)

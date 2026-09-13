@@ -24,7 +24,12 @@ using System.Text;
 
 namespace IronRuby.Builtins {
 
-    public partial class Range : IDuplicable, ISerializable {
+    public partial class Range : IDuplicable, ISerializable, IRubyObjectState {
+        private const int FrozenFlag = 1;
+        private const int TaintedFlag = 2;
+        private const int UntrustedFlag = 4;
+
+        private int _flags;
         private object _begin;
         private object _end;
         private bool _excludeEnd;
@@ -61,6 +66,7 @@ namespace IronRuby.Builtins {
             _end = end;
             _excludeEnd = excludeEnd;
             _initialized = true;
+            _flags |= FrozenFlag;
         }
 
         public Range(MutableString/*!*/ begin, MutableString/*!*/ end, bool excludeEnd) {
@@ -68,6 +74,7 @@ namespace IronRuby.Builtins {
             _end = end;
             _excludeEnd = excludeEnd;
             _initialized = true;
+            _flags |= FrozenFlag;
         }
         
         // Convience function for constructing from C#, calls initialize
@@ -80,7 +87,9 @@ namespace IronRuby.Builtins {
             RubyContext/*!*/ context, object begin, object end, bool excludeEnd) {
 
             if (_initialized) {
-                throw RubyExceptions.CreateNameError("`initialize' called twice");
+                // A range is frozen the moment it is initialized, so a second call is
+                // a modification of a frozen object rather than a naming problem.
+                throw RubyExceptions.CreateObjectFrozenError(context, this);
             }
 
             // Range tests whether the items can be compared, and uses that to determine if the range is valid
@@ -89,12 +98,10 @@ namespace IronRuby.Builtins {
             if (begin != null && end != null) {
                 object compareResult;
 
+                // An exception raised by #<=> belongs to the caller: MRI only turns a
+                // nil answer into "bad value for range".
                 var site = comparisonStorage.GetCallSite("<=>");
-                try {
-                    compareResult = site.Target(site, begin, end);
-                } catch (Exception) {
-                    compareResult = null;
-                }
+                compareResult = site.Target(site, begin, end);
 
                 if (compareResult == null) {
                     throw RubyExceptions.CreateArgumentError("bad value for range");
@@ -105,7 +112,31 @@ namespace IronRuby.Builtins {
             _end = end;
             _excludeEnd = excludeEnd;
             _initialized = true;
+            // Ruby 3.0 froze every Range on creation.
+            _flags |= FrozenFlag;
         }
+
+        #region IRubyObjectState Members
+
+        public bool IsFrozen {
+            get { return (_flags & FrozenFlag) != 0; }
+        }
+
+        public bool IsTainted {
+            get { return (_flags & TaintedFlag) != 0; }
+            set { _flags = (_flags & ~TaintedFlag) | (value ? TaintedFlag : 0); }
+        }
+
+        public bool IsUntrusted {
+            get { return (_flags & UntrustedFlag) != 0; }
+            set { _flags = (_flags & ~UntrustedFlag) | (value ? UntrustedFlag : 0); }
+        }
+
+        public void Freeze() {
+            _flags |= FrozenFlag;
+        }
+
+        #endregion
 
         protected virtual Range/*!*/ Copy() {
             return new Range(this);
@@ -130,11 +161,17 @@ namespace IronRuby.Builtins {
             return result.ToString();
         }
 
+        // MRI's inspect_range: an endless range drops its end and a beginless one drops
+        // its begin, but (nil..nil) prints both so that it is not just "..".
         public MutableString/*!*/ Inspect(RubyContext/*!*/ context) {
             var result = MutableString.CreateMutable(RubyEncoding.Binary);
-            result.Append(context.Inspect(_begin));
+            if (_begin != null || _end == null) {
+                result.Append(context.Inspect(_begin));
+            }
             result.Append(Separator);
-            result.Append(context.Inspect(_end));
+            if (_begin == null || _end != null) {
+                result.Append(context.Inspect(_end));
+            }
             return result;
         }
 

@@ -7085,8 +7085,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "overlap?", 0x51, 
-                0x00000006U, 
-                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Builtins.Range, IronRuby.Builtins.Range, System.Boolean>(IronRuby.Builtins.RangeOps.Overlap)
+                0x00000002U, 
+                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Builtins.Range, System.Object, System.Boolean>(IronRuby.Builtins.RangeOps.Overlap)
             );
             
             DefineLibraryMethod(module, "step", 0x51, 
