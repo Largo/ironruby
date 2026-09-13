@@ -792,6 +792,36 @@ namespace IronRuby.Builtins {
         
         private static void LoadBinding_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             module.UndefineMethodNoEvent("LocalScope");
+            DefineLibraryMethod(module, "__ir_variable_name__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.Binding, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.BindingOps.VariableName)
+            );
+            
+            DefineLibraryMethod(module, "implicit_parameter_defined?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.Binding, System.Object, System.Boolean>(IronRuby.Builtins.BindingOps.IsImplicitParameterDefined)
+            );
+            
+            DefineLibraryMethod(module, "implicit_parameter_get", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.Binding, System.Object, System.Object>(IronRuby.Builtins.BindingOps.GetImplicitParameter)
+            );
+            
+            DefineLibraryMethod(module, "implicit_parameters", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Binding, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.BindingOps.GetImplicitParameters)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Binding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.BindingOps.ToS)
+            );
+            
+            DefineLibraryMethod(module, "to_s", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Binding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.BindingOps.ToS)
+            );
+            
         }
         
         private static void LoadBinding_Class(IronRuby.Builtins.RubyModule/*!*/ module) {

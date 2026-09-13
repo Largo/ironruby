@@ -67,6 +67,15 @@ namespace IronRuby.Runtime.Calls {
             _hasKeywordRest = hasKeywordRest;
         }
 
+        /// <summary>
+        /// The names of the implicit parameters - `it`, or `_1` up to the highest numbered one
+        /// referenced - that the block body brought into being by mentioning them. Null for a
+        /// block whose parameters were written out. These are not local variables as far as MRI
+        /// is concerned: #local_variables leaves them out and Binding#implicit_parameters
+        /// reports them instead.
+        /// </summary>
+        public string[] ImplicitParameterNames { get; set; }
+
         public static readonly RubyParameterSignature/*!*/ Empty =
             new RubyParameterSignature(new Parameter[0], 0, 0, 0, false, 0, false, false);
 

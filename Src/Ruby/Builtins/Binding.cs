@@ -14,10 +14,11 @@
  * ***************************************************************************/
 
 using Microsoft.Scripting.Utils;
+using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
-    public sealed class Binding {
+    public sealed class Binding : IDuplicable {
         private readonly RubyScope/*!*/ _localScope;
         private readonly object _self;
 
@@ -43,6 +44,17 @@ namespace IronRuby.Builtins {
             Assert.NotNull(localScope);
             _localScope = localScope;
             _self = self;
+        }
+
+        /// <summary>
+        /// MRI's Binding#dup keeps every variable that already exists shared with the original and
+        /// lets the two diverge only over variables defined afterwards, so the copy gets a scope
+        /// nested inside this one rather than this very scope or a snapshot of it.
+        /// </summary>
+        object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
+            var result = new Binding(new RubyBindingCopyScope(_localScope, _self), _self);
+            context.CopyInstanceData(this, result, copySingletonMembers);
+            return result;
         }
     }
 }

@@ -7055,31 +7055,34 @@ class Binding
   end unless method_defined?(:local_variables)
 
   def local_variable_defined?(name)
-    __check_lvar_name__(name)
-    eval("defined?(#{name}) == 'local-variable'")
+    eval("defined?(#{__check_lvar_name__(name)}) == 'local-variable'")
   end unless method_defined?(:local_variable_defined?)
 
   def local_variable_get(name)
-    __check_lvar_name__(name)
+    name = __check_lvar_name__(name)
     unless local_variable_defined?(name)
-      ::Kernel.raise(::NameError, "local variable `#{name}' is not defined for #{inspect}")
+      ::Kernel.raise(::NameError, "local variable '#{name}' is not defined for #{inspect}")
     end
-    eval(name.to_s)
+    eval(name)
   end unless method_defined?(:local_variable_get)
 
   # The value cannot be written into the eval'd source, so it is parked in a
   # thread-local and read back out from inside the binding.
   def local_variable_set(name, value)
-    __check_lvar_name__(name)
+    name = __check_lvar_name__(name)
     ::Thread.current[:__ir_binding_value__] = value
     eval("#{name} = ::Thread.current[:__ir_binding_value__]")
     value
   end unless method_defined?(:local_variable_set)
 
+  # Only a plain identifier names a local; a global, an instance variable or a
+  # special variable such as $~ is a NameError rather than a way in.
   def __check_lvar_name__(name)
-    unless name.is_a?(::Symbol) || name.is_a?(::String)
-      ::Kernel.raise(::TypeError, "#{name.inspect} is not a symbol nor a string")
+    name = __ir_variable_name__(name)
+    unless name =~ /\A[_\p{Alpha}][_\p{Alnum}]*\z/
+      ::Kernel.raise(::NameError, "wrong local variable name '#{name}' for #{inspect}")
     end
+    name
   end
   private :__check_lvar_name__
 end

@@ -47,7 +47,12 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// BEGIN block scope.
         /// </summary>
-        FileInitializer
+        FileInitializer,
+
+        /// <summary>
+        /// The scope Binding#dup and Binding#clone hang their copy on.
+        /// </summary>
+        BindingCopy
     }
 
     public class RuntimeFlowControl {
@@ -268,10 +273,8 @@ namespace IronRuby.Runtime {
         }
 
         private IEnumerable<string>/*!*/ GetDeclaredLocalSymbols() {
-            for (int i = 0; i < _variableNames.Length; i++) {
-                yield return _variableNames[i];
-            }
-
+            // a variable an eval or Binding#local_variable_set introduced is newer than the ones
+            // the scope was compiled with, and MRI lists it first
             if (_dynamicLocals != null) {
                 lock (_dynamicLocals) {
                     foreach (string name in _dynamicLocals.Keys) {
@@ -279,14 +282,36 @@ namespace IronRuby.Runtime {
                     }
                 }
             }
+
+            for (int i = 0; i < _variableNames.Length; i++) {
+                yield return _variableNames[i];
+            }
+        }
+
+        /// <summary>
+        /// The implicit block parameters - `it` or `_1`.. - this scope brought into being by
+        /// mentioning them. They live in the scope's variable table like any other parameter, but
+        /// MRI does not count them as local variables. Null when there are none.
+        /// </summary>
+        public virtual string[] OwnImplicitParameterNames {
+            get { return null; }
         }
 
         public List<string/*!*/>/*!*/ GetVisibleLocalNames() {
             var result = new List<string>();
+            // a block parameter shadowing an outer local is the same name twice on the way up,
+            // and MRI reports it once
+            var seen = new HashSet<string>();
             RubyScope scope = this;
             while (true) {
+                var implicitParameters = scope.OwnImplicitParameterNames;
                 foreach (string name in scope.GetDeclaredLocalSymbols()) {
-                    result.Add(name);
+                    if (implicitParameters != null && Array.IndexOf(implicitParameters, name) >= 0) {
+                        continue;
+                    }
+                    if (seen.Add(name)) {
+                        result.Add(name);
+                    }
                 }
 
                 if (!scope.InheritsLocalVariables) {
@@ -297,7 +322,7 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal object ResolveLocalVariable(string/*!*/ name) {
+        public object ResolveLocalVariable(string/*!*/ name) {
             RubyScope scope = this;
             while (true) {
                 object value;
@@ -992,6 +1017,13 @@ var closureScope = scope as RubyClosureScope;
             get { return _blockFlowControl; }
         }
 
+        public override string[] OwnImplicitParameterNames {
+            get {
+                var signature = _blockFlowControl.Proc.Dispatcher.ParameterSignature;
+                return signature != null ? signature.ImplicitParameterNames : null;
+            }
+        }
+
         internal RubyBlockScope(MutableTuple locals, string/*!*/[]/*!*/ variableNames,
             BlockParam/*!*/ blockFlowControl, object selfObject, InterpretedFrame interpretedFrame) {
             var parent = blockFlowControl.Proc.LocalScope;
@@ -1010,6 +1042,34 @@ var closureScope = scope as RubyClosureScope;
             
             // RubyBlockScope:
             _blockFlowControl = blockFlowControl;
+        }
+    }
+
+    /// <summary>
+    /// The scope a copied Binding sees. MRI's Binding#dup shares every variable that already
+    /// exists with the original - assigning to one is visible through the other - while a variable
+    /// the copy defines afterwards stays private to it. A scope that inherits its parent's locals
+    /// and keeps its own dynamic ones does exactly that: an existing name resolves up into the
+    /// original's storage, and a new one is defined here.
+    /// </summary>
+    public sealed class RubyBindingCopyScope : RubyScope {
+        public override ScopeKind Kind { get { return ScopeKind.BindingCopy; } }
+        public override bool InheritsLocalVariables { get { return true; } }
+
+        public override RubyModule Module { get { return _parent.Module; } }
+
+        internal RubyBindingCopyScope(RubyScope/*!*/ parent, object selfObject) {
+            // RuntimeFlowControl:
+            _activeFlowControlScope = parent.FlowControlScope;
+
+            // RubyScope:
+            _parent = parent;
+            _top = parent.Top;
+            _selfObject = selfObject;
+            _methodAttributes = parent.MethodAttributes;
+            InLoop = parent.InLoop;
+            InRescue = parent.InRescue;
+            SetEmptyLocals();
         }
     }
 

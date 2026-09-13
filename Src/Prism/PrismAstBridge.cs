@@ -1179,8 +1179,14 @@ namespace IronRuby.Prism {
                         mandatory[i] = DefineParameter("_" + (i + 1), span);
                         declared[i] = new RubyParameterSignature.Parameter("req", "_" + (i + 1));
                     }
+                    var numberedNames = new string[numbered.Maximum];
+                    for (int i = 0; i < numbered.Maximum; i++) {
+                        numberedNames[i] = "_" + (i + 1);
+                    }
                     return new Parameters(mandatory, mandatory.Length, null, null, null, span) {
-                        Signature = new RubyParameterSignature(declared, declared.Length, 0, 0, false, 0, false, false)
+                        Signature = new RubyParameterSignature(declared, declared.Length, 0, 0, false, 0, false, false) {
+                            ImplicitParameterNames = numberedNames
+                        }
                     };
                 }
                 case Pm.ItParametersNode it: {
@@ -1189,7 +1195,9 @@ namespace IronRuby.Prism {
                     // `it` is a parameter without a name as far as #parameters is concerned
                     var declared = new[] { new RubyParameterSignature.Parameter("req", null) };
                     return new Parameters(mandatory, 1, null, null, null, span) {
-                        Signature = new RubyParameterSignature(declared, 1, 0, 0, false, 0, false, false)
+                        Signature = new RubyParameterSignature(declared, 1, 0, 0, false, 0, false, false) {
+                            ImplicitParameterNames = new[] { "it" }
+                        }
                     };
                 }
                 default:
