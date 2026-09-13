@@ -1487,7 +1487,7 @@ namespace IronRuby.Builtins {
 
             var settings = TranscodeSettings.Parse(toStr.Context, toHash, options, to);
 
-            if (settings.IsPlain && from == to) {
+            if (from == to && !settings.ReplaceInvalid && settings.XmlMode == 0 && settings.Newline == 0) {
                 // Nothing to do, and in particular nothing to validate: MRI does not check the
                 // bytes when the source and target encodings are the same.
                 self.ForceEncoding(to);
@@ -1651,6 +1651,23 @@ namespace IronRuby.Builtins {
             ConversionStorage<MutableString>/*!*/ toStr,
             MutableString/*!*/ self, RubyEncoding/*!*/ from, RubyEncoding/*!*/ to, TranscodeSettings settings) {
 
+            if (from == RubyEncoding.Binary && to != RubyEncoding.Binary) {
+                // The mirror of the rule above: MRI has no converter from a byte string to a
+                // character encoding, so any byte that is not ASCII is an undefined conversion.
+                byte[] raw = self.ToByteArray();
+                for (int j = 0; j < raw.Length; j++) {
+                    if (raw[j] > 0x7f && !settings.ReplaceUndefined && settings.Fallback == null) {
+                        // MRI converts through UTF-8 and names both legs when the target is not
+                        // UTF-8 itself.
+                        throw new UndefinedConversionError(to == RubyEncoding.UTF8
+                            ? RubyExceptions.FormatMessage("\"\\x{0:X2}\" from {1} to {2}", raw[j], from.Name, to.Name)
+                            : RubyExceptions.FormatMessage("\"\\x{0:X2}\" to UTF-8 in conversion from {1} to UTF-8 to {2}",
+                                raw[j], from.Name, to.Name)
+                        );
+                    }
+                }
+            }
+
             string text = DecodeForTranscoding(self, from, to, settings);
 
             if (settings.Newline != 0) {
@@ -1735,7 +1752,6 @@ namespace IronRuby.Builtins {
             string replacement = settings.GetReplacement(to).ConvertToString();
             var result = new StringBuilder(bytes.Length);
             int i = 0;
-            bool pendingBad = false;
 
             while (i < bytes.Length) {
                 int length = 0;
@@ -1752,13 +1768,11 @@ namespace IronRuby.Builtins {
                 }
 
                 if (length == 0) {
-                    if (!pendingBad) {
-                        result.Append(replacement);
-                        pendingBad = true;
-                    }
+                    // One replacement per byte: MRI only merges the bytes of a single truncated
+                    // character, not an arbitrary run of rubbish.
+                    result.Append(replacement);
                     i++;
                 } else {
-                    pendingBad = false;
                     i += length;
                 }
             }
