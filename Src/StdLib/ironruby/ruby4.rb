@@ -2935,78 +2935,71 @@ class String
   end unless method_defined?(:=~)
 end
 
-# Numeric#step never learned the keyword form - `1.step(by: 2, to: 7)` handed
-# the options hash to the positional parameter and came back with "can't convert
-# Hash into Float", which was 70 of spec/core/numeric's 123 errors. The
-# positional form still goes to the built-in.
+# Numeric#step: MRI's num_step, which the builtin only ever implemented as the
+# two-positional-argument block form. Missing were the keyword form
+# (`1.step(by: 2, to: 7)`), the endless form (`1.step`), the
+# Enumerator::ArithmeticSequence return value, and the float/infinity corners.
 class Numeric
-  alias_method :__ir_step__, :step
-
-  def step(*args, &block)
-    kw = nil
-    if !args.empty? && args.last.is_a?(::Hash)
-      last = args.last
-      unless last.empty?
-        unknown = last.keys - [:to, :by]
-        unless unknown.empty?
-          ::Kernel.raise(::ArgumentError, "unknown keyword: #{unknown[0].inspect}")
-        end
-        kw = args.pop
+  # MRI num_step_extract_args: positional (to, step) merged with the `to:` and
+  # `by:` keywords, which collide rather than override.
+  def __step_extract_args__(args, kw)
+    if args.size > 2
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..2)")
+    end
+    to = args.size >= 1 ? args[0] : nil
+    by = args.size >= 2 ? args[1] : nil
+    unless kw.nil? || kw.empty?
+      unknown = kw.keys - [:to, :by]
+      unless unknown.empty?
+        ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+      end
+      if kw.key?(:to)
+        ::Kernel.raise(::ArgumentError, "to is given twice") if args.size > 0
+        to = kw[:to]
+      end
+      if kw.key?(:by)
+        ::Kernel.raise(::ArgumentError, "step is given twice") if args.size > 1
+        by = kw[:by]
       end
     end
-    if kw.nil?
-      # The built-in only has the block form.
-      return ::Enumerator.new { |y| __ir_step__(*args) { |v| y << v } } unless block
-      return __ir_step__(*args, &block)
-    end
-    unless args.empty?
-      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 0..2)")
-    end
+    [to, by]
+  end
+  private :__step_extract_args__
 
-    limit = kw[:to]
-    increment = kw.key?(:by) ? kw[:by] : 1
+  # MRI num_step_scan_args. The `unit < 0` is not incidental: it is what turns
+  # a String step into ArgumentError("comparison of String with 0 failed"),
+  # which is the error the specs ask for.
+  def __step_scan_args__(args, kw)
+    to, unit = __step_extract_args__(args, kw)
+    unit = 1 if unit.nil?
+    ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+    unit < 0
+    [to, unit]
+  end
+  private :__step_scan_args__
+
+  def step(*args, **kw, &block)
     unless block
-      return ::Enumerator.new { |y| step(**kw) { |v| y << v } }
+      to, unit = __step_extract_args__(args, kw)
+      unit = 1 if unit.nil?
+      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+      if (to.nil? || to.is_a?(::Numeric)) && unit.is_a?(::Numeric)
+        shown = args.empty? && (kw.nil? || kw.empty?) ? "" : "(#{(args.map(&:inspect) + (kw || {}).map { |k, v| "#{k}: #{v.inspect}" }).join(', ')})"
+        return ::Enumerator::ArithmeticSequence.__build__(
+          self, to, unit, false, self, "(#{inspect}.step#{shown})")
+      end
+      recv = self
+      e = ::Enumerator.new { |y| recv.step(*args, **kw) { |v| y << v } }
+      e.__set_size__(lambda do
+        t, u = recv.__send__(:__step_scan_args__, args, kw)
+        t = (u < 0 ? -::Float::INFINITY : ::Float::INFINITY) if t.nil?
+        ::Enumerator::ArithmeticSequence.__interval_step_size__(recv, t, u, false)
+      end)
+      return e
     end
-    ::Kernel.raise(::ArgumentError, "step can't be 0") if increment == 0
 
-    if limit.nil?
-      value = self
-      loop do
-        block.call(value)
-        value += increment
-      end
-      return self
-    end
-
-    if is_a?(::Float) || limit.is_a?(::Float) || increment.is_a?(::Float)
-      # MRI multiplies rather than accumulates so the rounding does not drift.
-      base = to_f
-      stop = limit.to_f
-      unit = increment.to_f
-      n = (stop - base) / unit
-      err = ((base.abs + stop.abs + (stop - base).abs) / unit.abs) * ::Float::EPSILON
-      err = 0.5 if err.nan? || err > 0.5
-      n = (n + err).floor
-      i = 0
-      while i <= n
-        block.call(base + i * unit)
-        i += 1
-      end
-    else
-      value = self
-      if increment > 0
-        while value <= limit
-          block.call(value)
-          value += increment
-        end
-      else
-        while value >= limit
-          block.call(value)
-          value += increment
-        end
-      end
-    end
+    to, unit = __step_scan_args__(args, kw)
+    ::Enumerator::ArithmeticSequence.__step_each__(self, to, unit, false, &block)
     self
   end
 end
@@ -4806,21 +4799,163 @@ class Enumerator
   # 2.6's arithmetic sequence: what Range#step and Range#% answer, and what
   # Numeric#step answers. It is an Enumerator that also remembers the three
   # numbers it was built from.
+  #
+  # Iteration and #size follow MRI's numeric.c: ruby_float_step,
+  # ruby_float_step_size and ruby_num_interval_step_size. Reimplementing them
+  # rather than "value += step until past the end" matters because MRI
+  # multiplies rather than accumulates for floats (so 1.0.step(12.7, 1.3) ends
+  # at exactly 12.7), and because the infinity and NaN corners have answers a
+  # naive loop does not reach.
   class ArithmeticSequence < ::Enumerator
     attr_reader :begin, :end, :step
 
-    def self.__build__(from, to, by, exclude_end, source)
+    # floor that leaves NaN and Infinity alone, the way C's floor() does.
+    # Float#floor raises FloatDomainError for them.
+    def self.__safe_floor__(x)
+      return x if x.is_a?(::Float) && (x.nan? || x.infinite?)
+      x.floor
+    end
+
+    # MRI ruby_float_step_size: the number of values yielded, as a Float so
+    # that Infinity and NaN survive.
+    def self.__float_step_size__(beg, fin, unit, excl)
+      n = (fin - beg) / unit
+      err = (beg.abs + fin.abs + (fin - beg).abs) / unit.abs * ::Float::EPSILON
+      if unit.infinite?
+        return (unit > 0 ? beg <= fin : beg >= fin) ? 1.0 : 0.0
+      end
+      return ::Float::INFINITY if unit == 0
+      err = 0.5 if err > 0.5
+      if excl
+        return 0.0 if n <= 0
+        n = n < 1 ? 0.0 : __safe_floor__(n - err).to_f
+        d = (n + 1) * unit + beg
+        if beg < fin
+          n += 1 if d < fin
+        elsif beg > fin
+          n += 1 if d > fin
+        end
+      else
+        return 0.0 if n < 0
+        n = __safe_floor__(n + err).to_f
+        d = (n + 1) * unit + beg
+        if beg < fin
+          n += 1 if d <= fin
+        elsif beg > fin
+          n += 1 if d >= fin
+        end
+      end
+      n + 1
+    end
+
+    # MRI ruby_num_interval_step_size.
+    def self.__interval_step_size__(from, to, unit, excl)
+      if from.is_a?(::Integer) && to.is_a?(::Integer) && unit.is_a?(::Integer)
+        return ::Float::INFINITY if unit == 0
+        delta = to - from
+        diff = unit
+        if diff < 0
+          diff = -diff
+          delta = -delta
+        end
+        delta -= 1 if excl
+        return 0 if delta < 0
+        delta / diff + 1
+      elsif from.is_a?(::Float) || to.is_a?(::Float) || unit.is_a?(::Float)
+        n = __float_step_size__(from.to_f, to.to_f, unit.to_f, excl)
+        return n if n.infinite?
+        # MRI converts the double back to an Integer here; NaN raises
+        # FloatDomainError out of rb_dbl2big, and so does Float#floor.
+        n.floor
+      else
+        neg = unit < 0
+        return ::Float::INFINITY if !neg && !(unit > 0)
+        cmp = neg ? :< : :>
+        return 0 if from.__send__(cmp, to)
+        n = (to - from).div(unit)
+        n += 1 unless excl && from + n * unit == to
+        n < 0 ? 0 : n
+      end
+    end
+
+    # MRI ruby_float_step / num_step / range_step iteration, shared.
+    def self.__step_each__(from, to, unit, excl, &block)
+      desc = unit < 0
+      if to.nil?
+        inf = true
+      elsif to.is_a?(::Float) && to.infinite?
+        inf = (to < 0) ? desc : !desc
+      else
+        inf = false
+      end
+      inf = true if unit == 0
+
+      if from.is_a?(::Integer) && unit.is_a?(::Integer) && (inf || to.is_a?(::Integer))
+        i = from
+        if inf
+          loop { block.call(i); i += unit }
+        elsif desc
+          while i >= to
+            block.call(i)
+            i += unit
+          end
+        else
+          while i <= to
+            block.call(i)
+            i += unit
+          end
+        end
+        return
+      end
+
+      fin = to
+      fin = (desc ? -::Float::INFINITY : ::Float::INFINITY) if fin.nil?
+
+      if from.is_a?(::Float) || fin.is_a?(::Float) || unit.is_a?(::Float)
+        beg = from.to_f
+        stop = fin.to_f
+        step = unit.to_f
+        n = __float_step_size__(beg, stop, step, excl)
+        if step.infinite?
+          block.call(beg) if n > 0
+        elsif step == 0
+          loop { block.call(beg) }
+        else
+          i = 0
+          # n may be NaN (Infinity.step(Infinity, 1)); 0 < NaN is false, so
+          # nothing is yielded, which is what MRI's for(;i<n;) loop does.
+          while i < n
+            d = i * step + beg
+            d = stop if step >= 0 ? stop < d : d < stop
+            block.call(d)
+            i += 1
+          end
+        end
+        return
+      end
+
+      i = from
+      cmp = desc ? :< : :>
+      loop do
+        break if excl ? (i == fin || i.__send__(cmp, fin)) : i.__send__(cmp, fin)
+        block.call(i)
+        i += unit
+      end
+    end
+
+    def self.__build__(from, to, by, exclude_end, source, inspect_str = nil)
       seq = allocate
-      seq.__send__(:__arith_init__, from, to, by, exclude_end, source)
+      seq.__send__(:__arith_init__, from, to, by, exclude_end, source, inspect_str)
       seq
     end
 
-    def __arith_init__(from, to, by, exclude_end, source)
+    def __arith_init__(from, to, by, exclude_end, source, inspect_str = nil)
       @begin = from
       @end = to
       @step = by
       @exclude_end = exclude_end
       @source = source
+      @inspect_str = inspect_str
       initialize(nil) do |y|
         __arith_each__ { |v| y << v }
       end
@@ -4833,10 +4968,11 @@ class Enumerator
 
     def first(n = nil)
       return __arith_each__ { |v| return v } if n.nil?
+      return [] if n <= 0
       result = []
       __arith_each__ do |v|
-        break if result.size >= n
         result << v
+        break if result.size >= n
       end
       result
     end
@@ -4847,19 +4983,8 @@ class Enumerator
       self
     end
 
-    def __arith_each__
-      value = @begin
-      if @step > 0
-        while @exclude_end ? value < @end : value <= @end
-          yield value
-          value += @step
-        end
-      elsif @step < 0
-        while @exclude_end ? value > @end : value >= @end
-          yield value
-          value += @step
-        end
-      end
+    def __arith_each__(&block)
+      ArithmeticSequence.__step_each__(@begin, @end, @step, @exclude_end, &block)
       self
     end
     private :__arith_each__
@@ -4873,12 +4998,8 @@ class Enumerator
     alias_method :force, :to_a
 
     def size
-      return ::Float::INFINITY if @end.nil?
-      span = @end - @begin
-      return 0 if (@step > 0 && span < 0) || (@step < 0 && span > 0)
-      n = (span.to_f / @step).floor
-      n += 1 unless @exclude_end && span % @step == 0
-      n < 0 ? 0 : n
+      return ::Float::INFINITY if @end.nil? && @step != 0
+      ArithmeticSequence.__interval_step_size__(@begin, @end, @step, @exclude_end)
     end
 
     def last(n = nil)
@@ -4898,6 +5019,7 @@ class Enumerator
     end
 
     def inspect
+      return @inspect_str if @inspect_str
       "((#{@source.inspect}).%(#{@step.inspect}))"
     end
     alias_method :to_s, :inspect
