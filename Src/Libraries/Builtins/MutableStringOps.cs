@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -2968,9 +2968,52 @@ namespace IronRuby.Builtins {
         #region unpack
 
         [RubyMethod("unpack")]
-        public static RubyArray/*!*/ Unpack(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format) {
-            return RubyEncoder.Unpack(self, format);
+        public static RubyArray/*!*/ Unpack(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ format,
+            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            return RubyEncoder.Unpack(self, format, GetUnpackOffset(fixnumCast, context, self, options));
         }
+
+        [RubyMethod("unpack1")]
+        public static object Unpack1(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ format,
+            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            var result = RubyEncoder.Unpack(self, format, GetUnpackOffset(fixnumCast, context, self, options));
+            return result.Count > 0 ? result[0] : null;
+        }
+
+        /// <summary>
+        /// unpack(format, offset: n) - where in the receiver's *bytes* to start reading. MRI
+        /// rejects a negative offset and one past the end, but allows exactly the end, where every
+        /// directive yields nil.
+        /// </summary>
+        private static int GetUnpackOffset(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context,
+            MutableString/*!*/ self, IDictionary<object, object> options) {
+
+            if (options == null || options.Count == 0) {
+                return 0;
+            }
+
+            int offset = 0;
+            foreach (var entry in options) {
+                var key = entry.Key as RubySymbol;
+                if (key == null || key.ToString() != "offset") {
+                    throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(entry.Key));
+                }
+                offset = Protocols.CastToFixnum(fixnumCast, entry.Value);
+            }
+
+            if (offset < 0) {
+                throw RubyExceptions.CreateArgumentError("offset can't be negative");
+            }
+            if (offset > self.GetByteCount()) {
+                throw RubyExceptions.CreateArgumentError("offset outside of string");
+            }
+            return offset;
+        }
+
 
         #endregion
 

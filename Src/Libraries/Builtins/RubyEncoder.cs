@@ -1351,10 +1351,14 @@ namespace IronRuby.Builtins {
         #region Unpack
 
         public static RubyArray/*!*/ Unpack(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format) {
+            return Unpack(self, format, 0);
+        }
+
+        public static RubyArray/*!*/ Unpack(MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset) {
             RubyArray result = new RubyArray(1 + self.Length / 2);
 
             // TODO: encodings
-            int position = 0;
+            int position = offset;
             int length = self.GetByteCount();
             foreach (FormatDirective directive in FormatDirective.Enumerate(format.ToString())) {
                 int count, maxCount;

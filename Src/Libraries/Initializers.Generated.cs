@@ -7683,8 +7683,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "unpack", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.Unpack)
+                0x000c0008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.Unpack)
+            );
+            
+            DefineLibraryMethod(module, "unpack1", 0x51, 
+                0x000c0008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object>(IronRuby.Builtins.MutableStringOps.Unpack1)
             );
             
             DefineLibraryMethod(module, "upcase", 0x51, 
