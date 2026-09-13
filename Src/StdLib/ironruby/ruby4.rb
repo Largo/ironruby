@@ -6163,6 +6163,25 @@ class IO
     __ir_set_encoding__(*args)
   end
 
+  # binmode is implemented for a File and throws for everything else - a pipe,
+  # a socket, the standard streams. On this platform it has nothing to do but
+  # say "these are bytes", so record that and set the external encoding, rather
+  # than throwing a CLR exception at anything that is not a File.
+  alias_method :__ir_binmode__, :binmode
+
+  def binmode
+    @__binmode__ = true
+    begin
+      __ir_binmode__
+    rescue ::Exception
+      begin
+        set_encoding(::Encoding::BINARY)
+      rescue ::Exception
+      end
+    end
+    self
+  end
+
   # readpartial reads what is there, up to maxlen bytes, and only blocks when
   # nothing is there at all. Nothing here has a non-blocking read underneath, so
   # on a stream that is already open this is a read of at most maxlen bytes -
@@ -6325,9 +6344,18 @@ class IO
     defined?(@__close_on_exec__) && !@__close_on_exec__ ? false : true
   end unless method_defined?(:close_on_exec?)
 
+  # The built-in answers from the stream mode, which a pipe never gets set
+  # because the built-in binmode throws on one. Fall back to the flag that
+  # the binmode above records.
+  if method_defined?(:binmode?)
+    alias_method :__ir_binmode_p__, :binmode?
+    private :__ir_binmode_p__
+  end
+
   def binmode?
-    defined?(@__binmode__) ? !!@__binmode__ : false
-  end unless method_defined?(:binmode?)
+    return true if defined?(@__binmode__) && @__binmode__
+    respond_to?(:__ir_binmode_p__, true) ? __ir_binmode_p__ : false
+  end
 
   # A hint to the kernel about the access pattern; there is nothing to pass it
   # to here, but MRI still validates the arguments and answers nil.
