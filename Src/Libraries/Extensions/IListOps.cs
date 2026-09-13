@@ -1612,9 +1612,47 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("length")]
         [RubyMethod("size")]
-        [RubyMethod("count")]
         public static int Length(IList/*!*/ self) {
             return self.Count;
+        }
+
+        // #count is not a synonym for #size: it also takes a value to compare against or a
+        // block to test with. Registering Length under that name shadowed Enumerable#count
+        // altogether, so [1, 2, 2].count(2) raised "wrong number of arguments".
+        [RubyMethod("count")]
+        public static int Count(IList/*!*/ self) {
+            return self.Count;
+        }
+
+        [RubyMethod("count")]
+        public static int Count(BinaryOpStorage/*!*/ equals, BlockParam block, IList/*!*/ self, object value) {
+            if (block != null) {
+                equals.Context.ReportWarning("given block not used");
+            }
+
+            int result = 0;
+            for (int i = 0; i < self.Count; i++) {
+                if (Protocols.IsEqual(equals, self[i], value)) {
+                    result++;
+                }
+            }
+            return result;
+        }
+
+        [RubyMethod("count")]
+        public static object Count([NotNull]BlockParam/*!*/ block, IList/*!*/ self) {
+            int result = 0;
+            // The size is re-read every step, so a block that appends keeps being called.
+            for (int i = 0; i < self.Count; i++) {
+                object blockResult;
+                if (block.Yield(self[i], out blockResult)) {
+                    return blockResult;
+                }
+                if (Protocols.IsTrue(blockResult)) {
+                    result++;
+                }
+            }
+            return result;
         }
 
         // "none?" was aliased to "empty?" here, which is not what it means: [nil].none? is true

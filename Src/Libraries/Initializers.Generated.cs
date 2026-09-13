@@ -8383,8 +8383,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "count", 0x51, 
-                0x00000000U, 
-                new Func<System.Collections.IList, System.Int32>(IronRuby.Builtins.IListOps.Length)
+                0x00000000U, 0x00000000U, 0x00000001U, 
+                new Func<System.Collections.IList, System.Int32>(IronRuby.Builtins.IListOps.Count), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object, System.Int32>(IronRuby.Builtins.IListOps.Count), 
+                new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Count)
             );
             
             DefineLibraryMethod(module, "delete", 0x51, 
