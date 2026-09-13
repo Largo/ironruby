@@ -518,13 +518,29 @@ class Array
     replace(rotate(count))
   end unless method_defined?(:rotate!)
 
+  # The deletions have to be visible if the block raises part way through, so
+  # this compacts in place rather than building a new array and swapping it in.
   def select!(&block)
     return to_enum(:select!) { size } unless block
     __array_check_frozen__
-    kept = []
-    each { |element| kept << element if block.call(element) }
-    return nil if kept.size == size
-    replace(kept)
+    original = size
+    kept = 0
+    index = 0
+    begin
+      while index < size
+        element = self[index]
+        if block.call(element)
+          self[kept] = element
+          kept += 1
+        end
+        index += 1
+      end
+    ensure
+      # Only the examined-and-rejected span goes; anything the block never saw
+      # (because it raised) stays where it is.
+      slice!(kept, index - kept) if index > kept
+    end
+    original == size ? nil : self
   end unless method_defined?(:select!)
 
   def keep_if(&block)
@@ -579,6 +595,9 @@ class Array
     return to_enum(:rfind, ifnone) unless block
     index = size - 1
     while index >= 0
+      # The array may shrink under us; MRI re-reads the size every step.
+      index = size - 1 if index >= size
+      break if index < 0
       element = self[index]
       return element if block.call(element)
       index -= 1
@@ -601,19 +620,51 @@ class Array
 
   def repeated_permutation(count, &block)
     count = __array_to_int__(count)
-    return to_enum(:repeated_permutation, count) unless block
+    unless block
+      return to_enum(:repeated_permutation, count) {
+        count < 0 ? 0 : size ** count
+      }
+    end
     __array_repeat__(count, false, &block)
   end unless method_defined?(:repeated_permutation)
 
   def repeated_combination(count, &block)
     count = __array_to_int__(count)
-    return to_enum(:repeated_combination, count) unless block
+    unless block
+      return to_enum(:repeated_combination, count) {
+        if count < 0
+          0
+        elsif count == 0
+          1
+        else
+          __array_binomial__(size + count - 1, count)
+        end
+      }
+    end
     __array_repeat__(count, true, &block)
   end unless method_defined?(:repeated_combination)
 
   def fetch_values(*indexes, &block)
     indexes.map { |index| block ? fetch(index, &block) : fetch(index) }
   end unless method_defined?(:fetch_values)
+
+  # The core #shuffle takes no arguments; MRI's takes a :random generator and
+  # must hand back a plain Array.  Defined unconditionally for that reason.
+  def shuffle(random: Random)
+    result = [].concat(self)
+    index = result.size - 1
+    while index > 0
+      swap = __array_rand_index__(random, index + 1)
+      result[index], result[swap] = result[swap], result[index]
+      index -= 1
+    end
+    result
+  end
+
+  def shuffle!(random: Random)
+    __array_check_frozen__
+    replace(shuffle(random: random))
+  end
 
   def sample(count = nil, random: Random)
     if count.nil?
@@ -667,6 +718,15 @@ class Array
     value
   end
 
+  def __array_binomial__(n, k)
+    return 0 if k > n
+    result = 1
+    (1..k).each { |i| result = result * (n - k + i) / i }
+    result
+  end
+
+  # MRI iterates a snapshot, so mutating the receiver from the block does not
+  # change the elements that are yielded.
   def __array_repeat__(count, sorted, &block)
     return self if count < 0
     if count == 0
@@ -675,10 +735,11 @@ class Array
     end
     return self if empty?
 
+    snapshot = [].concat(self)
     indexes = Array.new(count, 0)
-    total = size
+    total = snapshot.size
     loop do
-      block.call(indexes.map { |i| self[i] })
+      block.call(indexes.map { |i| snapshot[i] })
 
       position = count - 1
       position -= 1 while position >= 0 && indexes[position] == total - 1
