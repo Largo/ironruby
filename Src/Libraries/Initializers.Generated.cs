@@ -6106,8 +6106,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "const_defined?", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.IsConstantDefined)
+                0x00010002U, 0x00010002U, 
+                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.IsConstantDefined), 
+                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean, System.Boolean>(IronRuby.Builtins.ModuleOps.IsConstantDefined)
             );
             
             DefineLibraryMethod(module, "const_get", 0x51, 
