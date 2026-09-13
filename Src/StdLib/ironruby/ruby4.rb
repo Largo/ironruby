@@ -3065,78 +3065,71 @@ class String
   end unless method_defined?(:=~)
 end
 
-# Numeric#step never learned the keyword form - `1.step(by: 2, to: 7)` handed
-# the options hash to the positional parameter and came back with "can't convert
-# Hash into Float", which was 70 of spec/core/numeric's 123 errors. The
-# positional form still goes to the built-in.
+# Numeric#step: MRI's num_step, which the builtin only ever implemented as the
+# two-positional-argument block form. Missing were the keyword form
+# (`1.step(by: 2, to: 7)`), the endless form (`1.step`), the
+# Enumerator::ArithmeticSequence return value, and the float/infinity corners.
 class Numeric
-  alias_method :__ir_step__, :step
-
-  def step(*args, &block)
-    kw = nil
-    if !args.empty? && args.last.is_a?(::Hash)
-      last = args.last
-      unless last.empty?
-        unknown = last.keys - [:to, :by]
-        unless unknown.empty?
-          ::Kernel.raise(::ArgumentError, "unknown keyword: #{unknown[0].inspect}")
-        end
-        kw = args.pop
+  # MRI num_step_extract_args: positional (to, step) merged with the `to:` and
+  # `by:` keywords, which collide rather than override.
+  def __step_extract_args__(args, kw)
+    if args.size > 2
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..2)")
+    end
+    to = args.size >= 1 ? args[0] : nil
+    by = args.size >= 2 ? args[1] : nil
+    unless kw.nil? || kw.empty?
+      unknown = kw.keys - [:to, :by]
+      unless unknown.empty?
+        ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+      end
+      if kw.key?(:to)
+        ::Kernel.raise(::ArgumentError, "to is given twice") if args.size > 0
+        to = kw[:to]
+      end
+      if kw.key?(:by)
+        ::Kernel.raise(::ArgumentError, "step is given twice") if args.size > 1
+        by = kw[:by]
       end
     end
-    if kw.nil?
-      # The built-in only has the block form.
-      return ::Enumerator.new { |y| __ir_step__(*args) { |v| y << v } } unless block
-      return __ir_step__(*args, &block)
-    end
-    unless args.empty?
-      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 0..2)")
-    end
+    [to, by]
+  end
+  private :__step_extract_args__
 
-    limit = kw[:to]
-    increment = kw.key?(:by) ? kw[:by] : 1
+  # MRI num_step_scan_args. The `unit < 0` is not incidental: it is what turns
+  # a String step into ArgumentError("comparison of String with 0 failed"),
+  # which is the error the specs ask for.
+  def __step_scan_args__(args, kw)
+    to, unit = __step_extract_args__(args, kw)
+    unit = 1 if unit.nil?
+    ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+    unit < 0
+    [to, unit]
+  end
+  private :__step_scan_args__
+
+  def step(*args, **kw, &block)
     unless block
-      return ::Enumerator.new { |y| step(**kw) { |v| y << v } }
+      to, unit = __step_extract_args__(args, kw)
+      unit = 1 if unit.nil?
+      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+      if (to.nil? || to.is_a?(::Numeric)) && unit.is_a?(::Numeric)
+        shown = args.empty? && (kw.nil? || kw.empty?) ? "" : "(#{(args.map(&:inspect) + (kw || {}).map { |k, v| "#{k}: #{v.inspect}" }).join(', ')})"
+        return ::Enumerator::ArithmeticSequence.__build__(
+          self, to, unit, false, self, "(#{inspect}.step#{shown})")
+      end
+      recv = self
+      e = ::Enumerator.new { |y| recv.step(*args, **kw) { |v| y << v } }
+      e.__set_size__(lambda do
+        t, u = recv.__send__(:__step_scan_args__, args, kw)
+        t = (u < 0 ? -::Float::INFINITY : ::Float::INFINITY) if t.nil?
+        ::Enumerator::ArithmeticSequence.__interval_step_size__(recv, t, u, false)
+      end)
+      return e
     end
-    ::Kernel.raise(::ArgumentError, "step can't be 0") if increment == 0
 
-    if limit.nil?
-      value = self
-      loop do
-        block.call(value)
-        value += increment
-      end
-      return self
-    end
-
-    if is_a?(::Float) || limit.is_a?(::Float) || increment.is_a?(::Float)
-      # MRI multiplies rather than accumulates so the rounding does not drift.
-      base = to_f
-      stop = limit.to_f
-      unit = increment.to_f
-      n = (stop - base) / unit
-      err = ((base.abs + stop.abs + (stop - base).abs) / unit.abs) * ::Float::EPSILON
-      err = 0.5 if err.nan? || err > 0.5
-      n = (n + err).floor
-      i = 0
-      while i <= n
-        block.call(base + i * unit)
-        i += 1
-      end
-    else
-      value = self
-      if increment > 0
-        while value <= limit
-          block.call(value)
-          value += increment
-        end
-      else
-        while value >= limit
-          block.call(value)
-          value += increment
-        end
-      end
-    end
+    to, unit = __step_scan_args__(args, kw)
+    ::Enumerator::ArithmeticSequence.__step_each__(self, to, unit, false, &block)
     self
   end
 end
@@ -3358,6 +3351,338 @@ class Complex
     [real, imag]
   end
   alias_method :rect, :rectangular
+end
+
+# The rest of Complex, on top of 1.8's complex.rb.
+#
+# complex.rb predates Ruby 1.9's Complex by a decade and differs from it
+# everywhere that matters: Kernel#Complex(a, b) built the result as
+# `Complex.new(a.real - b.imag, a.imag + b.real)`, so every argument had to
+# answer #real and #imag (which is why the specs' mock numerics all died on an
+# undefined #-); Complex.rect and Complex.rectangular did not exist; #<=>
+# compared magnitudes rather than answering nil; #to_f/#to_i/#to_r,
+# #rationalize, #fdiv, #finite? and #infinite? were missing; and Numeric's
+# comparison operators were inherited rather than undefined.
+#
+# Everything below follows MRI's complex.c.
+class Complex
+  # nucomp_real_check: Integer, Float and Rational pass; a Complex passes when
+  # its imaginary part is zero; any other Numeric passes when #real? is true.
+  def self.__real_check__(n)
+    return if n.is_a?(::Integer) || n.is_a?(::Float) || n.is_a?(::Rational)
+    if n.is_a?(::Complex)
+      return if n.imag == 0
+    elsif n.is_a?(::Numeric) && n.real?
+      return
+    end
+    ::Kernel.raise(::TypeError, "not a real")
+  end
+
+  # nucomp_s_new_internal: no canonicalisation, no checks.
+  def self.__raw__(real, imag)
+    c = allocate
+    c.__send__(:__set_parts__, real, imag)
+    c
+  end
+
+  def __set_parts__(real, imag)
+    @real = real
+    @image = imag
+  end
+  private :__set_parts__
+
+  # nucomp_s_canonicalize_internal: a Complex in either position folds in.
+  def self.__canon__(real, imag)
+    cr = real.is_a?(::Complex)
+    ci = imag.is_a?(::Complex)
+    if !cr && !ci
+      __raw__(real, imag)
+    elsif !cr
+      __raw__(real - imag.imag, 0 + imag.real)
+    elsif !ci
+      __raw__(real.real, real.imag + imag)
+    else
+      __raw__(real.real - imag.imag, real.imag + imag.real)
+    end
+  end
+
+  def self.rectangular(real, imag = 0)
+    __real_check__(real)
+    __real_check__(imag)
+    __canon__(real, imag)
+  end
+  class << self
+    alias_method :rect, :rectangular
+  end
+
+  def self.polar(abs, arg = 0)
+    __real_check__(abs)
+    __real_check__(arg)
+    return __raw__(abs, 0.0) if abs == 0 || arg == 0
+    __canon__(abs * ::Math.cos(arg), abs * ::Math.sin(arg))
+  end
+
+  I = __raw__(0, 1) unless const_defined?(:I, false) && I == __raw__(0, 1)
+
+  # k_exact_zero_p: an exact zero, so 0.0 does not count.
+  def __exact_zero_imag__
+    i = imag
+    !i.is_a?(::Float) && i == 0
+  end
+  private :__exact_zero_imag__
+
+  # rb_num_coerce_bin, with Complex's wording.
+  def __coerce_bin__(other, op)
+    unless other.respond_to?(:coerce)
+      ::Kernel.raise(::TypeError,
+        "#{other.nil? ? 'nil' : other.class} can't be coerced into #{self.class}")
+    end
+    a, b = other.coerce(self)
+    a.__send__(op, b)
+  end
+  private :__coerce_bin__
+
+  def __real_operand__(other)
+    other.is_a?(::Numeric) && other.real?
+  end
+  private :__real_operand__
+
+  def +(other)
+    if other.is_a?(::Complex)
+      ::Complex.__raw__(real + other.real, imag + other.imag)
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real + other, imag)
+    else
+      __coerce_bin__(other, :+)
+    end
+  end
+
+  def -(other)
+    if other.is_a?(::Complex)
+      ::Complex.__raw__(real - other.real, imag - other.imag)
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real - other, imag)
+    else
+      __coerce_bin__(other, :-)
+    end
+  end
+
+  def *(other)
+    if other.is_a?(::Complex)
+      ::Complex.__raw__(real * other.real - imag * other.imag,
+                        real * other.imag + imag * other.real)
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real * other, imag * other)
+    else
+      __coerce_bin__(other, :*)
+    end
+  end
+
+  def /(other)
+    if other.is_a?(::Complex)
+      d = other.abs2
+      ::Complex.__raw__((real * other.real + imag * other.imag).quo(d),
+                        (imag * other.real - real * other.imag).quo(d))
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real.quo(other), imag.quo(other))
+    else
+      __coerce_bin__(other, :/)
+    end
+  end
+  alias_method :quo, :/
+
+  def fdiv(other)
+    if other.is_a?(::Complex)
+      d = other.abs2.to_f
+      ::Complex.__raw__((real * other.real + imag * other.imag).fdiv(d),
+                        (imag * other.real - real * other.imag).fdiv(d))
+    elsif __real_operand__(other)
+      ::Complex.__raw__(real.fdiv(other), imag.fdiv(other))
+    else
+      __coerce_bin__(other, :fdiv)
+    end
+  end
+
+  def **(other)
+    return ::Complex.__raw__(1, 0) if other.is_a?(::Numeric) && !other.is_a?(::Float) && other == 0
+    other = other.numerator if other.is_a?(::Rational) && other.denominator == 1
+    if other.is_a?(::Complex)
+      if other.imag == 0 && !other.imag.is_a?(::Float)
+        other = other.real
+      else
+        r, theta = polar
+        return ::Complex.polar(r ** other, theta * other) rescue nil
+      end
+    end
+    if other.is_a?(::Integer)
+      if other > 0
+        # Repeated squaring, so that an exact Complex stays exact.
+        x = self
+        z = x
+        n = other - 1
+        while n != 0
+          while true
+            q, rem = n.divmod(2)
+            break if rem != 0
+            x = ::Complex.__raw__(x.real * x.real - x.imag * x.imag,
+                                  2 * x.real * x.imag)
+            n = q
+          end
+          z = z * x
+          n -= 1
+        end
+        return z
+      end
+      return (::Complex.__raw__(1, 0) / self) ** (-other)
+    end
+    if __real_operand__(other)
+      r, theta = polar
+      return ::Complex.polar(r ** other, theta * other)
+    end
+    __coerce_bin__(other, :**)
+  end
+
+  def -@
+    ::Complex.__raw__(-real, -imag)
+  end
+
+  def +@
+    self
+  end
+
+  def abs
+    r = real
+    i = imag
+    if r.is_a?(::Float) || i.is_a?(::Float)
+      ::Math.hypot(r, i)
+    elsif r == 0
+      i.abs
+    elsif i == 0
+      r.abs
+    else
+      ::Math.hypot(r, i)
+    end
+  end
+  alias_method :magnitude, :abs
+
+  def abs2
+    real * real + imag * imag
+  end
+
+  def arg
+    ::Math.atan2(imag, real)
+  end
+  alias_method :angle, :arg
+  alias_method :phase, :arg
+
+  def polar
+    [abs, arg]
+  end
+
+  def conjugate
+    ::Complex.__raw__(real, -imag)
+  end
+  alias_method :conj, :conjugate
+
+  def ==(other)
+    if other.is_a?(::Complex)
+      real == other.real && imag == other.imag
+    elsif __real_operand__(other)
+      real == other && imag == 0
+    else
+      other == self
+    end
+  end
+
+  def eql?(other)
+    return false unless other.is_a?(::Complex)
+    real.class == other.real.class && imag.class == other.imag.class && self == other
+  end
+
+  def <=>(other)
+    return nil unless imag == 0
+    if other.is_a?(::Complex)
+      return other.imag == 0 ? (real <=> other.real) : nil
+    end
+    return real <=> other if __real_operand__(other)
+    return nil unless other.is_a?(::Numeric)
+    nil
+  end
+
+  def coerce(other)
+    return [::Complex.__raw__(other, 0), self] if __real_operand__(other)
+    return [other, self] if other.is_a?(::Complex)
+    ::Kernel.raise(::TypeError, "#{other.class} can't be coerced into #{self.class}")
+  end
+
+  def denominator
+    real.denominator.lcm(imag.denominator)
+  end
+
+  def numerator
+    cd = denominator
+    ::Complex.__raw__(real.numerator * (cd / real.denominator),
+                      imag.numerator * (cd / imag.denominator))
+  end
+
+  def to_c
+    self
+  end
+
+  def to_f
+    unless __exact_zero_imag__
+      ::Kernel.raise(::RangeError, "can't convert #{self} into Float")
+    end
+    real.to_f
+  end
+
+  def to_i
+    unless __exact_zero_imag__
+      ::Kernel.raise(::RangeError, "can't convert #{self} into Integer")
+    end
+    real.to_i
+  end
+
+  def to_r
+    unless __exact_zero_imag__ || imag == 0
+      ::Kernel.raise(::RangeError, "can't convert #{self} into Rational")
+    end
+    real.to_r
+  end
+
+  def rationalize(*args)
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    unless __exact_zero_imag__
+      ::Kernel.raise(::RangeError, "can't convert #{self} into Rational")
+    end
+    real.rationalize(*args)
+  end
+
+  def hash
+    [real, imag].hash
+  end
+
+  def zero?
+    real == 0 && imag == 0
+  end
+
+  def nonzero?
+    zero? ? nil : self
+  end
+
+  # MRI removes the real-number protocol from Complex rather than inheriting
+  # Numeric's, so that `Complex(1) < 2` is a NoMethodError and not an attempt
+  # to compare magnitudes.
+  %i[< <= > >= between? clamp positive? negative? % modulo div divmod
+     remainder floor ceil round truncate step i integer? divmod].each do |m|
+    undef_method(m) if method_defined?(m) || private_method_defined?(m)
+  end
+
+  def integer?
+    false
+  end
 end
 
 # CRuby has KeyError < IndexError and StopIteration < IndexError, but IndexError
@@ -4936,21 +5261,163 @@ class Enumerator
   # 2.6's arithmetic sequence: what Range#step and Range#% answer, and what
   # Numeric#step answers. It is an Enumerator that also remembers the three
   # numbers it was built from.
+  #
+  # Iteration and #size follow MRI's numeric.c: ruby_float_step,
+  # ruby_float_step_size and ruby_num_interval_step_size. Reimplementing them
+  # rather than "value += step until past the end" matters because MRI
+  # multiplies rather than accumulates for floats (so 1.0.step(12.7, 1.3) ends
+  # at exactly 12.7), and because the infinity and NaN corners have answers a
+  # naive loop does not reach.
   class ArithmeticSequence < ::Enumerator
     attr_reader :begin, :end, :step
 
-    def self.__build__(from, to, by, exclude_end, source)
+    # floor that leaves NaN and Infinity alone, the way C's floor() does.
+    # Float#floor raises FloatDomainError for them.
+    def self.__safe_floor__(x)
+      return x if x.is_a?(::Float) && (x.nan? || x.infinite?)
+      x.floor
+    end
+
+    # MRI ruby_float_step_size: the number of values yielded, as a Float so
+    # that Infinity and NaN survive.
+    def self.__float_step_size__(beg, fin, unit, excl)
+      n = (fin - beg) / unit
+      err = (beg.abs + fin.abs + (fin - beg).abs) / unit.abs * ::Float::EPSILON
+      if unit.infinite?
+        return (unit > 0 ? beg <= fin : beg >= fin) ? 1.0 : 0.0
+      end
+      return ::Float::INFINITY if unit == 0
+      err = 0.5 if err > 0.5
+      if excl
+        return 0.0 if n <= 0
+        n = n < 1 ? 0.0 : __safe_floor__(n - err).to_f
+        d = (n + 1) * unit + beg
+        if beg < fin
+          n += 1 if d < fin
+        elsif beg > fin
+          n += 1 if d > fin
+        end
+      else
+        return 0.0 if n < 0
+        n = __safe_floor__(n + err).to_f
+        d = (n + 1) * unit + beg
+        if beg < fin
+          n += 1 if d <= fin
+        elsif beg > fin
+          n += 1 if d >= fin
+        end
+      end
+      n + 1
+    end
+
+    # MRI ruby_num_interval_step_size.
+    def self.__interval_step_size__(from, to, unit, excl)
+      if from.is_a?(::Integer) && to.is_a?(::Integer) && unit.is_a?(::Integer)
+        return ::Float::INFINITY if unit == 0
+        delta = to - from
+        diff = unit
+        if diff < 0
+          diff = -diff
+          delta = -delta
+        end
+        delta -= 1 if excl
+        return 0 if delta < 0
+        delta / diff + 1
+      elsif from.is_a?(::Float) || to.is_a?(::Float) || unit.is_a?(::Float)
+        n = __float_step_size__(from.to_f, to.to_f, unit.to_f, excl)
+        return n if n.infinite?
+        # MRI converts the double back to an Integer here; NaN raises
+        # FloatDomainError out of rb_dbl2big, and so does Float#floor.
+        n.floor
+      else
+        neg = unit < 0
+        return ::Float::INFINITY if !neg && !(unit > 0)
+        cmp = neg ? :< : :>
+        return 0 if from.__send__(cmp, to)
+        n = (to - from).div(unit)
+        n += 1 unless excl && from + n * unit == to
+        n < 0 ? 0 : n
+      end
+    end
+
+    # MRI ruby_float_step / num_step / range_step iteration, shared.
+    def self.__step_each__(from, to, unit, excl, &block)
+      desc = unit < 0
+      if to.nil?
+        inf = true
+      elsif to.is_a?(::Float) && to.infinite?
+        inf = (to < 0) ? desc : !desc
+      else
+        inf = false
+      end
+      inf = true if unit == 0
+
+      if from.is_a?(::Integer) && unit.is_a?(::Integer) && (inf || to.is_a?(::Integer))
+        i = from
+        if inf
+          loop { block.call(i); i += unit }
+        elsif desc
+          while i >= to
+            block.call(i)
+            i += unit
+          end
+        else
+          while i <= to
+            block.call(i)
+            i += unit
+          end
+        end
+        return
+      end
+
+      fin = to
+      fin = (desc ? -::Float::INFINITY : ::Float::INFINITY) if fin.nil?
+
+      if from.is_a?(::Float) || fin.is_a?(::Float) || unit.is_a?(::Float)
+        beg = from.to_f
+        stop = fin.to_f
+        step = unit.to_f
+        n = __float_step_size__(beg, stop, step, excl)
+        if step.infinite?
+          block.call(beg) if n > 0
+        elsif step == 0
+          loop { block.call(beg) }
+        else
+          i = 0
+          # n may be NaN (Infinity.step(Infinity, 1)); 0 < NaN is false, so
+          # nothing is yielded, which is what MRI's for(;i<n;) loop does.
+          while i < n
+            d = i * step + beg
+            d = stop if step >= 0 ? stop < d : d < stop
+            block.call(d)
+            i += 1
+          end
+        end
+        return
+      end
+
+      i = from
+      cmp = desc ? :< : :>
+      loop do
+        break if excl ? (i == fin || i.__send__(cmp, fin)) : i.__send__(cmp, fin)
+        block.call(i)
+        i += unit
+      end
+    end
+
+    def self.__build__(from, to, by, exclude_end, source, inspect_str = nil)
       seq = allocate
-      seq.__send__(:__arith_init__, from, to, by, exclude_end, source)
+      seq.__send__(:__arith_init__, from, to, by, exclude_end, source, inspect_str)
       seq
     end
 
-    def __arith_init__(from, to, by, exclude_end, source)
+    def __arith_init__(from, to, by, exclude_end, source, inspect_str = nil)
       @begin = from
       @end = to
       @step = by
       @exclude_end = exclude_end
       @source = source
+      @inspect_str = inspect_str
       initialize(nil) do |y|
         __arith_each__ { |v| y << v }
       end
@@ -4963,10 +5430,11 @@ class Enumerator
 
     def first(n = nil)
       return __arith_each__ { |v| return v } if n.nil?
+      return [] if n <= 0
       result = []
       __arith_each__ do |v|
-        break if result.size >= n
         result << v
+        break if result.size >= n
       end
       result
     end
@@ -4977,19 +5445,8 @@ class Enumerator
       self
     end
 
-    def __arith_each__
-      value = @begin
-      if @step > 0
-        while @exclude_end ? value < @end : value <= @end
-          yield value
-          value += @step
-        end
-      elsif @step < 0
-        while @exclude_end ? value > @end : value >= @end
-          yield value
-          value += @step
-        end
-      end
+    def __arith_each__(&block)
+      ArithmeticSequence.__step_each__(@begin, @end, @step, @exclude_end, &block)
       self
     end
     private :__arith_each__
@@ -5003,12 +5460,8 @@ class Enumerator
     alias_method :force, :to_a
 
     def size
-      return ::Float::INFINITY if @end.nil?
-      span = @end - @begin
-      return 0 if (@step > 0 && span < 0) || (@step < 0 && span > 0)
-      n = (span.to_f / @step).floor
-      n += 1 unless @exclude_end && span % @step == 0
-      n < 0 ? 0 : n
+      return ::Float::INFINITY if @end.nil? && @step != 0
+      ArithmeticSequence.__interval_step_size__(@begin, @end, @step, @exclude_end)
     end
 
     def last(n = nil)
@@ -5028,6 +5481,7 @@ class Enumerator
     end
 
     def inspect
+      return @inspect_str if @inspect_str
       "((#{@source.inspect}).%(#{@step.inspect}))"
     end
     alias_method :to_s, :inspect
@@ -5590,20 +6044,318 @@ class UnboundMethod
   end unless method_defined?(:bind_call)
 end
 
+# --- Math ------------------------------------------------------------------
+# Math had two independent problems in the same place.
+#
+# The C# builtins signalled every out-of-domain result as Errno::EDOM (MRI
+# raises Math::DomainError), did so for NaN input as well (MRI answers NaN),
+# converted arguments with the DefaultProtocol instead of Float()'s rules (MRI
+# raises TypeError for anything that is not a Numeric, including a String that
+# looks like a number), had no second argument to #log, no pair from #lgamma
+# and a #cbrt that was pow(x, 1/3.0) and so NaN for every negative argument.
+#
+# On top of that, the Complex implementation IronRuby loads is Ruby 1.8's
+# complex.rb, which replaces sqrt/exp/log/cos/sin/tan/... with CMath versions
+# that answer a Complex. This block runs after complex.rb and takes the module
+# back; Complex arithmetic keeps working because complex.rb calls the `!`
+# aliases it took before redefining.
+#
+# Everything is module_function, as in MRI: `include Math; atanh(2)` has to
+# raise the same Math::DomainError as `Math.atanh(2)`.
 module Math
-  class << self
-    # exp(x)-1 and log(1+x), accurate near zero, which is the whole point of
-    # having them separately from exp and log.
-    def expm1(x)
-      ::System::Math.Exp(::Kernel.Float(x)) - 1.0
-    end unless respond_to?(:expm1)
+  class DomainError < StandardError; end unless const_defined?(:DomainError, false)
 
-    def log1p(x)
-      x = ::Kernel.Float(x)
-      ::Kernel.raise(::Math::DomainError, 'Numerical argument is out of domain - log1p') if x < -1.0
-      ::System::Math.Log(1.0 + x)
-    end unless respond_to?(:log1p)
+  alias_method :__ir_gamma__, :gamma
+  alias_method :__ir_lgamma__, :lgamma
+  alias_method :__ir_erf__, :erf
+  alias_method :__ir_erfc__, :erfc
+  module_function :__ir_gamma__, :__ir_lgamma__, :__ir_erf__, :__ir_erfc__
+
+  # MRI's rb_to_float: Numeric only. An object that merely answers #to_f is a
+  # TypeError, and so is a String - Float("1") would work but Math.sqrt("1")
+  # does not.
+  def __flt__(x)
+    return x if x.is_a?(::Float)
+    if x.is_a?(::Numeric)
+      v = x.to_f
+      return v if v.is_a?(::Float)
+    end
+    ::Kernel.raise(::TypeError, "can't convert #{x.nil? ? 'nil' : x.class} into Float")
   end
+
+  def __dom__(name)
+    ::Kernel.raise(::Math::DomainError, "Numerical argument is out of domain - #{name}")
+  end
+
+  module_function :__flt__, :__dom__
+  private_class_method :__flt__, :__dom__
+
+  def acos(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("acos") if x < -1.0 || x > 1.0
+    ::System::Math.Acos(x)
+  end
+
+  def asin(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("asin") if x < -1.0 || x > 1.0
+    ::System::Math.Asin(x)
+  end
+
+  def atan(x)
+    ::System::Math.Atan(__flt__(x))
+  end
+
+  def atan2(y, x)
+    y = __flt__(y)
+    x = __flt__(x)
+    return y if y.nan?
+    return x if x.nan?
+    ::System::Math.Atan2(y, x)
+  end
+
+  def acosh(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("acosh") if x < 1.0
+    ::System::Math.Acosh(x)
+  end
+
+  def asinh(x)
+    ::System::Math.Asinh(__flt__(x))
+  end
+
+  def atanh(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("atanh") if x < -1.0 || x > 1.0
+    return ::Float::INFINITY if x == 1.0
+    return -::Float::INFINITY if x == -1.0
+    ::System::Math.Atanh(x)
+  end
+
+  def cos(x)
+    ::System::Math.Cos(__flt__(x))
+  end
+
+  def sin(x)
+    ::System::Math.Sin(__flt__(x))
+  end
+
+  def tan(x)
+    ::System::Math.Tan(__flt__(x))
+  end
+
+  def cosh(x)
+    ::System::Math.Cosh(__flt__(x))
+  end
+
+  def sinh(x)
+    ::System::Math.Sinh(__flt__(x))
+  end
+
+  def tanh(x)
+    ::System::Math.Tanh(__flt__(x))
+  end
+
+  def exp(x)
+    ::System::Math.Exp(__flt__(x))
+  end
+
+  # pow(x, 1/3.0) is NaN for every negative x; cbrt is defined there.
+  def cbrt(x)
+    ::System::Math.Cbrt(__flt__(x))
+  end
+
+  def sqrt(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("sqrt") if x < 0.0
+    # sqrt(-0.0) is -0.0 in IEEE but 0.0 in MRI.
+    return 0.0 if x == 0.0
+    ::System::Math.Sqrt(x)
+  end
+
+  def __log__(x, name)
+    return x if x.nan?
+    __dom__(name) if x < 0.0
+    nil
+  end
+  module_function :__log__
+  private_class_method :__log__
+
+  # MRI's math_log_split. Math.log2(2**10001) has to be 10001.0, but the
+  # argument does not survive the trip through a double: shift the exponent
+  # out first and add it back afterwards.
+  def __log_split__(x)
+    if x.is_a?(::Integer) && x > 0
+      bits = x.bit_length
+      if bits > 1024
+        n = bits - 53
+        return [(x >> n).to_f, n]
+      end
+    end
+    [__flt__(x), 0]
+  end
+  module_function :__log_split__
+  private_class_method :__log_split__
+
+  # Math.log(x) and Math.log(x, nil) are different calls - the second is a
+  # TypeError - so the base cannot be an optional parameter defaulting to nil.
+  def log(x, *rest)
+    if rest.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{rest.size + 1}, expected 1..2)")
+    end
+    x, bits = __log_split__(x)
+    r = __log__(x, "log")
+    return r if r
+    v = ::System::Math.Log(x) + bits * ::System::Math.Log(2.0)
+    return v if rest.empty?
+    b, bbits = __log_split__(rest[0])
+    r = __log__(b, "log")
+    return r if r
+    v / (::System::Math.Log(b) + bbits * ::System::Math.Log(2.0))
+  end
+
+  def log2(x)
+    x, bits = __log_split__(x)
+    r = __log__(x, "log2")
+    return r if r
+    ::System::Math.Log2(x) + bits
+  end
+
+  def log10(x)
+    x, bits = __log_split__(x)
+    r = __log__(x, "log10")
+    return r if r
+    ::System::Math.Log10(x) + bits * ::System::Math.Log10(2.0)
+  end
+
+  # exp(x)-1 and log(1+x), accurate near zero, which is the whole point of
+  # having them separately from exp and log.
+  def expm1(x)
+    x = __flt__(x)
+    # exp(1e-16) - 1.0 is exactly 0; the identity (u-1)*x/log(u) keeps the
+    # significant digits that the subtraction cancels away.
+    u = ::System::Math.Exp(x)
+    return x if u == 1.0
+    return u - 1.0 if u - 1.0 == -1.0 || u.infinite? || u.nan?
+    (u - 1.0) * x / ::System::Math.Log(u)
+  end
+
+  def log1p(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("log1p") if x < -1.0
+    return -::Float::INFINITY if x == -1.0
+    # log(1+x) loses every significant digit for tiny x; the identity
+    # x*log1p(u)/u with u = (1+x)-1 keeps them.
+    u = 1.0 + x
+    return x if u == 1.0
+    ::System::Math.Log(u) * x / (u - 1.0)
+  end
+
+  def erf(x)
+    __ir_erf__(__flt__(x))
+  end
+
+  def erfc(x)
+    __ir_erfc__(__flt__(x))
+  end
+
+  def hypot(x, y)
+    x = __flt__(x).abs
+    y = __flt__(y).abs
+    # An infinity wins over a NaN, which is what C's hypot() promises.
+    return ::Float::INFINITY if x.infinite? || y.infinite?
+    return ::Float::NAN if x.nan? || y.nan?
+    x, y = y, x if x < y
+    return x if y == 0.0
+    # Scaling by the larger operand keeps x*x from overflowing for x ~ 1e300.
+    r = y / x
+    x * ::System::Math.Sqrt(1.0 + r * r)
+  end
+
+  # MRI's NUM2INT: #to_int, never String parsing, and a Float that is not
+  # finite is a RangeError rather than a FloatDomainError.
+  def __int__(n)
+    return n if n.is_a?(::Integer)
+    if n.is_a?(::Float)
+      if n.nan?
+        ::Kernel.raise(::RangeError, "float NaN out of range of integer")
+      elsif n.infinite?
+        ::Kernel.raise(::RangeError, "float #{n > 0 ? 'Inf' : '-Inf'} out of range of integer")
+      end
+      return n.to_i
+    end
+    ::Kernel.raise(::TypeError, "no implicit conversion from nil to integer") if n.nil?
+    unless n.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{n.class} into Integer")
+    end
+    n.to_int
+  end
+  module_function :__int__
+  private_class_method :__int__
+
+  def ldexp(x, n)
+    n = __int__(n)
+    x = __flt__(x)
+    return x if x == 0.0 || x.nan? || x.infinite?
+    return 0.0 * x if n < -2098
+    return (x < 0 ? -::Float::INFINITY : ::Float::INFINITY) if n > 2098
+    ::System::Math.ScaleB(x, n)
+  end
+
+  # MRI answers +infinity at the poles rather than raising, and raises only for
+  # -infinity. MathUtils.Gamma already handles the negative non-integers.
+  def gamma(x)
+    x = __flt__(x)
+    return x if x.nan?
+    if x == 0.0
+      return (1.0 / x) < 0 ? -::Float::INFINITY : ::Float::INFINITY
+    end
+    if x < 0.0
+      __dom__("gamma") if x.infinite? || x == x.floor
+    end
+    __ir_gamma__(x)
+  end
+
+  # lgamma answers the pair [log(|gamma(x)|), sign of gamma(x)].
+  def lgamma(x)
+    x = __flt__(x)
+    return [x, 1] if x.nan?
+    __dom__("lgamma") if x.infinite? && x < 0
+    return [::Float::INFINITY, 1] if x.infinite?
+    if x == 0.0
+      return [::Float::INFINITY, (1.0 / x) < 0 ? -1 : 1]
+    end
+    if x < 0.0
+      return [::Float::INFINITY, 1] if x == x.floor
+      # Reflection: |gamma(x)| = pi / (|sin(pi*x)| * gamma(1-x)), and the sign
+      # of gamma(x) is the sign of sin(pi*x) because gamma(1-x) > 0 there.
+      s = ::System::Math.Sin(::Math::PI * x)
+      v = ::System::Math.Log(::Math::PI) - ::System::Math.Log(s.abs) - __ir_lgamma__(1.0 - x)
+      return [v, s < 0 ? -1 : 1]
+    end
+    # MathUtils.LogGamma(1.0) is 4.4e-16 rather than 0.
+    return [0.0, 1] if x == 1.0 || x == 2.0
+    [__ir_lgamma__(x), 1]
+  end
+
+  def frexp(x)
+    x = __flt__(x)
+    return [x, 0] if x == 0.0 || x.nan? || x.infinite?
+    e = ::System::Math.ILogB(x) + 1
+    [::System::Math.ScaleB(x, -e), e]
+  end
+
+  module_function :frexp
+  module_function :acos, :acosh, :asin, :asinh, :atan, :atan2, :atanh, :cbrt,
+                  :cos, :cosh, :erf, :erfc, :exp, :expm1, :gamma, :hypot,
+                  :ldexp, :lgamma, :log, :log10, :log1p, :log2, :sin, :sinh,
+                  :sqrt, :tan, :tanh
 end
 
 module Kernel
