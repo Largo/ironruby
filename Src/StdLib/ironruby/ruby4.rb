@@ -3302,6 +3302,8 @@ module Process
     end
   end
 
+  # NB SignalException#signo / #signm are defined just below this module.
+  #
   # Process.exit / .exit! / .abort are module functions in MRI and behave exactly
   # like their Kernel namesakes.  Without them Process.exit raised NoMethodError,
   # and in spec/core/process/exit_spec.rb that NoMethodError escaped a thread whose
@@ -3322,6 +3324,18 @@ module Process
     end
     module_function :abort
   end
+end
+
+class SignalException
+  # The CLR-backed class carries only the message, but MRI names the signal both
+  # ways round: #signm is "SIGTERM" and #signo is 15.
+  def signm
+    message
+  end unless method_defined?(:signm)
+
+  def signo
+    ::Signal.list[message.to_s.sub(/\ASIG/, "")]
+  end unless method_defined?(:signo)
 end
 
 # Random (1.9.2) — the runtime only exposes Kernel#rand/srand.

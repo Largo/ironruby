@@ -93,6 +93,35 @@ namespace IronRuby.Builtins {
         private const int EPERM = 1;
         private const int EINVAL = 22;
 
+        /// <summary>
+        /// Signals whose default disposition is to end the process. MRI installs a handler for each of
+        /// these and turns them into a SignalException instead of letting the process die, so sending
+        /// one to yourself is something a Ruby program can rescue. CHLD, CONT, URG and WINCH are
+        /// ignored by default, and KILL and STOP cannot be caught at all.
+        /// </summary>
+        internal static bool TerminatesByDefault(int signal) {
+            switch (signal) {
+                case 9:   // KILL
+                case 17:  // CHLD
+                case 18:  // CONT
+                case 19:  // STOP
+                case 20:  // TSTP
+                case 21:  // TTIN
+                case 22:  // TTOU
+                case 23:  // URG
+                case 28:  // WINCH
+                    return false;
+                default:
+                    return signal > 0;
+            }
+        }
+
+        internal static bool HasHandler(int signal) {
+            lock (_handlers) {
+                return _handlers.ContainsKey(signal);
+            }
+        }
+
         internal static void Kill(int pid, int signal) {
             if (SysKill(pid, signal) == 0) {
                 return;
