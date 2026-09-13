@@ -35,7 +35,7 @@ namespace IronRuby.Runtime.Calls {
         // R(0, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg) {
             // TODO: warning except for L == 1 nested l-value
-            return _block(param, self, new object[_parameterCount]);
+            return _block(param, self, NewArgs());
         }
 
         // R(1, -)
@@ -46,7 +46,7 @@ namespace IronRuby.Runtime.Calls {
         // R(1, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg, object arg1) {
             IList list = arg1 as IList ?? Protocols.ImplicitTrySplat(param.RubyContext, arg1) ?? new object[] { arg1 };                
-            return _block(param, self, CopyArgumentsFromSplattee(new object[_parameterCount], 0, list));
+            return _block(param, self, CopyArgumentsFromSplattee(NewArgs(), 0, list));
         }
 
         // R(2, -)
@@ -81,7 +81,7 @@ namespace IronRuby.Runtime.Calls {
             if (splattee.Count == 1) {
                 return Invoke(param, self, procArg, splattee[0]);
             } else {
-                return _block(param, self, CopyArgumentsFromSplattee(new object[_parameterCount], 0, splattee));
+                return _block(param, self, CopyArgumentsFromSplattee(NewArgs(), 0, splattee));
             }
         }
 

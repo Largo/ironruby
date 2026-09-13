@@ -81,7 +81,7 @@ namespace IronRuby.Runtime.Calls {
             } else if (_parameterCount == 0) {
                 return _block(param, self, ArrayUtils.EmptyObjects, RubyOps.MakeArrayN(args));
             } else {
-                var actualArgs = new object[_parameterCount];
+                var actualArgs = NewArgs();
 
                 for (int i = 0; i < actualArgs.Length; i++) {
                     actualArgs[i] = args[i];

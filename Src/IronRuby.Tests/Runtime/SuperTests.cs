@@ -407,7 +407,7 @@ class C < B
   puts mq.object_id == q.object_id  
   
   q.call rescue p $!
-  mq.call
+  C.new.m
 end
 ", @"
 false

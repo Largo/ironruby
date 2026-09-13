@@ -87,21 +87,37 @@ namespace IronRuby.Runtime.Calls {
             _parameterCount = parameterCount;
         }
 
-        protected object[]/*!*/ MakeArray(object arg1) {
+        /// <summary>
+        /// A block's argument array, with every optional parameter's slot pre-set to the
+        /// sentinel the block body compares against (see
+        /// Parameters.TransformOptionalsInitialization).  Leaving those slots null - which
+        /// is what a missing *mandatory* parameter gets - made the default expression of
+        /// {|a, b = 1|} never run, so b came out nil.
+        /// </summary>
+        protected object[]/*!*/ NewArgs() {
             var array = new object[_parameterCount];
+            int mandatory = Arity >= 0 ? Arity : -Arity - 1;
+            for (int i = mandatory; i < array.Length; i++) {
+                array[i] = RubyOps.DefaultArgument;
+            }
+            return array;
+        }
+
+        protected object[]/*!*/ MakeArray(object arg1) {
+            var array = NewArgs();
             array[0] = arg1;
             return array;
         }
 
         protected object[]/*!*/ MakeArray(object arg1, object arg2) {
-            var array = new object[_parameterCount];
+            var array = NewArgs();
             array[0] = arg1;
             array[1] = arg2;
             return array;
         }
 
         protected object[]/*!*/ MakeArray(object arg1, object arg2, object arg3) {
-            var array = new object[_parameterCount];
+            var array = NewArgs();
             array[0] = arg1;
             array[1] = arg2;
             array[2] = arg3;
@@ -109,7 +125,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected object[]/*!*/ MakeArray(object arg1, object arg2, object arg3, object arg4) {
-            var array = new object[_parameterCount];
+            var array = NewArgs();
             array[0] = arg1;
             array[1] = arg2;
             array[2] = arg3;
@@ -135,6 +151,16 @@ namespace IronRuby.Runtime.Calls {
 
         public int Arity {
             get { return ((int)_attributesAndArity >> 2); }
+        }
+
+        /// <summary>
+        /// What a parameter that the caller did not supply should receive: nil for a
+        /// mandatory one, and the sentinel the block body tests against for an optional
+        /// one, so that {|a, b = 1|} actually evaluates the default.
+        /// </summary>
+        protected object MissingArg(int index) {
+            int mandatory = Arity >= 0 ? Arity : -Arity - 1;
+            return index >= mandatory ? RubyOps.DefaultArgument : null;
         }
 
         public static BlockSignatureAttributes MakeAttributes(BlockSignatureAttributes attributes, int arity) {

@@ -34,7 +34,7 @@ namespace IronRuby.Runtime.Calls {
 
         // R(0, -)
         public override object Invoke(BlockParam/*!*/ param, object self, Proc procArg) {
-            return _block(param, self, new object[_parameterCount], procArg);
+            return _block(param, self, NewArgs(), procArg);
         }
 
         // R(1, -)
@@ -48,7 +48,7 @@ namespace IronRuby.Runtime.Calls {
                 return _block(param, self, MakeArray(arg1), procArg);
             } else {
                 IList list = arg1 as IList ?? Protocols.ImplicitTrySplat(param.RubyContext, arg1) ?? new object[] { arg1 };
-                return _block(param, self, CopyArgumentsFromSplattee(new object[_parameterCount], 0, list), procArg);
+                return _block(param, self, CopyArgumentsFromSplattee(NewArgs(), 0, list), procArg);
             }
         }
 
@@ -84,7 +84,7 @@ namespace IronRuby.Runtime.Calls {
             if (splattee.Count == 1) {
                 return Invoke(param, self, procArg, splattee[0]);
             } else {
-                return _block(param, self, CopyArgumentsFromSplattee(new object[_parameterCount], 0, splattee), procArg);
+                return _block(param, self, CopyArgumentsFromSplattee(NewArgs(), 0, splattee), procArg);
             }
         }
 
