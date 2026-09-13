@@ -237,6 +237,16 @@ namespace IronRuby.Runtime {
             return length;
         }
 
+        /// <summary>
+        /// DecoderFallbackException has to be built with the bytes it rejected: the parameterless
+        /// constructor leaves BytesUnknown null, and RubyExceptions.CreateInvalidByteSequenceError
+        /// formats that property, so a null there surfaces as a CLR ArgumentNullException instead
+        /// of Ruby's Encoding::InvalidByteSequenceError.
+        /// </summary>
+        private static DecoderFallbackException/*!*/ Undecodable(byte[]/*!*/ bytes, int index) {
+            return new DecoderFallbackException(null, new[] { bytes[index] }, index);
+        }
+
         private char Decode(byte[]/*!*/ bytes, int index, int length) {
             switch (length) {
                 case 1: return (char)bytes[index];
@@ -253,7 +263,7 @@ namespace IronRuby.Runtime {
                 int length = SequenceLength(bytes, i, limit);
                 if (length == 0) {
                     if (_throwOnError) {
-                        throw new DecoderFallbackException();
+                        throw Undecodable(bytes, i);
                     }
                     // BinaryDecoderFallback's convention: an undecodable byte becomes one char.
                     length = 1;
@@ -271,7 +281,7 @@ namespace IronRuby.Runtime {
                 int length = SequenceLength(bytes, i, limit);
                 if (length == 0) {
                     if (_throwOnError) {
-                        throw new DecoderFallbackException();
+                        throw Undecodable(bytes, i);
                     }
                     chars[j++] = (char)bytes[i++];
                     continue;
@@ -327,6 +337,11 @@ namespace IronRuby.Runtime {
             return b < 0x80 ? (char)b : (char)(0x0e00 + (b - 0xa0));
         }
 
+        /// <summary>See CesuEncoding.Undecodable - BytesUnknown must not be left null.</summary>
+        private static DecoderFallbackException/*!*/ Undecodable(byte[]/*!*/ bytes, int index) {
+            return new DecoderFallbackException(null, new[] { bytes[index] }, index);
+        }
+
         private static int ToByte(char c) {
             if (c < 0x80) {
                 return c;
@@ -367,7 +382,7 @@ namespace IronRuby.Runtime {
             if (_throwOnError) {
                 for (int i = 0; i < count; i++) {
                     if (!IsDefinedByte(bytes[index + i])) {
-                        throw new DecoderFallbackException();
+                        throw Undecodable(bytes, index + i);
                     }
                 }
             }
@@ -379,7 +394,7 @@ namespace IronRuby.Runtime {
                 byte b = bytes[byteIndex + i];
                 if (!IsDefinedByte(b)) {
                     if (_throwOnError) {
-                        throw new DecoderFallbackException();
+                        throw Undecodable(bytes, byteIndex + i);
                     }
                     // BinaryDecoderFallback's convention: the byte passes through as U+00mn.
                     chars[charIndex + i] = (char)b;
