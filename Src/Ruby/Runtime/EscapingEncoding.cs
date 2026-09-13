@@ -145,9 +145,49 @@ namespace IronRuby.Runtime {
 
         #region Encoding
 
-        private static bool ContainsEscape(char[]/*!*/ chars, int index, int count) {
-            for (int i = 0; i < count; i++) {
-                if (IsEscapedByte(chars[index + i])) {
+        /// <summary>
+        /// A surrogate with no partner. An escaped byte is one of these by construction, but so is
+        /// half of a pair that got separated - String#[] on a non-BMP character can produce one -
+        /// and the inner encoder throws on both. Neither may take the process down: MRI holds the
+        /// bytes and prints them.
+        /// </summary>
+        private static bool IsUnpaired(char[]/*!*/ chars, int index, int limit) {
+            char c = chars[index];
+            if (c < (char)0xD800 || c > (char)0xDFFF) {
+                return false;
+            }
+            if (c <= (char)0xDBFF) {
+                // High: paired only if a low surrogate follows.
+                return index + 1 >= limit || chars[index + 1] < (char)0xDC00 || chars[index + 1] > (char)0xDFFF;
+            }
+            // Low: paired only if a high surrogate precedes.
+            return index == 0 || chars[index - 1] < (char)0xD800 || chars[index - 1] > (char)0xDBFF;
+        }
+
+        /// <summary>
+        /// Bytes for an unpaired surrogate: the byte it stands for if it is an escape, and
+        /// otherwise the three byte form CESU-8 uses for a surrogate, which is what a broken
+        /// sequence would have held in the first place.
+        /// </summary>
+        private static int UnpairedByteCount(char c) {
+            return IsEscapedByte(c) ? 1 : 3;
+        }
+
+        private static int WriteUnpaired(char c, byte[]/*!*/ bytes, int at) {
+            if (IsEscapedByte(c)) {
+                bytes[at] = (byte)(c - EscapeBase);
+                return 1;
+            }
+            bytes[at] = (byte)(0xE0 | (c >> 12));
+            bytes[at + 1] = (byte)(0x80 | ((c >> 6) & 0x3F));
+            bytes[at + 2] = (byte)(0x80 | (c & 0x3F));
+            return 3;
+        }
+
+        private static bool ContainsUnpaired(char[]/*!*/ chars, int index, int count) {
+            int limit = index + count;
+            for (int i = index; i < limit; i++) {
+                if (IsUnpaired(chars, i, limit)) {
                     return true;
                 }
             }
@@ -155,7 +195,7 @@ namespace IronRuby.Runtime {
         }
 
         public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
-            if (!ContainsEscape(chars, index, count)) {
+            if (!ContainsUnpaired(chars, index, count)) {
                 return _inner.GetByteCount(chars, index, count);
             }
 
@@ -163,11 +203,11 @@ namespace IronRuby.Runtime {
             int runStart = index;
             int limit = index + count;
             for (int i = index; i < limit; i++) {
-                if (IsEscapedByte(chars[i])) {
+                if (IsUnpaired(chars, i, limit)) {
                     if (i > runStart) {
                         result += _inner.GetByteCount(chars, runStart, i - runStart);
                     }
-                    result++;
+                    result += UnpairedByteCount(chars[i]);
                     runStart = i + 1;
                 }
             }
@@ -178,7 +218,7 @@ namespace IronRuby.Runtime {
         }
 
         public override int GetBytes(char[]/*!*/ chars, int charIndex, int charCount, byte[]/*!*/ bytes, int byteIndex) {
-            if (!ContainsEscape(chars, charIndex, charCount)) {
+            if (!ContainsUnpaired(chars, charIndex, charCount)) {
                 return _inner.GetBytes(chars, charIndex, charCount, bytes, byteIndex);
             }
 
@@ -186,11 +226,11 @@ namespace IronRuby.Runtime {
             int runStart = charIndex;
             int limit = charIndex + charCount;
             for (int i = charIndex; i < limit; i++) {
-                if (IsEscapedByte(chars[i])) {
+                if (IsUnpaired(chars, i, limit)) {
                     if (i > runStart) {
                         written += _inner.GetBytes(chars, runStart, i - runStart, bytes, byteIndex + written);
                     }
-                    bytes[byteIndex + written++] = (byte)(chars[i] - EscapeBase);
+                    written += WriteUnpaired(chars[i], bytes, byteIndex + written);
                     runStart = i + 1;
                 }
             }
