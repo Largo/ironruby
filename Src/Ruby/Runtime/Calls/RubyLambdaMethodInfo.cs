@@ -28,6 +28,7 @@ using Microsoft.Scripting.Actions;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Builtins;
+using IronRuby.Compiler;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Calls {
@@ -86,6 +87,32 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
+            // A block turned into a method by define_method takes its arguments the way a
+            // method does, not the way a block does: too few or too many is an error rather
+            // than nil-padding or dropping.  (A splatted call cannot be counted here, so it
+            // keeps the old lenient behaviour.)
+            if (!args.Signature.HasSplattedArgument) {
+                int actual = args.Signature.ArgumentCount;
+                int arity = _lambda.Dispatcher.Arity;
+                int mandatory = arity >= 0 ? arity : -arity - 1;
+                int maximum = _lambda.Dispatcher.HasUnsplatParameter ? Int32.MaxValue : _lambda.Dispatcher.ParameterCount;
+
+                if (actual < mandatory || actual > maximum) {
+                    if (mandatory == maximum) {
+                        metaBuilder.SetWrongNumberOfArgumentsError(actual, mandatory);
+                    } else {
+                        metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                            AstUtils.Constant(actual),
+                            AstUtils.Constant(maximum == Int32.MaxValue
+                                ? mandatory.ToString(System.Globalization.CultureInfo.InvariantCulture) + "+"
+                                : mandatory.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".." +
+                                  maximum.ToString(System.Globalization.CultureInfo.InvariantCulture))
+                        ));
+                    }
+                    return;
+                }
+            }
+
             Proc.BuildCall(
                 metaBuilder,
                 AstUtils.Constant(_lambda),            // proc object
