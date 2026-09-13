@@ -6238,13 +6238,23 @@ class IO
       return result if result.nil? || !result.respond_to?(:force_encoding)
       return result unless args.empty? || args[0].nil?
       enc = nil
+      internal = nil
       if options
         enc = options[:encoding] || options["encoding"]
-        enc = enc.split(":").first if enc.is_a?(::String)
+        if enc.is_a?(::String) && enc.include?(":")
+          # "external:internal" asks for a conversion, same as the mode string.
+          external, internal = enc.split(":", 2)
+          enc = external
+        end
         enc = ::Encoding.find(enc) if enc
+        internal = ::Encoding.find(internal) if internal
       end
       enc ||= ::Encoding.default_external
-      enc ? result.force_encoding(enc) : result
+      result.force_encoding(enc) if enc
+      if internal && enc != internal && enc != ::Encoding::BINARY
+        result = result.encode(internal)
+      end
+      result
     end
   end
 
@@ -6260,7 +6270,8 @@ class IO
     return result unless args.empty? || args[0].nil?
     return result unless result.respond_to?(:force_encoding)
     enc = (external_encoding rescue nil) || ::Encoding.default_external
-    enc ? result.force_encoding(enc) : result
+    result.force_encoding(enc) if enc
+    __transcode__(result)
   end
 
   # set_encoding takes "external:internal" in one string as well as the two
@@ -6296,6 +6307,21 @@ class IO
     self
   end
 
+  # A stream opened "r:external:internal" is asking for the bytes to be read as
+  # the external encoding and handed back as the internal one. Nothing did that,
+  # so the text came back tagged external and untranslated. #internal_encoding
+  # already answers nil unless there is really a conversion to do - the external
+  # side binary, or the two the same, both mean no - so its answer is the whole
+  # condition here.
+  def __transcode__(text)
+    return text if text.nil?
+    target = internal_encoding
+    return text if target.nil?
+    return text unless text.respond_to?(:encode)
+    text.encode(target)
+  end
+  private :__transcode__
+
   # The line readers take a chomp: option, which the built-ins do not know
   # about - the options hash landed in the separator or limit parameter and came
   # back as "no implicit conversion of Hash into Integer". The option is split
@@ -6321,7 +6347,7 @@ class IO
 
   def gets(*args)
     args, chomp = __take_chomp__(args)
-    line = __ir_gets__(*args)
+    line = __transcode__(__ir_gets__(*args))
     chomp ? __chomp_line__(line, args[0]) : line
   end
 
@@ -6329,7 +6355,7 @@ class IO
 
   def readline(*args)
     args, chomp = __take_chomp__(args)
-    line = __ir_readline__(*args)
+    line = __transcode__(__ir_readline__(*args))
     chomp ? __chomp_line__(line, args[0]) : line
   end
 
@@ -6337,7 +6363,7 @@ class IO
 
   def readlines(*args)
     args, chomp = __take_chomp__(args)
-    lines = __ir_readlines__(*args)
+    lines = __ir_readlines__(*args).map { |l| __transcode__(l) }
     chomp ? lines.map { |l| __chomp_line__(l, args[0]) } : lines
   end
 
@@ -6349,6 +6375,7 @@ class IO
       return ::Enumerator.new { |y| each_line(*args, chomp: chomp) { |l| y << l } }
     end
     __ir_each_line__(*args) do |line|
+      line = __transcode__(line)
       block.call(chomp ? __chomp_line__(line, args[0]) : line)
     end
   end
@@ -6497,7 +6524,7 @@ class IO
         break if nxt.nil?
         bytes << nxt
       end
-      char
+      __transcode__(char)
     end
   end
 
