@@ -5068,9 +5068,9 @@ namespace IronRuby.Builtins {
             
             #if FEATURE_PROCESS
             DefineLibraryMethod(module, "trap", 0x52, 
-                0x00000000U, 0x00000002U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.KernelOps.Trap), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Trap)
+                0x00000000U, 0x00000004U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Trap), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Trap)
             );
             
             #endif
@@ -5396,9 +5396,9 @@ namespace IronRuby.Builtins {
             
             #if FEATURE_PROCESS
             DefineLibraryMethod(module, "trap", 0x61, 
-                0x00000000U, 0x00000002U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.KernelOps.Trap), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Trap)
+                0x00000000U, 0x00000004U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Trap), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Trap)
             );
             
             #endif
@@ -6740,8 +6740,8 @@ namespace IronRuby.Builtins {
         #if FEATURE_PROCESS
         private static void LoadProcess_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "kill", 0x52, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.Kill)
+                0x80000008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyModule, System.Object, System.Object[], System.Object>(IronRuby.Builtins.RubyProcess.Kill)
             );
             
         }
@@ -6770,8 +6770,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "kill", 0x61, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.Kill)
+                0x80000008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyModule, System.Object, System.Object[], System.Object>(IronRuby.Builtins.RubyProcess.Kill)
             );
             
             DefineLibraryMethod(module, "pid", 0x61, 
@@ -7101,10 +7101,15 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.Hash>(IronRuby.Builtins.Signal.List)
             );
             
+            DefineLibraryMethod(module, "signame", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.Signal.Signame)
+            );
+            
             DefineLibraryMethod(module, "trap", 0x61, 
                 0x00000000U, 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Proc, System.Object>(IronRuby.Builtins.Signal.Trap), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.Signal.Trap)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.Signal.Trap), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.Signal.Trap)
             );
             
         }

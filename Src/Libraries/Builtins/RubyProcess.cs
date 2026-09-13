@@ -431,8 +431,22 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("kill", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("kill", RubyMethodAttributes.PublicSingleton)]
-        public static object Kill(RubyModule/*!*/ self, object signalId, object pid) {
-            throw RubyExceptions.CreateNotImplementedError("Signals are not currently implemented. Signal.trap just pretends to work");
+        public static object Kill(ConversionStorage<int>/*!*/ toInt, RubyModule/*!*/ self, object signalId, [NotNull]params object[]/*!*/ pids) {
+            int signal = PosixSignals.ToNumber(signalId);
+            foreach (var pid in pids) {
+                int target = Protocols.CastToFixnum(toInt, pid);
+
+                // Signalling yourself with something that would end the process, and no handler to
+                // catch it, is a SignalException in MRI - the program gets to rescue it. Letting the
+                // real signal through would just kill us.
+                if (target == Environment.ProcessId && PosixSignals.TerminatesByDefault(signal) && !PosixSignals.HasHandler(signal)) {
+                    string name = PosixSignals.ToName(signal);
+                    throw new SignalException((name != null) ? "SIG" + name : "SIG" + signal);
+                }
+
+                PosixSignals.Kill(target, signal);
+            }
+            return ScriptingRuntimeHelpers.Int32ToObject(pids.Length);
         }
 
         // maxgroups

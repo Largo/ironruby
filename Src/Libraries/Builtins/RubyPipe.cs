@@ -159,6 +159,13 @@ namespace IronRuby.Builtins {
         }
 
         public override void Write(byte[] buffer, int offset, int count) {
+            if (_readerClosedEvent.WaitOne(0)) {
+                // Nobody will ever read this again. Without the error a `loop { w.write(...) }`
+                // against a closed read end runs forever and grows the queue until memory runs out;
+                // MRI reports EPIPE (or dies of SIGPIPE) on the first such write.
+                throw new Errno.PipeError();
+            }
+
             lock (((ICollection)_queue).SyncRoot) {
                 for (int idx = 0; idx < count; idx++) {
                     _queue.Enqueue(buffer[offset + idx]);

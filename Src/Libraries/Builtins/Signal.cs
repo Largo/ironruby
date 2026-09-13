@@ -13,6 +13,8 @@
  *
  * ***************************************************************************/
 
+using System;
+using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 
@@ -25,60 +27,72 @@ namespace IronRuby.Builtins {
         [RubyMethod("list", RubyMethodAttributes.PublicSingleton)]
         public static Hash/*!*/ List(RubyContext/*!*/ context, RubyModule/*!*/ self) {
             Hash result = new Hash(context);
-            result.Add(MutableString.CreateAscii("TERM"), ScriptingRuntimeHelpers.Int32ToObject(15));
-            result.Add(MutableString.CreateAscii("SEGV"), ScriptingRuntimeHelpers.Int32ToObject(11));
-            result.Add(MutableString.CreateAscii("KILL"), ScriptingRuntimeHelpers.Int32ToObject(9));
             result.Add(MutableString.CreateAscii("EXIT"), ScriptingRuntimeHelpers.Int32ToObject(0));
-            result.Add(MutableString.CreateAscii("INT"), ScriptingRuntimeHelpers.Int32ToObject(2));
-            result.Add(MutableString.CreateAscii("FPE"), ScriptingRuntimeHelpers.Int32ToObject(8));
-            result.Add(MutableString.CreateAscii("ABRT"), ScriptingRuntimeHelpers.Int32ToObject(22));
-            result.Add(MutableString.CreateAscii("ILL"), ScriptingRuntimeHelpers.Int32ToObject(4));
+            foreach (var entry in PosixSignals.Numbers) {
+                result.Add(MutableString.CreateAscii(entry.Key), ScriptingRuntimeHelpers.Int32ToObject(entry.Value));
+            }
             return result;
         }
 
-        /// <summary>
-        /// Registers an interrupt handler. The host application is responsible for ensuring
-        /// that the handler will actually be called.
-        /// </summary>
-        [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
-        public static object Trap(
-            RubyContext/*!*/ context, 
-            object self, 
-            object signalId, 
-            Proc proc) {
-
-            if ((signalId is MutableString) && ((MutableString)signalId).ConvertToString() == "INT") {
-                context.InterruptSignalHandler = () => proc.Call(null);
-            } else {
-                // TODO: For now, just ignore unknown signals. This should be changed to throw an
-                // exception. We are not doing it yet as it is close to the V1 RTM, and throwing
-                // an exception might cause some app to misbehave whereas it might have happenned
-                // to work if no exception is thrown
-            }
-            return null;
+        [RubyMethod("signame", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString Signame(RubyModule/*!*/ self, [DefaultProtocol]int number) {
+            string name = PosixSignals.ToName(number);
+            return (name != null) ? MutableString.CreateAscii(name) : null;
         }
 
         /// <summary>
-        /// Registers an interrupt handler. The host application is responsible for ensuring
-        /// that the handler will actually be called.
+        /// Installs a handler for a signal and returns the one it replaced. The handler cancels the
+        /// platform's default disposition, so trapping SIGTERM really does stop SIGTERM from ending
+        /// the process.
         /// </summary>
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
         public static object Trap(
-            RubyContext/*!*/ context, 
-            BlockParam block, 
-            object self, 
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            RubyContext/*!*/ context,
+            object self,
+            object signalId,
+            object command) {
+
+            int number = PosixSignals.ToNumber(signalId);
+            if (number == SignalInterrupt) {
+                var proc = command as Proc;
+                context.InterruptSignalHandler = (proc != null) ? new Action(() => proc.Call(null)) : null;
+            }
+
+            // MRI takes a block, a Proc, a Method - anything that answers #call - so dispatch
+            // dynamically rather than insisting on a Proc.
+            var site = callStorage.GetCallSite("call", 1);
+            var mainThread = context.MainThread;
+            return PosixSignals.Trap(number, command, signalNumber => {
+                try {
+                    site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber));
+                } catch (Exception e) {
+                    // MRI runs trap handlers on the main thread, so an exception out of one - a
+                    // NoMethodError from a handler that turned out not to be callable, say -
+                    // surfaces there.  We run them on the signal thread, where throwing would only
+                    // lose the exception, so hand it to the main thread instead.
+                    if (mainThread != null && mainThread != System.Threading.Thread.CurrentThread) {
+                        RubyUtils.RaiseAsyncException(mainThread, e);
+                    }
+                }
+            });
+        }
+
+        [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
+        public static object Trap(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            RubyContext/*!*/ context,
+            BlockParam block,
+            object self,
             object signalId) {
 
-            if ((signalId is MutableString) && ((MutableString)signalId).ConvertToString() == "INT") {
-                context.InterruptSignalHandler = delegate() { object result; block.Yield(out result); };
-            } else {
-                // TODO: For now, just ignore unknown signals. This should be changed to throw an
-                // exception. We are not doing it yet as it is close to the V1 RTM, and throwing
-                // an exception might cause some app to misbehave whereas it might have happenned
-                // to work if no exception is thrown
+            if (block == null) {
+                throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
-            return null;
+            return Trap(callStorage, context, self, signalId, block.Proc);
         }
+
+        private const int SignalInterrupt = 2;
 
         #endregion
     }
