@@ -94,7 +94,10 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("readagain_bytes")]
             public static MutableString GetReadAgainBytes(InvalidByteSequenceError/*!*/ self) {
-                return self.ReadAgainBytes != null ? MutableString.CreateBinary(self.ReadAgainBytes) : null;
+                // MRI answers nil, not "", when nothing is to be read again - #primitive_errinfo is
+                // the one that reports an empty string for the same state.
+                var bytes = self.ReadAgainBytes;
+                return bytes != null && bytes.Length != 0 ? MutableString.CreateBinary(bytes) : null;
             }
 
             [RubyMethod("incomplete_input?")]

@@ -272,6 +272,52 @@ namespace IronRuby.Runtime {
             return new InvalidByteSequenceError(FormatMessage("{0} on {1}", text.ToString(), encoding));
         }
 
+        /// <summary>
+        /// Spells a run of bytes the way String#inspect would, which is how MRI's transcoder names
+        /// the bytes it rejected.
+        /// </summary>
+        public static string/*!*/ InspectTranscodingBytes(byte[]/*!*/ bytes) {
+            var result = new StringBuilder(bytes.Length + 2);
+            result.Append('"');
+            foreach (byte b in bytes) {
+                if (b >= 0x20 && b < 0x7f && b != (byte)'"' && b != (byte)'\\') {
+                    result.Append((char)b);
+                } else {
+                    result.Append("\\x").Append(b.ToString("X2", CultureInfo.InvariantCulture));
+                }
+            }
+            result.Append('"');
+            return result.ToString();
+        }
+
+        public static string/*!*/ InvalidByteSequenceMessage(RubyEncoding/*!*/ source, byte[]/*!*/ errorBytes, byte[] readAgain, bool incomplete) {
+            if (incomplete) {
+                return FormatMessage("incomplete {0} on {1}", InspectTranscodingBytes(errorBytes), source.Name);
+            }
+            if (readAgain == null || readAgain.Length == 0) {
+                return FormatMessage("{0} on {1}", InspectTranscodingBytes(errorBytes), source.Name);
+            }
+            return FormatMessage("{0} followed by {1} on {2}",
+                InspectTranscodingBytes(errorBytes), InspectTranscodingBytes(readAgain), source.Name);
+        }
+
+        /// <summary>
+        /// The error MRI raises when a transcoder meets bytes that are not a character of the source
+        /// encoding. <paramref name="errorBytes"/> is the longest prefix that could still have grown
+        /// into a character and <paramref name="readAgain"/> the byte that proved it could not.
+        /// </summary>
+        public static Exception/*!*/ CreateInvalidByteSequenceError(RubyEncoding/*!*/ source, RubyEncoding destination,
+            byte[]/*!*/ errorBytes, byte[] readAgain, bool incomplete) {
+
+            var error = new InvalidByteSequenceError(InvalidByteSequenceMessage(source, errorBytes, readAgain, incomplete));
+            error.SourceEncoding = source;
+            error.DestinationEncoding = destination;
+            error.ErrorBytes = errorBytes;
+            error.ReadAgainBytes = readAgain ?? new byte[0];
+            error.IncompleteInput = incomplete;
+            return error;
+        }
+
         public static Exception/*!*/ CreateTranscodingError(EncoderFallbackException/*!*/ e, RubyEncoding/*!*/ fromEncoding, RubyEncoding/*!*/ toEncoding) {
             return new UndefinedConversionError(
                 FormatMessage(

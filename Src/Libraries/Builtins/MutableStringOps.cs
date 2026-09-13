@@ -1733,8 +1733,13 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// Reads the receiver's bytes as characters of the source encoding, honouring
-        /// :invalid => :replace. A run of bytes that cannot start a character becomes one
-        /// replacement, the way MRI groups them, not one per byte.
+        /// :invalid => :replace.
+        ///
+        /// The bytes go through a stateful decoder one at a time so that the error units come out
+        /// the shape MRI reports them: an error covers the longest prefix that could still have
+        /// grown into a character, the byte that proved it could not is read again rather than
+        /// swallowed with it, and a prefix left over at the end of the input is one incomplete
+        /// character rather than a run of stray bytes.
         /// </summary>
         private static string/*!*/ DecodeForTranscoding(MutableString/*!*/ self, RubyEncoding/*!*/ from,
             RubyEncoding/*!*/ to, TranscodeSettings settings) {
@@ -1742,40 +1747,66 @@ namespace IronRuby.Builtins {
             byte[] bytes = self.ToByteArray();
             var strict = from.StrictEncoding;
 
-            if (!settings.ReplaceInvalid) {
-                try {
-                    return strict.GetString(bytes);
-                } catch (DecoderFallbackException e) {
-                    throw RubyExceptions.CreateInvalidByteSequenceError(e, from);
+            // ASCII-8BIT has no invalid bytes at all - every byte is a character of it - so the
+            // decoder dance below would be both pointless and wrong for it.
+            if (from == RubyEncoding.Binary) {
+                var raw = new StringBuilder(bytes.Length);
+                foreach (byte b in bytes) {
+                    raw.Append((char)b);
                 }
+                return raw.ToString();
             }
 
-            string replacement = settings.GetReplacement(to).ConvertToString();
+            string replacement = settings.ReplaceInvalid ? settings.GetReplacement(to).ConvertToString() : null;
             var result = new StringBuilder(bytes.Length);
+            var decoder = strict.GetDecoder();
+            var chars = new char[8];
+            int pending = 0;    // bytes seen so far that have not produced a character yet
             int i = 0;
 
             while (i < bytes.Length) {
-                int length = 0;
-                // No encoding here needs more than four bytes for one character.
-                for (int candidate = 1; candidate <= 4 && i + candidate <= bytes.Length; candidate++) {
-                    try {
-                        string decoded = strict.GetString(bytes, i, candidate);
-                        result.Append(decoded);
-                        length = candidate;
-                        break;
-                    } catch (DecoderFallbackException) {
-                        // not a whole character yet
+                int produced;
+                try {
+                    produced = decoder.GetChars(bytes, i, 1, chars, 0, false);
+                } catch (DecoderFallbackException) {
+                    // bytes[i] cannot continue what the decoder is holding.
+                    byte[] errorBytes, readAgain;
+                    if (pending != 0) {
+                        errorBytes = new byte[pending];
+                        Array.Copy(bytes, i - pending, errorBytes, 0, pending);
+                        // bytes[i] is left for the next round: it may start a character of its own.
+                        readAgain = new byte[] { bytes[i] };
+                    } else {
+                        errorBytes = new byte[] { bytes[i] };
+                        readAgain = null;
+                        i++;
                     }
+                    pending = 0;
+                    decoder = strict.GetDecoder();
+
+                    if (replacement == null) {
+                        throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, readAgain, false);
+                    }
+                    result.Append(replacement);
+                    continue;
                 }
 
-                if (length == 0) {
-                    // One replacement per byte: MRI only merges the bytes of a single truncated
-                    // character, not an arbitrary run of rubbish.
-                    result.Append(replacement);
-                    i++;
-                } else {
-                    i += length;
+                i++;
+                if (produced == 0) {
+                    pending++;
+                    continue;
                 }
+                pending = 0;
+                result.Append(chars, 0, produced);
+            }
+
+            if (pending != 0) {
+                var errorBytes = new byte[pending];
+                Array.Copy(bytes, bytes.Length - pending, errorBytes, 0, pending);
+                if (replacement == null) {
+                    throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, null, true);
+                }
+                result.Append(replacement);
             }
 
             return result.ToString();
