@@ -1652,22 +1652,13 @@ namespace IronRuby.Builtins {
             ConversionStorage<MutableString>/*!*/ toStr,
             MutableString/*!*/ self, RubyEncoding/*!*/ from, RubyEncoding/*!*/ to, TranscodeSettings settings) {
 
-            if (from == RubyEncoding.Binary && to != RubyEncoding.Binary) {
-                // The mirror of the rule above: MRI has no converter from a byte string to a
-                // character encoding, so any byte that is not ASCII is an undefined conversion.
-                byte[] raw = self.ToByteArray();
-                for (int j = 0; j < raw.Length; j++) {
-                    if (raw[j] > 0x7f && !settings.ReplaceUndefined && settings.Fallback == null) {
-                        // MRI converts through UTF-8 and names both legs when the target is not
-                        // UTF-8 itself.
-                        throw new UndefinedConversionError(to == RubyEncoding.UTF8
-                            ? RubyExceptions.FormatMessage("\"\\x{0:X2}\" from {1} to {2}", raw[j], from.Name, to.Name)
-                            : RubyExceptions.FormatMessage("\"\\x{0:X2}\" to UTF-8 in conversion from {1} to UTF-8 to {2}",
-                                raw[j], from.Name, to.Name)
-                        );
-                    }
-                }
-            }
+            // MRI has no converter between a byte string and a character encoding in either
+            // direction, so a byte above 0x7F coming out of ASCII-8BIT, and a character above
+            // 0x7F going into it, are undefined conversions however well the code point would
+            // otherwise fit.  Between ASCII-8BIT and itself nothing is converted, so nothing is
+            // undefined either.
+            bool binarySource = from == RubyEncoding.Binary && to != RubyEncoding.Binary;
+            bool binaryTarget = to == RubyEncoding.Binary && from != RubyEncoding.Binary;
 
             string text = DecodeForTranscoding(self, from, to, settings);
 
@@ -1700,7 +1691,8 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                if (CanEncode(encoder, buffer, charCount) && !(to == RubyEncoding.Binary && text[i] > 0x7f)) {
+                bool oversized = (binarySource || binaryTarget) && buffer[0] > 0x7f;
+                if (!oversized && CanEncode(encoder, buffer, charCount)) {
                     result.Append(piece);
                     continue;
                 }
@@ -1720,15 +1712,50 @@ namespace IronRuby.Builtins {
                 }
 
                 if (!settings.ReplaceUndefined) {
-                    throw new UndefinedConversionError(RubyExceptions.FormatMessage(
-                        "U+{0:X4} from {1} to {2}", Char.ConvertToUtf32(piece, 0), from.Name, to.Name
-                    ));
+                    throw CreateUndefinedConversionError(piece, from, to, binarySource);
                 }
 
                 result.Append(settings.GetReplacement(to).ConvertToString());
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// The error MRI raises for a character the target encoding cannot hold. A byte out of
+        /// ASCII-8BIT is named by its byte rather than its code point, and the failing stage is
+        /// the one into UTF-8 because that is where MRI's conversion path from a byte string
+        /// begins - so the error reports UTF-8 as its destination even when the caller asked for
+        /// something else, and spells the whole path in its message.
+        /// </summary>
+        private static Exception/*!*/ CreateUndefinedConversionError(string/*!*/ piece,
+            RubyEncoding/*!*/ from, RubyEncoding/*!*/ to, bool binarySource) {
+
+            UndefinedConversionError error;
+            if (binarySource) {
+                error = new UndefinedConversionError(to == RubyEncoding.UTF8
+                    ? RubyExceptions.FormatMessage("\"\\x{0:X2}\" from {1} to {2}", (int)piece[0], from.Name, to.Name)
+                    : RubyExceptions.FormatMessage("\"\\x{0:X2}\" to UTF-8 in conversion from {1} to UTF-8 to {2}",
+                        (int)piece[0], from.Name, to.Name)
+                );
+                error.SourceEncoding = from;
+                error.DestinationEncoding = RubyEncoding.UTF8;
+                error.ErrorCharBytes = new byte[] { (byte)piece[0] };
+                return error;
+            }
+
+            error = new UndefinedConversionError(RubyExceptions.FormatMessage(
+                "U+{0:X4} from {1} to {2}", Char.ConvertToUtf32(piece, 0), from.Name, to.Name
+            ));
+            error.SourceEncoding = from;
+            error.DestinationEncoding = to;
+            try {
+                error.ErrorCharBytes = from.StrictEncoding.GetBytes(piece);
+            } catch (EncoderFallbackException) {
+                // The character came out of the source bytes, so this should not happen; if the
+                // source encoding cannot spell it again, #error_char simply has nothing to show.
+            }
+            return error;
         }
 
         /// <summary>
