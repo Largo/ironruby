@@ -190,6 +190,7 @@ namespace IronRuby.Builtins {
             IronRuby.Builtins.RubyClass def67 = DefineGlobalClass("Integer", typeof(IronRuby.Builtins.Integer), 0x0000000F, def61, LoadInteger_Instance, LoadInteger_Class, null, new IronRuby.Builtins.RubyModule[] {def62});
             DefineGlobalClass("NoMemoryError", typeof(IronRuby.Builtins.NoMemoryError), 0x0000000F, def66, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__NoMemoryError));
+            DefineGlobalClass("Refinement", typeof(IronRuby.Builtins.RefinementOps), 0x0000000F, Context.ModuleClass, LoadRefinement_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyClass def64 = DefineGlobalClass("ScriptError", typeof(IronRuby.Builtins.ScriptError), 0x00000007, def66, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__ScriptError));
             IronRuby.Builtins.RubyClass def63 = DefineGlobalClass("SignalException", typeof(IronRuby.Builtins.SignalException), 0x0000000F, def66, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
@@ -445,6 +446,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
                 new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MainSingletonOps.ToS)
+            );
+            
+            DefineLibraryMethod(module, "using", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>(IronRuby.Builtins.MainSingletonOps.Using)
             );
             
         }
@@ -6329,6 +6335,16 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.PublicMethodDefined)
             );
             
+            DefineLibraryMethod(module, "refine", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Refine)
+            );
+            
+            DefineLibraryMethod(module, "refinements", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetRefinements)
+            );
+            
             DefineLibraryMethod(module, "remove_class_variable", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.RemoveClassVariable)
@@ -6374,6 +6390,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetUndefinedInstanceMethods)
             );
             
+            DefineLibraryMethod(module, "using", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Using)
+            );
+            
         }
         
         private static void LoadModule_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -6385,6 +6406,16 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "nesting", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetLexicalModuleNesting)
+            );
+            
+            DefineLibraryMethod(module, "used_modules", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetUsedModules)
+            );
+            
+            DefineLibraryMethod(module, "used_refinements", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetUsedRefinements)
             );
             
         }
@@ -7073,6 +7104,29 @@ namespace IronRuby.Builtins {
         
         private static void LoadRangeError_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             module.HideMethod("message");
+        }
+        
+        private static void LoadRefinement_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "import_methods", 0x52, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.RefinementOps.ImportMethods)
+            );
+            
+            DefineLibraryMethod(module, "include", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.RefinementOps.Include)
+            );
+            
+            DefineLibraryMethod(module, "prepend", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.RefinementOps.Prepend)
+            );
+            
+            DefineLibraryMethod(module, "target", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.RefinementOps.GetTarget)
+            );
+            
         }
         
         private static void LoadRegexp_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {

@@ -253,17 +253,13 @@ namespace IronRuby.Builtins {
         [RubyConstant]
         public const int MULTILINE = (int)RubyRegexOptions.Multiline;
 
-        [RubyConstant]
-        public const int FIXEDENCODING = 16;
-
-        [RubyConstant]
-        public const int NOENCODING = 32;
-
         /// <summary>
         /// Set on a regexp whose encoding is fixed by its source or by an /u, /e or /s modifier.
+        /// The value is MRI's, not RubyRegexOptions.FixedEncoding's: the two numbering schemes
+        /// only agree on IGNORECASE, EXTENDED and MULTILINE.
         /// </summary>
         [RubyConstant]
-        public const int FIXEDENCODING = (int)RubyRegexOptions.FIXED;
+        public const int FIXEDENCODING = 16;
 
         /// <summary>
         /// Set by the /n modifier: the regexp matches bytes rather than characters.
