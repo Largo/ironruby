@@ -59,11 +59,17 @@ namespace IronRuby.Builtins {
             ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
             ConversionStorage<MutableString>/*!*/ toPath,
             ConversionStorage<MutableString>/*!*/ toStr,
+            BlockParam block,
             RubyClass/*!*/ self,
             object descriptorOrPath, 
             [Optional]object optionsOrMode, 
             [Optional]object optionsOrPermissions,
             [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            if (block != null) {
+                // File.new takes no block; only File.open does.
+                self.Context.ReportWarning("File::new() does not take block; use File::open() instead");
+            }
 
             return Reinitialize(toInt, toHash, toPath, toStr, new RubyFile(self.Context), descriptorOrPath, optionsOrMode, optionsOrPermissions, options);
         }
@@ -1924,7 +1930,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("exist?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        [RubyMethod("exists?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        // #exists? was deprecated in 2.1 and removed in 3.9.
         public static bool Exists(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
             return FileTest.Exists(toPath, self, path);
         }
