@@ -28,6 +28,7 @@ using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Generation;
+using Microsoft.Scripting.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Builtins {
@@ -35,7 +36,7 @@ namespace IronRuby.Builtins {
     using BlockCallTargetUnsplatN = Func<BlockParam, object, object[], RubyArray, object>;
 
     [DebuggerDisplay("{GetDebugView(), nq}")]
-    public partial class RubyMethod {
+    public partial class RubyMethod : IDuplicable {
         private readonly object _target;
         private readonly string/*!*/ _name;
         private readonly RubyMemberInfo/*!*/ _info;
@@ -60,6 +61,12 @@ namespace IronRuby.Builtins {
             _target = target;
             _info = info;
             _name = name;
+        }
+
+        object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
+            var result = new RubyMethod(_target, _info, _name);
+            context.CopyInstanceData(this, result, copySingletonMembers);
+            return result;
         }
 
         public RubyClass/*!*/ GetTargetClass() {

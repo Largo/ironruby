@@ -17,6 +17,7 @@ using System;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {
 
@@ -28,9 +29,22 @@ namespace IronRuby.Builtins {
             return ReferenceEquals(self.Target, other.Target) && self.Info.IsEquivalentTo(other.Info);
         }
 
+        // both names need both overloads, or `eql?' is not the same method as `==' and comparing
+        // the two UnboundMethods says so
         [RubyMethod("==")]
+        [RubyMethod("eql?")]
         public static bool Equal(RubyMethod/*!*/ self, object other) {
             return false;
+        }
+
+        /// <summary>
+        /// Two methods that are #eql? hash alike, which for a library method registered under
+        /// several names means hashing what they have in common - the CLR method underneath -
+        /// rather than the info object, of which each name has its own.
+        /// </summary>
+        [RubyMethod("hash")]
+        public static int GetHash(RubyMethod/*!*/ self) {
+            return RuntimeHelpers.GetHashCode(self.Target) ^ self.Info.GetEquivalenceHashCode();
         }
 
         [RubyMethod("arity")]
@@ -67,13 +81,9 @@ namespace IronRuby.Builtins {
             return self.Target;
         }
 
-        [RubyMethod("clone")]
-        public static RubyMethod/*!*/ Clone(RubyMethod/*!*/ self) {
-            return new RubyMethod(self.Target, self.Info, self.Name);
-        }
-
         [RubyMethod("[]")]
         [RubyMethod("call")]
+        [RubyMethod("===")]
         public static RuleGenerator/*!*/ Call() {
             return new RuleGenerator(RuleGenerators.MethodCall);
         }

@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -98,6 +98,14 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
             return true;
+        }
+
+        public override int GetEquivalenceHashCode() {
+            int result = 0;
+            foreach (var method in MethodBases) {
+                result ^= method.ReflectionInfo.GetHashCode();
+            }
+            return result;
         }
 
         internal abstract SelfCallConvention CallConvention { get; }

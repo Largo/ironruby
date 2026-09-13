@@ -5872,6 +5872,8 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyMethod, System.Object, System.Boolean>(IronRuby.Builtins.MethodOps.Equal)
             );
             
+            DefineRuleGenerator(module, "===", 0x51, IronRuby.Builtins.MethodOps.Call());
+            
             DefineLibraryMethod(module, "arity", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyMethod, System.Int32>(IronRuby.Builtins.MethodOps.GetArity)
@@ -5879,19 +5881,20 @@ namespace IronRuby.Builtins {
             
             DefineRuleGenerator(module, "call", 0x51, IronRuby.Builtins.MethodOps.Call());
             
-            DefineLibraryMethod(module, "clone", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.MethodOps.Clone)
-            );
-            
             DefineLibraryMethod(module, "clr_members", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MethodOps.GetClrMembers)
             );
             
             DefineLibraryMethod(module, "eql?", 0x51, 
-                0x00000002U, 
-                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod, System.Boolean>(IronRuby.Builtins.MethodOps.Equal)
+                0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyMethod, IronRuby.Builtins.RubyMethod, System.Boolean>(IronRuby.Builtins.MethodOps.Equal), 
+                new Func<IronRuby.Builtins.RubyMethod, System.Object, System.Boolean>(IronRuby.Builtins.MethodOps.Equal)
+            );
+            
+            DefineLibraryMethod(module, "hash", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyMethod, System.Int32>(IronRuby.Builtins.MethodOps.GetHash)
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 
@@ -9959,19 +9962,20 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.UnboundMethod, System.Object, System.Object[], System.Object>(IronRuby.Builtins.UnboundMethod.BindCall)
             );
             
-            DefineLibraryMethod(module, "clone", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.UnboundMethod.Clone)
-            );
-            
             DefineLibraryMethod(module, "clr_members", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.UnboundMethod.GetClrMembers)
             );
             
             DefineLibraryMethod(module, "eql?", 0x51, 
-                0x00000002U, 
-                new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod, System.Boolean>(IronRuby.Builtins.UnboundMethod.Equal)
+                0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.UnboundMethod, System.Boolean>(IronRuby.Builtins.UnboundMethod.Equal), 
+                new Func<IronRuby.Builtins.UnboundMethod, System.Object, System.Boolean>(IronRuby.Builtins.UnboundMethod.Equal)
+            );
+            
+            DefineLibraryMethod(module, "hash", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.UnboundMethod, System.Int32>(IronRuby.Builtins.UnboundMethod.GetHash)
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 

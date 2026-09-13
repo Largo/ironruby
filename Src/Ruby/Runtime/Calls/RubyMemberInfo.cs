@@ -244,6 +244,14 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
+        /// A hash code shared by every info IsEquivalentTo agrees with, so that Method#hash can
+        /// keep its contract with Method#eql?.
+        /// </summary>
+        public virtual int GetEquivalenceHashCode() {
+            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(this);
+        }
+
+        /// <summary>
         /// Gets all the CLR members represented by this member info. 
         /// </summary>
         public virtual MemberInfo/*!*/[]/*!*/ GetMembers() {

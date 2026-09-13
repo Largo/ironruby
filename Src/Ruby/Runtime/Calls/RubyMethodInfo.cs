@@ -69,6 +69,10 @@ namespace IronRuby.Runtime.Calls {
             return info != null && ReferenceEquals(_body, info._body);
         }
         
+        public override int GetEquivalenceHashCode() {
+            return System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(_body);
+        }
+
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
             return parameterTypes.Length >= Parameters.Mandatory.Length
                 && (Parameters.Unsplat != null || parameterTypes.Length <= Parameters.Mandatory.Length + Parameters.Optional.Length)

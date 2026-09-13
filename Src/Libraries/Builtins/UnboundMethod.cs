@@ -24,7 +24,7 @@ using IronRuby.Runtime.Calls;
 namespace IronRuby.Builtins {
 
     [RubyClass("UnboundMethod")]
-    public class UnboundMethod {
+    public class UnboundMethod : IDuplicable {
         private readonly string/*!*/ _name;
         private readonly RubyMemberInfo/*!*/ _info;
         private readonly RubyModule/*!*/ _targetConstraint;
@@ -49,6 +49,12 @@ namespace IronRuby.Builtins {
             _targetConstraint = targetConstraint;
         }
 
+        object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
+            var result = new UnboundMethod(_targetConstraint, _name, _info);
+            context.CopyInstanceData(this, result, copySingletonMembers);
+            return result;
+        }
+
         #region Public Instance Methods
 
         [RubyMethod("==")]
@@ -57,9 +63,17 @@ namespace IronRuby.Builtins {
             return self.Info.IsEquivalentTo(other.Info);
         }
 
+        // both names need both overloads, or the two are not the same method and the specs that
+        // check `eql?' is an alias of `==' by comparing the two UnboundMethods fail
         [RubyMethod("==")]
+        [RubyMethod("eql?")]
         public static bool Equal(UnboundMethod/*!*/ self, object other) {
             return false;
+        }
+
+        [RubyMethod("hash")]
+        public static int GetHash(UnboundMethod/*!*/ self) {
+            return self.Info.GetEquivalenceHashCode();
         }
 
         [RubyMethod("arity")]
@@ -95,11 +109,6 @@ namespace IronRuby.Builtins {
                 "call", new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
             );
             return site.Target(site, scope, bound, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
-        }
-
-        [RubyMethod("clone")]
-        public static UnboundMethod/*!*/ Clone(UnboundMethod/*!*/ self) {
-            return new UnboundMethod(self._targetConstraint, self._name, self._info);
         }
 
         [RubyMethod("name")]

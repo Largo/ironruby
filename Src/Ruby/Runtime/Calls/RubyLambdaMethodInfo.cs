@@ -81,6 +81,10 @@ namespace IronRuby.Runtime.Calls {
             return info != null && info._id == _id;
         }
 
+        public override int GetEquivalenceHashCode() {
+            return _id;
+        }
+
         public string/*!*/ DefinitionName {
             get { return _definitionName; }
         }
