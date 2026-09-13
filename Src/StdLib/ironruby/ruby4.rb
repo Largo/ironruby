@@ -5103,6 +5103,13 @@ class IO
       buffer
     end
 
+    # Yields a buffer of the given size and answers what was written into it.
+    def self.string(length)
+      buffer = new(length)
+      yield buffer
+      buffer.get_string
+    end
+
     def self.map(file, size = nil, offset = 0, flags = 0)
       data = file.pread(size || (file.size - offset), offset)
       buffer = allocate
@@ -5448,6 +5455,34 @@ class IO
     enc = (external_encoding rescue nil) || ::Encoding.default_external
     enc ? result.force_encoding(enc) : result
   end
+
+  # Reads a byte-order mark, and if there is one, adopts the encoding it names
+  # and leaves the stream positioned after it. Answers nil when there is none.
+  BOMS__ = [
+    ["\xEF\xBB\xBF".b, "UTF-8"],
+    ["\x00\x00\xFE\xFF".b, "UTF-32BE"],
+    ["\xFF\xFE\x00\x00".b, "UTF-32LE"],
+    ["\xFE\xFF".b, "UTF-16BE"],
+    ["\xFF\xFE".b, "UTF-16LE"],
+  ]
+
+  def set_encoding_by_bom
+    unless binmode?
+      ::Kernel.raise(::ArgumentError, "ASCII incompatible encoding needs binmode")
+    end
+    start = pos
+    head = __ir_read__(4).to_s
+    head.force_encoding(::Encoding::BINARY) if head.respond_to?(:force_encoding)
+    match = BOMS__.find { |bytes, _| head.start_with?(bytes) }
+    unless match
+      seek(start)
+      return nil
+    end
+    seek(start + match[0].bytesize)
+    enc = ::Encoding.find(match[1])
+    set_encoding(enc)
+    enc
+  end unless method_defined?(:set_encoding_by_bom)
 
   # ---- the byte and character side of IO ---------------------------------
 
