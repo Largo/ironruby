@@ -17,6 +17,7 @@ using System.Security.Cryptography;
 #endif
 
 using System;
+using System.Text;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -91,14 +92,34 @@ namespace IronRuby.Builtins {
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
         public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value) {
+            return ToInteger(self, value, 0);
+        }
+
+        [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("Integer", RubyMethodAttributes.PublicSingleton)]
+        public static object/*!*/ ToInteger(object self, [NotNull]MutableString/*!*/ value, [DefaultProtocol]int radix) {
             var str = value.ConvertToString();
 
+            // A negative radix means "this is only a hint, a prefix wins"; zero and the
+            // absent argument both mean "work it out from the prefix".
+            // MRI complains about the string before it complains about the radix, so
+            // Integer("\n", 1) is "invalid value", not "invalid radix".
+            if (!HasIntegerDigits(str)) {
+                throw InvalidIntegerValue(str);
+            }
+
+            // Only a positive radix is range-checked; a negative one is a hint, and an
+            // unusable magnitude just falls back to 10.
+            if (radix > 0 && (radix < 2 || radix > 36)) {
+                throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
+            }
+
             object result;
-            if (TryParseRubyInteger(str, out result)) {
+            if (TryParseRubyInteger(str, radix, out result)) {
                 return result;
             }
 
-            throw RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", str);
+            throw InvalidIntegerValue(str);
         }
 
         #region Kernel#Integer string grammar
@@ -107,6 +128,35 @@ namespace IronRuby.Builtins {
         // Surrounding whitespace and one sign are allowed, an embedded NUL is not; a radix
         // prefix of 0x, 0b, 0o or 0d may appear, and a bare leading zero means octal; single
         // underscores may separate digits. Derived by differential testing against CRuby 3.3.8.
+
+        /// <summary>True when the string holds anything but surrounding whitespace.</summary>
+        private static bool HasIntegerDigits(string/*!*/ str) {
+            foreach (char c in str) {
+                if (!IsIntegerWhitespace(c)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// MRI quotes the offending string with control characters escaped and everything
+        /// else passed through, so "\n" reads as \n but an accented letter stays itself.
+        /// </summary>
+        private static Exception/*!*/ InvalidIntegerValue(string/*!*/ str) {
+            var text = new StringBuilder(str.Length + 8);
+            foreach (char c in str) {
+                switch (c) {
+                    case '\n': text.Append("\\n"); break;
+                    case '\t': text.Append("\\t"); break;
+                    case '\r': text.Append("\\r"); break;
+                    case '\f': text.Append("\\f"); break;
+                    case '\v': text.Append("\\v"); break;
+                    default: text.Append(c); break;
+                }
+            }
+            return RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", text.ToString());
+        }
 
         private static bool IsIntegerWhitespace(char c) {
             return c == ' ' || (c >= '\t' && c <= '\r');
@@ -125,7 +175,7 @@ namespace IronRuby.Builtins {
             return -1;
         }
 
-        private static bool TryParseRubyInteger(string/*!*/ str, out object result) {
+        private static bool TryParseRubyInteger(string/*!*/ str, int requestedRadix, out object result) {
             result = null;
 
             int index = 0;
@@ -146,23 +196,43 @@ namespace IronRuby.Builtins {
                 index++;
             }
 
-            int radix = 10;
+            // requestedRadix 0 (or absent) means "infer from the prefix"; a negative one
+            // means "prefer the prefix, fall back to |radix|".
+            bool inferRadix = requestedRadix <= 0;
+            int radix = inferRadix ? 0 : requestedRadix;
             int digits = 0;
+
             if (index < end && str[index] == '0') {
                 char prefix = (index + 1 < end) ? str[index + 1] : '\0';
+                int prefixRadix;
                 switch (prefix) {
-                    case 'x': case 'X': radix = 16; index += 2; break;
-                    case 'b': case 'B': radix = 2; index += 2; break;
-                    case 'o': case 'O': radix = 8; index += 2; break;
-                    case 'd': case 'D': radix = 10; index += 2; break;
-                    default:
-                        // A bare leading zero is octal, and counts as a digit in its own right so
-                        // that "0" and "0_0" parse while "08" does not.
-                        radix = 8;
-                        digits = 1;
-                        index++;
-                        break;
+                    case 'x': case 'X': prefixRadix = 16; break;
+                    case 'b': case 'B': prefixRadix = 2; break;
+                    case 'o': case 'O': prefixRadix = 8; break;
+                    case 'd': case 'D': prefixRadix = 10; break;
+                    default: prefixRadix = 0; break;
                 }
+
+                if (prefixRadix != 0 && (inferRadix || radix == prefixRadix)) {
+                    radix = prefixRadix;
+                    index += 2;
+                } else if (prefixRadix != 0) {
+                    // A prefix that contradicts the radix is not a prefix: in base 36
+                    // "0x1f" is four ordinary digits, in base 10 it is an error, and the
+                    // digit loop below decides which.
+                } else if (inferRadix) {
+                    // A bare leading zero is octal, and counts as a digit in its own right so
+                    // that "0" and "0_0" parse while "08" does not.
+                    radix = 8;
+                    digits = 1;
+                    index++;
+                }
+                // With an explicit radix a leading zero is just another digit.
+            }
+
+            if (radix <= 0) {
+                int hinted = -requestedRadix;
+                radix = (requestedRadix < 0 && hinted >= 2 && hinted <= 36) ? hinted : 10;
             }
 
             BigInteger magnitude = BigInteger.Zero;

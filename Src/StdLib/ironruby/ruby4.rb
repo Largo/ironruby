@@ -2101,6 +2101,103 @@ module Kernel
   rescue ::Exception
   end
 
+  # Kernel#Integer and #Float: the C# side parses the string grammar (and, since
+  # this branch, an explicit radix); the arity, the exception: keyword and the
+  # coercion protocol are easier to get exactly right here.
+  #
+  # MRI's order for Integer(): an Integer or Float is converted directly, a
+  # String is parsed, and anything else is asked for #to_int, then #to_i, with
+  # #to_str consulted first when the object offers one.
+  if private_method_defined?(:Integer) || method_defined?(:Integer)
+    alias_method :__ir_Integer__, :Integer
+    private :__ir_Integer__
+
+    def Integer(arg, base = nil, exception: true)
+      __numeric_conversion__(exception) do
+        if arg.nil?
+          raise ::TypeError, "can't convert nil into Integer"
+        end
+
+        if base && !arg.is_a?(::String) && !arg.respond_to?(:to_str)
+          raise ::ArgumentError, "base specified for non string value"
+        end
+
+        if arg.is_a?(::String)
+          next base ? __ir_Integer__(arg, base) : __ir_Integer__(arg)
+        end
+
+        if arg.is_a?(::Integer)
+          next arg
+        end
+
+        if arg.is_a?(::Float)
+          if arg.nan? || arg.infinite?
+            raise ::FloatDomainError, arg.to_s
+          end
+          next arg.to_i
+        end
+
+        if arg.respond_to?(:to_str)
+          text = arg.to_str
+          unless text.is_a?(::String)
+            raise ::TypeError, "can't convert #{arg.class} into Integer"
+          end
+          next base ? __ir_Integer__(text, base) : __ir_Integer__(text)
+        end
+
+        # #to_int first, then #to_i; a non-Integer from #to_int is not an error
+        # by itself, it just falls through to #to_i.
+        if arg.respond_to?(:to_int)
+          value = arg.to_int
+          next value if value.is_a?(::Integer)
+        end
+
+        unless arg.respond_to?(:to_i)
+          raise ::TypeError, "can't convert #{__conversion_class_name__(arg)} into Integer"
+        end
+
+        value = arg.to_i
+        unless value.is_a?(::Integer)
+          raise ::TypeError,
+                "can't convert #{__conversion_class_name__(arg)} to Integer " \
+                "(#{arg.class}#to_i gives #{value.class})"
+        end
+        value
+      end
+    end
+    module_function :Integer
+  end
+
+  if private_method_defined?(:Float) || method_defined?(:Float)
+    alias_method :__ir_Float__, :Float
+    private :__ir_Float__
+
+    def Float(arg, exception: true)
+      __numeric_conversion__(exception) do
+        raise ::TypeError, "can't convert nil into Float" if arg.nil?
+        __ir_Float__(arg)
+      end
+    end
+    module_function :Float
+  end
+
+  # exception: false suppresses a conversion *failure* only - an exception the
+  # object's own #to_int or #to_f raises still comes through.
+  def __numeric_conversion__(exception)
+    yield
+  rescue ::TypeError, ::ArgumentError, ::FloatDomainError, ::RangeError
+    raise if exception
+    nil
+  end
+  private :__numeric_conversion__
+  module_function :__numeric_conversion__
+
+  def __conversion_class_name__(object)
+    object.nil? ? "nil" : object.class.to_s
+  end
+  private :__conversion_class_name__
+  module_function :__conversion_class_name__
+
   if private_method_defined?(:Complex) || method_defined?(:Complex)
     alias_method :__ir_Complex__, :Complex
     private :__ir_Complex__
