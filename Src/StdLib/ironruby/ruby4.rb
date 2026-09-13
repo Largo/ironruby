@@ -191,6 +191,36 @@ module Enumerable
     end
   end
 
+  # The method-name form of #inject reports a bad name the way MRI does - by
+  # inspecting the object rather than by naming its class - and takes at most
+  # two arguments. A block alongside a method name is never called.
+  unless method_defined?(:inject_without_name_check)
+    alias_method :inject_without_name_check, :inject
+
+    def inject(*args, &block)
+      if args.size > 2
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)"
+      end
+      if args.size == 2 || (args.size == 1 && !block)
+        name = args.last
+        unless name.is_a?(Symbol) || name.is_a?(String)
+          # A name that is neither is still given the chance to be a String.
+          name = name.respond_to?(:to_str) ? name.to_str : nil
+          unless name.is_a?(String)
+            raise TypeError, "#{args.last.inspect} is not a symbol nor a string"
+          end
+          args = args.dup
+          args[-1] = name
+        end
+        if block && !$VERBOSE.nil?
+          warn "warning: given block not used"
+        end
+      end
+      inject_without_name_check(*args, &block)
+    end
+    alias_method :reduce, :inject
+  end
+
   # min/max also grew an `n` form.
   unless method_defined?(:min_without_count)
     alias_method :min_without_count, :min
