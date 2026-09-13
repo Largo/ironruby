@@ -256,16 +256,19 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
+            int selfEndToOtherEnd;
             if (self.End == null) {
-                return true;
+                // An unbounded end sits past any bounded one; two unbounded ends finish in
+                // the same place, so only the exclusivity below can still separate them -
+                // which is why (0...) does not cover (4..).
+                selfEndToOtherEnd = (other.End == null) ? 0 : 1;
+            } else {
+                object result = compare.Target(compare, self.End, other.End);
+                if (result == null) {
+                    return false;
+                }
+                selfEndToOtherEnd = Protocols.ConvertCompareResult(comparisonStorage, result);
             }
-
-            object result = compare.Target(compare, self.End, other.End);
-            if (result == null) {
-                return false;
-            }
-
-            int selfEndToOtherEnd = Protocols.ConvertCompareResult(comparisonStorage, result);
             if (self.ExcludeEnd == other.ExcludeEnd) {
                 return selfEndToOtherEnd >= 0;
             }
@@ -303,7 +306,16 @@ namespace IronRuby.Builtins {
         /// Ruby 3.3. True when the two ranges have at least one element in common.
         /// </summary>
         [RubyMethod("overlap?")]
-        public static bool Overlap(ComparisonStorage/*!*/ comparisonStorage, [NotNull]Range/*!*/ self, [NotNull]Range/*!*/ other) {
+        public static bool Overlap(ComparisonStorage/*!*/ comparisonStorage, [NotNull]Range/*!*/ self, object other) {
+            var otherRange = other as Range;
+            if (otherRange == null) {
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Range)",
+                    comparisonStorage.Context.GetClassDisplayName(other));
+            }
+            return Overlap(comparisonStorage, self, otherRange);
+        }
+
+        private static bool Overlap(ComparisonStorage/*!*/ comparisonStorage, Range/*!*/ self, Range/*!*/ other) {
             var compare = comparisonStorage.CompareSite;
 
             if (IsEmpty(comparisonStorage, self) || IsEmpty(comparisonStorage, other)) {
@@ -332,6 +344,9 @@ namespace IronRuby.Builtins {
         }
 
         // Does a range ending at end (exclusive when excludeEnd) finish before begin starts?
+        // Endpoints that cannot be compared at all count as "before": MRI's
+        // empty_region_p treats a nil answer from #<=> as the widest possible gap, so
+        // (0..2).overlap?('a'..'d') is false rather than an exception.
         private static bool EndsBefore(ComparisonStorage/*!*/ comparisonStorage, object end, bool excludeEnd, object begin) {
             if (end == null || begin == null) {
                 return false;
@@ -339,7 +354,7 @@ namespace IronRuby.Builtins {
             var compare = comparisonStorage.CompareSite;
             object result = compare.Target(compare, end, begin);
             if (result == null) {
-                return false;
+                return true;
             }
             int endToBegin = Protocols.ConvertCompareResult(comparisonStorage, result);
             return endToBegin < 0 || (excludeEnd && endToBegin == 0);
@@ -719,31 +734,38 @@ namespace IronRuby.Builtins {
                 return self;
             }
 
-            MutableString current = begin;
-            int comp;
-
-            while ((comp = Protocols.Compare(storage, current, end)) < 0) {
-                if (block.Yield(wrap != null ? wrap(current.Clone()) : current.Clone(), out result)) {
-                    return result;
-                }
-
-                if (ReferenceEquals(current, begin)) {
-                    current = current.Clone();
-                }
-
-                // TODO: this can be optimized
-                for (int i = 0; i < step; i++) {
-                    MutableStringOps.SuccInPlace(current);
-                }
-
-                if (current.Length > end.Length) {
-                    return self;
-                }
+            if (Protocols.Compare(storage, begin, end) > 0) {
+                return self;
             }
 
-            if (comp == 0 && !self.ExcludeEnd) {
-                if (block.Yield(wrap != null ? wrap(current.Clone()) : current.Clone(), out result)) {
-                    return result;
+            // MRI's str_upto_each stops when the successor of the end turns up, not when
+            // the current value sorts past the end: "a".upto("ab") has to pass through
+            // "b".."z", every one of which sorts after "ab". Comparing against the end
+            // instead stopped the walk at "b", so ("a".."ab").to_a held one element.
+            MutableString current = begin.CloneDerived();
+            MutableString afterEnd = MutableStringOps.Succ(end);
+
+            int index = 0;
+            while (Protocols.Compare(storage, current, afterEnd) != 0) {
+                bool atEnd = Protocols.Compare(storage, current, end) == 0;
+                if (atEnd && self.ExcludeEnd) {
+                    return self;
+                }
+
+                if (index % step == 0) {
+                    if (block.Yield(wrap != null ? wrap(current.Clone()) : current.Clone(), out result)) {
+                        return result;
+                    }
+                }
+                index++;
+
+                if (atEnd) {
+                    return self;
+                }
+
+                MutableStringOps.SuccInPlace(current);
+                if (current.Length > end.Length || current.Length == 0) {
+                    return self;
                 }
             }
             return self;

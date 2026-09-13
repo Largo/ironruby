@@ -7,7 +7,8 @@ class NoMatchingPatternKeyError < NoMatchingPatternError; end
 class FrozenError < RuntimeError; end unless defined?(FrozenError)
 
 class Object
-  def then
+  def then(&block)
+    return to_enum(:then) { 1 } unless block
     yield self
   end unless method_defined?(:then)
   alias_method :yield_self, :then unless method_defined?(:yield_self)
@@ -15,6 +16,24 @@ class Object
   def itself
     self
   end unless method_defined?(:itself)
+
+  # The Method object for a method defined only on this object. Kernel#method
+  # would happily answer one inherited from the class.
+  def singleton_method(name)
+    name = name.to_sym if name.respond_to?(:to_sym)
+    unless name.is_a?(::Symbol)
+      ::Kernel.raise(::TypeError, "#{name.inspect} is not a symbol nor a string")
+    end
+    klass = (singleton_class rescue nil)
+    defined = klass &&
+      (klass.instance_methods(false).include?(name) ||
+       klass.private_instance_methods(false).include?(name) ||
+       klass.protected_instance_methods(false).include?(name))
+    unless defined
+      ::Kernel.raise(::NameError, "undefined singleton method `#{name}\' for #{inspect}")
+    end
+    method(name)
+  end unless method_defined?(:singleton_method)
 end
 
 module Kernel
@@ -405,24 +424,72 @@ module Enumerable
 end
 
 class Range
-  # The number of elements a numeric range iterates. Non-numeric beginnings
-  # cannot be counted without walking the range, which MRI refuses to do.
+  # The number of elements the range iterates. MRI 3.4 only counts a range that
+  # begins at an Integer; a Float beginning cannot be walked at all (1.0..2.0
+  # has no elements to count), and a beginning that has #succ can be walked but
+  # not counted in advance, so it answers nil rather than guessing.
   def size
     from = self.begin
     to = self.end
-    raise TypeError, "can't iterate from #{from.class}" unless from.is_a?(Numeric)
-    return Float::INFINITY if to.nil?
-    return Float::INFINITY if to.is_a?(Float) && to.infinite? == 1
-    span = to - from
-    return 0 if span < 0
-    # Half-open ranges lose the last element only when it lands exactly on the
-    # end, so 1...3 has two elements but 1.0...3.5 still has three.
-    if exclude_end? && span == span.floor
-      span.to_i
-    else
-      span.floor.to_i + 1
+    if from.is_a?(::Integer)
+      if to.is_a?(::Numeric)
+        return ::Enumerator::ArithmeticSequence.__interval_step_size__(from, to, 1, exclude_end?)
+      end
+      return ::Float::INFINITY if to.nil?
+    elsif from.nil?
+      raise TypeError, "can't iterate from NilClass"
+    elsif !from.respond_to?(:succ)
+      raise TypeError, "can't iterate from #{from.class}"
     end
-  end unless method_defined?(:size)
+    nil
+  end
+
+  # Walking a range backwards needs a finite end to start from. An Integer end
+  # can be counted down from forever, which is how a beginless range works;
+  # anything else has to be materialised first.
+  def reverse_each(&block)
+    unless block
+      range = self
+      enum = ::Enumerator.new { |y| range.reverse_each { |x| y << x } }
+      enum.__set_size__(lambda { range.__send__(:__reverse_each_size__) })
+      return enum
+    end
+    to = self.end
+    raise TypeError, "can't iterate from NilClass" if to.nil?
+    from = self.begin
+    if from.nil?
+      raise TypeError, "can't iterate from NilClass" unless to.is_a?(::Integer)
+      i = exclude_end? ? to - 1 : to
+      loop do
+        block.call(i)
+        i -= 1
+      end
+      return self
+    end
+    to_a.reverse_each(&block)
+    self
+  end
+
+  # Matches MRI's range_reverse_each_size, quirks included: the class it names
+  # when it refuses is the end's unless the beginning is the unwalkable one.
+  def __reverse_each_size__
+    from = self.begin
+    to = self.end
+    raise TypeError, "can't iterate from NilClass" if to.nil?
+    if from.is_a?(::Integer)
+      size
+    elsif from.nil?
+      return ::Float::INFINITY if to.is_a?(::Integer)
+      raise TypeError, "can't iterate from #{to.class}"
+    elsif to.is_a?(::Integer)
+      raise TypeError, "can't iterate from Integer"
+    elsif from.respond_to?(:succ)
+      nil
+    else
+      raise TypeError, "can't iterate from #{from.class}"
+    end
+  end
+  private :__reverse_each_size__
 
   # The built-in #first/#last only answer the no-argument form, and because they
   # are defined on Range they hide Enumerable#first(n) rather than falling
@@ -432,9 +499,11 @@ class Range
     alias_method :last_without_count, :last
 
     def first(*args)
-      return first_without_count if args.empty?
-      n = args[0]
-      n = n.to_int unless n.is_a?(Integer)
+      if args.empty?
+        raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
+        return first_without_count
+      end
+      n = __to_count__(args[0])
       raise ArgumentError, "negative array size (or size too big)" if n < 0
       result = []
       return result if n == 0
@@ -446,12 +515,29 @@ class Range
     end
 
     def last(*args)
-      return last_without_count if args.empty?
-      n = args[0]
-      n = n.to_int unless n.is_a?(Integer)
+      if args.empty?
+        raise RangeError, "cannot get the last element of endless range" if self.end.nil?
+        return last_without_count
+      end
+      n = __to_count__(args[0])
       raise ArgumentError, "negative array size (or size too big)" if n < 0
       to_a.last(n)
     end
+
+    # #first and #last take a count, not an arbitrary object: anything that is
+    # not an Integer has to offer #to_int and have it answer one.
+    def __to_count__(n)
+      return n if n.is_a?(::Integer)
+      unless n.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{n.nil? ? "nil" : n.class} into Integer"
+      end
+      converted = n.to_int
+      unless converted.is_a?(::Integer)
+        raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{converted.class})"
+      end
+      converted
+    end
+    private :__to_count__
   end
 end
 
@@ -5357,12 +5443,12 @@ class Enumerator
         if inf
           loop { block.call(i); i += unit }
         elsif desc
-          while i >= to
+          while excl ? i > to : i >= to
             block.call(i)
             i += unit
           end
         else
-          while i <= to
+          while excl ? i < to : i <= to
             block.call(i)
             i += unit
           end
@@ -5490,136 +5576,263 @@ end
 
 # 3.2's Data: immutable value objects. The constant did not exist, so every
 # file in spec/core/data failed to load.
+#
+# The shape follows struct.c: Data.define builds a subclass that owns the
+# member list, its .new normalises whatever it was handed into a keyword hash
+# and then calls #initialize, and Data#initialize is the one place that
+# validates the keys and freezes the object. Doing the validation inside .new
+# instead - which is what the first version of this file did - meant a
+# user-written #initialize was never reached, so neither the `super` idiom nor
+# psych's Data.instance_method(:initialize).bind_call trick worked.
 class Data
   class << self
-    def define(*members, &block)
-      members = members.map do |m|
+    def define(*names, &block)
+      names = names.map do |m|
         unless m.is_a?(::Symbol) || m.is_a?(::String)
           ::Kernel.raise(::TypeError, "#{m.inspect} is not a symbol nor a string")
         end
         m.to_sym
       end
-      duplicate = members.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
+      duplicate = names.group_by { |m| m }.select { |_, v| v.size > 1 }.keys.first
       ::Kernel.raise(::ArgumentError, "duplicate member: #{duplicate}") if duplicate
+      names.freeze
 
       klass = ::Class.new(self) do
-        @__members__ = members
-
-        members.each do |name|
+        names.each do |name|
           define_method(name) { instance_variable_get("@#{name}") }
         end
 
         class << self
           def members
-            @__members__.dup
+            __data_members__.dup
           end
 
-          def [](*args, **kwargs)
-            new(*args, **kwargs)
-          end
-
-          def new(*args, **kwargs)
+          def new(*args, **kwargs, &block)
+            unless args.empty?
+              unless kwargs.empty?
+                ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 0)")
+              end
+              members = __data_members__
+              if args.size > members.size
+                ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..#{members.size})")
+              end
+              args.each_with_index { |value, i| kwargs[members[i]] = value }
+            end
             instance = allocate
-            instance.__send__(:__data_init__, @__members__, args, kwargs)
+            instance.__send__(:initialize, **kwargs, &block)
             instance
+          end
+
+          alias_method :[], :new
+
+          def inspect
+            ::Module.instance_method(:to_s).bind(self).call
           end
         end
       end
+      klass.instance_variable_set(:@__data_members__, names)
       klass.class_eval(&block) if block
       klass
     end
 
-    def members
-      @__members__ ? @__members__.dup : []
+    private
+
+    # The member list lives in an ivar on the class Data.define created. A
+    # plain `class Foo < Data` never gets one, and neither does Data itself,
+    # which is why .members is defined on the generated class rather than here
+    # - `Data.respond_to?(:members)` has to stay false.
+    def __data_members__
+      klass = self
+      while klass
+        names = klass.instance_variable_get(:@__data_members__)
+        return names if names
+        klass = klass.superclass
+      end
+      ::Kernel.raise(::NoMethodError, "undefined method `members' for #{self}")
     end
   end
 
-  def __data_init__(names, args, kwargs)
-    if !args.empty? && !kwargs.empty?
-      ::Kernel.raise(::ArgumentError, "wrong number of arguments")
+  def initialize(**kwargs)
+    names = __data_members__
+    given = {}
+    unknown = []
+    kwargs.each do |key, value|
+      key = __data_key__(key)
+      if names.include?(key.to_sym)
+        given[key.to_sym] = value
+      else
+        unknown << key.inspect
+      end
     end
-    if args.empty? && kwargs.empty? && !names.empty?
-      ::Kernel.raise(::ArgumentError, "missing keyword#{names.size > 1 ? 's' : ''}: #{names.map(&:inspect).join(', ')}")
+    missing = names.reject { |name| given.key?(name) }
+    unless missing.empty?
+      ::Kernel.raise(::ArgumentError,
+        "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map { |n| n.inspect }.join(', ')}")
     end
-    if !args.empty?
-      if args.size > names.size
-        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..#{names.size})")
-      end
-      if args.size < names.size
-        missing = names[args.size..-1]
-        ::Kernel.raise(::ArgumentError, "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map(&:inspect).join(', ')}")
-      end
-      names.each_with_index { |n, i| instance_variable_set("@#{n}", args[i]) }
-    else
-      missing = names - kwargs.keys
-      unless missing.empty?
-        ::Kernel.raise(::ArgumentError, "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map(&:inspect).join(', ')}")
-      end
-      unknown = kwargs.keys - names
-      unless unknown.empty?
-        ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
-      end
-      names.each { |n| instance_variable_set("@#{n}", kwargs[n]) }
-    end
+    given.each { |name, value| instance_variable_set("@#{name}", value) }
     freeze
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError,
+        "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.join(', ')}")
+    end
+    nil
   end
-  private :__data_init__
 
   def members
-    self.class.members
+    __data_members__.dup
   end
 
   def to_h(&block)
     result = {}
-    members.each { |n| result[n] = __send__(n) }
-    return result unless block
-    out = {}
-    result.each { |k, v| pair = block.call(k, v); out[pair[0]] = pair[1] }
-    out
+    __data_members__.each do |name|
+      key, value = name, __send__(name)
+      if block
+        pair = block.call(key, value)
+        unless ::Array === pair
+          converted = pair.respond_to?(:to_ary) ? pair.to_ary : nil
+          unless ::Array === converted
+            ::Kernel.raise(::TypeError, "wrong element type #{pair.class} (expected array)")
+          end
+          pair = converted
+        end
+        unless pair.size == 2
+          ::Kernel.raise(::ArgumentError, "element has wrong array length (expected 2, was #{pair.size})")
+        end
+        key, value = pair[0], pair[1]
+      end
+      result[key] = value
+    end
+    result
   end
 
   def deconstruct
-    members.map { |n| __send__(n) }
+    __data_members__.map { |name| __send__(name) }
   end
 
   def deconstruct_keys(keys)
     return to_h if keys.nil?
-    all = members
+    unless ::Array === keys
+      ::Kernel.raise(::TypeError, "wrong argument type #{keys.class} (expected Array or nil)")
+    end
+    names = __data_members__
+    return {} if keys.size > names.size
     result = {}
-    keys.each do |k|
-      return result unless all.include?(k)
-      result[k] = __send__(k)
+    keys.each do |key|
+      key = __data_key__(key)
+      return result unless names.include?(key.to_sym)
+      result[key] = __send__(key.to_sym)
     end
     result
   end
 
   def with(**kwargs)
     return self if kwargs.empty?
-    unknown = kwargs.keys - members
-    unless unknown.empty?
-      ::Kernel.raise(::ArgumentError, "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.map(&:inspect).join(', ')}")
+    names = __data_members__
+    updates = {}
+    unknown = []
+    kwargs.each do |key, value|
+      key = __data_key__(key)
+      if names.include?(key.to_sym)
+        updates[key.to_sym] = value
+      else
+        unknown << key.inspect
+      end
     end
-    self.class.new(**to_h.merge(kwargs))
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError,
+        "unknown keyword#{unknown.size > 1 ? 's' : ''}: #{unknown.join(', ')}")
+    end
+    copy = self.class.allocate
+    copy.__send__(:initialize, **to_h.merge(updates))
+    copy
   end
 
   def ==(other)
-    other.class == self.class && other.deconstruct == deconstruct
+    return true if equal?(other)
+    return false unless other.class == self.class
+    __data_paired__(:==, other) do
+      __data_members__.all? { |name| __send__(name) == other.__send__(name) }
+    end
   end
 
   def eql?(other)
-    other.class == self.class && members.all? { |n| __send__(n).eql?(other.__send__(n)) }
+    return true if equal?(other)
+    return false unless other.class == self.class
+    __data_paired__(:eql?, other) do
+      __data_members__.all? { |name| __send__(name).eql?(other.__send__(name)) }
+    end
   end
 
   def hash
-    ([self.class] + deconstruct).hash
+    stack = (::Thread.current[:__data_hash__] ||= [])
+    return self.class.hash if stack.any? { |seen| seen.equal?(self) }
+    stack.push(self)
+    begin
+      ([self.class] + deconstruct).hash
+    ensure
+      stack.pop
+    end
   end
 
-  def inspect
-    name = self.class.name
-    body = members.map { |n| "#{n}=#{__send__(n).inspect}" }.join(", ")
-    "#<data #{name ? "#{name} " : ''}#{body}>"
+  # struct.c prints the class path, not #name: a Data class whose name method
+  # has been redefined still inspects under its real path, and a class whose
+  # path starts with '#' - anonymous, or nested inside something anonymous -
+  # prints no name at all unless it is the recursive placeholder.
+  def to_s
+    path = ::Module.instance_method(:to_s).bind(self.class).call
+    named = !path.start_with?("#")
+    stack = (::Thread.current[:__data_inspect__] ||= [])
+    return "#<data #{path}:...>" if stack.any? { |seen| seen.equal?(self) }
+    stack.push(self)
+    begin
+      out = "#<data "
+      out << path if named
+      __data_members__.each_with_index do |name, i|
+        out << (i > 0 ? ", " : (named ? " " : ""))
+        out << "#{name}=#{__send__(name).inspect}"
+      end
+      out << ">"
+    ensure
+      stack.pop
+    end
   end
-  alias_method :to_s, :inspect
+  alias_method :inspect, :to_s
+
+  private
+
+  def __data_members__
+    self.class.__send__(:__data_members__)
+  end
+
+  # Data accepts a String wherever it accepts a Symbol, and asks anything else
+  # for #to_str before giving up. The value returned here is the key as the
+  # caller wrote it - a String stays a String so that #deconstruct_keys can key
+  # its result by it, and so that an unknown-keyword message quotes it.
+  def __data_key__(key)
+    return key if ::Symbol === key
+    return key if ::String === key
+    unless key.respond_to?(:to_str)
+      ::Kernel.raise(::TypeError, "#{key.inspect} is not a symbol nor a string")
+    end
+    converted = key.to_str
+    unless ::String === converted
+      ::Kernel.raise(::TypeError,
+        "can't convert #{key.class} into String (#{key.class}#to_str gives #{converted.class})")
+    end
+    converted
+  end
+
+  def __data_paired__(tag, other)
+    stack = (::Thread.current[:__data_paired__] ||= [])
+    pair = [tag, object_id, other.object_id]
+    return true if stack.include?(pair)
+    stack.push(pair)
+    begin
+      yield
+    ensure
+      stack.pop
+    end
+  end
 end unless defined?(Data)
 
 # ARGF was a plain Object carrying singleton methods, so it had no class to
@@ -8581,6 +8794,15 @@ class Struct
     keyword_init = self.class.respond_to?(:keyword_init?) ? self.class.keyword_init? : nil
     args.pop if args.size > 0 && args.last.is_a?(Hash) && args.last.empty? && !keyword_init
 
+    # Since 3.2 a struct built without keyword_init: takes keywords as well as
+    # positional values. Keywords reach this method as a trailing Hash, so the
+    # only thing that distinguishes them from a Hash meant as a member value is
+    # that every key names a member.
+    if keyword_init.nil? && args.size == 1 && args[0].is_a?(Hash) &&
+       !args[0].empty? && (args[0].keys - names).empty?
+      keyword_init = true
+    end
+
     if keyword_init
       unless args.size <= 1 && (args.empty? || args[0].is_a?(Hash))
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)"
@@ -8765,9 +8987,14 @@ class Range
     return false if oe.nil? && !self.end.nil?
     return false unless ob.nil? || cover?(ob)
     se = self.end
-    return true if se.nil?
-    cmp = (se <=> oe)
-    return false if cmp.nil?
+    if se.nil?
+      # Two ranges that both run to infinity end at the same place; only the
+      # exclusive/inclusive disagreement below can still separate them.
+      cmp = oe.nil? ? 0 : 1
+    else
+      cmp = (se <=> oe)
+      return false if cmp.nil?
+    end
     # MRI's r_cover_range_p: when the two ranges agree about their end being
     # exclusive the comparison is enough, and when they disagree the inclusive
     # one has to be measured against the other's last element instead.
@@ -8785,6 +9012,68 @@ class Range
     end
   end
   private :__cover_range__
+
+  # Range#include? is not Range#cover?. For a range of numbers or times - or
+  # when the value asked about is itself a number - the two agree and the
+  # comparison is enough. A range of Strings answers whether the value turns up
+  # in the #succ walk from begin to end, which is why ("a".."z") does not
+  # include "cc". Anything else has to be walked, and a range with no beginning
+  # or no end cannot be walked at all.
+  def include?(value)
+    b = self.begin
+    e = self.end
+    if __linear__(value) || __linear__(b) || __linear__(e) ||
+       __integerish__(b) || __integerish__(e)
+      return cover?(value)
+    end
+    return __string_include__(b, e, value) if b.is_a?(::String) && e.is_a?(::String)
+    if b.nil? || e.nil?
+      ::Kernel.raise(::TypeError, "cannot determine inclusion in beginless/endless ranges")
+    end
+    each { |x| return true if x == value }
+    false
+  end
+  alias_method :member?, :include?
+
+  def __linear__(x)
+    x.is_a?(::Numeric) || x.is_a?(::Time)
+  end
+  private :__linear__
+
+  # MRI's rb_check_to_integer: an endpoint that converts to an Integer is
+  # treated as a point on a line even if its class is something else entirely.
+  def __integerish__(x)
+    return false unless x.respond_to?(:to_int)
+    (x.to_int rescue nil).is_a?(::Integer)
+  end
+  private :__integerish__
+
+  # MRI's rb_str_include_range_p: single ASCII characters compare directly,
+  # everything else walks #succ and looks for an equal string.
+  def __string_include__(b, e, value)
+    unless value.is_a?(::String)
+      return false unless value.respond_to?(:to_str)
+      value = value.to_str
+      unless value.is_a?(::String)
+        ::Kernel.raise(::TypeError, "can't convert #{value.class} to String")
+      end
+    end
+    if b.bytesize == 1 && e.bytesize == 1 && b.ascii_only? && e.ascii_only? && value.ascii_only?
+      return false unless value.bytesize == 1
+      return true if b <= value && value < e
+      return !exclude_end? && value == e
+    end
+    found = false
+    b.upto(e) do |s|
+      next if exclude_end? && s == e
+      if s == value
+        found = true
+        break
+      end
+    end
+    found
+  end
+  private :__string_include__
 
   def overlap?(other)
     unless other.is_a?(::Range)
@@ -8826,25 +9115,35 @@ class Range
   end
 
   def bsearch(&block)
-    return ::Enumerator.new { |y| each { |x| y << x } } unless block
     b = self.begin
     e = self.end
-    if (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer))
-      respond_to?(:__ir_bsearch__, true) ? __ir_bsearch__(&block) : __bsearch_int__(block)
-    elsif (b.nil? || b.is_a?(::Numeric)) && (e.nil? || e.is_a?(::Numeric))
-      __bsearch_float__(block)
-    else
+    integral = (b.nil? || b.is_a?(::Integer)) && (e.nil? || e.is_a?(::Integer))
+    numeric = (b.nil? || b.is_a?(::Numeric)) && (e.nil? || e.is_a?(::Numeric))
+    unless numeric
+      # MRI refuses before it would hand back an enumerator.
       ::Kernel.raise(::TypeError, "can't do binary search for #{(b || e).class}")
+    end
+    return ::Enumerator.new { |y| each { |x| y << x } } unless block
+    if integral
+      respond_to?(:__ir_bsearch__, true) ? __ir_bsearch__(&block) : __bsearch_int__(block)
+    else
+      __bsearch_float__(block)
     end
   end
 
-  # Answers :found, true (go left, remember) or false (go right).
+  # Answers :found, true (go left, remember) or false (go right). MRI accepts any
+  # Numeric from the block, not just an Integer, so a block that answers a Float
+  # difference - or +/-Float::INFINITY - steers the search rather than raising.
   def __bsearch_test__(block, value)
     r = block.call(value)
     case r
-    when true then true
-    when false, nil then false
-    when ::Integer then r == 0 ? :found : r < 0
+    when true then :satisfied
+    when false, nil then :greater
+    when ::Integer then r == 0 ? :found : (r < 0 ? :smaller : :greater)
+    when ::Numeric
+      c = (r <=> 0)
+      ::Kernel.raise(::ArgumentError, "comparison of #{r.class} with 0 failed") if c.nil?
+      c == 0 ? :found : (c < 0 ? :smaller : :greater)
     else
       ::Kernel.raise(::TypeError, "wrong argument type #{r.class} (must be numeric, true, false or nil)")
     end
@@ -8860,13 +9159,13 @@ class Range
       span = 1
       if high.nil?
         high = low + span
-        while __bsearch_test__(block, high) == false
+        while __bsearch_test__(block, high) == :greater
           span *= 2
           high = low + span
         end
       else
         low = high - span
-        while __bsearch_test__(block, low) != false
+        while __bsearch_test__(block, low) != :greater
           span *= 2
           low = high - span
         end
@@ -8877,7 +9176,8 @@ class Range
       mid = low + (high - low) / 2
       case __bsearch_test__(block, mid)
       when :found then return mid
-      when true then result = mid; high = mid - 1
+      when :satisfied then result = mid; high = mid - 1
+      when :smaller then high = mid - 1
       else low = mid + 1
       end
     end
@@ -8885,39 +9185,151 @@ class Range
   end
   private :__bsearch_int__
 
+  # MRI bisects a Float range over the IEEE bit patterns of the doubles rather
+  # than over the interval, so the search lands exactly on a representable value
+  # instead of converging near it - the difference between answering -0.2 and
+  # answering -0.19999999999999998 - and reaches infinity in 64 steps.
+  DOUBLE_MIN_INT64 = -9223372036854775808
+  private_constant :DOUBLE_MIN_INT64 rescue nil
+
+  def __double_as_int64__(d)
+    i = ::System::BitConverter.DoubleToInt64Bits(d)
+    i < 0 ? (-9223372036854775808 - i) : i
+  end
+  private :__double_as_int64__
+
+  def __int64_as_double__(i)
+    i = -9223372036854775808 - i if i < 0
+    ::System::BitConverter.Int64BitsToDouble(i)
+  end
+  private :__int64_as_double__
+
   def __bsearch_float__(block)
-    low = (self.begin || -::Float::MAX).to_f
-    high = (self.end || ::Float::MAX).to_f
-    result = nil
-    64.times do
-      mid = low + (high - low) / 2
-      break if mid == low || mid == high
-      case __bsearch_test__(block, mid)
-      when :found then return mid
-      when true then result = mid; high = mid
-      else low = mid
+    b = self.begin
+    e = self.end
+    low = __double_as_int64__(b.nil? ? -::Float::INFINITY : b.to_f)
+    high = __double_as_int64__(e.nil? ? ::Float::INFINITY : e.to_f)
+    high += 1 unless exclude_end?
+    satisfied = nil
+    while low < high
+      mid = if (high < 0) == (low < 0)
+              low + ((high - low) / 2)
+            elsif low < -high
+              -((-1 - low - high) / 2 + 1)
+            else
+              (low + high) / 2
+            end
+      value = __int64_as_double__(mid)
+      case __bsearch_test__(block, value)
+      when :found then return value
+      when :satisfied then satisfied = value; high = mid
+      when :smaller then high = mid
+      else low = mid + 1
       end
     end
-    result
+    # find-minimum mode answers the smallest element the block accepted; find-any
+    # mode has already returned, so reaching here means it never found its zero.
+    satisfied
   end
   private :__bsearch_float__
 
-  def %(n)
-    ::Enumerator::ArithmeticSequence.__build__(self.begin, self.end, n, exclude_end?, self)
+  # Range#step as MRI 3.4 rewrote it. A numeric range steps arithmetically,
+  # sharing ruby_float_step with Numeric#step so that a Float range lands on
+  # its end point rather than drifting; a range whose elements have #succ still
+  # walks them when the step is an Integer, which is what keeps ("A".."G")
+  # .step(2) answering letters; and anything else - a Time, a String step, an
+  # object that only knows #+ and #<=> - advances by asking the current element
+  # for `element + step`. A beginless range has nowhere to start.
+  #
+  # The old version just handed every stepping job to the 1.9 built-in, which
+  # knows only #succ, so a Float step, a negative step, a String step and a
+  # step given as an object answering #coerce were all wrong or raised.
+  def step(n = nil, &block)
+    b = self.begin
+    e = self.end
+    unit = n.nil? ? 1 : n
+    numeric = b.is_a?(::Numeric) && (e.nil? || e.is_a?(::Numeric)) && unit.is_a?(::Numeric)
+
+    if b.nil?
+      unless e.is_a?(::Numeric) && unit.is_a?(::Numeric)
+        ::Kernel.raise(::ArgumentError, "#step for non-numeric beginless ranges is meaningless")
+      end
+      ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
+      if block
+        ::Kernel.raise(::ArgumentError, "#step iteration for beginless ranges is meaningless")
+      end
+      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self)
+    end
+
+    ::Kernel.raise(::ArgumentError, "step can't be 0") if numeric && unit == 0
+
+    unless block
+      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self) if numeric
+      range = self
+      return ::Enumerator.new { |y| range.step(n) { |x| y << x } }
+    end
+
+    if numeric
+      ::Enumerator::ArithmeticSequence.__step_each__(b, e, unit, exclude_end?, &block)
+    elsif unit.is_a?(::Integer) && b.respond_to?(:succ)
+      if unit > 0
+        i = 0
+        each do |x|
+          block.call(x) if i % unit == 0
+          i += 1
+        end
+      end
+    else
+      __step_by_plus__(b, e, unit, &block)
+    end
+    self
   end
 
-  alias_method :__ir_step__, :step
+  def %(n)
+    step(n)
+  end
 
-  # Without a block, MRI answers an arithmetic sequence rather than a plain
-  # Enumerator, and the specs check the class.
-  def step(n = 1, &block)
-    return __ir_step__(n, &block) if block
-    if self.begin.is_a?(::Numeric) && (self.end.nil? || self.end.is_a?(::Numeric))
-      ::Enumerator::ArithmeticSequence.__build__(self.begin, self.end, n, exclude_end?, self)
-    else
-      __ir_step__(n)
+  # The generic walk: decide which way the range runs, check that adding the
+  # step moves that way, then advance with #+ until #<=> says the end has been
+  # passed. A step that does not move, or moves against the range, yields
+  # nothing instead of looping forever.
+  def __step_by_plus__(b, e, unit, &block)
+    if e.nil?
+      v = b
+      loop do
+        block.call(v)
+        v = v + unit
+      end
+      return
+    end
+    dir = (b <=> e)
+    return if dir.nil?
+    c = (b <=> e)
+    return if c.nil? || __step_past_end__(c, dir)
+    sdir = (b <=> (b + unit))
+    return if sdir.nil? || sdir == 0
+    return unless dir == 0 || (dir < 0) == (sdir < 0)
+    v = b
+    loop do
+      block.call(v)
+      break if c == 0
+      v = v + unit
+      c = (v <=> e)
+      break if c.nil? || __step_past_end__(c, dir)
     end
   end
+  private :__step_by_plus__
+
+  def __step_past_end__(c, dir)
+    if dir < 0
+      exclude_end? ? c >= 0 : c > 0
+    elsif dir > 0
+      exclude_end? ? c <= 0 : c < 0
+    else
+      exclude_end?
+    end
+  end
+  private :__step_past_end__
 
   # Range#min/#max/#minmax are specialised in MRI: without a block they answer from the
   # endpoints instead of enumerating. IronRuby inherited Enumerable's versions, so

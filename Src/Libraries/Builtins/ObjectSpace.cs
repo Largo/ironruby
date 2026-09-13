@@ -52,6 +52,16 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// The finalizer may be given as a block instead of an argument.
+        /// </summary>
+        [RubyMethod("define_finalizer", RubyMethodAttributes.PublicSingleton)]
+        public static object DefineFinalizer(RespondToStorage/*!*/ respondTo, BinaryOpStorage/*!*/ call,
+            [NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self, object obj) {
+
+            return DefineFinalizer(respondTo, call, self, obj, block.Proc);
+        }
+
         [RubyMethod("define_finalizer", RubyMethodAttributes.PublicSingleton)]
         public static object DefineFinalizer(RespondToStorage/*!*/ respondTo, BinaryOpStorage/*!*/ call, RubyModule/*!*/ self, object obj, object finalizer) {
             if (!Protocols.RespondTo(respondTo, finalizer, "call")) {
@@ -77,13 +87,14 @@ namespace IronRuby.Builtins {
         #endregion
 
         [RubyMethod("each_object", RubyMethodAttributes.PublicSingleton)]
-        public static object EachObject(BlockParam block, RubyModule/*!*/ self, [NotNull]RubyClass/*!*/ theClass) {
+        public static Enumerator/*!*/ GetEachObjectEnumerator(RubyModule/*!*/ self, [NotNull]RubyClass/*!*/ theClass) {
+            return new Enumerator((_, block) => EachObject(block, self, theClass));
+        }
+
+        [RubyMethod("each_object", RubyMethodAttributes.PublicSingleton)]
+        public static object EachObject([NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self, [NotNull]RubyClass/*!*/ theClass) {
             if (!theClass.HasAncestor(self.Context.ModuleClass)) {
                 throw RubyExceptions.CreateRuntimeError("each_object only supported for objects of type Class or Module");
-            }
-
-            if (block == null) {
-                throw RubyExceptions.NoBlockGiven();
             }
 
             int matches = 0;

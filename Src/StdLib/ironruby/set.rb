@@ -806,18 +806,20 @@ class Set
 
   InspectKey = :__inspect_key__         # :nodoc:
 
-  # Returns a string containing a human-readable representation of the
-  # set ("#<Set: {element1, element2, ...}>").
+  # Ruby 4.0 made Set a core class and gave it the literal-looking form
+  # "Set[1, 2]"; a subclass keeps the older "#<MySet: {1, 2}>".
   def inspect
     ids = (Thread.current[InspectKey] ||= [])
+    plain = instance_of?(::Set)
 
     if ids.include?(object_id)
-      return sprintf('#<%s: {...}>', self.class.name)
+      return plain ? 'Set[...]' : sprintf('#<%s: {...}>', self.class.name)
     end
 
     ids << object_id
     begin
-      return sprintf('#<%s: {%s}>', self.class, to_a.inspect[1..-2])
+      body = to_a.inspect[1..-2]
+      return plain ? sprintf('Set[%s]', body) : sprintf('#<%s: {%s}>', self.class, body)
     ensure
       ids.pop
     end

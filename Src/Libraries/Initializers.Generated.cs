@@ -4800,9 +4800,19 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetId)
             );
             
+            DefineLibraryMethod(module, "initialize_clone", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.InitializeClone)
+            );
+            
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.InitializeCopy)
+            );
+            
+            DefineLibraryMethod(module, "initialize_dup", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.InitializeDuplicate)
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 
@@ -6704,12 +6714,14 @@ namespace IronRuby.Builtins {
         
         private static void LoadObjectSpace_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "define_finalizer", 0x61, 
-                0x00000000U, 
+                0x00000004U, 0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.DefineFinalizer), 
                 new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.DefineFinalizer)
             );
             
             DefineLibraryMethod(module, "each_object", 0x61, 
-                0x00000004U, 
+                0x00000002U, 0x00000005U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyClass, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.ObjectSpace.GetEachObjectEnumerator), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyClass, System.Object>(IronRuby.Builtins.ObjectSpace.EachObject)
             );
             
@@ -7173,8 +7185,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "overlap?", 0x51, 
-                0x00000006U, 
-                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Builtins.Range, IronRuby.Builtins.Range, System.Boolean>(IronRuby.Builtins.RangeOps.Overlap)
+                0x00000002U, 
+                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Builtins.Range, System.Object, System.Boolean>(IronRuby.Builtins.RangeOps.Overlap)
             );
             
             DefineLibraryMethod(module, "step", 0x51, 

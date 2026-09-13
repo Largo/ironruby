@@ -484,16 +484,13 @@ namespace IronRuby.Prism {
                     return new MemberAssignmentExpression(Expr(callAnd.Receiver), callAnd.ReadName, "&&", Expr(callAnd.Value), span);
 
                 case Pm.IndexOperatorWriteNode indexOp:
-                    return new SimpleAssignmentExpression(
-                        new ArrayItemAccess(Expr(indexOp.Receiver), BuildArguments(indexOp.Arguments), null, span),
+                    return IndexOperatorAssignment(Expr(indexOp.Receiver), indexOp.Arguments,
                         Expr(indexOp.Value), indexOp.BinaryOperator, span);
                 case Pm.IndexOrWriteNode indexOr:
-                    return new SimpleAssignmentExpression(
-                        new ArrayItemAccess(Expr(indexOr.Receiver), BuildArguments(indexOr.Arguments), null, span),
+                    return IndexOperatorAssignment(Expr(indexOr.Receiver), indexOr.Arguments,
                         Expr(indexOr.Value), "||", span);
                 case Pm.IndexAndWriteNode indexAnd:
-                    return new SimpleAssignmentExpression(
-                        new ArrayItemAccess(Expr(indexAnd.Receiver), BuildArguments(indexAnd.Arguments), null, span),
+                    return IndexOperatorAssignment(Expr(indexAnd.Receiver), indexAnd.Arguments,
                         Expr(indexAnd.Value), "&&", span);
 
                 case Pm.DefNode def: return Def(def, span);
@@ -1255,6 +1252,45 @@ namespace IronRuby.Prism {
             }
         }
 
+        private int _indexTempCount;
+
+        /// <summary>
+        /// recv[i] op= value. An operator assignment reads through the left value and then
+        /// writes through it, and both halves transform the index expressions again - so an
+        /// index with a side effect ran twice, and `h[k] ||= v` called k a second time on
+        /// its way to storing the default. Evaluating the indexes into temporaries first
+        /// leaves one evaluation, which is what MRI does.
+        /// </summary>
+        private Expression/*!*/ IndexOperatorAssignment(Expression/*!*/ receiver, Pm.PmNode argumentsNode,
+            Expression/*!*/ value, string operation, SourceSpan span) {
+
+            Arguments arguments = argumentsNode is Pm.ArgumentsNode args
+                ? BuildArguments(args) : new Arguments();
+            var expressions = arguments.Expressions;
+
+            var statements = new Statements();
+            var hoisted = new Expression[expressions.Length];
+            for (int i = 0; i < expressions.Length; i++) {
+                // A splat or a keyword splat is not a plain value and cannot be lifted out.
+                if (expressions[i] is Literal || expressions[i] is SplattedArgument) {
+                    hoisted[i] = expressions[i];
+                    continue;
+                }
+                var temp = CurrentScope.AddVariable("?index" + _indexTempCount++ + "?", span);
+                statements.Add(new SimpleAssignmentExpression(temp, expressions[i], null, span));
+                hoisted[i] = temp;
+            }
+
+            if (statements.Count == 0) {
+                return new SimpleAssignmentExpression(
+                    new ArrayItemAccess(receiver, arguments, null, span), value, operation, span);
+            }
+
+            statements.Add(new SimpleAssignmentExpression(
+                new ArrayItemAccess(receiver, new Arguments(hoisted), null, span), value, operation, span));
+            return new BlockExpression(statements, span);
+        }
+
         // ---- parameters (including keyword-argument lowering) ----
 
         private Parameters/*!*/ BuildParameters(Pm.ParametersNode/*!*/ node, bool autoSplat, out Statements prologue) {
@@ -1427,6 +1463,13 @@ namespace IronRuby.Prism {
 
             var kwVar = CurrentScope.AddVariable("?kw?", span);
 
+            // Everything below consumes ?args? destructively, so a parameterless `super`
+            // inside the body would find nothing left to forward. Keep the list as it
+            // arrived - trailing keyword hash included - and let SuperCall splat that.
+            var superArgs = CurrentScope.AddVariable("?superargs?", span);
+            statements.Add(new SimpleAssignmentExpression(superArgs,
+                new MethodCall(args, "dup", null, span), null, span));
+
             // A trailing Hash is how a keyword call arrives here, since keywords have no
             // calling-convention slot of their own. But when a block auto-splats a single
             // Array argument no keywords were passed, so the Hash stays positional
@@ -1502,7 +1545,9 @@ namespace IronRuby.Prism {
             if (node.Block is Pm.BlockParameterNode block) {
                 blockParam = DefineParameter(block.Name ?? "?block?", Span(node.Block));
             }
-            return new Parameters(LeftValue.EmptyArray, 0, null, args, blockParam, span);
+            return new Parameters(LeftValue.EmptyArray, 0, null, args, blockParam, span) {
+                SuperSplat = superArgs
+            };
         }
 
         /// <summary>

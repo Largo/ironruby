@@ -22,10 +22,6 @@ module Etc
   Passwd = Struct.new(:name, :passwd, :uid, :gid, :gecos, :dir, :shell)
   Group  = Struct.new(:name, :passwd, :gid, :mem)
 
-  # Ruby also publishes these under Struct for backwards compatibility.
-  Struct.const_set(:Passwd, Passwd) unless Struct.const_defined?(:Passwd, false)
-  Struct.const_set(:Group, Group) unless Struct.const_defined?(:Group, false)
-
   # sysconf(3) variable names. The values are the Linux/glibc ones.
   SC_ARG_MAX = 0
   SC_CHILD_MAX = 1

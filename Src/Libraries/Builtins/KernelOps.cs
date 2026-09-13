@@ -56,6 +56,31 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+
+        /// <summary>
+        /// #dup and #clone dispatch through these rather than calling #initialize_copy
+        /// themselves, so that a class can do different work for the two. The defaults
+        /// just forward, which is what MRI's Kernel#initialize_dup does.
+        /// </summary>
+        [RubyMethod("initialize_dup", RubyMethodAttributes.PrivateInstance)]
+        public static object InitializeDuplicate(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage, object self, object source) {
+
+            var site = initializeCopyStorage.GetCallSite("initialize_copy", 1);
+            site.Target(site, self, source);
+            return self;
+        }
+
+        [RubyMethod("initialize_clone", RubyMethodAttributes.PrivateInstance)]
+        public static object InitializeClone(
+            CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage, object self, object source,
+            [Optional]object options) {
+
+            var site = initializeCopyStorage.GetCallSite("initialize_copy", 1);
+            site.Target(site, self, source);
+            return self;
+        }
+
         #endregion
 
         #region Array, Float, Integer, String, Complex, Rational
@@ -346,6 +371,9 @@ namespace IronRuby.Builtins {
         /// The name the enclosing method was defined under, or nil outside any method. A block
         /// reports the method it was written in, which is why this walks the scope chain rather
         /// than only looking at the innermost scope.
+        ///
+        /// Without it every library method written as `block or return enum_for(__method__)` -
+        /// which is how the standard library returns an enumerator - raised NoMethodError.
         /// </summary>
         [RubyMethod("__method__", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("__method__", RubyMethodAttributes.PublicSingleton)]
@@ -845,8 +873,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("frozen?")]
         public static bool Frozen(RubyContext/*!*/ context, object self) {
-            if (!RubyUtils.HasObjectState(self)) {
-                return false; // can't freeze value types
+            if (!RubyUtils.HasObjectState(self) || self is double || self is float) {
+                // Immediate values - Integer, Float, Symbol, nil, true, false - cannot hold
+                // state, and Ruby reports exactly that by calling them frozen. Answering
+                // false said the opposite of the truth: nothing can modify them at all.
+                return true;
             }
             return context.IsObjectFrozen(self);
         }

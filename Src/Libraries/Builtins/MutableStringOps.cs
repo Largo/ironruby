@@ -2693,8 +2693,26 @@ namespace IronRuby.Builtins {
                     }
                 }
             } else {
-                IncrementChar(str, index);
+                IncrementCharacterOrByte(str, index);
             }
+        }
+
+        /// <summary>
+        /// MRI's rb_str_succ is encoding-aware: in a character encoding the code point of
+        /// the character goes up by one, and only a binary string steps its bytes. Always
+        /// stepping bytes turned "\u0999".succ into a broken character instead of
+        /// "\u099a", and made a range of non-ASCII characters walk off the end of the
+        /// string's byte array.
+        /// </summary>
+        private static void IncrementCharacterOrByte(MutableString/*!*/ str, int index) {
+            if (str.Encoding != RubyEncoding.Binary) {
+                char c = str.GetChar(index);
+                if (c < Char.MaxValue) {
+                    str.SetChar(index, (char)(c + 1));
+                    return;
+                }
+            }
+            IncrementChar(str, index);
         }
 
         public static void IncrementChar(MutableString/*!*/ str, int index) {
@@ -2720,9 +2738,13 @@ namespace IronRuby.Builtins {
                 return self;
             }
 
-            int index = GetIndexOfRightmostAlphaNumericCharacter(self, self.Length - 1);
+            // Length counts bytes once the string has been read as binary - which anything
+            // that asks for its byte count makes it do - while the increment below indexes
+            // characters, so a multi-byte string walked off the end of itself.
+            int last = self.GetCharCount() - 1;
+            int index = GetIndexOfRightmostAlphaNumericCharacter(self, last);
             if (index == -1) {
-                IncrementChar(self, self.Length - 1);
+                IncrementCharacterOrByte(self, last);
             } else {
                 IncrementAlphaNumericChar(self, index);
             }
@@ -3181,8 +3203,12 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("upto")]
         public static object UpTo(RangeOps.EachStorage/*!*/ storage, [NotNull]BlockParam/*!*/ block, MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ endString) {
-            RangeOps.Each(storage, block, new Range(self, endString, false));
-            return self;
+            var range = new Range(self, endString, false);
+            object result = RangeOps.Each(storage, block, range);
+            // Each answers the range it walked once the block has run to the end; anything
+            // else is what a break or a return inside the block produced, and discarding it
+            // - as this used to - swallowed the jump entirely.
+            return ReferenceEquals(result, range) ? (object)self : result;
         }
 
         #endregion

@@ -219,7 +219,13 @@ namespace IronRuby.Runtime {
                 context.CopyInstanceData(obj, copy, cloneSemantics);
             }
 
-            var initializeCopySite = initializeCopyStorage.GetCallSite("initialize_copy", 1);
+            // MRI hands the copy to #initialize_dup or #initialize_clone, whose default
+            // implementations call #initialize_copy. Calling #initialize_copy directly
+            // skipped both hooks, so a class that deep-copies its internals in
+            // #initialize_dup - Set copies its backing Hash there - handed out a copy that
+            // still shared them, and mutating the copy mutated the original.
+            var initializeCopySite = initializeCopyStorage.GetCallSite(
+                cloneSemantics ? "initialize_clone" : "initialize_dup", 1);
             initializeCopySite.Target(initializeCopySite, copy, obj);
             if (cloneSemantics) {
                 context.FreezeObjectBy(copy, obj);
