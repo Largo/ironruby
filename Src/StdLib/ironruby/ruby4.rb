@@ -2410,11 +2410,22 @@ class String
     # (index, length, str, str_index, str_length), which splices only part of the
     # replacement. Four arguments is not one of them, even with a Range first.
     case args.size
-    when 2 then index_args, str, sub_args = args[0, 1], args[1], nil
-    when 3 then index_args, str, sub_args = args[0, 2], args[2], nil
-    when 5 then index_args, str, sub_args = args[0, 2], args[2], args[3, 2]
-    when 4 then ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 4, expected 2, 3, or 5)")
-    else ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 2..5)")
+    when 2
+      index_args, str, sub_args = args[0, 1], args[1], nil
+    when 3
+      # (range, str, str_range) when the first argument is a Range, otherwise
+      # (index, length, str).
+      if args[0].is_a?(::Range)
+        index_args, str, sub_args = args[0, 1], args[1], args[2, 1]
+      else
+        index_args, str, sub_args = args[0, 2], args[2], nil
+      end
+    when 5
+      index_args, str, sub_args = args[0, 2], args[2], args[3, 2]
+    when 4
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 4, expected 2, 3, or 5)")
+    else
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 2..5)")
     end
 
     unless str.is_a?(::String)
@@ -2424,7 +2435,7 @@ class String
     if index_args.size == 1
       range = index_args[0]
       unless range.is_a?(::Range)
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{range.class} into Integer")
+        ::Kernel.raise(::TypeError, "wrong argument type #{range.nil? ? 'nil' : range.class} (expected Range)")
       end
       index, length = __byte_range__(range)
     else
@@ -2436,7 +2447,14 @@ class String
       ::Kernel.raise(::IndexError, "index #{index_args[0]} out of string") if index < 0 || index > bytesize
     end
 
-    if sub_args
+    if sub_args && sub_args.size == 1
+      sub_range = sub_args[0]
+      unless sub_range.is_a?(::Range)
+        ::Kernel.raise(::TypeError, "wrong argument type #{sub_range.nil? ? 'nil' : sub_range.class} (expected Range)")
+      end
+      sub_index, sub_length = str.__send__(:__byte_range__, sub_range)
+      str = str.byteslice(sub_index, sub_length) || str[0, 0]
+    elsif sub_args
       sub_index = ::Kernel.Integer(sub_args[0])
       sub_length = ::Kernel.Integer(sub_args[1])
       ::Kernel.raise(::IndexError, "negative length #{sub_length}") if sub_length < 0
