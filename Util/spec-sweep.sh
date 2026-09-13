@@ -23,25 +23,18 @@
 #
 # Known wedges (skipped, listed in the summary):
 #
-#   spec/core/kernel/require_spec.rb
-#       "Kernel#require (concurrently) blocks a second thread from returning
-#       while the 1st is still requiring" deadlocks - a busy-wait with no
-#       timeout, so raising mspec's cap does not help and never will.
-#
-#       Run Util/kernel-require-wedge.rb for the measured diagnosis.  In
-#       short, and because these are the natural guesses and all three are
-#       wrong: thread-locals ARE visible across threads, require's
-#       cross-thread lock DOES work (the second thread really blocks and
-#       really gets false), and the first thread DOES reach the required
-#       file's body.  The thread that spins forever is the *first* one, on
-#       the one term left: Thread#backtrace answers nil for any thread but
-#       the caller.  IronRuby builds backtraces by walking the CLR stack on
-#       demand rather than keeping a per-thread frame list, and .NET Core
-#       removed the APIs that could capture another thread's managed stack,
-#       so this is structural rather than a missing method.
-#
 #   spec/core/kernel/abort_spec.rb, spec/core/kernel/exit_spec.rb
 #       process termination; owned elsewhere.
+#
+# No longer a wedge:
+#
+#   spec/core/kernel/require_spec.rb used to deadlock on "blocks a second thread
+#   from returning while the 1st is still requiring", and two defects had to go
+#   before it stopped: Thread#backtrace answered nil about every thread but the
+#   caller, and a require of a file another thread was still loading returned
+#   false instead of waiting.  See Util/kernel-require-wedge.rb.  The whole
+#   directory now runs in one mspec-run - 2204 examples, 211 failures, 209
+#   errors - so the sweep is no longer the only way to get a number for it.
 
 set -u
 
@@ -51,7 +44,7 @@ TIMEOUT=${SPEC_SWEEP_TIMEOUT:-120}
 
 cd "$(dirname "$0")/.."
 
-EXCLUDE='spec/core/kernel/require_spec\.rb|spec/core/kernel/abort_spec\.rb|spec/core/kernel/exit_spec\.rb'
+EXCLUDE='spec/core/kernel/abort_spec\.rb|spec/core/kernel/exit_spec\.rb'
 
 : > "$OUT"
 skipped=0

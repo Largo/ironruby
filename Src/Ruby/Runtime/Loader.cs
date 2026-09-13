@@ -69,8 +69,9 @@ namespace IronRuby.Runtime {
         // $"
         private readonly RubyArray/*!*/ _loadedFiles;
 
-        // files that were required but their execution haven't completed yet:
-        private readonly Stack<string>/*!*/ _unfinishedFiles;
+        // Files that a require has started and not finished, each mapped to the thread doing it.
+        // Doubles as the monitor threads wait on when they want a file somebody else is loading.
+        private readonly Dictionary<string, Thread>/*!*/ _unfinishedFiles;
 
         // lazy init
         private SynchronizedDictionary<string, Scope> _loadedScripts;
@@ -142,7 +143,7 @@ namespace IronRuby.Runtime {
             _toStrStorage = new ConversionStorage<MutableString>(context);
             _loadPaths = MakeLoadPaths(context.RubyOptions);
             _loadedFiles = new RubyArray();
-            _unfinishedFiles = new Stack<string>();
+            _unfinishedFiles = new Dictionary<string, Thread>();
 
 #if FEATURE_ASSEMBLY_RESOLVE
             if (!context.RubyOptions.NoAssemblyResolveHook) {
@@ -578,7 +579,35 @@ namespace IronRuby.Runtime {
                 pathWithExtension += file.AppendedExtension;
             }
 
-            if (AlreadyLoaded(path, files, flags) || _unfinishedFiles.Contains(file.Path)) {
+            // Claim the file, or find out why we cannot have it.  Three ways that can go: it is
+            // already loaded; this very thread is already loading it, which is a circular require and
+            // answers false at once; or another thread is loading it, and then MRI has us wait for
+            // that thread rather than answer false while the file's definitions do not exist yet.
+            // The wait is also what makes the waiting thread observable - it is sleeping inside
+            // require, which is what a spec watching it expects to see.
+            bool claimed;
+            lock (_unfinishedFiles) {
+                Thread owner;
+                while (_unfinishedFiles.TryGetValue(file.Path, out owner) && owner != Thread.CurrentThread) {
+                    try {
+                        Monitor.Wait(_unfinishedFiles);
+                    } catch (ThreadInterruptedException) {
+                        // Thread#kill and Thread#raise deliver by parking an exception and interrupting the
+                        // target's wait, so an interrupt here is either that exception - in which case this
+                        // throws it, holding no claim on the file - or somebody else's, in which case the
+                        // wait simply resumes.
+                        RubyUtils.TranslateThreadInterrupt();
+                    }
+                }
+
+                claimed = !_unfinishedFiles.ContainsKey(file.Path) && !AlreadyLoaded(path, files, flags);
+                if (claimed) {
+                    // save path as is, no canonicalization nor combination with an extension or directory:
+                    _unfinishedFiles.Add(file.Path, Thread.CurrentThread);
+                }
+            }
+
+            if (!claimed) {
                 if ((flags & LoadFlags.ResolveLoaded) != 0) {
                     if (file.SourceUnit != null) {
                         Scope loadedScope;
@@ -596,9 +625,6 @@ namespace IronRuby.Runtime {
             }
 
             try {
-                // save path as is, no canonicalization nor combination with an extension or directory:
-                _unfinishedFiles.Push(file.Path);
-
                 if (file.SourceUnit != null) {
                     AddScriptLines(file.SourceUnit);
 
@@ -622,7 +648,10 @@ namespace IronRuby.Runtime {
 
                 FileLoaded(MutableString.Create(file.Path, pathEncoding), flags);
             } finally {
-                _unfinishedFiles.Pop();
+                lock (_unfinishedFiles) {
+                    _unfinishedFiles.Remove(file.Path);
+                    Monitor.PulseAll(_unfinishedFiles);
+                }
             }
 
             return true;

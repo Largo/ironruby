@@ -9216,6 +9216,11 @@ namespace IronRuby.Builtins {
         
         #if FEATURE_THREAD
         private static void LoadThread_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__native_backtrace__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object>(IronRuby.Builtins.ThreadOps.NativeBacktrace)
+            );
+            
             DefineLibraryMethod(module, "[]", 0x51, 
                 0x00000002U, 0x00000004U, 0x00000000U, 
                 new Func<System.Threading.Thread, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.ThreadOps.GetElement), 
