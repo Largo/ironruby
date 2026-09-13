@@ -1684,6 +1684,44 @@ namespace IronRuby.Runtime {
             return cache.Value ?? (cache.Value = InternFrozenStringLiteral(MutableString.CreateBinary(bytes, encoding)));
         }
 
+        // Only emitted under --debug-frozen-string-literal, which is why the site can be threaded
+        // through as a constant without costing an ordinary run anything.
+        [Emitted]
+        public static MutableString/*!*/ CreateFrozenMutableStringL(string/*!*/ str1, RubyEncoding/*!*/ encoding, StrongBox<MutableString>/*!*/ cache, string/*!*/ site) {
+            return cache.Value ?? (cache.Value = MutableString.RecordLiteralSite(
+                InternFrozenStringLiteral(MutableString.Create(str1, encoding)), site));
+        }
+
+        [Emitted]
+        public static MutableString/*!*/ CreateFrozenMutableStringB(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, StrongBox<MutableString>/*!*/ cache, string/*!*/ site) {
+            return cache.Value ?? (cache.Value = MutableString.RecordLiteralSite(
+                InternFrozenStringLiteral(MutableString.CreateBinary(bytes, encoding)), site));
+        }
+
+        /// <summary>
+        /// A literal in a file that said nothing about frozen_string_literal. Mutable, but it
+        /// warns the first time it is mutated - see MutableString.Chill.
+        /// </summary>
+        [Emitted]
+        public static MutableString/*!*/ CreateChilledMutableStringL(string/*!*/ str1, RubyEncoding/*!*/ encoding) {
+            return MutableString.Create(str1, encoding).Chill();
+        }
+
+        [Emitted]
+        public static MutableString/*!*/ CreateChilledMutableStringB(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding) {
+            return MutableString.CreateBinary(bytes, encoding).Chill();
+        }
+
+        [Emitted]
+        public static MutableString/*!*/ CreateChilledMutableStringL(string/*!*/ str1, RubyEncoding/*!*/ encoding, string/*!*/ site) {
+            return MutableString.RecordLiteralSite(MutableString.Create(str1, encoding).Chill(), site);
+        }
+
+        [Emitted]
+        public static MutableString/*!*/ CreateChilledMutableStringB(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, string/*!*/ site) {
+            return MutableString.RecordLiteralSite(MutableString.CreateBinary(bytes, encoding).Chill(), site);
+        }
+
         #endregion
 
         [Emitted]

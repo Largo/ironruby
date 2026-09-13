@@ -63,6 +63,54 @@ namespace IronRuby.Runtime {
             return new FrozenError(String.Format(CultureInfo.InvariantCulture, "can't modify frozen {0}", className));
         }
 
+        /// <summary>
+        /// MRI: `can't modify frozen String: "abc"`, and under --debug-frozen-string-literal
+        /// `can't modify frozen String: "abc", created at foo.rb:1` for a literal.
+        ///
+        /// The mutation guard sits in MutableString, below the assembly that has #inspect, so the
+        /// quoting is done here. It covers the escapes MRI uses for ASCII and passes anything else
+        /// through; an error message is the one place that is good enough, and the alternative was
+        /// no receiver in the message at all.
+        /// </summary>
+        public static Exception/*!*/ CreateStringFrozenError(MutableString/*!*/ str) {
+            var message = new StringBuilder("can't modify frozen String: ");
+            AppendQuoted(message, str);
+
+            string site = MutableString.GetLiteralSite(str);
+            if (site != null) {
+                message.Append(", created at ").Append(site);
+            }
+
+            return ((FrozenError)new FrozenError(message.ToString())).SetReceiver(str);
+        }
+
+        private static void AppendQuoted(StringBuilder/*!*/ result, MutableString/*!*/ str) {
+            result.Append('"');
+            foreach (char c in str.ConvertToString()) {
+                switch (c) {
+                    case '"': result.Append("\\\""); break;
+                    case '\\': result.Append("\\\\"); break;
+                    case '\n': result.Append("\\n"); break;
+                    case '\t': result.Append("\\t"); break;
+                    case '\r': result.Append("\\r"); break;
+                    case '\0': result.Append("\\0"); break;
+                    case '\a': result.Append("\\a"); break;
+                    case '\b': result.Append("\\b"); break;
+                    case '\f': result.Append("\\f"); break;
+                    case '\v': result.Append("\\v"); break;
+                    case (char)0x1b: result.Append("\\e"); break;
+                    default:
+                        if (c < 0x20 || c == 0x7f) {
+                            result.Append("\\x").Append(((int)c).ToString("X2", CultureInfo.InvariantCulture));
+                        } else {
+                            result.Append(c);
+                        }
+                        break;
+                }
+            }
+            result.Append('"');
+        }
+
         // Guards against #inspect itself mutating the frozen receiver, which would re-enter
         // CreateObjectFrozenError and blow the stack (an uncatchable failure on .NET).
         // MRI has the same problem and solves it the same way, printing "..." for the receiver.

@@ -36,6 +36,8 @@ namespace IronRuby.Runtime {
         private readonly bool _chopLines;
         private readonly string _inputRecordSeparator;
         private readonly int _frozenStringLiteral;
+        private readonly bool _debugFrozenStringLiteral;
+        private readonly ReadOnlyCollection<string>/*!*/ _warningCategoryFlags;
         private readonly string _standardLibraryPath;
         private readonly string _applicationBase;
         private readonly ReadOnlyCollection<string> _requirePaths;
@@ -115,6 +117,21 @@ namespace IronRuby.Runtime {
             get { return _frozenStringLiteral; }
         }
 
+        /// <summary>
+        /// --debug-frozen-string-literal, which --debug implies: every string literal remembers
+        /// where it was written, so a FrozenError or a chilled-mutation warning can name it.
+        /// </summary>
+        public bool DebugFrozenStringLiteral {
+            get { return _debugFrozenStringLiteral; }
+        }
+
+        /// <summary>
+        /// The -W:category and -W:no-category flags, in the order they were given.
+        /// </summary>
+        public ReadOnlyCollection<string>/*!*/ WarningCategoryFlags {
+            get { return _warningCategoryFlags; }
+        }
+
         /// <summary>The initial $/ as given by -0, or null for the default newline.</summary>
         public string InputRecordSeparator {
             get { return _inputRecordSeparator; }
@@ -189,6 +206,8 @@ namespace IronRuby.Runtime {
             _chopLines = GetOption(options, "ChopLines", false);
             _inputRecordSeparator = GetOption<string>(options, "InputRecordSeparator", null);
             _frozenStringLiteral = GetOption(options, "FrozenStringLiteral", 0);
+            _debugFrozenStringLiteral = GetOption(options, "DebugFrozenStringLiteral", false);
+            _warningCategoryFlags = GetStringCollectionOption(options, "WarningCategoryFlags") ?? EmptyStringCollection;
 
             _mainFile = GetOption(options, "MainFile", (string)null);
             _verbosity = GetOption(options, "Verbosity", 1);

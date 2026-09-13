@@ -72,6 +72,22 @@ namespace IronRuby.Builtins {
 
         // true if the content should be copied on mutation:
         private const uint CopyOnWriteFlag = 1 << 10;
+
+        // True for a string literal in a file that said nothing about frozen_string_literal.
+        // Such a string is mutable, but Ruby 3.4 onwards warns the first time it is mutated that
+        // it will be frozen in some future version. The bit rides the same test as frozen and
+        // copy-on-write, so an ordinary string pays nothing for it.
+        private const uint IsChilledFlag = 1 << 11;
+
+        private const uint MutationGuardFlags = IsFrozenFlag | CopyOnWriteFlag | IsChilledFlag;
+
+        /// <summary>
+        /// Called the first time a chilled string is mutated. Set by RubyContext, because the
+        /// report has to reach the Ruby $stderr and a MutableString has no way to find one.
+        /// With more than one runtime in the process the last one to start wins; that only ever
+        /// costs a deprecation warning going to the wrong stream.
+        /// </summary>
+        internal static Action<MutableString> ChilledMutationReporter;
         
         // The instance is frozen so that it can be shared, but it should not be used in places where
         // it will be accessible from user code as the user code could try to mutate it.
@@ -360,20 +376,84 @@ namespace IronRuby.Builtins {
             return _encoding.IsSingleByteCharacterSet || IsAscii();
         }
 
-        private void FrozenOrCopyOnWrite(uint flags) {
+        /// <summary>
+        /// The slow path of a mutation: the string is frozen, shared, chilled, or some
+        /// combination. Answers the flags the caller should go on to store - it must not reuse
+        /// the ones it read, or it would put the copy-on-write and chilled bits straight back.
+        /// </summary>
+        private uint FrozenOrCopyOnWrite(uint flags) {
             if ((flags & IsFrozenFlag) != 0) {
-                throw RubyExceptions.CreateObjectFrozenError("String");
+                throw RubyExceptions.CreateStringFrozenError(this);
             }
 
-            // TODO: we can do better if the representation is being changed: we don't need to copy the data twice
-            _content = _content.Clone();
-            _flags = flags & ~CopyOnWriteFlag;
+            if ((flags & CopyOnWriteFlag) != 0) {
+                // TODO: we can do better if the representation is being changed: we don't need to copy the data twice
+                _content = _content.Clone();
+                flags &= ~CopyOnWriteFlag;
+            }
+
+            if ((flags & IsChilledFlag) != 0) {
+                // Report once: after this the string is an ordinary mutable one.
+                flags &= ~IsChilledFlag;
+                _flags = flags;
+
+                var reporter = ChilledMutationReporter;
+                if (reporter != null) {
+                    reporter(this);
+                }
+            }
+
+            _flags = flags;
+            return flags;
+        }
+
+        /// <summary>
+        /// Where a string literal was written, for --debug-frozen-string-literal. Off that flag
+        /// nothing is ever recorded, so ordinary runs pay neither the lookup nor the memory; the
+        /// entries go away with the strings they describe.
+        /// </summary>
+        private static System.Runtime.CompilerServices.ConditionalWeakTable<MutableString, string> _literalSites;
+
+        public static MutableString/*!*/ RecordLiteralSite(MutableString/*!*/ str, string/*!*/ site) {
+            var table = _literalSites;
+            if (table == null) {
+                System.Threading.Interlocked.CompareExchange(ref _literalSites,
+                    new System.Runtime.CompilerServices.ConditionalWeakTable<MutableString, string>(), null);
+                table = _literalSites;
+            }
+
+            // A frozen literal is shared, so the same instance can come back for a second literal;
+            // MRI names the first one it saw too.
+            string existing;
+            if (!table.TryGetValue(str, out existing)) {
+                table.Add(str, site);
+            }
+            return str;
+        }
+
+        public static string GetLiteralSite(MutableString/*!*/ str) {
+            var table = _literalSites;
+            string site;
+            return table != null && table.TryGetValue(str, out site) ? site : null;
+        }
+
+        /// <summary>
+        /// A literal in a file with no frozen_string_literal comment: mutable, but the first
+        /// mutation is worth a deprecation warning.
+        /// </summary>
+        public MutableString/*!*/ Chill() {
+            _flags |= IsChilledFlag;
+            return this;
+        }
+
+        public bool IsChilled {
+            get { return (_flags & IsChilledFlag) != 0; }
         }
 
         private void MutateContent(uint setFlags) {
             uint flags = _flags;
-            if ((flags & (IsFrozenFlag | CopyOnWriteFlag)) != 0) {
-                FrozenOrCopyOnWrite(flags);
+            if ((flags & MutationGuardFlags) != 0) {
+                flags = FrozenOrCopyOnWrite(flags);
             }
             _flags = flags | setFlags;
         }
@@ -390,8 +470,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         private void MutateOne(char c) {
             uint flags = _flags;
-            if ((flags & (IsFrozenFlag | CopyOnWriteFlag)) != 0) {
-                FrozenOrCopyOnWrite(flags);
+            if ((flags & MutationGuardFlags) != 0) {
+                flags = FrozenOrCopyOnWrite(flags);
             }
             if (c >= 0x80) {
                 if (Tokenizer.IsSurrogate(c)) {
@@ -408,8 +488,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         private void MutateOne(byte b) {
             uint flags = _flags;
-            if ((flags & (IsFrozenFlag | CopyOnWriteFlag)) != 0) {
-                FrozenOrCopyOnWrite(flags);
+            if ((flags & MutationGuardFlags) != 0) {
+                flags = FrozenOrCopyOnWrite(flags);
             }
             if (b >= 0x80) {
                 flags &= ~(AsciiUnknownFlag | IsAsciiFlag);

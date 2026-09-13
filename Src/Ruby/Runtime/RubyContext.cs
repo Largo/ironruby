@@ -560,6 +560,10 @@ namespace IronRuby.Runtime {
 
             InitializeGlobalConstants();
             InitializeGlobalVariables();
+            InitializeWarningCategories();
+
+            // MutableString's mutation guard has no way to find a runtime, so it calls back here.
+            MutableString.ChilledMutationReporter = ReportChilledStringMutation;
 
             // Refinement inherits Module's ancestor-splicing hooks and must not keep them; they have to go
             // before any user code can ask Refinement.private_instance_methods.
@@ -2415,6 +2419,106 @@ namespace IronRuby.Runtime {
         public void ReportWarning(string/*!*/ message, bool isVerbose) {
             _runtimeErrorSink.Add(null, message, SourceSpan.None, isVerbose ? Errors.RuntimeVerboseWarning : Errors.RuntimeWarning, Severity.Warning);
         }
+
+        #region Warning categories, chilled string literals
+
+        /// <summary>
+        /// Warning[:deprecated] and friends. MRI's defaults: deprecated follows $VERBOSE being
+        /// true, experimental is on, the rest are off.
+        /// </summary>
+        private readonly Dictionary<string, bool>/*!*/ _warningCategories = new Dictionary<string, bool>();
+
+        public bool IsWarningEnabled(string/*!*/ category) {
+            bool enabled;
+            lock (_warningCategories) {
+                return _warningCategories.TryGetValue(category, out enabled) && enabled;
+            }
+        }
+
+        public void SetWarningEnabled(string/*!*/ category, bool enabled) {
+            lock (_warningCategories) {
+                _warningCategories[category] = enabled;
+            }
+        }
+
+        public static readonly string[]/*!*/ WarningCategories =
+            new[] { "deprecated", "experimental", "performance", "strict_unused_block" };
+
+        private void InitializeWarningCategories() {
+            SetWarningEnabled("deprecated", false);
+            SetWarningEnabled("experimental", true);
+            SetWarningEnabled("performance", false);
+            SetWarningEnabled("strict_unused_block", false);
+
+            foreach (var category in RubyOptions.WarningCategoryFlags) {
+                if (category.StartsWith("no-", StringComparison.Ordinal)) {
+                    SetWarningEnabled(category.Substring(3), false);
+                } else {
+                    SetWarningEnabled(category, true);
+                }
+            }
+        }
+
+        /// <summary>
+        /// The first mutation of a chilled string literal - one written in a file that said
+        /// nothing about frozen_string_literal. MRI warns that it will be frozen in a future
+        /// version, under the deprecated category rather than $VERBOSE.
+        ///
+        /// The message goes straight to $stderr rather than through Warning.warn, so a Ruby level
+        /// override of Warning.warn does not see it. MRI routes it through; closing that gap means
+        /// calling back into Ruby from inside MutableString's mutation guard.
+        /// </summary>
+        private void ReportChilledStringMutation(MutableString/*!*/ str) {
+            if (!IsWarningEnabled("deprecated")) {
+                return;
+            }
+
+            string createdAt = MutableString.GetLiteralSite(str);
+            var message = new StringBuilder();
+
+            string mutatedAt = TryGetCurrentSourceLocation();
+            if (mutatedAt != null) {
+                message.Append(mutatedAt).Append(": ");
+            }
+            message.Append("warning: literal string will be frozen in the future");
+            if (createdAt == null) {
+                message.Append(" (run with --debug-frozen-string-literal for more information)");
+            }
+            message.Append('\n');
+
+            if (createdAt != null) {
+                message.Append(createdAt).Append(": info: the string was created here\n");
+            }
+
+            _runtimeErrorSink.WriteMessage(MutableString.CreateMutable(message.ToString(), RubyEncoding.UTF8));
+        }
+
+        /// <summary>
+        /// "file:line" for the Ruby frame that is running, or null when there is no Ruby frame to
+        /// name. Taken from the backtrace machinery, so it is only worth asking for on a path that
+        /// is already reporting something.
+        /// </summary>
+        private string TryGetCurrentSourceLocation() {
+            try {
+                var backtrace = RubyExceptionData.CreateBacktrace(this, 0);
+                if (backtrace == null || backtrace.Count == 0) {
+                    return null;
+                }
+
+                string first = backtrace[0].ToString();
+                // "file:line:in `method'" - keep the first two colon separated parts.
+                int firstColon = first.IndexOf(':');
+                if (firstColon < 0) {
+                    return null;
+                }
+                int secondColon = first.IndexOf(':', firstColon + 1);
+                return secondColon < 0 ? first : first.Substring(0, secondColon);
+            } catch (Exception) {
+                return null;
+            }
+        }
+
+        #endregion
 
         public RubyEncoding/*!*/ GetPathEncoding() {
             // On everything but Windows the filesystem encoding follows the default external

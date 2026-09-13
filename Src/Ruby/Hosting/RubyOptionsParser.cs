@@ -39,6 +39,7 @@ namespace IronRuby.Hosting {
         private string _externalEncodingName;
         private string _internalEncodingName;
         private bool _disableRubyGems;
+        private readonly List<string>/*!*/ _warningCategoryFlags = new List<string>();
 
 #if DEBUG
         private ConsoleTraceListener _debugListener;
@@ -307,6 +308,13 @@ namespace IronRuby.Hosting {
                 case "-d":
                 case "--debug":
                     LanguageSetup.Options["DebugVariable"] = true; // $DEBUG = true
+                    // --debug turns on every debugging aid MRI has, which includes naming the
+                    // place a string literal was written.
+                    LanguageSetup.Options["DebugFrozenStringLiteral"] = true;
+                    break;
+
+                case "--debug-frozen-string-literal":
+                    LanguageSetup.Options["DebugFrozenStringLiteral"] = true;
                     break;
 
                 case "--version":
@@ -317,6 +325,15 @@ namespace IronRuby.Hosting {
                 case "-v":
                     ConsoleOptions.DisplayVersion = true;
                     goto case "-W2";
+
+                // -W:deprecated, -W:no-deprecated and the other category switches. The parser has
+                // already split the colon off, so optionValue is the category.
+                case "-W":
+                    if (optionValue == null) {
+                        goto case "-W2";
+                    }
+                    _warningCategoryFlags.Add(optionValue);
+                    break;
 
                 case "-W0":
                     LanguageSetup.Options["Verbosity"] = 0; // $VERBOSE = nil
@@ -329,6 +346,9 @@ namespace IronRuby.Hosting {
                 case "-w":
                 case "-W2":
                     LanguageSetup.Options["Verbosity"] = 2; // $VERBOSE = true
+                    // $VERBOSE = true turns the deprecated category on, and it goes in the same
+                    // ordered list as -W:no-deprecated so that the later flag wins.
+                    _warningCategoryFlags.Add("deprecated");
                     break;
 
                 #endregion
@@ -464,6 +484,7 @@ namespace IronRuby.Hosting {
             LanguageSetup.Options["RequiredPaths"] = _requiredPaths;
 
             LanguageSetup.Options["DefaultEncoding"] = _defaultEncoding;
+            LanguageSetup.Options["WarningCategoryFlags"] = _warningCategoryFlags;
             LanguageSetup.Options["ExternalEncoding"] = _externalEncodingName;
             LanguageSetup.Options["InternalEncoding"] = _internalEncodingName;
             LanguageSetup.Options["LocaleEncoding"] = _defaultEncoding ??

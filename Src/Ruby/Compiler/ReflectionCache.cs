@@ -26,6 +26,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Linq;
+using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
@@ -55,18 +56,65 @@ namespace IronRuby.Compiler {
         public static ConstructorInfo RubyCallSignatureCtor { get { return _RubyCallSignatureCtor ?? (_RubyCallSignatureCtor = GetConstructor(typeof(RubyCallSignature), typeof(uint))); } }
         
         private static MethodInfo _CreateFrozenMutableStringL, _CreateFrozenMutableStringB;
+        private static MethodInfo _CreateFrozenMutableStringLDebug, _CreateFrozenMutableStringBDebug;
+        private static MethodInfo _CreateChilledMutableStringL, _CreateChilledMutableStringB;
+        private static MethodInfo _CreateChilledMutableStringLDebug, _CreateChilledMutableStringBDebug;
 
+        // The Debug variants take the source site as a further argument and are only emitted under
+        // --debug-frozen-string-literal, so the signature has to be spelled out to pick the overload.
         public static MethodInfo/*!*/ CreateFrozenMutableStringL {
             get {
-                return _CreateFrozenMutableStringL ?? (_CreateFrozenMutableStringL =
-                    GetMethod(typeof(RubyOps), "CreateFrozenMutableStringL"));
+                return _CreateFrozenMutableStringL ?? (_CreateFrozenMutableStringL = GetMethod(typeof(RubyOps),
+                    "CreateFrozenMutableStringL", BindingFlags.Static, typeof(string), typeof(RubyEncoding), typeof(StrongBox<MutableString>)));
             }
         }
 
         public static MethodInfo/*!*/ CreateFrozenMutableStringB {
             get {
-                return _CreateFrozenMutableStringB ?? (_CreateFrozenMutableStringB =
-                    GetMethod(typeof(RubyOps), "CreateFrozenMutableStringB"));
+                return _CreateFrozenMutableStringB ?? (_CreateFrozenMutableStringB = GetMethod(typeof(RubyOps),
+                    "CreateFrozenMutableStringB", BindingFlags.Static, typeof(byte[]), typeof(RubyEncoding), typeof(StrongBox<MutableString>)));
+            }
+        }
+
+        public static MethodInfo/*!*/ CreateFrozenMutableStringLDebug {
+            get {
+                return _CreateFrozenMutableStringLDebug ?? (_CreateFrozenMutableStringLDebug = GetMethod(typeof(RubyOps),
+                    "CreateFrozenMutableStringL", BindingFlags.Static, typeof(string), typeof(RubyEncoding), typeof(StrongBox<MutableString>), typeof(string)));
+            }
+        }
+
+        public static MethodInfo/*!*/ CreateFrozenMutableStringBDebug {
+            get {
+                return _CreateFrozenMutableStringBDebug ?? (_CreateFrozenMutableStringBDebug = GetMethod(typeof(RubyOps),
+                    "CreateFrozenMutableStringB", BindingFlags.Static, typeof(byte[]), typeof(RubyEncoding), typeof(StrongBox<MutableString>), typeof(string)));
+            }
+        }
+
+        public static MethodInfo/*!*/ CreateChilledMutableStringL {
+            get {
+                return _CreateChilledMutableStringL ?? (_CreateChilledMutableStringL = GetMethod(typeof(RubyOps),
+                    "CreateChilledMutableStringL", BindingFlags.Static, typeof(string), typeof(RubyEncoding)));
+            }
+        }
+
+        public static MethodInfo/*!*/ CreateChilledMutableStringB {
+            get {
+                return _CreateChilledMutableStringB ?? (_CreateChilledMutableStringB = GetMethod(typeof(RubyOps),
+                    "CreateChilledMutableStringB", BindingFlags.Static, typeof(byte[]), typeof(RubyEncoding)));
+            }
+        }
+
+        public static MethodInfo/*!*/ CreateChilledMutableStringLDebug {
+            get {
+                return _CreateChilledMutableStringLDebug ?? (_CreateChilledMutableStringLDebug = GetMethod(typeof(RubyOps),
+                    "CreateChilledMutableStringL", BindingFlags.Static, typeof(string), typeof(RubyEncoding), typeof(string)));
+            }
+        }
+
+        public static MethodInfo/*!*/ CreateChilledMutableStringBDebug {
+            get {
+                return _CreateChilledMutableStringBDebug ?? (_CreateChilledMutableStringBDebug = GetMethod(typeof(RubyOps),
+                    "CreateChilledMutableStringB", BindingFlags.Static, typeof(byte[]), typeof(RubyEncoding), typeof(string)));
             }
         }
 

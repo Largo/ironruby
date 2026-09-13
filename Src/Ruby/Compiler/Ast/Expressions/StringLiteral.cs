@@ -22,6 +22,7 @@ using System.Diagnostics;
 using Microsoft.Scripting;
 using IronRuby.Builtins;
 using System.Runtime.CompilerServices;
+using System.Globalization;
 
 namespace IronRuby.Compiler.Ast {
     using AstUtils = Microsoft.Scripting.Ast.Utils;
@@ -29,6 +30,16 @@ namespace IronRuby.Compiler.Ast {
     /// <summary>
     /// Represents a string literal.
     /// </summary>
+    /// <summary>
+    /// What a string literal's source said about frozen_string_literal. Chilled is the state of
+    /// a file that said nothing: mutable, but a mutation is worth a deprecation warning.
+    /// </summary>
+    public enum StringLiteralMutability {
+        Mutable,
+        Chilled,
+        Frozen,
+    }
+
     public partial class StringLiteral : Expression {
         // string or byte[]
         private readonly object/*!*/ _value;
@@ -36,24 +47,25 @@ namespace IronRuby.Compiler.Ast {
         // TODO: we can save memory if we subclass StringLiteral (EncodedStringLiteral, EncodedSymbolLiteral) for _encoding != __ENCODING__
         private readonly RubyEncoding/*!*/ _encoding;
 
-        // Whether the literal is under `# frozen_string_literal: true` (or -\-enable=frozen-string-literal).
-        private readonly bool _isFrozen;
+        private readonly StringLiteralMutability _mutability;
 
+        // A synthesised string - a defined? category, __FILE__, an error message - is an ordinary
+        // mutable one; only something the user actually wrote is frozen or chilled.
         internal StringLiteral(object/*!*/ value, RubyEncoding/*!*/ encoding, SourceSpan location)
-            : this(value, encoding, false, location) {
+            : this(value, encoding, StringLiteralMutability.Mutable, location) {
         }
 
-        internal StringLiteral(object/*!*/ value, RubyEncoding/*!*/ encoding, bool isFrozen, SourceSpan location) 
+        internal StringLiteral(object/*!*/ value, RubyEncoding/*!*/ encoding, StringLiteralMutability mutability, SourceSpan location) 
             : base(location) {
             Debug.Assert(value is string || value is byte[]);
             Debug.Assert(encoding != null);
             _value = value;
             _encoding = encoding;
-            _isFrozen = isFrozen;
+            _mutability = mutability;
         }
 
-        public bool IsFrozen {
-            get { return _isFrozen; }
+        public StringLiteralMutability Mutability {
+            get { return _mutability; }
         }
 
         public object/*!*/ Value {
@@ -74,7 +86,17 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
-            return _isFrozen ? TransformFrozen(_value, _encoding) : Transform(_value, _encoding);
+            // Under --debug-frozen-string-literal every literal remembers where it was written,
+            // so that a FrozenError or a chilled-mutation warning can name the place.
+            string site = gen.Context.RubyOptions.DebugFrozenStringLiteral
+                ? gen.SourcePath + ":" + Location.Start.Line.ToString(CultureInfo.InvariantCulture)
+                : null;
+
+            switch (_mutability) {
+                case StringLiteralMutability.Frozen: return TransformFrozen(_value, _encoding, site);
+                case StringLiteralMutability.Chilled: return TransformChilled(_value, _encoding, site);
+                default: return Transform(_value, _encoding);
+            }
         }
 
         /// <summary>
@@ -82,13 +104,34 @@ namespace IronRuby.Compiler.Ast {
         /// StrongBox belongs to this one literal in the program - the same shape the regexp
         /// literals use for their cache.
         /// </summary>
-        internal static MSA.Expression/*!*/ TransformFrozen(object/*!*/ value, RubyEncoding/*!*/ encoding) {
+        internal static MSA.Expression/*!*/ TransformFrozen(object/*!*/ value, RubyEncoding/*!*/ encoding, string site) {
             var cache = AstUtils.Constant(new StrongBox<MutableString>(null));
-            if (value is string) {
-                return Methods.CreateFrozenMutableStringL.OpCall(AstUtils.Constant(value), encoding.Expression, cache);
-            } else {
-                return Methods.CreateFrozenMutableStringB.OpCall(AstUtils.Constant(value), encoding.Expression, cache);
+            if (site == null) {
+                return (value is string)
+                    ? Methods.CreateFrozenMutableStringL.OpCall(AstUtils.Constant(value), encoding.Expression, cache)
+                    : Methods.CreateFrozenMutableStringB.OpCall(AstUtils.Constant(value), encoding.Expression, cache);
             }
+
+            return (value is string)
+                ? Methods.CreateFrozenMutableStringLDebug.OpCall(AstUtils.Constant(value), encoding.Expression, cache, AstUtils.Constant(site))
+                : Methods.CreateFrozenMutableStringBDebug.OpCall(AstUtils.Constant(value), encoding.Expression, cache, AstUtils.Constant(site));
+        }
+
+        /// <summary>
+        /// A literal in a file that said nothing about frozen_string_literal. Still a fresh
+        /// mutable string every time, so there is no cache; it only carries the bit that makes
+        /// the first mutation warn.
+        /// </summary>
+        internal static MSA.Expression/*!*/ TransformChilled(object/*!*/ value, RubyEncoding/*!*/ encoding, string site) {
+            if (site == null) {
+                return (value is string)
+                    ? Methods.CreateChilledMutableStringL.OpCall(AstUtils.Constant(value), encoding.Expression)
+                    : Methods.CreateChilledMutableStringB.OpCall(AstUtils.Constant(value), encoding.Expression);
+            }
+
+            return (value is string)
+                ? Methods.CreateChilledMutableStringLDebug.OpCall(AstUtils.Constant(value), encoding.Expression, AstUtils.Constant(site))
+                : Methods.CreateChilledMutableStringBDebug.OpCall(AstUtils.Constant(value), encoding.Expression, AstUtils.Constant(site));
         }
 
         internal static MSA.Expression/*!*/ Transform(object/*!*/ value, RubyEncoding/*!*/ encoding) {

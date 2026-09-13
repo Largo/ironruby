@@ -82,6 +82,7 @@ namespace IronRuby.Builtins {
             #endif
             DefineGlobalModule("Signal", typeof(IronRuby.Builtins.Signal), 0x0000000F, null, LoadSignal_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Type), 0x00000000, null, LoadSystem__Type_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            DefineGlobalModule("Warning", typeof(IronRuby.Builtins.WarningOps), 0x0000000F, LoadWarning_Instance, LoadWarning_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             object def1 = DefineSingleton(Load__Singleton_ArgFilesSingletonOps_Instance, null, null, def54);
             object def13 = DefineSingleton(Load__Singleton_EnvironmentSingletonOps_Instance, null, null, def54);
             ExtendClass(typeof(Microsoft.Scripting.Actions.TypeGroup), 0x00000000, null, LoadMicrosoft__Scripting__Actions__TypeGroup_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def54});
@@ -10063,6 +10064,42 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.MutableString>(IronRuby.Builtins.UnboundMethod.ToS)
+            );
+            
+        }
+        
+        private static void LoadWarning_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "[]", 0x51, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubySymbol, System.Boolean>(IronRuby.Builtins.WarningOps.GetCategory)
+            );
+            
+            DefineLibraryMethod(module, "[]=", 0x51, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubySymbol, System.Object, System.Object>(IronRuby.Builtins.WarningOps.SetCategory)
+            );
+            
+            DefineLibraryMethod(module, "categories", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.WarningOps.GetCategories)
+            );
+            
+        }
+        
+        private static void LoadWarning_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "[]", 0x61, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubySymbol, System.Boolean>(IronRuby.Builtins.WarningOps.GetCategory)
+            );
+            
+            DefineLibraryMethod(module, "[]=", 0x61, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubySymbol, System.Object, System.Object>(IronRuby.Builtins.WarningOps.SetCategory)
+            );
+            
+            DefineLibraryMethod(module, "categories", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.WarningOps.GetCategories)
             );
             
         }

@@ -1500,29 +1500,10 @@ module Warning
     :deprecated, :experimental, :performance, :strict_unused_block
   ] unless defined?(CATEGORIES)
 
-  @categories = { :deprecated => false, :experimental => true,
-                  :performance => false, :strict_unused_block => false }
-
-  # NB: Module#[] already exists in IronRuby (CLR generic instantiation), so the
-  # guard has to look at Warning's own singleton methods, not respond_to?.
-  unless singleton_methods(false).include?(:[])
-    def self.[](category)
-      unless CATEGORIES.include?(category)
-        raise ArgumentError, "unknown category: #{category}"
-      end
-      @categories[category] ? true : false
-    end
-  end
-
-  unless singleton_methods(false).include?(:[]=)
-    def self.[]=(category, flag)
-      unless CATEGORIES.include?(category)
-        raise ArgumentError, "unknown category: #{category}"
-      end
-      @categories[category] = flag
-      flag
-    end
-  end
+  # Warning[] and Warning[]= are implemented in C# (WarningOps): the runtime reads
+  # the categories itself - the chilled string literal warning is raised from
+  # inside MutableString's mutation guard - and -W:category has to be able to set
+  # them before any Ruby code runs.
 
   # Warning.warn is the single hook every Kernel#warn call funnels through in
   # CRuby; user code overrides it to filter or redirect warnings.

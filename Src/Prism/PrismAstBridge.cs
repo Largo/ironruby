@@ -224,7 +224,7 @@ namespace IronRuby.Prism {
                     // whole file, and only the file it is in - comes out right without the bridge
                     // having to know anything about it.
                     return new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str),
-                        HasFlag(str, Pm.StringFlags.Frozen), span);
+                        StringMutability(str), span);
                 case Pm.SymbolNode symbol:
                     return new SymbolLiteral(LiteralText(symbol.Unescaped), SymbolEncoding(symbol), span);
                 case Pm.TrueNode _: return Literal.True(span);
@@ -758,6 +758,20 @@ namespace IronRuby.Prism {
         }
 
         // defined? answers with a frozen String in CRuby; IsDefinedExpression builds a mutable one.
+        /// <summary>
+        /// prism flags a literal Frozen where frozen_string_literal is on and Mutable where it was
+        /// explicitly turned off. Neither flag means the file said nothing, which since Ruby 3.4
+        /// is not the same as saying false: the literal is chilled, mutable but warning the first
+        /// time it is mutated.
+        /// </summary>
+        private static StringLiteralMutability StringMutability(Pm.PmNode/*!*/ node) {
+            if (HasFlag(node, Pm.StringFlags.Frozen)) {
+                return StringLiteralMutability.Frozen;
+            }
+            return HasFlag(node, Pm.StringFlags.Mutable)
+                ? StringLiteralMutability.Mutable : StringLiteralMutability.Chilled;
+        }
+
         private Expression/*!*/ Freeze(Expression/*!*/ value, SourceSpan span) {
             return new MethodCall(value, "freeze", null, span);
         }
