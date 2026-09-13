@@ -103,6 +103,14 @@ namespace IronRuby.Runtime {
         // set by private/public/protected/module_function
         internal /*and protected*/ RubyMethodAttributes _methodAttributes;
 
+        // Refinements activated by `using' in this scope, in activation order; null until `using' runs here.
+        private List<RubyModule> _usedModules;
+
+        // Memoized effective activation table for this scope (own + everything lexically enclosing),
+        // stamped with RubyContext.RefinementVersion so that a `using' anywhere forces a recompute.
+        private RefinementActivation _refinements;
+        private int _refinementsVersion;
+
         internal InterpretedFrame InterpretedFrame { get; set; }
 
         public abstract ScopeKind Kind { get; }
@@ -333,6 +341,62 @@ namespace IronRuby.Runtime {
             lock (_dynamicLocals) {
                 _dynamicLocals[name] = value;
             }
+        }
+
+        #endregion
+
+        #region Refinements
+
+        /// <summary>
+        /// `using M' in this scope.  Activation is lexical, so it is recorded on the scope object rather
+        /// than anywhere global; the scope object is the runtime representative of the lexical position
+        /// (a method's scope parent is the scope that was current at `def' time, a block's is its
+        /// defining scope), which is the same chain Module.nesting walks.
+        /// </summary>
+        public void ActivateRefinements(RubyModule/*!*/ module) {
+            if (_usedModules == null) {
+                _usedModules = new List<RubyModule>();
+            } else {
+                // re-activating moves it to the front of this scope's precedence order
+                _usedModules.Remove(module);
+            }
+            _usedModules.Add(module);
+
+            // Invalidate every memoized table and, through the rule guards built on them, every cached
+            // call site that could be affected.
+            RubyContext.RefinementVersion++;
+        }
+
+        /// <summary>
+        /// The refinements active at this lexical position.  Canonical: a scope with no `using' of its own
+        /// returns its parent's instance, and a chain with none anywhere returns
+        /// <see cref="RefinementActivation.Empty"/>, so reference equality of the result is a sound (and
+        /// cheap) call-site guard.
+        /// </summary>
+        public RefinementActivation/*!*/ GetActiveRefinements() {
+            var context = RubyContext;
+            if (!context.HasRefinements) {
+                return RefinementActivation.Empty;
+            }
+
+            int version = context.RefinementVersion;
+            if (_refinements != null && _refinementsVersion == version) {
+                return _refinements;
+            }
+
+            RefinementActivation outer;
+            var blockScope = this as RubyBlockScope;
+            RefinementActivation blockOverride = (blockScope != null) ? blockScope.BlockFlowControl.Proc.RefinementOverride : null;
+            if (blockOverride != null) {
+                outer = blockOverride;
+            } else {
+                outer = (_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty;
+            }
+            RefinementActivation result = (_usedModules != null) ? RefinementActivation.Create(outer, _usedModules) : outer;
+
+            _refinements = result;
+            _refinementsVersion = version;
+            return result;
         }
 
         #endregion

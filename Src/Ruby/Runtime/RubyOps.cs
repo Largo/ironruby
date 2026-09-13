@@ -227,6 +227,16 @@ namespace IronRuby.Runtime {
             return scope.SelfImmediateClass.Version;
         }
 
+        /// <summary>
+        /// Emitted into the guard of any call-site rule whose target class has been refined.  The rule is
+        /// valid exactly while the calling scope's lexical refinement activation is the same instance it
+        /// was bound against.
+        /// </summary>
+        [Emitted]
+        public static RefinementActivation/*!*/ GetActiveRefinements(RubyScope/*!*/ scope) {
+            return scope.GetActiveRefinements();
+        }
+
         #endregion
 
         #region Context

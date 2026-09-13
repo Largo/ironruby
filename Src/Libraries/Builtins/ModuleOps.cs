@@ -167,6 +167,90 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region refine, using, refinements, used_modules, used_refinements
+
+        [RubyMethod("refine", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ Refine(BlockParam block, RubyModule/*!*/ self, object target) {
+            RubyModule refinedModule = target as RubyModule;
+            if (refinedModule == null) {
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Class or Module)",
+                    self.Context.GetClassDisplayName(target)
+                );
+            }
+            if (block == null) {
+                throw RubyExceptions.CreateArgumentError("no block given");
+            }
+
+            RubyModule refinement = self.GetOrCreateRefinement(refinedModule);
+
+            // The block runs with self set to the refinement, like module_eval, so `def' inside it defines
+            // a method on the refinement rather than on the refined class; and the enclosing module's
+            // refinements are active inside it.
+            RubyUtils.EvaluateRefinementBlock(self, refinement, block);
+            return refinement;
+        }
+
+        /// <summary>
+        /// Module#using activates a module's refinements for the rest of the *caller's lexical scope*.
+        /// The RubyScope the library binder hands us is that scope, and its parent chain is the lexical
+        /// nesting, so recording the activation on it is all the scoping there is.
+        /// </summary>
+        [RubyMethod("using", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ Using(RubyScope/*!*/ scope, RubyModule/*!*/ self, object module) {
+            ActivateRefinements(scope, module);
+            return self;
+        }
+
+        internal static void ActivateRefinements(RubyScope/*!*/ scope, object module) {
+            RubyModule refiner = module as RubyModule;
+            if (refiner == null) {
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Module)",
+                    scope.RubyContext.GetClassDisplayName(module)
+                );
+            }
+            if (refiner.IsClass) {
+                throw RubyExceptions.CreateTypeError("wrong argument type Class (expected Module)");
+            }
+
+            // `using' is a no-op for a module that refines nothing, exactly as in CRuby.
+            scope.ActivateRefinements(refiner);
+        }
+
+        [RubyMethod("refinements")]
+        public static RubyArray/*!*/ GetRefinements(RubyModule/*!*/ self) {
+            var refinements = new List<RubyModule>();
+            self.GetOwnRefinements(refinements);
+            var result = new RubyArray(refinements.Count);
+            foreach (RubyModule m in refinements) {
+                result.Add(m);
+            }
+            return result;
+        }
+
+        [RubyMethod("used_modules", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ GetUsedModules(RubyScope/*!*/ scope, RubyModule/*!*/ self) {
+            var modules = new List<RubyModule>();
+            scope.GetActiveRefinements().GetUsedModules(modules);
+            var result = new RubyArray(modules.Count);
+            foreach (RubyModule m in modules) {
+                result.Add(m);
+            }
+            return result;
+        }
+
+        [RubyMethod("used_refinements", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ GetUsedRefinements(RubyScope/*!*/ scope, RubyModule/*!*/ self) {
+            var refinements = new List<RubyModule>();
+            scope.GetActiveRefinements().GetUsedRefinements(refinements);
+            var result = new RubyArray(refinements.Count);
+            foreach (RubyModule m in refinements) {
+                result.Add(m);
+            }
+            return result;
+        }
+
+        #endregion
+
         #region private, protected, public, private_class_method, public_class_method, module_function
 
         // thread-safe:
