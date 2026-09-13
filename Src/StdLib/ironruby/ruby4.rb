@@ -4885,7 +4885,66 @@ module ObjectSpace
     def size; @table.size; end
     alias_method :length, :size
     def delete(key); entry = @table.delete(key.object_id); entry && entry[1]; end
+    def each_key; @table.each_value { |(k, _)| yield k }; self; end
+    def each_value; @table.each_value { |(_, v)| yield v }; self; end
+    def each_pair(&block); each(&block); end
   end unless const_defined?(:WeakMap)
+
+  # 3.2's map with weakly-held keys compared by equality rather than identity.
+  # Same caveat as WeakMap: the references here are strong, so entries outlive
+  # what MRI would collect, which is safe but not weak.
+  class WeakKeyMap
+    def initialize
+      @table = {}
+    end
+
+    def [](key)
+      @table[key]
+    end
+
+    def []=(key, value)
+      # MRI refuses a key it could not hold weakly.
+      case key
+      when ::Integer, ::Float, ::Symbol, ::TrueClass, ::FalseClass, ::NilClass
+        ::Kernel.raise(::ArgumentError, "WeakKeyMap keys must be garbage collectable")
+      end
+      @table[key] = value
+    end
+
+    def delete(key)
+      if @table.key?(key)
+        @table.delete(key)
+      elsif block_given?
+        yield key
+      end
+    end
+
+    # The key already in the map that is equal to the one given.
+    def getkey(key)
+      @table.each_key { |k| return k if k == key }
+      nil
+    end
+
+    def key?(key)
+      @table.key?(key)
+    end
+    alias_method :member?, :key?
+    alias_method :include?, :key?
+
+    def clear
+      @table.clear
+      self
+    end
+
+    def size
+      @table.size
+    end
+    alias_method :length, :size
+
+    def inspect
+      "#<ObjectSpace::WeakKeyMap:0x#{(object_id << 1).to_s(16).rjust(16, '0')} size=#{@table.size}>"
+    end
+  end unless const_defined?(:WeakKeyMap)
 end
 
 # Class.try_convert (1.9): the conversion protocol, returning nil instead of raising.
