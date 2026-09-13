@@ -525,9 +525,23 @@ namespace IronRuby.Builtins {
             var reader = new FileStream(new SafeFileHandle((IntPtr)fds[0], true), FileAccess.Read, 1, false);
             var writer = new FileStream(new SafeFileHandle((IntPtr)fds[1], true), FileAccess.Write, 1, false);
             return new RubyArray {
-                new RubyIO(context, reader, IOMode.ReadOnly),
-                new RubyIO(context, writer, IOMode.WriteOnly)
+                new RubyIO(context, reader, Adopt(context, fds[0], reader), IOMode.ReadOnly),
+                new RubyIO(context, writer, Adopt(context, fds[1], writer), IOMode.WriteOnly)
             };
+        }
+
+        /// <summary>
+        /// Files the stream under the number the kernel gave it, so that #fileno is a
+        /// descriptor a child can be told about - "write to fd 7" means nothing to a child
+        /// unless 7 is the number the kernel knows. Falls back to the usual table index if
+        /// something else already holds that number.
+        /// </summary>
+        private static int Adopt(RubyContext/*!*/ context, int descriptor, Stream/*!*/ stream) {
+            if (context.GetStream(descriptor) != null) {
+                return context.AllocateFileDescriptor(stream);
+            }
+            context.SetOrAllocateDescriptor(descriptor, stream);
+            return descriptor;
         }
 
         /// <summary>One IO reading from one stream and writing to another, which is what

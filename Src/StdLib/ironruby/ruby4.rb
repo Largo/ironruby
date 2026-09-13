@@ -6821,7 +6821,8 @@ module Process
   def self.__resolve_executable__(name, search_path = nil)
     raise Errno::ENOENT, name if name.empty?
 
-    if name.include?(File::SEPARATOR) || (File::ALT_SEPARATOR && name.include?(File::ALT_SEPARATOR))
+    named = name.include?(File::SEPARATOR) || (File::ALT_SEPARATOR && name.include?(File::ALT_SEPARATOR))
+    if named
       candidates = [name]
     else
       path = (search_path || ENV["PATH"]).to_s
@@ -6830,8 +6831,13 @@ module Process
 
     candidates.each do |candidate|
       next unless File.exist?(candidate)
-      raise Errno::EACCES, candidate if File.directory?(candidate)
-      raise Errno::EACCES, candidate unless File.executable?(candidate)
+      # A file that cannot be run is a reason to refuse only when the caller named it. A
+      # PATH search that turns one up simply keeps looking, and ends in ENOENT if nothing
+      # runnable is there - naming the command, not the last unusable file that matched.
+      unless File.executable?(candidate) && !File.directory?(candidate)
+        next unless named
+        raise Errno::EACCES, candidate
+      end
       return candidate
     end
     raise Errno::ENOENT, name
@@ -6960,6 +6966,11 @@ module Process
     __with_umask__(options[:umask]) do
       __check__(__spawn__(file, argv, envp, actions, pgroup, options[:close_others] ? true : false), file)
     end
+  rescue SystemCallError
+    # MRI forks first and only then discovers that the command cannot be run, so the child
+    # it already has exits with 127 and $? says so even though spawn itself raises.
+    __set_last_status__(__make_status__(-1, 127 << 8))
+    raise
   end
 
   # Process.exec really does replace this process: execve(2) only returns on failure.
