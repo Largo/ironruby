@@ -1399,10 +1399,21 @@ namespace IronRuby.Builtins {
 
                 // Buffered writes have to reach the descriptor before it is stat'd, and
                 // fstat needs the real OS handle, not IronRuby's descriptor table index.
-                io.Flush();
+                try {
+                    io.Flush();
+                } catch (NotSupportedException) {
+                    // A read-only console stream cannot be flushed and needs no flushing.
+                }
                 int fd = GetNativeFileDescriptor(io);
                 if (fd < 0) {
-                    throw RubyExceptions.CreateEBADF();
+                    // The console streams are not FileStreams, but their descriptors are
+                    // the well-known 0/1/2.
+                    switch (io.ConsoleStreamType) {
+                        case Microsoft.Scripting.Utils.ConsoleStreamType.Input: fd = 0; break;
+                        case Microsoft.Scripting.Utils.ConsoleStreamType.Output: fd = 1; break;
+                        case Microsoft.Scripting.Utils.ConsoleStreamType.ErrorOutput: fd = 2; break;
+                        default: throw RubyExceptions.CreateEBADF();
+                    }
                 }
 
                 Posix.StatData data;
