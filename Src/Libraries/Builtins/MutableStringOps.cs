@@ -17,6 +17,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -1652,22 +1653,13 @@ namespace IronRuby.Builtins {
             ConversionStorage<MutableString>/*!*/ toStr,
             MutableString/*!*/ self, RubyEncoding/*!*/ from, RubyEncoding/*!*/ to, TranscodeSettings settings) {
 
-            if (from == RubyEncoding.Binary && to != RubyEncoding.Binary) {
-                // The mirror of the rule above: MRI has no converter from a byte string to a
-                // character encoding, so any byte that is not ASCII is an undefined conversion.
-                byte[] raw = self.ToByteArray();
-                for (int j = 0; j < raw.Length; j++) {
-                    if (raw[j] > 0x7f && !settings.ReplaceUndefined && settings.Fallback == null) {
-                        // MRI converts through UTF-8 and names both legs when the target is not
-                        // UTF-8 itself.
-                        throw new UndefinedConversionError(to == RubyEncoding.UTF8
-                            ? RubyExceptions.FormatMessage("\"\\x{0:X2}\" from {1} to {2}", raw[j], from.Name, to.Name)
-                            : RubyExceptions.FormatMessage("\"\\x{0:X2}\" to UTF-8 in conversion from {1} to UTF-8 to {2}",
-                                raw[j], from.Name, to.Name)
-                        );
-                    }
-                }
-            }
+            // MRI has no converter between a byte string and a character encoding in either
+            // direction, so a byte above 0x7F coming out of ASCII-8BIT, and a character above
+            // 0x7F going into it, are undefined conversions however well the code point would
+            // otherwise fit.  Between ASCII-8BIT and itself nothing is converted, so nothing is
+            // undefined either.
+            bool binarySource = from == RubyEncoding.Binary && to != RubyEncoding.Binary;
+            bool binaryTarget = to == RubyEncoding.Binary && from != RubyEncoding.Binary;
 
             string text = DecodeForTranscoding(self, from, to, settings);
 
@@ -1700,7 +1692,8 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                if (CanEncode(encoder, buffer, charCount) && !(to == RubyEncoding.Binary && text[i] > 0x7f)) {
+                bool oversized = (binarySource || binaryTarget) && buffer[0] > 0x7f;
+                if (!oversized && CanEncode(encoder, buffer, charCount)) {
                     result.Append(piece);
                     continue;
                 }
@@ -1720,9 +1713,7 @@ namespace IronRuby.Builtins {
                 }
 
                 if (!settings.ReplaceUndefined) {
-                    throw new UndefinedConversionError(RubyExceptions.FormatMessage(
-                        "U+{0:X4} from {1} to {2}", Char.ConvertToUtf32(piece, 0), from.Name, to.Name
-                    ));
+                    throw CreateUndefinedConversionError(piece, from, to, binarySource);
                 }
 
                 result.Append(settings.GetReplacement(to).ConvertToString());
@@ -1732,9 +1723,47 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// The error MRI raises for a character no leg of the conversion can represent.
+        ///
+        /// A byte leaving ASCII-8BIT fails on the first leg, the one into UTF-8, so it is named by
+        /// its byte rather than by a code point and the error reports UTF-8 as its destination
+        /// however the conversion was asked for; everything else fails on the last leg, the one
+        /// into the target encoding.
+        /// </summary>
+        private static Exception/*!*/ CreateUndefinedConversionError(string/*!*/ piece,
+            RubyEncoding/*!*/ from, RubyEncoding/*!*/ to, bool binarySource) {
+
+            var path = RubyExceptions.ConversionPath(from, to);
+
+            if (binarySource) {
+                var raw = new byte[] { (byte)piece[0] };
+                return RubyExceptions.CreateUndefinedConversionError(
+                    RubyExceptions.InspectTranscodingBytes(raw), raw, path, 0);
+            }
+
+            byte[] charBytes = null;
+            try {
+                charBytes = from.StrictEncoding.GetBytes(piece);
+            } catch (EncoderFallbackException) {
+                // The character came out of the receiver's own bytes, so this should not happen;
+                // if the source encoding cannot spell it again, #error_char has nothing to show.
+            }
+
+            int codepoint = Char.ConvertToUtf32(piece, 0);
+            return RubyExceptions.CreateUndefinedConversionError(
+                "U+" + codepoint.ToString(codepoint > 0xffff ? "X" : "X4", CultureInfo.InvariantCulture),
+                charBytes, path, path.Length - 2);
+        }
+
+        /// <summary>
         /// Reads the receiver's bytes as characters of the source encoding, honouring
-        /// :invalid => :replace. A run of bytes that cannot start a character becomes one
-        /// replacement, the way MRI groups them, not one per byte.
+        /// :invalid => :replace.
+        ///
+        /// The bytes go through a stateful decoder one at a time so that the error units come out
+        /// the shape MRI reports them: an error covers the longest prefix that could still have
+        /// grown into a character, the byte that proved it could not is read again rather than
+        /// swallowed with it, and a prefix left over at the end of the input is one incomplete
+        /// character rather than a run of stray bytes.
         /// </summary>
         private static string/*!*/ DecodeForTranscoding(MutableString/*!*/ self, RubyEncoding/*!*/ from,
             RubyEncoding/*!*/ to, TranscodeSettings settings) {
@@ -1742,40 +1771,66 @@ namespace IronRuby.Builtins {
             byte[] bytes = self.ToByteArray();
             var strict = from.StrictEncoding;
 
-            if (!settings.ReplaceInvalid) {
-                try {
-                    return strict.GetString(bytes);
-                } catch (DecoderFallbackException e) {
-                    throw RubyExceptions.CreateInvalidByteSequenceError(e, from);
+            // ASCII-8BIT has no invalid bytes at all - every byte is a character of it - so the
+            // decoder dance below would be both pointless and wrong for it.
+            if (from == RubyEncoding.Binary) {
+                var raw = new StringBuilder(bytes.Length);
+                foreach (byte b in bytes) {
+                    raw.Append((char)b);
                 }
+                return raw.ToString();
             }
 
-            string replacement = settings.GetReplacement(to).ConvertToString();
+            string replacement = settings.ReplaceInvalid ? settings.GetReplacement(to).ConvertToString() : null;
             var result = new StringBuilder(bytes.Length);
+            var decoder = strict.GetDecoder();
+            var chars = new char[8];
+            int pending = 0;    // bytes seen so far that have not produced a character yet
             int i = 0;
 
             while (i < bytes.Length) {
-                int length = 0;
-                // No encoding here needs more than four bytes for one character.
-                for (int candidate = 1; candidate <= 4 && i + candidate <= bytes.Length; candidate++) {
-                    try {
-                        string decoded = strict.GetString(bytes, i, candidate);
-                        result.Append(decoded);
-                        length = candidate;
-                        break;
-                    } catch (DecoderFallbackException) {
-                        // not a whole character yet
+                int produced;
+                try {
+                    produced = decoder.GetChars(bytes, i, 1, chars, 0, false);
+                } catch (DecoderFallbackException) {
+                    // bytes[i] cannot continue what the decoder is holding.
+                    byte[] errorBytes, readAgain;
+                    if (pending != 0) {
+                        errorBytes = new byte[pending];
+                        Array.Copy(bytes, i - pending, errorBytes, 0, pending);
+                        // bytes[i] is left for the next round: it may start a character of its own.
+                        readAgain = new byte[] { bytes[i] };
+                    } else {
+                        errorBytes = new byte[] { bytes[i] };
+                        readAgain = null;
+                        i++;
                     }
+                    pending = 0;
+                    decoder = strict.GetDecoder();
+
+                    if (replacement == null) {
+                        throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, readAgain, false);
+                    }
+                    result.Append(replacement);
+                    continue;
                 }
 
-                if (length == 0) {
-                    // One replacement per byte: MRI only merges the bytes of a single truncated
-                    // character, not an arbitrary run of rubbish.
-                    result.Append(replacement);
-                    i++;
-                } else {
-                    i += length;
+                i++;
+                if (produced == 0) {
+                    pending++;
+                    continue;
                 }
+                pending = 0;
+                result.Append(chars, 0, produced);
+            }
+
+            if (pending != 0) {
+                var errorBytes = new byte[pending];
+                Array.Copy(bytes, bytes.Length - pending, errorBytes, 0, pending);
+                if (replacement == null) {
+                    throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, null, true);
+                }
+                result.Append(replacement);
             }
 
             return result.ToString();

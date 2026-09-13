@@ -153,6 +153,7 @@ namespace IronRuby.Hosting {
             // printed the four UTF-8 bytes. UTF-8 is also what the source unit's encoding resolves
             // to further down when no magic comment says otherwise, so this only stops -e from
             // being the one input path that loses bytes before the parser ever sees them.
+            // (Ruby 2.0 made UTF-8 the default script encoding; only -K overrides it.)
             return (((RubyContext)Language).RubyOptions.DefaultEncoding ?? RubyEncoding.UTF8).Encoding;
         }
         

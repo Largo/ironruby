@@ -47,12 +47,13 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("source_encoding_name")]
             public static MutableString GetSourceEncodingName(UndefinedConversionError/*!*/ self) {
-                return self.SourceEncoding != null ? MutableString.CreateAscii(self.SourceEncoding.Name) : null;
+                // MRI hands back the name the transcoder tables carry, which is a byte string.
+                return self.SourceEncoding != null ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(self.SourceEncoding.Name)) : null;
             }
 
             [RubyMethod("destination_encoding_name")]
             public static MutableString GetDestinationEncodingName(UndefinedConversionError/*!*/ self) {
-                return self.DestinationEncoding != null ? MutableString.CreateAscii(self.DestinationEncoding.Name) : null;
+                return self.DestinationEncoding != null ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(self.DestinationEncoding.Name)) : null;
             }
 
             [RubyMethod("error_char")]
@@ -79,12 +80,12 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("source_encoding_name")]
             public static MutableString GetSourceEncodingName(InvalidByteSequenceError/*!*/ self) {
-                return self.SourceEncoding != null ? MutableString.CreateAscii(self.SourceEncoding.Name) : null;
+                return self.SourceEncoding != null ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(self.SourceEncoding.Name)) : null;
             }
 
             [RubyMethod("destination_encoding_name")]
             public static MutableString GetDestinationEncodingName(InvalidByteSequenceError/*!*/ self) {
-                return self.DestinationEncoding != null ? MutableString.CreateAscii(self.DestinationEncoding.Name) : null;
+                return self.DestinationEncoding != null ? MutableString.CreateBinary(Encoding.ASCII.GetBytes(self.DestinationEncoding.Name)) : null;
             }
 
             [RubyMethod("error_bytes")]
@@ -94,7 +95,10 @@ namespace IronRuby.Builtins {
 
             [RubyMethod("readagain_bytes")]
             public static MutableString GetReadAgainBytes(InvalidByteSequenceError/*!*/ self) {
-                return self.ReadAgainBytes != null ? MutableString.CreateBinary(self.ReadAgainBytes) : null;
+                // MRI answers nil, not "", when nothing is to be read again - #primitive_errinfo is
+                // the one that reports an empty string for the same state.
+                var bytes = self.ReadAgainBytes;
+                return bytes != null && bytes.Length != 0 ? MutableString.CreateBinary(bytes) : null;
             }
 
             [RubyMethod("incomplete_input?")]

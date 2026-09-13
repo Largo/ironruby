@@ -272,6 +272,114 @@ namespace IronRuby.Runtime {
             return new InvalidByteSequenceError(FormatMessage("{0} on {1}", text.ToString(), encoding));
         }
 
+        /// <summary>
+        /// Spells a run of bytes the way String#inspect would, which is how MRI's transcoder names
+        /// the bytes it rejected.
+        /// </summary>
+        public static string/*!*/ InspectTranscodingBytes(byte[]/*!*/ bytes) {
+            var result = new StringBuilder(bytes.Length + 2);
+            result.Append('"');
+            foreach (byte b in bytes) {
+                if (b >= 0x20 && b < 0x7f && b != (byte)'"' && b != (byte)'\\') {
+                    result.Append((char)b);
+                } else {
+                    result.Append("\\x").Append(b.ToString("X2", CultureInfo.InvariantCulture));
+                }
+            }
+            result.Append('"');
+            return result.ToString();
+        }
+
+        public static string/*!*/ InvalidByteSequenceMessage(RubyEncoding/*!*/ source, byte[]/*!*/ errorBytes, byte[] readAgain, bool incomplete) {
+            if (incomplete) {
+                return FormatMessage("incomplete {0} on {1}", InspectTranscodingBytes(errorBytes), source.Name);
+            }
+            if (readAgain == null || readAgain.Length == 0) {
+                return FormatMessage("{0} on {1}", InspectTranscodingBytes(errorBytes), source.Name);
+            }
+            return FormatMessage("{0} followed by {1} on {2}",
+                InspectTranscodingBytes(errorBytes), InspectTranscodingBytes(readAgain), source.Name);
+        }
+
+        /// <summary>
+        /// The error MRI raises when a transcoder meets bytes that are not a character of the source
+        /// encoding. <paramref name="errorBytes"/> is the longest prefix that could still have grown
+        /// into a character and <paramref name="readAgain"/> the byte that proved it could not.
+        /// </summary>
+        public static Exception/*!*/ CreateInvalidByteSequenceError(RubyEncoding/*!*/ source, RubyEncoding destination,
+            byte[]/*!*/ errorBytes, byte[] readAgain, bool incomplete) {
+
+            var error = new InvalidByteSequenceError(InvalidByteSequenceMessage(source, errorBytes, readAgain, incomplete));
+            error.SourceEncoding = source;
+            error.DestinationEncoding = destination;
+            error.ErrorBytes = errorBytes;
+            error.ReadAgainBytes = readAgain ?? new byte[0];
+            error.IncompleteInput = incomplete;
+            return error;
+        }
+
+        /// <summary>
+        /// The encodings a conversion actually passes through. MRI's transcoder table has a direct
+        /// converter between UTF-8 and nearly everything else and routes the rest through UTF-8, so
+        /// a pair with UTF-8 at one end is one hop and any other pair is two.
+        /// </summary>
+        public static RubyEncoding/*!*/[]/*!*/ ConversionPath(RubyEncoding/*!*/ source, RubyEncoding/*!*/ destination) {
+            if (source == RubyEncoding.UTF8 || destination == RubyEncoding.UTF8) {
+                return new[] { source, destination };
+            }
+            return new[] { source, RubyEncoding.UTF8, destination };
+        }
+
+        /// <summary>
+        /// The name MRI's transcoder tables give an encoding. The Windows and Macintosh code pages
+        /// are spelled in upper case there while Encoding#name spells them in mixed case, and MRI
+        /// compares the two spellings byte for byte when it chooses between the short and the long
+        /// form of a conversion-error message, so the difference is visible from Ruby.
+        /// </summary>
+        public static string/*!*/ TranscoderName(RubyEncoding/*!*/ encoding) {
+            string name = encoding.Name;
+            return name.StartsWith("Windows-", StringComparison.Ordinal) || name.StartsWith("mac", StringComparison.Ordinal)
+                ? name.ToUpperInvariant() : name;
+        }
+
+        /// <summary>
+        /// MRI names only the failing leg of a conversion when that leg is the whole conversion,
+        /// and otherwise spells out the entire path: "U+65E5 from UTF-8 to EUC-JP" but "U+65E5 to
+        /// US-ASCII in conversion from UTF-16BE to UTF-8 to US-ASCII".  <paramref name="stage"/> is
+        /// the index in <paramref name="path"/> of the leg that failed.
+        /// </summary>
+        public static string/*!*/ UndefinedConversionMessage(string/*!*/ dumped, RubyEncoding/*!*/[]/*!*/ path, int stage) {
+            string stageSource = TranscoderName(path[stage]);
+            string stageDestination = TranscoderName(path[stage + 1]);
+
+            if (stageSource == path[0].Name && stageDestination == path[path.Length - 1].Name) {
+                return FormatMessage("{0} from {1} to {2}", dumped, stageSource, stageDestination);
+            }
+
+            var text = new StringBuilder(dumped);
+            text.Append(" to ").Append(stageDestination).Append(" in conversion from ").Append(path[0].Name);
+            for (int i = 1; i < path.Length; i++) {
+                text.Append(" to ").Append(TranscoderName(path[i]));
+            }
+            return text.ToString();
+        }
+
+        /// <summary>
+        /// The error MRI raises for a character no leg of the conversion can represent.
+        /// <paramref name="dumped"/> is how MRI spells the character: U+XXXX when the failing leg
+        /// reads UTF-8 and can therefore talk about code points, and an inspected byte string when
+        /// it cannot.
+        /// </summary>
+        public static Exception/*!*/ CreateUndefinedConversionError(string/*!*/ dumped, byte[] errorCharBytes,
+            RubyEncoding/*!*/[]/*!*/ path, int stage) {
+
+            var error = new UndefinedConversionError(UndefinedConversionMessage(dumped, path, stage));
+            error.SourceEncoding = path[stage];
+            error.DestinationEncoding = path[stage + 1];
+            error.ErrorCharBytes = errorCharBytes;
+            return error;
+        }
+
         public static Exception/*!*/ CreateTranscodingError(EncoderFallbackException/*!*/ e, RubyEncoding/*!*/ fromEncoding, RubyEncoding/*!*/ toEncoding) {
             return new UndefinedConversionError(
                 FormatMessage(

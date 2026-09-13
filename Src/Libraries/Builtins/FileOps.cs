@@ -104,6 +104,7 @@ namespace IronRuby.Builtins {
             if (options != null) {
                 info = info.AddOptions(toStr, options);
             }
+            self.ConversionOptions = options;
 
             // TODO: permissions
             

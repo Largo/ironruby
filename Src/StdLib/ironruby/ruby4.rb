@@ -7759,7 +7759,13 @@ class IO
     return result unless result.respond_to?(:force_encoding)
     enc = (external_encoding rescue nil) || ::Encoding.default_external
     result.force_encoding(enc) if enc
-    __transcode__(result)
+    converted = __transcode__(result)
+    return converted unless args.size >= 2 && args[1].equal?(result) && !converted.equal?(result)
+    # A caller-supplied buffer is filled in place, so the transcoded text has to
+    # go back into it rather than being handed back beside it.
+    result.force_encoding(converted.encoding)
+    result.replace(converted)
+    result
   end
 
   # set_encoding takes "external:internal" in one string as well as the two
@@ -7795,20 +7801,99 @@ class IO
     self
   end
 
+  # The conversion options the stream was opened with, reduced to the ones
+  # String#encode understands. The hash also carries :mode, :binmode and the
+  # rest of IO.open's own options, which #encode would reject.
+  DECORATOR_OPTIONS__ = [:universal_newline, :cr_newline, :crlf_newline, :newline].freeze
+  ENCODE_OPTIONS__ = ([:invalid, :undef, :replace, :fallback, :xml] + DECORATOR_OPTIONS__).freeze
+
+  def __encode_options__
+    given = (__conversion_options__ rescue nil)
+    return {} unless given.is_a?(::Hash)
+    options = {}
+    ENCODE_OPTIONS__.each { |key| options[key] = given[key] if given.key?(key) }
+    # Binary mode is the absence of conversion, and that includes the newline
+    # decorators the stream was opened with.
+    DECORATOR_OPTIONS__.each { |key| options.delete(key) } if binmode?
+    options
+  end
+  private :__encode_options__
+
+  # The newline decorators work on the bytes, not on the characters: MRI runs
+  # them beside the conversion rather than through it, so they apply to text
+  # whose bytes are not valid characters of its own encoding. They are a
+  # conversion in their own right, so they happen even when the two encodings
+  # are the same; and :universal_newline is a decorator for the way in only.
+  def __decorate_newlines__(text, options, reading)
+    newline = options[:newline]
+    if reading && (options[:universal_newline] || newline == :universal || newline == :lf)
+      return text.gsub("\r\n", "\n").gsub("\r", "\n")
+    end
+    return text.gsub("\n", "\r\n") if options[:crlf_newline] || newline == :crlf
+    return text.gsub("\n", "\r") if options[:cr_newline] || newline == :cr
+    text
+  end
+  private :__decorate_newlines__
+
+  def __decorated__(options, reading)
+    newline = options[:newline]
+    return true if options[:crlf_newline] || options[:cr_newline] || newline == :crlf || newline == :cr
+    reading && (options[:universal_newline] || newline == :universal || newline == :lf) ? true : false
+  end
+  private :__decorated__
+
   # A stream opened "r:external:internal" is asking for the bytes to be read as
-  # the external encoding and handed back as the internal one. Nothing did that,
-  # so the text came back tagged external and untranslated. #internal_encoding
+  # the external encoding and handed back as the internal one. #internal_encoding
   # already answers nil unless there is really a conversion to do - the external
   # side binary, or the two the same, both mean no - so its answer is the whole
-  # condition here.
+  # condition here, once the decorators have had their turn.
   def __transcode__(text)
     return text if text.nil?
+    return text unless text.respond_to?(:encode)
+    options = __encode_options__
+    text = __decorate_newlines__(text, options, true) if __decorated__(options, true)
     target = internal_encoding
     return text if target.nil?
-    return text unless text.respond_to?(:encode)
-    text.encode(target)
+    text.encode(target, **options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) })
   end
   private :__transcode__
+
+  # The mirror of __transcode__ for the way out. A stream opened "w:external"
+  # is asking for what is written to it to be converted into that encoding, and
+  # nothing did it, so the bytes of whatever string was handed over went
+  # straight to the file whatever its encoding said.
+  #
+  # Only a stream that was actually told an external encoding converts: MRI
+  # leaves an ordinary stream alone even when Encoding.default_external would
+  # have something to say, which is what keeps a binary string writable to
+  # $stdout.  A byte-string destination converts nothing either, and text that
+  # is already in the target encoding, or is ASCII and going somewhere that
+  # keeps ASCII where it is, needs no work.
+  def __encode_for_write__(text)
+    return text unless ::String === text
+    options = __encode_options__
+    text = __decorate_newlines__(text, options, false) if __decorated__(options, false)
+    target = external_encoding
+    return text if target.nil? || target == ::Encoding::BINARY || text.encoding == target
+    return text if text.ascii_only? && target.ascii_compatible?
+    text.encode(target, **options.reject { |key, _| DECORATOR_OPTIONS__.include?(key) })
+  end
+  private :__encode_for_write__
+
+  alias_method :__ir_write__, :write
+
+  def write(*args)
+    total = 0
+    args.each do |arg|
+      # Anything that is not already a String is left to the built-in write to
+      # convert, which is the only thing that knows how MRI complains about an
+      # object that cannot become one. String === arg rather than
+      # arg.is_a?(String) because the argument may be a BasicObject, which has
+      # no #is_a? to call.
+      total += __ir_write__(::String === arg ? __encode_for_write__(arg) : arg)
+    end
+    total
+  end
 
   # The line readers take a chomp: option, which the built-ins do not know
   # about - the options hash landed in the separator or limit parameter and came
