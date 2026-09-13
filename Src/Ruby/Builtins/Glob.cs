@@ -70,19 +70,37 @@ namespace IronRuby.Builtins {
                     return;
                 }
                 _empty = false;
-                if (c == ']' || c == '\\' || (c == '^' && _chars.Length == 0)) {
-                    _chars.Append('\\');
-                }
                 _chars.Append(c);
+            }
+
+            private static void AppendLiteral(StringBuilder/*!*/ builder, char c) {
+                if (c == ']' || c == '\\' || c == '^' || c == '-' || c == '[') {
+                    builder.Append('\\');
+                }
+                builder.Append(c);
             }
 
             internal string MakeString() {
                 if (_chars.Length == 0) {
                     return null;
                 }
-                _chars.Insert(0, _negated ? "[^" : "[");
-                _chars.Append(']');
-                return _chars.ToString();
+
+                var result = new StringBuilder(_negated ? "[^" : "[");
+                for (int i = 0; i < _chars.Length; i++) {
+                    // "a-z" is a range; "z-a" is not - glob(7) leaves a reversed range
+                    // undefined and CRuby falls back to three literal characters, while
+                    // the CLR regex engine would throw.
+                    if (i + 2 < _chars.Length && _chars[i + 1] == '-' && _chars[i] <= _chars[i + 2]) {
+                        AppendLiteral(result, _chars[i]);
+                        result.Append('-');
+                        AppendLiteral(result, _chars[i + 2]);
+                        i += 2;
+                    } else {
+                        AppendLiteral(result, _chars[i]);
+                    }
+                }
+                result.Append(']');
+                return result.ToString();
             }
         }
 
@@ -96,6 +114,14 @@ namespace IronRuby.Builtins {
         }
 
         internal static string/*!*/ PatternToRegex(string/*!*/ pattern, bool pathName, bool noEscape) {
+            return PatternToRegex(pattern, pathName, noEscape, false);
+        }
+
+        /// <param name="noLeadingDot">
+        /// Under FNM_PATHNAME without FNM_DOTMATCH a wildcard must not match a leading '.'
+        /// of *any* path segment, not just of the whole path.
+        /// </param>
+        internal static string/*!*/ PatternToRegex(string/*!*/ pattern, bool pathName, bool noEscape, bool noLeadingDot) {
             StringBuilder result = new StringBuilder(pattern.Length);
             result.Append("\\G");
 
@@ -109,7 +135,13 @@ namespace IronRuby.Builtins {
             int starRun = 0;
             bool atSegmentStart = true;
 
-            foreach (char c in pattern) {
+            for (int index = 0; index < pattern.Length; index++) {
+                char c = pattern[index];
+
+                if (noLeadingDot && atSegmentStart && !inEscape && !StartsWithLiteralDot(pattern, index, noEscape)) {
+                    result.Append("(?![.])");
+                }
+
                 if (inEscape) {
                     if (charClass != null) {
                         charClass.Add(c);
@@ -167,7 +199,9 @@ namespace IronRuby.Builtins {
                         // File.fnmatch?("a/**/b", "a/b", File::FNM_PATHNAME) is true.
                         if (pathName && starRun == 2 && starRunStart >= 0) {
                             result.Length = starRunStart;
-                            result.Append("(?:.*[/])?");
+                            // "**/" spans whole segments, each still subject to the
+                            // leading-dot rule.
+                            result.Append(noLeadingDot ? "(?:(?![.])[^/]*[/])*" : "(?:.*[/])?");
                         } else {
                             AppendExplicitRegexChar(result, c);
                         }
@@ -188,6 +222,17 @@ namespace IronRuby.Builtins {
             return (charClass == null) ? result.ToString() : String.Empty;
         }
 
+        /// <summary>
+        /// True when the pattern at <paramref name="index"/> is a literal '.', written
+        /// plainly or escaped.
+        /// </summary>
+        private static bool StartsWithLiteralDot(string/*!*/ pattern, int index, bool noEscape) {
+            if (pattern[index] == '.') {
+                return true;
+            }
+            return !noEscape && pattern[index] == '\\' && index + 1 < pattern.Length && pattern[index + 1] == '.';
+        }
+
         public static bool FnMatch(string/*!*/ pattern, string/*!*/ path, int flags) {
             if (pattern.Length == 0) {
                 return path.Length == 0;
@@ -206,12 +251,13 @@ namespace IronRuby.Builtins {
 
             bool pathName = ((flags & Constants.FNM_PATHNAME) != 0);
             bool noEscape = ((flags & Constants.FNM_NOESCAPE) != 0);
-            string regexPattern = PatternToRegex(pattern, pathName, noEscape);
+            bool noLeadingDot = pathName && (flags & Constants.FNM_DOTMATCH) == 0;
+            string regexPattern = PatternToRegex(pattern, pathName, noEscape, noLeadingDot);
             if (regexPattern.Length == 0) {
                 return false;
             }
 
-            if (((flags & Constants.FNM_DOTMATCH) == 0) && path.Length > 0 && path[0] == '.') {
+            if (!pathName && ((flags & Constants.FNM_DOTMATCH) == 0) && path.Length > 0 && path[0] == '.') {
                 // Starting dot requires an explicit dot in the pattern
                 if (regexPattern.Length < 4 || regexPattern[2] != '[' || regexPattern[3] != '.') {
                     return false;
