@@ -50,6 +50,16 @@ namespace IronRuby.Builtins {
         internal static Stream/*!*/ GetDescriptorStream(RubyContext/*!*/ context, int descriptor) {
             Stream stream = context.GetStream(descriptor);
             if (stream == null) {
+                // A descriptor this process was handed rather than opened - what a child of
+                // Process.spawn gets through a redirection - is not in IronRuby's table, so
+                // IO.new(fd) used to answer EBADF for exactly the descriptors a program has
+                // been told to use.
+                stream = RubyIO.TryAdoptDescriptor(descriptor);
+                if (stream != null) {
+                    context.SetOrAllocateDescriptor(descriptor, stream);
+                }
+            }
+            if (stream == null) {
                 throw RubyExceptions.CreateEBADF();
             }
             return stream;
@@ -135,7 +145,17 @@ namespace IronRuby.Builtins {
         }
 
         internal static RubyIO/*!*/ Reinitialize(RubyIO/*!*/ io, int descriptor, IOInfo info) {
-            io.Mode = info.Mode;
+            IOMode mode = info.Mode;
+
+            // A descriptor this process was handed rather than opened carries its own access
+            // mode, and that is the one to believe: Ruby's default of "r" is an answer about a
+            // path, and IO.new(fd) was not given one.
+            IOMode adopted;
+            if (io.Context.GetStream(descriptor) == null && RubyIO.TryGetDescriptorMode(descriptor, out adopted)) {
+                mode = (mode & ~IOMode.ReadWriteMask) | adopted;
+            }
+
+            io.Mode = mode;
             io.SetStream(GetDescriptorStream(io.Context, descriptor));
             io.SetFileDescriptor(descriptor);
 

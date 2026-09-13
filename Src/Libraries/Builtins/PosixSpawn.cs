@@ -197,6 +197,9 @@ namespace IronRuby.Builtins {
                 int error;
                 switch (ToInt(action[0])) {
                     case ActionDup2:
+                        // No need to clear FD_CLOEXEC on the source here: the action runs in
+                        // the child between fork and exec, where the flag has not taken effect
+                        // yet, and glibc handles "dup2 a descriptor to itself" by clearing it.
                         error = SysFileActionsAddDup2(fileActions,
                             ToInt(action[2]), ToInt(action[1]));
                         break;
@@ -225,13 +228,46 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// close_others: every descriptor above the standard three that the child was not
+        /// explicitly given is closed. The closes go after the redirections, so a descriptor
+        /// that was dup2'd from is closed in the child, but only once the copy exists.
+        /// </summary>
+        private static int AddCloseOthers(IntPtr fileActions, RubyArray actions) {
+            var keep = new HashSet<int>();
+            if (actions != null) {
+                foreach (var item in actions) {
+                    var action = (RubyArray)item;
+                    int opcode = ToInt(action[0]);
+                    if (opcode == ActionDup2 || opcode == ActionOpen) {
+                        keep.Add(ToInt(action[1]));
+                    }
+                }
+            }
+
+            // There is no portable way to ask which descriptors are open, and walking /proc
+            // would need a descriptor of its own; asking the kernel about each in turn is a
+            // cheap syscall and the limit is a thousand or so in practice.
+            for (int fd = 3; fd < 4096; fd++) {
+                if (keep.Contains(fd) || SysFcntl(fd, F_GETFD, 0) < 0) {
+                    continue;
+                }
+                int error = SysFileActionsAddClose(fileActions, fd);
+                if (error != 0) {
+                    return -error;
+                }
+            }
+            return 0;
+        }
+
+        /// <summary>
         /// posix_spawn(3). Returns the child's pid, or -errno. glibc reports a failure of the
         /// execve in the child back through the return value, so a missing or unusable command
         /// is ENOENT/EACCES from here rather than a silent exit status 127.
         /// </summary>
         [RubyMethod("__spawn__", RubyMethodAttributes.PublicSingleton)]
         public static object SpawnPrimitive(RubyContext/*!*/ context, RubyModule/*!*/ self,
-            [NotNull]MutableString/*!*/ file, [NotNull]RubyArray/*!*/ argv, RubyArray envp, RubyArray actions, object pgroup) {
+            [NotNull]MutableString/*!*/ file, [NotNull]RubyArray/*!*/ argv, RubyArray envp, RubyArray actions,
+            object pgroup, bool closeOthers) {
 
             // posix_spawn_file_actions_t is 80 bytes and posix_spawnattr_t 336 on glibc; both
             // are opaque, so over-allocate rather than mirror a private layout.
@@ -251,6 +287,13 @@ namespace IronRuby.Builtins {
                 int error = ApplyActions(fileActions, strings, actions);
                 if (error != 0) {
                     return ScriptingRuntimeHelpers.Int32ToObject(error);
+                }
+
+                if (closeOthers) {
+                    error = AddCloseOthers(fileActions, actions);
+                    if (error != 0) {
+                        return ScriptingRuntimeHelpers.Int32ToObject(error);
+                    }
                 }
 
                 if (pgroup != null) {
@@ -296,6 +339,19 @@ namespace IronRuby.Builtins {
             try {
                 IntPtr path = strings.Allocate(file);
 
+                // A descriptor that was explicitly named in the options survives the exec even
+                // if the exec fails, which is what MRI guarantees - so the close-on-exec flags
+                // come off before anything can go wrong.
+                if (actions != null) {
+                    foreach (var item in actions) {
+                        var action = (RubyArray)item;
+                        if (ToInt(action[0]) == ActionDup2) {
+                            ClearCloseOnExec(ToInt(action[1]));
+                            ClearCloseOnExec(ToInt(action[2]));
+                        }
+                    }
+                }
+
                 // Applying the redirections is destructive, so refuse before touching anything
                 // if the command could not have been run anyway.
                 if (SysAccess(path, X_OK) != 0) {
@@ -307,7 +363,9 @@ namespace IronRuby.Builtins {
                         var action = (RubyArray)item;
                         switch (ToInt(action[0])) {
                             case ActionDup2:
-                                SysDup2(ToInt(action[2]), ToInt(action[1]));
+                                if (ToInt(action[1]) != ToInt(action[2])) {
+                                    SysDup2(ToInt(action[2]), ToInt(action[1]));
+                                }
                                 break;
 
                             case ActionClose:
@@ -374,6 +432,18 @@ namespace IronRuby.Builtins {
             var childStatus = new Status(result, status);
             context.ChildProcessExitStatus = childStatus;
             return new RubyArray { ScriptingRuntimeHelpers.Int32ToObject(result), childStatus };
+        }
+
+        /// <summary>
+        /// dup2 clears FD_CLOEXEC on the descriptor it creates, but "redirect this descriptor
+        /// to itself" is a no-op that would leave the flag on - and it is precisely how a Ruby
+        /// program says "let the child have this one".
+        /// </summary>
+        private static void ClearCloseOnExec(int fd) {
+            int flags = SysFcntl(fd, F_GETFD, 0);
+            if (flags >= 0 && (flags & FD_CLOEXEC) != 0) {
+                SysFcntl(fd, F_SETFD, flags & ~FD_CLOEXEC);
+            }
         }
 
         /// <summary>
@@ -500,7 +570,7 @@ namespace IronRuby.Builtins {
                     ScriptingRuntimeHelpers.Int32ToObject(fds[1])
                 });
 
-                pid = ToInt(SpawnPrimitive(context, null, file, argv, envp, redirected, null));
+                pid = ToInt(SpawnPrimitive(context, null, file, argv, envp, redirected, null, false));
                 if (pid < 0) {
                     throw RubyExceptions.CreateENOENT(file.ToString());
                 }

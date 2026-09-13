@@ -6808,6 +6808,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.GetSid)
             );
             
+            DefineLibraryMethod(module, "__initgroups__", 0x61, 
+                0x00030002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.InitGroups)
+            );
+            
             DefineLibraryMethod(module, "__issetugid__", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, System.Object>(IronRuby.Builtins.RubyProcess.IsSetUgid)
@@ -6838,6 +6843,26 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.SetLastStatus)
             );
             
+            DefineLibraryMethod(module, "__setegid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetEgid)
+            );
+            
+            DefineLibraryMethod(module, "__seteuid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetEuid)
+            );
+            
+            DefineLibraryMethod(module, "__setgid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetGid)
+            );
+            
+            DefineLibraryMethod(module, "__setgroups__", 0x61, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray, System.Int32>(IronRuby.Builtins.RubyProcess.SetGroups)
+            );
+            
             DefineLibraryMethod(module, "__setpgid__", 0x61, 
                 0x00030000U, 
                 new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetPgid)
@@ -6858,9 +6883,14 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.Builtins.RubyProcess.SetSid)
             );
             
+            DefineLibraryMethod(module, "__setuid__", 0x61, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.Builtins.RubyProcess.SetUid)
+            );
+            
             DefineLibraryMethod(module, "__spawn__", 0x61, 
                 0x0000000cU, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, System.Object, System.Object>(IronRuby.Builtins.RubyProcess.SpawnPrimitive)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, IronRuby.Builtins.RubyArray, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.RubyProcess.SpawnPrimitive)
             );
             
             DefineLibraryMethod(module, "__waitpid__", 0x61, 

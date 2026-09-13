@@ -2350,6 +2350,21 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Records a stream against a descriptor number the operating system chose, filling
+        /// the table out to it. Only an adopted descriptor needs this: everything IronRuby
+        /// opens itself gets the next free index instead.
+        /// </summary>
+        public void SetOrAllocateDescriptor(int descriptor, Stream/*!*/ stream) {
+            ContractUtils.RequiresNotNull(stream, "stream");
+            lock (_fileDescriptors) {
+                while (_fileDescriptors.Count <= descriptor) {
+                    _fileDescriptors.Add(null);
+                }
+                _fileDescriptors[descriptor] = new FileDescriptor(stream);
+            }
+        }
+
         public int AllocateFileDescriptor(Stream/*!*/ stream) {
             ContractUtils.RequiresNotNull(stream, "stream");
             lock (_fileDescriptors) {

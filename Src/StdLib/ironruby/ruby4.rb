@@ -6569,12 +6569,60 @@ module Process
     module_function :maxgroups=
   end
 
+  # MRI's conversion of anything that claims to be a pid or an id, including the two
+  # different TypeErrors it reports for "no #to_int" and "#to_int gave something else".
+  def self.__integer_value__(value)
+    return value if value.is_a?(Integer)
+    unless value.respond_to?(:to_int)
+      raise TypeError, "no implicit conversion of #{value.class} into Integer"
+    end
+    result = value.to_int
+    unless result.is_a?(Integer)
+      raise TypeError, "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{result.class})"
+    end
+    result
+  end
+
+  # A user or group name is allowed wherever an id is, and is looked up the way MRI
+  # looks it up.
+  def self.__user_id__(value)
+    return __integer_value__(value) unless value.is_a?(String)
+    require "etc"
+    entry = begin
+              Etc.getpwnam(value)
+            rescue StandardError
+              nil
+            end
+    raise ArgumentError, "can't find user for #{value}" unless entry
+    entry.uid
+  end
+
+  def self.__group_id__(value)
+    return __integer_value__(value) unless value.is_a?(String)
+    require "etc"
+    entry = begin
+              Etc.getgrnam(value)
+            rescue StandardError
+              nil
+            end
+    raise ArgumentError, "can't find group for #{value}" unless entry
+    entry.gid
+  end
+
   unless respond_to?(:detach)
-    # A thread that reaps the child and whose #value is the exit status, plus the
-    # #pid reader MRI puts on it.
+    # A thread that reaps the child and whose #value is the exit status, plus the #pid
+    # reader and the :pid thread-local MRI puts on it. A pid that is not ours is not an
+    # error here: MRI's detach thread just ends with no status.
     def detach(pid)
-      pid = pid.to_int
-      thread = Thread.new(pid) { |p| Process.wait2(p)[1] }
+      pid = __integer_value__(pid)
+      thread = Thread.new(pid) do |p|
+        begin
+          Process.wait2(p)[1]
+        rescue SystemCallError
+          nil
+        end
+      end
+      thread[:pid] = pid
       thread.define_singleton_method(:pid) { pid }
       thread
     end
@@ -6910,7 +6958,7 @@ module Process
   def self.spawn(*args)
     file, argv, envp, actions, pgroup, options = __spawn_setup__(args)
     __with_umask__(options[:umask]) do
-      __check__(__spawn__(file, argv, envp, actions, pgroup), file)
+      __check__(__spawn__(file, argv, envp, actions, pgroup, options[:close_others] ? true : false), file)
     end
   end
 
@@ -6918,6 +6966,17 @@ module Process
   # Anything Ruby still has buffered would be lost with the address space, so it is
   # flushed first.
   def self.exec(*args)
+    # MRI takes close-on-exec off every descriptor the options name before it so much as
+    # looks at the command, so that one named in a redirection is still usable if the exec
+    # turns out to be impossible.
+    args.each do |argument|
+      next if argument.is_a?(String) || argument.is_a?(Array) || !argument.respond_to?(:to_hash)
+      argument.to_hash.each_key do |key|
+        next unless __spawn_redirect_key?(key)
+        __spawn_key_fds__(key).each { |fd| __set_cloexec__(fd, false) }
+      end
+    end
+
     file, argv, envp, actions, _pgroup, options = __spawn_setup__(args)
     File.umask(options[:umask].to_int) if options[:umask]
     [$stdout, $stderr].each do |io|
@@ -7042,6 +7101,53 @@ module Process
     module_function :setsid
   end
 
+  unless respond_to?(:getpgrp)
+    def getpgrp
+      __check__(__getpgid__(0))
+    end
+    module_function :getpgrp
+
+    def setpgrp
+      __check__(__setpgid__(0, 0))
+      0
+    end
+    module_function :setpgrp
+  end
+
+  # The real and effective ids. MRI takes a name as well as a number for the ones that
+  # name a user or a group, and the C# side hands back -errno so that EPERM comes out as
+  # Errno::EPERM rather than as a bare failure.
+  def self.uid=(value)
+    __check__(__setuid__(__user_id__(value)))
+    value
+  end
+
+  def self.euid=(value)
+    __check__(__seteuid__(__user_id__(value)))
+    value
+  end
+
+  def self.gid=(value)
+    __check__(__setgid__(__group_id__(value)))
+    value
+  end
+
+  def self.egid=(value)
+    __check__(__setegid__(__group_id__(value)))
+    value
+  end
+
+  def self.groups=(list)
+    gids = list.to_ary.map { |gid| __group_id__(gid) }
+    __check__(__setgroups__(gids))
+    list
+  end
+
+  def self.initgroups(user, group)
+    __check__(__initgroups__(user.to_s, __group_id__(group)))
+    groups
+  end
+
   unless respond_to?(:getpriority)
     def getpriority(which, who)
       __check__(__getpriority__(which.to_int, who.to_int))
@@ -7086,31 +7192,34 @@ module Process
 
   # waitpid(2) itself, so that a child that was killed is reported as killed rather
   # than as having exited with 128 plus the signal number.
-  def self.waitpid2(pid = -1, flags = 0)
-    result = __waitpid__(pid.to_int, flags.to_int)
+  def self.__wait2__(pid, flags)
+    result = __waitpid__(__integer_value__(pid), __integer_value__(flags))
     return nil if result.nil?
     __check__(result)
     result
   end
 
-  def self.waitpid(pid = -1, flags = 0)
-    result = waitpid2(pid, flags)
+  def self.wait(pid = -1, flags = 0)
+    result = __wait2__(pid, flags)
     result && result[0]
   end
 
-  def self.wait(pid = -1, flags = 0)
-    waitpid(pid, flags)
+  def self.wait2(pid = -1, flags = 0)
+    __wait2__(pid, flags)
   end
 
-  def self.wait2(pid = -1, flags = 0)
-    waitpid2(pid, flags)
+  # Not four methods that call one another: MRI defines two and aliases them, and a spec
+  # compares Process.method(:waitpid) with Process.method(:wait).
+  class << self
+    alias_method :waitpid, :wait
+    alias_method :waitpid2, :wait2
   end
 
   def self.waitall
     results = []
     loop do
       begin
-        pair = waitpid2(-1, 0)
+        pair = __wait2__(-1, 0)
       rescue SystemCallError
         break
       end
@@ -7120,21 +7229,22 @@ module Process
     results
   end
 
+  # Daemonising means forking, and there is no fork on the CLR. MRI defines the method
+  # on platforms that cannot do it too, as the function that raises NotImplementedError,
+  # and that function is exactly the case respond_to? answers false for - so portable
+  # code asks whether the feature is there rather than whether the name is.
+  NOT_IMPLEMENTED_METHODS = [:daemon, :fork].freeze unless const_defined?(:NOT_IMPLEMENTED_METHODS)
+
   unless respond_to?(:daemon)
-    # No fork, so the best we can do is the parts that are syscalls: detach from the
-    # controlling terminal, move to / and send the standard streams to /dev/null. The
-    # process does not become a child of init, which nothing portable can observe from
-    # inside it anyway.
     def daemon(nochdir = nil, noclose = nil)
-      setsid rescue nil
-      Dir.chdir("/") unless nochdir
-      unless noclose
-        null = File.open(File::NULL, "r+")
-        [$stdin, $stdout, $stderr].each { |io| io.reopen(null) rescue nil }
-      end
-      0
+      raise NotImplementedError, "daemon() function is unimplemented on this machine"
     end
     module_function :daemon
+  end
+
+  def self.respond_to?(name, include_all = false)
+    return false if NOT_IMPLEMENTED_METHODS.include?(name.to_sym)
+    Module.instance_method(:respond_to?).bind(self).call(name, include_all)
   end
 end
 

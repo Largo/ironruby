@@ -489,6 +489,52 @@ namespace IronRuby.Builtins {
             return (descriptor < 0) ? -1 : sys_dup(descriptor);
         }
 
+        /// <summary>
+        /// Whether the descriptor is open, and how. The low two bits of IOMode are O_ACCMODE
+        /// by construction. Ruby's default mode of "r" is an answer about a path; a descriptor
+        /// already knows what it was opened for, which is what MRI reports for one handed to
+        /// IO.new without a mode.
+        /// </summary>
+        public static bool TryGetDescriptorMode(int descriptor, out IOMode mode) {
+            mode = IOMode.ReadOnly;
+            if (!_hasFileControl || descriptor < 0) {
+                return false;
+            }
+            int flags = sys_fcntl(descriptor, F_GETFL, 0);
+            if (flags < 0) {
+                return false;
+            }
+            mode = (IOMode)(flags & (int)IOMode.ReadWriteMask);
+            return true;
+        }
+
+        /// <summary>
+        /// A stream over a descriptor this process was handed rather than opened - the way a
+        /// child of Process.spawn receives one through a redirection. IronRuby's descriptor
+        /// table knows nothing about it, so IO.new(fd) could only ever answer EBADF for it.
+        /// </summary>
+        public static System.IO.Stream TryAdoptDescriptor(int descriptor) {
+            IOMode mode;
+            if (!TryGetDescriptorMode(descriptor, out mode)) {
+                return null;
+            }
+            System.IO.FileAccess access;
+            switch (mode) {
+                case IOMode.WriteOnly: access = System.IO.FileAccess.Write; break;
+                case IOMode.ReadWrite: access = System.IO.FileAccess.ReadWrite; break;
+                default: access = System.IO.FileAccess.Read; break;
+            }
+            try {
+                // ownsHandle: false - the descriptor belongs to whoever passed it in, and a
+                // finalizer closing, say, the inherited standard output would be a disaster.
+                return new System.IO.FileStream(
+                    new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)descriptor, false), access, 1, false
+                );
+            } catch (Exception) {
+                return null;
+            }
+        }
+
         /// <summary>The native descriptor of an IO, for Ruby code that needs one.</summary>
         public static int GetNativeDescriptor(RubyIO/*!*/ io) {
             return io.NativeDescriptor;
