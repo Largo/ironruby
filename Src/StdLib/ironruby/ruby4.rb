@@ -679,8 +679,11 @@ module Kernel
 end
 
 class Array
+  # #dig indexes with an Integer and nothing else: unlike #[] it does not take a
+  # Range or an arithmetic sequence, because there would be no way to keep
+  # digging into the several elements that would answer.
   def dig(key, *rest)
-    __dig_step__(self[key], rest)
+    __dig_step__(self[__array_to_int__(key)], rest)
   end unless method_defined?(:dig)
 
   # No Array#sum here on purpose: Enumerable#sum already does the compensated
@@ -972,7 +975,10 @@ class Array
   def __array_to_int__(value)
     return value if value.is_a?(Integer)
     unless value.respond_to?(:to_int)
-      raise TypeError, "no implicit conversion of #{value.nil? ? 'nil' : value.class} into Integer"
+      if value.nil?
+        raise TypeError, "no implicit conversion from nil to integer"
+      end
+      raise TypeError, "no implicit conversion of #{value.class} into Integer"
     end
     converted = value.to_int
     unless converted.is_a?(Integer)
