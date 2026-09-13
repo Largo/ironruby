@@ -260,7 +260,12 @@ namespace IronRuby.Runtime.Conversions {
                         // what it has overridden, and both answers are known here rather than at
                         // call time - an object that has overridden neither (the overwhelmingly
                         // common case) costs nothing extra.
-                        customMethodMissing = IsOverridden(methodMissing.Info, targetClass.Context.BasicObjectClass);
+                        // The method_missing a hosting scope installs on main is there to resolve
+                        // names from that scope, not to answer conversions, and it needs a scope
+                        // that a conversion site has no way to pass. Asking it for #to_ary is both
+                        // meaningless and fatal, so it does not count as overridden here.
+                        customMethodMissing = IsOverridden(methodMissing.Info, targetClass.Context.BasicObjectClass)
+                            && !(methodMissing.Info is RubyScopeMethodMissingInfo);
                         customRespondToMissing = IsOverridden(
                             targetClass.ResolveMethodForSiteNoLock(Symbols.RespondToMissing, VisibilityContext.AllVisible).Info,
                             targetClass.Context.KernelModule

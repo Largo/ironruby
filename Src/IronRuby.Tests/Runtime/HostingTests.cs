@@ -205,8 +205,14 @@ py_add
             AssertOutput(() =>
                 Engine.Execute(@"
 class Object
+  # Deliberately written without #puts or a block: every conversion the
+  # interpreter attempts on the way - #to_ary for the argument list, #to_ary to
+  # destructure a block parameter - now reaches method_missing, so a
+  # method_missing defined this widely and implemented with either would call
+  # itself forever. MRI warns about exactly this when Object#method_missing is
+  # redefined.
   def method_missing *args
-    puts args
+    $stdout.write(args[0].to_s + ""\n"" + args[1].to_s + ""\n"" + args[2].to_s + ""\n"" + args[3].to_s + ""\n"")
   end
 end
 
