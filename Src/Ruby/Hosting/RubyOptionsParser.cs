@@ -36,6 +36,8 @@ namespace IronRuby.Hosting {
         private readonly List<string>/*!*/ _loadPaths = new List<string>();
         private readonly List<string>/*!*/ _requiredPaths = new List<string>();
         private RubyEncoding _defaultEncoding;
+        private string _externalEncodingName;
+        private string _internalEncodingName;
         private bool _disableRubyGems;
 
 #if DEBUG
@@ -130,6 +132,40 @@ namespace IronRuby.Hosting {
 
             if (arg.StartsWith("-K", StringComparison.Ordinal)) {
                 _defaultEncoding = arg.Length >= 3 ? RubyEncoding.GetEncodingByNameInitial(arg[2]) : null;
+                return;
+            }
+
+            // -Eext, -E ext, -Eext:int and the long spellings. Unlike -K this says nothing about
+            // how the source is read: it sets Encoding.default_external (and default_internal).
+            if (arg.StartsWith("-E", StringComparison.Ordinal) || arg.StartsWith("--encoding", StringComparison.Ordinal)) {
+                string value;
+                if (arg == "-E" || arg == "--encoding") {
+                    value = PopNextArg();
+                } else if (arg.StartsWith("--encoding=", StringComparison.Ordinal)) {
+                    value = arg.Substring("--encoding=".Length);
+                } else if (arg.StartsWith("-E", StringComparison.Ordinal)) {
+                    value = arg.Substring(2);
+                } else {
+                    throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));
+                }
+
+                int separator = value.IndexOf(':');
+                if (separator >= 0) {
+                    _externalEncodingName = value.Substring(0, separator);
+                    _internalEncodingName = value.Substring(separator + 1);
+                } else {
+                    _externalEncodingName = value;
+                }
+                return;
+            }
+
+            if (arg.StartsWith("--external-encoding=", StringComparison.Ordinal)) {
+                _externalEncodingName = arg.Substring("--external-encoding=".Length);
+                return;
+            }
+
+            if (arg.StartsWith("--internal-encoding=", StringComparison.Ordinal)) {
+                _internalEncodingName = arg.Substring("--internal-encoding=".Length);
                 return;
             }
 
@@ -337,7 +373,9 @@ namespace IronRuby.Hosting {
 
             LanguageSetup.Options["RequiredPaths"] = _requiredPaths;
 
-            LanguageSetup.Options["DefaultEncoding"] = _defaultEncoding;                        
+            LanguageSetup.Options["DefaultEncoding"] = _defaultEncoding;
+            LanguageSetup.Options["ExternalEncoding"] = _externalEncodingName;
+            LanguageSetup.Options["InternalEncoding"] = _internalEncodingName;
             LanguageSetup.Options["LocaleEncoding"] = _defaultEncoding ??
                 RubyEncoding.GetRubyEncoding(Console.InputEncoding);
 

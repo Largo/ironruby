@@ -506,6 +506,15 @@ namespace IronRuby.Runtime {
             _valueTypeInstanceData = new Dictionary<object, RubyInstanceData>();
             _inputProvider = new RubyInputProvider(this, _options.Arguments, _options.LocaleEncoding);
             _defaultExternalEncoding = _options.DefaultEncoding ?? _options.LocaleEncoding;
+            // -E / --encoding, resolved here rather than in the options parser because looking an
+            // encoding up by its Ruby name needs a context. It overrides both -K and the locale:
+            // that is the whole point of the option.
+            if (_options.ExternalEncodingName != null) {
+                _defaultExternalEncoding = GetCommandLineEncoding(_options.ExternalEncodingName);
+            }
+            if (_options.InternalEncodingName != null) {
+                DefaultInternalEncoding = GetCommandLineEncoding(_options.InternalEncodingName);
+            }
             _globalScope = DomainManager.Globals;
             _loader = new Loader(this);
             _emptyScope = new RubyTopLevelScope(this);            
@@ -2972,6 +2981,21 @@ namespace IronRuby.Runtime {
         }
 
         /// <exception cref="ArgumentException">Unknown encoding.</exception>
+        /// <summary>
+        /// An encoding named on the command line by -E or --encoding. A bad name there is a
+        /// startup error, not a Ruby exception - there is no Ruby program running yet to rescue
+        /// it - so the .NET lookup failure is replaced by MRI's own wording.
+        /// </summary>
+        private RubyEncoding/*!*/ GetCommandLineEncoding(string/*!*/ name) {
+            try {
+                return RubyEncoding.GetRubyEncoding(GetEncodingByRubyName(name));
+            } catch (ArgumentException) {
+                throw new ArgumentException("unknown encoding name - " + name);
+            } catch (NotSupportedException) {
+                throw new ArgumentException("unknown encoding name - " + name);
+            }
+        }
+
         public Encoding/*!*/ GetEncodingByRubyName(string/*!*/ name) {
             ContractUtils.RequiresNotNull(name, "name");
 

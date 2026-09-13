@@ -28,6 +28,8 @@ namespace IronRuby.Runtime {
         private readonly ReadOnlyCollection<string>/*!*/ _arguments;
         private readonly RubyEncoding/*!*/ _localeEncoding;
         private readonly RubyEncoding _defaultEncoding;
+        private readonly string _externalEncodingName;
+        private readonly string _internalEncodingName;
         private readonly string _standardLibraryPath;
         private readonly string _applicationBase;
         private readonly ReadOnlyCollection<string> _requirePaths;
@@ -57,6 +59,24 @@ namespace IronRuby.Runtime {
 
         public RubyEncoding DefaultEncoding {
             get { return _defaultEncoding; }
+        }
+
+        /// <summary>
+        /// Encoding.default_external as named by -E / --encoding / --external-encoding, or null.
+        /// Distinct from <see cref="DefaultEncoding"/>, which is -K and says how the *source* is
+        /// to be read; the two are independent in MRI. Kept as a name rather than a RubyEncoding
+        /// because resolving one needs the context that is not built yet when options are parsed.
+        /// </summary>
+        public string ExternalEncodingName {
+            get { return _externalEncodingName; }
+        }
+
+        /// <summary>
+        /// Encoding.default_internal as named by -E ext:int / --internal-encoding, or null - and
+        /// null is the normal state, meaning no transcoding on read.
+        /// </summary>
+        public string InternalEncodingName {
+            get { return _internalEncodingName; }
         }
 
         public string MainFile {
@@ -119,6 +139,8 @@ namespace IronRuby.Runtime {
             _arguments = GetStringCollectionOption(options, "Arguments") ?? EmptyStringCollection;
             _localeEncoding = GetOption(options, "LocaleEncoding", RubyEncoding.UTF8);
             _defaultEncoding = GetOption<RubyEncoding>(options, "DefaultEncoding", null);
+            _externalEncodingName = GetOption<string>(options, "ExternalEncoding", null);
+            _internalEncodingName = GetOption<string>(options, "InternalEncoding", null);
 
             _mainFile = GetOption(options, "MainFile", (string)null);
             _verbosity = GetOption(options, "Verbosity", 1);
