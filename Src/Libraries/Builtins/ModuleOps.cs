@@ -858,27 +858,92 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("const_defined?")]
-        public static bool IsConstantDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            return IsConstantDefined(self, constantName, true);
+        public static bool IsConstantDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object constantName) {
+            return IsConstantDefined(stringCast, self, constantName, true);
         }
 
         [RubyMethod("const_defined?")]
-        public static bool IsConstantDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName, bool inherit) {
-            RubyUtils.CheckConstantName(constantName);
-            object constant;
+        public static bool IsConstantDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object constantName,
+            bool inherit) {
 
-            // Passing null as the autoload scope so that a registered autoload answers true
-            // without running: MRI reports the constant as defined but does not trigger it here.
-            // inherit defaults to true - the ancestors are searched unless it is explicitly false.
-            return inherit
-                ? self.TryResolveConstant(null, constantName, out constant)
-                : self.TryGetConstant(null, constantName, out constant);
+            bool isTopLevel;
+            string[] parts = SplitConstantName(stringCast, constantName, out isTopLevel);
+            var context = self.Context;
+            RubyModule owner = isTopLevel ? context.ObjectClass : self;
+
+            // MRI searches Object for the first segment only (rb_const_defined vs rb_const_defined_from).
+            bool lookupObject = inherit && !isTopLevel;
+
+            for (int i = 0; i < parts.Length; i++) {
+                object value;
+
+                // Passing null as the autoload scope so that a registered autoload answers true
+                // without running: MRI reports the constant as defined but does not trigger it here.
+                bool found = inherit
+                    ? owner.TryResolveConstant(null, parts[i], out value)
+                    : owner.TryGetConstant(null, parts[i], out value);
+
+                if (!found && lookupObject && !owner.IsObjectClass) {
+                    found = context.ObjectClass.TryResolveConstant(null, parts[i], out value);
+                }
+                lookupObject = false;
+
+                if (!found) {
+                    return false;
+                }
+                if (i == parts.Length - 1) {
+                    return true;
+                }
+
+                owner = value as RubyModule;
+                if (owner == null) {
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                }
+            }
+
+            return false;
         }
 
         // thread-safe:
         [RubyMethod("const_get")]
-        public static object GetConstantValue(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            return RubyUtils.GetConstant(scope.GlobalScope, self, constantName, true);
+        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName) {
+            return GetConstantValue(stringCast, scope, self, constantName, true);
+        }
+
+        // thread-safe:
+        [RubyMethod("const_get")]
+        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName, bool inherit) {
+
+            bool isTopLevel;
+            string[] parts = SplitConstantName(stringCast, constantName, out isTopLevel);
+            var context = self.Context;
+            RubyModule owner = isTopLevel ? context.ObjectClass : self;
+
+            // MRI searches Object for the first segment only (rb_const_get vs rb_const_get_from).
+            bool lookupObject = inherit && !isTopLevel;
+
+            object value = null;
+            for (int i = 0; i < parts.Length; i++) {
+                if (inherit) {
+                    value = RubyUtils.GetConstant(scope.GlobalScope, owner, parts[i], lookupObject);
+                } else if (!owner.TryGetConstant(scope.GlobalScope, parts[i], out value)) {
+                    value = ConstantMissing(owner, parts[i]);
+                }
+                lookupObject = false;
+
+                if (i == parts.Length - 1) {
+                    break;
+                }
+
+                owner = value as RubyModule;
+                if (owner == null) {
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                }
+            }
+
+            return value;
         }
 
         // thread-safe:
@@ -954,17 +1019,20 @@ namespace IronRuby.Builtins {
             var context = self.Context;
 
             RubyModule owner = isTopLevel ? context.ObjectClass : self;
+            bool lookupObject = inherit && !isTopLevel;
 
             // Resolve everything but the last segment; only the last one's location is reported.
             for (int i = 0; i < parts.Length - 1; i++) {
                 object value;
-                bool found = (inherit || i > 0)
+                bool found = inherit
                     ? owner.TryResolveConstant(scope.GlobalScope, parts[i], out value)
                     : owner.TryGetConstant(scope.GlobalScope, parts[i], out value);
 
-                if (!found && (inherit || i > 0) && !owner.IsObjectClass && owner.IsClass) {
+                if (!found && lookupObject && !owner.IsObjectClass) {
                     found = context.ObjectClass.TryResolveConstant(scope.GlobalScope, parts[i], out value);
                 }
+                lookupObject = false;
+
                 if (!found) {
                     return null;
                 }
@@ -976,7 +1044,7 @@ namespace IronRuby.Builtins {
             }
 
             string lastName = parts[parts.Length - 1];
-            RubyModule definingModule = FindConstantOwner(context, scope, owner, lastName, inherit);
+            RubyModule definingModule = FindConstantOwner(context, scope, owner, lastName, inherit, lookupObject);
             if (definingModule == null) {
                 return null;
             }
@@ -993,7 +1061,7 @@ namespace IronRuby.Builtins {
 
         // Returns the module in the lookup path of <paramref name="owner"/> that defines the constant, or null.
         private static RubyModule FindConstantOwner(RubyContext/*!*/ context, RubyScope/*!*/ scope, RubyModule/*!*/ owner,
-            string/*!*/ name, bool inherit) {
+            string/*!*/ name, bool inherit, bool lookupObject) {
 
             RubyModule result = null;
             using (context.ClassHierarchyLocker()) {
@@ -1006,7 +1074,7 @@ namespace IronRuby.Builtins {
                 });
             }
 
-            if (result == null && inherit && !owner.IsObjectClass && !owner.IsClass) {
+            if (result == null && lookupObject && !owner.IsObjectClass) {
                 // A Module's lookup path ends at Object for reads (MRI searches Object last for modules too).
                 using (context.ClassHierarchyLocker()) {
                     context.ObjectClass.ForEachConstant(true, (module, constantName, value) => {

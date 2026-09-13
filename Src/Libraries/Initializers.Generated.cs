@@ -6103,14 +6103,15 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "const_defined?", 0x51, 
-                0x00010002U, 0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.IsConstantDefined), 
-                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean, System.Boolean>(IronRuby.Builtins.ModuleOps.IsConstantDefined)
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Boolean>(IronRuby.Builtins.ModuleOps.IsConstantDefined), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Boolean, System.Boolean>(IronRuby.Builtins.ModuleOps.IsConstantDefined)
             );
             
             DefineLibraryMethod(module, "const_get", 0x51, 
-                0x00020004U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.GetConstantValue)
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.GetConstantValue), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.ModuleOps.GetConstantValue)
             );
             
             DefineLibraryMethod(module, "const_missing", 0x51, 
