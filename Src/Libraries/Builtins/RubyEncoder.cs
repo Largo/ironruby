@@ -640,7 +640,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            var result = MutableString.CreateBinary(outputSize);
+            // The pieces are always '0' and '1', and MRI hands them back as US-ASCII rather than
+            // in the receiver's encoding or ASCII-8BIT.
+            var result = MutableString.CreateMutable(outputSize, RubyEncoding.Ascii);
             if (outputSize == 0) {
                 return result;
             }
@@ -1007,6 +1009,17 @@ namespace IronRuby.Builtins {
                 return c == ' ' || c == '\t' || c == '\n' || c == '\v' || c == '\f' || c == '\r';
             }
 
+            /// <summary>
+            /// The directive letters MRI knows. Both pack and unpack accept the same set; 'k',
+            /// 'o', 'r', 't', 'y' and their upper case forms are not directives, and a format
+            /// containing one is an error rather than something to skip over.
+            /// </summary>
+            private const string KnownDirectives = "aAZbBhHcCsSiIlLqQjJnNvVUwmMuPpDdFfEeGgxX@";
+
+            private static bool IsKnownDirective(char c) {
+                return KnownDirectives.IndexOf(c) >= 0;
+            }
+
             internal static IEnumerable<FormatDirective>/*!*/ Enumerate(string/*!*/ format) {
                 return Enumerate(format, false);
             }
@@ -1030,7 +1043,7 @@ namespace IronRuby.Builtins {
                     // Anything else that is not a directive is an error. Silently skipping it -
                     // which is what this used to do - turned "abc".unpack("1") into [] instead of
                     // the ArgumentError ruby/spec asks for, and hid every typo in a format.
-                    if (!Tokenizer.IsLetter(c) && c != '@') {
+                    if (!IsKnownDirective(c)) {
                         throw UnknownDirective(c, format, packing);
                     }
 
@@ -1545,7 +1558,7 @@ namespace IronRuby.Builtins {
                     case 'x':
                         int newPos = directive.Count.HasValue ? (int)position + directive.Count.Value : (int)length;
                         if (newPos > length) {
-                            throw RubyExceptions.CreateArgumentError("X outside of string");
+                            throw RubyExceptions.CreateArgumentError("x outside of string");
                         }
                         position = newPos;
                         break;
@@ -1579,7 +1592,8 @@ namespace IronRuby.Builtins {
 
         private static MutableString/*!*/ ToHex(MutableString/*!*/ data, ref int index, int nibbleCount, bool swap) {
             int wholeChars = nibbleCount / 2;
-            MutableString hex = MutableString.CreateMutable(nibbleCount, RubyEncoding.Binary);
+            // Hex digits only, and MRI hands them back as US-ASCII.
+            MutableString hex = MutableString.CreateMutable(nibbleCount, RubyEncoding.Ascii);
 
             for (int i = 0; i < wholeChars; i++) {
                 byte b = data.GetByte(index++);
