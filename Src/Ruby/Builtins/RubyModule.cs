@@ -141,6 +141,12 @@ namespace IronRuby.Builtins {
         // name of the module or null for anonymous modules:
         private string _name;
 
+        // True if _name is a "temporary" name in MRI's sense: either set by Module#set_temporary_name or
+        // derived from an outer module that doesn't have a permanent name itself. A temporary name can be
+        // replaced (by set_temporary_name, or when the module is reachable from a permanently named one),
+        // a permanent name can't.
+        private bool _isTemporaryName;
+
         // Lazy interlocked init'd.
         private RubyInstanceData _instanceData;
         
@@ -268,7 +274,11 @@ namespace IronRuby.Builtins {
         private MemberTableState _constantsState = MemberTableState.Uninitialized;
         private Action<RubyModule> _constantsInitializer;
         private Dictionary<string, ConstantStorage> _constants;
-        
+
+        // { constant-name -> (source path, source line) }; lazily allocated, only holds constants
+        // whose definition site is known (Module#const_source_location).
+        private Dictionary<string, KeyValuePair<string, int>> _constantLocations;
+
         // method table:
         private MemberTableState _methodsState = MemberTableState.Uninitialized;
         private Dictionary<string, RubyMemberInfo> _methods;
@@ -304,12 +314,23 @@ namespace IronRuby.Builtins {
 
         // RubyModule, symbol -> object
         private CallSite<Func<CallSite, object, object, object>> _constantMissingCallbackSite;
+        private CallSite<Func<CallSite, object, object, object>> _constantAddedCallbackSite;
         private CallSite<Func<CallSite, object, object, object>> _methodAddedCallbackSite;
         private CallSite<Func<CallSite, object, object, object>> _methodRemovedCallbackSite;
         private CallSite<Func<CallSite, object, object, object>> _methodUndefinedCallbackSite;
 
         internal object ConstantMissing(string/*!*/ name) {
             return Context.Send(ref _constantMissingCallbackSite, "const_missing", this, name);
+        }
+
+        /// <summary>
+        /// Fires the Module#const_added hook. Called after the constant has been stored so that the callback
+        /// can read it back with const_get, and - for `class X < Y` - after the superclass is known but before
+        /// the "inherited" event, which is the order MRI documents.
+        /// </summary>
+        public void ConstantAdded(string/*!*/ name) {
+            Assert.NotNull(name);
+            Context.Send(ref _constantAddedCallbackSite, Symbols.ConstantAdded, this, name);
         }
 
         // Ruby 1.8: called after method is added, except for alias_method which calls it before
@@ -352,6 +373,65 @@ namespace IronRuby.Builtins {
         public string Name {
             get { return _name; }
             internal set { _name = value; }
+        }
+
+        /// <summary>
+        /// True if the module has a name that cannot be changed any more - i.e. it is (transitively) reachable
+        /// from Object via constants. MRI calls this a "permanent" name; Module#set_temporary_name refuses to
+        /// touch one and a module that acquires one hands permanent names down to its nested modules.
+        /// </summary>
+        public bool HasPermanentName {
+            get { return _name != null && !_isTemporaryName; }
+        }
+
+        internal bool HasTemporaryName {
+            get { return _name != null && _isTemporaryName; }
+        }
+
+        /// <summary>
+        /// Sets the module's name and propagates the change to nested modules that don't have a permanent name
+        /// of their own, the way MRI's rb_set_class_path/set_sub_temporary_name do.
+        /// </summary>
+        public void SetName(string name, bool permanent) {
+            SetName(name, permanent, null);
+        }
+
+        private void SetName(string name, bool permanent, Dictionary<object, bool> visited) {
+            _name = name;
+            _isTemporaryName = name != null && !permanent;
+            Version.SetName(name);
+
+            // Collect first: the recursive call re-enters the constant tables.
+            List<KeyValuePair<string, RubyModule>> nested = null;
+            using (Context.ClassHierarchyLocker()) {
+                EnumerateConstants((module, constName, value) => {
+                    var m = value as RubyModule;
+                    if (m != null && m != this && m.HasTemporaryName) {
+                        if (nested == null) {
+                            nested = new List<KeyValuePair<string, RubyModule>>();
+                        }
+                        nested.Add(new KeyValuePair<string, RubyModule>(constName, m));
+                    }
+                    return false;
+                });
+            }
+
+            if (nested == null) {
+                return;
+            }
+
+            if (visited == null) {
+                visited = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
+                visited[this] = true;
+            }
+
+            foreach (var entry in nested) {
+                if (visited.ContainsKey(entry.Value)) {
+                    continue;
+                }
+                visited[entry.Value] = true;
+                entry.Value.SetName(name == null ? null : MakeNestedModuleName(entry.Key), permanent, visited);
+            }
         }
 
         public RubyContext/*!*/ Context {
@@ -575,6 +655,8 @@ namespace IronRuby.Builtins {
             }
 
             _constants = (module._constants != null) ? new Dictionary<string, ConstantStorage>(module._constants) : null;
+            _constantLocations = (module._constantLocations != null) ?
+                new Dictionary<string, KeyValuePair<string, int>>(module._constantLocations) : null;
 
             // copy namespace members:
             if (module._namespaceTracker != null) {
@@ -977,6 +1059,45 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Records where a constant of this module was defined, for Module#const_source_location.
+        /// Constants defined by libraries have no location (MRI reports [] for those).
+        /// The table is allocated lazily so modules whose constants all come from C#/library code pay nothing.
+        /// </summary>
+        public void SetConstantLocation(string/*!*/ name, string sourcePath, int sourceLine) {
+            if (sourcePath == null) {
+                return;
+            }
+            using (Context.ClassHierarchyLocker()) {
+                SetConstantLocationNoLock(name, sourcePath, sourceLine);
+            }
+        }
+
+        private void SetConstantLocationNoLock(string/*!*/ name, string/*!*/ sourcePath, int sourceLine) {
+            if (_constantLocations == null) {
+                _constantLocations = new Dictionary<string, KeyValuePair<string, int>>();
+            }
+            _constantLocations[name] = new KeyValuePair<string, int>(sourcePath, sourceLine);
+        }
+
+        public bool TryGetConstantLocation(string/*!*/ name, out string sourcePath, out int sourceLine) {
+            KeyValuePair<string, int> location;
+            if (_constantLocations != null && _constantLocations.TryGetValue(name, out location)) {
+                sourcePath = location.Key;
+                sourceLine = location.Value;
+                return true;
+            }
+            sourcePath = null;
+            sourceLine = 0;
+            return false;
+        }
+
+        private void RemoveConstantLocationNoLock(string/*!*/ name) {
+            if (_constantLocations != null) {
+                _constantLocations.Remove(name);
+            }
+        }
+
         internal void Publish(string/*!*/ name) {
             RubyOps.ScopeSetMember(_context.TopGlobalScope, name, this);
         }
@@ -1012,21 +1133,41 @@ namespace IronRuby.Builtins {
         
         // thread-safe:
         public void SetAutoloadedConstant(string/*!*/ name, MutableString/*!*/ path) {
-            ConstantStorage dummy;
-            if (!TryGetConstant(null, name, out dummy)) {
-                SetConstant(name, new AutoloadedConstant(MutableString.Create(path).Freeze()));
+            using (Context.ClassHierarchyLocker()) {
+                ConstantStorage existing;
+                if (TryGetConstantNoAutoloadCheck(name, out existing)) {
+                    var autoloaded = existing.Value as AutoloadedConstant;
+                    // A real constant wins - autoload is a nop. A pending autoload is replaced by the new one.
+                    if (autoloaded == null || autoloaded.Loaded) {
+                        return;
+                    }
+                }
+                SetConstantNoLock(name, new AutoloadedConstant(MutableString.Create(path).Freeze()));
             }
         }
 
         // thread-safe:
         public MutableString GetAutoloadedConstantPath(string/*!*/ name) {
+            return GetAutoloadedConstantPath(name, false);
+        }
+
+        // thread-safe:
+        public MutableString GetAutoloadedConstantPath(string/*!*/ name, bool inherit) {
             using (Context.ClassHierarchyLocker()) {
-                ConstantStorage storage;
-                AutoloadedConstant autoloaded;
-                return (TryGetConstantNoAutoloadCheck(name, out storage)
-                    && (autoloaded = storage.Value as AutoloadedConstant) != null
-                    && !autoloaded.Loaded) ?
-                    autoloaded.Path : null;
+                MutableString result = null;
+                ForEachAncestor(inherit, (module) => {
+                    ConstantStorage storage;
+                    AutoloadedConstant autoloaded;
+                    if (module.TryGetConstantNoAutoloadCheck(name, out storage)) {
+                        if ((autoloaded = storage.Value as AutoloadedConstant) != null && !autoloaded.Loaded) {
+                            result = autoloaded.Path;
+                        }
+                        // a constant found in this module ends the search whether it is an autoload or not
+                        return true;
+                    }
+                    return false;
+                });
+                return result;
             }
         }
 
@@ -1131,11 +1272,29 @@ namespace IronRuby.Builtins {
                 }
 
                 // autoloaded constants are removed before the associated file is loaded:
+                string autoloadPath;
+                int autoloadLine;
+                bool hadLocation = owner.TryGetConstantLocation(name, out autoloadPath, out autoloadLine);
+
                 object _;
                 owner.TryRemoveConstantNoLock(name, out _);
-                               
+
                 // load file and try lookup again (releases the class hierarchy lock when loading the file):
-                if (!autoloaded.Load(autoloadScope)) {
+                bool loaded;
+                try {
+                    loaded = autoloaded.Load(autoloadScope);
+                } catch (Exception) {
+                    // MRI keeps the constant registered as an autoload when the file fails to load, so that
+                    // referencing it again retries the load. A fresh AutoloadedConstant is needed because the
+                    // old one already marked itself as loaded.
+                    owner.SetConstantNoMutateNoLock(name, new AutoloadedConstant(autoloaded.Path));
+                    if (hadLocation) {
+                        owner.SetConstantLocationNoLock(name, autoloadPath, autoloadLine);
+                    }
+                    throw;
+                }
+
+                if (!loaded) {
                     return ConstantLookupResult.NotFound;
                 }
             }
@@ -1232,6 +1391,10 @@ namespace IronRuby.Builtins {
                 _context.ConstantAccessVersion++;
             }
 
+            if (result) {
+                RemoveConstantLocationNoLock(name);
+            }
+
             return result;
         }
 
@@ -1303,8 +1466,15 @@ namespace IronRuby.Builtins {
                 // Note: We need to copy overload group since otherwise it might mess up caching if the alias is defined in a sub-module and 
                 // overloads of the same name that are not included in the overload group are inherited to this module.
                 // EnumerateMethods also relies on overload groups only representing cached CLR members.
-                if (!method.IsRubyMember) {
-                    SetMethodNoEventNoLock(Context, newName, method.Copy(method.Flags, method.DeclaringModule));
+                // MRI keeps initialize/initialize_copy/initialize_clone/initialize_dup/respond_to_missing?
+                // private no matter what the aliased method's visibility was.
+                RubyMemberFlags flags = method.Flags;
+                if (RubyUtils.IsForcedPrivateMethod(newName)) {
+                    flags = (flags & ~RubyMemberFlags.VisibilityMask) | RubyMemberFlags.Private;
+                }
+
+                if (!method.IsRubyMember || flags != method.Flags) {
+                    SetMethodNoEventNoLock(Context, newName, method.Copy(flags, method.DeclaringModule));
                 } else {
                     SetMethodNoEventNoLock(Context, newName, method);
                 }

@@ -48,15 +48,19 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression name = QualifiedName.TransformName(gen);
             MSA.Expression transformedSuper = (_superClass != null) ? AstUtils.Box(_superClass.TransformRead(gen)) : AstUtils.Constant(null);
 
+            // Module#const_source_location reports the line of the `class` keyword:
+            MSA.Expression sourcePath = gen.SourcePathConstant;
+            MSA.Expression sourceLine = AstUtils.Constant(Location.Start.Line);
+
             switch (QualifiedName.TransformQualifier(gen, out transformedQualifier)) {
                 case StaticScopeKind.Global:
-                    return Methods.DefineGlobalClass.OpCall(gen.CurrentScopeVariable, name, transformedSuper);
+                    return Methods.DefineGlobalClass.OpCall(gen.CurrentScopeVariable, name, transformedSuper, sourcePath, sourceLine);
 
                 case StaticScopeKind.EnclosingModule:
-                    return Methods.DefineNestedClass.OpCall(gen.CurrentScopeVariable, name, transformedSuper);
+                    return Methods.DefineNestedClass.OpCall(gen.CurrentScopeVariable, name, transformedSuper, sourcePath, sourceLine);
 
                 case StaticScopeKind.Explicit:
-                    return Methods.DefineClass.OpCall(gen.CurrentScopeVariable, transformedQualifier, name, transformedSuper);
+                    return Methods.DefineClass.OpCall(gen.CurrentScopeVariable, transformedQualifier, name, transformedSuper, sourcePath, sourceLine);
             }
 
             throw Assert.Unreachable;

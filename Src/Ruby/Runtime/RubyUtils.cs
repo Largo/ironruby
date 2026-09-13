@@ -562,7 +562,56 @@ namespace IronRuby.Runtime {
         }
 
         public static void SetConstant(RubyModule/*!*/ owner, string/*!*/ name, object value) {
+            SetConstant(owner, name, value, null, 0);
+        }
+
+        /// <summary>
+        /// Location of the Ruby frame that called the currently executing builtin, taken from the CLR stack.
+        /// Only for cold paths (Module#const_set, Module#autoload): capturing a stack trace with file info
+        /// costs on the order of a millisecond.
+        /// </summary>
+        public static bool TryGetCallerSourceLocation(RubyContext/*!*/ context, out string sourcePath, out int sourceLine) {
+            sourcePath = null;
+            sourceLine = 0;
+
+            RubyArray trace;
+            try {
+                trace = RubyExceptionData.CreateBacktrace(context, 0);
+            } catch (Exception) {
+                return false;
+            }
+
+            if (trace.Count == 0) {
+                return false;
+            }
+
+            string entry = trace[0].ToString();
+
+            // "<path>:<line>" optionally followed by ":in `<method>'"
+            int end = entry.IndexOf(":in ", StringComparison.Ordinal);
+            if (end < 0) {
+                end = entry.Length;
+            }
+
+            int colon = entry.LastIndexOf(':', end - 1);
+            if (colon <= 0) {
+                return false;
+            }
+
+            int line;
+            if (!Int32.TryParse(entry.Substring(colon + 1, end - colon - 1), out line)) {
+                return false;
+            }
+
+            sourcePath = entry.Substring(0, colon);
+            sourceLine = line;
+            return true;
+        }
+
+        public static void SetConstant(RubyModule/*!*/ owner, string/*!*/ name, object value, string sourcePath, int sourceLine) {
             Assert.NotNull(owner, name);
+
+            owner.SetConstantLocation(name, sourcePath, sourceLine);
 
             if (owner.SetConstantChecked(name, value)) {
                 owner.Context.ReportWarning(String.Format("already initialized constant {0}", name));
@@ -571,21 +620,40 @@ namespace IronRuby.Runtime {
             // Initializes anonymous module's name, publishes the module:
             RubyModule module = value as RubyModule;
             if (module != null) {
-                if (module.Name == null) {
-                    module.Name = owner.MakeNestedModuleName(name);
+                // A module reachable from Object gets a permanent name; one stored in a constant of an anonymous
+                // module only gets a temporary one, which a later set_temporary_name (or the outer module becoming
+                // permanently named) may replace. A name that is already permanent never changes.
+                if (!module.HasPermanentName) {
+                    bool permanent = owner.IsObjectClass || owner.HasPermanentName;
+                    if (permanent || module.Name == null) {
+                        module.SetName(owner.MakeNestedModuleName(name), permanent);
+                    }
                 }
                 if (owner.IsObjectClass) {
                     module.Publish(name);
                 }
             }
+
+            owner.ConstantAdded(name);
         }
 
         #endregion
 
         #region Methods
 
+        /// <summary>
+        /// Methods MRI forces to be private however they are defined: the initializers and respond_to_missing?.
+        /// </summary>
+        public static bool IsForcedPrivateMethod(string/*!*/ methodName) {
+            return methodName == Symbols.Initialize
+                || methodName == Symbols.InitializeCopy
+                || methodName == "initialize_clone"
+                || methodName == "initialize_dup"
+                || methodName == "respond_to_missing?";
+        }
+
         public static RubyMethodVisibility GetSpecialMethodVisibility(RubyMethodVisibility/*!*/ visibility, string/*!*/ methodName) {
-            return (methodName == Symbols.Initialize || methodName == Symbols.InitializeCopy) ? RubyMethodVisibility.Private : visibility;
+            return IsForcedPrivateMethod(methodName) ? RubyMethodVisibility.Private : visibility;
         }
 
         internal static string ToClrOperatorName(string/*!*/ rubyName) {

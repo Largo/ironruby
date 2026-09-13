@@ -514,12 +514,13 @@ namespace IronRuby.Builtins {
         #region alias_method, remove_method, undef_method
 
         // thread-safe:
-        [RubyMethod("alias_method", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ AliasMethod(RubyContext/*!*/ context, RubyModule/*!*/ self,
+        // public since Ruby 3.0; returns the new method's name as a Symbol, like define_method
+        [RubyMethod("alias_method")]
+        public static object AliasMethod(RubyContext/*!*/ context, RubyModule/*!*/ self,
             [DefaultProtocol, NotNull]string/*!*/ newName, [DefaultProtocol, NotNull]string/*!*/ oldName) {
 
             self.AddMethodAlias(newName, oldName);
-            return self;
+            return context.CreateSymbol(newName, RubyEncoding.UTF8);
         }
 
         // thread-safe:
@@ -861,34 +862,102 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("const_defined?")]
-        public static bool IsConstantDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            return IsConstantDefined(self, constantName, true);
+        public static bool IsConstantDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object constantName) {
+            return IsConstantDefined(stringCast, self, constantName, true);
         }
 
         [RubyMethod("const_defined?")]
-        public static bool IsConstantDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName, bool inherit) {
-            RubyUtils.CheckConstantName(constantName);
-            object constant;
+        public static bool IsConstantDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object constantName,
+            bool inherit) {
 
-            // Passing null as the autoload scope so that a registered autoload answers true
-            // without running: MRI reports the constant as defined but does not trigger it here.
-            // inherit defaults to true - the ancestors are searched unless it is explicitly false.
-            return inherit
-                ? self.TryResolveConstant(null, constantName, out constant)
-                : self.TryGetConstant(null, constantName, out constant);
+            bool isTopLevel;
+            string[] parts = SplitConstantName(stringCast, constantName, out isTopLevel);
+            var context = self.Context;
+            RubyModule owner = isTopLevel ? context.ObjectClass : self;
+
+            // MRI searches Object for the first segment only (rb_const_defined vs rb_const_defined_from).
+            bool lookupObject = inherit && !isTopLevel;
+
+            for (int i = 0; i < parts.Length; i++) {
+                object value;
+
+                // Passing null as the autoload scope so that a registered autoload answers true
+                // without running: MRI reports the constant as defined but does not trigger it here.
+                bool found = inherit
+                    ? owner.TryResolveConstant(null, parts[i], out value)
+                    : owner.TryGetConstant(null, parts[i], out value);
+
+                if (!found && lookupObject && !owner.IsObjectClass) {
+                    found = context.ObjectClass.TryResolveConstant(null, parts[i], out value);
+                }
+                lookupObject = false;
+
+                if (!found) {
+                    return false;
+                }
+                if (i == parts.Length - 1) {
+                    return true;
+                }
+
+                owner = value as RubyModule;
+                if (owner == null) {
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                }
+            }
+
+            return false;
         }
 
         // thread-safe:
         [RubyMethod("const_get")]
-        public static object GetConstantValue(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            return RubyUtils.GetConstant(scope.GlobalScope, self, constantName, true);
+        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName) {
+            return GetConstantValue(stringCast, scope, self, constantName, true);
+        }
+
+        // thread-safe:
+        [RubyMethod("const_get")]
+        public static object GetConstantValue(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName, bool inherit) {
+
+            bool isTopLevel;
+            string[] parts = SplitConstantName(stringCast, constantName, out isTopLevel);
+            var context = self.Context;
+            RubyModule owner = isTopLevel ? context.ObjectClass : self;
+
+            // MRI searches Object for the first segment only (rb_const_get vs rb_const_get_from).
+            bool lookupObject = inherit && !isTopLevel;
+
+            object value = null;
+            for (int i = 0; i < parts.Length; i++) {
+                if (inherit) {
+                    value = RubyUtils.GetConstant(scope.GlobalScope, owner, parts[i], lookupObject);
+                } else if (!owner.TryGetConstant(scope.GlobalScope, parts[i], out value)) {
+                    value = ConstantMissing(owner, parts[i]);
+                }
+                lookupObject = false;
+
+                if (i == parts.Length - 1) {
+                    break;
+                }
+
+                owner = value as RubyModule;
+                if (owner == null) {
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                }
+            }
+
+            return value;
         }
 
         // thread-safe:
         [RubyMethod("const_set")]
         public static object SetConstantValue(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName, object value) {
             RubyUtils.CheckConstantName(constantName);
-            RubyUtils.SetConstant(self, constantName, value);
+            string sourcePath;
+            int sourceLine;
+            RubyUtils.TryGetCallerSourceLocation(self.Context, out sourcePath, out sourceLine);
+            RubyUtils.SetConstant(self, constantName, value, sourcePath, sourceLine);
             return value;
         }
 
@@ -908,27 +977,165 @@ namespace IronRuby.Builtins {
             return self.Context.ResolveMissingConstant(self, name);
         }
 
+        /// <summary>
+        /// Splits a constant name given to const_get/const_source_location into its path segments.
+        /// A Symbol must be a plain constant name; a String may be a scoped path ("A::B") and may be
+        /// rooted at Object ("::A::B"), in which case <paramref name="isTopLevel"/> is set.
+        /// </summary>
+        private static string/*!*/[]/*!*/ SplitConstantName(ConversionStorage<MutableString>/*!*/ stringCast, object name, out bool isTopLevel) {
+            isTopLevel = false;
+
+            var symbol = name as RubySymbol;
+            string str;
+            if (symbol != null) {
+                str = symbol.ToString();
+            } else {
+                var mstr = name as MutableString ?? Protocols.CastToString(stringCast, name);
+                str = mstr.ToString();
+            }
+
+            if (symbol == null && str.StartsWith("::", StringComparison.Ordinal)) {
+                isTopLevel = true;
+                str = str.Substring(2);
+            }
+
+            string[] parts = (symbol == null) ? str.Split(new[] { "::" }, StringSplitOptions.None) : new[] { str };
+            foreach (string part in parts) {
+                RubyUtils.CheckConstantName(part);
+            }
+            return parts;
+        }
+
+        // thread-safe:
+        [RubyMethod("const_source_location")]
+        public static object GetConstantSourceLocation(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName) {
+            return GetConstantSourceLocation(stringCast, scope, self, constantName, true);
+        }
+
+        // thread-safe:
+        [RubyMethod("const_source_location")]
+        public static object GetConstantSourceLocation(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubyModule/*!*/ self, object constantName, bool inherit) {
+
+            bool isTopLevel;
+            string[] parts = SplitConstantName(stringCast, constantName, out isTopLevel);
+            var context = self.Context;
+
+            RubyModule owner = isTopLevel ? context.ObjectClass : self;
+            bool lookupObject = inherit && !isTopLevel;
+
+            // Resolve everything but the last segment; only the last one's location is reported.
+            for (int i = 0; i < parts.Length - 1; i++) {
+                object value;
+                bool found = inherit
+                    ? owner.TryResolveConstant(scope.GlobalScope, parts[i], out value)
+                    : owner.TryGetConstant(scope.GlobalScope, parts[i], out value);
+
+                if (!found && lookupObject && !owner.IsObjectClass) {
+                    found = context.ObjectClass.TryResolveConstant(scope.GlobalScope, parts[i], out value);
+                }
+                lookupObject = false;
+
+                if (!found) {
+                    return null;
+                }
+                owner = value as RubyModule;
+                if (owner == null) {
+                    throw RubyExceptions.CreateTypeError("{0} does not refer to class/module", parts[i]);
+                }
+                inherit = true;
+            }
+
+            string lastName = parts[parts.Length - 1];
+            RubyModule definingModule = FindConstantOwner(context, scope, owner, lastName, inherit, lookupObject);
+            if (definingModule == null) {
+                return null;
+            }
+
+            string sourcePath;
+            int sourceLine;
+            var result = new RubyArray();
+            if (definingModule.TryGetConstantLocation(lastName, out sourcePath, out sourceLine)) {
+                result.Add(context.EncodePath(sourcePath));
+                result.Add(sourceLine);
+            }
+            return result;
+        }
+
+        // Returns the module in the lookup path of <paramref name="owner"/> that defines the constant, or null.
+        private static RubyModule FindConstantOwner(RubyContext/*!*/ context, RubyScope/*!*/ scope, RubyModule/*!*/ owner,
+            string/*!*/ name, bool inherit, bool lookupObject) {
+
+            RubyModule result = null;
+            using (context.ClassHierarchyLocker()) {
+                owner.ForEachConstant(inherit, (module, constantName, value) => {
+                    if (constantName == name) {
+                        result = module;
+                        return true;
+                    }
+                    return false;
+                });
+            }
+
+            if (result == null && lookupObject && !owner.IsObjectClass) {
+                // A Module's lookup path ends at Object for reads (MRI searches Object last for modules too).
+                using (context.ClassHierarchyLocker()) {
+                    context.ObjectClass.ForEachConstant(true, (module, constantName, value) => {
+                        if (constantName == name) {
+                            result = module;
+                            return true;
+                        }
+                        return false;
+                    });
+                }
+            }
+
+            return result;
+        }
+
+        [RubyMethod("const_added", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
+        public static void ConstantAdded(RubyModule/*!*/ self, object name) {
+            // nop
+        }
+
         #endregion
 
         #region autoload, autoload?
 
         // thread-safe:
         [RubyMethod("autoload")]
-        public static void SetAutoloadedConstant(RubyModule/*!*/ self,
-            [DefaultProtocol, NotNull]string/*!*/ constantName, [DefaultProtocol, NotNull]MutableString/*!*/ path) {
+        public static void SetAutoloadedConstant(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ constantName, object pathArg) {
 
             RubyUtils.CheckConstantName(constantName);
+            MutableString path = Protocols.CastToPath(toPath, pathArg);
             if (path.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("empty file name");
             }
 
             self.SetAutoloadedConstant(constantName, path);
+
+            string sourcePath;
+            int sourceLine;
+            if (RubyUtils.TryGetCallerSourceLocation(self.Context, out sourcePath, out sourceLine)) {
+                self.SetConstantLocation(constantName, sourcePath, sourceLine);
+            }
+
+            self.ConstantAdded(constantName);
         }
 
         // thread-safe:
         [RubyMethod("autoload?")]
         public static MutableString GetAutoloadedConstantPath(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            return self.GetAutoloadedConstantPath(constantName);
+            return self.GetAutoloadedConstantPath(constantName, true);
+        }
+
+        // thread-safe:
+        [RubyMethod("autoload?")]
+        public static MutableString GetAutoloadedConstantPath(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName,
+            bool inherit) {
+            return self.GetAutoloadedConstantPath(constantName, inherit);
         }
 
         #endregion
@@ -981,6 +1188,22 @@ namespace IronRuby.Builtins {
         [RubyMethod("public_instance_methods")]
         public static RubyArray/*!*/ GetPublicInstanceMethods(RubyModule/*!*/ self, bool inherited) {
             return GetMethods(self, inherited, RubyMethodAttributes.PublicInstance);
+        }
+
+        // thread-safe:
+        // Names that this module (not its ancestors) undefines with undef_method.
+        [RubyMethod("undefined_instance_methods")]
+        public static RubyArray/*!*/ GetUndefinedInstanceMethods(RubyModule/*!*/ self) {
+            var result = new RubyArray();
+            using (self.Context.ClassHierarchyLocker()) {
+                self.EnumerateMethods((module, name, member) => {
+                    if (member.IsUndefined) {
+                        result.Add(self.Context.StringifyIdentifier(name));
+                    }
+                    return false;
+                });
+            }
+            return result;
         }
 
         internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes) {
@@ -1086,6 +1309,43 @@ namespace IronRuby.Builtins {
         [RubyMethod("freeze")]
         public static RubyModule/*!*/ Freeze(RubyContext/*!*/ context, RubyModule/*!*/ self) {
             self.Freeze();
+            return self;
+        }
+
+        // True if the string is a constant path ("A", "A::B", "::A::B"), which set_temporary_name rejects
+        // to keep temporary names distinguishable from real ones.
+        private static bool IsConstantPath(string/*!*/ name) {
+            if (name.StartsWith("::", StringComparison.Ordinal)) {
+                name = name.Substring(2);
+            }
+            foreach (string segment in name.Split(new[] { "::" }, StringSplitOptions.None)) {
+                if (!Tokenizer.IsConstantName(segment)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        [RubyMethod("set_temporary_name")]
+        public static RubyModule/*!*/ SetTemporaryName(RubyContext/*!*/ context, RubyModule/*!*/ self, [DefaultProtocol]MutableString name) {
+            if (self.HasPermanentName) {
+                throw RubyExceptions.CreateRuntimeError("can't change permanent name");
+            }
+
+            if (name == null) {
+                self.SetName(null, false);
+                return self;
+            }
+
+            string str = name.ConvertToString();
+            if (str.Length == 0) {
+                throw RubyExceptions.CreateArgumentError("empty class/module name");
+            }
+            if (IsConstantPath(str)) {
+                throw RubyExceptions.CreateArgumentError("the temporary name must not be a constant path to avoid confusion");
+            }
+
+            self.SetName(str, false);
             return self;
         }
 

@@ -59,15 +59,19 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression transformedQualifier;
             MSA.Expression name = QualifiedName.TransformName(gen);
 
+            // Module#const_source_location reports the line of the `module` keyword:
+            MSA.Expression sourcePath = gen.SourcePathConstant;
+            MSA.Expression sourceLine = AstUtils.Constant(Location.Start.Line);
+
             switch (QualifiedName.TransformQualifier(gen, out transformedQualifier)) {
                 case StaticScopeKind.Global:
-                    return Methods.DefineGlobalModule.OpCall(gen.CurrentScopeVariable, name);
+                    return Methods.DefineGlobalModule.OpCall(gen.CurrentScopeVariable, name, sourcePath, sourceLine);
 
                 case StaticScopeKind.EnclosingModule:
-                    return Methods.DefineNestedModule.OpCall(gen.CurrentScopeVariable, name);
+                    return Methods.DefineNestedModule.OpCall(gen.CurrentScopeVariable, name, sourcePath, sourceLine);
 
                 case StaticScopeKind.Explicit:
-                    return Methods.DefineModule.OpCall(gen.CurrentScopeVariable, AstUtils.Box(transformedQualifier), name);
+                    return Methods.DefineModule.OpCall(gen.CurrentScopeVariable, AstUtils.Box(transformedQualifier), name, sourcePath, sourceLine);
             }
 
             throw Assert.Unreachable;

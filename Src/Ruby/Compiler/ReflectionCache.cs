@@ -136,6 +136,14 @@ namespace IronRuby.Compiler {
             return MSA.Expression.Call(method, arg0, arg1, arg2, arg3);
         }
 
+        public static MSA.Expression/*!*/ OpCall(this MethodInfo/*!*/ method, MSA.Expression/*!*/ arg0, MSA.Expression/*!*/ arg1, MSA.Expression/*!*/ arg2, MSA.Expression/*!*/ arg3, MSA.Expression/*!*/ arg4) {
+            return MSA.Expression.Call(method, arg0, arg1, arg2, arg3, arg4);
+        }
+
+        public static MSA.Expression/*!*/ OpCall(this MethodInfo/*!*/ method, MSA.Expression/*!*/ arg0, MSA.Expression/*!*/ arg1, MSA.Expression/*!*/ arg2, MSA.Expression/*!*/ arg3, MSA.Expression/*!*/ arg4, MSA.Expression/*!*/ arg5) {
+            return MSA.Expression.Call(method, arg0, arg1, arg2, arg3, arg4, arg5);
+        }
+
         public static MSA.Expression/*!*/ OpCall(this MethodInfo/*!*/ method, AstExpressions/*!*/ args) {
             return MSA.Expression.Call(method, args);
         }

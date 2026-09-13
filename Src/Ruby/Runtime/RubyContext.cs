@@ -1187,9 +1187,14 @@ namespace IronRuby.Runtime {
         private static void PublishModule(string name, RubyModule/*!*/ owner, RubyModule/*!*/ module) {
             if (name != null) {
                 owner.SetConstant(name, module);
+                // `module M; end` nested in an anonymous module produces a temporary name, same as `m::M = ...`.
+                if (!owner.IsObjectClass && !owner.HasPermanentName) {
+                    module.SetName(module.Name, false);
+                }
                 if (owner.IsObjectClass) {
                     module.Publish(name);
                 }
+                owner.ConstantAdded(name);
             }
         }
 
