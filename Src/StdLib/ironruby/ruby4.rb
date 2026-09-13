@@ -2406,26 +2406,65 @@ class String
   # Replaces a byte range in place. Every index here is a byte index, so the
   # work is done on a binary copy and tagged back afterwards, like bytesplice.
   def bytesplice(*args)
-    str = args.pop
-    unless str.is_a?(::String)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{str.class} into String")
-    end
+    # Three shapes: (index, length, str), (range, str) and the five argument
+    # (index, length, str, str_index, str_length), which splices only part of the
+    # replacement. Four arguments is not one of them, even with a Range first.
     case args.size
-    when 1
-      range = args[0]
+    when 2
+      index_args, str, sub_args = args[0, 1], args[1], nil
+    when 3
+      # (range, str, str_range) when the first argument is a Range, otherwise
+      # (index, length, str).
+      if args[0].is_a?(::Range)
+        index_args, str, sub_args = args[0, 1], args[1], args[2, 1]
+      else
+        index_args, str, sub_args = args[0, 2], args[2], nil
+      end
+    when 5
+      index_args, str, sub_args = args[0, 2], args[2], args[3, 2]
+    when 4
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 4, expected 2, 3, or 5)")
+    else
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 2..5)")
+    end
+
+    unless str.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{str.nil? ? 'nil' : str.class} into String")
+    end
+
+    if index_args.size == 1
+      range = index_args[0]
       unless range.is_a?(::Range)
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{range.class} into Integer")
+        ::Kernel.raise(::TypeError, "wrong argument type #{range.nil? ? 'nil' : range.class} (expected Range)")
       end
       index, length = __byte_range__(range)
-    when 2
-      index = ::Kernel.Integer(args[0])
-      length = ::Kernel.Integer(args[1])
-      index += bytesize if index < 0
-      ::Kernel.raise(::IndexError, "index #{args[0]} out of string") if index < 0 || index > bytesize
-      ::Kernel.raise(::IndexError, "negative length #{length}") if length < 0
     else
-      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 2..5)")
+      index = ::Kernel.Integer(index_args[0])
+      length = ::Kernel.Integer(index_args[1])
+      # A negative length is rejected before the index is even bounds checked.
+      ::Kernel.raise(::IndexError, "negative length #{length}") if length < 0
+      index += bytesize if index < 0
+      ::Kernel.raise(::IndexError, "index #{index_args[0]} out of string") if index < 0 || index > bytesize
     end
+
+    if sub_args && sub_args.size == 1
+      sub_range = sub_args[0]
+      unless sub_range.is_a?(::Range)
+        ::Kernel.raise(::TypeError, "wrong argument type #{sub_range.nil? ? 'nil' : sub_range.class} (expected Range)")
+      end
+      sub_index, sub_length = str.__send__(:__byte_range__, sub_range)
+      str = str.byteslice(sub_index, sub_length) || str[0, 0]
+    elsif sub_args
+      sub_index = ::Kernel.Integer(sub_args[0])
+      sub_length = ::Kernel.Integer(sub_args[1])
+      ::Kernel.raise(::IndexError, "negative length #{sub_length}") if sub_length < 0
+      sub_index += str.bytesize if sub_index < 0
+      if sub_index < 0 || sub_index > str.bytesize
+        ::Kernel.raise(::IndexError, "index #{sub_args[0]} out of string")
+      end
+      str = str.byteslice(sub_index, sub_length) || str[0, 0]
+    end
+
     length = bytesize - index if index + length > bytesize
 
     binary = dup
@@ -2479,20 +2518,36 @@ class String
     self
   end unless method_defined?(:append_as_bytes)
 
+  # MRI takes a String or a Regexp here and nothing else - Kernel.String would happily
+  # accept anything with a #to_s - and the empty pieces carry the receiver's encoding.
+  def __ir_separator__(pattern)
+    return pattern if pattern.is_a?(::Regexp) || pattern.is_a?(::String)
+    if pattern.respond_to?(:to_str)
+      converted = pattern.to_str
+      return converted if converted.is_a?(::String)
+    end
+    ::Kernel.raise(::TypeError,
+      "wrong argument type #{pattern.nil? ? 'nil' : pattern.class} (expected Regexp)")
+  end
+  private :__ir_separator__
+
   def partition(pattern)
+    pattern = __ir_separator__(pattern)
+    empty = self[0, 0]
     if pattern.is_a?(::Regexp)
       m = pattern.match(self)
-      return [dup, "", ""] unless m
+      return [self[0..-1], empty, empty] unless m
       [m.pre_match, m[0], m.post_match]
     else
-      pattern = ::Kernel.String(pattern) unless pattern.is_a?(::String)
       i = index(pattern)
-      return [dup, "", ""] unless i
+      return [self[0..-1], empty, empty] unless i
       [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
     end
   end unless method_defined?(:partition)
 
   def rpartition(pattern)
+    pattern = __ir_separator__(pattern)
+    empty = self[0, 0]
     if pattern.is_a?(::Regexp)
       start = nil
       pos = 0
@@ -2502,24 +2557,31 @@ class String
         start = i
         pos = i + 1
       end
-      return ["", "", dup] unless start
+      return [empty, empty, self[0..-1]] unless start
       m = pattern.match(self[start..-1])
       [self[0, start], m[0], self[(start + m[0].length)..-1]]
     else
-      pattern = ::Kernel.String(pattern) unless pattern.is_a?(::String)
       i = rindex(pattern)
-      return ["", "", dup] unless i
+      return [empty, empty, self[0..-1]] unless i
       [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
     end
   end unless method_defined?(:rpartition)
 
   def prepend(*others)
-    others = others.map { |o| o.is_a?(::String) ? o : ::Kernel.String(o) }
+    others = others.map do |o|
+      # #to_str only: MRI will not call #to_s to find something to prepend.
+      converted = o.is_a?(::String) ? o : ::String.try_convert(o)
+      converted || ::Kernel.raise(::TypeError,
+        "no implicit conversion of #{o.nil? ? 'nil' : o.class} into String")
+    end
     replace(others.join + self)
   end unless method_defined?(:prepend)
 
   def casecmp?(other)
     return nil unless other.is_a?(::String)
+    # Two strings in encodings that cannot be compared are not unequal, they are
+    # incomparable, and #casecmp? answers nil for them just as #casecmp does.
+    return nil if ::Encoding.compatible?(self, other).nil?
     c = casecmp(other)
     c.nil? ? nil : c == 0
   end unless method_defined?(:casecmp?)
@@ -2660,7 +2722,9 @@ class String
   # Replaces every byte that is not part of a valid character with the given
   # replacement (the encoding's own replacement character by default).
   def scrub(replacement = nil, &block)
-    return dup if valid_encoding?
+    # String, not the receiver's class: since Ruby 3.0 only #dup, #clone and #+@ carry a
+    # String subclass over to the result.
+    return __ir_plain_copy__ if valid_encoding?
     default = encoding == ::Encoding::UTF_8 ? "�" : "?"
     out = +""
     out.force_encoding(encoding) if out.respond_to?(:force_encoding)
@@ -3502,8 +3566,19 @@ class Array
 end
 
 class String
+  # A copy of the receiver as a plain String. Since Ruby 3.0 a method that derives a new
+  # string answers with String even when the receiver is a subclass of it; only #dup, #clone
+  # and #+@ carry the class over, and String.new here takes no encoding: keyword.
+  def __ir_plain_copy__
+    out = +""
+    out.force_encoding(encoding) if out.respond_to?(:force_encoding)
+    out << self
+    out
+  end
+  private :__ir_plain_copy__
+
   def b
-    dup.force_encoding("ASCII-8BIT")
+    __ir_plain_copy__.force_encoding(Encoding::BINARY)
   end unless method_defined?(:b)
 
   def match?(pattern, pos = 0)
