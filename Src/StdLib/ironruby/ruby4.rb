@@ -5582,20 +5582,296 @@ class UnboundMethod
   end unless method_defined?(:bind_call)
 end
 
+# --- Math ------------------------------------------------------------------
+# Math had two independent problems in the same place.
+#
+# The C# builtins signalled every out-of-domain result as Errno::EDOM (MRI
+# raises Math::DomainError), did so for NaN input as well (MRI answers NaN),
+# converted arguments with the DefaultProtocol instead of Float()'s rules (MRI
+# raises TypeError for anything that is not a Numeric, including a String that
+# looks like a number), had no second argument to #log, no pair from #lgamma
+# and a #cbrt that was pow(x, 1/3.0) and so NaN for every negative argument.
+#
+# On top of that, the Complex implementation IronRuby loads is Ruby 1.8's
+# complex.rb, which replaces sqrt/exp/log/cos/sin/tan/... with CMath versions
+# that answer a Complex. This block runs after complex.rb and takes the module
+# back; Complex arithmetic keeps working because complex.rb calls the `!`
+# aliases it took before redefining.
+#
+# Everything is module_function, as in MRI: `include Math; atanh(2)` has to
+# raise the same Math::DomainError as `Math.atanh(2)`.
 module Math
-  class << self
-    # exp(x)-1 and log(1+x), accurate near zero, which is the whole point of
-    # having them separately from exp and log.
-    def expm1(x)
-      ::System::Math.Exp(::Kernel.Float(x)) - 1.0
-    end unless respond_to?(:expm1)
+  class DomainError < StandardError; end unless const_defined?(:DomainError, false)
 
-    def log1p(x)
-      x = ::Kernel.Float(x)
-      ::Kernel.raise(::Math::DomainError, 'Numerical argument is out of domain - log1p') if x < -1.0
-      ::System::Math.Log(1.0 + x)
-    end unless respond_to?(:log1p)
+  alias_method :__ir_gamma__, :gamma
+  alias_method :__ir_lgamma__, :lgamma
+  alias_method :__ir_erf__, :erf
+  alias_method :__ir_erfc__, :erfc
+  module_function :__ir_gamma__, :__ir_lgamma__, :__ir_erf__, :__ir_erfc__
+
+  # MRI's rb_to_float: Numeric only. An object that merely answers #to_f is a
+  # TypeError, and so is a String - Float("1") would work but Math.sqrt("1")
+  # does not.
+  def __flt__(x)
+    return x if x.is_a?(::Float)
+    if x.is_a?(::Numeric)
+      v = x.to_f
+      return v if v.is_a?(::Float)
+    end
+    ::Kernel.raise(::TypeError, "can't convert #{x.nil? ? 'nil' : x.class} into Float")
   end
+
+  def __dom__(name)
+    ::Kernel.raise(::Math::DomainError, "Numerical argument is out of domain - #{name}")
+  end
+
+  module_function :__flt__, :__dom__
+  private_class_method :__flt__, :__dom__
+
+  def acos(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("acos") if x < -1.0 || x > 1.0
+    ::System::Math.Acos(x)
+  end
+
+  def asin(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("asin") if x < -1.0 || x > 1.0
+    ::System::Math.Asin(x)
+  end
+
+  def atan(x)
+    ::System::Math.Atan(__flt__(x))
+  end
+
+  def atan2(y, x)
+    y = __flt__(y)
+    x = __flt__(x)
+    return y if y.nan?
+    return x if x.nan?
+    ::System::Math.Atan2(y, x)
+  end
+
+  def acosh(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("acosh") if x < 1.0
+    ::System::Math.Acosh(x)
+  end
+
+  def asinh(x)
+    ::System::Math.Asinh(__flt__(x))
+  end
+
+  def atanh(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("atanh") if x < -1.0 || x > 1.0
+    return ::Float::INFINITY if x == 1.0
+    return -::Float::INFINITY if x == -1.0
+    ::System::Math.Atanh(x)
+  end
+
+  def cos(x)
+    ::System::Math.Cos(__flt__(x))
+  end
+
+  def sin(x)
+    ::System::Math.Sin(__flt__(x))
+  end
+
+  def tan(x)
+    ::System::Math.Tan(__flt__(x))
+  end
+
+  def cosh(x)
+    ::System::Math.Cosh(__flt__(x))
+  end
+
+  def sinh(x)
+    ::System::Math.Sinh(__flt__(x))
+  end
+
+  def tanh(x)
+    ::System::Math.Tanh(__flt__(x))
+  end
+
+  def exp(x)
+    ::System::Math.Exp(__flt__(x))
+  end
+
+  # pow(x, 1/3.0) is NaN for every negative x; cbrt is defined there.
+  def cbrt(x)
+    ::System::Math.Cbrt(__flt__(x))
+  end
+
+  def sqrt(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("sqrt") if x < 0.0
+    # sqrt(-0.0) is -0.0 in IEEE but 0.0 in MRI.
+    return 0.0 if x == 0.0
+    ::System::Math.Sqrt(x)
+  end
+
+  def __log__(x, name)
+    return x if x.nan?
+    __dom__(name) if x < 0.0
+    nil
+  end
+  module_function :__log__
+  private_class_method :__log__
+
+  # Math.log(x) and Math.log(x, nil) are different calls - the second is a
+  # TypeError - so the base cannot be an optional parameter defaulting to nil.
+  def log(x, *rest)
+    if rest.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{rest.size + 1}, expected 1..2)")
+    end
+    x = __flt__(x)
+    r = __log__(x, "log")
+    return r if r
+    v = ::System::Math.Log(x)
+    return v if rest.empty?
+    b = __flt__(rest[0])
+    r = __log__(b, "log")
+    return r if r
+    v / ::System::Math.Log(b)
+  end
+
+  def log2(x)
+    x = __flt__(x)
+    r = __log__(x, "log2")
+    return r if r
+    ::System::Math.Log2(x)
+  end
+
+  def log10(x)
+    x = __flt__(x)
+    r = __log__(x, "log10")
+    return r if r
+    ::System::Math.Log10(x)
+  end
+
+  # exp(x)-1 and log(1+x), accurate near zero, which is the whole point of
+  # having them separately from exp and log.
+  def expm1(x)
+    ::System::Math.Exp(__flt__(x)) - 1.0
+  end
+
+  def log1p(x)
+    x = __flt__(x)
+    return x if x.nan?
+    __dom__("log1p") if x < -1.0
+    return -::Float::INFINITY if x == -1.0
+    # log(1+x) loses every significant digit for tiny x; the identity
+    # x*log1p(u)/u with u = (1+x)-1 keeps them.
+    u = 1.0 + x
+    return x if u == 1.0
+    ::System::Math.Log(u) * x / (u - 1.0)
+  end
+
+  def erf(x)
+    __ir_erf__(__flt__(x))
+  end
+
+  def erfc(x)
+    __ir_erfc__(__flt__(x))
+  end
+
+  def hypot(x, y)
+    x = __flt__(x).abs
+    y = __flt__(y).abs
+    # An infinity wins over a NaN, which is what C's hypot() promises.
+    return ::Float::INFINITY if x.infinite? || y.infinite?
+    return ::Float::NAN if x.nan? || y.nan?
+    x, y = y, x if x < y
+    return x if y == 0.0
+    # Scaling by the larger operand keeps x*x from overflowing for x ~ 1e300.
+    r = y / x
+    x * ::System::Math.Sqrt(1.0 + r * r)
+  end
+
+  # MRI's NUM2INT: #to_int, never String parsing, and a Float that is not
+  # finite is a RangeError rather than a FloatDomainError.
+  def __int__(n)
+    return n if n.is_a?(::Integer)
+    if n.is_a?(::Float)
+      if n.nan?
+        ::Kernel.raise(::RangeError, "float NaN out of range of integer")
+      elsif n.infinite?
+        ::Kernel.raise(::RangeError, "float #{n > 0 ? 'Inf' : '-Inf'} out of range of integer")
+      end
+      return n.to_i
+    end
+    ::Kernel.raise(::TypeError, "no implicit conversion from nil to integer") if n.nil?
+    unless n.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{n.class} into Integer")
+    end
+    n.to_int
+  end
+  module_function :__int__
+  private_class_method :__int__
+
+  def ldexp(x, n)
+    n = __int__(n)
+    x = __flt__(x)
+    return x if x == 0.0 || x.nan? || x.infinite?
+    return 0.0 * x if n < -2098
+    return (x < 0 ? -::Float::INFINITY : ::Float::INFINITY) if n > 2098
+    ::System::Math.ScaleB(x, n)
+  end
+
+  # MRI answers +infinity at the poles rather than raising, and raises only for
+  # -infinity. MathUtils.Gamma already handles the negative non-integers.
+  def gamma(x)
+    x = __flt__(x)
+    return x if x.nan?
+    if x == 0.0
+      return (1.0 / x) < 0 ? -::Float::INFINITY : ::Float::INFINITY
+    end
+    if x < 0.0
+      __dom__("gamma") if x.infinite? || x == x.floor
+    end
+    __ir_gamma__(x)
+  end
+
+  # lgamma answers the pair [log(|gamma(x)|), sign of gamma(x)].
+  def lgamma(x)
+    x = __flt__(x)
+    return [x, 1] if x.nan?
+    __dom__("lgamma") if x.infinite? && x < 0
+    return [::Float::INFINITY, 1] if x.infinite?
+    if x == 0.0
+      return [::Float::INFINITY, (1.0 / x) < 0 ? -1 : 1]
+    end
+    if x < 0.0
+      return [::Float::INFINITY, 1] if x == x.floor
+      # Reflection: |gamma(x)| = pi / (|sin(pi*x)| * gamma(1-x)), and the sign
+      # of gamma(x) is the sign of sin(pi*x) because gamma(1-x) > 0 there.
+      s = ::System::Math.Sin(::Math::PI * x)
+      v = ::System::Math.Log(::Math::PI) - ::System::Math.Log(s.abs) - __ir_lgamma__(1.0 - x)
+      return [v, s < 0 ? -1 : 1]
+    end
+    # MathUtils.LogGamma(1.0) is 4.4e-16 rather than 0.
+    return [0.0, 1] if x == 1.0 || x == 2.0
+    [__ir_lgamma__(x), 1]
+  end
+
+  def frexp(x)
+    x = __flt__(x)
+    return [x, 0] if x == 0.0 || x.nan? || x.infinite?
+    e = ::System::Math.ILogB(x) + 1
+    [::System::Math.ScaleB(x, -e), e]
+  end
+
+  module_function :frexp
+  module_function :acos, :acosh, :asin, :asinh, :atan, :atan2, :atanh, :cbrt,
+                  :cos, :cosh, :erf, :erfc, :exp, :expm1, :gamma, :hypot,
+                  :ldexp, :lgamma, :log, :log10, :log1p, :log2, :sin, :sinh,
+                  :sqrt, :tan, :tanh
 end
 
 module Kernel
