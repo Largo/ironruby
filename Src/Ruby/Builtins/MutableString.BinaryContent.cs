@@ -125,18 +125,10 @@ namespace IronRuby.Builtins {
                     return String.Empty.GetHashCode();
                 }
 
-                char[] chars;
-                List<byte[]> invalidCharacters;
-                Decode(out chars, out invalidCharacters);
-
-                // TODO: we can also cache invalid bytes if needed (maybe have a special content repr?)
-                // cache conversion result if there are not invalid characters (switching content to char array):
-                if (invalidCharacters == null) {
-                    return WrapContent(chars, chars.Length).CalculateHashCode();
-                } else {
-                    // Unfortunately, BLC doesn't have a method to calculate hash code directly out of char[]:
-                    return new string(chars).GetHashCode();
-                }
+                // The same string can be held as bytes or as characters and the hash has to come
+                // out the same either way, so this has to be the character representation the
+                // escaping decoder produces - the same one CharArrayContent would hash.
+                return DataToString().GetHashCode();
             }
 
             public override int Count {

@@ -2286,6 +2286,10 @@ namespace IronRuby.Builtins {
         public static object Index(RubyScope/*!*/ scope, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol, Optional]int start) {
 
+            // A Regexp has to interpret characters, so unlike #index with a String this one does
+            // refuse a receiver whose bytes are not valid in its encoding, the way MRI does.
+            RequireValidEncoding(self);
+
             MatchData match = regex.Match(self, start, true);
             scope.GetInnerMostClosureScope().CurrentMatch = match;
             return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.Index) : null;

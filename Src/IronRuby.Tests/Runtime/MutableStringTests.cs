@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -807,10 +807,13 @@ namespace IronRuby.Tests {
                 () => Test_Reverse(u12345, RubyEncoding.UTF8, u12345)
             );
 
-            // TODO: MRI allows incorrect byte sequences
-            AssertExceptionThrown<InvalidByteSequenceError>(
-                () => Test_Reverse(invalid_utf8, RubyEncoding.UTF8, rev_invalid_utf8)
-            );
+            // Bytes that are not valid UTF-8 reverse like any others - the TODO that used to
+            // stand here is done:
+            //
+            //   $ ruby -e 's = [0xe2,0x85,0x9c,0xef].pack("C*").force_encoding("UTF-8")
+            //              p s.reverse.bytes'
+            //   [239, 226, 133, 156]
+            Test_Reverse(invalid_utf8, RubyEncoding.UTF8, rev_invalid_utf8);
 
             Assert(MutableStringOps.Reverse(MutableString.Create("αΣ", RubyEncoding.UTF8)).ToString() == "Σα");
         }
@@ -1107,9 +1110,15 @@ namespace IronRuby.Tests {
             b = MutableString.CreateBinary(u12345, RubyEncoding.UTF8);
             AssertExceptionThrown<EncodingCompatibilityError>(() => MutableStringOps.Index(a, b, 0));
 
-            // invalid character:
-            AssertExceptionThrown<InvalidByteSequenceError>(() => MutableStringOps.Index(invalid, MutableString.FrozenEmpty, 0));
-            AssertExceptionThrown<InvalidByteSequenceError>(() => MutableStringOps.Index(MutableString.FrozenEmpty, invalid, 0));
+            // A byte that is not valid in the receiver's encoding is no obstacle to #index with a
+            // String argument - it does not have to interpret characters to answer:
+            //
+            //   $ ruby -e 'invalid = (+"\x80").force_encoding("UTF-8")
+            //              p invalid.index(""), "".index(invalid)'
+            //   0
+            //   nil
+            Assert((int)MutableStringOps.Index(invalid, MutableString.FrozenEmpty, 0) == 0);
+            Assert(MutableStringOps.Index(MutableString.FrozenEmpty, invalid, 0) == null);
             
             // returns character index:
             i = (int)MutableStringOps.Index(
@@ -1143,8 +1152,13 @@ namespace IronRuby.Tests {
             r = new RubyRegex(MutableString.CreateBinary(u12345, RubyEncoding.UTF8));
             AssertExceptionThrown<EncodingCompatibilityError>(() => MutableStringOps.Index(scope, a, r, 0));
 
-            // invalid character:
-            AssertExceptionThrown<InvalidByteSequenceError>(() => MutableStringOps.Index(scope, invalid, r, 0));
+            // A Regexp does have to interpret characters, so this one is refused - as ArgumentError,
+            // which is what MRI raises, not Encoding::InvalidByteSequenceError:
+            //
+            //   $ ruby -e 'invalid = (+"\x80").force_encoding("UTF-8")
+            //              invalid.index(/\u{12345}/)'
+            //   -e:1:in 'String#index': invalid byte sequence in UTF-8 (ArgumentError)
+            AssertExceptionThrown<ArgumentException>(() => MutableStringOps.Index(scope, invalid, r, 0));
 
             // returns character index:
             i = (int)MutableStringOps.Index(
