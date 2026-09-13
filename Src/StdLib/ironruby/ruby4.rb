@@ -8068,17 +8068,26 @@ end
 # caller_locations (2.0) and the Location objects it yields. The runtime only
 # offers caller strings, so parse those: "path:lineno:in `label'".
 class Thread
-  # A thread's own stack is reachable through Kernel#caller; another thread's is
-  # not, and IronRuby has no way to walk it, so those answer the same thing MRI
-  # answers for a thread that has already finished.
+  # A thread's own stack is reachable through Kernel#caller.  Another thread's
+  # comes from __native_backtrace__, which reads the frame list that thread
+  # already keeps for its own backtraces instead of trying to walk its stack
+  # from outside - which .NET Core does not allow.  A thread that has not
+  # started, has finished, or has never run Ruby code still answers nil.
   def backtrace(*args)
-    return nil unless self == ::Thread.current
-    __slice_stack__(::Kernel.send(:caller, 1), args)
+    frames = (self == ::Thread.current) ? ::Kernel.send(:caller, 1) : __native_backtrace__
+    return nil if frames.nil?
+    __slice_stack__(frames, args)
   end unless method_defined?(:backtrace)
 
   def backtrace_locations(*args)
-    return nil unless self == ::Thread.current
-    __slice_stack__(::Kernel.send(:caller_locations, 1), args)
+    if self == ::Thread.current
+      frames = ::Kernel.send(:caller_locations, 1)
+    else
+      entries = __native_backtrace__
+      return nil if entries.nil?
+      frames = entries.map { |e| ::Thread::Backtrace::Location.__parse__(e) }
+    end
+    __slice_stack__(frames, args)
   end unless method_defined?(:backtrace_locations)
 
   # Both take (start, length) or a Range, like Kernel#caller.
@@ -8140,6 +8149,16 @@ class Thread
 
       def base_label; @label; end
 
+      # "path:lineno:in `label'" -> a Location.  Both Kernel#caller_locations and
+      # Thread#backtrace_locations have only the string form to work from.
+      def self.__parse__(entry)
+        if (m = /\A(.*):(\d+)(?::in [`'](.*)')?\z/.match(entry))
+          new(m[1], m[2].to_i, m[3])
+        else
+          new(entry, 0, nil)
+        end
+      end
+
       def to_s
         @label ? "#{@path}:#{@lineno}:in `#{@label}'" : "#{@path}:#{@lineno}"
       end
@@ -8156,13 +8175,7 @@ module Kernel
     entries = caller(start + 1)
     return nil if entries.nil?
     entries = entries.first(length) if length
-    entries.map do |entry|
-      if (m = /\A(.*):(\d+)(?::in [`'](.*)')?\z/.match(entry))
-        Thread::Backtrace::Location.new(m[1], m[2].to_i, m[3])
-      else
-        Thread::Backtrace::Location.new(entry, 0, nil)
-      end
-    end
+    entries.map { |entry| Thread::Backtrace::Location.__parse__(entry) }
   end unless private_method_defined?(:caller_locations)
 end
 

@@ -71,6 +71,51 @@ namespace IronRuby.Runtime {
             AddBacktrace(trace.GetFrames(), skipFrames, false);
         }
 
+        /// <summary>
+        /// Builds a backtrace for a thread other than the caller's from that thread's interpreted frame
+        /// chain, which the interpreter maintains as a linked list hanging off a thread-local and which
+        /// any thread may read.  A CLR stack walk is not an option here - .NET Core has no
+        /// StackTrace(Thread) and no Thread.Suspend - so this is what there is, and it costs nothing
+        /// when nobody asks: the chain is already there for the owning thread's own backtraces.
+        ///
+        /// The thread is running while we read, so the result is a snapshot rather than an instant.
+        /// Frames are not recycled, so a frame that was left while we were walking still points at its
+        /// old parent and the walk terminates; the depth cap is there for the case where it somehow
+        /// does not.
+        /// </summary>
+        internal RubyStackTraceBuilder(RubyContext/*!*/ context, InterpretedFrame frame)
+            : this(context) {
+
+            for (int depth = 0; frame != null && depth < MaxThreadBacktraceDepth; depth++, frame = frame.Parent) {
+                string methodName = frame.Name;
+                if (methodName == InterpretedCallSiteName) {
+                    continue;
+                }
+
+                string file;
+                int line;
+                var debugInfo = frame.GetDebugInfo(frame.InstructionIndex);
+                if (debugInfo != null) {
+                    file = debugInfo.FileName;
+                    line = debugInfo.StartLine;
+                } else {
+                    file = null;
+                    line = 0;
+                }
+
+                // Frames the interpreter runs on behalf of the DLR rather than of Ruby have no encoded
+                // Ruby name; they are not part of a Ruby backtrace and MRI has nothing to put in their
+                // place, so leave them out.
+                if (!TryParseRubyMethodName(ref methodName, ref file, ref line)) {
+                    continue;
+                }
+
+                _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
+            }
+        }
+
+        private const int MaxThreadBacktraceDepth = 10000;
+
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
         internal static StackTrace GetClrStackTrace(Exception exception) {
             return exception != null ? new StackTrace(exception, true) : new StackTrace(true);

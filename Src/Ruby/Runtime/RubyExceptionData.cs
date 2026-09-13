@@ -95,6 +95,27 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// The backtrace of a thread other than the calling one, or null if that thread has no Ruby
+        /// stack to speak of - it has not started, it has finished, or it has never run Ruby code.
+        /// </summary>
+        public static RubyArray CreateBacktrace(RubyContext/*!*/ context, Thread/*!*/ thread) {
+#if FEATURE_STACK_TRACE && FEATURE_THREAD
+            if (thread == Thread.CurrentThread) {
+                return CreateBacktrace(context, 0);
+            }
+
+            InterpretedFrame frame;
+            if (!InterpretedFrame.CurrentFrame.TryGetValue(thread, out frame) || frame == null) {
+                return null;
+            }
+
+            return new RubyStackTraceBuilder(context, frame).RubyTrace;
+#else
+            return null;
+#endif
+        }
+
+        /// <summary>
         /// Builds backtrace for the exception if it wasn't built yet. 
         /// Captures a full stack trace starting with the current frame and combines it with the trace of the exception.
         /// Called from compiled code.

@@ -367,6 +367,24 @@ namespace IronRuby.Builtins {
             return self.IsAlive;
         }
 
+        /// <summary>
+        /// The Ruby stack of this thread, or nil if there is none to report.  Thread#backtrace is
+        /// defined in Ruby on top of this so that it can do MRI's start/length slicing; this is only
+        /// the part that has to reach into the runtime.
+        ///
+        /// A thread that has not started or has already finished has no stack and answers nil, as in
+        /// MRI.  A running thread answers a snapshot: it does not stop to be read, so by the time the
+        /// array is handed back the thread has probably moved on.
+        /// </summary>
+        [RubyMethod("__native_backtrace__", RubyMethodAttributes.PrivateInstance)]
+        public static object NativeBacktrace(RubyContext/*!*/ context, Thread/*!*/ self) {
+            RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+            if (!self.IsAlive) {
+                return null;
+            }
+            return RubyExceptionData.CreateBacktrace(context, self);
+        }
+
         [RubyMethod("group")]
         public static ThreadGroup Group(Thread/*!*/ self) {
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
