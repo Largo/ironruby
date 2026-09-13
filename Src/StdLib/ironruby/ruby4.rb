@@ -2368,18 +2368,51 @@ module Errno
 end
 
 class Array
+  # Array#to_h takes no arguments and names the offending index in its errors,
+  # which is what distinguishes it from the Enumerable#to_h above.
   def to_h
     result = {}
-    each do |pair|
+    each_with_index do |pair, index|
       pair = yield(pair) if block_given?
-      unless pair.respond_to?(:to_ary) && pair.to_ary.size == 2
-        raise TypeError, "wrong element type #{pair.class} (expected array)"
+      array = pair.respond_to?(:to_ary) ? pair.to_ary : nil
+      unless array.is_a?(Array)
+        raise TypeError, "wrong element type #{pair.class} at #{index} (expected array)"
       end
-      k, v = pair.to_ary
-      result[k] = v
+      unless array.size == 2
+        raise ArgumentError, "wrong array length at #{index} (expected 2, was #{array.size})"
+      end
+      result[array[0]] = array[1]
     end
     result
-  end unless method_defined?(:to_h)
+  end
+
+  # #uniq and #uniq! compare the block's result, not the element itself; the
+  # core versions ignore the block entirely, so they are kept for the no-block
+  # case and wrapped here.
+  alias_method :__uniq_without_block__, :uniq
+  alias_method :__uniq_in_place_without_block__, :uniq!
+
+  def uniq(&block)
+    return __uniq_without_block__ unless block
+    seen = {}
+    result = []
+    each do |element|
+      key = block.call(element)
+      next if seen.key?(key)
+      seen[key] = true
+      result << element
+    end
+    result
+  end
+
+  def uniq!(&block)
+    return __uniq_in_place_without_block__ unless block
+    result = uniq(&block)
+    return nil if result.size == size
+    replace(result)
+  end
+
+  private :__uniq_without_block__, :__uniq_in_place_without_block__
 end
 
 class String

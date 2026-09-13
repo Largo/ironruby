@@ -226,7 +226,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("sort")]
         public static object Sort(ComparisonStorage/*!*/ comparisonStorage, BlockParam block, RubyArray/*!*/ self) {
-            RubyArray result = self.CreateInstance();
+            // Since Ruby 3.0 #sort hands back a plain Array, not the receiver's subclass.
+            RubyArray result = new RubyArray();
             IListOps.Replace(result, self);
             return SortInPlace(comparisonStorage, block, result);
         }
@@ -253,16 +254,12 @@ namespace IronRuby.Builtins {
             breakResult = null;
             var context = comparisonStorage.Context;
 
-            // TODO: this does more comparisons (and in a different order) than
-            // Ruby's sort. Also, control flow won't work because List<T>.Sort wraps
-            // exceptions from the comparer & rethrows. We need to rewrite a version of quicksort
-            // that behaves like Ruby's sort.
             if (block == null) {
-                self.Sort((x, y) => Protocols.Compare(comparisonStorage, x, y));
+                MergeSort(self, (x, y) => Protocols.Compare(comparisonStorage, x, y));
             } else {
                 object nonRefBreakResult = null;
                 try {
-                    self.Sort((x, y) =>
+                    MergeSort(self, (x, y) =>
                     {
                         object result = null;
                         if (block.Yield(x, y, out result)) {
@@ -276,21 +273,63 @@ namespace IronRuby.Builtins {
 
                         return Protocols.ConvertCompareResult(comparisonStorage, result);
                     });
-                } catch (InvalidOperationException e) {
-                    if (e.InnerException == null) {
-                        throw;
-                    }
-
-                    if (e.InnerException is BreakException) {
-                        breakResult = new StrongBox<object>(nonRefBreakResult);
-                        return null;
-                    } else {
-                        throw e.InnerException;
-                    }
+                } catch (BreakException) {
+                    breakResult = new StrongBox<object>(nonRefBreakResult);
+                    return null;
                 }
             }
 
             return self;
+        }
+
+        /// <summary>
+        /// List&lt;T&gt;.Sort cannot be used here: it wraps whatever the comparer throws in an
+        /// InvalidOperationException (so a Ruby exception or a block's break never arrives
+        /// intact) and .NET 5 added a consistency check that raises ArgumentException when
+        /// the comparer disagrees with itself - which a Ruby block is perfectly entitled to
+        /// do.  A plain merge sort has neither problem and is stable into the bargain.
+        /// </summary>
+        private static void MergeSort(RubyArray/*!*/ self, Comparison<object>/*!*/ comparison) {
+            int count = self.Count;
+            if (count < 2) {
+                return;
+            }
+
+            object[] items = new object[count];
+            self.CopyTo(items, 0);
+            MergeSortRange(items, new object[count], 0, count, comparison);
+
+            for (int i = 0; i < count; i++) {
+                self[i] = items[i];
+            }
+        }
+
+        private static void MergeSortRange(object[]/*!*/ items, object[]/*!*/ buffer, int start, int length,
+            Comparison<object>/*!*/ comparison) {
+
+            if (length < 2) {
+                return;
+            }
+
+            int half = length / 2;
+            MergeSortRange(items, buffer, start, half, comparison);
+            MergeSortRange(items, buffer, start + half, length - half, comparison);
+
+            int left = start, right = start + half, target = start;
+            int leftEnd = start + half, rightEnd = start + length;
+            while (left < leftEnd && right < rightEnd) {
+                // Take from the right only when it is strictly smaller, which keeps equal
+                // elements in their original order.
+                buffer[target++] = comparison(items[right], items[left]) < 0 ? items[right++] : items[left++];
+            }
+            while (left < leftEnd) {
+                buffer[target++] = items[left++];
+            }
+            while (right < rightEnd) {
+                buffer[target++] = items[right++];
+            }
+
+            Array.Copy(buffer, start, items, start, length);
         }
         #endregion
 
