@@ -35,6 +35,7 @@ namespace IronRuby.Runtime {
         private readonly bool _autoSplit;
         private readonly bool _chopLines;
         private readonly string _inputRecordSeparator;
+        private readonly int _frozenStringLiteral;
         private readonly string _standardLibraryPath;
         private readonly string _applicationBase;
         private readonly ReadOnlyCollection<string> _requirePaths;
@@ -102,6 +103,16 @@ namespace IronRuby.Runtime {
         /// <summary>-l: chomp each input line, and set $\ to $/.</summary>
         public bool ChopLines {
             get { return _chopLines; }
+        }
+
+        /// <summary>
+        /// --enable / --disable=frozen-string-literal: 1 enabled, -1 disabled, 0 not given. The
+        /// numbering is prism's own (PM_OPTIONS_FROZEN_STRING_LITERAL_*), because prism is what
+        /// this feeds and it is the parser that decides which literals the flag reaches. A file's
+        /// own magic comment overrides it either way.
+        /// </summary>
+        public int FrozenStringLiteral {
+            get { return _frozenStringLiteral; }
         }
 
         /// <summary>The initial $/ as given by -0, or null for the default newline.</summary>
@@ -177,6 +188,7 @@ namespace IronRuby.Runtime {
             _autoSplit = GetOption(options, "AutoSplit", false);
             _chopLines = GetOption(options, "ChopLines", false);
             _inputRecordSeparator = GetOption<string>(options, "InputRecordSeparator", null);
+            _frozenStringLiteral = GetOption(options, "FrozenStringLiteral", 0);
 
             _mainFile = GetOption(options, "MainFile", (string)null);
             _verbosity = GetOption(options, "Verbosity", 1);

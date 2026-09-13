@@ -51,7 +51,12 @@ namespace IronRuby.Prism {
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
             SourceUnit sourceUnit, ErrorSink errorSink) {
 
-            PrismParseResult result = PrismParser.Parse(code, path, 1, outerLocalNames);
+            // --enable/--disable=frozen-string-literal only sets the default; the magic comment
+            // in a file still wins, and prism applies that rule itself.
+            var context = sourceUnit != null ? sourceUnit.LanguageContext as RubyContext : null;
+            int frozenStringLiteral = context != null ? context.RubyOptions.FrozenStringLiteral : 0;
+
+            PrismParseResult result = PrismParser.Parse(code, path, 1, outerLocalNames, frozenStringLiteral);
 
             var bridge = new PrismAstBridge(code, path, ResolveEncoding(result.EncodingName, sourceUnit));
             bridge._sourceUnit = sourceUnit;
@@ -213,7 +218,12 @@ namespace IronRuby.Prism {
                         Literal.Integer(0, span), Expr(imaginary.Numeric)
                     }), span);
                 case Pm.StringNode str:
-                    return new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str), span);
+                    // prism tracks the frozen_string_literal magic comment itself and flags each
+                    // literal with the state in effect where it appears, so the comment's scope -
+                    // whole file, and only the file it is in - comes out right without the bridge
+                    // having to know anything about it.
+                    return new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str),
+                        HasFlag(str, Pm.StringFlags.Frozen), span);
                 case Pm.SymbolNode symbol:
                     return new SymbolLiteral(LiteralText(symbol.Unescaped), SymbolEncoding(symbol), span);
                 case Pm.TrueNode _: return Literal.True(span);

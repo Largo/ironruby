@@ -12,7 +12,13 @@ namespace IronRuby.Prism {
     /// </summary>
     public static class PrismParser {
         public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals) {
-            return PrismLoader.LoadParse(ParseSerialized(source, BuildOptionsData(path, startLine, outerLocals)));
+            return Parse(source, path, startLine, outerLocals, 0);
+        }
+
+        public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
+            int frozenStringLiteral) {
+
+            return PrismLoader.LoadParse(ParseSerialized(source, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral)));
         }
 
         public static byte[]/*!*/ ParseSerialized(string/*!*/ source) {
@@ -45,6 +51,10 @@ namespace IronRuby.Prism {
         /// makes prism resolve eval-context locals itself.
         /// </summary>
         internal static byte[]/*!*/ BuildOptionsData(string path, int startLine, IList<string> outerLocals) {
+            return BuildOptionsData(path, startLine, outerLocals, 0);
+        }
+
+        internal static byte[]/*!*/ BuildOptionsData(string path, int startLine, IList<string> outerLocals, int frozenStringLiteral) {
             using (var stream = new MemoryStream())
             using (var writer = new BinaryWriter(stream)) {
                 byte[] pathBytes = Encoding.UTF8.GetBytes(path ?? "");
@@ -52,7 +62,9 @@ namespace IronRuby.Prism {
                 writer.Write(pathBytes);
                 writer.Write(startLine);
                 writer.Write(0);            // encoding name length (default)
-                writer.Write((byte)0);      // frozen string literal
+                // 1 enabled, -1 (0xff) disabled, 0 unset - a magic comment in the file wins
+                // over either, which prism does itself.
+                writer.Write((sbyte)frozenStringLiteral);
                 writer.Write((byte)0);      // command line flags
                 writer.Write((byte)0);      // syntax version (latest)
                 writer.Write((byte)0);      // encoding locked

@@ -21,6 +21,7 @@ using MSA = Microsoft.Scripting.Ast;
 
 using System;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
@@ -1641,6 +1642,49 @@ namespace IronRuby.Runtime {
         public static MutableString/*!*/ CreateMutableStringM(MutableString str1, RubyEncoding/*!*/ encoding) {
             return MutableString.CreateInternal(str1, encoding);
         }
+
+        #region frozen string literals
+
+        /// <summary>
+        /// MRI's fstring table. Under `# frozen_string_literal: true` two literals with the same
+        /// bytes and encoding are the *same* object, not merely two frozen equal ones, so
+        /// "foo".equal?("foo") is true. Entries live as long as the runtime, as they do in MRI.
+        /// </summary>
+        private static readonly ConcurrentDictionary<MutableString, MutableString>/*!*/ _frozenStringLiterals =
+            new ConcurrentDictionary<MutableString, MutableString>(new FrozenStringLiteralComparer());
+
+        /// <summary>
+        /// Exact identity of bytes and encoding, which is #eql? rather than #== - the latter calls
+        /// a zero length string comparable with any other whatever its encoding, and two literals
+        /// that disagree about their encoding must not share a frozen instance.
+        /// </summary>
+        private sealed class FrozenStringLiteralComparer : IEqualityComparer<MutableString> {
+            public bool Equals(MutableString x, MutableString y) {
+                return x.Encoding == y.Encoding && x.Equals(y);
+            }
+
+            public int GetHashCode(MutableString str) {
+                return str.GetHashCode() ^ str.Encoding.GetHashCode();
+            }
+        }
+
+        private static MutableString/*!*/ InternFrozenStringLiteral(MutableString/*!*/ str) {
+            return _frozenStringLiterals.GetOrAdd(str.Freeze(), str);
+        }
+
+        // The StrongBox is one per literal in the program, so the table is consulted once per
+        // literal however often it is evaluated - the same shape the regexp literals use.
+        [Emitted]
+        public static MutableString/*!*/ CreateFrozenMutableStringL(string/*!*/ str1, RubyEncoding/*!*/ encoding, StrongBox<MutableString>/*!*/ cache) {
+            return cache.Value ?? (cache.Value = InternFrozenStringLiteral(MutableString.Create(str1, encoding)));
+        }
+
+        [Emitted]
+        public static MutableString/*!*/ CreateFrozenMutableStringB(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, StrongBox<MutableString>/*!*/ cache) {
+            return cache.Value ?? (cache.Value = InternFrozenStringLiteral(MutableString.CreateBinary(bytes, encoding)));
+        }
+
+        #endregion
 
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringLM(string/*!*/ str1, MutableString str2, RubyEncoding/*!*/ encoding) {

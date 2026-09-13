@@ -26,6 +26,7 @@ using System.Diagnostics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Linq;
+using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 
@@ -53,6 +54,22 @@ namespace IronRuby.Compiler {
 
         public static ConstructorInfo RubyCallSignatureCtor { get { return _RubyCallSignatureCtor ?? (_RubyCallSignatureCtor = GetConstructor(typeof(RubyCallSignature), typeof(uint))); } }
         
+        private static MethodInfo _CreateFrozenMutableStringL, _CreateFrozenMutableStringB;
+
+        public static MethodInfo/*!*/ CreateFrozenMutableStringL {
+            get {
+                return _CreateFrozenMutableStringL ?? (_CreateFrozenMutableStringL =
+                    GetMethod(typeof(RubyOps), "CreateFrozenMutableStringL"));
+            }
+        }
+
+        public static MethodInfo/*!*/ CreateFrozenMutableStringB {
+            get {
+                return _CreateFrozenMutableStringB ?? (_CreateFrozenMutableStringB =
+                    GetMethod(typeof(RubyOps), "CreateFrozenMutableStringB"));
+            }
+        }
+
         private static MethodInfo _Stopwatch_GetTimestamp;
         public static MethodInfo Stopwatch_GetTimestamp { get { return _Stopwatch_GetTimestamp ?? (_Stopwatch_GetTimestamp = GetMethod(typeof(Stopwatch), "GetTimestamp")); } }
         public static MethodInfo IList_get_Item { get { return _IList_get_Item ?? (_IList_get_Item = GetMethod(typeof(IList), "get_Item")); } }

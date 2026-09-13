@@ -92,14 +92,21 @@ namespace IronRuby.Hosting {
                     _disableRubyGems = !enable;
                     break;
 
+                case "frozen-string-literal":
+                case "frozen_string_literal":
+                    // prism's numbering, which is where this ends up.
+                    LanguageSetup.Options["FrozenStringLiteral"] = enable ? 1 : -1;
+                    break;
+
                 case "all":
                     _disableRubyGems = !enable;
+                    LanguageSetup.Options["FrozenStringLiteral"] = enable ? 1 : -1;
                     break;
 
                 default:
-                    // did_you_mean, error_highlight, syntax_suggest, frozen-string-literal, jit,
-                    // yjit, rubyopt: nothing here implements them yet, and refusing the option
-                    // would be worse than ignoring it.
+                    // did_you_mean, error_highlight, syntax_suggest, jit, yjit, rubyopt: nothing
+                    // here implements them yet, and refusing the option would be worse than
+                    // ignoring it.
                     break;
             }
         }
@@ -298,6 +305,7 @@ namespace IronRuby.Hosting {
                     break;
 
                 case "-d":
+                case "--debug":
                     LanguageSetup.Options["DebugVariable"] = true; // $DEBUG = true
                     break;
 
