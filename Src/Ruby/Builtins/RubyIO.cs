@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
@@ -28,6 +29,10 @@ namespace IronRuby.Builtins {
         private RubyContext/*!*/ _context;
         private RubyEncoding/*!*/ _externalEncoding;
         private RubyEncoding _internalEncoding;
+
+        // the :invalid, :undef, :replace and decorator options the stream was opened with,
+        // which the transcoding on the way in and on the way out has to honour
+        private IDictionary<object, object> _conversionOptions;
 
         // -1 if uninitialized or closed:
         private int _fileDescriptor;
@@ -123,6 +128,11 @@ namespace IronRuby.Builtins {
         public RubyEncoding InternalEncoding {
             get { return _internalEncoding; }
             set { _internalEncoding = value; }
+        }
+
+        public IDictionary<object, object> ConversionOptions {
+            get { return _conversionOptions; }
+            set { _conversionOptions = value; }
         }
 
         public int GetFileDescriptor() {

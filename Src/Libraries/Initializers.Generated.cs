@@ -3229,6 +3229,11 @@ namespace IronRuby.Builtins {
         
         private static void LoadIO_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             LoadIronRuby__Print_Instance(module);
+            DefineLibraryMethod(module, "__conversion_options__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyIO, System.Object>(IronRuby.Builtins.RubyIOOps.GetConversionOptions)
+            );
+            
             DefineLibraryMethod(module, "binmode", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyIO, IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.Binmode)

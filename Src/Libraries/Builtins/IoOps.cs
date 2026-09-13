@@ -130,6 +130,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(descriptor), "Fixnum");
             }
             Reinitialize(self, desc.Value, info);
+            self.ConversionOptions = options;
 
             return self;
         }
@@ -140,11 +141,11 @@ namespace IronRuby.Builtins {
             io.SetFileDescriptor(descriptor);
 
             if (info.HasEncoding) {
-                io.ExternalEncoding = info.ExternalEncoding;
+                io.ExternalEncoding = info.ExternalEncoding ?? io.ExternalEncoding;
                 // An explicit external encoding on its own does not cancel the default
                 // internal encoding; MRI still transcodes to it.
                 io.InternalEncoding = info.InternalEncoding ?? io.Context.DefaultInternalEncoding;
-                io.EncodingSpecified = true;
+                io.EncodingSpecified = info.ExternalEncoding != null;
             }
 
             return io;
@@ -161,6 +162,7 @@ namespace IronRuby.Builtins {
             self.ExternalEncoding = source.ExternalEncoding;
             self.InternalEncoding = source.InternalEncoding;
             self.EncodingSpecified = source.EncodingSpecified;
+            self.ConversionOptions = source.ConversionOptions;
             return self;
         }
 
@@ -201,11 +203,11 @@ namespace IronRuby.Builtins {
             io.Mode = info.Mode;
 
             if (info.HasEncoding) {
-                io.ExternalEncoding = info.ExternalEncoding;
+                io.ExternalEncoding = info.ExternalEncoding ?? io.ExternalEncoding;
                 // An explicit external encoding on its own does not cancel the default
                 // internal encoding; MRI still transcodes to it.
                 io.InternalEncoding = info.InternalEncoding ?? io.Context.DefaultInternalEncoding;
-                io.EncodingSpecified = true;
+                io.EncodingSpecified = info.ExternalEncoding != null;
             }
 
             return io;
@@ -724,8 +726,7 @@ namespace IronRuby.Builtins {
             RubyIO/*!*/ self, object external, [Optional]object @internal, [Optional]IDictionary<object, object> options) {
 
             Protocols.TryConvertToOptions(toHash, ref options, ref external, ref @internal);
-
-            // TODO: options
+            self.ConversionOptions = options;
 
             RubyEncoding externalEncoding = null, internalEncoding = null;
             if (external != Missing.Value && external != null) {
@@ -735,6 +736,15 @@ namespace IronRuby.Builtins {
                 internalEncoding = Protocols.ConvertToEncoding(toStr, @internal);
             }
             return SetEncodings(self, externalEncoding, internalEncoding);
+        }
+
+        /// <summary>
+        /// The conversion options the stream was opened with, for the transcoding the library
+        /// code does on the way in and on the way out. Not a CRuby method.
+        /// </summary>
+        [RubyMethod("__conversion_options__", RubyMethodAttributes.PrivateInstance)]
+        public static object GetConversionOptions(RubyIO/*!*/ self) {
+            return self.ConversionOptions;
         }
 
         [RubyMethod("set_encoding")]

@@ -54,7 +54,9 @@ namespace IronRuby.Builtins {
         public IOMode Mode { get { return _mode ?? IOMode.Default; } }
         public RubyEncoding ExternalEncoding { get { return _externalEncoding; } }
         public RubyEncoding InternalEncoding { get { return _internalEncoding; } }
-        public bool HasEncoding { get { return _externalEncoding != null; } }
+        // Either side on its own counts: "internal_encoding: 'ISO-8859-1'" asks for a
+        // conversion from whatever the external side turns out to be.
+        public bool HasEncoding { get { return _externalEncoding != null || _internalEncoding != null; } }
 
         public IOInfo(IOMode mode) 
             : this(mode, null, null) {
@@ -123,6 +125,19 @@ namespace IronRuby.Builtins {
             }
         }
 
+        private static RubyEncoding ToEncoding(ConversionStorage<MutableString>/*!*/ toStr, object value) {
+            if (value == null) {
+                return null;
+            }
+            var encoding = value as RubyEncoding;
+            if (encoding != null) {
+                return encoding;
+            }
+            var name = Protocols.CastToString(toStr, value);
+            // "-" is MRI's way of spelling "no internal encoding".
+            return name.ToString() == "-" ? null : TryParseEncoding(toStr.Context, name.ToString());
+        }
+
         public IOInfo AddOptions(ConversionStorage<MutableString>/*!*/ toStr, IDictionary<object, object> options) {
             var context = toStr.Context;
 
@@ -134,6 +149,23 @@ namespace IronRuby.Builtins {
 
             if (options.TryGetValue(context.CreateAsciiSymbol("mode"), out optionValue)) {
                 result = result.AddModeAndEncoding(context, Protocols.CastToString(toStr, optionValue));
+            }
+
+            // :external_encoding and :internal_encoding say separately what "ext:int" says
+            // together, and either of them may appear on its own. The mode is carried over as
+            // the nullable it is: turning it into a concrete mode here would make a later
+            // "mode" option look like a second one.
+            object externalValue, internalValue;
+            bool hasExternal = options.TryGetValue(context.CreateAsciiSymbol("external_encoding"), out externalValue);
+            bool hasInternal = options.TryGetValue(context.CreateAsciiSymbol("internal_encoding"), out internalValue);
+            if (hasExternal || hasInternal) {
+                if (result.HasEncoding) {
+                    throw RubyExceptions.CreateArgumentError("encoding specified twice");
+                }
+                result = new IOInfo(result._mode,
+                    hasExternal ? ToEncoding(toStr, externalValue) : null,
+                    hasInternal ? ToEncoding(toStr, internalValue) : null
+                );
             }
 
             // :newline is a text-mode decorator, so it contradicts "b".
