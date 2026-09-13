@@ -6666,12 +6666,14 @@ namespace IronRuby.Builtins {
         
         private static void LoadObjectSpace_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "define_finalizer", 0x61, 
-                0x00000000U, 
+                0x00000004U, 0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.DefineFinalizer), 
                 new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.DefineFinalizer)
             );
             
             DefineLibraryMethod(module, "each_object", 0x61, 
-                0x00000004U, 
+                0x00000002U, 0x00000005U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyClass, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.ObjectSpace.GetEachObjectEnumerator), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyClass, System.Object>(IronRuby.Builtins.ObjectSpace.EachObject)
             );
             
