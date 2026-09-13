@@ -59,17 +59,11 @@ namespace IronRuby.Builtins {
             ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
             ConversionStorage<MutableString>/*!*/ toPath,
             ConversionStorage<MutableString>/*!*/ toStr,
-            BlockParam block,
             RubyClass/*!*/ self,
             object descriptorOrPath, 
             [Optional]object optionsOrMode, 
             [Optional]object optionsOrPermissions,
             [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
-
-            if (block != null) {
-                // File.new takes no block; only File.open does.
-                self.Context.ReportWarning("File::new() does not take block; use File::open() instead");
-            }
 
             return Reinitialize(toInt, toHash, toPath, toStr, new RubyFile(self.Context), descriptorOrPath, optionsOrMode, optionsOrPermissions, options);
         }
@@ -459,7 +453,11 @@ namespace IronRuby.Builtins {
                 throw new InvalidError();
             }
 
+            // ftruncate(2) leaves the file offset alone; Stream.SetLength pulls it back
+            // to the new end, which would make a later write land in the wrong place.
+            long position = self.Position;
             self.Length = size;
+            self.Position = position;
             return 0;
         }
 
@@ -1321,7 +1319,10 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("size", BuildConfig = "FEATURE_FILESYSTEM")]
         public static object FileSize(RubyFile/*!*/ self) {
-            return RubyStatOps.Size(RubyStatOps.Create(self));
+            // fstat the descriptor rather than the path: the size of a file that has
+            // since been unlinked is still readable, and a closed File raises IOError.
+            self.RequireOpen();
+            return RubyStatOps.Size(RubyStatOps.Create((RubyIO)self));
         }
 #endif
         [RubyMethod("inspect")]
@@ -1394,9 +1395,18 @@ namespace IronRuby.Builtins {
             /// </summary>
             internal static FileSystemInfo/*!*/ Create(RubyIO/*!*/ io) {
                 io.RequireOpen();
+
+                // Buffered writes have to reach the descriptor before it is stat'd, and
+                // fstat needs the real OS handle, not IronRuby's descriptor table index.
+                io.Flush();
+                int fd = GetNativeFileDescriptor(io);
+                if (fd < 0) {
+                    throw RubyExceptions.CreateEBADF();
+                }
+
                 Posix.StatData data;
                 int errno;
-                if (Posix.TryFStat(io.GetFileDescriptor(), out data, out errno)) {
+                if (Posix.TryFStat(fd, out data, out errno)) {
                     return new StatInfo("", data);
                 }
                 throw Posix.Error(errno == 0 ? Posix.EBADF : errno, "");
