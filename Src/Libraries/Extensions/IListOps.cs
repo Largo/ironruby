@@ -788,9 +788,16 @@ namespace IronRuby.Builtins {
 
         #region assoc, rassoc
 
-        public static IList GetContainerOf(BinaryOpStorage/*!*/ equals, IList list, int index, object item) {
+        /// <summary>
+        /// MRI asks a non-Array element for #to_ary before giving up on it, so an object standing
+        /// in for a pair is found by #assoc and #rassoc like a real one. An element that is already
+        /// an Array is never asked.
+        /// </summary>
+        public static IList GetContainerOf(ConversionStorage<IList>/*!*/ tryToAry, BinaryOpStorage/*!*/ equals,
+            IList list, int index, object item) {
+
             foreach (object current in list) {
-                IList subArray = current as IList;
+                IList subArray = current as IList ?? Protocols.TryCastToArray(tryToAry, current);
                 if (subArray != null && subArray.Count > index) {
                     if (Protocols.IsEqual(equals, subArray[index], item)) {
                         return subArray;
@@ -801,13 +808,15 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("assoc")]
-        public static IList GetContainerOfFirstItem(BinaryOpStorage/*!*/ equals, IList/*!*/ self, object item) {
-            return GetContainerOf(equals, self, 0, item);
+        public static IList GetContainerOfFirstItem(ConversionStorage<IList>/*!*/ tryToAry, BinaryOpStorage/*!*/ equals,
+            IList/*!*/ self, object item) {
+            return GetContainerOf(tryToAry, equals, self, 0, item);
         }
 
         [RubyMethod("rassoc")]
-        public static IList/*!*/ GetContainerOfSecondItem(BinaryOpStorage/*!*/ equals, IList/*!*/ self, object item) {
-            return GetContainerOf(equals, self, 1, item);
+        public static IList GetContainerOfSecondItem(ConversionStorage<IList>/*!*/ tryToAry, BinaryOpStorage/*!*/ equals,
+            IList/*!*/ self, object item) {
+            return GetContainerOf(tryToAry, equals, self, 1, item);
         }
 
         #endregion

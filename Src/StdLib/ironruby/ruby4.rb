@@ -1577,8 +1577,28 @@ class Array
   unless (begin; [1].shift(1); true; rescue ArgumentError; false; end)
     alias_method :shift_without_count, :shift
 
-    def shift(count = nil)
-      return shift_without_count if count.nil?
+    def shift(*args)
+      if args.size > 1
+        raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+      end
+      return shift_without_count if args.empty?
+
+      # nil is an argument here, not the absence of one, and an object that is
+      # not an Integer is asked for one exactly once - #self[0, count] would ask
+      # again - before the count is checked for being negative.
+      count = args[0]
+      unless count.is_a?(Integer)
+        unless count.respond_to?(:to_int)
+          raise TypeError, "no implicit conversion of #{count.nil? ? 'nil' : count.class} into Integer"
+        end
+        count = count.to_int
+        unless count.is_a?(Integer)
+          raise TypeError, "can't convert #{args[0].class} to Integer (#{args[0].class}#to_int gives #{count.class})"
+        end
+      end
+      raise ArgumentError, "negative array size" if count < 0
+
+      __array_check_frozen__
       taken = self[0, count] || []
       self[0, count] = []
       taken
