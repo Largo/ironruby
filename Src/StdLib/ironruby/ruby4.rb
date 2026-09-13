@@ -1912,13 +1912,154 @@ class String
     result
   end unless method_defined?(:byteslice)
 
+
+  # ------------------------------------------------------------------
+  # Byte-offset searching.
+  #
+  # A byte offset is not a character offset, and MRI insists that the one you
+  # hand it lands on a character boundary.  The search itself has to run in the
+  # receiver's real encoding - forcing a binary copy, which is what #byteindex
+  # used to do, makes a UTF-8 Regexp needle raise Encoding::CompatibilityError -
+  # so the offset is converted to a character offset, the ordinary search runs,
+  # and the answer is converted back.
+  # ------------------------------------------------------------------
+
+  # Byte offset of the start of every character, plus one final entry for the
+  # end of the string.  The Nth entry is the byte offset of character N.
+  def __ir_char_starts__
+    starts = [0]
+    at = 0
+    each_char { |ch| at += ch.bytesize; starts << at }
+    starts
+  end
+  private :__ir_char_starts__
+
+  def __ir_byte_search__(reverse, needle, offset)
+    starts = __ir_char_starts__
+    size = starts.last
+
+    offset += size if offset < 0
+    return nil if offset < 0
+    if offset > size
+      # #index gives up past the end; #rindex clamps to it.
+      return nil unless reverse
+      offset = size
+    end
+
+    char_offset = starts.index(offset)
+    raise IndexError, "offset #{offset} does not land on character boundary" if char_offset.nil?
+
+    found = reverse ? rindex(needle, char_offset) : index(needle, char_offset)
+    found.nil? ? nil : starts[found]
+  end
+  private :__ir_byte_search__
+
   def byteindex(needle, offset = 0)
-    binary = dup
-    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
-    needle = needle.dup
-    needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
-    binary.index(needle, offset)
-  end unless method_defined?(:byteindex)
+    __ir_byte_search__(false, needle, offset)
+  end
+
+  def byterindex(needle, offset = nil)
+    __ir_byte_search__(true, needle, offset.nil? ? bytesize : offset)
+  end unless method_defined?(:byterindex)
+
+  # ------------------------------------------------------------------
+  # partition / rpartition
+  # ------------------------------------------------------------------
+
+  def __ir_partition_bounds__(sep)
+    if sep.is_a?(Regexp)
+      m = sep.match(self)
+      m && [m.begin(0), m.end(0)]
+    else
+      unless sep.is_a?(String)
+        if sep.respond_to?(:to_str)
+          sep = sep.to_str
+        else
+          raise TypeError, "wrong argument type #{sep.nil? ? 'nil' : sep.class} (expected Regexp)"
+        end
+      end
+      i = index(sep)
+      i && [i, i + sep.length]
+    end
+  end
+  private :__ir_partition_bounds__
+
+  def partition(sep)
+    bounds = __ir_partition_bounds__(sep)
+    return [self[0..-1], self[0, 0], self[0, 0]] if bounds.nil?
+    [self[0, bounds[0]], self[bounds[0], bounds[1] - bounds[0]], self[bounds[1]..-1]]
+  end unless method_defined?(:partition)
+
+  def rpartition(sep)
+    if sep.is_a?(Regexp)
+      # Regexp#match has no "last match" mode, so the last one is found by
+      # walking the matches forward and keeping the final one.
+      last = nil
+      at = 0
+      while (m = sep.match(self, at))
+        last = [m.begin(0), m.end(0)]
+        at = m.end(0) > m.begin(0) ? m.end(0) : m.begin(0) + 1
+        break if at > length
+      end
+      bounds = last
+    else
+      unless sep.is_a?(String)
+        if sep.respond_to?(:to_str)
+          sep = sep.to_str
+        else
+          raise TypeError, "wrong argument type #{sep.nil? ? 'nil' : sep.class} (expected Regexp)"
+        end
+      end
+      i = rindex(sep)
+      bounds = i && [i, i + sep.length]
+    end
+    return [self[0, 0], self[0, 0], self[0..-1]] if bounds.nil?
+    [self[0, bounds[0]], self[bounds[0], bounds[1] - bounds[0]], self[bounds[1]..-1]]
+  end unless method_defined?(:rpartition)
+
+  # ------------------------------------------------------------------
+  # prepend / append_as_bytes
+  # ------------------------------------------------------------------
+
+  def prepend(*others)
+    return self if others.empty?
+    joined = others.map { |o| String.try_convert(o) || raise(TypeError, "no implicit conversion of #{o.nil? ? 'nil' : o.class} into String") }
+    replace(joined.join + self)
+  end unless method_defined?(:prepend)
+
+  # Ruby 3.4: concatenation that copies bytes and never transcodes, so the
+  # receiver's encoding is kept whatever the arguments were in.  Integers are
+  # single bytes, taken modulo 256.
+  def append_as_bytes(*objects)
+    return self if objects.empty?
+    enc = encoding
+    tail = +""
+    tail.force_encoding(Encoding::BINARY)
+    objects.each do |o|
+      case o
+      when String  then tail << o.dup.force_encoding(Encoding::BINARY)
+      when Integer then tail << (o % 256).chr(Encoding::BINARY)
+      else raise TypeError, "wrong argument type #{o.nil? ? 'nil' : o.class} (expected String or Integer)"
+      end
+    end
+    binary = dup.force_encoding(Encoding::BINARY)
+    binary << tail
+    replace(binary.force_encoding(enc))
+  end unless method_defined?(:append_as_bytes)
+
+  # ------------------------------------------------------------------
+  # casecmp? - casecmp compares byte by byte after a simple ASCII fold;
+  # casecmp? asks whether the two are equal under full Unicode case folding.
+  # ------------------------------------------------------------------
+
+  def casecmp?(other)
+    other = String.try_convert(other)
+    return nil if other.nil?
+    return nil unless Encoding.compatible?(self, other)
+    downcase(:fold) == other.downcase(:fold)
+  rescue ArgumentError
+    downcase == other.downcase
+  end unless method_defined?(:casecmp?)
 end
 
 # The complex-number half of Numeric.  IronRuby's Complex has these, but the
