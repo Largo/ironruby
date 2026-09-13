@@ -6438,6 +6438,40 @@ class IO
   end unless method_defined?(:readpartial)
 
   class << self
+    # IO.pipe takes the encodings for the read end, and its block form yields the
+    # pair, closes both afterwards and answers what the block answered. The
+    # built-in took no arguments at all and gave the pair back from the block
+    # form instead of the block's value.
+    alias_method :__ir_pipe__, :pipe
+
+    def pipe(*args)
+      options = args.last.is_a?(::Hash) ? args.pop : nil
+      external, internal = args
+      if external.is_a?(::String) && external.include?(":")
+        external, internal = external.split(":", 2)
+      end
+      if options
+        external ||= options[:external_encoding]
+        internal ||= options[:internal_encoding]
+        if (enc = options[:encoding]) && external.nil?
+          external, internal = enc.is_a?(::String) && enc.include?(":") ? enc.split(":", 2) : [enc, internal]
+        end
+      end
+
+      read_end, write_end = __ir_pipe__
+      if external
+        internal ? read_end.set_encoding(external, internal) : read_end.set_encoding(external)
+      end
+
+      return [read_end, write_end] unless block_given?
+      begin
+        yield(read_end, write_end)
+      ensure
+        read_end.close unless read_end.closed?
+        write_end.close unless write_end.closed?
+      end
+    end
+
     # Multiplexing through poll(2), for the streams that have an operating
     # system descriptor to poll. Not all of them do: IronRuby's IO.pipe is not
     # backed by a FileStream, so IO#GetNativeDescriptor answers -1 for a pipe
