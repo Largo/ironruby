@@ -261,6 +261,32 @@ namespace IronRuby.Runtime {
             get { return _refinedModules.Count > 0; }
         }
 
+        private RubyClass _refinementClass;
+
+        /// <summary>
+        /// The Refinement class, i.e. the class of the module Module#refine returns.  Looked up lazily by
+        /// constant because it is an ordinary library class with no CLR type of its own.
+        /// </summary>
+        internal RubyClass/*!*/ RefinementClass {
+            get {
+                if (_refinementClass == null) {
+                    object value;
+                    RubyClass cls = ObjectClass.TryGetConstant(null, "Refinement", out value) ? value as RubyClass : null;
+                    if (cls == null) {
+                        return ModuleClass;
+                    }
+
+                    // A refinement is never spliced into anyone's ancestors, so the Module hooks that do the
+                    // splicing must not be callable on one.  CRuby removes them outright.
+                    cls.UndefineMethodNoEvent("append_features");
+                    cls.UndefineMethodNoEvent("prepend_features");
+                    cls.UndefineMethodNoEvent("extend_object");
+                    _refinementClass = cls;
+                }
+                return _refinementClass;
+            }
+        }
+
         internal void RegisterRefinedModule(RubyModule/*!*/ refinedModule) {
             RequiresClassHierarchyLock();
             if (_refinedModules.ContainsKey(refinedModule)) {

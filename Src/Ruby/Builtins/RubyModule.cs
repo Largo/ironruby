@@ -393,7 +393,7 @@ namespace IronRuby.Builtins {
                 if (_refinements.TryGetValue(refinedModule, out existing)) {
                     return existing;
                 }
-                RubyModule refinement = new RubyModule(Context.ModuleClass, null);
+                RubyModule refinement = new RubyModule(Context.RefinementClass, null);
                 refinement._refinedModule = refinedModule;
                 _refinements.Add(refinedModule, refinement);
                 Context.RegisterRefinedModule(refinedModule);
