@@ -5414,12 +5414,23 @@ class Enumerator
   # --- Enumerator::Product -----------------------------------------------
   # The cartesian product of its arguments, leftmost varying slowest.
   class Product < Enumerator
-    def initialize(*enums, **options)
-      enums.each do |enum|
-        unless enum.respond_to?(:each)
-          ::Kernel.raise(::TypeError, "wrong argument type #{enum.class} (must respond to :each)")
-        end
+    # MRI accepts anything here -- the arguments are only required to answer
+    # #each_entry at the point #each actually walks them, which is what lets
+    # Product wrap a plain Object that defines each_entry and nothing else.
+    def initialize(*enums)
+      __check_frozen__
+      @__enums__ = enums
+      self
+    end
+
+    def initialize_copy(other)
+      return self if other.equal?(self)
+      __check_frozen__
+      unless other.instance_of?(self.class)
+        ::Kernel.raise(::TypeError, "initialize_copy should take same class object")
       end
+      enums = other.__enums_or_nil__
+      ::Kernel.raise(::ArgumentError, "uninitialized product") if enums.nil?
       @__enums__ = enums
       self
     end
@@ -5430,12 +5441,15 @@ class Enumerator
       self
     end
 
+    # Ruby 3.2 specifies #each_entry, not #each: an argument that only answers
+    # each_entry has to work, and one that answers neither has to raise NoMethodError
+    # rather than a TypeError from the constructor.
     def __product__(index, prefix, block)
       if index == @__enums__.size
         block.call(prefix.dup)
         return
       end
-      @__enums__[index].each do |*values|
+      @__enums__[index].each_entry do |*values|
         prefix.push(values.size <= 1 ? values[0] : values)
         __product__(index + 1, prefix, block)
         prefix.pop
@@ -5443,25 +5457,56 @@ class Enumerator
     end
     private :__product__
 
+    protected def __enums_or_nil__
+      defined?(@__enums__) ? @__enums__ : nil
+    end
+
+    # nil for any size MRI cannot use (missing, non-Integer, NaN); zero short-circuits
+    # even when another enumerable has an unknown size, and an infinite size carries.
     def size
       total = 1
+      unknown = false
       @__enums__.each do |enum|
         n = enum.respond_to?(:size) ? enum.size : nil
-        return nil unless n.is_a?(::Numeric)
-        total *= n
+        if n.is_a?(::Integer)
+          return 0 if n == 0
+          total *= n
+        elsif n.is_a?(::Float) && n.infinite?
+          total *= n
+        else
+          unknown = true
+        end
       end
-      total
+      unknown ? nil : total
     end
 
     def rewind
-      @__enums__.reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
+      @__enums__.each { |enum| enum.rewind if enum.respond_to?(:rewind) }
       self
     end
 
     def inspect
-      "#<Enumerator::Product: #{@__enums__.inspect}>"
+      enums = __enums_or_nil__
+      return "#<#{self.class}: uninitialized>" if enums.nil?
+
+      seen = ::Thread.current[:__enumerator_product_inspect__] ||= []
+      return "#<#{self.class}: ...>" if seen.any? { |o| o.equal?(self) }
+
+      seen.push(self)
+      begin
+        "#<#{self.class}: #{enums.inspect}>"
+      ensure
+        seen.pop
+        ::Thread.current[:__enumerator_product_inspect__] = nil if seen.empty?
+      end
     end
     alias_method :to_s, :inspect
+
+    def __check_frozen__
+      return unless frozen?
+      ::Kernel.raise(::FrozenError, "can't modify frozen #{self.class}: #{inspect}")
+    end
+    private :__check_frozen__
   end
 
   def +(other)

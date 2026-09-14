@@ -6996,8 +6996,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "__setrlimit__", 0x61, 
-                0x00070000U, 
-                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int64, System.Int64, System.Int32>(IronRuby.Builtins.RubyProcess.SetRLimit)
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Object, System.Object, System.Int32>(IronRuby.Builtins.RubyProcess.SetRLimit)
             );
             
             DefineLibraryMethod(module, "__setsid__", 0x61, 
