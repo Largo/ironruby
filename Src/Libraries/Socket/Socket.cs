@@ -264,8 +264,9 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyArray result = new RubyArray(2);
             RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, () => self.Socket.Accept()));
             result.Add(s);
-            SocketAddress addr = s.Socket.RemoteEndPoint.Serialize();
-            result.Add(MutableString.CreateAscii(addr.ToString()));
+            // CRuby's second element is an Addrinfo, which socket.rb builds from the packed
+            // sockaddr.  This used to be SocketAddress.ToString(), a CLR debug rendering.
+            result.Add(GetPeerName(s));
             return result;
         }
 
@@ -323,7 +324,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             int length, object/*Numeric*/ flags) {
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
             byte[] buffer = new byte[length];
-            EndPoint fromEP = new IPEndPoint(IPAddress.Any, 0);
+            EndPoint fromEP = AnyEndPoint(self.Socket.AddressFamily);
             int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP));
             MutableString str = MutableString.CreateBinary();
             str.Append(buffer, 0, received);
@@ -339,8 +340,8 @@ namespace IronRuby.StandardLibrary.Sockets {
             // here to stop the RubySocket from being garbage collected?
             RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, () => self.Socket.Accept()));
             result.Add(s.GetFileDescriptor());
-            SocketAddress addr = s.Socket.RemoteEndPoint.Serialize();
-            result.Add(MutableString.CreateAscii(addr.ToString()));
+            // As for #accept: the packed sockaddr, which socket.rb turns into an Addrinfo.
+            result.Add(GetPeerName(s));
             return result;
         }
 

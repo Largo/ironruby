@@ -10807,7 +10807,10 @@ namespace IronRuby.StandardLibrary.Sockets {
                 new Action<IronRuby.Builtins.RubyClass, System.Boolean>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.SetDoNotReverseLookup)
             );
             
-            DefineRuleGenerator(module, "for_fd", 0x21, IronRuby.StandardLibrary.Sockets.RubyBasicSocket.ForFileDescriptor());
+            DefineLibraryMethod(module, "for_fd", 0x21, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, IronRuby.StandardLibrary.Sockets.RubyBasicSocket>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.ForFileDescriptor)
+            );
             
         }
         #endif

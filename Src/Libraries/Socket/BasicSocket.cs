@@ -122,18 +122,27 @@ namespace IronRuby.StandardLibrary.Sockets {
             throw new NotSupportedException();
         }
 
+        // The Linux fcntl(2) command numbers, which is what io/nonblock.rb and IO#fcntl use;
+        // Fcntl::F_SETFL in this tree is a made-up 1.
+        private const int LinuxGetFileFlags = 3;
+        private const int LinuxSetFileFlags = 4;
+        private const int LinuxNonBlock = 0x800;
+
         // returns 0 on success, -1 on failure
         private int SetFileControlFlags(int flags) {
-            // TODO:
-            Socket.Blocking = (flags & RubyFileOps.Constants.NONBLOCK) != 0;
+            Socket.Blocking = (flags & (RubyFileOps.Constants.NONBLOCK | LinuxNonBlock)) == 0;
             return 0;
         }
 
         public override int FileControl(int commandId, int arg) {
-            // TODO:
             switch (commandId) {
                 case Fcntl.F_SETFL:
+                case LinuxSetFileFlags:
                     return SetFileControlFlags(arg);
+                case LinuxGetFileFlags:
+                    // .NET owns the blocking flag; report it the way fcntl(2) would, which is
+                    // what io/nonblock's #nonblock? and #nonblock= read back.
+                    return Socket.Blocking ? 0 : LinuxNonBlock;
             }
             throw new NotSupportedException();
         }
@@ -184,12 +193,78 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         /// <summary>
-        /// Wraps an already open file descriptor into a socket object.
+        /// Wraps an already open file descriptor into a socket object.  The descriptor is an
+        /// index into the context's descriptor table (see RubyContext.AllocateFileDescriptor),
+        /// so the socket it names is recoverable from the table's SocketStream; the result
+        /// keeps the same fileno, as CRuby's does.
         /// </summary>
-        /// <returns>The corresponding socket</returns>
         [RubyMethod("for_fd", RubyMethodAttributes.PublicSingleton)]
-        public static RuleGenerator/*!*/ ForFileDescriptor() {
-            return new RuleGenerator(RuleGenerators.InstanceConstructor);
+        public static RubyBasicSocket/*!*/ ForFileDescriptor(RubyClass/*!*/ self, [DefaultProtocol]int fileDescriptor) {
+            SocketStream stream = self.Context.GetStream(fileDescriptor) as SocketStream;
+            if (stream == null) {
+                throw RubyExceptions.CreateEBADF();
+            }
+            RubyBasicSocket result = CreateForClass(self, stream.Socket);
+            result.SetFileDescriptor(fileDescriptor);
+            return result;
+        }
+
+        private static RubyBasicSocket/*!*/ CreateForClass(RubyClass/*!*/ self, Socket/*!*/ socket) {
+            Type type = self.GetUnderlyingSystemType();
+            if (typeof(TCPServer).IsAssignableFrom(type)) {
+                return new TCPServer(self.Context, socket);
+            }
+            if (typeof(TCPSocket).IsAssignableFrom(type)) {
+                return new TCPSocket(self.Context, socket);
+            }
+            if (typeof(UDPSocket).IsAssignableFrom(type)) {
+                return new UDPSocket(self.Context, socket);
+            }
+            return new RubySocket(self.Context, socket);
+        }
+
+        /// <summary>
+        /// The wildcard endpoint of a socket's own family, for seeding ReceiveFrom.  Handing
+        /// an IPv4 endpoint to an IPv6 socket is an ArgumentError from .NET.
+        /// </summary>
+        internal static EndPoint/*!*/ AnyEndPoint(AddressFamily family) {
+            return family == AddressFamily.InterNetworkV6
+                ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                : new IPEndPoint(IPAddress.Any, 0);
+        }
+
+        /// <summary>
+        /// Turns a packed sockaddr into an EndPoint.  The obvious
+        /// Socket.LocalEndPoint.Create(...) does not work for a socket that was never bound:
+        /// .NET has no local endpoint for one and returns null.
+        /// </summary>
+        internal static EndPoint/*!*/ CreateEndPoint(MutableString/*!*/ sockaddr) {
+            byte[] bytes = sockaddr.ConvertToBytes();
+            if (bytes.Length < 8) {
+                throw RubyExceptions.CreateArgumentError("not a valid sockaddr");
+            }
+            int family = bytes[0] | (bytes[1] << 8);
+            bool v6 = family == 10 || family == 23 || family == 28 || family == 30;
+            AddressFamily addressFamily = v6 ? AddressFamily.InterNetworkV6 : AddressFamily.InterNetwork;
+            int size = v6 ? 28 : 16;
+            SocketAddress address = new SocketAddress(addressFamily, size);
+            for (int i = 2; i < size && i < bytes.Length; i++) {
+                address[i] = bytes[i];
+            }
+            return new IPEndPoint(v6 ? IPAddress.IPv6Any : IPAddress.Any, 0).Create(address);
+        }
+
+        /// <summary>
+        /// The all-zero sockaddr CRuby's getsockname(2) reports for a socket that has never
+        /// been bound.
+        /// </summary>
+        private static MutableString/*!*/ EmptySocketAddress(AddressFamily family) {
+            bool v6 = family == AddressFamily.InterNetworkV6;
+            byte[] bytes = new byte[v6 ? 28 : 16];
+            int number = v6 ? 10 : 2;
+            bytes[0] = (byte)(number & 0xff);
+            bytes[1] = (byte)(number >> 8);
+            return MutableString.CreateBinary(bytes);
         }
 
 #endregion
@@ -227,7 +302,17 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// accept(2): a listening socket is never "connected", so it needs the wait unconditionally.
         /// </summary>
         internal static TResult BlockingAccept<TResult>(Socket/*!*/ socket, Func<TResult>/*!*/ operation) {
-            return BlockingCore(socket, SelectMode.SelectRead, operation);
+            if (!socket.IsBound) {
+                // .NET answers accept(2) on an unbound or unlistened socket with an
+                // InvalidOperationException, which surfaces in Ruby as TypeError; the kernel,
+                // and CRuby, report EINVAL.
+                throw new InvalidError();
+            }
+            try {
+                return BlockingCore(socket, SelectMode.SelectRead, operation);
+            } catch (InvalidOperationException) {
+                throw new InvalidError();
+            }
         }
 
         private static TResult BlockingCore<TResult>(Socket socket, SelectMode mode, Func<TResult>/*!*/ operation) {
@@ -379,13 +464,19 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static MutableString GetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context, 
             RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname) {
             Protocols.CheckSafeLevel(context, 2, "getsockopt");
-            byte[] value = self.Socket.GetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, 4);
+            // struct linger is two ints; everything else the specs ask about is one.
+            int size = (level == (int)SocketOptionLevel.Socket && optname == (int)SocketOptionName.Linger) ? 8 : 4;
+            byte[] value = self.Socket.GetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, size);
             return MutableString.CreateBinary(value);
         }
 
         [RubyMethod("getsockname")]
         public static MutableString GetSocketName(RubyBasicSocket/*!*/ self) {
-            SocketAddress addr = self.Socket.LocalEndPoint.Serialize();
+            EndPoint local = self.Socket.LocalEndPoint;
+            if (local == null) {
+                return EmptySocketAddress(self.Socket.AddressFamily);
+            }
+            SocketAddress addr = local.Serialize();
             byte[] bytes = new byte[addr.Size];
             for (int i = 0; i < addr.Size; ++i) {
                 bytes[i] = addr[i];
@@ -395,7 +486,11 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         [RubyMethod("getpeername")]
         public static MutableString GetPeerName(RubyBasicSocket/*!*/ self) {
-            SocketAddress addr = self.Socket.RemoteEndPoint.Serialize();
+            EndPoint remote = self.Socket.RemoteEndPoint;
+            if (remote == null) {
+                throw new Errno.NotConnectedError();
+            }
+            SocketAddress addr = remote.Serialize();
             byte[] bytes = new byte[addr.Size];
             for (int i = 0; i < addr.Size; ++i) {
                 bytes[i] = addr[i];
@@ -418,11 +513,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             // Convert the parameters
             SocketFlags socketFlags = ConvertToSocketFlag(fixnumCast, flags);
             // Unpack the socket address information from the to parameter
-            SocketAddress address = new SocketAddress(AddressFamily.InterNetwork);
-            for (int i = 0; i < to.GetByteCount(); i++) {
-                address[i] = to.GetByte(i);
-            }
-            EndPoint toEndPoint = self.Socket.LocalEndPoint.Create(address);
+            EndPoint toEndPoint = CreateEndPoint(to);
             return Blocking(() => self.Socket.SendTo(message.ConvertToBytes(), socketFlags, toEndPoint));
         }
 
@@ -518,6 +609,24 @@ namespace IronRuby.StandardLibrary.Sockets {
                 }
             }
 
+            return addresses[0];
+        }
+
+        /// <summary>
+        /// Resolve preferring a particular address family -- needed when a socket already
+        /// exists and its local address has to match it.
+        /// </summary>
+        internal static IPAddress/*!*/ GetHostAddress(string/*!*/ hostNameOrAddress, AddressFamily family) {
+            IPAddress address;
+            if (IPAddress.TryParse(hostNameOrAddress, out address)) {
+                return address;
+            }
+            var addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            foreach (var hostAddress in addresses) {
+                if (hostAddress.AddressFamily == family) {
+                    return hostAddress;
+                }
+            }
             return addresses[0];
         }
 

@@ -26,6 +26,10 @@ namespace IronRuby.StandardLibrary.Sockets {
     internal class SocketStream : Stream, IDescriptorStream {
         internal readonly Socket/*!*/ _socket;
 
+        internal Socket/*!*/ Socket {
+            get { return _socket; }
+        }
+
         public SocketStream(Socket/*!*/ s) {
             Assert.NotNull(s);
             _socket = s;

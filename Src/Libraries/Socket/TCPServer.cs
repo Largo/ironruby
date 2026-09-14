@@ -100,34 +100,21 @@ namespace IronRuby.StandardLibrary.Sockets {
                     listeningInterface = IPAddress.Loopback;
                 } else if (!IPAddress.TryParse(hostnameStr, out listeningInterface)) {
 
-                    // look up the host IP from DNS
-                    IPHostEntry hostEntry = Dns.GetHostEntry(hostnameStr);
-                    foreach (IPAddress address in hostEntry.AddressList) {
-                        if (address.AddressFamily == AddressFamily.InterNetwork) {
-                            listeningInterface = address;
-                            break;
-                        }
-                    }
-                    if (listeningInterface == null) {
-                        // TODO: do we need to support any other address family types?
-                        // (presumably should support at least IPv6)
-                        throw new NotImplementedException("TODO: non-inet addresses");
-                    }
+                    // look up the host IP from DNS; an IPv6-only name is served over IPv6
+                    // rather than rejected, which is what pinning AddressFamily.InterNetwork
+                    // here used to do.
+                    listeningInterface = GetHostAddress(hostnameStr);
                 }
                 Assert.NotNull(listeningInterface);
             }
 
-            Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            Socket socket = new Socket(listeningInterface.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             try {
                 socket.Bind(new IPEndPoint(listeningInterface, ConvertToPortNum(stringCast, fixnumCast, port)));
-                socket.Listen(10);            
+                socket.Listen(128);
             } catch (SocketException e) {
-                switch (e.SocketErrorCode) {
-                    case SocketError.AddressAlreadyInUse:
-                        throw new Errno.AddressInUseError();
-                    default: 
-                        throw;
-                }
+                socket.Close();
+                throw SocketErrorOps.ToRubyException(e);
             }
             return socket;
         }

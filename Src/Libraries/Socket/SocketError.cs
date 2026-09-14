@@ -34,6 +34,42 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static Exception/*!*/ Create(MutableString/*!*/ message) {
             return RubyExceptionData.InitializeException(new SocketException(0), message);
         }
+
+        /// <summary>
+        /// .NET reports every socket failure as a SocketException, and because Socket::SocketError
+        /// *is* that CLR type an unhandled one surfaces in Ruby as SocketError.  CRuby raises an
+        /// Errno for anything the kernel reported through errno and keeps SocketError for name
+        /// resolution, so translate the codes that have an Errno class here.  The rest are mapped
+        /// in Src/StdLib/ironruby/socket.rb, where the whole Errno table is available.
+        /// </summary>
+        internal static Exception/*!*/ ToRubyException(Exception/*!*/ e) {
+            SocketException se = e as SocketException;
+            if (se != null) {
+                switch (se.SocketErrorCode) {
+                    case System.Net.Sockets.SocketError.ConnectionRefused:
+                        return new Errno.ConnectionRefusedError();
+                    case System.Net.Sockets.SocketError.AddressAlreadyInUse:
+                        return new Errno.AddressInUseError();
+                    case System.Net.Sockets.SocketError.ConnectionReset:
+                        return new Errno.ConnectionResetError();
+                    case System.Net.Sockets.SocketError.ConnectionAborted:
+                        return new Errno.ConnectionAbortedError();
+                    case System.Net.Sockets.SocketError.NotConnected:
+                        return new Errno.NotConnectedError();
+                    case System.Net.Sockets.SocketError.HostDown:
+                        return new Errno.HostDownError();
+                    case System.Net.Sockets.SocketError.Shutdown:
+                        return new Errno.PipeError();
+                    case System.Net.Sockets.SocketError.InvalidArgument:
+                        return new InvalidError();
+                }
+                return e;
+            }
+            if (e is ObjectDisposedException) {
+                return RubyExceptions.CreateIOError("closed stream");
+            }
+            return e;
+        }
     }
 }
 
