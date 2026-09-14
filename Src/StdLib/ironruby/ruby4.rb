@@ -2714,6 +2714,15 @@ module Kernel
       if scheduler && scheduler.respond_to?(:kernel_sleep)
         return scheduler.kernel_sleep(*args)
       end
+      # MRI's rb_time_interval: an Integer or Float goes straight through, a Rational or
+      # anything else that answers #divmod is split into seconds and a fraction.
+      unless args.empty?
+        d = args[0]
+        if !d.nil? && !d.is_a?(::Integer) && !d.is_a?(::Float) && d.respond_to?(:divmod)
+          whole, fraction = d.divmod(1)
+          args = [whole.to_i + fraction.to_f] + args[1..-1]
+        end
+      end
       __ir_sleep__(*args)
     end
     module_function :sleep
@@ -11858,6 +11867,27 @@ end
 # --- a batch of small post-1.9 additions ------------------------------------
 
 module Kernel
+  # rb_String: #to_str if there is one, otherwise #to_s - and #to_s not existing, or
+  # answering something that is not a String, is a TypeError rather than a NoMethodError
+  # or a silently wrong result.
+  def String(object)
+    return object if object.is_a?(::String)
+    if object.respond_to?(:to_str)
+      converted = object.to_str
+      return converted if converted.is_a?(::String)
+    end
+    unless object.respond_to?(:to_s)
+      ::Kernel.raise(::TypeError, "can't convert #{object.nil? ? 'nil' : object.class} into String")
+    end
+    converted = object.to_s
+    unless converted.is_a?(::String)
+      ::Kernel.raise(::TypeError,
+        "can't convert #{object.class} to String (#{object.class}#to_s gives #{converted.class})")
+    end
+    converted
+  end
+  module_function :String
+
   # rb_obj_public_method: #method restricted to public methods. A private or
   # protected method is reported as undefined, but #method_missing/
   # #respond_to_missing? are consulted exactly as #method consults them.
