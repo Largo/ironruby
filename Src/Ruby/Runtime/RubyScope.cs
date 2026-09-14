@@ -204,6 +204,11 @@ namespace IronRuby.Runtime {
 
         private void EnsureBoxes() {
             if (_staticLocalMapping == null) {
+                if (_variableNames == null) {
+                    // Locals not installed yet (see GetDeclaredLocalVariables). Don't cache an
+                    // empty mapping - it would permanently hide the real locals once SetLocals runs.
+                    return;
+                }
                 int count = _variableNames.Length;
                 Dictionary<string, int> boxes = new Dictionary<string, int>(count);
                 for (int i = 0; i < count; i++) {
@@ -217,7 +222,7 @@ namespace IronRuby.Runtime {
             EnsureBoxes();
 
             int index;
-            if (_staticLocalMapping.TryGetValue(name, out index)) {
+            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index)) {
                 Debug.Assert(_locals != null);
                 value = _locals.GetValue(index);
                 return true;
@@ -237,7 +242,7 @@ namespace IronRuby.Runtime {
             EnsureBoxes();
 
             int index;
-            if (_staticLocalMapping.TryGetValue(name, out index)) {
+            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index)) {
                 Debug.Assert(_locals != null);
                 _locals.SetValue(index, value);
                 return true;
@@ -258,9 +263,13 @@ namespace IronRuby.Runtime {
         }
 
         private IEnumerable<KeyValuePair<string, object>>/*!*/ GetDeclaredLocalVariables() {
-            for (int i = 0; i < _variableNames.Length; i++) {
-                Debug.Assert(_locals != null);
-                yield return new KeyValuePair<string, object>(_variableNames[i], _locals.GetValue(i));
+            // TOPLEVEL_BINDING is published (and -r files run) before the main script's prologue
+            // calls SetLocals, so the declared-locals table can legitimately be missing here.
+            if (LocalsInitialized) {
+                for (int i = 0; i < _variableNames.Length; i++) {
+                    Debug.Assert(_locals != null);
+                    yield return new KeyValuePair<string, object>(_variableNames[i], _locals.GetValue(i));
+                }
             }
 
             if (_dynamicLocals != null) {
@@ -283,8 +292,11 @@ namespace IronRuby.Runtime {
                 }
             }
 
-            for (int i = 0; i < _variableNames.Length; i++) {
-                yield return _variableNames[i];
+            // see GetDeclaredLocalVariables: the table may not be installed yet
+            if (LocalsInitialized) {
+                for (int i = 0; i < _variableNames.Length; i++) {
+                    yield return _variableNames[i];
+                }
             }
         }
 
