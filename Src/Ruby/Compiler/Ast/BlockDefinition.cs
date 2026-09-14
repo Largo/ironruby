@@ -67,8 +67,17 @@ namespace IronRuby.Compiler.Ast {
 
         private bool HasFormalParametersInArray {
             get {
-                return ParameterCount > MaxBlockArity || HasUnsplatParameter || HasProcParameter; 
+                return ParameterCount > MaxBlockArity || HasUnsplatParameter || HasProcParameter || HasPostParameters;
             }
+        }
+
+        // mandatory parameters written after the optional/rest ones, as in |a, *b, c|
+        private int PostParameterCount {
+            get { return _parameters.Mandatory.Length - _parameters.LeadingMandatoryCount; }
+        }
+
+        private bool HasPostParameters {
+            get { return PostParameterCount > 0; }
         }
 
         private bool HasUnsplatParameter {
@@ -207,7 +216,7 @@ namespace IronRuby.Compiler.Ast {
             int parameterCount = ParameterCount;
             var attributes = _parameters.GetBlockSignatureAttributes();
 
-            var blockDispatcher = BlockDispatcher.Create(parameterCount, attributes, gen.SourcePath, Location.Start.Line);
+            var blockDispatcher = BlockDispatcher.Create(parameterCount, PostParameterCount, attributes, gen.SourcePath, Location.Start.Line);
             blockDispatcher.ParameterSignature = _parameters.Signature;
 
             var dispatcher = Ast.Constant(blockDispatcher, typeof(BlockDispatcher));
@@ -220,6 +229,7 @@ namespace IronRuby.Compiler.Ast {
                         RubyStackTraceBuilder.EncodeMethodName(gen.CurrentMethod.MethodName, gen.SourcePath, Location, gen.DebugMode),
                         parameters,
                         parameterCount,
+                        PostParameterCount,
                         attributes
                     )
                 )

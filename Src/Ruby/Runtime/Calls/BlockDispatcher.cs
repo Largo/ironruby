@@ -215,6 +215,24 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal static BlockDispatcher/*!*/ Create(int parameterCount, BlockSignatureAttributes attributesAndArity, string sourcePath, int sourceLine) {
+            return Create(parameterCount, 0, attributesAndArity, sourcePath, sourceLine);
+        }
+
+        internal static BlockDispatcher/*!*/ Create(int parameterCount, int postCount, BlockSignatureAttributes attributesAndArity, string sourcePath, int sourceLine) {
+            if (postCount > 0) {
+                // post parameters are bound out of order, so they need a dispatcher that knows
+                // how many there are; it always passes the parameters in an array
+                if ((attributesAndArity & BlockSignatureAttributes.HasUnsplatParameter) == 0) {
+                    return ((attributesAndArity & BlockSignatureAttributes.HasProcParameter) == 0)
+                        ? (BlockDispatcher)new BlockDispatcherPostN(parameterCount, postCount, attributesAndArity, sourcePath, sourceLine)
+                        : new BlockDispatcherPostProcN(parameterCount, postCount, attributesAndArity, sourcePath, sourceLine);
+                } else {
+                    return ((attributesAndArity & BlockSignatureAttributes.HasProcParameter) == 0)
+                        ? (BlockDispatcher)new BlockDispatcherPostUnsplatN(parameterCount, postCount, attributesAndArity, sourcePath, sourceLine)
+                        : new BlockDispatcherPostUnsplatProcN(parameterCount, postCount, attributesAndArity, sourcePath, sourceLine);
+                }
+            }
+
             if ((attributesAndArity & BlockSignatureAttributes.HasUnsplatParameter) == 0) {
                 if ((attributesAndArity & BlockSignatureAttributes.HasProcParameter) == 0) {
                     switch (parameterCount) {
@@ -239,10 +257,16 @@ namespace IronRuby.Runtime.Calls {
 
         internal static LambdaExpression/*!*/ CreateLambda(Expression body, string name, ICollection<ParameterExpression> parameters,
             int parameterCount, BlockSignatureAttributes attributes) {
+            return CreateLambda(body, name, parameters, parameterCount, 0, attributes);
+        }
+
+        internal static LambdaExpression/*!*/ CreateLambda(Expression body, string name, ICollection<ParameterExpression> parameters,
+            int parameterCount, int postCount, BlockSignatureAttributes attributes) {
 
             if ((attributes & BlockSignatureAttributes.HasUnsplatParameter) == 0) {
                 if ((attributes & BlockSignatureAttributes.HasProcParameter) == 0) {
-                    switch (parameterCount) {
+                    // a post-parameter dispatcher always passes an array, whatever the count
+                    switch (postCount > 0 ? Int32.MaxValue : parameterCount) {
                         case 0: return Ast.Lambda<BlockCallTarget0>(body, name, parameters);
                         case 1: return Ast.Lambda<BlockCallTarget1>(body, name, parameters);
                         case 2: return Ast.Lambda<BlockCallTarget2>(body, name, parameters);
