@@ -120,10 +120,10 @@ foo(1,*[2,3,4])
 foo(1,*[2,3],*[4,5,6,7])
 foo(1,*[2,3,4,5,6,7,8,9,10,11,12])
 ", @"
-#<ArgumentError: wrong number of arguments (given 0, expected 4)>
-#<ArgumentError: wrong number of arguments (given 1, expected 4)>
-#<ArgumentError: wrong number of arguments (given 2, expected 4)>
-#<ArgumentError: wrong number of arguments (given 3, expected 4)>
+#<ArgumentError: wrong number of arguments (given 0, expected 4+)>
+#<ArgumentError: wrong number of arguments (given 1, expected 4+)>
+#<ArgumentError: wrong number of arguments (given 2, expected 4+)>
+#<ArgumentError: wrong number of arguments (given 3, expected 4+)>
 [1, 2, :c, :d, [], 3, 4]
 [1, 2, 3, :d, [], 4, 5]
 [1, 2, 3, 4, [], 5, 6]
