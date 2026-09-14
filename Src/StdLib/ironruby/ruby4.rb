@@ -4292,6 +4292,17 @@ module Errno
     "ENOTEMPTY" => 39, "ELOOP" => 40, "EADDRINUSE" => 98, "ECONNABORTED" => 103,
     "ECONNRESET" => 104, "ENOTCONN" => 107, "ECONNREFUSED" => 111,
     "EHOSTDOWN" => 112, "EINPROGRESS" => 115,
+    # The socket family. Half of these were missing entirely, which turned a
+    # "rescue Errno::EAFNOSUPPORT" clause into a NameError the moment it was
+    # evaluated -- SocketSpecs.ipv6_available? exploded instead of answering.
+    "ENOTSOCK" => 88, "EDESTADDRREQ" => 89, "EMSGSIZE" => 90,
+    "EPROTOTYPE" => 91, "ENOPROTOOPT" => 92, "EPROTONOSUPPORT" => 93,
+    "ESOCKTNOSUPPORT" => 94, "EOPNOTSUPP" => 95, "EPFNOSUPPORT" => 96,
+    "EAFNOSUPPORT" => 97, "EADDRNOTAVAIL" => 99, "ENETDOWN" => 100,
+    "ENETUNREACH" => 101, "ENETRESET" => 102, "ENOBUFS" => 105,
+    "EISCONN" => 106, "ESHUTDOWN" => 108, "ETOOMANYREFS" => 109,
+    "ETIMEDOUT" => 110, "EHOSTUNREACH" => 113, "EALREADY" => 114,
+    "EPROTO" => 71, "ENOSYS" => 38,
   }.each do |name, errno|
     if const_defined?(name)
       klass = const_get(name)

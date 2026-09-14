@@ -48,7 +48,9 @@ namespace IronRuby.StandardLibrary.Sockets {
         internal static StrongBox<bool> DoNotReverseLookup(RubyContext/*!*/ context) {
             Assert.NotNull(context);
 
-            return (StrongBox<bool>)context.GetOrCreateLibraryData(BasicSocketClassKey, () => new StrongBox<bool>(false));
+            // CRuby has defaulted this to true since 1.9; leaving it false made every
+            // #addr/#peeraddr do a live reverse DNS lookup.
+            return (StrongBox<bool>)context.GetOrCreateLibraryData(BasicSocketClassKey, () => new StrongBox<bool>(true));
         }
 
         /// <summary>
@@ -59,6 +61,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             Mode = IOMode.ReadWrite | IOMode.PreserveEndOfLines;
             ExternalEncoding = RubyEncoding.Binary;
             InternalEncoding = null;
+            _doNotReverseLookup = DoNotReverseLookup(context).Value;
         }
 
         /// <summary>
@@ -69,6 +72,8 @@ namespace IronRuby.StandardLibrary.Sockets {
             _socket = socket;
             ExternalEncoding = RubyEncoding.Binary;
             InternalEncoding = null;
+            // CRuby snapshots BasicSocket.do_not_reverse_lookup into the socket at creation.
+            _doNotReverseLookup = DoNotReverseLookup(context).Value;
         }
 
         public override int SetReadTimeout(int timeout) {
@@ -191,6 +196,73 @@ namespace IronRuby.StandardLibrary.Sockets {
 
 #endregion
 
+#region Blocking operations
+
+        // CRuby reports a thread parked in a blocking socket call as "sleep". IronRuby derives
+        // Thread#status from the CLR thread state, which stays Running while the thread sits in a
+        // native socket call, so every blocking entry point has to flag itself the way
+        // TCPServer#accept always has. Without this the ruby/spec idiom
+        // "Thread.pass while t.status != 'sleep'" livelocks.
+        internal static TResult Blocking<TResult>(Func<TResult>/*!*/ operation) {
+            return BlockingCore(null, SelectMode.SelectRead, operation);
+        }
+
+        // A thread sitting inside a native socket call is not in WaitSleepJoin, so Thread.Interrupt
+        // -- how Thread#kill and Thread#raise are delivered -- cannot reach it, and the thread can
+        // never be killed. Wait for readiness in slices instead and check for a parked asynchronous
+        // exception between them, which turns the wait into a Ruby safe point. mspec's block_caller
+        // matcher does exactly "wait for status == sleep, then kill and join".
+        private const int PollSliceMicroseconds = 50 * 1000;
+
+        /// <summary>
+        /// A read that waits for data. A *stream* socket that is not connected does not wait at all --
+        /// recv(2) on it fails with ENOTCONN, and polling it would wait forever for readiness that can
+        /// never come (TCPServer#gets is the case that matters). Datagram sockets do wait, connected
+        /// or not.
+        /// </summary>
+        internal static TResult Blocking<TResult>(Socket socket, SelectMode mode, Func<TResult>/*!*/ operation) {
+            bool waitable = socket != null && (socket.Connected || socket.SocketType != SocketType.Stream);
+            return BlockingCore(waitable ? socket : null, mode, operation);
+        }
+
+        /// <summary>
+        /// accept(2): a listening socket is never "connected", so it needs the wait unconditionally.
+        /// </summary>
+        internal static TResult BlockingAccept<TResult>(Socket/*!*/ socket, Func<TResult>/*!*/ operation) {
+            return BlockingCore(socket, SelectMode.SelectRead, operation);
+        }
+
+        private static TResult BlockingCore<TResult>(Socket socket, SelectMode mode, Func<TResult>/*!*/ operation) {
+            ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
+            bool wasBlocked = info.Blocked;
+            info.Blocked = true;
+            try {
+                // Only a socket left in blocking mode can park here; the *_nonblock family has
+                // already cleared Socket.Blocking and must not wait at all.
+                if (socket != null && socket.Blocking) {
+                    while (!socket.Poll(PollSliceMicroseconds, mode)) {
+                        RubyUtils.CheckAsyncException();
+                    }
+                }
+                return operation();
+            } finally {
+                info.Blocked = wasBlocked;
+            }
+        }
+
+        internal static void Blocking(Action/*!*/ operation) {
+            ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
+            bool wasBlocked = info.Blocked;
+            info.Blocked = true;
+            try {
+                operation();
+            } finally {
+                info.Blocked = wasBlocked;
+            }
+        }
+
+#endregion
+
 #region Public Instance Methods
 
         [RubyMethod("close_read")]
@@ -213,10 +285,10 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (how < 0 || 2 < how) {
                 throw RubyExceptions.CreateArgumentError("`how' should be either 0, 1, 2");
             }
-            // TODO: 
-            // Webrick's (ruby\1.9.1\webrick\server.rb) use of shutdown on socket leads to subsequent scoket failures. Do close instead.
-            // self.Socket.Shutdown((SocketShutdown)how);
-            self.Socket.Close();
+            // This used to close() instead, to work around webrick trouble in 2009. Closing is
+            // observably wrong -- the socket stays open after shutdown in every other Ruby, and
+            // #recv on a read-shutdown socket has to return "" rather than raise.
+            self.Socket.Shutdown((SocketShutdown)how);
             return 0;
         }
 
@@ -338,7 +410,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyBasicSocket/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ message, object flags) {
             Protocols.CheckSafeLevel(fixnumCast.Context, 4, "send");
             SocketFlags socketFlags = ConvertToSocketFlag(fixnumCast, flags);
-            return self.Socket.Send(message.ConvertToBytes(), socketFlags);
+            return Blocking(() => self.Socket.Send(message.ConvertToBytes(), socketFlags));
         }
 
         [RubyMethod("send")]
@@ -353,7 +425,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 address[i] = to.GetByte(i);
             }
             EndPoint toEndPoint = self.Socket.LocalEndPoint.Create(address);
-            return self.Socket.SendTo(message.ConvertToBytes(), socketFlags, toEndPoint);
+            return Blocking(() => self.Socket.SendTo(message.ConvertToBytes(), socketFlags, toEndPoint));
         }
 
         [RubyMethod("recv")]
@@ -363,7 +435,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
 
             byte[] buffer = new byte[length];
-            int received = self.Socket.Receive(buffer, 0, length, sFlags);
+            int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.Receive(buffer, 0, length, sFlags));
 
             MutableString str = MutableString.CreateBinary(received);
             str.Append(buffer, 0, received);

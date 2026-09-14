@@ -262,7 +262,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("accept")]
         public static RubyArray/*!*/ Accept(RubyContext/*!*/ context, RubySocket/*!*/ self) {
             RubyArray result = new RubyArray(2);
-            RubySocket s = new RubySocket(context, self.Socket.Accept());
+            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, () => self.Socket.Accept()));
             result.Add(s);
             SocketAddress addr = s.Socket.RemoteEndPoint.Serialize();
             result.Add(MutableString.CreateAscii(addr.ToString()));
@@ -291,7 +291,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("connect")]
         public static int Connect(RubyContext/*!*/ context, RubySocket/*!*/ self, MutableString sockaddr) {
             IPEndPoint ep = UnpackSockAddr(sockaddr);
-            self.Socket.Connect(ep);
+            Blocking(() => self.Socket.Connect(ep));
             return 0;
         }
 
@@ -324,7 +324,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
             byte[] buffer = new byte[length];
             EndPoint fromEP = new IPEndPoint(IPAddress.Any, 0);
-            int received = self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP);
+            int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP));
             MutableString str = MutableString.CreateBinary();
             str.Append(buffer, 0, received);
             str.IsTainted = true;
@@ -337,7 +337,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyArray result = new RubyArray(2);
             // TODO: Do we need some kind of strong reference to the socket
             // here to stop the RubySocket from being garbage collected?
-            RubySocket s = new RubySocket(context, self.Socket.Accept());
+            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, () => self.Socket.Accept()));
             result.Add(s.GetFileDescriptor());
             SocketAddress addr = s.Socket.RemoteEndPoint.Serialize();
             result.Add(MutableString.CreateAscii(addr.ToString()));
