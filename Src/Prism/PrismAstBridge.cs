@@ -1234,7 +1234,7 @@ namespace IronRuby.Prism {
                 Statements prologue = null;
                 Parameters parameters = Parameters.Empty;
                 if (node.Parameters != null) {
-                    parameters = BuildParameters((Pm.ParametersNode)node.Parameters, false, out prologue);
+                    parameters = BuildParameters((Pm.ParametersNode)node.Parameters, false, true, out prologue);
                 }
                 var body = DefinitionBody(node.Body, span, prologue);
                 return new MethodDefinition(scope, target, node.Name, parameters, body, span);
@@ -1308,7 +1308,11 @@ namespace IronRuby.Prism {
         // ---- parameters (including keyword-argument lowering) ----
 
         private Parameters/*!*/ BuildParameters(Pm.ParametersNode/*!*/ node, bool autoSplat, out Statements prologue) {
-            var result = BuildParametersWorker(node, autoSplat, out prologue);
+            return BuildParameters(node, autoSplat, false, out prologue);
+        }
+
+        private Parameters/*!*/ BuildParameters(Pm.ParametersNode/*!*/ node, bool autoSplat, bool isMethod, out Statements prologue) {
+            var result = BuildParametersWorker(node, autoSplat, isMethod, out prologue);
             result.Signature = BuildSignature(node);
             return result;
         }
@@ -1381,9 +1385,14 @@ namespace IronRuby.Prism {
                 node.Posts.Length, hasRest, requiredKeywordCount, node.Keywords.Length > 0, hasKeywordRest);
         }
 
-        private Parameters/*!*/ BuildParametersWorker(Pm.ParametersNode/*!*/ node, bool autoSplat, out Statements prologue) {
+        private Parameters/*!*/ BuildParametersWorker(Pm.ParametersNode/*!*/ node, bool autoSplat, bool isMethod, out Statements prologue) {
             var span = Span(node);
             prologue = null;
+
+            // A destructured parameter is a CompoundLeftValue, which only the block calling
+            // convention can bind directly. Methods get a plain hidden parameter plus a
+            // parallel assignment in the prologue: `def m((a, b))` => `def m(?d0?); (a, b) = ?d0?`.
+            List<Expression> destructuring = isMethod ? new List<Expression>() : null;
 
             var mandatory = new List<LeftValue>();
             foreach (var required in node.Requireds) {
@@ -1392,7 +1401,7 @@ namespace IronRuby.Prism {
                         mandatory.Add(DefineParameter(requiredParam.Name, Span(required)));
                         break;
                     case Pm.MultiTargetNode multi:
-                        mandatory.Add(CompoundTarget(multi.Lefts, multi.Rest, multi.Rights));
+                        mandatory.Add(DestructuredParameter(multi, destructuring, Span(required)));
                         break;
                     default:
                         throw Unsupported(required);
@@ -1422,8 +1431,16 @@ namespace IronRuby.Prism {
             }
 
             foreach (var post in node.Posts) {
-                if (!(post is Pm.RequiredParameterNode postParam)) throw Unsupported(post);
-                mandatory.Add(DefineParameter(postParam.Name, Span(post)));
+                switch (post) {
+                    case Pm.RequiredParameterNode postParam:
+                        mandatory.Add(DefineParameter(postParam.Name, Span(post)));
+                        break;
+                    case Pm.MultiTargetNode multi:
+                        mandatory.Add(DestructuredParameter(multi, destructuring, Span(post)));
+                        break;
+                    default:
+                        throw Unsupported(post);
+                }
             }
 
             // keyword arguments: with only mandatory positionals a trailing optional hash
@@ -1450,8 +1467,34 @@ namespace IronRuby.Prism {
                 blockParam = DefineParameter(ForwardingBlockName, Span(node.KeywordRest));
             }
 
+            if (destructuring != null && destructuring.Count > 0) {
+                var statements = new Statements();
+                foreach (var assignment in destructuring) statements.Add(assignment);
+                if (prologue != null) {
+                    foreach (var statement in prologue) statements.Add(statement);
+                }
+                prologue = statements;
+            }
+
             return new Parameters(mandatory.ToArray(), leadingMandatoryCount,
                 optional.Count > 0 ? optional.ToArray() : null, unsplat, blockParam, span);
+        }
+
+        /// <summary>
+        /// A destructured parameter `(a, b)`. In a block it is bound by the calling convention
+        /// itself, so the CompoundLeftValue goes straight into the parameter list. A method has
+        /// no such convention, so it gets a hidden parameter plus a parallel assignment that
+        /// <paramref name="destructuring"/> collects for the body prologue.
+        /// </summary>
+        private LeftValue/*!*/ DestructuredParameter(Pm.MultiTargetNode/*!*/ node, List<Expression> destructuring, SourceSpan span) {
+            var compound = CompoundTarget(node.Lefts, node.Rest, node.Rights);
+            if (destructuring == null) {
+                return compound;
+            }
+
+            var parameter = CurrentScope.AddVariable("?destructure" + _tempCounter++ + "?", span);
+            destructuring.Add(new DestructuringAssignmentExpression(compound, parameter, span));
+            return parameter;
         }
 
         /// <summary>
@@ -1573,7 +1616,7 @@ namespace IronRuby.Prism {
             var shift = new MethodCall(args, "shift", null, span);
             var lhs = Target(target);
             return lhs is CompoundLeftValue compound
-                ? (Expression)new ParallelAssignmentExpression(compound, new Expression[] { shift }, span)
+                ? (Expression)new DestructuringAssignmentExpression(compound, shift, span)
                 : new SimpleAssignmentExpression(lhs, shift, null, span);
         }
 
