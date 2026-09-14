@@ -5365,9 +5365,37 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.MatchData, IronRuby.Builtins.Range, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.GetGroup)
             );
             
+            DefineLibraryMethod(module, "==", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MatchData, System.Object, System.Boolean>(IronRuby.Builtins.MatchDataOps.Equals)
+            );
+            
             DefineLibraryMethod(module, "begin", 0x51, 
-                0x00010000U, 
-                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.Begin)
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.Begin), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.MatchDataOps.Begin), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MatchDataOps.Begin)
+            );
+            
+            DefineLibraryMethod(module, "bytebegin", 0x51, 
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.ByteBegin), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.MatchDataOps.ByteBegin), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MatchDataOps.ByteBegin)
+            );
+            
+            DefineLibraryMethod(module, "byteend", 0x51, 
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.ByteEnd), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.MatchDataOps.ByteEnd), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MatchDataOps.ByteEnd)
+            );
+            
+            DefineLibraryMethod(module, "byteoffset", 0x51, 
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.ByteOffset), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.ByteOffset), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.ByteOffset)
             );
             
             DefineLibraryMethod(module, "captures", 0x51, 
@@ -5376,8 +5404,15 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "end", 0x51, 
-                0x00010000U, 
-                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.End)
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.End), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.MatchDataOps.End), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MatchDataOps.End)
+            );
+            
+            DefineLibraryMethod(module, "eql?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MatchData, System.Object, System.Boolean>(IronRuby.Builtins.MatchDataOps.Equals)
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
@@ -5396,8 +5431,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "offset", 0x51, 
-                0x00010000U, 
-                new Func<IronRuby.Builtins.MatchData, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.Offset)
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.Offset), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.Offset), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.Offset)
             );
             
             DefineLibraryMethod(module, "post_match", 0x51, 
@@ -5408,6 +5445,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "pre_match", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MatchDataOps.PreMatch)
+            );
+            
+            DefineLibraryMethod(module, "regexp", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.MatchDataOps.Regexp)
             );
             
             DefineLibraryMethod(module, "select", 0x51, 
@@ -5422,7 +5464,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "string", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MatchDataOps.ReturnFrozenString)
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MatchDataOps.ReturnFrozenString)
             );
             
             DefineLibraryMethod(module, "to_a", 0x51, 
@@ -5443,6 +5485,7 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadMatchData_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            module.UndefineMethodNoEvent("allocate");
             module.UndefineMethodNoEvent("new");
         }
         

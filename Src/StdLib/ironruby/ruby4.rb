@@ -7086,6 +7086,9 @@ class MatchData
         start = GetNamedGroupStart(name)
         return string[start, GetNamedGroupLength(name)]
       end
+      # The groups are a plain Array as far as a Range is concerned, down to
+      # md[3..1] being [] while md[-30..2] is nil.
+      return to_a[key] if key.is_a?(::Range)
     end
     __ir_index__(*args)
   end
@@ -7102,9 +7105,9 @@ class MatchData
     result
   end unless method_defined?(:named_captures)
 
-  def deconstruct
-    captures
-  end unless method_defined?(:deconstruct)
+  # #deconstruct is not merely equivalent to #captures, it is the same method:
+  # MatchData.instance_method(:deconstruct) == MatchData.instance_method(:captures).
+  alias_method :deconstruct, :captures unless method_defined?(:deconstruct)
 
   def deconstruct_keys(keys)
     all = names
@@ -7113,8 +7116,16 @@ class MatchData
       all.each { |n| result[n.to_sym] = self[n] }
       return result
     end
+    unless keys.is_a?(::Array)
+      ::Kernel.raise(::TypeError, "wrong argument type #{keys.class} (expected Array)")
+    end
+    # More keys than there are groups cannot all be found, and MRI does not even
+    # start looking - it answers {} rather than the prefix that does match.
+    return result if keys.size > all.size
     keys.each do |k|
-      k = k.to_sym
+      unless k.is_a?(::Symbol)
+        ::Kernel.raise(::TypeError, "wrong argument type #{k.class} (expected Symbol)")
+      end
       return result unless all.include?(k.to_s)
       result[k] = self[k.to_s]
     end
@@ -7130,68 +7141,15 @@ class MatchData
     m && m.length
   end unless method_defined?(:match_length)
 
-  def __group_bounds__(n)
-    if n.is_a?(::Integer)
-      s = self.begin(n)
-      return nil if s.nil?
-      [s, self.end(n)]
-    else
-      name = n.to_s
-      unless HasNamedGroup(name)
-        ::Kernel.raise(::IndexError, "undefined group name reference: #{name}")
-      end
-      return nil unless NamedGroupSuccess(name)
-      s = GetNamedGroupStart(name)
-      [s, s + GetNamedGroupLength(name)]
-    end
-  end
-  private :__group_bounds__
-
-  # Character offsets in, byte offsets out: the subject's own bytes decide.
-  def byteoffset(n)
-    bounds = __group_bounds__(n)
-    return [nil, nil] if bounds.nil?
-    subject = string
-    [subject[0, bounds[0]].bytesize, subject[0, bounds[1]].bytesize]
-  end unless method_defined?(:byteoffset)
-
-  def bytebegin(n)
-    byteoffset(n)[0]
-  end unless method_defined?(:bytebegin)
-
-  def byteend(n)
-    byteoffset(n)[1]
-  end unless method_defined?(:byteend)
-
   alias_method :__ir_values_at__, :values_at
 
+  # Ranges, names and Integers can be mixed. Array#values_at already has the
+  # Range rules - nil fill past the end, RangeError for a start that is negative
+  # and out of range, [] for an empty Range - so the numeric part goes to it.
   def values_at(*indexes)
-    indexes.map { |i| self[i] }
-  end
-
-  # 1.9 let #begin/#end/#offset name a group. The C# signatures only take an
-  # Integer, so a name was a TypeError; __group_bounds__ already knows how to
-  # resolve both forms.
-  unless method_defined?(:__ir_begin__)
-    alias_method :__ir_begin__, :begin
-    alias_method :__ir_end__, :end
-    alias_method :__ir_offset__, :offset
-
-    def begin(n)
-      return __ir_begin__(n) if n.is_a?(::Integer) || n.respond_to?(:to_int)
-      bounds = __group_bounds__(n)
-      bounds && bounds[0]
-    end
-
-    def end(n)
-      return __ir_end__(n) if n.is_a?(::Integer) || n.respond_to?(:to_int)
-      bounds = __group_bounds__(n)
-      bounds && bounds[1]
-    end
-
-    def offset(n)
-      return __ir_offset__(n) if n.is_a?(::Integer) || n.respond_to?(:to_int)
-      __group_bounds__(n) || [nil, nil]
+    groups = to_a
+    indexes.flat_map do |i|
+      (i.is_a?(::Symbol) || i.is_a?(::String)) ? [self[i]] : groups.values_at(i)
     end
   end
 end
