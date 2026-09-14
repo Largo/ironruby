@@ -3552,78 +3552,11 @@ class String
     replace(scrub(replacement, &block))
   end unless method_defined?(:scrub!)
 
-  # ---- case mapping options (2.4) and strip selectors (4.0) ---------------
+  # ---- strip selectors (4.0) ---------------------------------------------
   #
-  # The built-ins take no arguments, so every `upcase(:ascii)` and
-  # `strip("a-c")` in the specs came back as a wrong-number-of-arguments error.
-
-  CASE_OPTIONS__ = [:ascii, :turkic, :lithuanian, :fold]
-
-  def __case_options__(options, folding_allowed)
-    ::Kernel.raise(::ArgumentError, "too many options") if options.size > 2
-    options.each do |o|
-      ::Kernel.raise(::ArgumentError, "invalid option") unless CASE_OPTIONS__.include?(o)
-      if o == :fold && !folding_allowed
-        ::Kernel.raise(::ArgumentError, "option :fold only allowed for downcasing")
-      end
-    end
-    # :turkic and :lithuanian are the only pair MRI accepts together.
-    if options.size == 2 && !(options.include?(:turkic) && options.include?(:lithuanian))
-      ::Kernel.raise(::ArgumentError, "too many options")
-    end
-    options
-  end
-  private :__case_options__
-
-  # Turkic keeps the dot: I/ı and İ/i are separate letters.
-  def __turkic__(up)
-    if up
-      gsub("i", "İ")
-    else
-      gsub("I", "ı")
-    end
-  end
-  private :__turkic__
-
-  [[:upcase, true], [:downcase, false], [:capitalize, true], [:swapcase, true]].each do |name, upward|
-    plain = :"__ir_#{name}__"
-    alias_method plain, name
-    private plain
-
-    define_method(name) do |*options|
-      __case_options__(options, name == :downcase)
-      return __send__(plain) if options.empty?
-      if options.include?(:ascii)
-        # Only a-z/A-Z move; everything else is left alone.
-        case name
-        when :upcase then gsub(/[a-z]/) { |c| c.__send__(plain) }
-        when :downcase then gsub(/[A-Z]/) { |c| c.__send__(plain) }
-        when :swapcase then gsub(/[a-zA-Z]/) { |c| c.__send__(plain) }
-        else
-          rest = self[1..-1].to_s
-          self[0, 1].to_s.gsub(/[a-z]/) { |c| c.__send__(:__ir_upcase__) } +
-            rest.gsub(/[A-Z]/) { |c| c.__send__(:__ir_downcase__) }
-        end
-      elsif options.include?(:turkic)
-        __turkic__(upward).__send__(plain)
-      else
-        # :lithuanian and :fold: MRI currently does plain full case mapping.
-        __send__(plain)
-      end
-    end
-
-    bang = :"#{name}!"
-    if method_defined?(bang)
-      plain_bang = :"__ir_#{name}_bang__"
-      alias_method plain_bang, bang
-      private plain_bang
-      define_method(bang) do |*options|
-        return __send__(plain_bang) if options.empty?
-        result = __send__(name, *options)
-        result == self ? nil : replace(result)
-      end
-    end
-  end
+  # `strip("a-c")` came back as a wrong-number-of-arguments error. (The case
+  # mapping options - upcase(:ascii) and friends - used to be shimmed here too;
+  # they are built in now, tables and all: see UnicodeCaseMapping.)
 
   # A character is stripped when it is in every one of the given sets, which is
   # exactly what String#count answers for a one-character string.

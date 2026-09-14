@@ -199,13 +199,15 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("casecmp")]
-        public static int Casecmp(RubySymbol/*!*/ self, [NotNull]RubySymbol/*!*/ other) {
-            return MutableStringOps.Casecmp(self.String, other.String);
+        public static object Casecmp(RubySymbol/*!*/ self, [NotNull]RubySymbol/*!*/ other) {
+            return ScriptingRuntimeHelpers.Int32ToObject(MutableStringOps.Casecmp(self.String, other.String));
         }
 
+        // Only a Symbol is comparable with a Symbol - :abc.casecmp("abc") is nil, not 0, and
+        // no conversion is attempted on anything else either (CRuby 4.0.6).
         [RubyMethod("casecmp")]
-        public static int Casecmp(RubySymbol/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ other) {
-            return MutableStringOps.Casecmp(self.String, other);
+        public static object Casecmp(RubySymbol/*!*/ self, object other) {
+            return null;
         }
 
         #endregion
@@ -304,24 +306,25 @@ namespace IronRuby.Builtins {
 
         #region downcase, upcase, swapcase, capitalize, next/succ
 
+        // Symbol's case methods take the same options String's do.
         [RubyMethod("downcase")]
-        public static RubySymbol/*!*/ DownCase(RubyContext/*!*/ context, RubySymbol/*!*/ self) {
-            return context.CreateSymbol(MutableStringOps.DownCase(self.String));
+        public static RubySymbol/*!*/ DownCase(RubyContext/*!*/ context, RubySymbol/*!*/ self, params object[]/*!*/ options) {
+            return context.CreateSymbol(MutableStringOps.DownCase(self.String, options));
         }
 
         [RubyMethod("upcase")]
-        public static RubySymbol/*!*/ UpCase(RubyContext/*!*/ context, RubySymbol/*!*/ self) {
-            return context.CreateSymbol(MutableStringOps.UpCase(self.String));
+        public static RubySymbol/*!*/ UpCase(RubyContext/*!*/ context, RubySymbol/*!*/ self, params object[]/*!*/ options) {
+            return context.CreateSymbol(MutableStringOps.UpCase(self.String, options));
         }
 
         [RubyMethod("swapcase")]
-        public static RubySymbol/*!*/ SwapCase(RubyContext/*!*/ context, RubySymbol/*!*/ self) {
-            return context.CreateSymbol(MutableStringOps.SwapCase(self.String));
+        public static RubySymbol/*!*/ SwapCase(RubyContext/*!*/ context, RubySymbol/*!*/ self, params object[]/*!*/ options) {
+            return context.CreateSymbol(MutableStringOps.SwapCase(self.String, options));
         }
 
         [RubyMethod("capitalize")]
-        public static RubySymbol/*!*/ Capitalize(RubyContext/*!*/ context, RubySymbol/*!*/ self) {
-            return context.CreateSymbol(MutableStringOps.Capitalize(self.String));
+        public static RubySymbol/*!*/ Capitalize(RubyContext/*!*/ context, RubySymbol/*!*/ self, params object[]/*!*/ options) {
+            return context.CreateSymbol(MutableStringOps.Capitalize(self.String, options));
         }
 
         [RubyMethod("next")]

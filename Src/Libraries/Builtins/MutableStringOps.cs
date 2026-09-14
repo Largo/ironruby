@@ -1147,81 +1147,137 @@ namespace IronRuby.Builtins {
 
         #region casecmp, capitalize, capitalize!, downcase, downcase!, swapcase, swapcase!, upcase, upcase!
 
-        public static bool UpCaseChar(MutableString/*!*/ self, int index) {
-            char current = self.GetChar(index);
-            if (current >= 'a' && current <= 'z') {
-                self.SetChar(index, current.ToUpperInvariant());
-                return true;
+        /// <summary>
+        /// MRI's check_case_options (string.c). The distinctions are MRI's: an unrecognised
+        /// option is "invalid option", an option that cannot follow the first is "invalid second
+        /// option", and a second option after one that takes no partner is "too many options".
+        /// Verified against CRuby 4.0.6:
+        ///   "a".upcase(:foo)             -> invalid option
+        ///   "a".upcase(:turkic, :ascii)  -> invalid second option
+        ///   "a".upcase(:ascii, :ascii)   -> too many options
+        ///   "a".upcase(:fold)            -> option :fold only allowed for downcasing
+        /// </summary>
+        private static CaseMappingOptions ParseCaseOptions(object[]/*!*/ options, bool foldingAllowed) {
+            if (options.Length == 0) {
+                return CaseMappingOptions.None;
             }
-            return false;
-        }
-
-        public static bool DownCaseChar(MutableString/*!*/ self, int index) {
-            char current = self.GetChar(index);
-            if (current >= 'A' && current <= 'Z') {
-                self.SetChar(index, current.ToLowerInvariant());
-                return true;
+            if (options.Length > 2) {
+                throw RubyExceptions.CreateArgumentError("too many options");
             }
-            return false;
-        }
 
-        public static bool SwapCaseChar(MutableString/*!*/ self, int index) {
-            char current = self.GetChar(index);
-            if (current >= 'A' && current <= 'Z') {
-                self.SetChar(index, current.ToLowerInvariant());
-                return true;
-            } else if (current >= 'a' && current <= 'z') {
-                self.SetChar(index, current.ToUpperInvariant());
-                return true;
-            }
-            return false;
-        }
-
-        public static bool CapitalizeMutableString(MutableString/*!*/ str) {
-            bool changed = false;
-            if (!str.IsEmpty) {
-                int strLength = str.GetCharCount();
-
-                if (UpCaseChar(str, 0)) {
-                    changed = true;
-                }
-                for (int i = 1; i < strLength; ++i) {
-                    if (DownCaseChar(str, i)) {
-                        changed = true;
+            CaseMappingOptions first, partner;
+            switch (OptionName(options[0])) {
+                case "ascii": first = CaseMappingOptions.Ascii; partner = CaseMappingOptions.None; break;
+                case "turkic": first = CaseMappingOptions.Turkic; partner = CaseMappingOptions.Lithuanian; break;
+                case "lithuanian": first = CaseMappingOptions.Lithuanian; partner = CaseMappingOptions.Turkic; break;
+                case "fold":
+                    if (!foldingAllowed) {
+                        throw RubyExceptions.CreateArgumentError("option :fold only allowed for downcasing");
                     }
-                }
+                    first = CaseMappingOptions.Fold;
+                    partner = CaseMappingOptions.None;
+                    break;
+                default:
+                    throw RubyExceptions.CreateArgumentError("invalid option");
             }
-            return changed;
+
+            if (options.Length == 1) {
+                return first;
+            }
+            if (partner == CaseMappingOptions.None) {
+                throw RubyExceptions.CreateArgumentError("too many options");
+            }
+            if (OptionName(options[1]) != (partner == CaseMappingOptions.Turkic ? "turkic" : "lithuanian")) {
+                throw RubyExceptions.CreateArgumentError("invalid second option");
+            }
+            return first | partner;
         }
 
-        public static bool UpCaseMutableString(MutableString/*!*/ str) {
-            bool changed = false;
-            for (int i = 0; i < str.Length; ++i) {
-                if (UpCaseChar(str, i)) {
-                    changed = true;
-                }
-            }
-            return changed;
+        // Anything that is not a Symbol is simply not one of the four names, and MRI reports it
+        // as an invalid option rather than a type error: "a".upcase(1) is an ArgumentError.
+        private static string OptionName(object option) {
+            return (option as RubySymbol)?.ToString();
         }
 
-        public static bool DownCaseMutableString(MutableString/*!*/ str) {
-            bool changed = false;
-            for (int i = 0; i < str.Length; ++i) {
-                if (DownCaseChar(str, i)) {
-                    changed = true;
-                }
+        /// <summary>
+        /// The text a case mapping should run over, or null when the string has to be treated as
+        /// opaque bytes. ASCII-8BIT is the case that matters: MRI maps only a-z/A-Z in it, so
+        /// "\xE4".b.upcase is "\xE4" and not "\xC4" the way the same bytes in ISO-8859-1 would be.
+        /// Bytes that are invalid in the string's own encoding are not a problem here - they
+        /// decode to lone surrogates (see EscapingEncoding), which no mapping touches, so they
+        /// survive the round trip untouched.
+        /// </summary>
+        private static string TryDecodeForCaseMapping(MutableString/*!*/ self) {
+            RubyEncoding encoding = self.Encoding;
+            if (ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
+                return null;
             }
-            return changed;
+            return self.ToString();
         }
 
-        public static bool SwapCaseMutableString(MutableString/*!*/ str) {
-            bool changed = false;
-            for (int i = 0; i < str.Length; ++i) {
-                if (SwapCaseChar(str, i)) {
-                    changed = true;
-                }
+        /// <summary>
+        /// ASCII-only mapping of opaque bytes, each byte standing for itself. Answers null when
+        /// nothing moved. Length never changes, since no a-z/A-Z has a multi-character mapping.
+        /// </summary>
+        private static byte[] MapAsciiBytes(byte[]/*!*/ bytes, CaseMappingKind kind) {
+            var chars = new char[bytes.Length];
+            for (int i = 0; i < bytes.Length; i++) {
+                chars[i] = (char)bytes[i];
             }
-            return changed;
+
+            string source = new String(chars);
+            string mapped = UnicodeCaseMapping.Apply(source, kind, CaseMappingOptions.Ascii);
+            if (ReferenceEquals(mapped, source)) {
+                return null;
+            }
+
+            var result = new byte[mapped.Length];
+            for (int i = 0; i < mapped.Length; i++) {
+                result[i] = (byte)mapped[i];
+            }
+            return result;
+        }
+
+        private static MutableString/*!*/ CaseMap(MutableString/*!*/ self, CaseMappingKind kind,
+            object[]/*!*/ options, bool foldingAllowed) {
+
+            CaseMappingOptions flags = ParseCaseOptions(options, foldingAllowed);
+
+            string source = TryDecodeForCaseMapping(self);
+            if (source != null) {
+                return MutableString.Create(UnicodeCaseMapping.Apply(source, kind, flags), self.Encoding).TaintBy(self);
+            }
+
+            byte[] bytes = self.ToByteArray();
+            return MutableString.CreateBinary(MapAsciiBytes(bytes, kind) ?? bytes, self.Encoding).TaintBy(self);
+        }
+
+        private static MutableString CaseMapInPlace(MutableString/*!*/ self, CaseMappingKind kind,
+            object[]/*!*/ options, bool foldingAllowed) {
+
+            // The options are checked before the receiver is: "abc".freeze.upcase!(:bogus) is an
+            // ArgumentError in MRI, not a FrozenError.
+            CaseMappingOptions flags = ParseCaseOptions(options, foldingAllowed);
+            self.RequireNotFrozen();
+
+            string source = TryDecodeForCaseMapping(self);
+            if (source != null) {
+                string mapped = UnicodeCaseMapping.Apply(source, kind, flags);
+                if (ReferenceEquals(mapped, source)) {
+                    return null;
+                }
+                self.Clear();
+                self.Append(mapped);
+                return self;
+            }
+
+            byte[] mappedBytes = MapAsciiBytes(self.ToByteArray(), kind);
+            if (mappedBytes == null) {
+                return null;
+            }
+            self.Clear();
+            self.Append(mappedBytes);
+            return self;
         }
 
         // Ruby 3.4: a chilled literal counts as frozen here, so +"str" answers a copy that
@@ -1231,8 +1287,35 @@ namespace IronRuby.Builtins {
             return (self.IsFrozen || self.IsChilled) ? self.Clone() : self;
         }
 
+        /// <summary>
+        /// #casecmp folds a-z/A-Z and nothing else - it is not the Unicode comparison #casecmp?
+        /// is. Confirmed against CRuby 4.0.6: "ä".casecmp("Ä") is 1, and "ss".casecmp("ß") is -1.
+        /// </summary>
         public static int Casecmp(MutableString/*!*/ self, MutableString/*!*/ other) {
-            return Compare(DownCase(self), DownCase(other));
+            return Compare(DownCaseAscii(self), DownCaseAscii(other));
+        }
+
+        private static MutableString/*!*/ DownCaseAscii(MutableString/*!*/ str) {
+            byte[] bytes = str.ToByteArray();
+            return MutableString.CreateBinary(MapAsciiBytes(bytes, CaseMappingKind.DownCase) ?? bytes, str.Encoding);
+        }
+
+        /// <summary>
+        /// The key #casecmp? compares by: full case folding, which is why "ß".casecmp?("ss") is
+        /// true where #casecmp says they differ.
+        /// </summary>
+        private static string/*!*/ FoldForComparison(MutableString/*!*/ str) {
+            string source = TryDecodeForCaseMapping(str);
+            if (source != null) {
+                return UnicodeCaseMapping.Fold(source);
+            }
+            byte[] bytes = str.ToByteArray();
+            byte[] mapped = MapAsciiBytes(bytes, CaseMappingKind.DownCase) ?? bytes;
+            var chars = new char[mapped.Length];
+            for (int i = 0; i < mapped.Length; i++) {
+                chars[i] = (char)mapped[i];
+            }
+            return new String(chars);
         }
 
         // MRI answers nil rather than raising when the argument is not a String, and also when
@@ -1249,56 +1332,56 @@ namespace IronRuby.Builtins {
             return ScriptingRuntimeHelpers.Int32ToObject(Casecmp(self, str));
         }
 
+        [RubyMethod("casecmp?")]
+        public static object CasecmpQ(ConversionStorage<MutableString>/*!*/ stringTryCast, MutableString/*!*/ self, object other) {
+            MutableString str = (other is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, other);
+            if (str == null) {
+                return null;
+            }
+            if (!self.Encoding.Equals(str.Encoding) && !(self.IsAscii() || str.IsAscii())) {
+                return null;
+            }
+            return ScriptingRuntimeHelpers.BooleanToObject(FoldForComparison(self) == FoldForComparison(str));
+        }
+
         [RubyMethod("capitalize")]
-        public static MutableString/*!*/ Capitalize(MutableString/*!*/ self) {
-            MutableString result = self.CloneDerived();
-            CapitalizeMutableString(result);
-            return result;
+        public static MutableString/*!*/ Capitalize(MutableString/*!*/ self, params object[]/*!*/ options) {
+            return CaseMap(self, CaseMappingKind.Capitalize, options, false);
         }
 
         [RubyMethod("capitalize!")]
-        public static MutableString CapitalizeInPlace(MutableString/*!*/ self) {
-            self.RequireNotFrozen();
-            return CapitalizeMutableString(self) ? self : null;
+        public static MutableString CapitalizeInPlace(MutableString/*!*/ self, params object[]/*!*/ options) {
+            return CaseMapInPlace(self, CaseMappingKind.Capitalize, options, false);
         }
 
         [RubyMethod("downcase")]
-        public static MutableString/*!*/ DownCase(MutableString/*!*/ self) {
-            MutableString result = self.CloneDerived();
-            DownCaseMutableString(result);
-            return result;
+        public static MutableString/*!*/ DownCase(MutableString/*!*/ self, params object[]/*!*/ options) {
+            return CaseMap(self, CaseMappingKind.DownCase, options, true);
         }
 
         [RubyMethod("downcase!")]
-        public static MutableString DownCaseInPlace(MutableString/*!*/ self) {
-            self.RequireNotFrozen();
-            return DownCaseMutableString(self) ? self : null;
+        public static MutableString DownCaseInPlace(MutableString/*!*/ self, params object[]/*!*/ options) {
+            return CaseMapInPlace(self, CaseMappingKind.DownCase, options, true);
         }
 
         [RubyMethod("swapcase")]
-        public static MutableString/*!*/ SwapCase(MutableString/*!*/ self) {
-            MutableString result = self.CloneDerived();
-            SwapCaseMutableString(result);
-            return result;
+        public static MutableString/*!*/ SwapCase(MutableString/*!*/ self, params object[]/*!*/ options) {
+            return CaseMap(self, CaseMappingKind.SwapCase, options, false);
         }
 
         [RubyMethod("swapcase!")]
-        public static MutableString SwapCaseInPlace(MutableString/*!*/ self) {
-            self.RequireNotFrozen();
-            return SwapCaseMutableString(self) ? self : null;
+        public static MutableString SwapCaseInPlace(MutableString/*!*/ self, params object[]/*!*/ options) {
+            return CaseMapInPlace(self, CaseMappingKind.SwapCase, options, false);
         }
 
         [RubyMethod("upcase")]
-        public static MutableString/*!*/ UpCase(MutableString/*!*/ self) {
-            MutableString result = self.CloneDerived();
-            UpCaseMutableString(result);
-            return result;
+        public static MutableString/*!*/ UpCase(MutableString/*!*/ self, params object[]/*!*/ options) {
+            return CaseMap(self, CaseMappingKind.UpCase, options, false);
         }
 
         [RubyMethod("upcase!")]
-        public static MutableString UpCaseInPlace(MutableString/*!*/ self) {
-            self.RequireNotFrozen();
-            return UpCaseMutableString(self) ? self : null;
+        public static MutableString UpCaseInPlace(MutableString/*!*/ self, params object[]/*!*/ options) {
+            return CaseMapInPlace(self, CaseMappingKind.UpCase, options, false);
         }
 
         #endregion
