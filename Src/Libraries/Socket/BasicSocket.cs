@@ -48,7 +48,9 @@ namespace IronRuby.StandardLibrary.Sockets {
         internal static StrongBox<bool> DoNotReverseLookup(RubyContext/*!*/ context) {
             Assert.NotNull(context);
 
-            return (StrongBox<bool>)context.GetOrCreateLibraryData(BasicSocketClassKey, () => new StrongBox<bool>(false));
+            // CRuby has defaulted this to true since 1.9; leaving it false made every
+            // #addr/#peeraddr do a live reverse DNS lookup.
+            return (StrongBox<bool>)context.GetOrCreateLibraryData(BasicSocketClassKey, () => new StrongBox<bool>(true));
         }
 
         /// <summary>
@@ -59,6 +61,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             Mode = IOMode.ReadWrite | IOMode.PreserveEndOfLines;
             ExternalEncoding = RubyEncoding.Binary;
             InternalEncoding = null;
+            _doNotReverseLookup = DoNotReverseLookup(context).Value;
         }
 
         /// <summary>
@@ -69,6 +72,8 @@ namespace IronRuby.StandardLibrary.Sockets {
             _socket = socket;
             ExternalEncoding = RubyEncoding.Binary;
             InternalEncoding = null;
+            // CRuby snapshots BasicSocket.do_not_reverse_lookup into the socket at creation.
+            _doNotReverseLookup = DoNotReverseLookup(context).Value;
         }
 
         public override int SetReadTimeout(int timeout) {
@@ -244,10 +249,10 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (how < 0 || 2 < how) {
                 throw RubyExceptions.CreateArgumentError("`how' should be either 0, 1, 2");
             }
-            // TODO: 
-            // Webrick's (ruby\1.9.1\webrick\server.rb) use of shutdown on socket leads to subsequent scoket failures. Do close instead.
-            // self.Socket.Shutdown((SocketShutdown)how);
-            self.Socket.Close();
+            // This used to close() instead, to work around webrick trouble in 2009. Closing is
+            // observably wrong -- the socket stays open after shutdown in every other Ruby, and
+            // #recv on a read-shutdown socket has to return "" rather than raise.
+            self.Socket.Shutdown((SocketShutdown)how);
             return 0;
         }
 
