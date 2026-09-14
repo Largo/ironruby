@@ -472,9 +472,18 @@ namespace IronRuby.Prism {
                     return new MatchExpression(regex, Expr(arguments.Arguments[0]), span);
                 }
 
-                case Pm.MultiWriteNode multiWrite:
-                    return new ParallelAssignmentExpression(
-                        CompoundTarget(multiWrite.Lefts, multiWrite.Rest, multiWrite.Rights), RhsFromValue(multiWrite.Value), span);
+                case Pm.MultiWriteNode multiWrite: {
+                    // MRI evaluates everything the l-values need - receivers and index
+                    // arguments, left to right - before the right hand side.
+                    var hoist = new Statements();
+                    var lhs = CompoundTarget(multiWrite.Lefts, multiWrite.Rest, multiWrite.Rights, hoist);
+                    var assignment = new ParallelAssignmentExpression(lhs, RhsFromValue(multiWrite.Value), span);
+                    if (hoist.Count == 0) {
+                        return assignment;
+                    }
+                    hoist.Add(assignment);
+                    return new BlockExpression(hoist, span);
+                }
 
                 case Pm.CallOperatorWriteNode callOp:
                     return new MemberAssignmentExpression(Expr(callOp.Receiver), callOp.ReadName, callOp.BinaryOperator,
@@ -1057,6 +1066,16 @@ namespace IronRuby.Prism {
         // ---- targets / multiple assignment ----
 
         private LeftValue/*!*/ Target(Pm.PmNode/*!*/ node) {
+            return Target(node, null);
+        }
+
+        /// <summary>
+        /// An assignment target. When <paramref name="hoist"/> is given, everything the target
+        /// needs in order to be written - its receiver and any index arguments - is evaluated
+        /// into a temporary there and then, which is how a multiple assignment orders those
+        /// against the right hand side.
+        /// </summary>
+        private LeftValue/*!*/ Target(Pm.PmNode/*!*/ node, Statements hoist) {
             var span = Span(node);
             switch (node) {
                 case Pm.LocalVariableTargetNode local:
@@ -1074,32 +1093,61 @@ namespace IronRuby.Prism {
                 case Pm.ConstantPathTargetNode constantPath:
                     return ConstantPath(constantPath, span);
                 case Pm.IndexTargetNode index:
-                    return new ArrayItemAccess(Expr(index.Receiver), BuildArguments(index.Arguments), null, span);
+                    return new ArrayItemAccess(Hoist(Expr(index.Receiver), hoist, span),
+                        HoistArguments(BuildArguments(index.Arguments), hoist, span), null, span);
                 case Pm.CallTargetNode callTarget:
-                    return new AttributeAccess(Expr(callTarget.Receiver), callTarget.Name.TrimEnd('='), span);
+                    return new AttributeAccess(Hoist(Expr(callTarget.Receiver), hoist, span), callTarget.Name.TrimEnd('='), span);
                 case Pm.MultiTargetNode multi:
-                    return CompoundTarget(multi.Lefts, multi.Rest, multi.Rights);
+                    return CompoundTarget(multi.Lefts, multi.Rest, multi.Rights, hoist);
                 default:
                     throw Unsupported(node);
             }
         }
 
         private CompoundLeftValue/*!*/ CompoundTarget(Pm.PmNode[]/*!*/ lefts, Pm.PmNode rest, Pm.PmNode[]/*!*/ rights) {
+            return CompoundTarget(lefts, rest, rights, null);
+        }
+
+        private CompoundLeftValue/*!*/ CompoundTarget(Pm.PmNode[]/*!*/ lefts, Pm.PmNode rest, Pm.PmNode[]/*!*/ rights, Statements hoist) {
             var lvs = new List<LeftValue>();
-            foreach (var left in lefts) lvs.Add(Target(left));
+            foreach (var left in lefts) lvs.Add(Target(left, hoist));
             int unsplatIndex = int.MaxValue;
             if (rest != null) {
                 unsplatIndex = lvs.Count;
                 if (rest is Pm.SplatNode splat && splat.Expression != null) {
-                    lvs.Add(Target(splat.Expression));
+                    lvs.Add(Target(splat.Expression, hoist));
                 } else {
                     lvs.Add(Placeholder.Singleton); // `a, * = x` / `a, = x`
                 }
             }
-            foreach (var right in rights) lvs.Add(Target(right));
+            foreach (var right in rights) lvs.Add(Target(right, hoist));
             return unsplatIndex == int.MaxValue
                 ? new CompoundLeftValue(lvs.ToArray())
                 : new CompoundLeftValue(lvs.ToArray(), unsplatIndex);
+        }
+
+        /// <summary>Evaluates the expression into a temporary, appended to <paramref name="hoist"/>.</summary>
+        private Expression/*!*/ Hoist(Expression/*!*/ expression, Statements hoist, SourceSpan span) {
+            if (hoist == null || expression is Literal || expression is SelfReference) {
+                return expression;
+            }
+            var temp = CurrentScope.AddVariable("?lhs" + _indexTempCount++ + "?", span);
+            hoist.Add(new SimpleAssignmentExpression(temp, expression, null, span));
+            return temp;
+        }
+
+        private Arguments/*!*/ HoistArguments(Arguments/*!*/ arguments, Statements hoist, SourceSpan span) {
+            if (hoist == null || arguments.IsEmpty) {
+                return arguments;
+            }
+
+            var expressions = arguments.Expressions;
+            var hoisted = new Expression[expressions.Length];
+            for (int i = 0; i < expressions.Length; i++) {
+                // a splat is not a plain value and cannot be lifted out
+                hoisted[i] = expressions[i] is SplattedArgument ? expressions[i] : Hoist(expressions[i], hoist, span);
+            }
+            return new Arguments(hoisted);
         }
 
         private Expression/*!*/[]/*!*/ RhsFromValue(Pm.PmNode/*!*/ value) {
