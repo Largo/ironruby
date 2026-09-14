@@ -1512,17 +1512,38 @@ class File
   # the instance-level operations.  offset nil means truncate, an integer seeks
   # first and leaves the rest of the file intact, matching IO.write.
   def self.write(name, string, offset = nil, **opts)
-    # "rb+" not "r+b": IronRuby's mode parser only accepts the letter before the
-    # plus, though CRuby takes either order.
-    mode = offset ? "rb+" : (opts[:mode] || "w")
+    open_args = opts[:open_args]
+    if open_args
+      # :open_args is the whole argument list for the open, and it displaces every
+      # other option - including the mode, which is then read-only if it is absent.
+      extra = open_args.find { |a| a.is_a?(::Hash) } || {}
+      mode = open_args.find { |a| a.is_a?(::String) || a.is_a?(::Integer) } || extra[:mode] || "r"
+      encoding = extra[:encoding]
+    else
+      mode = opts[:mode]
+      encoding = opts[:encoding]
+      if encoding && mode.is_a?(::String) && mode.include?(":")
+        ::Kernel.raise(::ArgumentError, "encoding specified twice")
+      end
+      # No mode and an offset: write into the file where it is, creating it if it is
+      # not there, but leaving the rest of it alone. No mode string says that.
+      mode ||= offset ? (::File::WRONLY | ::File::CREAT) : "w"
+      if opts[:binmode] && mode.is_a?(::String) && !mode.include?("b")
+        mode = mode.sub(/\A([^:]*)/) { "#{$1}b" }
+      end
+    end
+
     open(name, mode) do |io|
+      io.set_encoding(encoding) if encoding
       io.seek(offset) if offset
       io.write(string)
     end
   end unless respond_to?(:write)
 
-  def self.binwrite(name, string, offset = nil)
-    write(name, string, offset, mode: "wb")
+  def self.binwrite(name, string, offset = nil, **opts)
+    # binwrite is write in binary mode; it keeps every other option it was given,
+    # including the rule that an offset means "do not truncate".
+    write(name, string, offset, **opts, binmode: true)
   end unless respond_to?(:binwrite)
 
   def self.binread(name, length = nil, offset = 0)
@@ -1542,8 +1563,8 @@ class IO
     File.write(name, string, offset, **opts)
   end unless respond_to?(:write)
 
-  def self.binwrite(name, string, offset = nil)
-    File.binwrite(name, string, offset)
+  def self.binwrite(name, string, offset = nil, **opts)
+    File.binwrite(name, string, offset, **opts)
   end unless respond_to?(:binwrite)
 
   def self.binread(name, length = nil, offset = 0)
@@ -9441,27 +9462,48 @@ class IO
     alias_method :__ir_class_read__, :read
     private :__ir_class_read__
 
+    # IO.read opens the file itself, so mode:, encoding: and :open_args all get
+    # their chance; the whole-file form is tagged with the stream's encoding and
+    # the length form is bytes, which is MRI's split too.
     def read(name, *args)
       options = args.last.is_a?(::Hash) ? args.pop : nil
-      result = args.empty? ? __ir_class_read__(name) : __ir_class_read__(name, *args)
-      return result if result.nil? || !result.respond_to?(:force_encoding)
-      return result unless args.empty? || args[0].nil?
-      enc = nil
-      internal = nil
-      if options
-        enc = options[:encoding] || options["encoding"]
-        if enc.is_a?(::String) && enc.include?(":")
-          # "external:internal" asks for a conversion, same as the mode string.
-          external, internal = enc.split(":", 2)
-          enc = external
-        end
-        enc = ::Encoding.find(enc) if enc
-        internal = ::Encoding.find(internal) if internal
+      length = args[0]
+      offset = args[1]
+      ::Kernel.raise(::ArgumentError, "negative offset #{offset} given") if offset && offset < 0
+      ::Kernel.raise(::ArgumentError, "negative length #{length} given") if length && length < 0
+
+      open_args = options && options[:open_args]
+      if open_args
+        extra = open_args.find { |a| a.is_a?(::Hash) } || {}
+        mode = open_args.find { |a| a.is_a?(::String) || a.is_a?(::Integer) } || extra[:mode] || "r"
+        enc = extra[:encoding] || extra[:external_encoding]
+      else
+        mode = (options && options[:mode]) || "r"
+        enc = options && (options[:encoding] || options[:external_encoding])
       end
-      enc ||= ::Encoding.default_external
-      result.force_encoding(enc) if enc
-      if internal && enc != internal && enc != ::Encoding::BINARY
-        result = result.encode(internal)
+
+      internal = nil
+      if enc.is_a?(::String) && enc.include?(":")
+        # "external:internal" asks for a conversion, same as the mode string.
+        enc, internal = enc.split(":", 2)
+      end
+
+      # "BOM|<encoding>" means "read the byte-order mark if there is one, and let it
+      # name the encoding"; the mode parser underneath does not know the prefix.
+      bom = mode.is_a?(::String) && mode =~ /:\s*BOM\|/i
+      mode = mode.sub(/BOM\|/i, "") if bom
+
+      result = ::File.open(name, mode) do |io|
+        io.set_encoding(enc) if enc
+        io.set_encoding_by_bom if bom
+        io.seek(offset) if offset && offset > 0
+        length ? io.read(length) : io.read
+      end
+
+      return result if result.nil? || !result.respond_to?(:force_encoding)
+      return result if length
+      if internal
+        result = result.encode(::Encoding.find(internal))
       end
       result
     end

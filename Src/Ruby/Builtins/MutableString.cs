@@ -110,6 +110,13 @@ namespace IronRuby.Builtins {
             // we can extract some useful information from the target encoding:
             if (!encoding.IsAsciiIdentity) {
                 flags &= ~(AsciiUnknownFlag | IsAsciiFlag);
+            } else if (_encoding != null && !_encoding.IsAsciiIdentity) {
+                // No character in a non-ascii-identity encoding counts as ASCII, so the flag
+                // says "not ASCII" whatever the bytes are. Coming back to an encoding where the
+                // bytes do decide, it has to be worked out again - otherwise a UTF-16LE string
+                // forced to BINARY still claims not to be ASCII, and comparing it with a plain
+                // String takes the wrong path.
+                flags |= AsciiUnknownFlag;
             }
 
             if (encoding.InUnicodeBasicPlane) {

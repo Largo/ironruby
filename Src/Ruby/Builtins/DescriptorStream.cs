@@ -179,7 +179,8 @@ namespace IronRuby.Builtins {
                         WaitFor(POLLOUT);
                         continue;
                     }
-                    throw new IOException("write failed");
+                    // EPIPE and the rest: the caller turns the errno into the Ruby exception.
+                    throw new IOException("write failed", error);
                 }
                 written += n;
             }

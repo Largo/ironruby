@@ -825,7 +825,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("fsync")]
         [RubyMethod("flush")]
         public static void Flush(RubyIO/*!*/ self) {
-            self.Flush();
+            try {
+                self.Flush();
+            } catch (IOException e) {
+                throw TranslateStreamError(e);
+            }
         }
 
         #endregion
@@ -1084,11 +1088,15 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("write")]
         public static int Write(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
-            int bytesWritten = val.IsEmpty ? 0 : self.WriteBytes(val, 0, val.GetByteCount());
-            if (self.AutoFlush) {
-                self.Flush();
+            try {
+                int bytesWritten = val.IsEmpty ? 0 : self.WriteBytes(val, 0, val.GetByteCount());
+                if (self.AutoFlush) {
+                    self.Flush();
+                }
+                return bytesWritten;
+            } catch (IOException e) {
+                throw TranslateStreamError(e);
             }
-            return bytesWritten;
         }
 
         [RubyMethod("write")]
@@ -1649,7 +1657,8 @@ namespace IronRuby.Builtins {
 
                     var dstPath = toPathSite.Target(toPathSite, dst);
                     if (dstPath != null) {
-                        dstStream = self.Context.Platform.OpenInputFileStream(context.DecodePath(dstPath), FileMode.Truncate, FileAccess.ReadWrite, FileShare.Read);
+                        // Create, not Truncate: MRI's copy_stream makes the destination when it is not there.
+                        dstStream = self.Context.Platform.OpenInputFileStream(context.DecodePath(dstPath), FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
                     } else {
                         writeSite = writeStorage.GetCallSite("write", 1);
                     }
