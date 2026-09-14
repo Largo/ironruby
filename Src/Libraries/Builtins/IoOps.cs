@@ -104,7 +104,7 @@ namespace IronRuby.Builtins {
             RubyClass/*!*/ self,
             object descriptor,
             [Optional]object optionsOrMode,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Optional]object options) {
 
             return Reinitialize(toInt, toHash, toStr, new RubyIO(self.Context), descriptor, optionsOrMode, options);
         }
@@ -117,16 +117,30 @@ namespace IronRuby.Builtins {
             RubyIO/*!*/ self,
             object descriptor,
             [Optional]object optionsOrMode,
-            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+            [Optional]object optionsArgument) {
 
             var context = self.Context;
+
+            // The options are a Hash or nothing at all. MRI takes an explicit nil as a third
+            // argument that is not a Hash - "wrong number of arguments" - rather than as no
+            // options, which is what a defaulted parameter would make of it.
+            IDictionary<object, object> options = null;
+            if (optionsArgument != Missing.Value) {
+                var toHashSite = toHash.GetSite(TryConvertToHashAction.Make(context));
+                options = (optionsArgument != null) ? toHashSite.Target(toHashSite, optionsArgument) : null;
+                if (options == null) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 3, expected 1..2)");
+                }
+            }
 
             object _ = Missing.Value;
             Protocols.TryConvertToOptions(toHash, ref options, ref optionsOrMode, ref _);
             var toIntSite = toInt.GetSite(TryConvertToFixnumAction.Make(toInt.Context));
 
             IOInfo info = new IOInfo();
-            if (optionsOrMode != Missing.Value) {
+            // A nil mode argument is MRI's "no mode here", which leaves the :mode option free to
+            // supply one.
+            if (optionsOrMode != Missing.Value && optionsOrMode != null) {
                 int? m = toIntSite.Target(toIntSite, optionsOrMode);
                 info = m.HasValue ? new IOInfo((IOMode)m) : IOInfo.Parse(context, Protocols.CastToString(toStr, optionsOrMode));
             }
@@ -142,6 +156,13 @@ namespace IronRuby.Builtins {
             Reinitialize(self, desc.Value, info);
             self.ConversionOptions = options;
 
+            // #autoclose? is kept in an instance variable by the prelude, which is where the
+            // option has to land for IO.new(fd, autoclose: false) to be visible.
+            object autoclose;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("autoclose"), out autoclose)) {
+                context.SetInstanceVariable(self, "@__autoclose", Protocols.IsTrue(autoclose));
+            }
+
             return self;
         }
 
@@ -152,12 +173,24 @@ namespace IronRuby.Builtins {
             // mode, and that is the one to believe: Ruby's default of "r" is an answer about a
             // path, and IO.new(fd) was not given one.
             IOMode adopted;
-            if (io.Context.GetStream(descriptor) == null && RubyIO.TryGetDescriptorMode(descriptor, out adopted)) {
+            bool known = io.Context.GetStream(descriptor) != null;
+            if (!known && RubyIO.TryGetDescriptorMode(descriptor, out adopted)) {
                 mode = (mode & ~IOMode.ReadWriteMask) | adopted;
             }
 
+            Stream stream = GetDescriptorStream(io.Context, descriptor);
+
+            // A mode the caller spelled out has to agree with what the descriptor was opened
+            // for; MRI answers EINVAL when it does not. Only for a descriptor IronRuby opened -
+            // an adopted one has just told us its mode and cannot disagree with itself.
+            if (info.HasMode && known) {
+                if ((mode.CanRead() && !stream.CanRead) || (mode.CanWrite() && !stream.CanWrite)) {
+                    throw RubyExceptions.CreateEINVAL();
+                }
+            }
+
             io.Mode = mode;
-            io.SetStream(GetDescriptorStream(io.Context, descriptor));
+            io.SetStream(stream);
             io.SetFileDescriptor(descriptor);
 
             if (info.HasEncoding) {
@@ -166,6 +199,11 @@ namespace IronRuby.Builtins {
                 // internal encoding; MRI still transcodes to it.
                 io.InternalEncoding = info.InternalEncoding ?? io.Context.DefaultInternalEncoding;
                 io.EncodingSpecified = info.ExternalEncoding != null;
+            } else if ((mode & IOMode.PreserveEndOfLines) != 0) {
+                // Binary mode with nothing said about encoding reads and writes bytes, which MRI
+                // reports as an external encoding of ASCII-8BIT.
+                io.ExternalEncoding = RubyEncoding.Binary;
+                io.InternalEncoding = null;
             }
 
             return io;
@@ -263,7 +301,13 @@ namespace IronRuby.Builtins {
         // TODO: params, conversions, options?
 
         [RubyMethod("sysopen", RubyMethodAttributes.PublicSingleton)]
-        public static int SysOpen(RubyClass/*!*/ self, [NotNull]MutableString path, [Optional]MutableString mode, [Optional]int perm) {
+        public static int SysOpen(ConversionStorage<MutableString>/*!*/ toPath, ConversionStorage<MutableString>/*!*/ toStr,
+            RubyClass/*!*/ self, object pathObject, [Optional]object modeObject, [Optional]object perm) {
+
+            // #to_path, and a nil mode or permission means "not given" rather than an empty one.
+            MutableString path = Protocols.CastToPath(toPath, pathObject);
+            MutableString mode = (modeObject == null || modeObject is Missing) ? null : Protocols.CastToString(toStr, modeObject);
+
             if (RubyFileOps.DirectoryExists(self.Context, path)) {
                 // TODO: What file descriptor should be returned for a directory?
                 return -1;
@@ -271,10 +315,13 @@ namespace IronRuby.Builtins {
 
             // The mode may carry an encoding suffix ("w:utf-8"), which only IOInfo parses.
             IOMode ioMode = (mode != null) ? IOInfo.Parse(self.Context, mode).Mode : IOMode.Default;
+
+            // The descriptor stays open: MRI hands back a descriptor the caller owns and is
+            // expected to wrap in an IO. Closing it here left nothing behind but a table index,
+            // and IO.new(index) then read the *kernel's* descriptor of that number - some
+            // unrelated pipe - to decide what the file had been opened for.
             RubyIO io = new RubyFile(self.Context, path.ToString(), ioMode);
-            int fileDesc = io.GetFileDescriptor();
-            io.Close();
-            return fileDesc;
+            return io.GetFileDescriptor();
         }
 
         #endregion
