@@ -3290,23 +3290,36 @@ class String
   # rest, the way Kernel#Complex(str, exception: false) does. The grammar is
   # MRI's: [real][sign imaginary"i"], or "real@angle" for polar form, with the
   # real and imaginary parts each an integer, a float or a rational.
-  NUMBER__ = '[+-]?(?:\d[\d_]*)?(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?(?:\/\d[\d_]*)?'
+  # A single underscore may sit between two digits and nowhere else: "12_3" is
+  # 123 but "12__3" stops after the 12.
+  DIGITS__ = '\d(?:_?\d)*'
+  NUMBER__ = "[+-]?(?:#{DIGITS__})?(?:\\.#{DIGITS__})?(?:[eE][+-]?#{DIGITS__})?(?:/#{DIGITS__})?"
+  # MRI accepts i, I, j and J as the imaginary unit.
+  UNIT__ = '[iIjJ]'
 
   def to_c
+    unless encoding.ascii_compatible?
+      ::Kernel.raise(::Encoding::CompatibilityError, "ASCII incompatible encoding: #{encoding}")
+    end
     s = strip
     if (m = /\A(#{NUMBER__})@(#{NUMBER__})/o.match(s)) && !m[1].empty? && !m[2].empty?
       return ::Complex.polar(__to_num__(m[1]), __to_num__(m[2]))
     end
-    if (m = /\A(#{NUMBER__})?([+-](?:\d[\d_]*)?(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?(?:\/\d[\d_]*)?)i/o.match(s))
+    if (m = /\A(#{NUMBER__})?([+-](?:#{DIGITS__})?(?:\.#{DIGITS__})?(?:[eE][+-]?#{DIGITS__})?(?:\/#{DIGITS__})?)#{UNIT__}/o.match(s))
       real = m[1].nil? || m[1].empty? ? 0 : __to_num__(m[1])
       imag = m[2] == "+" ? 1 : (m[2] == "-" ? -1 : __to_num__(m[2]))
       return ::Complex.new(real, imag)
     end
-    if (m = /\A(#{NUMBER__})i/o.match(s)) && !m[1].empty? && m[1] != "+" && m[1] != "-"
+    if (m = /\A(#{NUMBER__})#{UNIT__}/o.match(s)) && !m[1].empty? && m[1] != "+" && m[1] != "-"
       return ::Complex.new(0, __to_num__(m[1]))
     end
     if (m = /\A(#{NUMBER__})/o.match(s)) && !m[1].empty?
       return ::Complex.new(__to_num__(m[1]), 0)
+    end
+    # A bare unit is an imaginary 1 - and so is any string starting with one,
+    # which is why "Infinity".to_c is (0+1i).
+    if (m = /\A([+-]?)#{UNIT__}/o.match(s))
+      return ::Complex.new(0, m[1] == "-" ? -1 : 1)
     end
     ::Complex.new(0, 0)
   end unless method_defined?(:to_c)

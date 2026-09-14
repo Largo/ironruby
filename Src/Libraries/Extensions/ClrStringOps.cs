@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections;
+using System.Globalization;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -382,7 +383,31 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("oct")]
         public static object/*!*/ ToIntegerOctal(string/*!*/ self) {
-            return Tokenizer.ParseInteger(self, 8).ToObject();
+            return Tokenizer.ParseInteger(self, DetectOctalBase(self)).ToObject();
+        }
+
+        /// <summary>
+        /// #oct is base 8, but a "0b"/"0x"/"0d"/"0o" prefix overrides that - MRI calls
+        /// rb_str_to_inum with a negative base, which means "this base unless the string
+        /// says otherwise".
+        /// </summary>
+        private static int DetectOctalBase(string/*!*/ self) {
+            int i = 0;
+            while (i < self.Length && Char.IsWhiteSpace(self[i])) {
+                i++;
+            }
+            if (i < self.Length && (self[i] == '+' || self[i] == '-')) {
+                i++;
+            }
+            if (i + 1 < self.Length && self[i] == '0') {
+                switch (Char.ToLowerInvariant(self[i + 1])) {
+                    case 'b': return 2;
+                    case 'x': return 16;
+                    case 'd': return 10;
+                    case 'o': return 8;
+                }
+            }
+            return 8;
         }
 
         #endregion
@@ -391,9 +416,99 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_f")]
         public static double ToDouble(string/*!*/ self) {
+            // The tokenizer parses *literals*, where an underscore may sit anywhere between
+            // digits and the whole string has to be consumed. #to_f is the lenient form: it
+            // takes the longest valid prefix and answers 0.0 when there is none, and an
+            // underscore is only allowed strictly between two digits, so "1__2".to_f is 1.0.
+            string cleaned = ExtractDoublePrefix(self);
+            if (cleaned.Length == 0) {
+                return 0.0;
+            }
+
             double result;
-            bool complete;
-            return Tokenizer.TryParseDouble(self, out result, out complete) ? result : 0.0;
+            if (Double.TryParse(cleaned, NumberStyles.Float, CultureInfo.InvariantCulture, out result)) {
+                return result;
+            }
+
+            // Out of range: MRI answers +/-Infinity rather than failing.
+            return cleaned[0] == '-' ? Double.NegativeInfinity : Double.PositiveInfinity;
+        }
+
+        /// <summary>
+        /// The longest prefix of <paramref name="self"/> that is a Ruby float, with the
+        /// underscores taken out. Empty when the string does not start with a number.
+        /// </summary>
+        private static string/*!*/ ExtractDoublePrefix(string/*!*/ self) {
+            int i = 0;
+            while (i < self.Length && Char.IsWhiteSpace(self[i])) {
+                i++;
+            }
+
+            var result = new StringBuilder();
+            if (i < self.Length && (self[i] == '+' || self[i] == '-')) {
+                result.Append(self[i]);
+                i++;
+            }
+
+            int digits = AppendDigits(self, ref i, result);
+
+            // The point is consumed even with nothing after it - "1.e-2" is 0.01 - but it is
+            // only kept when a fractional digit follows.
+            if (i < self.Length && self[i] == '.') {
+                i++;
+                var fraction = new StringBuilder();
+                int fractionDigits = AppendDigits(self, ref i, fraction);
+                if (fractionDigits > 0) {
+                    result.Append('.').Append(fraction.ToString());
+                }
+                digits += fractionDigits;
+            }
+
+            if (digits == 0) {
+                return String.Empty;
+            }
+
+            // An exponent counts only when it is followed by at least one digit.
+            if (i < self.Length && (self[i] == 'e' || self[i] == 'E')) {
+                int mark = result.Length;
+                var exponent = new StringBuilder();
+                int at = i + 1;
+                if (at < self.Length && (self[at] == '+' || self[at] == '-')) {
+                    exponent.Append(self[at]);
+                    at++;
+                }
+                if (AppendDigits(self, ref at, exponent) > 0) {
+                    result.Append('e').Append(exponent.ToString());
+                } else {
+                    result.Length = mark;
+                }
+            }
+
+            return result.ToString();
+        }
+
+        private static bool IsDecimalDigit(char c) {
+            return c >= '0' && c <= '9';
+        }
+
+        /// <summary>
+        /// Appends a run of digits, dropping underscores that sit between two of them and
+        /// stopping at anything else. Answers how many digits were appended.
+        /// </summary>
+        private static int AppendDigits(string/*!*/ self, ref int i, StringBuilder/*!*/ result) {
+            int count = 0;
+            while (i < self.Length) {
+                if (IsDecimalDigit(self[i])) {
+                    result.Append(self[i]);
+                    count++;
+                    i++;
+                } else if (self[i] == '_' && count > 0 && i + 1 < self.Length && IsDecimalDigit(self[i + 1])) {
+                    i++;
+                } else {
+                    break;
+                }
+            }
+            return count;
         }
 
         [RubyMethod("to_str", RubyMethodAttributes.PublicInstance)]

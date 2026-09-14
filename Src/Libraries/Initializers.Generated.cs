@@ -7511,9 +7511,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "<<", 0x51, 
-                0x00010002U, 0x00000000U, 
+                0x00010002U, 0x00000000U, 0x00000002U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Append), 
-                new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Append)
+                new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Append), 
+                new Func<IronRuby.Builtins.MutableString, System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Append)
             );
             
             DefineLibraryMethod(module, "<=>", 0x51, 
@@ -7625,9 +7626,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "concat", 0x51, 
-                0x00010002U, 0x00000000U, 
+                0x00010002U, 0x00000000U, 0x00000002U, 0x80000004U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Append), 
-                new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Append)
+                new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Append), 
+                new Func<IronRuby.Builtins.MutableString, System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Append), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Append)
             );
             
             DefineLibraryMethod(module, "count", 0x51, 
@@ -7707,8 +7710,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "end_with?", 0x51, 
-                0x00020000U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.MutableStringOps.EndsWith)
+                0x80000008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, System.Object[], System.Boolean>(IronRuby.Builtins.MutableStringOps.EndsWith)
             );
             
             DefineLibraryMethod(module, "eql?", 0x51, 
@@ -7937,8 +7940,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "start_with?", 0x51, 
-                0x00020000U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.MutableStringOps.StartsWith)
+                0x80000008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, System.Object[], System.Boolean>(IronRuby.Builtins.MutableStringOps.StartsWith)
             );
             
             DefineLibraryMethod(module, "strip", 0x51, 

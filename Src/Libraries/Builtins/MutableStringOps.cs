@@ -583,6 +583,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, int c) {
+            if (c < 0) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", c);
+            }
+
             // #5855: appending a 0x80-0xff code point to a US-ASCII string widens the receiver
             // to BINARY instead of failing. Integer#chr is stricter - 0x80.chr("US-ASCII") is a
             // RangeError - so this case cannot go through ToChr.
@@ -591,6 +595,42 @@ namespace IronRuby.Builtins {
                 return self.Append((byte)c);
             }
             return self.Append(Integer.ToChr(self.Encoding, self.Encoding, c));
+        }
+
+        [RubyMethod("<<")]
+        [RubyMethod("concat")]
+        public static MutableString/*!*/ Append(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ c) {
+            throw RubyExceptions.CreateRangeError("bignum out of char range");
+        }
+
+        // Ruby 1.9 gave #concat - but not #<< - any number of arguments. Each one is an
+        // Integer codepoint or something String-convertible, and they are appended in order,
+        // so "s.concat(s, s)" triples s rather than looping.
+        [RubyMethod("concat")]
+        public static MutableString/*!*/ Append(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self,
+            [NotNull]params object/*!*/[]/*!*/ others) {
+            self.RequireNotFrozen();
+
+            var pieces = new object[others.Length];
+            for (int i = 0; i < others.Length; i++) {
+                if (others[i] is int || others[i] is BigInteger) {
+                    pieces[i] = others[i];
+                } else {
+                    // A copy, so that "s.concat(s, s)" sees the original both times.
+                    pieces[i] = Protocols.CastToString(stringCast, others[i]).Clone();
+                }
+            }
+
+            for (int i = 0; i < pieces.Length; i++) {
+                if (pieces[i] is int) {
+                    Append(self, (int)pieces[i]);
+                } else if (pieces[i] is BigInteger) {
+                    Append(self, (BigInteger)pieces[i]);
+                } else {
+                    Append(self, (MutableString)pieces[i]);
+                }
+            }
+            return self;
         }
 
         #endregion
@@ -2582,14 +2622,31 @@ namespace IronRuby.Builtins {
             return true;
         }
 
+        // Ruby 1.9 takes any number of prefixes and answers true as soon as one matches,
+        // which is why the arguments are converted one at a time: MRI never asks the ones
+        // it did not need for #to_str. A Regexp prefix (Ruby 2.5) has to match at position 0.
         [RubyMethod("start_with?")]
-        public static bool StartsWith(RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, Optional]MutableString subString) {
+        public static bool StartsWith(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [NotNull]params object/*!*/[]/*!*/ prefixes) {
 
-            if (subString == null) {
-                return false;
+            for (int i = 0; i < prefixes.Length; i++) {
+                RubyRegex regex = prefixes[i] as RubyRegex;
+                if (regex != null) {
+                    MatchData match = RegexpOps.Match(scope, regex, self);
+                    if (match != null && match.Index == 0) {
+                        return true;
+                    }
+                    continue;
+                }
+
+                if (StartsWith(self, Protocols.CastToString(stringCast, prefixes[i]))) {
+                    return true;
+                }
             }
+            return false;
+        }
 
+        private static bool StartsWith(MutableString/*!*/ self, MutableString/*!*/ subString) {
             int prefix = subString.GetByteCount();
             if (self.GetByteCount() < prefix) {
                 return false;
@@ -2625,19 +2682,35 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("end_with?")]
-        public static bool EndsWith(RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, Optional]MutableString subString) {
+        public static bool EndsWith(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [NotNull]params object/*!*/[]/*!*/ suffixes) {
 
-            // TODO: Deal with encodings
+            for (int i = 0; i < suffixes.Length; i++) {
+                MutableString suffix = Protocols.CastToString(stringCast, suffixes[i]);
+                self.RequireCompatibleEncoding(suffix);
+                if (EndsWith(self, suffix)) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
-            if (subString == null || self.Length < subString.Length) {
+        private static bool EndsWith(MutableString/*!*/ self, MutableString/*!*/ subString) {
+            int suffix = subString.GetByteCount();
+            if (self.GetByteCount() < suffix) {
                 return false;
             }
 
             // Comparing the strings rather than converting the argument to a CLR string keeps
             // this working for a string holding bytes that are invalid in its encoding, which
             // MRI answers from the trailing bytes.
-            return self.EndsWith(subString);
+            if (!self.EndsWith(subString)) {
+                return false;
+            }
+
+            // ... and the suffix has to begin on a character boundary: "\xC3\xA9" does not end
+            // with "\xA9".
+            return EndsOnCharacterBoundary(self, self.GetByteCount() - suffix);
         }
 
         #endregion
@@ -3437,6 +3510,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_f")]
         public static double ToDouble(MutableString/*!*/ self) {
+            if (!self.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError(
+                    String.Format("ASCII incompatible encoding: {0}", self.Encoding.Name)
+                );
+            }
             return ClrString.ToDouble(self.ConvertToString());
         }
 
