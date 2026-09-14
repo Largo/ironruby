@@ -2094,11 +2094,22 @@ namespace IronRuby.Builtins {
         // one. IO#gets does set it, but the scope it sets it in is the one at its own call site -
         // which here is inside this method, where nothing can read it again. So the assignment has
         // to be repeated against the scope Kernel#gets was called from.
+        /// <summary>
+        /// Kernel#gets reads ARGF, not $stdin: the files named in ARGV first, standard input only
+        /// when there are none. Resolved per call because the prelude replaces the constant with
+        /// its own ARGFClass instance after startup, so anything cached here would be the object
+        /// that got thrown away.
+        /// </summary>
+        private static object GetArgFile(RubyContext/*!*/ context) {
+            object argf;
+            return context.ObjectClass.TryGetConstant(null, "ARGF", out argf) ? argf : context.StandardInput;
+        }
+
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
         public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self) {
             var site = storage.GetCallSite("gets", 0);
-            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, storage.Context.StandardInput);
+            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, GetArgFile(storage.Context));
         }
 
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
@@ -2107,7 +2118,7 @@ namespace IronRuby.Builtins {
             [NotNull]MutableString/*!*/ separator) {
 
             var site = storage.GetCallSite("gets", 1);
-            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, storage.Context.StandardInput, separator);
+            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, GetArgFile(storage.Context), separator);
         }
 
         [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
@@ -2116,7 +2127,7 @@ namespace IronRuby.Builtins {
             [NotNull]MutableString/*!*/ separator, [DefaultProtocol]int limit) {
 
             var site = storage.GetCallSite("gets", 2);
-            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, storage.Context.StandardInput, separator, limit);
+            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, GetArgFile(storage.Context), separator, limit);
         }
 
         #endregion
