@@ -1535,10 +1535,15 @@ namespace IronRuby.Prism {
             // Anything richer needs positional binding done by hand, because keywords do
             // not have their own calling-convention slot here.
             if (node.Keywords.Length > 0 || node.KeywordRest is Pm.KeywordRestParameterNode) {
-                if (optional.Count > 0 || unsplat != null || node.Posts.Length > 0) {
+                // A block's keyword parameters must not count towards the auto-splat decision:
+                // `{ |a, **k| }` takes one positional parameter, so a single Array argument is
+                // passed whole. The general lowering is the one that knows that, since it binds
+                // the positionals itself.
+                if (optional.Count > 0 || unsplat != null || node.Posts.Length > 0 || autoSplat) {
                     return LowerGeneralParameters(node, autoSplat, isMethod, span, out prologue);
                 }
-                prologue = LowerKeywords(node, optional, isMethod, mandatory, span);
+                // a lambda checks arity as strictly as a method does; a plain block does not
+                prologue = LowerKeywords(node, optional, isMethod || !autoSplat, mandatory, span);
                 if (isMethod) {
                     // only leading mandatory parameters can be here, and they are all locals
                     _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
@@ -1728,7 +1733,7 @@ namespace IronRuby.Prism {
         ///   rest = ?kw?.dup ; rest.delete(:j) ; rest.delete(:k)
         /// </summary>
         private Statements/*!*/ LowerKeywords(Pm.ParametersNode/*!*/ node, List<SimpleAssignmentExpression>/*!*/ optional,
-            bool isMethod, List<LeftValue>/*!*/ mandatory, SourceSpan span) {
+            bool strict, List<LeftValue>/*!*/ mandatory, SourceSpan span) {
 
             var kwVar = CurrentScope.AddVariable("?kw?", span);
             // The default stands for "the caller passed no keywords", so it is marked as keyword
@@ -1741,7 +1746,7 @@ namespace IronRuby.Prism {
             prologue.Add(new SimpleAssignmentExpression(kwVar,
                 new HashConstructor(new Maplet[0], true, span), "||", span));
 
-            if (isMethod) {
+            if (strict) {
                 foreach (var check in KeywordSeparationChecks(kwVar, mandatory, true, span)) {
                     prologue.Add(check);
                 }
