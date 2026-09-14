@@ -250,7 +250,12 @@ namespace IronRuby.Compiler.Ast {
                     return Methods.SetUnqualifiedConstant.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine);
 
                 case StaticScopeKind.Explicit:
-                    return Methods.SetQualifiedConstant.OpCall(AstUtils.Box(rightValue), transformedQualifier, gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine);
+                    // `qualifier::NAME = rhs` evaluates the qualifier first
+                    var qualifier = gen.CurrentScope.DefineHiddenVariable("#qualifier", typeof(object));
+                    return Ast.Block(
+                        Ast.Assign(qualifier, AstUtils.Box(transformedQualifier)),
+                        Methods.SetQualifiedConstant.OpCall(AstUtils.Box(rightValue), qualifier, gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine)
+                    );
             }
 
             throw Assert.Unreachable;

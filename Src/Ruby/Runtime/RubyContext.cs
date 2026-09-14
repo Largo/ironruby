@@ -1727,10 +1727,35 @@ namespace IronRuby.Runtime {
             // MRI omits the owner for Object: "uninitialized constant Foo", but keeps it otherwise:
             // "uninitialized constant Math::Nope".
             throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
-                (owner == ObjectClass || String.IsNullOrEmpty(owner.Name))
+                owner == ObjectClass
                     ? String.Format("uninitialized constant {0}", name)
-                    : String.Format("uninitialized constant {0}::{1}", owner.Name, name)
+                    : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name)
             ), name, owner);
+        }
+
+        /// <summary>
+        /// How MRI names a module in an "uninitialized constant" message: whatever #name answers,
+        /// falling back to #inspect for an anonymous one. Both are user-overridable, so they are
+        /// called rather than read off the module.
+        /// </summary>
+        private string/*!*/ GetModuleDisplayName(RubyModule/*!*/ owner) {
+            if (_moduleName == null) {
+                Interlocked.CompareExchange(
+                    ref _moduleName,
+                    CallSite<Func<CallSite, object, object>>.Create(RubyCallAction.Make(this, "name", RubyCallSignature.WithImplicitSelf(0))),
+                    null
+                );
+            }
+            object moduleName = _moduleName.Target(_moduleName, owner);
+
+            var str = moduleName as MutableString;
+            if (str != null && str.Length > 0) {
+                return str.ToString();
+            }
+            if (moduleName != null && !(moduleName is MutableString)) {
+                return moduleName.ToString();
+            }
+            return Inspect(owner).ToString();
         }
 
         // thread-safe:
@@ -3316,6 +3341,7 @@ namespace IronRuby.Runtime {
         #region Ruby Events
 
         private CallSite<Func<CallSite, object, object, object>> _respondTo;
+        private CallSite<Func<CallSite, object, object>> _moduleName;
 
         internal object Send(ref CallSite<Func<CallSite, object, object, object>> site, string/*!*/ eventName,
             object target, string/*!*/ memberName) {
