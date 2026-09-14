@@ -314,7 +314,7 @@ module M
   end
 end
 ", @"
-nil
+
 constant
 ");
         }
@@ -581,8 +581,8 @@ while i < 6
   i += 1
 end
 ", @"
-nil
-nil
+
+
 missing: C
 constant
 missing: C
@@ -615,7 +615,7 @@ constant
 1
 constant
 1
-nil
+
 #<NameError: uninitialized constant M::A>
 ");
         }
@@ -737,7 +737,7 @@ while i < 2
 end
 ", @"
 constant
-nil
+
 ");
             }
         }

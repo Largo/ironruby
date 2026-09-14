@@ -62,7 +62,7 @@ end
 
 foo
 ");
-            }, "nil");
+            }, @"");
         }
 
         public void Scenario_UninitializedVars2() {
@@ -89,7 +89,7 @@ puts foo(1,2)
             },
             @"
 3
-nil");
+");
         }
 
         public void Scenario_RubyParams2() {

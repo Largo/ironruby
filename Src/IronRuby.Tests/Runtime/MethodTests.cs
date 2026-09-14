@@ -22,7 +22,7 @@ namespace IronRuby.Tests {
             TestOutput(@"
 puts nil
 ", 
-            @"nil");
+            @"");
         }
 
         public void SimpleCall2() {
@@ -45,7 +45,7 @@ puts y
 x = 123
 puts x
 ", @"
-nil
+
 123
 ");
 

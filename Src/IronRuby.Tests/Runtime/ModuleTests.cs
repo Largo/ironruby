@@ -542,14 +542,14 @@ nil
 nil
 nil
 ---
-nil
+
 instance-variable
 ---
-nil
+
 instance-variable
-nil
+
 instance-variable
-nil
+
 ");
         }
 

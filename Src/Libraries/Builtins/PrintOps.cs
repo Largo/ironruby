@@ -112,11 +112,21 @@ namespace IronRuby.Builtins {
         public static void Puts(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,
             ConversionStorage<IList>/*!*/ tryToAry, object self, [NotNull]object/*!*/ val) {
 
+            if (val == null) {
+                // `puts nil` is an empty line; only Kernel#p and #inspect spell nil out.
+                PutsEmptyLine(writeStorage, self);
+                return;
+            }
+
             IList list = Protocols.TryCastToArray(tryToAry, val);
             if (list != null) {
                 IEnumerable recEnum = IListOps.EnumerateRecursively(tryToAry, list, -1, (_) => MutableString.CreateAscii("[...]"));
                 foreach (object item in recEnum ?? list) {
-                    Puts(writeStorage, self, ToPrintedString(tosConversion, item));
+                    if (item == null) {
+                        PutsEmptyLine(writeStorage, self);
+                    } else {
+                        Puts(writeStorage, self, ToPrintedString(tosConversion, item));
+                    }
                 }
             } else {
                 Puts(writeStorage, self, ToPrintedString(tosConversion, val));

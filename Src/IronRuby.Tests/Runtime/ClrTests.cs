@@ -1819,7 +1819,7 @@ end
 ", @"
 constant
 constant
-nil
+
 System::Collections
 ");
         }
@@ -1852,9 +1852,9 @@ X
 #<NameError: constant InteropTests::Namespaces2::C not defined>
 #<NameError: constant InteropTests::Namespaces2::N not defined>
 #<NameError: constant InteropTests::Namespaces2::X not defined>
-nil
-nil
-nil
+
+
+
 ");
         }
         

@@ -96,10 +96,10 @@ public :foo
 puts defined? foo.foo
 "), @"
 method
-nil
-nil
+
+
 foo
-nil
+
 foo
 method
 ");
@@ -136,12 +136,12 @@ C.new.cs_defined?
 ");
             }, @"
 constant
-nil
+
 constant
-nil
-nil
+
+
 constant
-nil
+
 ");
         }
 
@@ -168,7 +168,7 @@ puts defined?(foo::C)
 ", @"
 missing X
 constant
-nil
+
 constant
 ");
         }
@@ -259,7 +259,7 @@ c.foo_defined?
 c.foo_defined_on_M?
 ");
             }, @"
-nil
+
 class variable
 ");
         }
@@ -286,7 +286,7 @@ puts foo
 puts foo {}
 ");
             }, @"
-nil
+
 yield
 ");
         }
@@ -305,7 +305,7 @@ end
 bob 1
 ");
             }, @"
-nil
+
 local-variable
 local-variable
 local-variable
@@ -337,9 +337,9 @@ puts D.new.foo
 puts D.new.bar
 ");
             }, @"
-nil
+
 super
-nil
+
 ");
         }
     }
