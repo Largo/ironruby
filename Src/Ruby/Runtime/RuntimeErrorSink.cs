@@ -84,8 +84,11 @@ namespace IronRuby.Runtime {
             if (severity == Severity.Error || severity == Severity.FatalError) {
                 throw new SyntaxError(message, path, line, span.Start.Column, codeLine);
             } else {
-                WriteMessage(
-                    MutableString.Create(RubyContext.FormatErrorMessage(message, "warning", path, line, span.Start.Column, null), encoding)
+                // Through Warning.warn, not straight to $stderr: this is the single point every
+                // RubyContext.ReportWarning site and every prism parser warning funnels through.
+                _context.DispatchWarning(
+                    MutableString.Create(RubyContext.FormatErrorMessage(message, "warning", path, line, span.Start.Column, null), encoding),
+                    null
                 );
             }
         }

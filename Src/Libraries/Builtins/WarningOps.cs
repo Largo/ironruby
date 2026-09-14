@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Runtime.InteropServices;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Runtime;
 
@@ -23,7 +24,11 @@ namespace IronRuby.Builtins {
     /// Warning's category switches.  They live here rather than in the Ruby prelude because the
     /// runtime has to read them too: the chilled string literal warning is raised from inside
     /// MutableString's mutation guard, and -W:category has to be able to set them before any Ruby
-    /// code runs.  Warning.warn itself stays in Ruby, so overriding it still works.
+    /// code runs.
+    ///
+    /// Warning#warn lives here rather than in the prelude because every internal warning is routed
+    /// through it (RubyContext.DispatchWarning) and the first ones are emitted while ruby4.rb is
+    /// still being parsed, long before a Ruby level definition would exist.
     /// </summary>
     [RubyModule("Warning")]
     public static class WarningOps {
@@ -49,6 +54,39 @@ namespace IronRuby.Builtins {
                 result.Add(context.CreateAsciiSymbol(category));
             }
             return result;
+        }
+
+        /// <summary>
+        /// MRI's rb_warning_s_warn. Registered as an instance method only: `extend self' in the
+        /// prelude makes Warning.warn work while keeping Method#owner == Warning, which
+        /// spec/core/warning/warn_spec.rb checks.
+        /// </summary>
+        [RubyMethod("warn", RubyMethodAttributes.PublicInstance)]
+        public static object Warn(RubyContext/*!*/ context, object self, object message,
+            [DefaultParameterValue(null)]Hash options) {
+
+            MutableString str = message as MutableString;
+            if (str == null) {
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected String)",
+                    context.GetClassDisplayName(message));
+            }
+
+            object category;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("category"), out category) && category != null) {
+                var symbol = category as RubySymbol;
+                if (symbol == null) {
+                    throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Symbol)",
+                        context.GetClassDisplayName(category));
+                }
+                if (!context.IsWarningEnabled(CheckCategory(symbol))) {
+                    return null;
+                }
+            }
+
+            // Resolves $stderr dynamically and adds nothing to the message - MRI's
+            // rb_write_error_str. $VERBOSE is deliberately not consulted here.
+            context.WriteWarningMessage(str);
+            return null;
         }
 
         private static string/*!*/ CheckCategory(RubySymbol/*!*/ category) {
