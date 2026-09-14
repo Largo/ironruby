@@ -326,10 +326,20 @@ namespace IronRuby.Builtins {
             return context.CreateSymbol(str);
         }
 
+        /// <summary>
+        /// Thread#[] and friends are fiber-local in MRI. Every fiber runs on its own CLR thread
+        /// here, so "the current fiber's storage" is the current CLR thread's - which stopped
+        /// being the same object as Thread.current when Thread.current started answering the
+        /// fiber's owning thread. Another thread is addressed by its own storage, as in MRI,
+        /// where it is that thread's root fiber's.
+        /// </summary>
+        private static RubyThreadInfo/*!*/ FiberLocals(Thread/*!*/ self) {
+            return RubyThreadInfo.FromThread(self == RubyUtils.CurrentRubyThread ? Thread.CurrentThread : self);
+        }
+
         [RubyMethod("[]")]
         public static object GetElement(Thread/*!*/ self, [NotNull]RubySymbol/*!*/ key) {
-            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            return info[key];
+            return FiberLocals(self)[key];
         }
 
         [RubyMethod("[]")]
@@ -355,8 +365,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]=")]
         public static object SetElement(RubyContext/*!*/ context, Thread/*!*/ self, [NotNull]RubySymbol/*!*/ key, object value) {
             CheckLocalsNotFrozen(context, self);
-            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            info[key] = value;
+            FiberLocals(self)[key] = value;
             return value;
         }
 
@@ -569,8 +578,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("key?")]
         public static object HasKey(Thread/*!*/ self, [NotNull]RubySymbol/*!*/ key) {
-            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            return info.HasKey(key);
+            return FiberLocals(self).HasKey(key);
         }
 
         [RubyMethod("key?")]
@@ -585,8 +593,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("keys")]
         public static object Keys(RubyContext/*!*/ context, Thread/*!*/ self) {
-            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            return info.GetKeys();
+            return FiberLocals(self).GetKeys();
         }
 
         #region priority, priority=
@@ -821,10 +828,15 @@ namespace IronRuby.Builtins {
             SetCritical(context, value);
         }
 
+        /// <summary>
+        /// Every fiber runs on its own CLR thread here, but Ruby says a fiber belongs to the
+        /// thread that created it - so inside a fiber this answers that thread, not the one the
+        /// fiber happens to be running on.
+        /// </summary>
         [RubyMethod("current", RubyMethodAttributes.PublicSingleton)]
         public static Thread/*!*/ Current(object self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
-            return Thread.CurrentThread;
+            return RubyUtils.CurrentRubyThread;
         }
 
         //    exclusive
