@@ -3986,8 +3986,14 @@ class Complex
       if other.imag == 0 && !other.imag.is_a?(::Float)
         other = other.real
       else
+        # z**w == exp(w * log z). Going through `r ** other` instead would hand a
+        # Complex exponent to Float#**, which coerces straight back to here and
+        # recurses until the stack overflows - which is not rescuable.
         r, theta = polar
-        return ::Complex.polar(r ** other, theta * other) rescue nil
+        a = other.real.to_f
+        b = other.imag.to_f
+        log_r = ::Math.log(r)
+        return ::Complex.polar(::Math.exp(a * log_r - b * theta), b * log_r + a * theta)
       end
     end
     if other.is_a?(::Integer)
