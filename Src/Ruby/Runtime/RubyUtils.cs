@@ -620,7 +620,9 @@ namespace IronRuby.Runtime {
             owner.SetConstantLocation(name, sourcePath, sourceLine);
 
             if (owner.SetConstantChecked(name, value)) {
-                owner.Context.ReportWarning(String.Format("already initialized constant {0}", name));
+                // MRI names the owner unless it is Object: "already initialized constant M::X"
+                owner.Context.ReportWarning(String.Format("already initialized constant {0}{1}",
+                    owner.IsObjectClass ? "" : owner.Name + "::", name));
             }
 
             // Initializes anonymous module's name, publishes the module:

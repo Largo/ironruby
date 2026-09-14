@@ -98,7 +98,62 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformReadVariable(AstGenerator/*!*/ gen, bool tryRead) {
-            return TransformRead(gen, OpGet);
+            if (!tryRead) {
+                return TransformRead(gen, OpGet);
+            }
+
+            // `X ||= v` must not raise when X is undefined: it is defined?(X) ? X : (X = v)
+            return Ast.Condition(
+                TransformRead(gen, OpIsDefined),
+                AstUtils.Box(TransformRead(gen, OpGet)),
+                AstUtils.Constant(null, typeof(object))
+            );
+        }
+
+        /// <summary>
+        /// The qualifier of `expr::NAME`, so that an assignment evaluates it once for both the
+        /// read and the write (`expr::NAME ||= v` must not run expr twice).
+        /// </summary>
+        internal override MSA.Expression TransformTargetRead(AstGenerator/*!*/ gen) {
+            return (_qualifier != null && !(_qualifier is ConstantVariable))
+                ? AstUtils.Box(_qualifier.TransformRead(gen)) : null;
+        }
+
+        internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen, MSA.Expression targetValue, bool tryRead) {
+            if (targetValue == null) {
+                return TransformReadVariable(gen, tryRead);
+            }
+
+            var names = new[] { Name };
+            if (!tryRead) {
+                return Methods.GetExpressionQualifiedConstant.OpCall(targetValue, gen.CurrentScopeVariable,
+                    Ast.Constant(new ExpressionQualifiedConstantSiteCache()), Ast.Constant(names));
+            }
+
+            // the target expression may assign a temporary, so evaluate it exactly once
+            var qualifier = gen.CurrentScope.DefineHiddenVariable("#qualifier", typeof(object));
+            return Ast.Condition(
+                Methods.IsDefinedExpressionQualifiedConstant.OpCall(Ast.Assign(qualifier, targetValue), gen.CurrentScopeVariable,
+                    Ast.Constant(new ExpressionQualifiedIsDefinedConstantSiteCache()), Ast.Constant(names)),
+                AstUtils.Box(Methods.GetExpressionQualifiedConstant.OpCall(qualifier, gen.CurrentScopeVariable,
+                    Ast.Constant(new ExpressionQualifiedConstantSiteCache()), Ast.Constant(names))),
+                AstUtils.Constant(null, typeof(object))
+            );
+        }
+
+        internal override MSA.Expression/*!*/ TransformWrite(AstGenerator/*!*/ gen, MSA.Expression targetValue, MSA.Expression/*!*/ rightValue) {
+            if (targetValue == null) {
+                return TransformWriteVariable(gen, rightValue);
+            }
+
+            // the qualifier is evaluated first: an op-assignment reads the constant out of it
+            // while computing the value to write
+            var qualifier = gen.CurrentScope.DefineHiddenVariable("#qualifier", typeof(object));
+            return Ast.Block(
+                Ast.Assign(qualifier, AstUtils.Box(targetValue)),
+                Methods.SetQualifiedConstant.OpCall(AstUtils.Box(rightValue), qualifier, gen.CurrentScopeVariable,
+                    TransformName(gen), gen.SourcePathConstant, AstUtils.Constant(Location.Start.Line))
+            );
         }
 
         private const int OpGet = 0;

@@ -71,7 +71,7 @@ namespace IronRuby.Compiler.Ast {
             // lhs &&= rhs  -->  left.member && (left.member = rhs)
             // lhs ||= rhs  -->  left.member || (left.member = rhs)
             if (Operation == Symbols.And || Operation == Symbols.Or) {
-                MSA.Expression leftMemberRead = MethodCall.TransformRead(this, gen, false, _memberName, Ast.Assign(leftTemp, transformedLeftTarget), null, null, null, null);
+                MSA.Expression leftMemberRead = MethodCall.TransformRead(this, gen, leftIsSelf, _memberName, Ast.Assign(leftTemp, transformedLeftTarget), null, null, null, null);
                 MSA.Expression transformedWrite = MethodCall.TransformRead(this, gen, leftIsSelf, setterName, leftTemp, null, null, null, transformedRight);
 
                 if (Operation == Symbols.And) {
@@ -81,7 +81,7 @@ namespace IronRuby.Compiler.Ast {
                 }
             } else {
                 // left.member= left.member().op(right)
-                MSA.Expression leftMemberRead = MethodCall.TransformRead(this, gen, false, _memberName, leftTemp, null, null, null, null);
+                MSA.Expression leftMemberRead = MethodCall.TransformRead(this, gen, leftIsSelf, _memberName, leftTemp, null, null, null, null);
                 MSA.Expression operationCall = MethodCall.TransformRead(this, gen, false, Operation, leftMemberRead, null, null, transformedRight, null);
                 MSA.Expression transformedWrite = MethodCall.TransformRead(this, gen, leftIsSelf, setterName, Ast.Assign(leftTemp, transformedLeftTarget), null, null, null, operationCall);
                 return transformedWrite;

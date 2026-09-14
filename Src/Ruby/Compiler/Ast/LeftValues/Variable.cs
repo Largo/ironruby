@@ -46,7 +46,7 @@ namespace IronRuby.Compiler.Ast {
             return AstUtils.Constant(_name);
         }
 
-        internal sealed override MSA.Expression TransformTargetRead(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression TransformTargetRead(AstGenerator/*!*/ gen) {
             return null;
         }
 
@@ -62,6 +62,7 @@ namespace IronRuby.Compiler.Ast {
             Debug.Assert(targetValue == null);
             return TransformWriteVariable(gen, rightValue);
         }
+
 
         public override string/*!*/ ToString() {
             return _name.ToString();
