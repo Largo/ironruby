@@ -249,7 +249,7 @@ p C.instance_method(:f) rescue p $!
 p D.instance_method(:f) rescue p $!
 ", @"
 C
-#<NameError: undefined method `f' for class `Class'>
+#<NameError: undefined method `f' for class `C'>
 ---
 #<UnboundMethod: C#f() UndefMethodLookup4.rb:3>
 #<UnboundMethod: D#f() UndefMethodLookup4.rb:7>
