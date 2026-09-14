@@ -400,7 +400,11 @@ namespace IronRuby.Builtins {
                 var result = MutableString.CreateBinary();
                 return AppendBytes(result, limit, preserveEndOfLines) == 0 ? null : result;
             } else if (separator.StartsWith('\n') && separator.GetLength() == 1) {
-                return ReadLine(encoding, preserveEndOfLines, limit);
+                // The buffer-scanning reader has no way to stop part way through a line, so a
+                // read with a byte limit goes through the general one.
+                return limit == Int32.MaxValue
+                    ? ReadLine(encoding, preserveEndOfLines, limit)
+                    : ReadLine(separator, encoding, preserveEndOfLines, limit);
             } else if (separator.IsEmpty) {
                 return ReadParagraph(encoding, preserveEndOfLines, limit);
             } else {
@@ -479,8 +483,6 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString ReadParagraph(RubyEncoding/*!*/ encoding, bool preserveEndOfLines, int limit) {
-            // TODO: limit
-
             var result = ReadLine(MutableString.CreateAscii("\n\n"), encoding, preserveEndOfLines, limit);
 
             int c;
@@ -494,9 +496,18 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        public MutableString ReadLine(MutableString/*!*/ separator, RubyEncoding/*!*/ encoding, bool preserveEndOfLines, int limit) {
-            // TODO: limit
+        /// <summary>
+        /// Whether a byte can only be the continuation of a character that started earlier, so
+        /// that a byte limit that lands on it has to be stretched to the end of that character -
+        /// which is what MRI does, and why a limit of 2 can return three bytes.
+        /// </summary>
+        private static bool IsContinuationByte(RubyEncoding/*!*/ encoding, int b) {
+            // Only UTF-8 is self-synchronising in a way we can read off a single byte; in a
+            // single-byte encoding every byte is a character of its own anyway.
+            return encoding.StrictEncoding.CodePage == 65001 && (b & 0xC0) == 0x80;
+        }
 
+        public MutableString ReadLine(MutableString/*!*/ separator, RubyEncoding/*!*/ encoding, bool preserveEndOfLines, int limit) {
             int b = ReadByteNormalizeEoln(preserveEndOfLines);
             if (b == -1) {
                 return null;
@@ -516,6 +527,10 @@ namespace IronRuby.Builtins {
                     separatorOffset++;
                 } else if (separatorOffset > 0) {
                     separatorOffset = 0;
+                }
+
+                if (result.GetByteCount() >= limit && !IsContinuationByte(encoding, PeekByte(0))) {
+                    break;
                 }
 
                 b = ReadByteNormalizeEoln(preserveEndOfLines);

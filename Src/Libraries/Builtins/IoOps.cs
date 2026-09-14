@@ -1380,18 +1380,35 @@ namespace IronRuby.Builtins {
 
         // TODO: to_hash, to_str, to_int
 
-        [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(RubyClass/*!*/ self,
-            [DefaultProtocol, NotNull]MutableString/*!*/ path, [DefaultProtocol, DefaultParameterValue(-1)]int limit) {
+        // The name goes through #to_path, and the argument after it is a separator or a byte
+        // limit - the same overload set as the instance method, which is what the shared
+        // io_readlines_options_19 examples ask for.
 
-            return ReadLines(self, path, self.Context.InputSeparator, limit);
+        [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
+            return ReadLines(toPath, self, path, self.Context.InputSeparator, -1);
         }
 
         [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ ReadLines(RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString path, [DefaultProtocol]MutableString separator, 
-            [DefaultProtocol, DefaultParameterValue(-1)]int limit) {
+        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path, DynamicNull separator) {
+            return ReadLines(toPath, self, path, null, -1);
+        }
 
-            using (RubyIO io = new RubyIO(self.Context, self.Context.Platform.OpenInputFileStream(path.ConvertToString()), IOMode.ReadOnly)) {
+        [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+
+            return separatorOrLimit.IsFixnum()
+                ? ReadLines(toPath, self, path, self.Context.InputSeparator, separatorOrLimit.Fixnum())
+                : ReadLines(toPath, self, path, separatorOrLimit.String(), -1);
+        }
+
+        [RubyMethod("readlines", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ ReadLines(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path,
+            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+
+            MutableString pathString = Protocols.CastToPath(toPath, path);
+            using (RubyIO io = new RubyIO(self.Context, self.Context.Platform.OpenInputFileStream(pathString.ConvertToString()), IOMode.ReadOnly)) {
                 return ReadLines(self.Context, io, separator, limit);
             }
         }
@@ -1454,15 +1471,32 @@ namespace IronRuby.Builtins {
         // TODO: to_hash, to_str, to_int
 
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
-        public static void ForEach(BlockParam block, RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ path,
-            [DefaultProtocol, DefaultParameterValue(-1)]int limit) {
-            ForEach(block, self, path, self.Context.InputSeparator, limit);
+        public static void ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object path) {
+            ForEach(toPath, block, self, path, self.Context.InputSeparator, -1);
         }
 
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
-        public static void ForEach(BlockParam block, RubyClass/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ path,
-            [DefaultProtocol]MutableString separator, [DefaultProtocol, DefaultParameterValue(-1)]int limit) {
-            using (RubyIO io = new RubyIO(self.Context, self.Context.Platform.OpenInputFileStream(path.ConvertToString()), IOMode.ReadOnly)) {
+        public static void ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object path, DynamicNull separator) {
+            ForEach(toPath, block, self, path, null, -1);
+        }
+
+        [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
+        public static void ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object path,
+            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+
+            if (separatorOrLimit.IsFixnum()) {
+                ForEach(toPath, block, self, path, self.Context.InputSeparator, separatorOrLimit.Fixnum());
+            } else {
+                ForEach(toPath, block, self, path, separatorOrLimit.String(), -1);
+            }
+        }
+
+        [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
+        public static void ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object path,
+            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+
+            MutableString pathString = Protocols.CastToPath(toPath, path);
+            using (RubyIO io = new RubyIO(self.Context, self.Context.Platform.OpenInputFileStream(pathString.ConvertToString()), IOMode.ReadOnly)) {
                 Each(self.Context, block, io, separator, limit);
             }
         }
