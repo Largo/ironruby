@@ -1307,11 +1307,24 @@ namespace IronRuby.Runtime {
         /// every VM instruction. That difference is not fixable without a check in the interpreter loop.
         /// </summary>
         public static void CheckAsyncException() {
+            // Trap handlers run on the main thread at a safe point, like MRI's interrupt check.
+            // The hook is installed by the Signal library, which lives in another assembly.
+            Action safePoint = SafePointHandler;
+            if (safePoint != null) {
+                safePoint();
+            }
+
             Exception e = GetPendingAsyncException(Thread.CurrentThread);
             if (e != null) {
                 throw e;
             }
         }
+
+        /// <summary>
+        /// Work the main thread owes: signal handlers parked by .NET's POSIX signal thread. Set once
+        /// by the Signal library; a null check is all this costs on every other safe point.
+        /// </summary>
+        public static Action SafePointHandler;
 
         /// <summary>
         /// Called from a catch (ThreadInterruptedException) around a blocking wait: if the interrupt was our

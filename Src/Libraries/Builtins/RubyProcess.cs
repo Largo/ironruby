@@ -529,6 +529,16 @@ namespace IronRuby.Builtins {
                     throw new SignalException((name != null) ? "SIG" + name : "SIG" + signal);
                 }
 
+                // MRI checks for pending signals as soon as kill(2) returns, so signalling yourself
+                // from the main thread runs the handler before Process.kill does - and with
+                // Process.kill still on the stack, which ruby/spec looks for in the handler's
+                // #caller. Going through the kernel would run it on .NET's signal thread some time
+                // later instead, so call it here and skip the round trip.
+                if (targetsUs && signal > 0 && PosixSignals.HasHandler(signal) && PosixSignals.IsMainThread) {
+                    PosixSignals.RunHandler(signal);
+                    continue;
+                }
+
                 int error = PosixSignals.Kill(target, signal);
                 if (error < 0) {
                     // Negative means -errno; the prelude's Process.kill turns it into an Errno class.
