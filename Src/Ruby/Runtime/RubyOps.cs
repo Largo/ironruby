@@ -1290,8 +1290,11 @@ namespace IronRuby.Runtime {
         [Emitted] // parallel assignment:
         public static object GetTrailingArrayItem(IList/*!*/ array, int index, int explicitCount) {
             Debug.Assert(index >= 0);
+            // Trailing l-values are counted from the end of the RHS, but only once the RHS has
+            // enough elements to reach them: `a, b, *c, d = [1]` leaves d nil rather than
+            // indexing past the end.
             int i = Math.Max(array.Count, explicitCount) - index;
-            return i >= 0 ? array[i] : null;
+            return i >= 0 && i < array.Count ? array[i] : null;
         }
 
         [Emitted] // parallel assignment:

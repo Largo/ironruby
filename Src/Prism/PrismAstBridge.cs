@@ -1134,6 +1134,11 @@ namespace IronRuby.Prism {
             var result = new Statements();
             foreach (var statement in prologue) result.Add(statement);
             foreach (var statement in body) result.Add(statement);
+            if (body.Count == 0) {
+                // an empty body is nil, not whatever the last parameter-binding statement
+                // happened to evaluate to
+                result.Add(Literal.Nil(SourceSpan.None));
+            }
             return result;
         }
 
