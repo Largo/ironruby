@@ -2692,22 +2692,43 @@ namespace IronRuby.Runtime {
         /// is already reporting something.
         /// </summary>
         private string TryGetCurrentSourceLocation() {
+            string path;
+            int line;
+            return TryGetCurrentSourceLocation(out path, out line) ? path + ":" + line : null;
+        }
+
+        /// <summary>
+        /// Where in Ruby the current call is, recovered from the call stack. A warning raised by
+        /// the runtime carries no source unit of its own, but MRI still prefixes the location it
+        /// was raised from, so the sink asks for it rather than printing "unknown:0".
+        /// </summary>
+        internal bool TryGetCurrentSourceLocation(out string path, out int line) {
+            path = null;
+            line = 0;
             try {
                 var backtrace = RubyExceptionData.CreateBacktrace(this, 0);
                 if (backtrace == null || backtrace.Count == 0) {
-                    return null;
+                    return false;
                 }
 
+                // "file:line:in `method'"
                 string first = backtrace[0].ToString();
-                // "file:line:in `method'" - keep the first two colon separated parts.
                 int firstColon = first.IndexOf(':');
                 if (firstColon < 0) {
-                    return null;
+                    return false;
                 }
                 int secondColon = first.IndexOf(':', firstColon + 1);
-                return secondColon < 0 ? first : first.Substring(0, secondColon);
+                string lineText = (secondColon < 0)
+                    ? first.Substring(firstColon + 1)
+                    : first.Substring(firstColon + 1, secondColon - firstColon - 1);
+
+                Int32.TryParse(lineText, out line);
+                path = first.Substring(0, firstColon);
+                return true;
             } catch (Exception) {
-                return null;
+                path = null;
+                line = 0;
+                return false;
             }
         }
 

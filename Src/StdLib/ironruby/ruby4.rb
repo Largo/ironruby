@@ -3643,7 +3643,10 @@ class Numeric
     to, unit = __step_extract_args__(args, kw)
     unit = 1 if unit.nil?
     ::Kernel.raise(::ArgumentError, "step can't be 0") if unit == 0
-    unit < 0
+    # Ordering it against 0 is what rejects a step that cannot be compared at all:
+    # a String raises ArgumentError("comparison of String with 0 failed") here. The
+    # result is deliberately discarded - assigned so that -w does not flag it.
+    _ = unit < 0
     [to, unit]
   end
   private :__step_scan_args__

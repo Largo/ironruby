@@ -76,9 +76,15 @@ namespace IronRuby.Runtime {
                     encoding = reader.Encoding != null ? RubyEncoding.GetRubyEncoding(reader.Encoding) : RubyEncoding.UTF8;
                 }
             } else {
-                path = null;
                 codeLine = null;
                 encoding = RubyEncoding.UTF8;
+
+                // A runtime warning has no source unit. MRI still names the line that raised it,
+                // so recover it from the Ruby call stack instead of reporting "unknown:0".
+                if (!_context.TryGetCurrentSourceLocation(out path, out line)) {
+                    path = null;
+                    line = 0;
+                }
             }
 
             if (severity == Severity.Error || severity == Severity.FatalError) {

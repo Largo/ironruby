@@ -299,7 +299,7 @@ class Rational < Numeric
     elsif defined?(BigDecimal) and other.kind_of?(BigDecimal)
       # TODO:
       other == Float(self)
-    elsif
+    else
       other == self
     end
   end
