@@ -66,7 +66,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         public override int Read(byte[] buffer, int offset, int count) {
-            return RubyBasicSocket.Blocking(() => _socket.Receive(buffer, offset, count, SocketFlags.None));
+            return RubyBasicSocket.Blocking(_socket, SelectMode.SelectRead, () => _socket.Receive(buffer, offset, count, SocketFlags.None));
         }
 
         public override long Seek(long offset, SeekOrigin origin) {

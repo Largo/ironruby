@@ -925,3 +925,187 @@ class BasicSocket
   end
   private :__ir_raw_getsockname_bytes
 end
+
+# The *_nonblock family: .NET reports "would block" as a SocketException, which
+# surfaces as SocketError because Socket::SocketError *is* that CLR type.  CRuby
+# raises an Errno tagged with IO::WaitReadable/IO::WaitWritable instead, and
+# supports exception: false.  A full SocketException -> Errno mapping across the
+# library is still missing; this covers only the non-blocking entry points,
+# where the wrong class stops the spec suite from making progress at all.
+class Socket
+  def self.__ir_socket_error_code(error) # :nodoc:
+    error.socket_error_code.to_s
+  rescue StandardError, Exception
+    ""
+  end
+
+  alias_method :__ir_raw_connect_nonblock, :connect_nonblock
+
+  def connect_nonblock(sockaddr, exception: true)
+    __ir_raw_connect_nonblock(sockaddr)
+    0
+  rescue SocketError => e
+    case Socket.__ir_socket_error_code(e)
+    when "WouldBlock", "InProgress"
+      raise IO::EINPROGRESSWaitWritable, "Operation now in progress" if exception
+      :wait_writable
+    when "IsConnected"
+      raise Errno::EISCONN
+    else
+      raise
+    end
+  end
+
+  alias_method :__ir_raw_accept_nonblock, :accept_nonblock
+
+  def accept_nonblock(exception: true)
+    __ir_raw_accept_nonblock
+  rescue SocketError => e
+    case Socket.__ir_socket_error_code(e)
+    when "WouldBlock"
+      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      :wait_readable
+    else
+      raise
+    end
+  end
+end
+
+class TCPServer
+  alias_method :__ir_raw_accept_nonblock, :accept_nonblock
+
+  def accept_nonblock(exception: true)
+    __ir_raw_accept_nonblock
+  rescue SocketError => e
+    case Socket.__ir_socket_error_code(e)
+    when "WouldBlock"
+      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      :wait_readable
+    else
+      raise
+    end
+  end
+end
+
+class TCPSocket
+  # CRuby's third and fourth arguments are local_host and local_port; the C#
+  # constructor reads the third as a local *port*, so TCPSocket.new(host, port,
+  # nil) -- which the specs and plenty of real code do -- raised TypeError.
+  class << self
+    alias_method :__ir_raw_new, :new
+
+    def new(remote_host, remote_port, local_host = nil, local_port = nil,
+            connect_timeout: nil, open_timeout: nil, resolv_timeout: nil)
+      if connect_timeout || open_timeout
+        # .NET's Socket.Connect takes no timeout and IronRuby has no non-blocking
+        # connect on TCPSocket, so there is nothing honest to do here yet.
+        raise NotImplementedError, "TCPSocket.new does not support connect_timeout"
+      end
+      if local_host.nil? && local_port.nil?
+        __ir_raw_new(remote_host, remote_port)
+      else
+        __ir_raw_new(remote_host, remote_port, local_host, local_port || 0)
+      end
+    end
+
+    def open(*args, **opts, &block)
+      sock = new(*args, **opts)
+      return sock unless block
+      begin
+        block.call(sock)
+      ensure
+        sock.close unless sock.closed?
+      end
+    end
+  end
+end
+
+class UDPSocket
+  alias_method :__ir_raw_recvfrom_nonblock, :recvfrom_nonblock
+
+  def recvfrom_nonblock(length, flags = nil, exception: true)
+    flags.nil? ? __ir_raw_recvfrom_nonblock(length) : __ir_raw_recvfrom_nonblock(length, flags)
+  rescue SocketError => e
+    case Socket.__ir_socket_error_code(e)
+    when "WouldBlock"
+      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      :wait_readable
+    else
+      raise
+    end
+  end
+end
+
+class Socket
+  # Socket.udp_server_* is plain Ruby in CRuby too (ext/socket/lib/socket.rb).
+  # CRuby's version reads each datagram with recvmsg_nonblock so it can report
+  # the *local* address the packet arrived on; .NET 8 exposes no cmsg surface,
+  # so this uses recvfrom_nonblock and reports the socket's own bound address.
+  class UDPSource
+    attr_reader :remote_address, :local_address
+
+    def initialize(remote_address, local_address, &reply_proc)
+      @remote_address = remote_address
+      @local_address = local_address
+      @reply_proc = reply_proc
+    end
+
+    def inspect
+      "#<Socket::UDPSource: #{@remote_address.inspect_sockaddr} to #{@local_address.inspect_sockaddr}>"
+    end
+
+    def reply(message)
+      @reply_proc.call(message)
+    end
+  end
+
+  def self.udp_server_sockets(host = nil, port = nil)
+    host, port = nil, host if port.nil?
+    sock = UDPSocket.new
+    sock.bind(host || "0.0.0.0", port.to_i)
+    sockets = [sock]
+    return sockets unless block_given?
+    begin
+      yield sockets
+    ensure
+      sockets.each { |s| s.close unless s.closed? }
+    end
+  end
+
+  def self.udp_server_recv(sockets) # :yield: message, udpsource
+    sockets.each do |sock|
+      begin
+        message, sender = sock.recvfrom_nonblock(65536)
+      rescue IO::WaitReadable
+        next
+      end
+      remote = Addrinfo.new(sender, nil, Socket::SOCK_DGRAM, 0)
+      local = sock.local_address
+      yield message, UDPSource.new(remote, local) { |reply|
+        sock.send(reply, 0, remote.ip_address, remote.ip_port)
+      }
+    end
+  end
+
+  def self.udp_server_loop_on(sockets, &block) # :yield: message, udpsource
+    # CRuby waits in IO.select here. On IronRuby IO.select returns immediately for
+    # a UDP socket -- its read wait handle comes from a zero-byte overlapped
+    # receive, which UDP completes at once -- so that would busy-spin. Block in
+    # recvfrom instead, which is interruptible. With the single socket
+    # udp_server_sockets creates this is equivalent; several would be serialised.
+    loop do
+      sockets.each do |sock|
+        message, sender = sock.recvfrom(65536)
+        remote = Addrinfo.new(sender, nil, Socket::SOCK_DGRAM, 0)
+        local = sock.local_address
+        block.call(message, UDPSource.new(remote, local) { |reply|
+          sock.send(reply, 0, remote.ip_address, remote.ip_port)
+        })
+      end
+    end
+  end
+
+  def self.udp_server_loop(host = nil, port = nil, &block) # :yield: message, udpsource
+    udp_server_sockets(host, port) { |sockets| udp_server_loop_on(sockets, &block) }
+  end
+end

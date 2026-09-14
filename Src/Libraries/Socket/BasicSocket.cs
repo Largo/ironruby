@@ -204,10 +204,28 @@ namespace IronRuby.StandardLibrary.Sockets {
         // TCPServer#accept always has. Without this the ruby/spec idiom
         // "Thread.pass while t.status != 'sleep'" livelocks.
         internal static TResult Blocking<TResult>(Func<TResult>/*!*/ operation) {
+            return Blocking(null, SelectMode.SelectRead, operation);
+        }
+
+        // A thread sitting inside a native socket call is not in WaitSleepJoin, so Thread.Interrupt
+        // -- how Thread#kill and Thread#raise are delivered -- cannot reach it, and the thread can
+        // never be killed. Wait for readiness in slices instead and check for a parked asynchronous
+        // exception between them, which turns the wait into a Ruby safe point. mspec's block_caller
+        // matcher does exactly "wait for status == sleep, then kill and join".
+        private const int PollSliceMicroseconds = 50 * 1000;
+
+        internal static TResult Blocking<TResult>(Socket socket, SelectMode mode, Func<TResult>/*!*/ operation) {
             ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
             bool wasBlocked = info.Blocked;
             info.Blocked = true;
             try {
+                // Only a socket left in blocking mode can park here; the *_nonblock family has
+                // already cleared Socket.Blocking and must not wait at all.
+                if (socket != null && socket.Blocking) {
+                    while (!socket.Poll(PollSliceMicroseconds, mode)) {
+                        RubyUtils.CheckAsyncException();
+                    }
+                }
                 return operation();
             } finally {
                 info.Blocked = wasBlocked;
@@ -399,7 +417,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
 
             byte[] buffer = new byte[length];
-            int received = Blocking(() => self.Socket.Receive(buffer, 0, length, sFlags));
+            int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.Receive(buffer, 0, length, sFlags));
 
             MutableString str = MutableString.CreateBinary(received);
             str.Append(buffer, 0, received);

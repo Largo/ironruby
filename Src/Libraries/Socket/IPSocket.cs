@@ -62,7 +62,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             SocketFlags sFlags = ConvertToSocketFlag(conversionStorage, flags);
             byte[] buffer = new byte[length];
             EndPoint fromEP = new IPEndPoint(IPAddress.Any, 0);
-            int received = Blocking(() => self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP));
+            int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP));
             MutableString str = MutableString.CreateBinary();
             str.Append(buffer, 0, received);
 
