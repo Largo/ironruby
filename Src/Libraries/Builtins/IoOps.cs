@@ -163,6 +163,13 @@ namespace IronRuby.Builtins {
                 context.SetInstanceVariable(self, "@__autoclose", Protocols.IsTrue(autoclose));
             }
 
+            // IO.new(fd, path: "...") is how a descriptor is told the name it came from; #path
+            // and #inspect answer it, and nothing else in the stream knows it.
+            object path;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("path"), out path) && path != null) {
+                context.SetInstanceVariable(self, "@__io_path__", Protocols.CastToPath(toStr, path));
+            }
+
             return self;
         }
 
@@ -912,7 +919,24 @@ namespace IronRuby.Builtins {
                     case ConsoleStreamType.Input: result.Append("<STDIN>"); break;
                     case ConsoleStreamType.Output: result.Append("<STDOUT>"); break;
                     case ConsoleStreamType.ErrorOutput: result.Append("<STDERR>"); break;
-                    case null: result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture)); break;
+                    case null: {
+                        // A stream that knows its path shows it; one that does not shows its
+                        // descriptor, which a closed stream no longer has.
+                        object path;
+                        self.Context.TryGetInstanceVariable(self, "@__io_path__", out path);
+                        var pathString = path as MutableString;
+                        if (pathString != null) {
+                            result.Append(pathString);
+                            if (self.Closed) {
+                                result.Append(" (closed)");
+                            }
+                        } else if (self.Closed) {
+                            result.Append("(closed)");
+                        } else {
+                            result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture));
+                        }
+                        break;
+                    }
                 }
             } else {
                 RubyUtils.AppendFormatHexObjectId(result, RubyUtils.GetObjectId(self.Context, self));

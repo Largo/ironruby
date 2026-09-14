@@ -1448,17 +1448,13 @@ namespace IronRuby.Builtins {
 
             internal static FileSystemInfo/*!*/ Create(RubyFile/*!*/ file) {
                 file.RequireInitialized();
-                if (file.Path != null) {
-                    return Create(file.Context, file.Path);
-                }
+                file.RequireOpen();
 
-                // a file opened from a descriptor has no path; fstat it
-                Posix.StatData data;
-                int errno;
-                if (Posix.TryFStat(file.GetFileDescriptor(), out data, out errno)) {
-                    return new StatInfo("", data);
-                }
-                throw new NotSupportedException("cannot get file info for files without path");
+                // fstat the descriptor rather than the path: the file may have been renamed or
+                // unlinked since it was opened, and MRI still answers for what it holds open.
+                // The IO overload is the one that knows how to find the real descriptor behind
+                // IronRuby's own table.
+                return Create((RubyIO)file);
             }
 
             internal static FileSystemInfo/*!*/ Create(RubyContext/*!*/ context, MutableString/*!*/ path) {

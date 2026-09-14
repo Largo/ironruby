@@ -1728,6 +1728,7 @@ class IO
   # singleton `def io.close` has no `super` to reach the library's IO#close with.
   module PopenChild
     def pid
+      ::Kernel.raise(::IOError, "closed stream") if closed?
       @__popen_pid__
     end
 
@@ -10918,14 +10919,17 @@ class IO
   alias_method :__ir_binmode__, :binmode
 
   def binmode
+    ::Kernel.raise(::IOError, "closed stream") if closed?
     @__binmode__ = true
     begin
       __ir_binmode__
     rescue ::Exception
-      begin
-        set_encoding(::Encoding::BINARY)
-      rescue ::Exception
-      end
+    end
+    # Binary mode is "these bytes are bytes": the external encoding becomes
+    # ASCII-8BIT and there is no conversion left to do, so the internal one goes.
+    begin
+      set_encoding(::Encoding::BINARY)
+    rescue ::Exception
     end
     self
   end
