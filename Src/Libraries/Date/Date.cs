@@ -793,12 +793,8 @@ namespace IronRuby.StandardLibrary.Date {
 
         internal static IList CheckDeconstructKeys(RubyContext/*!*/ context, object keys) {
             if (keys != null && !(keys is IList)) {
-                // MRI says "Integer"; IronRuby still splits that into Fixnum/Bignum
-                string name = context.GetClassDisplayName(keys);
-                if (name == "Fixnum" || name == "Bignum") {
-                    name = "Integer";
-                }
-                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Array or nil)", name);
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Array or nil)",
+                    context.GetClassDisplayName(keys));
             }
             return keys as IList;
         }

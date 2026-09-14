@@ -187,7 +187,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<System.Nullable<System.Int32>>, IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.RubyFile>(IronRuby.Builtins.RubyFileOps.CreateFile)
             );
             DefineGlobalClass("Float", typeof(System.Double), 0x00000007, def65, LoadFloat_Instance, LoadFloat_Class, LoadFloat_Constants, new IronRuby.Builtins.RubyModule[] {def66});
-            IronRuby.Builtins.RubyClass def64 = DefineGlobalClass("Integer", typeof(System.Int32), 0x00000007, def65, LoadInteger_Instance, LoadInteger_Class, LoadInteger_Constants, new IronRuby.Builtins.RubyModule[] {def66});
+            IronRuby.Builtins.RubyClass def64 = DefineGlobalClass("Integer", typeof(System.Int32), 0x00000007, def65, LoadInteger_Instance, LoadInteger_Class, LoadInteger_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalClass("NoMemoryError", typeof(IronRuby.Builtins.NoMemoryError), 0x0000000F, def63, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__NoMemoryError));
             DefineGlobalClass("Refinement", typeof(IronRuby.Builtins.RefinementOps), 0x0000000F, Context.ModuleClass, LoadRefinement_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -3219,6 +3219,7 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadInteger_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            module.UndefineMethodNoEvent("new");
             DefineLibraryMethod(module, "induced_from", 0x61, 
                 0x00000000U, 0x00000002U, 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, System.Int32, System.Object>(IronRuby.Builtins.Integer.InducedFrom), 
@@ -8246,6 +8247,13 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.Double, System.Byte>(IronRuby.Builtins.ByteOps.InducedFrom)
             );
             
+            DefineLibraryMethod(module, "new", 0x61, 
+                0x00010000U, 0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, System.Byte>(IronRuby.Builtins.ByteOps.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.Byte>(IronRuby.Builtins.ByteOps.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Double, System.Byte>(IronRuby.Builtins.ByteOps.InducedFrom)
+            );
+            
         }
         
         private static void LoadSystem__Char_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -9002,6 +9010,13 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.Double, System.Int16>(IronRuby.Builtins.Int16Ops.InducedFrom)
             );
             
+            DefineLibraryMethod(module, "new", 0x61, 
+                0x00010000U, 0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, System.Int16>(IronRuby.Builtins.Int16Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.Int16>(IronRuby.Builtins.Int16Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Double, System.Int16>(IronRuby.Builtins.Int16Ops.InducedFrom)
+            );
+            
         }
         
         private static void LoadSystem__Int64_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -9040,6 +9055,13 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.Double, System.Int64>(IronRuby.Builtins.Int64Ops.InducedFrom)
             );
             
+            DefineLibraryMethod(module, "new", 0x61, 
+                0x00010000U, 0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, System.Int64>(IronRuby.Builtins.Int64Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.Int64>(IronRuby.Builtins.Int64Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Double, System.Int64>(IronRuby.Builtins.Int64Ops.InducedFrom)
+            );
+            
         }
         
         private static void LoadSystem__SByte_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -9072,6 +9094,13 @@ namespace IronRuby.Builtins {
         
         private static void LoadSystem__SByte_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "induced_from", 0x61, 
+                0x00010000U, 0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, System.SByte>(IronRuby.Builtins.SByteOps.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.SByte>(IronRuby.Builtins.SByteOps.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Double, System.SByte>(IronRuby.Builtins.SByteOps.InducedFrom)
+            );
+            
+            DefineLibraryMethod(module, "new", 0x61, 
                 0x00010000U, 0x00000002U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, System.Int32, System.SByte>(IronRuby.Builtins.SByteOps.InducedFrom), 
                 new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.SByte>(IronRuby.Builtins.SByteOps.InducedFrom), 
@@ -9154,6 +9183,13 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.Double, System.UInt16>(IronRuby.Builtins.UInt16Ops.InducedFrom)
             );
             
+            DefineLibraryMethod(module, "new", 0x61, 
+                0x00010000U, 0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, System.UInt16>(IronRuby.Builtins.UInt16Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.UInt16>(IronRuby.Builtins.UInt16Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Double, System.UInt16>(IronRuby.Builtins.UInt16Ops.InducedFrom)
+            );
+            
         }
         
         private static void LoadSystem__UInt32_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -9192,6 +9228,13 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.Double, System.UInt32>(IronRuby.Builtins.UInt32Ops.InducedFrom)
             );
             
+            DefineLibraryMethod(module, "new", 0x61, 
+                0x00010000U, 0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, System.UInt32>(IronRuby.Builtins.UInt32Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.UInt32>(IronRuby.Builtins.UInt32Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Double, System.UInt32>(IronRuby.Builtins.UInt32Ops.InducedFrom)
+            );
+            
         }
         
         private static void LoadSystem__UInt64_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -9224,6 +9267,13 @@ namespace IronRuby.Builtins {
         
         private static void LoadSystem__UInt64_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "induced_from", 0x61, 
+                0x00010000U, 0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, System.UInt64>(IronRuby.Builtins.UInt64Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.UInt64>(IronRuby.Builtins.UInt64Ops.InducedFrom), 
+                new Func<IronRuby.Builtins.RubyClass, System.Double, System.UInt64>(IronRuby.Builtins.UInt64Ops.InducedFrom)
+            );
+            
+            DefineLibraryMethod(module, "new", 0x61, 
                 0x00010000U, 0x00000002U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, System.Int32, System.UInt64>(IronRuby.Builtins.UInt64Ops.InducedFrom), 
                 new Func<IronRuby.Builtins.RubyClass, System.Numerics.BigInteger, System.UInt64>(IronRuby.Builtins.UInt64Ops.InducedFrom), 

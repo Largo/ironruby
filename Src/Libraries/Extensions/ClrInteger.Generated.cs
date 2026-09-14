@@ -61,6 +61,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static Byte InducedFrom(RubyClass/*!*/ self, [DefaultProtocol]int value) {
             if (value >= Byte.MinValue && value <= Byte.MaxValue) {
                 return (Byte)value;
@@ -70,6 +71,7 @@ namespace IronRuby.Builtins {
         
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static Byte InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
             if (value >= Byte.MinValue && value <= Byte.MaxValue) {
                 return (Byte)value;
@@ -79,6 +81,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static Byte InducedFrom(RubyClass/*!*/ self, double value) {
             if (value >= Byte.MinValue && value <= Byte.MaxValue) {
                 return (Byte)value;
@@ -109,6 +112,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static SByte InducedFrom(RubyClass/*!*/ self, [DefaultProtocol]int value) {
             if (value >= SByte.MinValue && value <= SByte.MaxValue) {
                 return (SByte)value;
@@ -118,6 +122,7 @@ namespace IronRuby.Builtins {
         
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static SByte InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
             if (value >= SByte.MinValue && value <= SByte.MaxValue) {
                 return (SByte)value;
@@ -127,6 +132,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static SByte InducedFrom(RubyClass/*!*/ self, double value) {
             if (value >= SByte.MinValue && value <= SByte.MaxValue) {
                 return (SByte)value;
@@ -157,6 +163,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static Int16 InducedFrom(RubyClass/*!*/ self, [DefaultProtocol]int value) {
             if (value >= Int16.MinValue && value <= Int16.MaxValue) {
                 return (Int16)value;
@@ -166,6 +173,7 @@ namespace IronRuby.Builtins {
         
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static Int16 InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
             if (value >= Int16.MinValue && value <= Int16.MaxValue) {
                 return (Int16)value;
@@ -175,6 +183,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static Int16 InducedFrom(RubyClass/*!*/ self, double value) {
             if (value >= Int16.MinValue && value <= Int16.MaxValue) {
                 return (Int16)value;
@@ -205,6 +214,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static UInt16 InducedFrom(RubyClass/*!*/ self, [DefaultProtocol]int value) {
             if (value >= 0 && value <= UInt16.MaxValue) {
                 return (UInt16)value;
@@ -214,6 +224,7 @@ namespace IronRuby.Builtins {
         
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static UInt16 InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
             if (value >= UInt16.MinValue && value <= UInt16.MaxValue) {
                 return (UInt16)value;
@@ -223,6 +234,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static UInt16 InducedFrom(RubyClass/*!*/ self, double value) {
             if (value >= UInt16.MinValue && value <= UInt16.MaxValue) {
                 return (UInt16)value;
@@ -253,6 +265,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static UInt32 InducedFrom(RubyClass/*!*/ self, [DefaultProtocol]int value) {
             if (value >= 0) {
                 return (UInt32)value;
@@ -262,6 +275,7 @@ namespace IronRuby.Builtins {
         
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static UInt32 InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
             if (value >= UInt32.MinValue && value <= UInt32.MaxValue) {
                 return (UInt32)value;
@@ -271,6 +285,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static UInt32 InducedFrom(RubyClass/*!*/ self, double value) {
             if (value >= UInt32.MinValue && value <= UInt32.MaxValue) {
                 return (UInt32)value;
@@ -301,6 +316,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static Int64 InducedFrom(RubyClass/*!*/ self, [DefaultProtocol]int value) {
             if (true) {
                 return (Int64)value;
@@ -310,6 +326,7 @@ namespace IronRuby.Builtins {
         
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static Int64 InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
             if (value >= Int64.MinValue && value <= Int64.MaxValue) {
                 return (Int64)value;
@@ -319,6 +336,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static Int64 InducedFrom(RubyClass/*!*/ self, double value) {
             if (value >= Int64.MinValue && value <= Int64.MaxValue) {
                 return (Int64)value;
@@ -349,6 +367,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static UInt64 InducedFrom(RubyClass/*!*/ self, [DefaultProtocol]int value) {
             if (value >= 0) {
                 return (UInt64)value;
@@ -358,6 +377,7 @@ namespace IronRuby.Builtins {
         
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static UInt64 InducedFrom(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ value) {
             if (value >= UInt64.MinValue && value <= UInt64.MaxValue) {
                 return (UInt64)value;
@@ -367,6 +387,7 @@ namespace IronRuby.Builtins {
     
         [RubyConstructor]
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
         public static UInt64 InducedFrom(RubyClass/*!*/ self, double value) {
             if (value >= UInt64.MinValue && value <= UInt64.MaxValue) {
                 return (UInt64)value;

@@ -3000,37 +3000,37 @@ init
 end
 ",
 @"
-[System::Byte, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::Byte, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Byte
 1
 Integer
 1
-[System::SByte, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::SByte, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::SByte
 2
 Integer
 1
-[System::UInt16, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::UInt16, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::UInt16
 3
 Integer
 2
-[System::Int16, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::Int16, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Int16
 4
 Integer
 2
-[System::UInt32, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::UInt32, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::UInt32
 5
 Integer
 4
-[System::Int64, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::Int64, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Int64
 6
 Integer
 8
-[System::UInt64, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::UInt64, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::UInt64
 7
 Integer

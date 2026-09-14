@@ -29,8 +29,6 @@ namespace IronRuby.StandardLibrary.Yaml {
         public const string Timestamp = Prefix + "timestamp";
         public const string TimestampYmd = Prefix + "timestamp#ymd";
         public const string Int = Prefix + "int";
-        public const string Bignum = Int + ":Bignum";
-        public const string Fixnum = Int + ":Fixnum";
         public const string Binary = Prefix + "binary";
 
         public const string RubyPrefix = "tag:ruby.yaml.org,2002:";

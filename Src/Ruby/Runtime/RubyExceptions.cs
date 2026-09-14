@@ -170,16 +170,13 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// How MRI spells a class in a TypeError message: nil/true/false are spelled by value, and
-        /// Fixnum/Bignum were unified into Integer in Ruby 2.4 (IronRuby still has the split classes).
+        /// How MRI spells a class in a TypeError message: nil, true and false are spelled by value.
         /// </summary>
         public static string/*!*/ MessageTypeName(string/*!*/ className) {
             switch (className) {
                 case "NilClass": return "nil";
                 case "TrueClass": return "true";
                 case "FalseClass": return "false";
-                case "Fixnum":
-                case "Bignum": return "Integer";
                 default: return className;
             }
         }
@@ -245,11 +242,6 @@ namespace IronRuby.Runtime {
             } else {
                 var context = RubyContext._Default;
                 resultClass = (context != null) ? context.GetClassDisplayName(result) : result.GetType().Name;
-                // Fixnum and Bignum were unified into Integer in Ruby 2.4; IronRuby still has the
-                // split classes internally but must not say so.
-                if (resultClass == "Fixnum" || resultClass == "Bignum") {
-                    resultClass = "Integer";
-                }
             }
 
             return CreateTypeError("can't convert {0} to {1} ({0}#{2} gives {3})",

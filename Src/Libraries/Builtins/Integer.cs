@@ -33,8 +33,10 @@ namespace IronRuby.Builtins {
     // very same RubyClass.  The int-self and BigInteger-self operations are therefore
     // overloads of one Ruby method, which is why ClrInteger is a single trait type.
     [RubyClass("Integer", Extends = typeof(int), Inherits = typeof(Numeric))]
-    [Includes(typeof(Precision))]
+    // Precision is a Ruby 1.8 module that MRI removed in 1.9; Integer.ancestors matches
+    // CRuby exactly without it.  Float still includes it, so the module itself stays.
     [Includes(typeof(ClrInteger), Copy = true)]
+    [UndefineMethod("new", IsStatic = true)]
     public partial class Integer : Numeric {
         public Integer(RubyClass/*!*/ cls) 
             : base(cls) { 
