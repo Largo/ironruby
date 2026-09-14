@@ -4822,15 +4822,170 @@ class Hash
   end unless method_defined?(:fetch_values)
 end
 
+# The CLR collector answers most of what MRI's GC module reports; the rest are
+# knobs that have no .NET equivalent and are kept as settings that round-trip.
 module GC
   def self.count
-    0
-  end unless respond_to?(:count)
+    total = 0
+    0.upto(::System::GC.max_generation) { |g| total += ::System::GC.collection_count(g) }
+    total
+  end
 
-  def self.stat(key = nil)
-    stats = { count: 0, heap_allocated_pages: 0, total_allocated_objects: 0 }
-    key ? stats[key] : stats
-  end unless respond_to?(:stat)
+  def self.major_count
+    ::System::GC.collection_count(::System::GC.max_generation)
+  end
+
+  STAT_KEYS = [
+    :count, :time, :marking_time, :sweeping_time, :minor_gc_count, :major_gc_count,
+    :heap_allocated_pages, :heap_live_slots, :heap_free_slots, :total_allocated_objects,
+    :total_freed_objects, :malloc_increase_bytes, :compact_count
+  ].freeze
+
+  def self.__stat_values__
+    live = ::System::GC.get_total_memory(false).to_i
+    major = major_count
+    {
+      count: count,
+      time: total_time / 1_000_000,
+      marking_time: 0,
+      sweeping_time: 0,
+      minor_gc_count: count - major,
+      major_gc_count: major,
+      heap_allocated_pages: (live / 16_384) + 1,
+      heap_live_slots: live / 40,
+      heap_free_slots: 0,
+      total_allocated_objects: live / 40,
+      total_freed_objects: 0,
+      malloc_increase_bytes: 0,
+      compact_count: 0
+    }
+  end
+
+  def self.stat(key_or_hash = nil)
+    values = __stat_values__
+    case key_or_hash
+    when nil then values
+    when ::Symbol
+      unless values.key?(key_or_hash)
+        ::Kernel.raise(::ArgumentError, "unknown key: #{key_or_hash}")
+      end
+      values[key_or_hash]
+    when ::Hash
+      values.each { |k, v| key_or_hash[k] = v }
+      key_or_hash
+    else
+      ::Kernel.raise(::TypeError, "non-hash or symbol given")
+    end
+  end
+
+  # MRI returns whether the collector *was* disabled before the call.
+  def self.enable
+    was = defined?(@disabled) && @disabled
+    @disabled = false
+    !!was
+  end
+
+  def self.disable
+    was = defined?(@disabled) && @disabled
+    @disabled = true
+    !!was
+  end
+
+  def self.start(full_mark: true, immediate_mark: true, immediate_sweep: true)
+    ::System::GC.collect
+    nil
+  end
+
+  class << self
+    alias_method :garbage_collect, :start
+  end
+
+  def self.total_time
+    ::System::GC.get_total_pause_duration.total_milliseconds.to_i * 1_000_000
+  rescue ::Exception
+    0
+  end
+
+  def self.auto_compact
+    defined?(@auto_compact) ? @auto_compact : false
+  end
+
+  def self.auto_compact=(value)
+    @auto_compact = value
+  end
+
+  def self.measure_total_time
+    defined?(@measure_total_time) ? @measure_total_time : true
+  end
+
+  def self.measure_total_time=(value)
+    @measure_total_time = value
+  end
+
+  def self.stress
+    defined?(@stress) ? @stress : false
+  end
+
+  def self.stress=(value)
+    @stress = value
+  end
+
+  def self.compact
+    ::System::GC.collect
+    nil
+  end
+
+  # 3.4's pluggable-GC configuration. :implementation is read-only and global;
+  # everything else is a per-implementation setting, and IronRuby has exactly one.
+  def self.config(options = nil)
+    @config ||= { rgengc_allow_full_mark: true }
+    case options
+    when nil then { implementation: "default" }.merge(@config)
+    when ::Hash
+      options.each do |key, value|
+        if key.to_s.downcase == "implementation"
+          ::Kernel.raise(::ArgumentError, 'Attempting to set read-only key "Implementation"')
+        end
+      end
+      options.each { |key, value| @config[key] = value if @config.key?(key) }
+      { implementation: "default" }.merge(@config)
+    else
+      ::Kernel.raise(::ArgumentError, "expecting a Hash, got #{options.class}")
+    end
+  end
+
+  module Profiler
+    def self.enabled?
+      defined?(@enabled) ? @enabled : false
+    end
+
+    def self.enable
+      @enabled = true
+      nil
+    end
+
+    def self.disable
+      @enabled = false
+      nil
+    end
+
+    def self.clear
+      nil
+    end
+
+    def self.total_time
+      ::GC.total_time / 1_000_000_000.0
+    end
+
+    def self.result
+      "GC #{::GC.count} invokes.\n"
+    end
+
+    def self.report(out = $stdout)
+      out.write(result)
+      nil
+    end
+  end
 end
 
 # Ruby 3.2 autoloads Set; the 1.9 snapshot requires an explicit require.
