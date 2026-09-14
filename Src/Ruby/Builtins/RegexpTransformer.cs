@@ -46,6 +46,20 @@ namespace IronRuby.Builtins {
         private int _groupDepth;
         private int _absentDepth;
 
+        /// <summary>
+        /// Which repertoire \w \d \s and the POSIX bracket classes range over, selected by the
+        /// (?a) (?d) (?u) inline modifiers. .NET has no equivalent flag, so the expansions have to
+        /// differ instead. Ruby's default is (?d): \w and friends are ASCII only while the POSIX
+        /// classes are Unicode aware.
+        /// </summary>
+        private enum CharacterClassMode {
+            Default,
+            Ascii,
+            Unicode,
+        }
+
+        private CharacterClassMode _characterClassMode;
+
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
@@ -448,33 +462,15 @@ namespace IronRuby.Builtins {
                     return;
                 }
 
+                if (c == '-' || c == 'i' || c == 'm' || c == 'x' || c == 'a' || c == 'd' || c == 'u') {
+                    ParseGroupOptions(c);
+                    return;
+                }
+
                 Append('(');
                 Append('?');
 
                 switch (c) {
-                    case '-':
-                    case 'i':
-                    case 'm':
-                    case 'x':
-                        while (true) {
-                            if (c == 'm') {
-                                // Map (?m) to (?s) ie. RegexOptions.SingleLine
-                                Append('s');
-                            } else if (c == 'i' || c == 'x' || c == '-') {
-                                Append((char)c);
-                            } else if (c == ':') {
-                                Append(':');
-                                break;
-                            } else if (c == ')' || c == -1) {
-                                Back();
-                                break;
-                            } else {
-                                throw MakeError("undefined group option");
-                            }
-                            c = Read();
-                        }
-                        break;
-
                     case ':':
                         // non-captured group
                         Append(':');
@@ -563,10 +559,73 @@ namespace IronRuby.Builtins {
                 _groupCount++;
                 Append('(');
             }
+            var savedMode = _characterClassMode;
             _groupDepth++;
             Parse(true);
             _groupDepth--;
+            _characterClassMode = savedMode;
             Append(')');
+        }
+
+        //
+        // (?imxadu-imx)          option on/off for the rest of the enclosing group
+        // (?imxadu-imx:subexp)   option on/off for subexp
+        //
+        // a, d and u select the repertoire of \w, \d, \s and the POSIX bracket classes. .NET has
+        // no such flag, so they are not emitted; they change how those classes are expanded.
+        //
+        private void ParseGroupOptions(int c) {
+            var flags = new StringBuilder();
+            var mode = _characterClassMode;
+            bool isScoped = false;
+
+            while (true) {
+                if (c == 'm') {
+                    // Map (?m) to (?s) ie. RegexOptions.SingleLine
+                    flags.Append('s');
+                } else if (c == 'i' || c == 'x' || c == '-') {
+                    flags.Append((char)c);
+                } else if (c == 'a') {
+                    mode = CharacterClassMode.Ascii;
+                } else if (c == 'd') {
+                    mode = CharacterClassMode.Default;
+                } else if (c == 'u') {
+                    mode = CharacterClassMode.Unicode;
+                } else if (c == ':') {
+                    isScoped = true;
+                    break;
+                } else if (c == ')') {
+                    break;
+                } else if (c == -1) {
+                    throw MakeError("end pattern in group");
+                } else {
+                    throw MakeError("undefined group option");
+                }
+                c = Read();
+            }
+
+            string options = flags.ToString();
+            if (options == "-") {
+                // a lone '-' turns nothing off and .NET rejects it
+                options = "";
+            }
+
+            if (!isScoped) {
+                _characterClassMode = mode;
+                if (options.Length != 0) {
+                    _sb.Append("(?").Append(options).Append(')');
+                }
+                return;
+            }
+
+            _sb.Append("(?").Append(options).Append(':');
+            var savedMode = _characterClassMode;
+            _characterClassMode = mode;
+            _groupDepth++;
+            Parse(true);
+            _groupDepth--;
+            _characterClassMode = savedMode;
+            _sb.Append(')');
         }
 
         /// <summary>
@@ -990,28 +1049,41 @@ namespace IronRuby.Builtins {
                 case 'P':
                     return ParseCharacterCategoryName(escape);
 
+                // \w, \d and \s are ASCII only in Ruby unless (?u) is in effect, where .NET's
+                // \w, \d and \s are always Unicode aware.
                 case 's':
-                    return new CharacterSet(@"\s");
+                    return MakeAsciiAware(@"\s", "\u0020\u0009-\u000d", true);
 
                 case 'S':
-                    return new CharacterSet(@"\S");
+                    return MakeAsciiAware(@"\S", "\u0020\u0009-\u000d", false);
 
                 case 'd':
-                    return new CharacterSet(@"\d");
+                    return MakeAsciiAware(@"\d", "0-9", true);
 
                 case 'D':
-                    return new CharacterSet(@"\D");
+                    return MakeAsciiAware(@"\D", "0-9", false);
 
                 case 'w':
-                    return new CharacterSet(@"\w");
+                    return MakeAsciiAware(@"\w", "a-zA-Z0-9_", true);
 
                 case 'W':
-                    return new CharacterSet(@"\W");
+                    return MakeAsciiAware(@"\W", "a-zA-Z0-9_", false);
 
                 default:
                     // ignore backslash unless needed
                     return new CharacterSet(Escape(escape), true);
             }
+        }
+
+        /// <summary>
+        /// Picks between the Unicode-aware .NET shorthand and an explicit ASCII set.
+        /// </summary>
+        private CharacterSet/*!*/ MakeAsciiAware(string/*!*/ unicodeShorthand, string/*!*/ asciiSet, bool positive) {
+            if (_characterClassMode == CharacterClassMode.Unicode) {
+                return new CharacterSet(positive ? unicodeShorthand : unicodeShorthand.ToUpperInvariant());
+            }
+            var result = new CharacterSet(asciiSet);
+            return positive ? result : result.Complement();
         }
 
         #endregion
@@ -1872,6 +1944,17 @@ namespace IronRuby.Builtins {
         }
 
         private CharacterSet MakePosixCharacterClass(PosixCharacterClass charClass, bool positive) {
+            if (_characterClassMode == CharacterClassMode.Ascii) {
+                // (?a) restricts the POSIX classes to ASCII. A negated class still matches
+                // non-ASCII: (?a)[[:^alpha:]] accepts a Hiragana character.
+                var ascii = MakePosixCharacterClassCore(charClass, true)
+                    .Intersect(new CharacterSet(@"\p{IsBasicLatin}"));
+                return positive ? ascii : ascii.Complement();
+            }
+            return MakePosixCharacterClassCore(charClass, positive);
+        }
+
+        private CharacterSet MakePosixCharacterClassCore(PosixCharacterClass charClass, bool positive) {
             switch (charClass) {
                 case PosixCharacterClass.Alnum:
                     if (positive) {
