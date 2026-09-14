@@ -69,8 +69,9 @@ namespace IronRuby.Builtins {
         }
 
         internal static bool NormalizeSubstringRange(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length, out int begin, out int count) {
-            begin = Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = Protocols.CastToFixnum(fixnumCast, range.End);
+            // Ruby 2.6/2.7 beginless and endless ranges: a missing bound is the
+            // start resp. the end of the string, and an open end is never exclusive.
+            begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
 
             begin = IListOps.NormalizeIndex(length, begin);
             if (begin < 0 || begin > length) {
@@ -78,7 +79,12 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            end = IListOps.NormalizeIndex(length, end); 
+            if (range.End == null) {
+                count = length - begin;
+                return true;
+            }
+
+            int end = IListOps.NormalizeIndex(length, Protocols.CastToFixnum(fixnumCast, range.End));
 
             count = range.ExcludeEnd ? end - begin : end - begin + 1;
             return true;
@@ -557,18 +563,23 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("slice!")]
         public static object RemoveCharInPlace(RubyContext/*!*/ context, MutableString/*!*/ self, [DefaultProtocol]int index) {
-            if (!InExclusiveRangeNormalized(self.GetByteCount(), ref index)) {
+            // The frozen check happens before the index is bounds checked: MRI raises
+            // FrozenError even when the call would be a no-op.
+            self.RequireNotFrozen();
+
+            // Ruby 1.9 returns the character at the index, not its first byte.
+            if (!InExclusiveRangeNormalized(self.GetCharCount(), ref index)) {
                 return null;
             }
 
-            // TODO: optimize if the value is not read:
-            int result = self.GetByte(index);
+            MutableString result = self.GetSlice(index, 1);
             self.Remove(index, 1);
             return result;
         }
 
         [RubyMethod("slice!")]
         public static MutableString RemoveSubstringInPlace(MutableString/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int length) {
+            self.RequireNotFrozen();
             if (length < 0) {
                 return null;
             }
@@ -589,6 +600,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice!")]
         public static MutableString RemoveSubstringInPlace(ConversionStorage<int>/*!*/ fixnumCast, 
             MutableString/*!*/ self, [NotNull]Range/*!*/ range) {
+            self.RequireNotFrozen();
             int begin = Protocols.CastToFixnum(fixnumCast, range.Begin);
             int end = Protocols.CastToFixnum(fixnumCast, range.End);
 
@@ -604,6 +616,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("slice!")]
         public static MutableString RemoveSubstringInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
+            self.RequireNotFrozen();
             if (regex.IsEmpty) {
                 return self.CloneDerived().TaintBy(regex, scope);
             }
@@ -620,6 +633,7 @@ namespace IronRuby.Builtins {
         public static MutableString RemoveSubstringInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int occurrance) {
 
+            self.RequireNotFrozen();
             if (regex.IsEmpty) {
                 return self.CloneDerived().TaintBy(regex, scope);
             }
@@ -635,6 +649,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("slice!")]
         public static MutableString RemoveSubstringInPlace(MutableString/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
+            self.RequireNotFrozen();
             if (searchStr.IsEmpty) {
                 return searchStr.CloneDerived();
             }
@@ -715,6 +730,36 @@ namespace IronRuby.Builtins {
 
             MutableString result = match.AppendGroupValue(occurrance, self.CreateDerived());
             return result != null ? result.TaintBy(regex, scope) : null;
+        }
+
+        // MRI also addresses a capture by its name, as a String or a Symbol.
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static MutableString GetSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regex, [NotNull]MutableString/*!*/ groupName) {
+            return GetNamedGroupSubstring(scope, self, regex, groupName.ConvertToString());
+        }
+
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static MutableString GetSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regex, [NotNull]RubySymbol/*!*/ groupName) {
+            return GetNamedGroupSubstring(scope, self, regex, groupName.ToString());
+        }
+
+        private static MutableString GetNamedGroupSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self,
+            RubyRegex/*!*/ regex, string/*!*/ groupName) {
+            MatchData match = RegexpOps.Match(scope, regex, self);
+            if (match == null) {
+                // MRI only reports an unknown name once something matched.
+                return null;
+            }
+
+            if (!match.HasNamedGroup(groupName)) {
+                throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", groupName);
+            }
+
+            return match.GetNamedGroupValue(groupName);
         }
 
         [RubyMethod("getbyte")]
@@ -2830,21 +2875,59 @@ namespace IronRuby.Builtins {
             return result;
         }
         
-        private static char[] _WhiteSpaceSeparators = new char[] { ' ', '\n', '\r', '\t', '\v' };
+        private static char[] _WhiteSpaceSeparators = new char[] { ' ', '\n', '\r', '\t', '\v', '\f' };
 
+        private static bool IsAwkWhiteSpace(char c) {
+            return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\v' || c == '\f';
+        }
+
+        /// <summary>
+        /// "awk" split: the separator is a single space or absent. This follows MRI's
+        /// rb_str_split_m loop, which is not simply "split on runs of whitespace and drop
+        /// the empties" once a positive limit is involved: the limit counts fields, the
+        /// remainder of the string becomes the last field verbatim, and an empty trailing
+        /// field survives unless no limit was given at all.
+        /// </summary>
         private static RubyArray/*!*/ WhitespaceSplit(MutableString/*!*/ str, int limit) {
-            int maxComponents = limit <= 0 ? Int32.MaxValue : limit;
+            str.PrepareForCharacterRead();
 
-            MutableString[] elements = str.Split(_WhiteSpaceSeparators, maxComponents, StringSplitOptions.RemoveEmptyEntries);
+            RubyArray result = new RubyArray();
+            int length = str.GetCharCount();
+            int begin = 0, end = 0, position = 0, fields = 1;
+            bool skipping = true;
 
-            RubyArray result = new RubyArray(elements.Length + (limit < 0 ? 1 : 0)); 
-            foreach (MutableString element in elements) {
-                result.Add(str.CreateDerived().Append(element).TaintBy(str));
+            while (position < length) {
+                char c = str.GetChar(position);
+                position++;
+
+                if (skipping) {
+                    if (IsAwkWhiteSpace(c)) {
+                        begin = position;
+                    } else {
+                        end = position;
+                        skipping = false;
+                        if (limit > 0 && limit <= fields) {
+                            break;
+                        }
+                    }
+                } else if (IsAwkWhiteSpace(c)) {
+                    result.Add(str.CreateDerived().Append(str, begin, end - begin).TaintBy(str));
+                    skipping = true;
+                    begin = position;
+                    if (limit > 0) {
+                        fields++;
+                    }
+                } else {
+                    end = position;
+                }
             }
 
-            // Strange behavior to match Ruby semantics
-            if (limit < 0) {
-                result.Add(str.CreateDerived().TaintBy(str));
+            if (length > 0 && (limit != 0 || length > begin)) {
+                result.Add(str.CreateDerived().Append(str, begin, length - begin).TaintBy(str));
+            }
+
+            if (limit == 0) {
+                RemoveTrailingEmptyItems(result);
             }
 
             return result;
@@ -2853,9 +2936,9 @@ namespace IronRuby.Builtins {
         private static RubyArray/*!*/ InternalSplit(MutableString/*!*/ str, MutableString separator, int limit) {
             RubyArray result;
             if (limit == 1) {
-                // returns an array with original string
+                // one field: the whole string, but as a fresh String
                 result = new RubyArray(1);
-                result.Add(str);
+                result.Add(str.CreateDerived().Append(str).TaintBy(str));
                 return result;
             }
 
@@ -2915,19 +2998,17 @@ namespace IronRuby.Builtins {
                 i++;
             }
 
-            if (charEnum.HasMore || limit < 0) {
+            if (charEnum.HasMore || limit != 0) {
                 result.Add(str.CreateDerived().AppendRemaining(charEnum).TaintBy(str));
             }
             
             return result;
         }
 
-        [RubyMethod("split")]
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self) {
             return Split(stringCast, self, (MutableString)null, 0);
         }
 
-        [RubyMethod("split")]
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, 
             [DefaultProtocol]MutableString separator, [DefaultProtocol, Optional]int limit) {
 
@@ -2957,7 +3038,6 @@ namespace IronRuby.Builtins {
             return InternalSplit(self, separator, limit);            
         }
 
-        [RubyMethod("split")]
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regexp, [DefaultProtocol, Optional]int limit) {
 
@@ -2981,9 +3061,9 @@ namespace IronRuby.Builtins {
                 }
                 return array;
             } else if (limit == 1) {
-                // returns an array with original string
+                // one field: the whole string, but as a fresh String
                 RubyArray result = new RubyArray(1);
-                result.Add(self);
+                result.Add(self.CreateDerived().Append(self).TaintBy(self));
                 return result;
             } else if (limit < 0) {
                 // does not suppress trailing fields when negative 
@@ -2992,6 +3072,41 @@ namespace IronRuby.Builtins {
                 // limit > 1 limits to N fields
                 return MakeRubyArray(self, regexp.Split(self, limit));
             }
+        }
+
+        // Ruby 2.6: #split yields each field to a block and answers self instead of
+        // building the array. The three splitting overloads above stay the plain
+        // array-producing versions and are what the CLR String extension calls.
+        [RubyMethod("split")]
+        public static object Split(ConversionStorage<MutableString>/*!*/ stringCast, BlockParam block, MutableString/*!*/ self) {
+            return YieldSplit(block, self, Split(stringCast, self));
+        }
+
+        [RubyMethod("split")]
+        public static object Split(ConversionStorage<MutableString>/*!*/ stringCast, BlockParam block, MutableString/*!*/ self,
+            [DefaultProtocol]MutableString separator, [DefaultProtocol, Optional]int limit) {
+            return YieldSplit(block, self, Split(stringCast, self, separator, limit));
+        }
+
+        [RubyMethod("split")]
+        public static object Split(ConversionStorage<MutableString>/*!*/ stringCast, BlockParam block, MutableString/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regexp, [DefaultProtocol, Optional]int limit) {
+            return YieldSplit(block, self, Split(stringCast, self, regexp, limit));
+        }
+
+        private static object YieldSplit(BlockParam block, MutableString/*!*/ self, RubyArray/*!*/ fields) {
+            if (block == null) {
+                return fields;
+            }
+
+            foreach (object field in fields) {
+                object blockResult;
+                if (block.Yield(field, out blockResult)) {
+                    return blockResult;
+                }
+            }
+
+            return self;
         }
 
         #endregion

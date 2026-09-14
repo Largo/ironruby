@@ -2970,6 +2970,21 @@ module Kernel
 end
 
 class String
+  # The name MRI puts in a "no implicit conversion of X into Y" message: the
+  # three singletons by value, everything else by class - with IronRuby's
+  # Fixnum/Bignum split hidden, because MRI only knows Integer.
+  def __ir_type_name__(value)
+    case value
+    when nil then "nil"
+    when true then "true"
+    when false then "false"
+    else
+      name = value.class.to_s
+      (name == "Fixnum" || name == "Bignum") ? "Integer" : name
+    end
+  end
+  private :__ir_type_name__
+
   # Byte-oriented slicing.  Done over a binary copy so that the indices really
   # are byte indices, then tagged back with the receiver's encoding the way
   # rb_str_byteslice does.
@@ -3005,8 +3020,11 @@ class String
   private :__ir_char_starts__
 
   def __ir_byte_search__(reverse, needle, offset)
-    starts = __ir_char_starts__
-    size = starts.last
+    # When every character is one byte wide the byte offsets and the character
+    # offsets coincide, so the (linear) character table is not needed.
+    size = bytesize
+    simple = (size == length)
+    starts = simple ? nil : __ir_char_starts__
 
     offset += size if offset < 0
     return nil if offset < 0
@@ -3016,28 +3034,57 @@ class String
       offset = size
     end
 
-    char_offset = starts.index(offset)
-    raise IndexError, "offset #{offset} does not land on character boundary" if char_offset.nil?
+    if simple
+      char_offset = offset
+    else
+      char_offset = starts.index(offset)
+      raise ::IndexError, "offset #{offset} does not land on character boundary" if char_offset.nil?
+    end
 
     found = reverse ? rindex(needle, char_offset) : index(needle, char_offset)
-    found.nil? ? nil : starts[found]
+    return nil if found.nil?
+    simple ? found : starts[found]
   end
   private :__ir_byte_search__
 
+  # A byte search needle is a Regexp or something String-convertible; unlike
+  # #index it never accepts an Integer codepoint.
+  def __ir_byte_needle__(needle)
+    return needle if needle.is_a?(::Regexp) || needle.is_a?(::String)
+    if needle.respond_to?(:to_str)
+      converted = needle.to_str
+      return converted if converted.is_a?(::String)
+    end
+    ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(needle)} into String")
+  end
+  private :__ir_byte_needle__
+
+  def __ir_byte_offset__(value)
+    return value if value.is_a?(::Integer)
+    unless value.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion from #{__ir_type_name__(value)} to integer")
+    end
+    converted = value.to_int
+    unless converted.is_a?(::Integer)
+      ::Kernel.raise(::TypeError, "can't convert #{__ir_type_name__(value)} to Integer")
+    end
+    converted
+  end
+  private :__ir_byte_offset__
+
   def byteindex(needle, offset = 0)
-    binary = dup
-    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
-    needle = needle.dup
-    needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
-    binary.index(needle, offset)
+    __ir_byte_search__(false, __ir_byte_needle__(needle), __ir_byte_offset__(offset))
   end unless method_defined?(:byteindex)
 
-  def byterindex(needle, offset = -1)
-    binary = dup
-    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
-    needle = needle.dup
-    needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
-    binary.rindex(needle, offset)
+  # MRI's default offset is the end of the string, not -1: "hello".byterindex("")
+  # answers 5. An explicitly passed nil is still a TypeError.
+  def byterindex(needle, *rest)
+    if rest.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{rest.size + 1}, expected 1..2)")
+    end
+    needle = __ir_byte_needle__(needle)
+    offset = rest.empty? ? bytesize : __ir_byte_offset__(rest[0])
+    __ir_byte_search__(true, needle, offset)
   end unless method_defined?(:byterindex)
 
   # Replaces a byte range in place. Every index here is a byte index, so the
@@ -6081,6 +6128,125 @@ class String
       bytes_enumerator.to_a
     end
   end
+end
+
+# String#each_line / String#lines.
+#
+# The C# implementation is frozen at Ruby 1.8: it has no `chomp:` keyword, its
+# paragraph mode (separator "") keeps every newline of the run instead of the
+# first two, it accepts separators that are not String-convertible, and it
+# raises "string modified" when the block mutates the receiver (checked in 1.8,
+# not checked at all from 1.9 on). Everything here is layered on top of the C#
+# splitter so encodings and the String-instances-for-subclasses rule keep
+# working; only the grouping and the trimming are redone.
+class String
+  alias_method :__ir_each_line__, :each_line
+
+  def each_line(*args, chomp: false, &block)
+    lines = __ir_split_lines__(args, chomp)
+    return ::Enumerator.new { |y| lines.each { |l| y << l } } unless block
+    lines.each { |line| block.call(line) }
+    self
+  end
+
+  # MRI's #lines still behaves exactly like #each_line when a block is passed:
+  # it yields and answers self rather than the array.
+  def lines(*args, chomp: false, &block)
+    return each_line(*args, chomp: chomp, &block) if block
+    __ir_split_lines__(args, chomp)
+  end
+
+  private
+
+  def __ir_split_lines__(args, chomp)
+    if args.size > 1
+      raise ::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    end
+    separator = args.empty? ? $/ : args[0]
+    unless separator.nil? || separator.is_a?(::String)
+      unless separator.respond_to?(:to_str)
+        raise ::TypeError, "no implicit conversion of #{__ir_type_name__(separator)} into String"
+      end
+      separator = separator.to_str
+      unless separator.is_a?(::String)
+        raise ::TypeError, "can't convert #{separator.class} to String"
+      end
+    end
+
+    # A non-ASCII-compatible encoding (UTF-16, UTF-7, ...) is never split: MRI
+    # has to transcode the separator first, which either fails outright or
+    # cannot match. The transcode is still attempted so that an encoding with
+    # no converter raises Encoding::ConverterNotFoundError.
+    unless encoding.ascii_compatible?
+      separator.encode(encoding) if separator
+      return [] if empty?
+      return [__ir_each_line_all__(nil)]
+    end
+
+    return empty? ? [] : [__ir_chomp_line__(__ir_each_line_all__(nil), nil, chomp)] if separator.nil?
+
+    if separator.empty?
+      lines = __ir_paragraphs__(__ir_each_line_all__("\n"))
+    else
+      lines = __ir_each_line_all__(separator)
+    end
+    return lines unless chomp
+    lines.map { |line| __ir_chomp_line__(line, separator, chomp) }
+  end
+
+  # Collects the physical lines without letting the 1.8 "string modified"
+  # check fire: the block below never touches the receiver.
+  def __ir_each_line_all__(separator)
+    return dup if separator.nil?
+    lines = []
+    __ir_each_line__(separator) { |line| lines << line }
+    lines
+  end
+
+  # Paragraph mode: a paragraph ends at the first blank line after some
+  # content, that blank line is kept, and every further blank line of the run
+  # is dropped.
+  def __ir_paragraphs__(physical)
+    result = []
+    buffer = nil
+    skipping = false
+    physical.each do |line|
+      blank = (line == "\n" || line == "\r\n")
+      if skipping
+        next if blank
+        skipping = false
+      end
+      if blank && buffer
+        result << (buffer + line)
+        buffer = nil
+        skipping = true
+      elsif buffer
+        buffer = buffer + line
+      else
+        buffer = line.dup
+      end
+    end
+    result << buffer if buffer
+    result
+  end
+
+  def __ir_chomp_line__(line, separator, chomp)
+    return line unless chomp
+    if separator.nil? || separator == "\n"
+      line = line[0...-1] if line.end_with?("\n")
+      line = line[0...-1] if line.end_with?("\r")
+      line
+    elsif separator.empty?
+      line = line[0...-1] while line.end_with?("\n") || line.end_with?("\r")
+      line
+    elsif line.end_with?(separator)
+      line[0, line.length - separator.length]
+    else
+      line
+    end
+  end
+
+  public
 end
 
 class Hash
