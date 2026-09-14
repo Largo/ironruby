@@ -684,6 +684,12 @@ namespace IronRuby.Runtime.Conversions {
                 metaBuilder.Result = AstUtils.Convert(args.TargetExpression, typeof(IList));
                 return true;
             }
+
+            if (args.Target == null) {
+                // `*nil` is no elements at all - MRI 4.0 does not ask nil for #to_a
+                metaBuilder.Result = Ast.Convert(Methods.MakeArray0.OpCall(), typeof(IList));
+                return true;
+            }
             return false;
         }
 

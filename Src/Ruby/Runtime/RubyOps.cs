@@ -1350,14 +1350,20 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// `[*x]` and `a = *x`. The result is always a new plain Array: MRI copies, so that
+        /// neither the splatted array itself nor an Array subclass nor a frozen #to_a result
+        /// shows through.
+        /// </summary>
         [Emitted]
         public static IList/*!*/ Unsplat(object splattee) {
             var list = splattee as IList;
             if (list == null) {
-                list = new RubyArray(1);
-                list.Add(splattee);
+                var single = new RubyArray(1);
+                single.Add(splattee);
+                return single;
             }
-            return list;
+            return new RubyArray(list);
         }
 
         // CaseExpression
