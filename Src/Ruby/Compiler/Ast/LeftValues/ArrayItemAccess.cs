@@ -59,7 +59,7 @@ namespace IronRuby.Compiler.Ast {
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen, MSA.Expression targetValue, bool tryRead) {
             Assert.NotNull(gen, targetValue);
-            return MethodCall.TransformRead(this, gen, false, "[]", targetValue, _arguments, _block, null, null);
+            return MethodCall.TransformRead(this, gen, _array.NodeType == NodeTypes.SelfReference, "[]", targetValue, _arguments, _block, null, null);
         }
 
         internal override MSA.Expression/*!*/ TransformWrite(AstGenerator/*!*/ gen, MSA.Expression target, MSA.Expression/*!*/ rightValue) {
