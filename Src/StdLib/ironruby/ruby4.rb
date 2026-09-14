@@ -5633,7 +5633,9 @@ require "thread" unless Object.const_defined?(:Mutex)
 
 class Thread
   %i[Mutex Queue SizedQueue ConditionVariable].each do |name|
-    next if const_defined?(name)
+    # `false`: Object is an ancestor of Thread, so an inherited lookup finds the
+    # top-level name every time and the constant never gets re-homed.
+    next if const_defined?(name, false)
     const_set(name, Object.const_get(name)) if Object.const_defined?(name)
   end
 end
