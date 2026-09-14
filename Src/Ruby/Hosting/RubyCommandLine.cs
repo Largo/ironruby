@@ -67,6 +67,13 @@ namespace IronRuby.Hosting {
 
         // overridden to set the default encoding to -KX
         protected override int Run() {
+            // Kernel#chomp, #chop, #sub and #gsub exist only under -n and -p, which is what
+            // `Kernel.private_instance_methods(false)` is asked to show; so they are added here,
+            // where the options are known, rather than declared with [RubyMethod].
+            if (((RubyContext)Language).RubyOptions.LoopOverInput) {
+                InputLoopOps.Define((RubyContext)Language);
+            }
+
             // `ruby` with no -e and no script argument reads the program from stdin when
             // stdin is redirected. Only a real terminal gets the interactive loop — and
             // the banner that goes with it.
