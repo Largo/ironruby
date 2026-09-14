@@ -1611,17 +1611,17 @@ class Hash
 end
 
 class Module
+  # No deprecation warning is emitted yet - that needs a hook in constant
+  # lookup - but the name check and the return value are MRI's, and a
+  # no-op here is what stops #private_constant's callers from breaking.
   def deprecate_constant(*names)
-    names
+    names.each do |name|
+      unless const_defined?(name, false)
+        ::Kernel.raise(::NameError, "constant #{self}::#{name} not defined")
+      end
+    end
+    self
   end unless method_defined?(:deprecate_constant)
-
-  def private_constant(*names)
-    names
-  end unless private_method_defined?(:private_constant)
-
-  def public_constant(*names)
-    names
-  end unless private_method_defined?(:public_constant)
 end
 
 class Object
@@ -6918,7 +6918,26 @@ end
 # trailing Hash here anyway, so recording the flag is all that is needed.
 class Module
   def ruby2_keywords(*names)
-    names
+    names.each do |name|
+      unless name.is_a?(::Symbol) || name.is_a?(::String)
+        ::Kernel.raise(::TypeError, "#{name.inspect} is not a symbol nor a string")
+      end
+      sym = name.to_sym
+      # NameError, not NoMethodError, and it names the missing method.
+      unless method_defined?(sym) || private_method_defined?(sym)
+        ::Kernel.raise(::NameError, "undefined method `#{sym}' for #{self.inspect}")
+      end
+      # The flag only means anything for a method of the shape `def m(*args)`.
+      # MRI warns and skips otherwise; the wording is rb_warn's, verbatim.
+      kinds = instance_method(sym).parameters.map { |kind, _| kind }
+      splat = kinds.index(:rest)
+      unless splat && kinds.none? { |k| k == :key || k == :keyreq || k == :keyrest } &&
+             kinds[(splat + 1)..-1].none? { |k| k == :req || k == :opt }
+        ::Kernel.warn("Skipping set of ruby2_keywords flag for #{sym} " \
+                      "(method accepts keywords or post arguments or method does not accept argument splat)")
+      end
+    end
+    nil
   end unless private_method_defined?(:ruby2_keywords) || method_defined?(:ruby2_keywords)
   private :ruby2_keywords rescue nil
 end

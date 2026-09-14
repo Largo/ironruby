@@ -368,6 +368,16 @@ namespace IronRuby.Builtins {
         #region define_method (thread-safe)
 
         // thread-safe:
+        // Anything that is not a Proc, Method or UnboundMethod: MRI names the three acceptable
+        // types rather than reporting a failed conversion to one of them.
+        [RubyMethod("define_method")]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName, object method) {
+            throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Proc/Method/UnboundMethod)",
+                scope.RubyContext.GetClassDisplayName(method));
+        }
+
+        // thread-safe:
         [RubyMethod("define_method")]
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
@@ -417,7 +427,17 @@ namespace IronRuby.Builtins {
                 // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do.
                 // Since Ruby 3.0 (Feature #15608) a method whose owner is a module rather than a class may be
                 // bound to any receiver, so only a class constraint is enforced.
+                // The constraint is the *owner* of the method, not the receiver #instance_method
+                // was sent to: Object.instance_method(:class) is owned by Kernel and so binds
+                // anywhere, even though it was fetched through Object.
+                var owner = info.DeclaringModule;
+                if (owner != null && (!owner.IsClass || owner.IsSingletonClass)) {
+                    targetConstraint = owner;
+                }
                 if (targetConstraint.IsClass && !self.HasAncestorNoLock(targetConstraint)) {
+                    if (targetConstraint.IsSingletonClass) {
+                        throw RubyExceptions.CreateTypeError("can't bind singleton method to a different class");
+                    }
                     throw RubyExceptions.CreateTypeError(
                         "bind argument must be a subclass of {0}", targetConstraint.GetName(scope.RubyContext)
                     );
