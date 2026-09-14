@@ -3546,8 +3546,25 @@ class String
   alias_method :__ir_rstrip__, :rstrip
   private :__ir_strip__, :__ir_lstrip__, :__ir_rstrip__
 
+  # #count is asked once per character, so the selectors are converted up front:
+  # MRI calls #to_str on each argument exactly once however long the receiver is.
+  def __strip_selectors__(selectors)
+    selectors.map do |selector|
+      next selector if selector.is_a?(::String)
+      converted = selector.respond_to?(:to_str) ? selector.to_str : nil
+      unless converted.is_a?(::String)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(selector)} into String")
+      end
+      converted
+    end
+  end
+  private :__strip_selectors__
+
   def lstrip(*selectors)
     return __ir_lstrip__ if selectors.empty?
+    selectors = __strip_selectors__(selectors)
+    # An invalid selector is an error even when the receiver is empty.
+    "".count(*selectors) if empty?
     i = 0
     i += 1 while i < length && __selected__(self[i, 1], selectors)
     self[i..-1] || self[0, 0]
@@ -3555,6 +3572,8 @@ class String
 
   def rstrip(*selectors)
     return __ir_rstrip__ if selectors.empty?
+    selectors = __strip_selectors__(selectors)
+    "".count(*selectors) if empty?
     i = length
     i -= 1 while i > 0 && __selected__(self[i - 1, 1], selectors)
     self[0, i]
@@ -3562,6 +3581,7 @@ class String
 
   def strip(*selectors)
     return __ir_strip__ if selectors.empty?
+    selectors = __strip_selectors__(selectors)
     lstrip(*selectors).rstrip(*selectors)
   end
 
@@ -3573,6 +3593,11 @@ class String
     private plain_bang
     define_method(bang) do |*selectors|
       return __send__(plain_bang) if selectors.empty?
+      # The frozen check comes before the work: MRI raises even when the
+      # selectors would leave the string alone.
+      if frozen?
+        ::Kernel.raise(::FrozenError.new("can't modify frozen String: #{inspect}", receiver: self))
+      end
       result = __send__(name, *selectors)
       result == self ? nil : replace(result)
     end

@@ -351,6 +351,119 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// The set of characters a tr-style selector ("a-z", "^abc", "a\\-b") describes.
+        ///
+        /// This replaces IntervalParser.Parse's 256-entry BitArray for #count, #delete and
+        /// #squeeze: a selector may name any character, not just a Latin-1 one, and an
+        /// unrepresentable one used to index past the end of the bit array and surface as a
+        /// CLR IndexOutOfRangeException. The parse follows MRI's trnext: a backslash escapes
+        /// the next character unless it is the last one, a trailing '-' is a literal, and a
+        /// descending range is an error rather than an empty set.
+        /// </summary>
+        public sealed class CharacterSelector {
+            private readonly bool _negated;
+            private readonly HashSet<int>/*!*/ _singles = new HashSet<int>();
+            private readonly List<int>/*!*/ _rangeBounds = new List<int>();
+
+            private CharacterSelector(bool negated) {
+                _negated = negated;
+            }
+
+            public bool Contains(int c) {
+                bool hit = _singles.Contains(c);
+                if (!hit) {
+                    for (int i = 0; i < _rangeBounds.Count; i += 2) {
+                        if (c >= _rangeBounds[i] && c <= _rangeBounds[i + 1]) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                }
+                return _negated ? !hit : hit;
+            }
+
+            private static int CodepointAt(MutableString/*!*/ str, ref int position) {
+                char c = str.GetChar(position++);
+                if (Char.IsHighSurrogate(c) && position < str.Length) {
+                    char low = str.GetChar(position);
+                    if (Char.IsLowSurrogate(low)) {
+                        position++;
+                        return Char.ConvertToUtf32(c, low);
+                    }
+                }
+                return c;
+            }
+
+            public static CharacterSelector/*!*/ Parse(MutableString/*!*/ selector) {
+                selector.PrepareForCharacterRead();
+                int length = selector.Length;
+                int position = 0;
+
+                // A lone "^" selects the circumflex itself.
+                bool negated = length > 1 && selector.GetChar(0) == '^';
+                if (negated) {
+                    position = 1;
+                }
+
+                var result = new CharacterSelector(negated);
+                while (position < length) {
+                    if (selector.GetChar(position) == '\\' && position < length - 1) {
+                        position++;
+                    }
+                    int first = CodepointAt(selector, ref position);
+
+                    // "a-z" is a range only when something follows the dash.
+                    if (position < length - 1 && selector.GetChar(position) == '-') {
+                        position++;
+                        int last = CodepointAt(selector, ref position);
+                        if (first > last) {
+                            if (first < 0x80 && last < 0x80) {
+                                throw RubyExceptions.CreateArgumentError(
+                                    String.Format("invalid range \"{0}-{1}\" in string transliteration", (char)first, (char)last)
+                                );
+                            }
+                            throw RubyExceptions.CreateArgumentError("invalid range in string transliteration");
+                        }
+                        result._rangeBounds.Add(first);
+                        result._rangeBounds.Add(last);
+                    } else {
+                        result._singles.Add(first);
+                    }
+                }
+
+                return result;
+            }
+        }
+
+        /// <summary>A character is selected when every one of the selectors picks it.</summary>
+        public sealed class CharacterSelectorSet {
+            private readonly CharacterSelector[]/*!*/ _selectors;
+
+            private CharacterSelectorSet(CharacterSelector[]/*!*/ selectors) {
+                _selectors = selectors;
+            }
+
+            public bool Contains(int c) {
+                for (int i = 0; i < _selectors.Length; i++) {
+                    if (!_selectors[i].Contains(c)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            public static CharacterSelectorSet/*!*/ Parse(MutableString/*!*/ self, MutableString[]/*!*/ selectors) {
+                var parsed = new CharacterSelector[selectors.Length];
+                for (int i = 0; i < selectors.Length; i++) {
+                    self.RequireCompatibleEncoding(selectors[i]);
+                    RequireValidEncoding(selectors[i]);
+                    parsed[i] = CharacterSelector.Parse(selectors[i]);
+                }
+                return new CharacterSelectorSet(parsed);
+            }
+        }
+
         #endregion
 
 
@@ -2533,10 +2646,11 @@ namespace IronRuby.Builtins {
         #region delete, delete!, clear
 
         private static MutableString/*!*/ InternalDelete(MutableString/*!*/ self, MutableString[]/*!*/ ranges) {
-            BitArray map = new RangeParser(ranges).Parse();
+            var map = CharacterSelectorSet.Parse(self, ranges);
+            self.PrepareForCharacterRead();
             MutableString result = self.CreateDerived().TaintBy(self);
             for (int i = 0; i < self.Length; i++) {
-                if (!map.Get(self.GetChar(i))) {
+                if (!map.Contains(self.GetChar(i))) {
                     result.Append(self.GetChar(i));
                 }
             }
@@ -2596,10 +2710,11 @@ namespace IronRuby.Builtins {
         #region count
         
         private static object InternalCount(MutableString/*!*/ self, MutableString[]/*!*/ ranges) {
-            BitArray map = new RangeParser(ranges).Parse();
+            var map = CharacterSelectorSet.Parse(self, ranges);
+            self.PrepareForCharacterRead();
             int count = 0;
             for (int i = 0; i < self.Length; i++) {
-                if (map.Get(self.GetChar(i))) {
+                if (map.Contains(self.GetChar(i))) {
                     count++;
                 }
             }
@@ -3145,19 +3260,23 @@ namespace IronRuby.Builtins {
         }
         
         private static MutableString/*!*/ Strip(MutableString/*!*/ str, bool trimLeft, bool trimRight) {
+            RequireStrippable(str, trimLeft);
             int left, right;
             GetTrimRange(str, trimLeft, trimRight, out left, out right);
             return str.GetSlice(left, right - left).TaintBy(str);
         }
 
         public static MutableString StripInPlace(MutableString/*!*/ self, bool trimLeft, bool trimRight) {
+            // MRI checks frozen-ness before it works out whether there is anything to trim.
+            self.RequireNotFrozen();
+            RequireStrippable(self, trimLeft);
+
             int left, right;
             GetTrimRange(self, trimLeft, trimRight, out left, out right);
             int remaining = right - left;
 
             // nothing to trim:
             if (remaining == self.Length) {
-                self.RequireNotFrozen();
                 return null;
             }
 
@@ -3170,14 +3289,34 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        /// <summary>
+        /// Stripping has to read characters, so a broken byte sequence stops it. MRI reports
+        /// that as ArgumentError from the left-hand scan and Encoding::CompatibilityError from
+        /// the right-hand one - #lstrip and #rstrip really do raise different classes.
+        /// </summary>
+        private static void RequireStrippable(MutableString/*!*/ str, bool trimLeft) {
+            if (!str.ContainsInvalidCharacters()) {
+                return;
+            }
+            if (trimLeft) {
+                throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", str.Encoding.Name);
+            }
+            throw new EncodingCompatibilityError(
+                String.Format("invalid byte sequence in {0}", str.Encoding.Name)
+            );
+        }
+
+        // MRI strips ASCII whitespace and NUL, on both sides; it does not strip the
+        // non-ASCII characters that Char.IsWhiteSpace also reports (U+00A0 and friends).
+        private static bool IsStrippedCharacter(char c) {
+            return c == ' ' || (c >= '\t' && c <= '\r') || c == '\0';
+        }
+
         private static void GetTrimRange(MutableString/*!*/ str, bool left, bool right, out int leftIndex, out int rightIndex) {
             GetTrimRange(
                 str.Length,
-                !left ? (Func<int, bool>)null : (i) => Char.IsWhiteSpace(str.GetChar(i)),
-                !right ? (Func<int, bool>)null : (i) => {
-                    char c = str.GetChar(i);
-                    return Char.IsWhiteSpace(c) || c == '\0';
-                },
+                !left ? (Func<int, bool>)null : (i) => IsStrippedCharacter(str.GetChar(i)),
+                !right ? (Func<int, bool>)null : (i) => IsStrippedCharacter(str.GetChar(i)),
                 out leftIndex, 
                 out rightIndex
             );
@@ -3248,15 +3387,16 @@ namespace IronRuby.Builtins {
             Assert.NotNull(str, ranges);
 
             // convert the args into a map of characters to be squeezed (same algorithm as count)
-            BitArray map = null;
+            CharacterSelectorSet map = null;
             if (ranges.Length > 0) {
-                map = new RangeParser(ranges).Parse();
+                map = CharacterSelectorSet.Parse(str, ranges);
             }
+            str.PrepareForCharacterRead();
 
             // Do the squeeze in place
             int j = 1, k = 1;
             while (j < str.Length) {
-                if (str.GetChar(j) == str.GetChar(j-1) && (ranges.Length == 0 || map.Get(str.GetChar(j)))) {
+                if (str.GetChar(j) == str.GetChar(j-1) && (ranges.Length == 0 || map.Contains(str.GetChar(j)))) {
                     j++;
                 } else {
                     str.SetChar(k, str.GetChar(j));
