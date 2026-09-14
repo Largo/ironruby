@@ -168,6 +168,18 @@ class Addrinfo
     end
   end
 
+  # An Addrinfo for a socket's own address: unlike a bare packed sockaddr, whose
+  # protocol family is unspecified, CRuby reports pfamily == afamily here.
+  def self.__ir_from_sockaddr(bytes, socktype = 0) # :nodoc:
+    info = new(bytes, nil, socktype, 0)
+    info.__ir_set_pfamily(info.afamily)
+    info
+  end
+
+  def __ir_set_pfamily(family) # :nodoc:
+    @pfamily = family
+  end
+
   def self.__resolve(host) # :nodoc:
     return "0.0.0.0" if host.nil?
     host = host.to_s
@@ -673,13 +685,12 @@ class BasicSocket
   # Socket, which has no #addr at all, and keeps the IPv6 and AF_UNIX cases out
   # of the IPv4-shaped GetAddressArray in BasicSocket.cs.
   def local_address
-    name = __ir_sockname_bytes
-    return Addrinfo.new(Socket.sockaddr_in(0, "0.0.0.0"), nil, __ir_socktype, 0) if name.nil?
-    Addrinfo.new(name, nil, __ir_socktype, 0)
+    name = __ir_sockname_bytes || Socket.sockaddr_in(0, "0.0.0.0")
+    Addrinfo.__ir_from_sockaddr(name, __ir_socktype)
   end
 
   def remote_address
-    Addrinfo.new(getpeername, nil, __ir_socktype, 0)
+    Addrinfo.__ir_from_sockaddr(getpeername, __ir_socktype)
   end
 
   # The address a client should connect to in order to reach this socket: the
@@ -688,7 +699,7 @@ class BasicSocket
   def connect_address
     name = __ir_sockname_bytes
     raise SocketError, "unbound socket" if name.nil?
-    addr = Addrinfo.new(name, nil, __ir_socktype, 0)
+    addr = Addrinfo.__ir_from_sockaddr(name, __ir_socktype)
     if addr.ipv4? && addr.ip_address == "0.0.0.0"
       Addrinfo.__ir_new_ip("127.0.0.1", addr.ip_port, addr.socktype, addr.protocol, addr.pfamily)
     elsif addr.ipv6? && addr.ipv6_unspecified?
@@ -1456,15 +1467,20 @@ class TCPSocket
 
     def new(remote_host, remote_port, local_host = nil, local_port = nil,
             connect_timeout: nil, open_timeout: nil, resolv_timeout: nil)
-      if connect_timeout || open_timeout
-        # .NET's Socket.Connect takes no timeout and IronRuby has no non-blocking
-        # connect on TCPSocket, so there is nothing honest to do here yet.
-        raise NotImplementedError, "TCPSocket.new does not support connect_timeout"
-      end
-      if local_host.nil? && local_port.nil?
-        __ir_raw_new(remote_host, remote_port)
-      else
-        __ir_raw_new(remote_host, remote_port, local_host, local_port || 0)
+      # .NET's Socket.Connect takes no timeout and IronRuby has no non-blocking
+      # connect, so the timeout cannot be enforced.  Connect anyway -- which is
+      # what a large enough timeout would do -- and report a connection that did
+      # not happen the way CRuby does, with IO::TimeoutError.
+      timeout = connect_timeout || open_timeout
+      begin
+        if local_host.nil? && local_port.nil?
+          __ir_raw_new(remote_host, remote_port)
+        else
+          __ir_raw_new(remote_host, remote_port, local_host, local_port || 0)
+        end
+      rescue Errno::ETIMEDOUT, Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
+        raise IO::TimeoutError, "Connection timed out" if timeout
+        raise
       end
     end
 
@@ -1836,11 +1852,7 @@ class Socket
     end
   end
 
-  class ResolutionError
-    def error_code
-      @__ir_error_code
-    end
-
+  class << self
     # gethostbyname(3) understands the two magic names inet_addr(3) does.
     def gethostbyname(host)
       case host.to_s
@@ -1848,6 +1860,12 @@ class Socket
       when "<any>" then ["0.0.0.0", [], AF_INET, [0, 0, 0, 0].pack("C4")]
       else __ir_raw_gethostbyname(host)
       end
+    end
+  end
+
+  class ResolutionError
+    def error_code
+      @__ir_error_code
     end
   end
 end
@@ -2045,3 +2063,55 @@ class TCPSocket
     end
   end
 end
+
+# Socket#accept and #sysaccept answer [socket, Addrinfo]; the C# layer hands
+# back the packed sockaddr getpeername(2) produced.  InvalidOperationException is
+# what .NET raises for accept(2) on a socket that was never listened on, where
+# the kernel -- and CRuby -- report EINVAL.
+class Socket
+  alias_method :__ir_raw_accept, :accept
+  alias_method :__ir_raw_sysaccept, :sysaccept
+
+  def __ir_accepted(pair) # :nodoc:
+    return pair unless pair.kind_of?(Array) && pair.size == 2
+    [pair[0], Addrinfo.__ir_from_sockaddr(pair[1], Socket::SOCK_STREAM)]
+  end
+  private :__ir_accepted
+
+  def accept
+    __ir_accepted(__ir_raw_accept)
+  end
+
+  def sysaccept
+    pair = __ir_raw_sysaccept
+    return pair unless pair.kind_of?(Array) && pair.size == 2
+    [pair[0], Addrinfo.__ir_from_sockaddr(pair[1], Socket::SOCK_STREAM)]
+  end
+
+  def accept_nonblock(exception: true)
+    __ir_accepted(__ir_raw_accept_nonblock)
+  rescue SocketError => e
+    case Socket.__ir_socket_error_code(e)
+    when "WouldBlock"
+      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      :wait_readable
+    else
+      raise
+    end
+  end
+end
+
+module IronRubySocketErrors__ # :nodoc: all
+  class << self
+    alias_method :__ir_translate_socket, :translate
+
+    def translate(error)
+      if error.class.name == "System::InvalidOperationException"
+        return Errno::EINVAL.new
+      end
+      __ir_translate_socket(error)
+    end
+  end
+end
+
+IronRubySocketErrors__.wrap(Socket, :accept, :sysaccept)

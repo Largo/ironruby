@@ -122,18 +122,27 @@ namespace IronRuby.StandardLibrary.Sockets {
             throw new NotSupportedException();
         }
 
+        // The Linux fcntl(2) command numbers, which is what io/nonblock.rb and IO#fcntl use;
+        // Fcntl::F_SETFL in this tree is a made-up 1.
+        private const int LinuxGetFileFlags = 3;
+        private const int LinuxSetFileFlags = 4;
+        private const int LinuxNonBlock = 0x800;
+
         // returns 0 on success, -1 on failure
         private int SetFileControlFlags(int flags) {
-            // TODO:
-            Socket.Blocking = (flags & RubyFileOps.Constants.NONBLOCK) != 0;
+            Socket.Blocking = (flags & (RubyFileOps.Constants.NONBLOCK | LinuxNonBlock)) == 0;
             return 0;
         }
 
         public override int FileControl(int commandId, int arg) {
-            // TODO:
             switch (commandId) {
                 case Fcntl.F_SETFL:
+                case LinuxSetFileFlags:
                     return SetFileControlFlags(arg);
+                case LinuxGetFileFlags:
+                    // .NET owns the blocking flag; report it the way fcntl(2) would, which is
+                    // what io/nonblock's #nonblock? and #nonblock= read back.
+                    return Socket.Blocking ? 0 : LinuxNonBlock;
             }
             throw new NotSupportedException();
         }
@@ -215,6 +224,16 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         /// <summary>
+        /// The wildcard endpoint of a socket's own family, for seeding ReceiveFrom.  Handing
+        /// an IPv4 endpoint to an IPv6 socket is an ArgumentError from .NET.
+        /// </summary>
+        internal static EndPoint/*!*/ AnyEndPoint(AddressFamily family) {
+            return family == AddressFamily.InterNetworkV6
+                ? new IPEndPoint(IPAddress.IPv6Any, 0)
+                : new IPEndPoint(IPAddress.Any, 0);
+        }
+
+        /// <summary>
         /// Turns a packed sockaddr into an EndPoint.  The obvious
         /// Socket.LocalEndPoint.Create(...) does not work for a socket that was never bound:
         /// .NET has no local endpoint for one and returns null.
@@ -283,7 +302,17 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// accept(2): a listening socket is never "connected", so it needs the wait unconditionally.
         /// </summary>
         internal static TResult BlockingAccept<TResult>(Socket/*!*/ socket, Func<TResult>/*!*/ operation) {
-            return BlockingCore(socket, SelectMode.SelectRead, operation);
+            if (!socket.IsBound) {
+                // .NET answers accept(2) on an unbound or unlistened socket with an
+                // InvalidOperationException, which surfaces in Ruby as TypeError; the kernel,
+                // and CRuby, report EINVAL.
+                throw new InvalidError();
+            }
+            try {
+                return BlockingCore(socket, SelectMode.SelectRead, operation);
+            } catch (InvalidOperationException) {
+                throw new InvalidError();
+            }
         }
 
         private static TResult BlockingCore<TResult>(Socket socket, SelectMode mode, Func<TResult>/*!*/ operation) {

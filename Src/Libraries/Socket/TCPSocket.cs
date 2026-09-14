@@ -55,11 +55,12 @@ namespace IronRuby.StandardLibrary.Sockets {
             [DefaultProtocol]MutableString remoteHost, object remotePort,
             [DefaultProtocol]MutableString localHost, object localPort) {
 
-            return BindLocalEndPoint(
-                CreateTCPSocket(stringCast, fixnumCast, self, remoteHost, remotePort, 0),
-                localHost,
-                ConvertToPortNum(stringCast, fixnumCast, localPort)
-            );
+            // The local endpoint has to be bound *before* connecting: bind(2) on a connected
+            // socket is EINVAL, which is what doing this the other way round produced.
+            return new TCPSocket(self.Context, CreateSocket(
+                remoteHost, ConvertToPortNum(stringCast, fixnumCast, remotePort),
+                localHost, ConvertToPortNum(stringCast, fixnumCast, localPort)
+            ));
         }
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
@@ -84,38 +85,32 @@ namespace IronRuby.StandardLibrary.Sockets {
             [DefaultProtocol]MutableString remoteHost, object remotePort,
             [DefaultProtocol]MutableString localHost, object localPort) {
 
-            self.Socket = CreateSocket(remoteHost, ConvertToPortNum(stringCast, fixnumCast, remotePort));
-            BindLocalEndPoint(self, localHost, ConvertToPortNum(stringCast, fixnumCast, localPort));
+            self.Socket = CreateSocket(
+                remoteHost, ConvertToPortNum(stringCast, fixnumCast, remotePort),
+                localHost, ConvertToPortNum(stringCast, fixnumCast, localPort));
             return self;
         }
 
         private static Socket/*!*/ CreateSocket(MutableString remoteHost, int port) {
+            return CreateSocket(remoteHost, port, null, 0);
+        }
+
+        private static Socket/*!*/ CreateSocket(MutableString remoteHost, int port, MutableString localHost, int localPort) {
             // Resolve first: the address family has to follow the address, not be pinned to
             // InterNetwork, or TCPSocket.new("::1", port) can never work and every IPv6-guarded
             // spec in the tree silently skips.
             IPAddress address = remoteHost != null ? GetHostAddress(remoteHost.ConvertToString()) : IPAddress.Loopback;
             Socket socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             try {
+                if (localHost != null || localPort != 0) {
+                    IPAddress localAddress = localHost != null
+                        ? GetHostAddress(localHost.ConvertToString(), address.AddressFamily)
+                        : (address.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any);
+                    socket.Bind(new IPEndPoint(localAddress, localPort));
+                }
                 socket.Connect(address, port);
             } catch (SocketException e) {
                 socket.Close();
-                throw SocketErrorOps.ToRubyException(e);
-            }
-            return socket;
-        }
-
-        private static TCPSocket/*!*/ BindLocalEndPoint(TCPSocket/*!*/ socket, MutableString localHost, int localPort) {
-            AddressFamily family = socket.Socket.AddressFamily;
-            IPAddress localIPAddress;
-            if (localHost != null) {
-                localIPAddress = GetHostAddress(localHost.ConvertToString(), family);
-            } else {
-                localIPAddress = family == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Loopback : IPAddress.Loopback;
-            }
-            IPEndPoint localEndPoint = new IPEndPoint(localIPAddress, localPort);
-            try {
-                socket.Socket.Bind(localEndPoint);
-            } catch (SocketException e) {
                 throw SocketErrorOps.ToRubyException(e);
             }
             return socket;
