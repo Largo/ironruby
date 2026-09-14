@@ -24,6 +24,11 @@ namespace IronRuby.Prism {
         public List<PrismError> Errors;
         public List<PrismWarning> Warnings;
         public PmLocation? DataLocation; // __END__
+
+        // Byte offset of the first byte after the __END__ line terminator, or -1 if
+        // there is no __END__. Computed by PrismParser while the UTF-8 byte array is
+        // still around: prism's locations are byte offsets, not char indices.
+        public int DataOffset = -1;
     }
 
     /// <summary>

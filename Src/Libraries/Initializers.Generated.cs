@@ -10147,6 +10147,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.WarningOps.GetCategories)
             );
             
+            DefineLibraryMethod(module, "warn", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Hash, System.Object>(IronRuby.Builtins.WarningOps.Warn)
+            );
+            
         }
         
         private static void LoadWarning_Class(IronRuby.Builtins.RubyModule/*!*/ module) {

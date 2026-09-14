@@ -83,7 +83,7 @@ namespace IronRuby.Prism {
                 }
             }
 
-            return bridge.Program((Pm.ProgramNode)result.Root, outerLocalNames);
+            return bridge.Program((Pm.ProgramNode)result.Root, outerLocalNames, result.DataOffset);
         }
 
         /// <summary>
@@ -158,13 +158,13 @@ namespace IronRuby.Prism {
 
         // ---- program / statements ----
 
-        private SourceUnitTree/*!*/ Program(Pm.ProgramNode/*!*/ node, List<string> outerLocalNames) {
+        private SourceUnitTree/*!*/ Program(Pm.ProgramNode/*!*/ node, List<string> outerLocalNames, int dataOffset) {
             var scope = new TopStaticLexicalScope(
                 outerLocalNames != null ? new RuntimeLexicalScope(outerLocalNames) : null);
             _scopes.Push(scope);
             var statements = BuildStatements(node.Statements);
             _scopes.Pop();
-            return new SourceUnitTree(scope, statements, null, _encoding, -1);
+            return new SourceUnitTree(scope, statements, null, _encoding, dataOffset);
         }
 
         private Statements/*!*/ BuildStatements(Pm.PmNode statementsNode) {

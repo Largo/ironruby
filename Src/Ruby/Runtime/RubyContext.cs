@@ -638,6 +638,10 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("KCODE", Runtime.GlobalVariables.KCode);
             DefineGlobalVariableNoLock("-K", Runtime.GlobalVariables.KCode);
 
+            // $=: removed from Ruby long ago, but still defined so that reading or writing it
+            // produces the deprecation warning rather than an unknown-global nil.
+            DefineGlobalVariableNoLock("=", Runtime.GlobalVariables.IgnoreCase);
+
             DefineGlobalVariableNoLock("SAFE", Runtime.GlobalVariables.SafeLevel);
 
             try {
@@ -2520,16 +2524,113 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// A warning in the :deprecated category. MRI gates every categorised warning on
+        /// $VERBOSE not being nil *and* the category being enabled (error.c rb_warn_deprecated),
+        /// and prefixes the message with the location of the frame that triggered it.
+        /// </summary>
+        public void ReportDeprecationWarning(string/*!*/ message) {
+            ReportCategoryWarning("deprecated", message);
+        }
+
+        public void ReportCategoryWarning(string/*!*/ category, string/*!*/ message) {
+            if (Verbose == null || !IsWarningEnabled(category)) {
+                return;
+            }
+
+            var text = new StringBuilder();
+            string location = TryGetCurrentSourceLocation();
+            if (location != null) {
+                text.Append(location).Append(": ");
+            }
+            text.Append("warning: ").Append(message).Append('\n');
+
+            DispatchWarning(MutableString.CreateMutable(text.ToString(), RubyEncoding.UTF8), category);
+        }
+
+        /// <summary>
+        /// Writes a fully formed warning message to $stderr, resolving $stderr dynamically and
+        /// adding nothing to the text. This is the tail of the default Warning#warn.
+        /// </summary>
+        public void WriteWarningMessage(MutableString/*!*/ message) {
+            _runtimeErrorSink.WriteMessage(message);
+        }
+
+        #region Warning.warn dispatch
+
+        private RubyModule _warningModule;
+        private CallSite<Func<CallSite, object, object, object>> _warnSite;
+        private CallSite<Func<CallSite, object, object, object, object>> _warnCategorySite;
+
+        /// <summary>
+        /// Hands a finished warning message to Warning.warn so that a Ruby level override sees it,
+        /// mirroring MRI's rb_write_warning_str / rb_warn_category.
+        ///
+        /// <paramref name="category"/> is null for the uncategorised warnings (MRI's rb_warn),
+        /// which call the hook with a single positional argument and no category: keyword at all.
+        /// A categorised warning passes category:, unless the installed warn takes exactly one
+        /// argument - MRI drops the keyword in that case (rb_warning_warn_arity).
+        ///
+        /// Falls back to writing straight to $stderr when Warning.warn is not resolvable yet: the
+        /// very first warnings are emitted while the prelude is still being parsed, before its
+        /// `extend self' has run.
+        /// No re-entrancy guard and no exception swallowing - MRI has neither.
+        /// </summary>
+        internal void DispatchWarning(MutableString/*!*/ message, string category) {
+            RubyModule warningModule = _warningModule;
+            if (warningModule == null) {
+                object value;
+                warningModule = ObjectClass.TryGetConstant(null, "Warning", out value) ? value as RubyModule : null;
+                if (warningModule == null) {
+                    _runtimeErrorSink.WriteMessage(message);
+                    return;
+                }
+                _warningModule = warningModule;
+            }
+
+            var resolved = GetImmediateClassOf(warningModule).ResolveMethod("warn", VisibilityContext.AllVisible);
+            if (!resolved.Found) {
+                _runtimeErrorSink.WriteMessage(message);
+                return;
+            }
+
+            if (category == null || resolved.Info.GetArity() == 1) {
+                if (_warnSite == null) {
+                    Interlocked.CompareExchange(
+                        ref _warnSite,
+                        CallSite<Func<CallSite, object, object, object>>.Create(RubyCallAction.Make(this, "warn", 1)),
+                        null
+                    );
+                }
+                _warnSite.Target(_warnSite, warningModule, message);
+                return;
+            }
+
+            var keywords = new Hash(this);
+            keywords.IsKeywordArguments = true;
+            keywords[CreateAsciiSymbol("category")] = CreateAsciiSymbol(category);
+
+            if (_warnCategorySite == null) {
+                Interlocked.CompareExchange(
+                    ref _warnCategorySite,
+                    CallSite<Func<CallSite, object, object, object, object>>.Create(RubyCallAction.Make(this, "warn", 2)),
+                    null
+                );
+            }
+            _warnCategorySite.Target(_warnCategorySite, warningModule, message, keywords);
+        }
+
+        #endregion
+
+        /// <summary>
         /// The first mutation of a chilled string literal - one written in a file that said
         /// nothing about frozen_string_literal. MRI warns that it will be frozen in a future
         /// version, under the deprecated category rather than $VERBOSE.
         ///
-        /// The message goes straight to $stderr rather than through Warning.warn, so a Ruby level
-        /// override of Warning.warn does not see it. MRI routes it through; closing that gap means
-        /// calling back into Ruby from inside MutableString's mutation guard.
         /// </summary>
         private void ReportChilledStringMutation(MutableString/*!*/ str) {
-            if (!IsWarningEnabled("deprecated")) {
+            // MRI's rb_warn_unchilled_literal gates on $VERBOSE not being nil as well as on the
+            // category, like every other categorised warning.
+            if (Verbose == null || !IsWarningEnabled("deprecated")) {
                 return;
             }
 
@@ -2550,7 +2651,7 @@ namespace IronRuby.Runtime {
                 message.Append(createdAt).Append(": info: the string was created here\n");
             }
 
-            _runtimeErrorSink.WriteMessage(MutableString.CreateMutable(message.ToString(), RubyEncoding.UTF8));
+            DispatchWarning(MutableString.CreateMutable(message.ToString(), RubyEncoding.UTF8), "deprecated");
         }
 
         /// <summary>

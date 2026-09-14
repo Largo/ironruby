@@ -1914,12 +1914,11 @@ module Warning
   # inside MutableString's mutation guard - and -W:category has to be able to set
   # them before any Ruby code runs.
 
-  # Warning.warn is the single hook every Kernel#warn call funnels through in
-  # CRuby; user code overrides it to filter or redirect warnings.
-  def warn(message, *rest)
-    $stderr.write(message)
-    nil
-  end unless method_defined?(:warn)
+  # Warning#warn is implemented in C# (WarningOps) too: it is the single hook every
+  # warning - Kernel#warn, runtime warnings and parser warnings alike - funnels
+  # through, and the first of those are emitted while this very file is being parsed.
+  # `extend self' is what makes Warning.warn find it while keeping Method#owner
+  # == Warning, as CRuby has it.
 
   extend self
 end
@@ -2885,20 +2884,64 @@ module Kernel
     private :__ir_warn__
 
     def warn(*messages, **options)
-      return nil if messages.empty?
-      uplevel = options[:uplevel]
-      if uplevel
-        # IronRuby's Kernel#caller only takes the start argument.
-        location = (caller(uplevel.to_i + 1) || [])[0]
-        prefix = location ? "#{location}: warning: " : nil
+      # The category gate runs before the $VERBOSE gate and before the message check,
+      # matching warning.rb's Kernel#warn: it is the Ruby half of rb_warn_m.
+      category = options[:category]
+      unless category.nil?
+        unless ::Symbol === category
+          unless category.respond_to?(:to_sym)
+            raise ::TypeError, "no implicit conversion of #{category.class} into Symbol"
+          end
+          category = category.to_sym
+        end
+        return nil unless ::Warning[category]
       end
-      text = messages.map { |m| s = m.to_s; s.end_with?("\n") ? s : s + "\n" }.join
+      return nil if messages.empty?
+      return nil if $VERBOSE.nil?
+
+      uplevel = options[:uplevel]
+      unless uplevel.nil?
+        unless ::Integer === uplevel
+          unless uplevel.respond_to?(:to_int)
+            raise ::TypeError, "no implicit conversion of #{uplevel.class} into Integer"
+          end
+          uplevel = uplevel.to_int
+        end
+        raise ::ArgumentError, "negative level (#{uplevel})" if uplevel < 0
+        # IronRuby's Kernel#caller only takes the start argument, and its entries carry a
+        # trailing ":in `method'" that MRI's uplevel prefix does not.
+        location = (caller(uplevel + 1) || [])[0]
+        location = location.sub(/:in [`'].*\z/, '') if location
+        # MRI prefixes "warning: " even when the level is past the end of the backtrace.
+        prefix = location ? "#{location}: warning: " : "warning: "
+      end
+
+      # Array arguments are expanded, one element per line (MRI joins with the record
+      # separator). Recurse over real Arrays only - probing #to_ary would disturb mocks.
+      flattened = []
+      expand = ->(list) { list.each { |m| ::Array === m ? expand.call(m) : flattened << m } }
+      expand.call(messages)
+      text = flattened.map { |m| s = m.to_s; s.end_with?("\n") ? s : s + "\n" }.join
+      return nil if text.empty?
       text = "#{prefix}#{text}" if prefix
-      # The built-in always appends a newline of its own, so drop the last one.
-      # By bytes, not by characters: a message is allowed to hold bytes that are
-      # invalid in its encoding, and slicing it as characters raises on those.
-      text = text.byteslice(0, text.bytesize - 1) if text.end_with?("\n")
-      __ir_warn__(text)
+
+      # MRI's `exc == rb_mWarning' escape hatch: a Warning#warn override that calls super
+      # lands back here, and routing on would recurse forever.
+      if equal?(::Warning)
+        # The built-in always appends a newline of its own, so drop the last one.
+        # By bytes, not by characters: a message is allowed to hold bytes that are
+        # invalid in its encoding, and slicing it as characters raises on those.
+        raw = text.end_with?("\n") ? text.byteslice(0, text.bytesize - 1) : text
+        __ir_warn__(raw)
+        return nil
+      end
+
+      # rb_warning_warn_arity: an override that takes exactly one argument gets no keywords.
+      if ::Warning.method(:warn).arity == 1
+        ::Warning.warn(text)
+      else
+        ::Warning.warn(text, category: category)
+      end
       nil
     end
     module_function :warn

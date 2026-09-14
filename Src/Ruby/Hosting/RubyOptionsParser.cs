@@ -335,20 +335,25 @@ namespace IronRuby.Hosting {
                     _warningCategoryFlags.Add(optionValue);
                     break;
 
+                // The -W numeric levels also move the category bits, exactly as MRI's
+                // proc_W_option does over RB_WARN_CATEGORY_DEFAULT_BITS (deprecated|experimental).
+                // They share the ordered list with -W:category so that the later flag wins per bit.
                 case "-W0":
                     LanguageSetup.Options["Verbosity"] = 0; // $VERBOSE = nil
+                    _warningCategoryFlags.Add("no-deprecated");
+                    _warningCategoryFlags.Add("no-experimental");
                     break;
 
                 case "-W1":
                     LanguageSetup.Options["Verbosity"] = 1; // $VERBOSE = false
+                    _warningCategoryFlags.Add("no-deprecated");
                     break;
 
                 case "-w":
                 case "-W2":
                     LanguageSetup.Options["Verbosity"] = 2; // $VERBOSE = true
-                    // $VERBOSE = true turns the deprecated category on, and it goes in the same
-                    // ordered list as -W:no-deprecated so that the later flag wins.
                     _warningCategoryFlags.Add("deprecated");
+                    _warningCategoryFlags.Add("experimental");
                     break;
 
                 #endregion
