@@ -5179,7 +5179,12 @@ class Enumerator
     def yield(*args)
       @block.call(*args)
     end
-    alias_method :<<, :yield
+
+    # Unlike #yield, #<< answers the yielder so that it can be chained.
+    def <<(value)
+      @block.call(value)
+      self
+    end
 
     def call(*args)
       @block.call(*args)
@@ -5203,16 +5208,28 @@ class Enumerator
         @generator = block
         @__size__ = args[0] unless args.empty?
       else
-        if args.empty?
-          ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1+)")
-        end
-        target = args[0]
-        method = args.size > 1 ? args[1] : :each
-        __enum_init__(target, method, args[2..-1] || [])
+        # Ruby 3.0 removed Enumerator.new(obj, meth, *args); only the block form
+        # is left. __enum_init__ is still how the prelude builds one internally.
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
       end
+      @__initialized__ = true
+      self
     end
 
-    def each(&block)
+    # Ruby 1.9: extra arguments are appended to the ones the enumerator was built
+    # with and handed to the underlying method; without a block that produces a
+    # new enumerator rather than iterating.
+    def each(*args, &block)
+      unless args.empty?
+        target = __enum_target__
+        if target
+          receiver, method, initial = target
+          arguments = initial + args
+          return receiver.to_enum(method, *arguments) unless block
+          return receiver.__send__(method, *arguments, &block)
+        end
+      end
+
       return self unless block
       if @generator
         @generator.call(Yielder.new(&block))
@@ -5223,7 +5240,24 @@ class Enumerator
     end
   end
 
+  # nil means "no offset", and anything else has to answer #to_int - a Float
+  # offset is truncated rather than counted up in halves.
+  def __index_offset__(offset)
+    return 0 if offset.nil?
+    return offset if offset.is_a?(::Integer)
+    unless offset.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{offset.class} into Integer")
+    end
+    converted = offset.to_int
+    unless converted.is_a?(::Integer)
+      ::Kernel.raise(::TypeError, "can't convert #{offset.class} to Integer")
+    end
+    converted
+  end
+  private :__index_offset__
+
   def with_index(offset = 0)
+    offset = __index_offset__(offset)
     unless block_given?
       # yield [value, index] pairs, lazily, via the generator form above
       source = self
@@ -5242,9 +5276,15 @@ class Enumerator
     end
   end unless method_defined?(:with_index)
 
-  def each_with_index(&block)
+  # Enumerable's #each_with_index would win here and it answers self; MRI's
+  # Enumerator#each_with_index is #with_index(0), which answers whatever the
+  # underlying #each answered, and it takes no arguments at all.
+  def each_with_index(*args, &block)
+    unless args.empty?
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)")
+    end
     with_index(0, &block)
-  end unless method_defined?(:each_with_index)
+  end
 
   def with_object(memo)
     unless block_given?
@@ -5257,7 +5297,9 @@ class Enumerator
     end
     memo
   end unless method_defined?(:with_object)
-  alias_method :each_with_object, :with_object unless method_defined?(:each_with_object)
+  # Same story as #each_with_index: Enumerable's version would shadow this one,
+  # and the specs check that the two really are the same method.
+  alias_method :each_with_object, :with_object
 
   # --- #size -----------------------------------------------------------
   # MRI gives every enumerator a size function: an Integer, a Proc, or nil when
@@ -5271,7 +5313,7 @@ class Enumerator
 
   def size
     n = @__size__
-    return n.call if n.is_a?(::Proc) || n.is_a?(::Method)
+    return n.call if !n.is_a?(::Numeric) && n.respond_to?(:call)
     return n unless n.nil?
     info = __enum_size_info__
     return __size_from_info__(info[0], info[1], info[2]) if info
@@ -5385,6 +5427,8 @@ class Enumerator
     target = (@generator ? nil : __enum_target__)
     return "#<#{self.class}: #{@generator ? 'generator' : '...'}>" unless target
     recv, meth, args = target
+    # Enumerator.allocate never got a receiver.
+    return "#<#{self.class}: uninitialized>" if recv.nil? && meth == :each && args.empty?
     detail = "#{recv.inspect}:#{meth}"
     detail += "(#{args.map { |a| a.inspect }.join(', ')})" unless args.empty?
     "#<#{self.class}: #{detail}>"
@@ -6140,7 +6184,10 @@ module Kernel
   # MRI defaults the method to :each and takes an optional block returning the
   # enumerator's #size.
   def to_enum(method = :each, *args, &size_block)
-    enum = ::Enumerator.new(self, method, *args)
+    # Not Enumerator.new: Ruby 3.0 removed its (obj, meth, *args) form, and the
+    # class-level initializer is what to_enum used to reach through.
+    enum = ::Enumerator.allocate
+    enum.__send__(:__enum_init__, self, method, args)
     enum.__set_size__(size_block) if size_block
     enum
   end
