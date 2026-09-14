@@ -4305,35 +4305,210 @@ class Dir
 end
 
 module Errno
-  # Linux errno numbers. Two jobs here: bind the names the 1.9 snapshot never
-  # bound, and give the C#-registered classes their Errno constant -- those are
-  # CLR-backed and carry no number, so Errno::ENOENT::Errno used to resolve up
-  # to the Errno module itself instead of 2.
-  {
-    "EPERM" => 1, "ENOENT" => 2, "ESRCH" => 3, "EINTR" => 4, "EIO" => 5,
-    "ENXIO" => 6, "E2BIG" => 7, "ENOEXEC" => 8, "EBADF" => 9, "ECHILD" => 10,
-    "EAGAIN" => 11, "EWOULDBLOCK" => 11, "ENOMEM" => 12, "EACCES" => 13,
-    "EFAULT" => 14, "EBUSY" => 16, "EEXIST" => 17, "EXDEV" => 18,
-    "ENODEV" => 19, "ENOTDIR" => 20, "EISDIR" => 21, "EINVAL" => 22,
-    "ENFILE" => 23, "EMFILE" => 24, "ENOTTY" => 25, "EFBIG" => 27,
-    "ENOSPC" => 28, "ESPIPE" => 29, "EROFS" => 30, "EMLINK" => 31,
-    "EPIPE" => 32, "EDOM" => 33, "ERANGE" => 34, "ENAMETOOLONG" => 36,
-    "ENOTEMPTY" => 39, "ELOOP" => 40, "EADDRINUSE" => 98, "ECONNABORTED" => 103,
-    "ECONNRESET" => 104, "ENOTCONN" => 107, "ECONNREFUSED" => 111,
-    "EHOSTDOWN" => 112, "EINPROGRESS" => 115,
-  }.each do |name, errno|
-    if const_defined?(name)
+  # Linux errno numbers and the messages strerror(3) gives for them. Three jobs:
+  # bind the names the 1.9 snapshot never bound, give the C#-registered classes
+  # their Errno constant -- those are CLR-backed and carry no number, so
+  # Errno::ENOENT::Errno used to resolve up to the Errno module itself instead of
+  # 2 -- and supply the default message for SystemCallError#initialize below,
+  # since the CLR-backed classes spell several of them differently from MRI
+  # ("Invalid Argument" for EINVAL).
+  ERRNO_TABLE = {
+    0 => ["NOERROR", "Success"], 1 => ["EPERM", "Operation not permitted"],
+    2 => ["ENOENT", "No such file or directory"], 3 => ["ESRCH", "No such process"],
+    4 => ["EINTR", "Interrupted system call"], 5 => ["EIO", "Input/output error"],
+    6 => ["ENXIO", "No such device or address"], 7 => ["E2BIG", "Argument list too long"],
+    8 => ["ENOEXEC", "Exec format error"], 9 => ["EBADF", "Bad file descriptor"],
+    10 => ["ECHILD", "No child processes"], 11 => ["EAGAIN", "Resource temporarily unavailable"],
+    12 => ["ENOMEM", "Cannot allocate memory"], 13 => ["EACCES", "Permission denied"],
+    14 => ["EFAULT", "Bad address"], 15 => ["ENOTBLK", "Block device required"],
+    16 => ["EBUSY", "Device or resource busy"], 17 => ["EEXIST", "File exists"],
+    18 => ["EXDEV", "Invalid cross-device link"], 19 => ["ENODEV", "No such device"],
+    20 => ["ENOTDIR", "Not a directory"], 21 => ["EISDIR", "Is a directory"],
+    22 => ["EINVAL", "Invalid argument"], 23 => ["ENFILE", "Too many open files in system"],
+    24 => ["EMFILE", "Too many open files"], 25 => ["ENOTTY", "Inappropriate ioctl for device"],
+    26 => ["ETXTBSY", "Text file busy"], 27 => ["EFBIG", "File too large"],
+    28 => ["ENOSPC", "No space left on device"], 29 => ["ESPIPE", "Illegal seek"],
+    30 => ["EROFS", "Read-only file system"], 31 => ["EMLINK", "Too many links"],
+    32 => ["EPIPE", "Broken pipe"], 33 => ["EDOM", "Numerical argument out of domain"],
+    34 => ["ERANGE", "Numerical result out of range"], 35 => ["EDEADLK", "Resource deadlock avoided"],
+    36 => ["ENAMETOOLONG", "File name too long"], 37 => ["ENOLCK", "No locks available"],
+    38 => ["ENOSYS", "Function not implemented"], 39 => ["ENOTEMPTY", "Directory not empty"],
+    40 => ["ELOOP", "Too many levels of symbolic links"], 42 => ["ENOMSG", "No message of desired type"],
+    43 => ["EIDRM", "Identifier removed"], 44 => ["ECHRNG", "Channel number out of range"],
+    45 => ["EL2NSYNC", "Level 2 not synchronized"], 46 => ["EL3HLT", "Level 3 halted"],
+    47 => ["EL3RST", "Level 3 reset"], 48 => ["ELNRNG", "Link number out of range"],
+    49 => ["EUNATCH", "Protocol driver not attached"], 50 => ["ENOCSI", "No CSI structure available"],
+    51 => ["EL2HLT", "Level 2 halted"], 52 => ["EBADE", "Invalid exchange"],
+    53 => ["EBADR", "Invalid request descriptor"], 54 => ["EXFULL", "Exchange full"],
+    55 => ["ENOANO", "No anode"], 56 => ["EBADRQC", "Invalid request code"],
+    57 => ["EBADSLT", "Invalid slot"], 59 => ["EBFONT", "Bad font file format"],
+    60 => ["ENOSTR", "Device not a stream"], 61 => ["ENODATA", "No data available"],
+    62 => ["ETIME", "Timer expired"], 63 => ["ENOSR", "Out of streams resources"],
+    64 => ["ENONET", "Machine is not on the network"], 65 => ["ENOPKG", "Package not installed"],
+    66 => ["EREMOTE", "Object is remote"], 67 => ["ENOLINK", "Link has been severed"],
+    68 => ["EADV", "Advertise error"], 69 => ["ESRMNT", "Srmount error"],
+    70 => ["ECOMM", "Communication error on send"], 71 => ["EPROTO", "Protocol error"],
+    72 => ["EMULTIHOP", "Multihop attempted"], 73 => ["EDOTDOT", "RFS specific error"],
+    74 => ["EBADMSG", "Bad message"], 75 => ["EOVERFLOW", "Value too large for defined data type"],
+    76 => ["ENOTUNIQ", "Name not unique on network"], 77 => ["EBADFD", "File descriptor in bad state"],
+    78 => ["EREMCHG", "Remote address changed"], 79 => ["ELIBACC", "Can not access a needed shared library"],
+    80 => ["ELIBBAD", "Accessing a corrupted shared library"], 81 => ["ELIBSCN", ".lib section in a.out corrupted"],
+    82 => ["ELIBMAX", "Attempting to link in too many shared libraries"], 83 => ["ELIBEXEC", "Cannot exec a shared library directly"],
+    84 => ["EILSEQ", "Invalid or incomplete multibyte or wide character"], 85 => ["ERESTART", "Interrupted system call should be restarted"],
+    86 => ["ESTRPIPE", "Streams pipe error"], 87 => ["EUSERS", "Too many users"],
+    88 => ["ENOTSOCK", "Socket operation on non-socket"], 89 => ["EDESTADDRREQ", "Destination address required"],
+    90 => ["EMSGSIZE", "Message too long"], 91 => ["EPROTOTYPE", "Protocol wrong type for socket"],
+    92 => ["ENOPROTOOPT", "Protocol not available"], 93 => ["EPROTONOSUPPORT", "Protocol not supported"],
+    94 => ["ESOCKTNOSUPPORT", "Socket type not supported"], 95 => ["ENOTSUP", "Operation not supported"],
+    96 => ["EPFNOSUPPORT", "Protocol family not supported"], 97 => ["EAFNOSUPPORT", "Address family not supported by protocol"],
+    98 => ["EADDRINUSE", "Address already in use"], 99 => ["EADDRNOTAVAIL", "Cannot assign requested address"],
+    100 => ["ENETDOWN", "Network is down"], 101 => ["ENETUNREACH", "Network is unreachable"],
+    102 => ["ENETRESET", "Network dropped connection on reset"], 103 => ["ECONNABORTED", "Software caused connection abort"],
+    104 => ["ECONNRESET", "Connection reset by peer"], 105 => ["ENOBUFS", "No buffer space available"],
+    106 => ["EISCONN", "Transport endpoint is already connected"], 107 => ["ENOTCONN", "Transport endpoint is not connected"],
+    108 => ["ESHUTDOWN", "Cannot send after transport endpoint shutdown"], 109 => ["ETOOMANYREFS", "Too many references: cannot splice"],
+    110 => ["ETIMEDOUT", "Connection timed out"], 111 => ["ECONNREFUSED", "Connection refused"],
+    112 => ["EHOSTDOWN", "Host is down"], 113 => ["EHOSTUNREACH", "No route to host"],
+    114 => ["EALREADY", "Operation already in progress"], 115 => ["EINPROGRESS", "Operation now in progress"],
+    116 => ["ESTALE", "Stale file handle"], 117 => ["EUCLEAN", "Structure needs cleaning"],
+    118 => ["ENOTNAM", "Not a XENIX named type file"], 119 => ["ENAVAIL", "No XENIX semaphores available"],
+    120 => ["EISNAM", "Is a named type file"], 121 => ["EREMOTEIO", "Remote I/O error"],
+    122 => ["EDQUOT", "Disk quota exceeded"], 123 => ["ENOMEDIUM", "No medium found"],
+    124 => ["EMEDIUMTYPE", "Wrong medium type"], 125 => ["ECANCELED", "Operation canceled"],
+    126 => ["ENOKEY", "Required key not available"], 127 => ["EKEYEXPIRED", "Key has expired"],
+    128 => ["EKEYREVOKED", "Key has been revoked"], 129 => ["EKEYREJECTED", "Key was rejected by service"],
+    130 => ["EOWNERDEAD", "Owner died"], 131 => ["ENOTRECOVERABLE", "State not recoverable"],
+    132 => ["ERFKILL", "Operation not possible due to RF-kill"], 133 => ["EHWPOISON", "Memory page has hardware error"],
+  }.freeze
+
+  ERRNO_ALIASES = { "EDEADLOCK" => "EDEADLK", "EOPNOTSUPP" => "ENOTSUP", "EWOULDBLOCK" => "EAGAIN" }.freeze
+
+  ERRNO_CLASSES = {}
+
+  ERRNO_TABLE.each do |errno, (name, message)|
+    if const_defined?(name, false)
       klass = const_get(name)
-      # const_defined? without the second argument would find the enclosing
-      # Errno module through the lexical scope, so restrict it to this class.
-      klass.const_set(:Errno, errno) unless klass.const_defined?(:Errno, false)
     else
-      klass = Class.new(SystemCallError) do
-        define_method(:initialize) { |msg = nil| super(msg ? "#{name}: #{msg}" : name) }
-      end
-      klass.const_set(:Errno, errno)
+      klass = Class.new(SystemCallError)
       const_set(name, klass)
     end
+    # const_defined? without the second argument would find the enclosing Errno
+    # module through the lexical scope, so restrict the lookup to the class.
+    klass.const_set(:Errno, errno) unless klass.const_defined?(:Errno, false)
+    klass.const_set(:Message, message) unless klass.const_defined?(:Message, false)
+    ERRNO_CLASSES[errno] ||= klass
+  end
+
+  # MRI makes EWOULDBLOCK *the same class* as EAGAIN where the numbers agree.
+  ERRNO_ALIASES.each do |name, target|
+    next unless const_defined?(target, false)
+    remove_const(name) if const_defined?(name, false)
+    const_set(name, const_get(target))
+  end
+
+  ERRNO_CLASSES.freeze
+end
+
+# SystemCallError's constructor understood exactly one argument: either a message
+# or an errno, never both, never a location, and it never picked the matching
+# Errno subclass. MRI's shape is
+#
+#   SystemCallError.new(errno)
+#   SystemCallError.new(message, errno)
+#   SystemCallError.new(message, errno, location)
+#   Errno::EINVAL.new(message = nil, location = nil)
+#
+# and the message is "<strerror> @ <location> - <message>", with each part dropped
+# when absent.
+class SystemCallError
+  def self.__errno_of__(klass)
+    klass.const_defined?(:Errno, false) ? klass.const_get(:Errno) : nil
+  end
+
+  def self.__default_message__(klass, errno)
+    return klass.const_get(:Message) if klass.const_defined?(:Message, false)
+    errno.nil? ? "unknown error" : "Unknown error #{errno}"
+  end
+
+  # MRI converts the errno with Integer(), so a Float or an exactly-real Complex
+  # is truncated and a String is a TypeError.
+  def self.__coerce_errno__(errno)
+    return nil if errno.nil?
+    return errno if errno.is_a?(::Integer)
+    if errno.is_a?(::Float)
+      ::Kernel.raise(::FloatDomainError, errno.to_s) if errno.nan? || errno.infinite?
+      return errno.truncate
+    end
+    if defined?(::Complex) && errno.is_a?(::Complex)
+      unless errno.imaginary == 0
+        ::Kernel.raise(::RangeError, "can't convert #{errno} into Integer")
+      end
+      return __coerce_errno__(errno.real)
+    end
+    unless errno.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{errno.class} into Integer")
+    end
+    errno.to_int
+  end
+
+  def self.__coerce_message__(message)
+    return nil if message.nil?
+    return message if message.is_a?(::String)
+    unless message.respond_to?(:to_str)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{message.class} into String")
+    end
+    message.to_str
+  end
+
+  def self.__build_message__(default, message, location)
+    text = default.dup
+    text << " @ " << location.to_s unless location.nil?
+    text << " - " << message unless message.nil?
+    text
+  end
+
+  def self.new(*args)
+    if equal?(::SystemCallError) && !args.empty?
+      if args.size == 1 && !args[0].is_a?(::String) && !args[0].respond_to?(:to_str)
+        message, errno = nil, __coerce_errno__(args[0])
+      else
+        message, errno = __coerce_message__(args[0]), __coerce_errno__(args[1])
+      end
+      # A known errno names a subclass; an unknown one stays a plain
+      # SystemCallError that remembers the number for #errno.
+      klass = ::Errno::ERRNO_CLASSES[errno]
+      return klass.new(message, args[2]) if klass
+      return super(message, errno, args[2])
+    end
+    super
+  end
+
+  def initialize(*args)
+    klass = self.class
+    if klass.equal?(::SystemCallError)
+      if args.empty?
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1..3)")
+      end
+      if args.size == 1 && !args[0].is_a?(::String) && !args[0].respond_to?(:to_str)
+        message, location, errno = nil, nil, ::SystemCallError.__coerce_errno__(args[0])
+      else
+        message = ::SystemCallError.__coerce_message__(args[0])
+        location = args[2]
+        errno = ::SystemCallError.__coerce_errno__(args[1])
+      end
+    else
+      message = ::SystemCallError.__coerce_message__(args[0])
+      location = args[1]
+      errno = ::SystemCallError.__errno_of__(klass)
+    end
+
+    @__errno__ = errno
+    default = ::SystemCallError.__default_message__(klass, errno)
+    super(::SystemCallError.__build_message__(default, message, location))
+  end
+
+  def errno
+    defined?(@__errno__) ? @__errno__ : super
   end
 end
 
