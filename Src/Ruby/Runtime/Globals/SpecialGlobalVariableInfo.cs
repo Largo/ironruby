@@ -117,6 +117,10 @@ namespace IronRuby.Runtime {
                     context.ReportWarning("variable $KCODE is no longer effective");
                     return null;
 
+                case GlobalVariableId.IgnoreCase:
+                    context.ReportDeprecationWarning("variable $= is no longer effective");
+                    return false;
+
                 case GlobalVariableId.ChildProcessExitStatus:
                     return context.ChildProcessExitStatus;
 
@@ -195,11 +199,13 @@ namespace IronRuby.Runtime {
 
                 case GlobalVariableId.InputSeparator:
                     context.InputSeparator = RequireInputSeparator(context, value, name);
+                    ReportNonNilDeprecation(context, name, context.InputSeparator);
                     return;
 
                 case GlobalVariableId.OutputSeparator:
                     // unlike $/, the output separator keeps the very string it was given
                     context.OutputSeparator = (value != null) ? RequireType<MutableString>(value, name, "String") : null;
+                    ReportNonNilDeprecation(context, name, context.OutputSeparator);
                     return;
 
                 case GlobalVariableId.StringSeparator:
@@ -207,10 +213,12 @@ namespace IronRuby.Runtime {
                         throw RubyExceptions.CreateTypeError(String.Format("value of ${0} must be String or Regexp", name));
                     }
                     context.StringSeparator = value;
+                    ReportNonNilDeprecation(context, name, context.StringSeparator);
                     return;
 
                 case GlobalVariableId.ItemSeparator:
                     context.ItemSeparator = (value != null) ? RequireType<MutableString>(value, name, "String") : null;
+                    ReportNonNilDeprecation(context, name, context.ItemSeparator);
                     return;
 
 
@@ -238,6 +246,12 @@ namespace IronRuby.Runtime {
                     context.ReportWarning("variable $KCODE is no longer effective");
                     return;
 
+                case GlobalVariableId.IgnoreCase:
+                    // MRI keeps $= readable but discards writes; the assignment expression still
+                    // evaluates to the assigned value by plain assignment semantics.
+                    context.ReportDeprecationWarning("variable $= is no longer effective; ignored");
+                    return;
+
                 case GlobalVariableId.ChildProcessExitStatus:
                     throw ReadOnlyError(name);
                     
@@ -246,6 +260,17 @@ namespace IronRuby.Runtime {
             }
         }
     
+        /// <summary>
+        /// MRI's rb_deprecated_str_setter: after the type check, a non-nil value for one of the
+        /// separator globals is deprecated. The name is the one that was assigned, so $-0 reports
+        /// itself rather than $/ even though both write the same slot.
+        /// </summary>
+        private static void ReportNonNilDeprecation(RubyContext/*!*/ context, string/*!*/ name, object newValue) {
+            if (newValue != null) {
+                context.ReportDeprecationWarning(String.Format("non-nil '${0}' is deprecated", name));
+            }
+        }
+
         private object RequireWriteProtocol(RubyContext/*!*/ context, object value, string/*!*/ variableName) {
             if (!context.RespondTo(value, "write")) {
                 throw RubyExceptions.CreateTypeError(String.Format("${0} must have write method, {1} given", variableName, context.GetClassDisplayName(value)));

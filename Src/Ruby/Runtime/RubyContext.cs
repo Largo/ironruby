@@ -638,6 +638,10 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("KCODE", Runtime.GlobalVariables.KCode);
             DefineGlobalVariableNoLock("-K", Runtime.GlobalVariables.KCode);
 
+            // $=: removed from Ruby long ago, but still defined so that reading or writing it
+            // produces the deprecation warning rather than an unknown-global nil.
+            DefineGlobalVariableNoLock("=", Runtime.GlobalVariables.IgnoreCase);
+
             DefineGlobalVariableNoLock("SAFE", Runtime.GlobalVariables.SafeLevel);
 
             try {
@@ -2517,6 +2521,30 @@ namespace IronRuby.Runtime {
                     SetWarningEnabled(category, true);
                 }
             }
+        }
+
+        /// <summary>
+        /// A warning in the :deprecated category. MRI gates every categorised warning on
+        /// $VERBOSE not being nil *and* the category being enabled (error.c rb_warn_deprecated),
+        /// and prefixes the message with the location of the frame that triggered it.
+        /// </summary>
+        public void ReportDeprecationWarning(string/*!*/ message) {
+            ReportCategoryWarning("deprecated", message);
+        }
+
+        public void ReportCategoryWarning(string/*!*/ category, string/*!*/ message) {
+            if (Verbose == null || !IsWarningEnabled(category)) {
+                return;
+            }
+
+            var text = new StringBuilder();
+            string location = TryGetCurrentSourceLocation();
+            if (location != null) {
+                text.Append(location).Append(": ");
+            }
+            text.Append("warning: ").Append(message).Append('\n');
+
+            _runtimeErrorSink.WriteMessage(MutableString.CreateMutable(text.ToString(), RubyEncoding.UTF8));
         }
 
         /// <summary>
