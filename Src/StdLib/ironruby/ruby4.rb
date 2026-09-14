@@ -3396,13 +3396,27 @@ class String
       s = m[1]
       forced = m[2]
     end
+    if s.start_with?('"') && !s.end_with?('"') && s.count('"') < 2
+      ::Kernel.raise(::RuntimeError, "unterminated dumped string")
+    end
     unless s.start_with?('"') && s.end_with?('"') && s.length >= 2
       ::Kernel.raise(::RuntimeError, "invalid dumped string; not wrapped with '\"' nor '\"...\".force_encoding(\"...\")' form")
     end
+    if forced && !__known_encoding__(forced)
+      ::Kernel.raise(::RuntimeError, "dumped string has unknown encoding name")
+    end
     body = s[1...-1]
     ::Kernel.raise(::RuntimeError, "invalid dumped string") if body.nil?
+    # The dumped form is plain ASCII; a NUL or a non-ASCII character in it means
+    # it did not come from #dump.
+    body.each_char do |ch|
+      if ch == "\0"
+        ::Kernel.raise(::RuntimeError, "string contains null byte")
+      elsif ch.ord > 0x7f
+        ::Kernel.raise(::RuntimeError, "non-ASCII character detected")
+      end
+    end
     out = +""
-    forced = nil
     i = 0
     while i < body.length
       c = body[i]
@@ -3434,7 +3448,7 @@ class String
         when "u"
           if body[i + 1] == "{"
             close = body.index("}", i + 1)
-            ::Kernel.raise(::RuntimeError, "unterminated Unicode escape") unless close
+            ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless close
             body[(i + 2)...close].split(" ").each { |cp| out << __undump_cp__(cp) }
             i = close
           else
@@ -3452,9 +3466,21 @@ class String
       end
       i += 1
     end
-    out.force_encoding(forced) if forced && out.respond_to?(:force_encoding)
+    # Without a .force_encoding(...) suffix the answer carries the receiver's
+    # own encoding, not UTF-8.
+    if out.respond_to?(:force_encoding)
+      out.force_encoding(forced || encoding)
+    end
     out
   end unless method_defined?(:undump)
+
+  def __known_encoding__(name)
+    ::Encoding.find(name)
+    true
+  rescue ::ArgumentError
+    false
+  end
+  private :__known_encoding__
 
   def __undump_cp__(hex)
     ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless hex =~ /\A[0-9a-fA-F]+\z/

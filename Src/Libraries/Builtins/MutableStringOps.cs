@@ -1483,6 +1483,15 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Dump(MutableString/*!*/ self) {
             // Note that "self" could be a subclass of MutableString, and the return value should be
             // of the same type
+            if (!self.Encoding.IsAsciiIdentity) {
+                // A string whose encoding is not ASCII-compatible cannot be dumped as text:
+                // MRI escapes its *bytes* and appends the call that puts the encoding back.
+                var bytes = MutableString.CreateBinary(self.ToByteArray());
+                string quoted = GetQuotedStringRepresentation(bytes, true, '"')
+                    + ".force_encoding(\"" + self.Encoding.Name + "\")";
+                return MutableString.Create(quoted, RubyEncoding.Ascii).TaintBy(self);
+            }
+
             return self.CreateDerived().Append(GetQuotedStringRepresentation(self, true, '"')).TaintBy(self);
         }
 
