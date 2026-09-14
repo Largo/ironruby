@@ -397,7 +397,8 @@ namespace IronRuby.Builtins {
             if (limit == 0) {
                 return MutableString.CreateEmpty();
             } else if (separator == null) {
-                var result = MutableString.CreateBinary();
+                // The whole of what is left, in the stream's own encoding rather than as bytes.
+                var result = MutableString.CreateBinary(encoding);
                 return AppendBytes(result, limit, preserveEndOfLines) == 0 ? null : result;
             } else if (separator.StartsWith('\n') && separator.GetLength() == 1) {
                 // The buffer-scanning reader has no way to stop part way through a line, so a

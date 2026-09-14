@@ -9629,10 +9629,25 @@ class IO
   end
   private :__take_chomp__
 
-  def __chomp_line__(line, separator)
+  # chomp removes the separator that was actually found, so what counts is which
+  # separator the read used - and whether one was given at all. An explicit nil
+  # separator reads the whole content and has nothing to chomp; an empty one reads
+  # paragraphs, whose separator is the run of newlines that ended them, and the
+  # last chunk of a file ends at end of file rather than at a separator.
+  def __chomp_line__(line, args)
     return line if line.nil?
-    sep = separator.is_a?(::String) ? separator : $/
-    return line if sep.nil? || sep.empty?
+    if args.empty?
+      sep = $/
+    else
+      sep = args[0]
+      return line if sep.nil?
+      sep = $/ unless sep.is_a?(::String)
+    end
+    return line if sep.nil?
+    if sep.empty?
+      return line unless line.end_with?("\n\n")
+      return line.sub(/\n+\z/, "")
+    end
     line.end_with?(sep) ? line[0...(line.length - sep.length)] : line
   end
   private :__chomp_line__
@@ -9642,7 +9657,7 @@ class IO
   def gets(*args)
     args, chomp = __take_chomp__(args)
     line = __transcode__(__ir_gets__(*args))
-    chomp ? __chomp_line__(line, args[0]) : line
+    chomp ? __chomp_line__(line, args) : line
   end
 
   alias_method :__ir_readline__, :readline
@@ -9650,7 +9665,7 @@ class IO
   def readline(*args)
     args, chomp = __take_chomp__(args)
     line = __transcode__(__ir_readline__(*args))
-    chomp ? __chomp_line__(line, args[0]) : line
+    chomp ? __chomp_line__(line, args) : line
   end
 
   alias_method :__ir_readlines__, :readlines
@@ -9658,7 +9673,7 @@ class IO
   def readlines(*args)
     args, chomp = __take_chomp__(args)
     lines = __ir_readlines__(*args).map { |l| __transcode__(l) }
-    chomp ? lines.map { |l| __chomp_line__(l, args[0]) } : lines
+    chomp ? lines.map { |l| __chomp_line__(l, args) } : lines
   end
 
   alias_method :__ir_each_line__, :each_line
@@ -9670,7 +9685,7 @@ class IO
     end
     __ir_each_line__(*args) do |line|
       line = __transcode__(line)
-      block.call(chomp ? __chomp_line__(line, args[0]) : line)
+      block.call(chomp ? __chomp_line__(line, args) : line)
     end
   end
 
@@ -9684,30 +9699,33 @@ class IO
   class << self
     alias_method :__ir_class_readlines__, :readlines
 
+    # IO.readlines and IO.foreach are the instance methods on a stream opened for
+    # the occasion, which is how the mode: and encoding options in the trailing
+    # hash get a chance to apply - the specs open a file for writing that way and
+    # expect the read to fail.
     def readlines(name, *args)
       options = args.last.is_a?(::Hash) ? args.pop : nil
-      chomp = options && options[:chomp]
-      lines = __ir_class_readlines__(name, *args)
-      return lines unless chomp
-      sep = args[0].is_a?(::String) ? args[0] : $/
-      lines.map { |l| (sep && !sep.empty? && l.end_with?(sep)) ? l[0...(l.length - sep.length)] : l }
+      ::File.open(name, (options && options[:mode]) || "r") do |io|
+        options ? io.readlines(*args, **options.reject { |k, _| k == :mode }) : io.readlines(*args)
+      end
     end
 
     alias_method :__ir_foreach__, :foreach
 
     def foreach(name, *args, &block)
       options = args.last.is_a?(::Hash) ? args.pop : nil
-      chomp = options && options[:chomp]
       unless block
-        return ::Enumerator.new { |y| foreach(name, *args, chomp: chomp) { |l| y << l } }
+        return ::Enumerator.new { |y| foreach(name, *args, **(options || {})) { |l| y << l } }
       end
-      sep = args[0].is_a?(::String) ? args[0] : $/
-      __ir_foreach__(name, *args) do |line|
-        if chomp && sep && !sep.empty? && line.end_with?(sep)
-          line = line[0...(line.length - sep.length)]
+      ::File.open(name, (options && options[:mode]) || "r") do |io|
+        if options
+          io.each_line(*args, **options.reject { |k, _| k == :mode }, &block)
+        else
+          io.each_line(*args, &block)
         end
-        block.call(line)
       end
+      # MRI's IO.foreach answers nil when it was given a block.
+      nil
     end
   end
 
