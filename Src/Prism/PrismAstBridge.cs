@@ -539,8 +539,8 @@ namespace IronRuby.Prism {
                     return new SuperCall(superArgs, superBlock, span);
                 }
                 case Pm.ForwardingSuperNode forwardingSuper:
-                    return new SuperCall(null,
-                        forwardingSuper.Block != null ? BlockDef((Pm.BlockNode)forwardingSuper.Block) : null, span);
+                    return new SuperCall(_zsuperArguments,
+                        forwardingSuper.Block != null ? BlockDef((Pm.BlockNode)forwardingSuper.Block) : null, span, true);
 
                 case Pm.ForNode forNode: {
                     // index and collection belong to the outer scope; only the body is
@@ -1238,11 +1238,17 @@ namespace IronRuby.Prism {
             try {
                 Statements prologue = null;
                 Parameters parameters = Parameters.Empty;
-                if (node.Parameters != null) {
-                    parameters = BuildParameters((Pm.ParametersNode)node.Parameters, false, true, out prologue);
+                var enclosingZSuperArguments = _zsuperArguments;
+                _zsuperArguments = null;
+                try {
+                    if (node.Parameters != null) {
+                        parameters = BuildParameters((Pm.ParametersNode)node.Parameters, false, true, out prologue);
+                    }
+                    var body = DefinitionBody(node.Body, span, prologue);
+                    return new MethodDefinition(scope, target, node.Name, parameters, body, span);
+                } finally {
+                    _zsuperArguments = enclosingZSuperArguments;
                 }
-                var body = DefinitionBody(node.Body, span, prologue);
-                return new MethodDefinition(scope, target, node.Name, parameters, body, span);
             } finally {
                 _scopes.Pop();
             }
@@ -1311,6 +1317,78 @@ namespace IronRuby.Prism {
         }
 
         // ---- parameters (including keyword-argument lowering) ----
+
+        /// <summary>
+        /// The argument list a parameterless `super` in the method being built should use, or
+        /// null to let <see cref="SuperCall"/> read the parameters itself. It is only needed for
+        /// a signature with keyword parameters: those were lowered onto a trailing hash, so the
+        /// hash the parent expects has to be rebuilt from the keyword locals.
+        /// </summary>
+        private Arguments _zsuperArguments;
+
+        /// <summary>
+        ///   def m(a, b: 1, **rest); super; end   =>   super(a, **{b: b}.merge(rest))
+        /// The keyword values are read at the call site, so a body that reassigns one passes the
+        /// new value, as MRI does. Returns null when there are no keywords to rebuild.
+        /// </summary>
+        /// <summary>
+        /// The positional parameters of a generally-lowered signature, read back by name.
+        /// Returns null if one of them has no name to read it back by, in which case the
+        /// original argument list kept aside by the prologue is forwarded instead.
+        /// </summary>
+        private List<Expression> ZSuperPositionalArguments(Pm.ParametersNode/*!*/ node) {
+            var result = new List<Expression>();
+
+            foreach (var required in node.Requireds) {
+                if (!(required is Pm.RequiredParameterNode param)) return null;
+                result.Add(CurrentScope.ResolveOrAddVariable(param.Name, Span(required)));
+            }
+
+            foreach (var opt in node.Optionals) {
+                var param = (Pm.OptionalParameterNode)opt;
+                result.Add(CurrentScope.ResolveOrAddVariable(param.Name, Span(opt)));
+            }
+
+            if (node.Rest != null) {
+                if (!(node.Rest is Pm.RestParameterNode rest) || rest.Name == null) return null;
+                result.Add(new SplattedArgument(CurrentScope.ResolveOrAddVariable(rest.Name, Span(node.Rest))));
+            }
+
+            foreach (var post in node.Posts) {
+                if (!(post is Pm.RequiredParameterNode param)) return null;
+                result.Add(CurrentScope.ResolveOrAddVariable(param.Name, Span(post)));
+            }
+
+            return result;
+        }
+
+        private Arguments ZSuperArguments(Pm.ParametersNode/*!*/ node, List<Expression> positional) {
+            if (positional == null || node.Keywords.Length == 0) {
+                return null;
+            }
+
+            var span = Span(node);
+            var maplets = new List<Maplet>();
+            foreach (var keyword in node.Keywords) {
+                string name = keyword is Pm.RequiredKeywordParameterNode required
+                    ? required.Name
+                    : ((Pm.OptionalKeywordParameterNode)keyword).Name;
+                maplets.Add(new Maplet(new SymbolLiteral(name, _encoding, span),
+                    CurrentScope.ResolveOrAddVariable(name, span), span));
+            }
+
+            Expression hash = new HashConstructor(maplets.ToArray(), span);
+            if (node.KeywordRest is Pm.KeywordRestParameterNode keywordRest && keywordRest.Name != null) {
+                // MRI orders the forwarded hash rest-first: `def m(b: 1, **rest)` called with
+                // z: 2 supers with {z: 2, b: 1}
+                hash = new MethodCall(CurrentScope.ResolveOrAddVariable(keywordRest.Name, span), "merge",
+                    new Arguments(hash), span);
+            }
+
+            var arguments = new List<Expression>(positional);
+            arguments.Add(new KeywordArgumentSplat(hash));
+            return new Arguments(arguments.ToArray());
+        }
 
         private Parameters/*!*/ BuildParameters(Pm.ParametersNode/*!*/ node, bool autoSplat, out Statements prologue) {
             return BuildParameters(node, autoSplat, false, out prologue);
@@ -1454,9 +1532,13 @@ namespace IronRuby.Prism {
             // not have their own calling-convention slot here.
             if (node.Keywords.Length > 0 || node.KeywordRest is Pm.KeywordRestParameterNode) {
                 if (optional.Count > 0 || unsplat != null || node.Posts.Length > 0) {
-                    return LowerGeneralParameters(node, autoSplat, span, out prologue);
+                    return LowerGeneralParameters(node, autoSplat, isMethod, span, out prologue);
                 }
                 prologue = LowerKeywords(node, optional, span);
+                if (isMethod) {
+                    // only leading mandatory parameters can be here, and they are all locals
+                    _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
+                }
             } else if (node.KeywordRest is Pm.ForwardingParameterNode) {
                 // def f(...) => def f(*?fwd?, &?fwdblk?); calls with `...` splat them back
                 if (unsplat != null) throw Unsupported(node.KeywordRest);
@@ -1518,7 +1600,7 @@ namespace IronRuby.Prism {
         ///
         /// Execution semantics match MRI; arity and Method#parameters do not.
         /// </summary>
-        private Parameters/*!*/ LowerGeneralParameters(Pm.ParametersNode/*!*/ node, bool autoSplat, SourceSpan span, out Statements prologue) {
+        private Parameters/*!*/ LowerGeneralParameters(Pm.ParametersNode/*!*/ node, bool autoSplat, bool isMethod, SourceSpan span, out Statements prologue) {
             var args = DefineParameter("?args?", span);
             var statements = new Statements();
             int postCount = node.Posts.Length;
@@ -1602,6 +1684,10 @@ namespace IronRuby.Prism {
             }
 
             prologue = statements;
+
+            if (isMethod) {
+                _zsuperArguments = ZSuperArguments(node, ZSuperPositionalArguments(node));
+            }
 
             LocalVariable blockParam = null;
             if (node.Block is Pm.BlockParameterNode block) {

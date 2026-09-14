@@ -40,15 +40,25 @@ namespace IronRuby.Compiler.Ast {
     /// Also works from a method defined using define_method.
     /// </summary>
     public partial class SuperCall : CallExpression {
+        // True for `super` without an argument list, even when the front end synthesized one
+        // from the parameters (which it does for a signature with keyword parameters).
+        private readonly bool _argumentsAreImplicit;
+
         /// <summary>
-        /// All non-block arguments are passed implicitly.
+        /// All non-block arguments are passed implicitly and this node has to read them off the
+        /// enclosing method's parameter list itself.
         /// </summary>
         public bool HasImplicitArguments {
             get { return Arguments == null; }
         }
 
         public SuperCall(Arguments args, Block block, SourceSpan location)
+            : this(args, block, location, args == null) {
+        }
+
+        public SuperCall(Arguments args, Block block, SourceSpan location, bool argumentsAreImplicit)
             : base(args, block, location) {
+            _argumentsAreImplicit = argumentsAreImplicit;
         }
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
@@ -95,7 +105,7 @@ namespace IronRuby.Compiler.Ast {
             
             return gen.DebugMark(
                 MethodCall.MakeCallWithBlockRetryable(gen,
-                    siteBuilder.MakeSuperCallAction(gen.CurrentFrame.UniqueId, HasImplicitArguments), 
+                    siteBuilder.MakeSuperCallAction(gen.CurrentFrame.UniqueId, _argumentsAreImplicit),
                     blockArgVariable, 
                     transformedBlock,
                     Block != null && Block.IsDefinition

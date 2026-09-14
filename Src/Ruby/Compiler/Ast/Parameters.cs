@@ -20,12 +20,14 @@ using MSA = Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
+using IronRuby.Runtime.Conversions;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
@@ -145,6 +147,26 @@ namespace IronRuby.Compiler.Ast {
                 return;
             }
 
+            int trailingMandatoryCount = _mandatory.Length - _leadingMandatoryCount;
+            if (_unsplat != null && trailingMandatoryCount > 0) {
+                // A call site splats at the end of the argument list only, so a signature with
+                // post parameters (`def m(a, *b, c)`) has to hand `super` the whole list as one
+                // splatted array to keep `a, *b, c` in that order.
+                MSA.Expression array = Methods.MakeArray0.OpCall();
+                for (int i = 0; i < _leadingMandatoryCount; i++) {
+                    array = Methods.AddItem.OpCall(array, AstUtils.Box(_mandatory[i].TransformRead(gen)));
+                }
+                foreach (SimpleAssignmentExpression s in _optional) {
+                    array = Methods.AddItem.OpCall(array, AstUtils.Box(s.Left.TransformRead(gen)));
+                }
+                array = Methods.AddRange.OpCall(array, TransformUnsplatForSuperCall(gen));
+                for (int i = _leadingMandatoryCount; i < _mandatory.Length; i++) {
+                    array = Methods.AddItem.OpCall(array, AstUtils.Box(_mandatory[i].TransformRead(gen)));
+                }
+                siteBuilder.SplattedArgument = array;
+                return;
+            }
+
             for (int i = 0; i < _leadingMandatoryCount; i++) {
                 siteBuilder.Add(_mandatory[i].TransformRead(gen));
             }
@@ -152,14 +174,23 @@ namespace IronRuby.Compiler.Ast {
             foreach (SimpleAssignmentExpression s in _optional) {
                 siteBuilder.Add(s.Left.TransformRead(gen));
             }
-            
+
             for (int i = _leadingMandatoryCount; i < _mandatory.Length; i++) {
                 siteBuilder.Add(_mandatory[i].TransformRead(gen));
             }
 
             if (_unsplat != null) {
-                siteBuilder.SplattedArgument = _unsplat.TransformRead(gen);
+                siteBuilder.SplattedArgument = TransformUnsplatForSuperCall(gen);
             }
+        }
+
+        /// <summary>
+        /// The rest parameter as `super` passes it on. It is an ordinary local that the body may
+        /// have reassigned to anything, so it is splatted the way `f(*x)` would splat it:
+        /// `args = {a: 1}` passes [[:a, 1]], `args = 5` passes [5].
+        /// </summary>
+        private MSA.Expression/*!*/ TransformUnsplatForSuperCall(AstGenerator/*!*/ gen) {
+            return AstUtils.LightDynamic(ExplicitSplatAction.Make(gen.Context), typeof(IList), _unsplat.TransformRead(gen));
         }
 
         internal BlockSignatureAttributes GetBlockSignatureAttributes() {
