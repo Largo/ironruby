@@ -191,6 +191,37 @@ namespace IronRuby.StandardLibrary.Sockets {
 
 #endregion
 
+#region Blocking operations
+
+        // CRuby reports a thread parked in a blocking socket call as "sleep". IronRuby derives
+        // Thread#status from the CLR thread state, which stays Running while the thread sits in a
+        // native socket call, so every blocking entry point has to flag itself the way
+        // TCPServer#accept always has. Without this the ruby/spec idiom
+        // "Thread.pass while t.status != 'sleep'" livelocks.
+        internal static TResult Blocking<TResult>(Func<TResult>/*!*/ operation) {
+            ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
+            bool wasBlocked = info.Blocked;
+            info.Blocked = true;
+            try {
+                return operation();
+            } finally {
+                info.Blocked = wasBlocked;
+            }
+        }
+
+        internal static void Blocking(Action/*!*/ operation) {
+            ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
+            bool wasBlocked = info.Blocked;
+            info.Blocked = true;
+            try {
+                operation();
+            } finally {
+                info.Blocked = wasBlocked;
+            }
+        }
+
+#endregion
+
 #region Public Instance Methods
 
         [RubyMethod("close_read")]
@@ -338,7 +369,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyBasicSocket/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ message, object flags) {
             Protocols.CheckSafeLevel(fixnumCast.Context, 4, "send");
             SocketFlags socketFlags = ConvertToSocketFlag(fixnumCast, flags);
-            return self.Socket.Send(message.ConvertToBytes(), socketFlags);
+            return Blocking(() => self.Socket.Send(message.ConvertToBytes(), socketFlags));
         }
 
         [RubyMethod("send")]
@@ -353,7 +384,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 address[i] = to.GetByte(i);
             }
             EndPoint toEndPoint = self.Socket.LocalEndPoint.Create(address);
-            return self.Socket.SendTo(message.ConvertToBytes(), socketFlags, toEndPoint);
+            return Blocking(() => self.Socket.SendTo(message.ConvertToBytes(), socketFlags, toEndPoint));
         }
 
         [RubyMethod("recv")]
@@ -363,7 +394,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
 
             byte[] buffer = new byte[length];
-            int received = self.Socket.Receive(buffer, 0, length, sFlags);
+            int received = Blocking(() => self.Socket.Receive(buffer, 0, length, sFlags));
 
             MutableString str = MutableString.CreateBinary(received);
             str.Append(buffer, 0, received);

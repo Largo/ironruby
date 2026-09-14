@@ -76,7 +76,7 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             string strHostname = ConvertToHostString(stringCast, hostname);
             int iPort = ConvertToPortNum(stringCast, fixnumCast, port);
-            self.Socket.Connect(strHostname, iPort);
+            Blocking(() => self.Socket.Connect(strHostname, iPort));
             return 0;
         }
 
@@ -118,7 +118,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 GetHostAddress(ConvertToHostString(stringCast, hostNameOrAddress)) : IPAddress.Loopback;
 
             EndPoint toEndPoint = new IPEndPoint(address, iPort);
-            return self.Socket.SendTo(message.ConvertToBytes(), sFlags, toEndPoint);
+            return Blocking(() => self.Socket.SendTo(message.ConvertToBytes(), sFlags, toEndPoint));
         }
 
         // These overwritten methods have to be here because we kill the ones in RubyBasicSocket by creating the one above
