@@ -165,6 +165,9 @@ namespace IronRuby.Builtins {
 
         private void Parse(bool isSubexpression) {
             int lastEntityIndex = 0;
+            // Ruby allows a quantifier to be quantified again (a***, a+?*); .NET rejects that as a
+            // nested quantifier, so the whole quantified entity has to be wrapped first.
+            bool lastWasQuantifier = false;
             int c;
             while (true) {
                 switch (c = Read()) {
@@ -176,26 +179,37 @@ namespace IronRuby.Builtins {
                     
                     case '\\':
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
                         ParseEscape();
                         break;
 
                     case '?':
                     case '*':
                     case '+':
+                        if (lastWasQuantifier) {
+                            // a*** == (?:(?:a*)*)*
+                            _sb.Insert(lastEntityIndex, "(?:");
+                            Append(')');
+                        }
                         Append((char)c);
-                        ParsePostQuantifier(lastEntityIndex, true);
+                        ParsePostQuantifier(lastEntityIndex, true, false);
+                        lastWasQuantifier = true;
                         break;
 
-                    case '{':
-                        if (ParseConstrainedQuantifier()) {
-                            ParsePostQuantifier(lastEntityIndex, false);
+                    case '{': {
+                        bool isExactCount;
+                        if (ParseConstrainedQuantifier(lastWasQuantifier, lastEntityIndex, out isExactCount)) {
+                            ParsePostQuantifier(lastEntityIndex, false, isExactCount);
+                            lastWasQuantifier = true;
                         } else {
                             goto default;
                         }
                         break;
+                    }
 
                     case '(':
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
                         ParseGroup();
                         break;
 
@@ -208,16 +222,19 @@ namespace IronRuby.Builtins {
                     
                     case '[':
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
                         ParseCharacterGroup(false).AppendTo(_sb, true);
                         break;
 
                     case '|':
                         Append('|');
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
                         break;
 
                     default:
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
                         Append((char)c);
                         break;
                 }
@@ -228,11 +245,14 @@ namespace IronRuby.Builtins {
         // {n,}
         // {,m}
         // {n}
-        private bool ParseConstrainedQuantifier() {
+        private bool ParseConstrainedQuantifier(bool lastWasQuantifier, int lastEntityIndex, out bool isExactCount) {
             Debug.Assert(_rubyPattern[_index - 1] == '{');
+            isExactCount = false;
 
             int c;
             int m = -1;
+            bool hasDigits = false;
+            bool hasDigitsAfterComma = false;
 
             int i = 0;
             while (true) {
@@ -247,15 +267,38 @@ namespace IronRuby.Builtins {
                     break;
                 } else if (!Tokenizer.IsDecimalDigit(c)) {
                     return false;
+                } else {
+                    hasDigits = true;
+                    if (m != -1) {
+                        hasDigitsAfterComma = true;
+                    }
                 }
             }
 
-            _sb.Append(_rubyPattern, _index - 1, i + 1);
+            // {} and {,} carry no count: Ruby and .NET both read them as literal text, so they go
+            // through untouched and are not treated as a quantifier for the purposes below.
+            if (hasDigits) {
+                if (lastWasQuantifier) {
+                    // a*{2} == (?:a*){2}
+                    _sb.Insert(lastEntityIndex, "(?:");
+                    Append(')');
+                }
+                if (m == 1 && hasDigitsAfterComma) {
+                    // Ruby's {,m} means {0,m}; .NET has no such form and reads it as literal text.
+                    _sb.Append("{0");
+                    _sb.Append(_rubyPattern, _index, i);
+                } else {
+                    _sb.Append(_rubyPattern, _index - 1, i + 1);
+                    isExactCount = m == -1;
+                }
+            } else {
+                _sb.Append(_rubyPattern, _index - 1, i + 1);
+            }
             _index += i;
             return true;
         }
 
-        private void ParsePostQuantifier(int lastEntityIndex, bool possessive) {
+        private void ParsePostQuantifier(int lastEntityIndex, bool possessive, bool questionIsQuantifier) {
             int c = Peek();
 
             if (c == '+') {
@@ -268,7 +311,14 @@ namespace IronRuby.Builtins {
                 }
             } else if (c == '?') {
                 Skip();
-                Append('?');
+                if (questionIsQuantifier) {
+                    // After an exact count Ruby reads ? as another quantifier: a{1}? == (?:a{1})?.
+                    // After a range it is the ordinary laziness marker: a{1,2}? matches one 'a'.
+                    _sb.Insert(lastEntityIndex, "(?:");
+                    _sb.Append(")?");
+                } else {
+                    Append('?');
+                }
             }
         }
 
@@ -303,6 +353,11 @@ namespace IronRuby.Builtins {
                             break;
                         }
                     }
+                    return;
+                }
+
+                if (c == '~') {
+                    ParseAbsentExpression();
                     return;
                 }
 
@@ -404,6 +459,66 @@ namespace IronRuby.Builtins {
             }
             Parse(true);
             Append(')');
+        }
+
+        /// <summary>
+        /// (?~E) matches the longest string that contains no match of E.
+        ///
+        /// .NET has no absent operator but does support variable-length lookbehind, so
+        /// "consume one character provided we have not just completed an E" renders it.
+        /// (?:(?!E)[\s\S])* is NOT equivalent: the lookahead sees past the intended match end
+        /// and stops too early ("xfooy" would give "x" where Onigmo gives "xfo").
+        ///
+        /// The lookbehind alone is still not enough, because it also sees occurrences of E that
+        /// began before the match started - "foo".scan(/(?~foo)/) would give ["fo", "", ""] where
+        /// Onigmo gives ["fo", "o", ""]. An E of fixed length L can only be completed inside the
+        /// match once L-1 characters have been consumed, so the first L-1 characters are consumed
+        /// unconditionally. Both parts are greedy and consuming in the unconstrained part is never
+        /// worse, so the result is still the longest match.
+        ///
+        /// When E has no computable fixed length the plain lookbehind form is emitted; it is exact
+        /// for a match at the start of the input and conservative elsewhere.
+        /// </summary>
+        private void ParseAbsentExpression() {
+            var outer = _sb;
+            _sb = new StringBuilder();
+            Parse(true);
+            string absent = _sb.ToString();
+            _sb = outer;
+
+            if (absent.Length == 0) {
+                // (?~) can never complete, so it matches everything remaining.
+                _sb.Append("[\\s\\S]*");
+                return;
+            }
+
+            int fixedLength = GetLiteralLength(absent);
+            _sb.Append("(?:");
+            if (fixedLength > 1) {
+                _sb.Append("[\\s\\S]{0,").Append(fixedLength - 1).Append('}');
+            }
+            _sb.Append("(?:[\\s\\S](?<!").Append(absent).Append("))*)");
+        }
+
+        /// <summary>
+        /// The number of characters a translated pattern matches when it is a plain literal
+        /// sequence, or -1 when it contains anything whose length is not fixed and obvious.
+        /// </summary>
+        private static int GetLiteralLength(string/*!*/ pattern) {
+            int length = 0;
+            for (int i = 0; i < pattern.Length; i++) {
+                char c = pattern[i];
+                if (c == '\\') {
+                    if (i + 1 == pattern.Length || !IsMetaCharacter(pattern[i + 1])) {
+                        return -1;
+                    }
+                    i++;
+                } else if (IsMetaCharacter(c)) {
+                    return -1;
+                }
+                length++;
+            }
+            return length;
         }
 
         private void ParseGroupName(int c, int terminator) {
