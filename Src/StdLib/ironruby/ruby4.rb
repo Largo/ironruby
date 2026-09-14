@@ -7045,7 +7045,7 @@ module Process
     # We have no way to ask the platform, so report the resolution the source we
     # actually use has: Stopwatch for the monotonic clocks, and Time for the rest.
     def clock_getres(clock_id = CLOCK_MONOTONIC, unit = :float_second)
-      seconds = 1.0 / System::Diagnostics::Stopwatch.frequency.to_f
+      seconds = CLOCK_RESOLUTIONS__[clock_id.to_s] || 1.0 / System::Diagnostics::Stopwatch.frequency.to_f
       case unit
       when :float_second then seconds
       when :float_millisecond then seconds * 1_000.0
@@ -7784,7 +7784,7 @@ module Process
   # on platforms that cannot do it too, as the function that raises NotImplementedError,
   # and that function is exactly the case respond_to? answers false for - so portable
   # code asks whether the feature is there rather than whether the name is.
-  NOT_IMPLEMENTED_METHODS = [:daemon, :fork].freeze unless const_defined?(:NOT_IMPLEMENTED_METHODS)
+  NOT_IMPLEMENTED_METHODS = [:daemon, :fork, :_fork].freeze unless const_defined?(:NOT_IMPLEMENTED_METHODS)
 
   unless respond_to?(:daemon)
     def daemon(nochdir = nil, noclose = nil)
@@ -7792,6 +7792,34 @@ module Process
     end
     module_function :daemon
   end
+
+  # Process.fork and Process._fork exist for the same reason daemon does: MRI defines
+  # them everywhere and lets respond_to? be the portable answer. Kernel#fork is private
+  # and so was never reachable as Process.fork.
+  unless singleton_class.method_defined?(:fork)
+    def fork(&block)
+      raise NotImplementedError, "fork() function is unimplemented on this machine"
+    end
+    module_function :fork
+
+    def _fork
+      raise NotImplementedError, "fork() function is unimplemented on this machine"
+    end
+    module_function :_fork
+  end
+
+  # The resolution of the clock we would actually read, per clock. The two named after
+  # the calls MRI emulates them with have the resolution of those calls, whatever the
+  # platform timer manages.
+  CLOCK_RESOLUTIONS__ = {
+    "GETTIMEOFDAY_BASED_CLOCK_REALTIME" => 1.0e-6,
+    "TIME_BASED_CLOCK_REALTIME" => 1.0,
+    "GETRUSAGE_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1.0e-6,
+    "CLOCK_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1.0e-6,
+    "TIMES_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1.0e-2,
+    "TIMES_BASED_CLOCK_MONOTONIC" => 1.0e-2,
+    "MACH_ABSOLUTE_TIME_BASED_CLOCK_MONOTONIC" => 1.0e-9,
+  }.freeze unless const_defined?(:CLOCK_RESOLUTIONS__)
 
   def self.respond_to?(name, include_all = false)
     return false if NOT_IMPLEMENTED_METHODS.include?(name.to_sym)
