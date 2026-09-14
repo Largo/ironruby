@@ -468,11 +468,11 @@ namespace IronRuby.Builtins {
                     if (Peek() == '{') {
                         // \u{1234 12345 123}
                         foreach (var codepoint in ParseUnicodeEscapeList()) {
-                            AppendEscaped(codepoint);
+                            AppendUnicodeCodePoint(_sb, codepoint);
                         }
                     } else {
                         // \u1234
-                        AppendEscaped(ParseUnicodeEscape());
+                        AppendUnicodeCodePoint(_sb, ParseUnicodeEscape());
                     }
                     break;
                     
@@ -781,6 +781,19 @@ namespace IronRuby.Builtins {
             return sb.ToString();
         }
 
+        /// <summary>
+        /// A character-class member for a single codepoint. Non-BMP codepoints cannot be class
+        /// members in .NET (see CharacterSet._astral), so they get their own representation.
+        /// </summary>
+        private CharacterSet/*!*/ MakeCodePointSet(int codepoint) {
+            if (codepoint >= 0xd800 && codepoint <= 0xdfff || codepoint > 0x10ffff) {
+                throw MakeError("invalid Unicode range");
+            }
+            return (codepoint >= 0x10000)
+                ? CharacterSet.MakeAstralCharacter(codepoint)
+                : new CharacterSet(UnicodeCodePointToString(codepoint), true);
+        }
+
         private void AppendUnicodeCodePoint(StringBuilder/*!*/ builder, int codepoint) {
             if (codepoint >= 0xd800 && codepoint <= 0xdfff || codepoint > 0x10ffff) {
                 throw MakeError("invalid Unicode range");
@@ -788,8 +801,8 @@ namespace IronRuby.Builtins {
                 AppendEscaped(builder, codepoint);
             } else {
                 codepoint -= 0x10000;
-                Append((char)((codepoint / 0x400) + 0xd800));
-                Append((char)((codepoint % 0x400) + 0xdc00));
+                builder.Append((char)((codepoint / 0x400) + 0xd800));
+                builder.Append((char)((codepoint % 0x400) + 0xdc00));
             }
         }
 
@@ -806,6 +819,15 @@ namespace IronRuby.Builtins {
             private readonly string/*!*/ _include;
             private readonly CharacterSet/*!*/ _exclude;
             private readonly bool _isSingleCharacter;
+
+            // .NET's Regex matches UTF-16 code units, so a non-BMP codepoint cannot be a member
+            // of a character class: [\uD83E\uDD8A] would match either surrogate half on its own.
+            // Such members are held aside as an alternation of surrogate-pair sequences and the
+            // whole class is emitted as (?:[bmp members]|<pairs>).
+            private readonly string/*!*/ _astral = "";
+            // The single codepoint this set stands for, if it is exactly one non-BMP character.
+            // Needed to build [x-y] ranges, whose endpoints are parsed as separate sets.
+            private readonly int _astralCodepoint = -1;
 
             public CharacterSet() {
                 _include = "";
@@ -837,16 +859,89 @@ namespace IronRuby.Builtins {
                 _exclude = exclude;
             }
 
+            private CharacterSet(string/*!*/ astral, int astralCodepoint) {
+                _include = "";
+                _exclude = Empty;
+                _astral = astral;
+                _astralCodepoint = astralCodepoint;
+            }
+
+            /// <summary>A set holding the single non-BMP codepoint <paramref name="codepoint"/>.</summary>
+            internal static CharacterSet/*!*/ MakeAstralCharacter(int codepoint) {
+                return new CharacterSet(SurrogatePair(codepoint), codepoint);
+            }
+
+            /// <summary>A set holding the inclusive non-BMP range [<paramref name="low"/>, <paramref name="high"/>].</summary>
+            internal static CharacterSet/*!*/ MakeAstralRange(int low, int high) {
+                return new CharacterSet(SurrogateRange(low, high), -1);
+            }
+
+            internal bool IsAstralCharacter {
+                get { return _astralCodepoint >= 0; }
+            }
+
+            internal int AstralCodepoint {
+                get { return _astralCodepoint; }
+            }
+
+            internal bool HasAstral {
+                get { return _astral.Length != 0; }
+            }
+
+            private static string/*!*/ Unit(int c) {
+                return "\\u" + c.ToString("x4");
+            }
+
+            private static string/*!*/ SurrogatePair(int codepoint) {
+                int v = codepoint - 0x10000;
+                return Unit(0xd800 + (v >> 10)) + Unit(0xdc00 + (v & 0x3ff));
+            }
+
+            private static string/*!*/ SurrogateRange(int low, int high) {
+                int lowLead = 0xd800 + ((low - 0x10000) >> 10), lowTrail = 0xdc00 + ((low - 0x10000) & 0x3ff);
+                int highLead = 0xd800 + ((high - 0x10000) >> 10), highTrail = 0xdc00 + ((high - 0x10000) & 0x3ff);
+
+                if (lowLead == highLead) {
+                    return Unit(lowLead) + "[" + Unit(lowTrail) + "-" + Unit(highTrail) + "]";
+                }
+
+                var sb = new StringBuilder();
+                sb.Append(Unit(lowLead)).Append('[').Append(Unit(lowTrail)).Append("-\\udfff]");
+                if (lowLead + 1 <= highLead - 1) {
+                    sb.Append("|[").Append(Unit(lowLead + 1)).Append('-').Append(Unit(highLead - 1)).Append("][\\udc00-\\udfff]");
+                }
+                sb.Append('|').Append(Unit(highLead)).Append("[\\udc00-").Append(Unit(highTrail)).Append(']');
+                return sb.ToString();
+            }
+
+            private CharacterSet/*!*/ RequireNoAstral(string/*!*/ operation) {
+                if (HasAstral) {
+                    // The surrogate-pair alternation is not a character class, so it cannot take
+                    // part in [a-[b]] subtraction or && intersection.
+                    throw new RegexpError("non-BMP character is not supported in a " + operation + " character class");
+                }
+                return this;
+            }
+
             public string/*!*/ Include {
                 get { return _include; }
             }
 
             public bool IsEmpty {
-                get { return _include.Length == 0 && !_negated; }
+                get { return _include.Length == 0 && _astral.Length == 0 && !_negated; }
             }
 
             public bool IsSingleCharacter {
                 get { return _isSingleCharacter; }
+            }
+
+            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral)
+                : this(negate, include, exclude) {
+                _astral = astral;
+            }
+
+            private static string/*!*/ JoinAstral(string/*!*/ a, string/*!*/ b) {
+                return (a.Length == 0) ? b : (b.Length == 0) ? a : a + "|" + b;
             }
 
             internal CharacterSet/*!*/ GetIncludedSet() {
@@ -854,6 +949,7 @@ namespace IronRuby.Builtins {
             }
 
             internal CharacterSet/*!*/ Complement() {
+                RequireNoAstral("negated");
                 return new CharacterSet(!_negated, _include, _exclude);
             }
 
@@ -861,6 +957,8 @@ namespace IronRuby.Builtins {
                 if (IsEmpty || set.IsEmpty) {
                     return this;
                 }
+                RequireNoAstral("subtracted");
+                set.RequireNoAstral("subtracted");
 
                 if (_negated) {
                     if (set._negated) {
@@ -907,10 +1005,11 @@ namespace IronRuby.Builtins {
                 // (a or c) and (a or ^D) and (^B or c) and (^B or ^D) ==
                 // (a or c) \ (^(a or ^D) or ^(^B or c) or ^(^B or ^D)) ==
                 // (a or c) \ ((D \ a) or (B \ c) or (B and D))                QED
-                return new CharacterSet(_include + set._include,
+                return new CharacterSet(false, _include + set._include,
                     set._exclude.Subtract(GetIncludedSet()).
                         Union(this._exclude.Subtract(set.GetIncludedSet())).
-                        Union(this._exclude.Intersect(set._exclude))
+                        Union(this._exclude.Intersect(set._exclude)),
+                    JoinAstral(_astral, set._astral)
                 );
             }
 
@@ -918,6 +1017,8 @@ namespace IronRuby.Builtins {
                 if (IsEmpty || set.IsEmpty) {
                     return Empty;
                 }
+                RequireNoAstral("intersected");
+                set.RequireNoAstral("intersected");
 
                 if (_negated) {
                     if (set._negated) {
@@ -943,6 +1044,20 @@ namespace IronRuby.Builtins {
             }
 
             public StringBuilder/*!*/ AppendTo(StringBuilder/*!*/ sb, bool parenthesize) {
+                if (HasAstral) {
+                    sb.Append("(?:");
+                    if (_include.Length != 0 || !_exclude.IsEmpty) {
+                        sb.Append('[').Append(_include);
+                        if (!_exclude.IsEmpty) {
+                            sb.Append('-');
+                            _exclude.AppendTo(sb, true);
+                        }
+                        sb.Append("]|");
+                    }
+                    sb.Append(_astral);
+                    sb.Append(')');
+                    return sb;
+                }
                 if (IsEmpty) {
                     if (_negated) {
                         sb.Append("[\0-\uffff]");
@@ -1061,17 +1176,28 @@ namespace IronRuby.Builtins {
 
                     // [a-b]-z
                     // \p{L}-z
-                    if (!mayStartRange || !set.IsSingleCharacter) {
+                    if (!mayStartRange || !(set.IsSingleCharacter || set.IsAstralCharacter)) {
                         throw MakeError("char-class value at start of range");
                     }
 
                     // a-[a-z]
                     // a-\p{L}
-                    if (!mayEndRange || !rangeEnd.IsSingleCharacter) {
+                    if (!mayEndRange || !(rangeEnd.IsSingleCharacter || rangeEnd.IsAstralCharacter)) {
                         throw MakeError("char-class value at end of range");
                     }
 
-                    set = new CharacterSet(set.Include + "-" + rangeEnd.Include);
+                    if (set.IsAstralCharacter || rangeEnd.IsAstralCharacter) {
+                        if (!set.IsAstralCharacter || !rangeEnd.IsAstralCharacter) {
+                            // A range straddling U+FFFF would need both a class and an alternation.
+                            throw MakeError("char-class range crosses the BMP boundary");
+                        }
+                        if (set.AstralCodepoint > rangeEnd.AstralCodepoint) {
+                            throw MakeError("empty range in char class");
+                        }
+                        set = CharacterSet.MakeAstralRange(set.AstralCodepoint, rangeEnd.AstralCodepoint);
+                    } else {
+                        set = new CharacterSet(set.Include + "-" + rangeEnd.Include);
+                    }
                 }
 
                 result = result.Union(set);
@@ -1086,7 +1212,7 @@ namespace IronRuby.Builtins {
                 if (!codepoints.MoveNext()) {
                     codepoints = null;
                 }
-                return new CharacterSet(UnicodeCodePointToString(current), true);
+                return MakeCodePointSet(current);
             }
 
             int c;
@@ -1123,7 +1249,7 @@ namespace IronRuby.Builtins {
                             codepoint = ParseUnicodeEscape();
                         }
                         mayStartRange = true;
-                        return new CharacterSet(UnicodeCodePointToString(codepoint), true);
+                        return MakeCodePointSet(codepoint);
                     } else {
                         mayStartRange = true;
                         return ParseCharacterEscape(escape);
@@ -1140,6 +1266,10 @@ namespace IronRuby.Builtins {
 
                 default:
                     mayStartRange = true;
+                    if (c >= 0xd800 && c <= 0xdbff && Peek() >= 0xdc00 && Peek() <= 0xdfff) {
+                        // a literal non-BMP character, written as its surrogate pair
+                        return CharacterSet.MakeAstralCharacter(Char.ConvertToUtf32((char)c, (char)Read()));
+                    }
                     return new CharacterSet(((char)c).ToString(), true);
             }
         }
