@@ -71,9 +71,19 @@ namespace IronRuby.Compiler.Ast {
             }
         }
 
-        // mandatory parameters written after the optional/rest ones, as in |a, *b, c|
+        // Mandatory parameters written after the optional/rest ones, as in |a, *b, c|.
+        // A trailing Placeholder is not one of those: it is how `|a,|` spells "swallow the rest",
+        // so it binds like a rest parameter rather than like a post parameter.
         private int PostParameterCount {
-            get { return _parameters.Mandatory.Length - _parameters.LeadingMandatoryCount; }
+            get {
+                int count = 0;
+                for (int i = _parameters.LeadingMandatoryCount; i < _parameters.Mandatory.Length; i++) {
+                    if (!(_parameters.Mandatory[i] is Placeholder)) {
+                        count++;
+                    }
+                }
+                return count;
+            }
         }
 
         private bool HasPostParameters {

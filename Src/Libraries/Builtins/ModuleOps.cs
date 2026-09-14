@@ -1056,6 +1056,29 @@ namespace IronRuby.Builtins {
             return value;
         }
 
+        [RubyMethod("private_constant", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ PrivateConstant(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self,
+            [NotNull]params object[]/*!*/ constantNames) {
+            SetConstantVisibility(stringCast, self, constantNames, true);
+            return self;
+        }
+
+        [RubyMethod("public_constant", RubyMethodAttributes.PrivateInstance)]
+        public static RubyModule/*!*/ PublicConstant(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self,
+            [NotNull]params object[]/*!*/ constantNames) {
+            SetConstantVisibility(stringCast, self, constantNames, false);
+            return self;
+        }
+
+        private static void SetConstantVisibility(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self,
+            object[]/*!*/ constantNames, bool isPrivate) {
+            foreach (var constantName in constantNames) {
+                var name = Protocols.CastToString(stringCast, constantName).ToString();
+                RubyUtils.CheckConstantName(name);
+                self.SetConstantVisibility(name, isPrivate);
+            }
+        }
+
         [RubyMethod("const_missing")]
         public static object ConstantMissing(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
             return self.Context.ResolveMissingConstant(self, name);

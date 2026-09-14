@@ -1711,8 +1711,28 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Set when a qualified constant lookup found the constant but it was private, so the
+        /// lookup reported it missing (which is how MRI routes it to #const_missing). The default
+        /// #const_missing words its error differently in that case.
+        /// </summary>
+        [ThreadStatic]
+        private static RubyModule _privateConstantReference;
+
+        internal static void SetPrivateConstantReference(RubyModule/*!*/ owner) {
+            _privateConstantReference = owner;
+        }
+
         // thread-safe:
         public object ResolveMissingConstant(RubyModule/*!*/ owner, string/*!*/ name) {
+            var privateReference = _privateConstantReference;
+            _privateConstantReference = null;
+            if (privateReference != null) {
+                throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
+                    String.Format("private constant {0}::{1} referenced", GetModuleDisplayName(privateReference), name)
+                ), name, privateReference);
+            }
+
             if (owner.IsObjectClass) {
                 object value;
                 if (RubyOps.TryGetGlobalScopeConstant(this, _globalScope, name, out value)) {
@@ -1738,7 +1758,7 @@ namespace IronRuby.Runtime {
         /// falling back to #inspect for an anonymous one. Both are user-overridable, so they are
         /// called rather than read off the module.
         /// </summary>
-        private string/*!*/ GetModuleDisplayName(RubyModule/*!*/ owner) {
+        internal string/*!*/ GetModuleDisplayName(RubyModule/*!*/ owner) {
             if (_moduleName == null) {
                 Interlocked.CompareExchange(
                     ref _moduleName,

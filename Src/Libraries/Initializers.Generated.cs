@@ -6320,6 +6320,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPrivate)
             );
             
+            DefineLibraryMethod(module, "private_constant", 0x52, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.PrivateConstant)
+            );
+            
             DefineLibraryMethod(module, "private_instance_methods", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetPrivateInstanceMethods), 
@@ -6355,6 +6360,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "public_class_method", 0x51, 
                 0x80010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPublic)
+            );
+            
+            DefineLibraryMethod(module, "public_constant", 0x52, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.PublicConstant)
             );
             
             DefineLibraryMethod(module, "public_instance_method", 0x51, 

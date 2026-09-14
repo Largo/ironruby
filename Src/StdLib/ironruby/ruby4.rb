@@ -1602,11 +1602,11 @@ class Module
 
   def private_constant(*names)
     names
-  end unless method_defined?(:private_constant)
+  end unless private_method_defined?(:private_constant)
 
   def public_constant(*names)
     names
-  end unless method_defined?(:public_constant)
+  end unless private_method_defined?(:public_constant)
 end
 
 class Object

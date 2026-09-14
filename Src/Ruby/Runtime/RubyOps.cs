@@ -658,7 +658,24 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static RubyModule/*!*/ DefineModule(RubyScope/*!*/ scope, object target, string/*!*/ name, string sourcePath, int sourceLine) {
-            return DefineModule(scope, RubyUtils.GetModuleFromObject(scope, target), name, sourcePath, sourceLine);
+            var owner = RubyUtils.GetModuleFromObject(scope, target);
+            CheckConstantVisibility(owner, name);
+            return DefineModule(scope, owner, name, sourcePath, sourceLine);
+        }
+
+        /// <summary>
+        /// `module Owner::Name` and `class Owner::Name` name the constant explicitly, so a
+        /// private one is out of reach here just as it is for a reference.
+        /// </summary>
+        private static void CheckConstantVisibility(RubyModule/*!*/ owner, string/*!*/ name) {
+            bool isPrivate;
+            using (owner.Context.ClassHierarchyLocker()) {
+                isPrivate = owner.IsPrivateConstantInAncestors(name);
+            }
+            if (isPrivate) {
+                RubyContext.SetPrivateConstantReference(owner);
+                owner.Context.ResolveMissingConstant(owner, name);
+            }
         }
 
         // thread-safe:
@@ -708,7 +725,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static RubyModule/*!*/ DefineClass(RubyScope/*!*/ scope, object target, string/*!*/ name, object superClassObject,
             string sourcePath, int sourceLine) {
-            return DefineClass(scope, RubyUtils.GetModuleFromObject(scope, target), name, superClassObject, sourcePath, sourceLine);
+            var owner = RubyUtils.GetModuleFromObject(scope, target);
+            CheckConstantVisibility(owner, name);
+            return DefineClass(scope, owner, name, superClassObject, sourcePath, sourceLine);
         }
 
         // thread-safe:
@@ -945,7 +964,7 @@ namespace IronRuby.Runtime {
                 }
                 
                 // Note that the owner could be another runtime's module:
-                bool exists = owner != null && owner.TryResolveConstant(context, null, qualifiedName[qualifiedName.Length - 1], out storage);
+                bool exists = IsVisibleConstantDefined(owner, context, qualifiedName[qualifiedName.Length - 1], out storage);
                 
                 // cache result only if no constant was missing:
                 if (!anyMissing) {
@@ -984,7 +1003,7 @@ namespace IronRuby.Runtime {
                 bool exists;
                 if (qualifiedName.Length == 1) {
                     // Note that the owner could be another runtime's module:
-                    exists = module.TryResolveConstant(context, null, qualifiedName[0], out storage);
+                    exists = IsVisibleConstantDefined(module, context, qualifiedName[0], out storage);
                 } else {
                     bool anyMissing;
                     RubyModule owner;
@@ -996,7 +1015,7 @@ namespace IronRuby.Runtime {
                     }
 
                     // Note that the owner could be another runtime's module:
-                    exists = owner != null && owner.TryResolveConstant(context, null, qualifiedName[qualifiedName.Length - 1], out storage);
+                    exists = IsVisibleConstantDefined(owner, context, qualifiedName[qualifiedName.Length - 1], out storage);
 
                     // cache result only if no constant was missing:
                     if (anyMissing) {
@@ -1022,8 +1041,10 @@ namespace IronRuby.Runtime {
 
             string name = qualifiedName[0];
             if (topModule == null) {
+                // the first name of `A::B` is an ordinary lexical lookup, where a private
+                // constant of an enclosing module is perfectly visible
                 missingConstantOwner = scope.TryResolveConstantNoLock(globalScope, name, out storage);
-            } else if (topModule.TryResolveConstant(context, globalScope, name, out storage)) {
+            } else if (TryResolveVisibleConstant(topModule, context, globalScope, name, out storage)) {
                 missingConstantOwner = null;
             } else {
                 missingConstantOwner = topModule;
@@ -1044,7 +1065,7 @@ namespace IronRuby.Runtime {
                 RubyModule owner = RubyUtils.GetModuleFromObject(scope, result);
                 // Note that the owner could be another runtime's module:
                 name = qualifiedName[i];
-                if (owner.TryResolveConstant(context, globalScope, name, out storage)) {
+                if (TryResolveVisibleConstant(owner, context, globalScope, name, out storage)) {
                     
                     // Constant write updates constant version in a single runtime only. 
                     // Therefore if the chain mixes modules from different runtimes we cannot cache the result.
@@ -1062,6 +1083,38 @@ namespace IronRuby.Runtime {
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// A qualified constant reference - `Mod::NAME` - does not see a constant the owner
+        /// declared private. MRI reports it as missing, which routes it through #const_missing,
+        /// and remembers that it was really there so the default #const_missing can say so.
+        /// </summary>
+        private static bool TryResolveVisibleConstant(RubyModule/*!*/ owner, RubyContext/*!*/ context, RubyGlobalScope globalScope,
+            string/*!*/ name, out ConstantStorage storage) {
+
+            if (!owner.TryResolveConstant(context, globalScope, name, out storage)) {
+                return false;
+            }
+
+            if (owner.Context == context && owner.IsPrivateConstantInAncestors(name)) {
+                RubyContext.SetPrivateConstantReference(owner);
+                storage = default(ConstantStorage);
+                return false;
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// `defined?(Mod::NAME)` is nil for a constant the owner declared private - and unlike a
+        /// reference it must not leave a private-constant reference behind for #const_missing.
+        /// </summary>
+        private static bool IsVisibleConstantDefined(RubyModule owner, RubyContext/*!*/ context, string/*!*/ name, out ConstantStorage storage) {
+            storage = default(ConstantStorage);
+            if (owner == null || !owner.TryResolveConstant(context, null, name, out storage)) {
+                return false;
+            }
+            return owner.Context != context || !owner.IsPrivateConstantInAncestors(name);
         }
 
         [Emitted]

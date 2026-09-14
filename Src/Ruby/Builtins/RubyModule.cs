@@ -275,6 +275,10 @@ namespace IronRuby.Builtins {
         private Action<RubyModule> _constantsInitializer;
         private Dictionary<string, ConstantStorage> _constants;
 
+        // names this module declared private with Module#private_constant; null until one is
+        // (guarded by the class hierarchy lock, like _constants)
+        private HashSet<string> _privateConstants;
+
         // { constant-name -> (source path, source line) }; lazily allocated, only holds constants
         // whose definition site is known (Module#const_source_location).
         private Dictionary<string, KeyValuePair<string, int>> _constantLocations;
@@ -1161,6 +1165,55 @@ namespace IronRuby.Builtins {
 
                 return module.EnumerateConstants(action);
             });
+        }
+
+        /// <summary>
+        /// Module#private_constant / #public_constant. A private constant can still be reached
+        /// from the module itself and from lexical scopes nested in it; what it stops is a
+        /// qualified reference from outside - `Mod::NAME`.
+        /// </summary>
+        public void SetConstantVisibility(string/*!*/ name, bool isPrivate) {
+            using (Context.ClassHierarchyLocker()) {
+                ConstantStorage storage;
+                if (!TryResolveConstantNoLock(null, name, out storage)) {
+                    throw RubyExceptions.CreateNameError(String.Format("constant {0}::{1} not defined",
+                        Context.GetModuleDisplayName(this), name));
+                }
+
+                if (isPrivate) {
+                    if (_privateConstants == null) {
+                        _privateConstants = new HashSet<string>();
+                    }
+                    _privateConstants.Add(name);
+                } else if (_privateConstants != null) {
+                    _privateConstants.Remove(name);
+                }
+                _context.ConstantAccessVersion++;
+            }
+        }
+
+        /// <summary>True if this module itself declared the constant private.</summary>
+        public bool IsPrivateConstant(string/*!*/ name) {
+            return _privateConstants != null && _privateConstants.Contains(name);
+        }
+
+        /// <summary>
+        /// True if the module that declares <paramref name="name"/> - this one or the first
+        /// ancestor that has it - declared it private.
+        /// </summary>
+        internal bool IsPrivateConstantInAncestors(string/*!*/ name) {
+            Context.RequiresClassHierarchyLock();
+
+            bool isPrivate = false;
+            ForEachAncestor(true, (module) => {
+                ConstantStorage storage;
+                if (module.TryGetConstantNoAutoloadCheck(name, out storage)) {
+                    isPrivate = module.IsPrivateConstant(name);
+                    return true;
+                }
+                return false;
+            });
+            return isPrivate;
         }
 
         // thread-safe:
