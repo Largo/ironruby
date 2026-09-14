@@ -500,7 +500,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("kill", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("kill", RubyMethodAttributes.PublicSingleton)]
         public static object Kill(ConversionStorage<int>/*!*/ toInt, RubyModule/*!*/ self, object signalId, [NotNull]params object[]/*!*/ pids) {
-            int signal = PosixSignals.ToNumber(signalId);
+            int signal = PosixSignals.ToNumber(self.Context, signalId);
 
             // A negative signal - -15, "-TERM", :"-SIGTERM" - is Ruby's way of saying "send it
             // to the process group of each pid", which is kill(2)'s negative pid.

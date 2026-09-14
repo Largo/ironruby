@@ -100,10 +100,37 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("__setrlimit__", RubyMethodAttributes.PublicSingleton)]
         public static int SetRLimit(RubyModule/*!*/ self, [DefaultProtocol]int resource,
-            [DefaultProtocol]long soft, [DefaultProtocol]long hard) {
+            object soft, object hard) {
 
-            var limit = new RLimit { Current = unchecked((ulong)soft), Maximum = unchecked((ulong)hard) };
+            var limit = new RLimit { Current = ToRLimitValue(soft), Maximum = ToRLimitValue(hard) };
             return (SysSetRLimit(resource, ref limit) != 0) ? Failure() : 0;
+        }
+
+        // rlim_t is unsigned, so RLIM_INFINITY reaches Ruby as the Bignum 2**64-1 (see Clamp)
+        // and has to be able to travel straight back into setrlimit. Taking the limits as long
+        // made `Process.setrlimit(r, *Process.getrlimit(r))` throw OverflowException.
+        // Negative values wrap into the unsigned range, as they do in MRI.
+        private static ulong ToRLimitValue(object value) {
+            if (value is int) {
+                return unchecked((ulong)(long)(int)value);
+            }
+
+            if (value is System.Numerics.BigInteger) {
+                var big = (System.Numerics.BigInteger)value;
+                if (big.Sign < 0) {
+                    if (big < Int64.MinValue) {
+                        throw RubyExceptions.CreateRangeError("bignum too big to convert into 'unsigned long'");
+                    }
+                    return unchecked((ulong)(long)big);
+                }
+
+                if (big > UInt64.MaxValue) {
+                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'unsigned long'");
+                }
+                return (ulong)big;
+            }
+
+            throw RubyExceptions.CreateTypeError("no implicit conversion into Integer");
         }
 
         [RubyMethod("__getpgid__", RubyMethodAttributes.PublicSingleton)]

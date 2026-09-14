@@ -1439,8 +1439,23 @@ module Kernel
 end
 
 RUBY_ENGINE_VERSION = RUBY_VERSION unless defined?(RUBY_ENGINE_VERSION)
-RUBY_COPYRIGHT = "ironruby - Apache License, Version 2.0" unless defined?(RUBY_COPYRIGHT)
-RUBY_DESCRIPTION = "ironruby #{RUBY_VERSION} (.NET)" unless defined?(RUBY_DESCRIPTION)
+RUBY_COPYRIGHT = "ironruby - Apache License, Version 2.0".freeze unless defined?(RUBY_COPYRIGHT)
+RUBY_DESCRIPTION = "ironruby #{RUBY_VERSION} (.NET)".freeze unless defined?(RUBY_DESCRIPTION)
+
+# Ruby 4.0 collects the RUBY_* constants into a module. Every member must be the
+# very same object as its RUBY_* counterpart -- ruby/spec asserts identity with
+# #equal?, not equality -- so these alias rather than re-create.
+module Ruby
+  VERSION = RUBY_VERSION
+  PATCHLEVEL = RUBY_PATCHLEVEL
+  COPYRIGHT = RUBY_COPYRIGHT
+  DESCRIPTION = RUBY_DESCRIPTION
+  ENGINE = RUBY_ENGINE
+  ENGINE_VERSION = RUBY_ENGINE_VERSION
+  PLATFORM = RUBY_PLATFORM
+  RELEASE_DATE = RUBY_RELEASE_DATE
+  REVISION = RUBY_REVISION
+end unless defined?(Ruby)
 
 class IO
   # autoclose is tracked but not acted on: IronRuby closes descriptors it owns
@@ -2860,17 +2875,23 @@ if defined?(Rational) && Rational.instance_method(:round).arity == 0
       "(#{to_s})"
     end
 
-    alias_method :__ir_round__, :round
+    # rational18.rb's rounding methods take no precision at all. MRI's rule is the
+    # same for all four: 0 and negative precisions answer an Integer, a positive
+    # precision answers a Rational scaled back down.
+    [:round, :ceil, :floor, :truncate].each do |name|
+      alias_method :"__ir_#{name}__", name
 
-    def round(ndigits = 0)
-      n = ndigits.to_int
-      return __ir_round__ if n == 0
-      if n > 0
-        s = 10**n
-        Rational((self * s).__ir_round__, s)
-      else
-        s = 10**(-n)
-        (self / s).__ir_round__ * s
+      define_method(name) do |ndigits = 0|
+        n = ndigits.to_int
+        bare = :"__ir_#{name}__"
+        next __send__(bare) if n == 0
+        if n > 0
+          s = 10**n
+          Rational((self * s).__send__(bare), s)
+        else
+          s = 10**(-n)
+          (self / s).__send__(bare) * s
+        end
       end
     end
   end
@@ -4262,11 +4283,23 @@ class << Dir
     entries(path, *args) - %w[. ..]
   end unless respond_to?(:children)
 
+  # MRI's Dir.each_child / Dir.foreach enumerators do not know their size.
   def each_child(path, *args, &block)
-    return children(path, *args).each unless block
+    return to_enum(:each_child, path, *args) { nil } unless block
     children(path, *args).each(&block)
     nil
-  end unless respond_to?(:each_child)
+  end
+
+  unless respond_to?(:__clr_foreach__, true)
+    alias_method :__clr_foreach__, :foreach
+    private :__clr_foreach__
+
+    def foreach(path, *args, &block)
+      return to_enum(:foreach, path, *args) { nil } unless block
+      __clr_foreach__(path, *args, &block)
+      nil
+    end
+  end
 
   def empty?(path)
     # File.stat rather than File.directory? so that a missing path is an ENOENT
@@ -4275,47 +4308,250 @@ class << Dir
   end unless respond_to?(:empty?)
 end
 
+# The instance side of Dir is a subset of the singleton side; MRI gives it #children,
+# #each_child and #chdir, and an Enumerator from #each when no block is given.
+class Dir
+  unless method_defined?(:__clr_each__)
+    alias_method :__clr_each__, :each
+    private :__clr_each__
+
+    def each(&block)
+      return to_enum(:each) { nil } unless block
+      __clr_each__(&block)
+      self
+    end
+  end
+
+  def children
+    entries - %w[. ..]
+  end unless method_defined?(:children)
+
+  def each_child(&block)
+    return to_enum(:each_child) { nil } unless block
+    children.each(&block)
+    self
+  end unless method_defined?(:each_child)
+
+  def entries
+    result = []
+    rewind
+    while (entry = read)
+      result << entry
+    end
+    rewind
+    result
+  end unless method_defined?(:entries)
+
+  def chdir(&block)
+    Dir.chdir(path, &block)
+  end unless method_defined?(:chdir)
+end
+
 module Errno
-  # Linux errno numbers. Two jobs here: bind the names the 1.9 snapshot never
-  # bound, and give the C#-registered classes their Errno constant -- those are
-  # CLR-backed and carry no number, so Errno::ENOENT::Errno used to resolve up
-  # to the Errno module itself instead of 2.
-  {
-    "EPERM" => 1, "ENOENT" => 2, "ESRCH" => 3, "EINTR" => 4, "EIO" => 5,
-    "ENXIO" => 6, "E2BIG" => 7, "ENOEXEC" => 8, "EBADF" => 9, "ECHILD" => 10,
-    "EAGAIN" => 11, "EWOULDBLOCK" => 11, "ENOMEM" => 12, "EACCES" => 13,
-    "EFAULT" => 14, "EBUSY" => 16, "EEXIST" => 17, "EXDEV" => 18,
-    "ENODEV" => 19, "ENOTDIR" => 20, "EISDIR" => 21, "EINVAL" => 22,
-    "ENFILE" => 23, "EMFILE" => 24, "ENOTTY" => 25, "EFBIG" => 27,
-    "ENOSPC" => 28, "ESPIPE" => 29, "EROFS" => 30, "EMLINK" => 31,
-    "EPIPE" => 32, "EDOM" => 33, "ERANGE" => 34, "ENAMETOOLONG" => 36,
-    "ENOTEMPTY" => 39, "ELOOP" => 40, "EADDRINUSE" => 98, "ECONNABORTED" => 103,
-    "ECONNRESET" => 104, "ENOTCONN" => 107, "ECONNREFUSED" => 111,
-    "EHOSTDOWN" => 112, "EINPROGRESS" => 115,
-    # The socket family. Half of these were missing entirely, which turned a
-    # "rescue Errno::EAFNOSUPPORT" clause into a NameError the moment it was
-    # evaluated -- SocketSpecs.ipv6_available? exploded instead of answering.
-    "ENOTSOCK" => 88, "EDESTADDRREQ" => 89, "EMSGSIZE" => 90,
-    "EPROTOTYPE" => 91, "ENOPROTOOPT" => 92, "EPROTONOSUPPORT" => 93,
-    "ESOCKTNOSUPPORT" => 94, "EOPNOTSUPP" => 95, "EPFNOSUPPORT" => 96,
-    "EAFNOSUPPORT" => 97, "EADDRNOTAVAIL" => 99, "ENETDOWN" => 100,
-    "ENETUNREACH" => 101, "ENETRESET" => 102, "ENOBUFS" => 105,
-    "EISCONN" => 106, "ESHUTDOWN" => 108, "ETOOMANYREFS" => 109,
-    "ETIMEDOUT" => 110, "EHOSTUNREACH" => 113, "EALREADY" => 114,
-    "EPROTO" => 71, "ENOSYS" => 38,
-  }.each do |name, errno|
-    if const_defined?(name)
+  # Linux errno numbers and the messages strerror(3) gives for them. Three jobs:
+  # bind the names the 1.9 snapshot never bound, give the C#-registered classes
+  # their Errno constant -- those are CLR-backed and carry no number, so
+  # Errno::ENOENT::Errno used to resolve up to the Errno module itself instead of
+  # 2 -- and supply the default message for SystemCallError#initialize below,
+  # since the CLR-backed classes spell several of them differently from MRI
+  # ("Invalid Argument" for EINVAL).
+  ERRNO_TABLE = {
+    0 => ["NOERROR", "Success"], 1 => ["EPERM", "Operation not permitted"],
+    2 => ["ENOENT", "No such file or directory"], 3 => ["ESRCH", "No such process"],
+    4 => ["EINTR", "Interrupted system call"], 5 => ["EIO", "Input/output error"],
+    6 => ["ENXIO", "No such device or address"], 7 => ["E2BIG", "Argument list too long"],
+    8 => ["ENOEXEC", "Exec format error"], 9 => ["EBADF", "Bad file descriptor"],
+    10 => ["ECHILD", "No child processes"], 11 => ["EAGAIN", "Resource temporarily unavailable"],
+    12 => ["ENOMEM", "Cannot allocate memory"], 13 => ["EACCES", "Permission denied"],
+    14 => ["EFAULT", "Bad address"], 15 => ["ENOTBLK", "Block device required"],
+    16 => ["EBUSY", "Device or resource busy"], 17 => ["EEXIST", "File exists"],
+    18 => ["EXDEV", "Invalid cross-device link"], 19 => ["ENODEV", "No such device"],
+    20 => ["ENOTDIR", "Not a directory"], 21 => ["EISDIR", "Is a directory"],
+    22 => ["EINVAL", "Invalid argument"], 23 => ["ENFILE", "Too many open files in system"],
+    24 => ["EMFILE", "Too many open files"], 25 => ["ENOTTY", "Inappropriate ioctl for device"],
+    26 => ["ETXTBSY", "Text file busy"], 27 => ["EFBIG", "File too large"],
+    28 => ["ENOSPC", "No space left on device"], 29 => ["ESPIPE", "Illegal seek"],
+    30 => ["EROFS", "Read-only file system"], 31 => ["EMLINK", "Too many links"],
+    32 => ["EPIPE", "Broken pipe"], 33 => ["EDOM", "Numerical argument out of domain"],
+    34 => ["ERANGE", "Numerical result out of range"], 35 => ["EDEADLK", "Resource deadlock avoided"],
+    36 => ["ENAMETOOLONG", "File name too long"], 37 => ["ENOLCK", "No locks available"],
+    38 => ["ENOSYS", "Function not implemented"], 39 => ["ENOTEMPTY", "Directory not empty"],
+    40 => ["ELOOP", "Too many levels of symbolic links"], 42 => ["ENOMSG", "No message of desired type"],
+    43 => ["EIDRM", "Identifier removed"], 44 => ["ECHRNG", "Channel number out of range"],
+    45 => ["EL2NSYNC", "Level 2 not synchronized"], 46 => ["EL3HLT", "Level 3 halted"],
+    47 => ["EL3RST", "Level 3 reset"], 48 => ["ELNRNG", "Link number out of range"],
+    49 => ["EUNATCH", "Protocol driver not attached"], 50 => ["ENOCSI", "No CSI structure available"],
+    51 => ["EL2HLT", "Level 2 halted"], 52 => ["EBADE", "Invalid exchange"],
+    53 => ["EBADR", "Invalid request descriptor"], 54 => ["EXFULL", "Exchange full"],
+    55 => ["ENOANO", "No anode"], 56 => ["EBADRQC", "Invalid request code"],
+    57 => ["EBADSLT", "Invalid slot"], 59 => ["EBFONT", "Bad font file format"],
+    60 => ["ENOSTR", "Device not a stream"], 61 => ["ENODATA", "No data available"],
+    62 => ["ETIME", "Timer expired"], 63 => ["ENOSR", "Out of streams resources"],
+    64 => ["ENONET", "Machine is not on the network"], 65 => ["ENOPKG", "Package not installed"],
+    66 => ["EREMOTE", "Object is remote"], 67 => ["ENOLINK", "Link has been severed"],
+    68 => ["EADV", "Advertise error"], 69 => ["ESRMNT", "Srmount error"],
+    70 => ["ECOMM", "Communication error on send"], 71 => ["EPROTO", "Protocol error"],
+    72 => ["EMULTIHOP", "Multihop attempted"], 73 => ["EDOTDOT", "RFS specific error"],
+    74 => ["EBADMSG", "Bad message"], 75 => ["EOVERFLOW", "Value too large for defined data type"],
+    76 => ["ENOTUNIQ", "Name not unique on network"], 77 => ["EBADFD", "File descriptor in bad state"],
+    78 => ["EREMCHG", "Remote address changed"], 79 => ["ELIBACC", "Can not access a needed shared library"],
+    80 => ["ELIBBAD", "Accessing a corrupted shared library"], 81 => ["ELIBSCN", ".lib section in a.out corrupted"],
+    82 => ["ELIBMAX", "Attempting to link in too many shared libraries"], 83 => ["ELIBEXEC", "Cannot exec a shared library directly"],
+    84 => ["EILSEQ", "Invalid or incomplete multibyte or wide character"], 85 => ["ERESTART", "Interrupted system call should be restarted"],
+    86 => ["ESTRPIPE", "Streams pipe error"], 87 => ["EUSERS", "Too many users"],
+    88 => ["ENOTSOCK", "Socket operation on non-socket"], 89 => ["EDESTADDRREQ", "Destination address required"],
+    90 => ["EMSGSIZE", "Message too long"], 91 => ["EPROTOTYPE", "Protocol wrong type for socket"],
+    92 => ["ENOPROTOOPT", "Protocol not available"], 93 => ["EPROTONOSUPPORT", "Protocol not supported"],
+    94 => ["ESOCKTNOSUPPORT", "Socket type not supported"], 95 => ["ENOTSUP", "Operation not supported"],
+    96 => ["EPFNOSUPPORT", "Protocol family not supported"], 97 => ["EAFNOSUPPORT", "Address family not supported by protocol"],
+    98 => ["EADDRINUSE", "Address already in use"], 99 => ["EADDRNOTAVAIL", "Cannot assign requested address"],
+    100 => ["ENETDOWN", "Network is down"], 101 => ["ENETUNREACH", "Network is unreachable"],
+    102 => ["ENETRESET", "Network dropped connection on reset"], 103 => ["ECONNABORTED", "Software caused connection abort"],
+    104 => ["ECONNRESET", "Connection reset by peer"], 105 => ["ENOBUFS", "No buffer space available"],
+    106 => ["EISCONN", "Transport endpoint is already connected"], 107 => ["ENOTCONN", "Transport endpoint is not connected"],
+    108 => ["ESHUTDOWN", "Cannot send after transport endpoint shutdown"], 109 => ["ETOOMANYREFS", "Too many references: cannot splice"],
+    110 => ["ETIMEDOUT", "Connection timed out"], 111 => ["ECONNREFUSED", "Connection refused"],
+    112 => ["EHOSTDOWN", "Host is down"], 113 => ["EHOSTUNREACH", "No route to host"],
+    114 => ["EALREADY", "Operation already in progress"], 115 => ["EINPROGRESS", "Operation now in progress"],
+    116 => ["ESTALE", "Stale file handle"], 117 => ["EUCLEAN", "Structure needs cleaning"],
+    118 => ["ENOTNAM", "Not a XENIX named type file"], 119 => ["ENAVAIL", "No XENIX semaphores available"],
+    120 => ["EISNAM", "Is a named type file"], 121 => ["EREMOTEIO", "Remote I/O error"],
+    122 => ["EDQUOT", "Disk quota exceeded"], 123 => ["ENOMEDIUM", "No medium found"],
+    124 => ["EMEDIUMTYPE", "Wrong medium type"], 125 => ["ECANCELED", "Operation canceled"],
+    126 => ["ENOKEY", "Required key not available"], 127 => ["EKEYEXPIRED", "Key has expired"],
+    128 => ["EKEYREVOKED", "Key has been revoked"], 129 => ["EKEYREJECTED", "Key was rejected by service"],
+    130 => ["EOWNERDEAD", "Owner died"], 131 => ["ENOTRECOVERABLE", "State not recoverable"],
+    132 => ["ERFKILL", "Operation not possible due to RF-kill"], 133 => ["EHWPOISON", "Memory page has hardware error"],
+  }.freeze
+
+  ERRNO_ALIASES = { "EDEADLOCK" => "EDEADLK", "EOPNOTSUPP" => "ENOTSUP", "EWOULDBLOCK" => "EAGAIN" }.freeze
+
+  ERRNO_CLASSES = {}
+
+  ERRNO_TABLE.each do |errno, (name, message)|
+    if const_defined?(name, false)
       klass = const_get(name)
-      # const_defined? without the second argument would find the enclosing
-      # Errno module through the lexical scope, so restrict it to this class.
-      klass.const_set(:Errno, errno) unless klass.const_defined?(:Errno, false)
     else
-      klass = Class.new(SystemCallError) do
-        define_method(:initialize) { |msg = nil| super(msg ? "#{name}: #{msg}" : name) }
-      end
-      klass.const_set(:Errno, errno)
+      klass = Class.new(SystemCallError)
       const_set(name, klass)
     end
+    # const_defined? without the second argument would find the enclosing Errno
+    # module through the lexical scope, so restrict the lookup to the class.
+    klass.const_set(:Errno, errno) unless klass.const_defined?(:Errno, false)
+    klass.const_set(:Message, message) unless klass.const_defined?(:Message, false)
+    ERRNO_CLASSES[errno] ||= klass
+  end
+
+  # MRI makes EWOULDBLOCK *the same class* as EAGAIN where the numbers agree.
+  ERRNO_ALIASES.each do |name, target|
+    next unless const_defined?(target, false)
+    remove_const(name) if const_defined?(name, false)
+    const_set(name, const_get(target))
+  end
+
+  ERRNO_CLASSES.freeze
+end
+
+# SystemCallError's constructor understood exactly one argument: either a message
+# or an errno, never both, never a location, and it never picked the matching
+# Errno subclass. MRI's shape is
+#
+#   SystemCallError.new(errno)
+#   SystemCallError.new(message, errno)
+#   SystemCallError.new(message, errno, location)
+#   Errno::EINVAL.new(message = nil, location = nil)
+#
+# and the message is "<strerror> @ <location> - <message>", with each part dropped
+# when absent.
+class SystemCallError
+  def self.__errno_of__(klass)
+    klass.const_defined?(:Errno, false) ? klass.const_get(:Errno) : nil
+  end
+
+  def self.__default_message__(klass, errno)
+    return klass.const_get(:Message) if klass.const_defined?(:Message, false)
+    errno.nil? ? "unknown error" : "Unknown error #{errno}"
+  end
+
+  # MRI converts the errno with Integer(), so a Float or an exactly-real Complex
+  # is truncated and a String is a TypeError.
+  def self.__coerce_errno__(errno)
+    return nil if errno.nil?
+    return errno if errno.is_a?(::Integer)
+    if errno.is_a?(::Float)
+      ::Kernel.raise(::FloatDomainError, errno.to_s) if errno.nan? || errno.infinite?
+      return errno.truncate
+    end
+    if defined?(::Complex) && errno.is_a?(::Complex)
+      unless errno.imaginary == 0
+        ::Kernel.raise(::RangeError, "can't convert #{errno} into Integer")
+      end
+      return __coerce_errno__(errno.real)
+    end
+    unless errno.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{errno.class} into Integer")
+    end
+    errno.to_int
+  end
+
+  def self.__coerce_message__(message)
+    return nil if message.nil?
+    return message if message.is_a?(::String)
+    unless message.respond_to?(:to_str)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{message.class} into String")
+    end
+    message.to_str
+  end
+
+  def self.__build_message__(default, message, location)
+    text = default.dup
+    text << " @ " << location.to_s unless location.nil?
+    text << " - " << message unless message.nil?
+    text
+  end
+
+  def self.new(*args)
+    if equal?(::SystemCallError) && !args.empty?
+      if args.size == 1 && !args[0].is_a?(::String) && !args[0].respond_to?(:to_str)
+        message, errno = nil, __coerce_errno__(args[0])
+      else
+        message, errno = __coerce_message__(args[0]), __coerce_errno__(args[1])
+      end
+      # A known errno names a subclass; an unknown one stays a plain
+      # SystemCallError that remembers the number for #errno.
+      klass = ::Errno::ERRNO_CLASSES[errno]
+      return klass.new(message, args[2]) if klass
+      return super(message, errno, args[2])
+    end
+    super
+  end
+
+  def initialize(*args)
+    klass = self.class
+    if klass.equal?(::SystemCallError)
+      if args.empty?
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1..3)")
+      end
+      if args.size == 1 && !args[0].is_a?(::String) && !args[0].respond_to?(:to_str)
+        message, location, errno = nil, nil, ::SystemCallError.__coerce_errno__(args[0])
+      else
+        message = ::SystemCallError.__coerce_message__(args[0])
+        location = args[2]
+        errno = ::SystemCallError.__coerce_errno__(args[1])
+      end
+    else
+      message = ::SystemCallError.__coerce_message__(args[0])
+      location = args[1]
+      errno = ::SystemCallError.__errno_of__(klass)
+    end
+
+    @__errno__ = errno
+    default = ::SystemCallError.__default_message__(klass, errno)
+    super(::SystemCallError.__build_message__(default, message, location))
+  end
+
+  def errno
+    defined?(@__errno__) ? @__errno__ : super
   end
 end
 
@@ -4629,15 +4865,170 @@ class Hash
   end unless method_defined?(:fetch_values)
 end
 
+# The CLR collector answers most of what MRI's GC module reports; the rest are
+# knobs that have no .NET equivalent and are kept as settings that round-trip.
 module GC
   def self.count
-    0
-  end unless respond_to?(:count)
+    total = 0
+    0.upto(::System::GC.max_generation) { |g| total += ::System::GC.collection_count(g) }
+    total
+  end
 
-  def self.stat(key = nil)
-    stats = { count: 0, heap_allocated_pages: 0, total_allocated_objects: 0 }
-    key ? stats[key] : stats
-  end unless respond_to?(:stat)
+  def self.major_count
+    ::System::GC.collection_count(::System::GC.max_generation)
+  end
+
+  STAT_KEYS = [
+    :count, :time, :marking_time, :sweeping_time, :minor_gc_count, :major_gc_count,
+    :heap_allocated_pages, :heap_live_slots, :heap_free_slots, :total_allocated_objects,
+    :total_freed_objects, :malloc_increase_bytes, :compact_count
+  ].freeze
+
+  def self.__stat_values__
+    live = ::System::GC.get_total_memory(false).to_i
+    major = major_count
+    {
+      count: count,
+      time: total_time / 1_000_000,
+      marking_time: 0,
+      sweeping_time: 0,
+      minor_gc_count: count - major,
+      major_gc_count: major,
+      heap_allocated_pages: (live / 16_384) + 1,
+      heap_live_slots: live / 40,
+      heap_free_slots: 0,
+      total_allocated_objects: live / 40,
+      total_freed_objects: 0,
+      malloc_increase_bytes: 0,
+      compact_count: 0
+    }
+  end
+
+  def self.stat(key_or_hash = nil)
+    values = __stat_values__
+    case key_or_hash
+    when nil then values
+    when ::Symbol
+      unless values.key?(key_or_hash)
+        ::Kernel.raise(::ArgumentError, "unknown key: #{key_or_hash}")
+      end
+      values[key_or_hash]
+    when ::Hash
+      values.each { |k, v| key_or_hash[k] = v }
+      key_or_hash
+    else
+      ::Kernel.raise(::TypeError, "non-hash or symbol given")
+    end
+  end
+
+  # MRI returns whether the collector *was* disabled before the call.
+  def self.enable
+    was = defined?(@disabled) && @disabled
+    @disabled = false
+    !!was
+  end
+
+  def self.disable
+    was = defined?(@disabled) && @disabled
+    @disabled = true
+    !!was
+  end
+
+  def self.start(full_mark: true, immediate_mark: true, immediate_sweep: true)
+    ::System::GC.collect
+    nil
+  end
+
+  class << self
+    alias_method :garbage_collect, :start
+  end
+
+  def self.total_time
+    ::System::GC.get_total_pause_duration.total_milliseconds.to_i * 1_000_000
+  rescue ::Exception
+    0
+  end
+
+  def self.auto_compact
+    defined?(@auto_compact) ? @auto_compact : false
+  end
+
+  def self.auto_compact=(value)
+    @auto_compact = value
+  end
+
+  def self.measure_total_time
+    defined?(@measure_total_time) ? @measure_total_time : true
+  end
+
+  def self.measure_total_time=(value)
+    @measure_total_time = value
+  end
+
+  def self.stress
+    defined?(@stress) ? @stress : false
+  end
+
+  def self.stress=(value)
+    @stress = value
+  end
+
+  def self.compact
+    ::System::GC.collect
+    nil
+  end
+
+  # 3.4's pluggable-GC configuration. :implementation is read-only and global;
+  # everything else is a per-implementation setting, and IronRuby has exactly one.
+  def self.config(options = nil)
+    @config ||= { rgengc_allow_full_mark: true }
+    case options
+    when nil then { implementation: "default" }.merge(@config)
+    when ::Hash
+      options.each do |key, value|
+        if key.to_s.downcase == "implementation"
+          ::Kernel.raise(::ArgumentError, 'Attempting to set read-only key "Implementation"')
+        end
+      end
+      options.each { |key, value| @config[key] = value if @config.key?(key) }
+      { implementation: "default" }.merge(@config)
+    else
+      ::Kernel.raise(::ArgumentError, "expecting a Hash, got #{options.class}")
+    end
+  end
+
+  module Profiler
+    def self.enabled?
+      defined?(@enabled) ? @enabled : false
+    end
+
+    def self.enable
+      @enabled = true
+      nil
+    end
+
+    def self.disable
+      @enabled = false
+      nil
+    end
+
+    def self.clear
+      nil
+    end
+
+    def self.total_time
+      ::GC.total_time / 1_000_000_000.0
+    end
+
+    def self.result
+      "GC #{::GC.count} invokes.\n"
+    end
+
+    def self.report(out = $stdout)
+      out.write(result)
+      nil
+    end
+  end
 end
 
 # Ruby 3.2 autoloads Set; the 1.9 snapshot requires an explicit require.
@@ -5453,12 +5844,23 @@ class Enumerator
   # --- Enumerator::Product -----------------------------------------------
   # The cartesian product of its arguments, leftmost varying slowest.
   class Product < Enumerator
-    def initialize(*enums, **options)
-      enums.each do |enum|
-        unless enum.respond_to?(:each)
-          ::Kernel.raise(::TypeError, "wrong argument type #{enum.class} (must respond to :each)")
-        end
+    # MRI accepts anything here -- the arguments are only required to answer
+    # #each_entry at the point #each actually walks them, which is what lets
+    # Product wrap a plain Object that defines each_entry and nothing else.
+    def initialize(*enums)
+      __check_frozen__
+      @__enums__ = enums
+      self
+    end
+
+    def initialize_copy(other)
+      return self if other.equal?(self)
+      __check_frozen__
+      unless other.instance_of?(self.class)
+        ::Kernel.raise(::TypeError, "initialize_copy should take same class object")
       end
+      enums = other.__enums_or_nil__
+      ::Kernel.raise(::ArgumentError, "uninitialized product") if enums.nil?
       @__enums__ = enums
       self
     end
@@ -5469,12 +5871,15 @@ class Enumerator
       self
     end
 
+    # Ruby 3.2 specifies #each_entry, not #each: an argument that only answers
+    # each_entry has to work, and one that answers neither has to raise NoMethodError
+    # rather than a TypeError from the constructor.
     def __product__(index, prefix, block)
       if index == @__enums__.size
         block.call(prefix.dup)
         return
       end
-      @__enums__[index].each do |*values|
+      @__enums__[index].each_entry do |*values|
         prefix.push(values.size <= 1 ? values[0] : values)
         __product__(index + 1, prefix, block)
         prefix.pop
@@ -5482,25 +5887,56 @@ class Enumerator
     end
     private :__product__
 
+    protected def __enums_or_nil__
+      defined?(@__enums__) ? @__enums__ : nil
+    end
+
+    # nil for any size MRI cannot use (missing, non-Integer, NaN); zero short-circuits
+    # even when another enumerable has an unknown size, and an infinite size carries.
     def size
       total = 1
+      unknown = false
       @__enums__.each do |enum|
         n = enum.respond_to?(:size) ? enum.size : nil
-        return nil unless n.is_a?(::Numeric)
-        total *= n
+        if n.is_a?(::Integer)
+          return 0 if n == 0
+          total *= n
+        elsif n.is_a?(::Float) && n.infinite?
+          total *= n
+        else
+          unknown = true
+        end
       end
-      total
+      unknown ? nil : total
     end
 
     def rewind
-      @__enums__.reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
+      @__enums__.each { |enum| enum.rewind if enum.respond_to?(:rewind) }
       self
     end
 
     def inspect
-      "#<Enumerator::Product: #{@__enums__.inspect}>"
+      enums = __enums_or_nil__
+      return "#<#{self.class}: uninitialized>" if enums.nil?
+
+      seen = ::Thread.current[:__enumerator_product_inspect__] ||= []
+      return "#<#{self.class}: ...>" if seen.any? { |o| o.equal?(self) }
+
+      seen.push(self)
+      begin
+        "#<#{self.class}: #{enums.inspect}>"
+      ensure
+        seen.pop
+        ::Thread.current[:__enumerator_product_inspect__] = nil if seen.empty?
+      end
     end
     alias_method :to_s, :inspect
+
+    def __check_frozen__
+      return unless frozen?
+      ::Kernel.raise(::FrozenError, "can't modify frozen #{self.class}: #{inspect}")
+    end
+    private :__check_frozen__
   end
 
   def +(other)
@@ -5808,6 +6244,98 @@ class MatchData
 
   def values_at(*indexes)
     indexes.map { |i| self[i] }
+  end
+
+  # 1.9 let #begin/#end/#offset name a group. The C# signatures only take an
+  # Integer, so a name was a TypeError; __group_bounds__ already knows how to
+  # resolve both forms.
+  unless method_defined?(:__ir_begin__)
+    alias_method :__ir_begin__, :begin
+    alias_method :__ir_end__, :end
+    alias_method :__ir_offset__, :offset
+
+    def begin(n)
+      return __ir_begin__(n) if n.is_a?(::Integer) || n.respond_to?(:to_int)
+      bounds = __group_bounds__(n)
+      bounds && bounds[0]
+    end
+
+    def end(n)
+      return __ir_end__(n) if n.is_a?(::Integer) || n.respond_to?(:to_int)
+      bounds = __group_bounds__(n)
+      bounds && bounds[1]
+    end
+
+    def offset(n)
+      return __ir_offset__(n) if n.is_a?(::Integer) || n.respond_to?(:to_int)
+      __group_bounds__(n) || [nil, nil]
+    end
+  end
+end
+
+# Integer#[] grew (index, length) and Range forms in 2.7. The builtin only ever
+# took a single bit index, so both were a TypeError or an ArgumentError. All of
+# them reduce to (self >> i) & ((1 << len) - 1), with a negative index shifting
+# the other way and a non-positive length meaning "no mask".
+[Fixnum, Bignum].each do |klass|
+  next unless klass.instance_method(:[]).arity == 1
+
+  klass.class_eval do
+    alias_method :__ir_bit__, :[]
+
+    def __bit_position__(value)
+      return value if value.is_a?(::Integer)
+      if value.is_a?(::Float)
+        if value.nan? || value.infinite?
+          ::Kernel.raise(::FloatDomainError, value.to_s)
+        end
+        return value.truncate
+      end
+      unless value.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+      end
+      converted = value.to_int
+      unless converted.is_a?(::Integer)
+        ::Kernel.raise(::TypeError, "can't convert #{value.class} to Integer")
+      end
+      converted
+    end
+    private :__bit_position__
+
+    def __bits_from__(first, length)
+      shifted = first >= 0 ? (self >> first) : (self << -first)
+      return shifted if length.nil? || length <= 0
+      shifted & ((1 << length) - 1)
+    end
+    private :__bits_from__
+
+    def [](index, length = nil)
+      unless index.is_a?(::Range)
+        return __ir_bit__(index) if length.nil?
+        return __bits_from__(__bit_position__(index), __bit_position__(length))
+      end
+
+      unless length.nil?
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 2, expected 1)")
+      end
+
+      first = index.begin.nil? ? nil : __bit_position__(index.begin)
+      last = index.end.nil? ? nil : __bit_position__(index.end)
+
+      if first.nil?
+        # A beginless range asks for every bit below `last`; that is only a finite
+        # answer when they are all zero.
+        if last.nil? || (self & ((1 << (last + 1)) - 1)) != 0
+          ::Kernel.raise(::ArgumentError, "The beginless range for Integer#[] results in infinity")
+        end
+        return 0
+      end
+
+      return __bits_from__(first, nil) if last.nil?
+      span = last - first + 1
+      span -= 1 if index.exclude_end?
+      __bits_from__(first, span)
+    end
   end
 end
 
@@ -6595,19 +7123,189 @@ end
 # written in terms of the accessors it does have, so it stays in step with the
 # real environment rather than a snapshot of it.
 class << ENV
+  # Names and values go through #to_str, not #to_s: ENV is as strict as Hash about
+  # implicit conversion and reports the failure the same way.
+  def __env_str__(object)
+    return object if object.is_a?(::String)
+    unless object.respond_to?(:to_str)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{object.class} into String")
+    end
+    converted = object.to_str
+    unless converted.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{object.class} into String")
+    end
+    converted
+  end
+  private :__env_str__
+
+  # setenv(3) rejects a name that is empty or contains '='. The CLR reports that as its
+  # own ArgumentException; MRI reports Errno::EINVAL naming the call.
+  def __env_check_name__(name)
+    if name.empty? || name.include?("=")
+      ::Kernel.raise(::Errno::EINVAL, "setenv(#{name})")
+    end
+    name
+  end
+  private :__env_check_name__
+
+  unless respond_to?(:__clr_store__, true)
+    alias_method :__clr_store__, :[]=
+    alias_method :__clr_fetch__, :[]
+    private :__clr_store__
+    private :__clr_fetch__
+
+    def []=(name, value)
+      name = __env_str__(name)
+      if value.nil?
+        # Deleting a name setenv(3) would have rejected is a no-op, not an error.
+        __clr_store__(name, nil) unless name.empty? || name.include?("=")
+        return nil
+      end
+      value = __env_str__(value)
+      __env_check_name__(name)
+      __clr_store__(name, value)
+      value
+    end
+
+    alias_method :store, :[]=
+  end
+
+  def [](name)
+    __clr_fetch__(__env_str__(name))
+  end
+
+  def fetch(name, *default)
+    if default.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)")
+    end
+    name = __env_str__(name)
+    if block_given? && !default.empty?
+      ::Kernel.warn("warning: block supersedes default value argument")
+    end
+
+    value = __clr_fetch__(name)
+    return value unless value.nil?
+    return yield(name) if block_given?
+    return default[0] unless default.empty?
+
+    ::Kernel.raise(::KeyError.new("key not found: #{name.inspect}", receiver: self, key: name))
+  end
+
+  def delete(name)
+    name = __env_str__(name)
+    value = __clr_fetch__(name)
+    if value.nil?
+      return block_given? ? yield(name) : nil
+    end
+    __clr_store__(name, nil)
+    value
+  end
+
+  def clone(freeze: nil)
+    unless freeze.nil? || freeze == true || freeze == false
+      ::Kernel.raise(::ArgumentError, "unexpected value for freeze: #{freeze.class}")
+    end
+    ::Kernel.raise(::TypeError, "Cannot clone ENV, use ENV.to_h to get a copy of ENV as a hash")
+  end
+
+  def dup
+    ::Kernel.raise(::TypeError, "Cannot dup ENV, use ENV.to_h to get a copy of ENV as a hash")
+  end
+
+  # MRI hands back an Enumerator rather than complaining about the missing block,
+  # and the Enumerator knows how many pairs it will walk.
+  def each(&block)
+    return to_enum(:each) { size } unless block
+    to_hash.each(&block)
+    self
+  end
+  alias_method :each_pair, :each
+
+  def each_key
+    return to_enum(:each_key) { size } unless block_given?
+    to_hash.each_key { |k| yield k }
+    self
+  end
+
+  def each_value
+    return to_enum(:each_value) { size } unless block_given?
+    to_hash.each_value { |v| yield v }
+    self
+  end
+
+  def delete_if
+    return to_enum(:delete_if) { size } unless block_given?
+    to_hash.each { |k, v| __clr_store__(k, nil) if yield(k, v) }
+    self
+  end
+
+  def reject!
+    return to_enum(:reject!) { size } unless block_given?
+    changed = false
+    to_hash.each do |k, v|
+      next unless yield(k, v)
+      __clr_store__(k, nil)
+      changed = true
+    end
+    changed ? self : nil
+  end
+
+  def reject(&block)
+    return to_enum(:reject) { size } unless block
+    to_hash.reject(&block)
+  end
+
+  def select(&block)
+    return to_enum(:select) { size } unless block
+    to_hash.select(&block)
+  end
+  alias_method :filter, :select
+
+  alias_method :member?, :include?
+
+  # Pairs are applied one at a time and in order, so a bad pair leaves everything
+  # before it in place -- which is what MRI's own specs pin down.
   def merge!(*others)
     others.each do |other|
       other.each do |key, value|
-        if block_given? && key?(key.to_s)
-          value = yield(key.to_s, self[key.to_s], value)
+        key = __env_str__(key)
+        if block_given? && !__clr_fetch__(key).nil?
+          value = yield(key, __clr_fetch__(key), value)
         end
-        self[key.to_s] = value.nil? ? nil : value.to_s
+        self[key] = value
       end
     end
     self
-  end unless respond_to?(:merge!)
+  end
 
-  alias_method :update, :merge! unless respond_to?(:update)
+  alias_method :update, :merge!
+
+  # replace is all-or-nothing: everything is converted and checked before the first
+  # variable is touched, so a TypeError halfway through leaves ENV untouched.
+  def replace(other)
+    unless other.is_a?(::Hash)
+      unless other.respond_to?(:to_hash)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{other.class} into Hash")
+      end
+      other = other.to_hash
+    end
+
+    pairs = other.map do |key, value|
+      key = __env_str__(key)
+      value = __env_str__(value)
+      __env_check_name__(key)
+      [key, value]
+    end
+
+    clear
+    pairs.each { |key, value| __clr_store__(key, value) }
+    self
+  end
+
+  # The C# implementation built a CLR dictionary and threw on a duplicate value.
+  def invert
+    to_hash.invert
+  end
 
   def keep_if
     return to_enum(:keep_if) unless block_given?
@@ -6629,38 +7327,54 @@ class << ENV
 
   alias_method :filter!, :select! unless respond_to?(:filter!)
 
+  # MRI keeps the objects it was handed as the result keys, not their #to_str.
   def slice(*keys)
     result = {}
-    keys.each do |k|
-      k = k.to_s
-      result[k] = self[k] if key?(k)
+    keys.each do |key|
+      name = __env_str__(key)
+      value = __clr_fetch__(name)
+      result[key] = value unless value.nil?
     end
     result
-  end unless respond_to?(:slice)
+  end
 
   def except(*keys)
-    keys = keys.map { |k| k.to_s }
+    keys = keys.map { |key| __env_str__(key) }
     to_hash.reject { |k, _| keys.include?(k) }
-  end unless respond_to?(:except)
+  end
 
   def assoc(key)
-    key = key.to_s
-    key?(key) ? [key, self[key]] : nil
-  end unless respond_to?(:assoc)
+    key = __env_str__(key)
+    value = __clr_fetch__(key)
+    value.nil? ? nil : [key, value]
+  end
 
+  # rassoc and value? answer nil for an argument they cannot convert, where assoc
+  # and the key-taking methods raise. That asymmetry is MRI's.
   def rassoc(value)
-    value = value.to_s
+    return nil unless value.is_a?(::String) || value.respond_to?(:to_str)
+    value = __env_str__(value)
     to_hash.each { |k, v| return [k, v] if v == value }
     nil
-  end unless respond_to?(:rassoc)
+  end
+
+  def value?(value)
+    return nil unless value.is_a?(::String) || value.respond_to?(:to_str)
+    value = __env_str__(value)
+    to_hash.each_value { |v| return true if v == value }
+    false
+  end
+  alias_method :has_value?, :value?
+
+  def to_h(&block)
+    to_hash.to_h(&block)
+  end
 
   def key(value)
-    unless value.is_a?(::String)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into String")
-    end
+    value = __env_str__(value)
     to_hash.each { |k, v| return k if v == value }
     nil
-  end unless respond_to?(:key)
+  end
 
   def to_set(*args, &block)
     require 'set'
@@ -7974,14 +8688,60 @@ unless defined?(Random)
     def rand(limit = nil)
       case limit
       when nil then @native.next_double
-      when Range
-        span = limit.end - limit.begin
-        span = span.to_i + (limit.exclude_end? ? 0 : 1)
-        limit.begin + @native.next(span)
-      when Float then @native.next_double * limit
-      else @native.next(limit.to_i)
+      when ::Range then __rand_in_range__(limit)
+      when ::Float
+        unless limit > 0
+          ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
+        end
+        @native.next_double * limit
+      else
+        n = limit.to_int
+        unless n > 0
+          ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
+        end
+        __rand_below__(n)
       end
     end
+
+    # An Integer uniformly in 0...n. System::Random.next only covers Int32, so a
+    # wider bound is filled from random bytes and rejection-sampled.
+    def __rand_below__(n)
+      return @native.next(n) if n <= 2147483647
+
+      bits = n.bit_length
+      bytes = (bits + 7) / 8
+      buffer = System::Array[System::Byte].new(bytes)
+      loop do
+        @native.next_bytes(buffer)
+        value = 0
+        buffer.to_a.each { |b| value = (value << 8) | b }
+        value >>= (bytes * 8 - bits)
+        return value if value < n
+      end
+    end
+    private :__rand_below__
+
+    # MRI drives this entirely off `end - begin`, which is what makes it work for
+    # Time and for any object that answers #-, #+ and #to_int or #to_f. nil comes
+    # back for a range that cannot produce a value.
+    def __rand_in_range__(range)
+      first = range.begin
+      last = range.end
+      return nil if first.nil? || last.nil?
+
+      span = last - first
+      if !span.is_a?(::Float) && span.respond_to?(:to_int)
+        n = span.to_int
+        n += 1 unless range.exclude_end?
+        return nil if n <= 0
+        first + __rand_below__(n)
+      else
+        width = span.to_f
+        return nil if width < 0 || (width == 0 && range.exclude_end?)
+        first + @native.next_double * width
+      end
+    end
+    private :__rand_in_range__
 
     def bytes(count)
       buffer = System::Array[System::Byte].new(count)
@@ -8016,6 +8776,29 @@ class Random
   def self.urandom(count)
     File.open("/dev/urandom", "rb") { |f| f.read(count) }
   end unless respond_to?(:urandom)
+end
+
+module Kernel
+  # Kernel#rand is more forgiving than Random#rand: it takes a Range (1.9.3), it
+  # ignores the sign of a numeric limit, and a limit that truncates to 0 -- which
+  # includes every Float below 1 -- means "give me a Float" rather than an error.
+  # The builtin only ever understood a positive Integer.
+  unless private_method_defined?(:__ir_rand__)
+    alias_method :__ir_rand__, :rand
+    private :__ir_rand__
+
+    def rand(limit = nil)
+      return __ir_rand__ if limit.nil?
+      return ::Random.rand(limit) if limit.is_a?(::Range)
+
+      unless limit.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{limit.class} into Integer")
+      end
+      n = limit.to_int.abs
+      n == 0 ? __ir_rand__ : __ir_rand__(n)
+    end
+    module_function :rand
+  end
 end
 
 module ObjectSpace
@@ -10455,4 +11238,66 @@ class Complex
     freeze
     self
   end
+end
+
+# --- a batch of small post-1.9 additions ------------------------------------
+
+module Kernel
+  # Kernel#Hash (1.9). Only nil and [] are special-cased; everything else must
+  # answer #to_hash with a Hash.
+  def Hash(object)
+    return {} if object.nil? || object == []
+    return object if object.instance_of?(::Hash)
+    unless object.respond_to?(:to_hash)
+      ::Kernel.raise(::TypeError, "can't convert #{object.class} into Hash")
+    end
+    converted = object.to_hash
+    unless converted.is_a?(::Hash)
+      ::Kernel.raise(::TypeError, "can't convert #{object.class} into Hash (#{object.class}#to_hash gives #{converted.class})")
+    end
+    converted
+  end
+  module_function :Hash
+  private :Hash
+
+  # MRI has these as private instance methods on Kernel as well as public
+  # singletons; IronRuby declared several of them singleton-only, and #loop was
+  # not private at all.
+  private :loop if public_method_defined?(:loop)
+end
+
+class LoadError
+  # MRI 2.0 records the path that could not be loaded. IronRuby does not thread
+  # it through the raise sites yet, so the reader exists and answers nil unless
+  # something set it.
+  def path
+    defined?(@path) ? @path : nil
+  end unless method_defined?(:path)
+end
+
+class SyntaxError
+  def path
+    defined?(@path) ? @path : nil
+  end unless method_defined?(:path)
+end
+
+# Deliberately not defined: Regexp.timeout / Regexp.timeout= (Ruby 3.2).
+# An accessor that only stores the value is worse than no accessor at all. The
+# point of the setting is to bound catastrophic backtracking, and ruby/spec tests
+# it by running /^(a*)*$/ against a million characters -- which hangs the .NET
+# matcher outright once Regexp.timeout= stops being a NoMethodError.
+# Implementing it means passing System.Text.RegularExpressions' matchTimeout into
+# RubyRegex.TransformPattern (invalidating the cached Regex when the global
+# changes) and mapping RegexMatchTimeoutException onto a real Regexp::TimeoutError.
+
+class Random
+  # 2.0's Random#random_number: rand's behaviour, but a bare call always answers
+  # a Float and an out-of-range argument is an ArgumentError rather than nil.
+  def random_number(limit = nil)
+    limit.nil? ? rand : rand(limit)
+  end unless method_defined?(:random_number)
+
+  def self.random_number(limit = nil)
+    limit.nil? ? rand : rand(limit)
+  end unless respond_to?(:random_number)
 end

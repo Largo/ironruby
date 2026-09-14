@@ -1664,15 +1664,17 @@ namespace IronRuby.Builtins {
         [RubyMethod("trap", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
         public static object Trap(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            ConversionStorage<MutableString>/*!*/ stringCast,
             RubyContext/*!*/ context, object self, object signalId, object command) {
-            return Signal.Trap(callStorage, context, self, signalId, command);
+            return Signal.Trap(callStorage, stringCast, context, self, signalId, command);
         }
 
         [RubyMethod("trap", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_PROCESS")]
         public static object Trap(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            ConversionStorage<MutableString>/*!*/ stringCast,
             RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, object self, object signalId) {
-            return Signal.Trap(callStorage, context, block, self, signalId);
+            return Signal.Trap(callStorage, stringCast, context, block, self, signalId);
         }
 
 #endif

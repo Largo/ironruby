@@ -2819,9 +2819,10 @@ namespace IronRuby.Runtime {
                     return false;
                 }
                 if (fractionDigits == 0) {
-                    // Ruby 3.4 accepts a trailing point, so Float("10.") is 10.0, but the point
-                    // has to end the number: "." and "1.e5" are still errors.
-                    if (integerDigits == 0 || index != end) {
+                    // Ruby 3.4 accepts a point with nothing after it, so Float("10.") is 10.0 and
+                    // Float("1.e5") is 100000.0, but there has to be something before it: "." and
+                    // ".5e1" are still errors.
+                    if (integerDigits == 0) {
                         return false;
                     }
                 }
@@ -2859,39 +2860,33 @@ namespace IronRuby.Runtime {
         private static bool TryParseHexadecimalFloat(string/*!*/ str, int index, int end, out double result) {
             result = 0.0;
 
-            // Underscores are not accepted among the hexadecimal digits, only in the exponent.
+            // '_' may separate two hexadecimal digits, exactly as in the decimal form.
             StringBuilder digits = new StringBuilder();
-            if (ScanDigitRun(str, end, ref index, digits, true, false) <= 0) {
+            int integerDigits = ScanDigitRun(str, end, ref index, digits, true, true);
+            if (integerDigits < 0) {
                 return false;
             }
 
             int scale = 0;
-            bool hasFraction = false;
             if (index < end && str[index] == '.') {
                 index++;
-                int fractionDigits = ScanDigitRun(str, end, ref index, digits, true, false);
+                int fractionDigits = ScanDigitRun(str, end, ref index, digits, true, true);
                 if (fractionDigits <= 0) {
                     return false;
                 }
                 scale = -4 * fractionDigits;
-                hasFraction = true;
+            } else if (integerDigits == 0) {
+                return false;
             }
 
             int exponent = 0;
-            bool hasExponent = false;
             if (index < end && (str[index] == 'p' || str[index] == 'P')) {
                 index++;
                 if (!ScanExponent(str, end, ref index, out exponent)) {
                     return false;
                 }
-                hasExponent = true;
             }
 
-            // A hexadecimal fraction is only meaningful with a binary exponent, so "0x1.8" is
-            // rejected while "0x1f" and "0x1p3" are not.
-            if (hasFraction && !hasExponent) {
-                return false;
-            }
             if (index != end) {
                 return false;
             }

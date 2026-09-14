@@ -489,20 +489,46 @@ namespace IronRuby.Runtime {
             try {
                 // Swap self and other around to do the coercion.
                 coercedValues = coerce.Target(coerce, other, self) as IList;
-            } catch (SystemException) { 
-                // catches StandardError (like rescue)
+            } catch (MissingMethodException e) when (IsUndefinedCoerce(coercionStorage.Context, e, other)) {
+                // MRI only falls back to "X can't be coerced into Y" / "comparison of X with Y
+                // failed" when #coerce is not defined at all. An exception raised *inside* a
+                // user-written #coerce propagates to the caller unchanged. IronRuby used to
+                // `catch (SystemException)` here, which is the 1.8 behaviour and silently turned
+                // every bug in a #coerce into a TypeError.
                 result = null;
                 return false;
             }
 
-            if (coercedValues != null && coercedValues.Count == 2) {
-                var opSite = binaryOpStorage.GetCallSite(binaryOp);
-                result = opSite.Target(opSite, coercedValues[0], coercedValues[1]);
-                return true;
+            if (coercedValues == null || coercedValues.Count != 2) {
+                // #coerce exists but answered something that is not a pair. MRI reports that
+                // as its own error rather than pretending the operand was not coercible.
+                throw RubyExceptions.CreateTypeError("coerce must return [x, y]");
             }
 
-            result = null;
-            return false;
+            var opSite = binaryOpStorage.GetCallSite(binaryOp);
+            result = opSite.Target(opSite, coercedValues[0], coercedValues[1]);
+            return true;
+        }
+
+        /// <summary>
+        /// True when <paramref name="e"/> is the NoMethodError produced by the #coerce dispatch
+        /// itself failing to find the method on <paramref name="other"/>, as opposed to a
+        /// NoMethodError raised from inside a #coerce that does exist.
+        /// </summary>
+        private static bool IsUndefinedCoerce(RubyContext/*!*/ context, MissingMethodException/*!*/ e, object other) {
+            var data = RubyExceptionData.TryGetInstance(e);
+            if (data == null) {
+                return false;
+            }
+
+            var name = data.Name as RubySymbol;
+            if (name == null || name.ToString() != "coerce") {
+                return false;
+            }
+
+            // A boxed value type can be re-boxed between the call site and the error, so the
+            // receiver is compared by value as well as by reference.
+            return !data.HasReceiver || ReferenceEquals(data.Receiver, other) || Equals(data.Receiver, other);
         }
     
         #endregion

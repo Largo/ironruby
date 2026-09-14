@@ -48,12 +48,21 @@ namespace IronRuby.Builtins {
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
         public static object Trap(
             CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            ConversionStorage<MutableString>/*!*/ stringCast,
             RubyContext/*!*/ context,
             object self,
             object signalId,
             object command) {
 
-            int number = PosixSignals.ToNumber(signalId);
+            // MRI converts the signal with #to_str (never #to_int), and does so on every call.
+            if (!(signalId is int) && !(signalId is MutableString) && !(signalId is RubySymbol)) {
+                var converted = Protocols.TryCastToString(stringCast, signalId);
+                if (converted != null) {
+                    signalId = converted;
+                }
+            }
+
+            int number = PosixSignals.ToNumber(context, signalId, true);
             if (number == SignalInterrupt) {
                 var proc = command as Proc;
                 context.InterruptSignalHandler = (proc != null) ? new Action(() => proc.Call(null)) : null;
@@ -68,14 +77,28 @@ namespace IronRuby.Builtins {
             // MRI takes a block, a Proc, a Method - anything that answers #call - so dispatch
             // dynamically rather than insisting on a Proc.
             var site = callStorage.GetCallSite("call", 1);
+            var mainThread = context.MainThread;
+
+            // MRI's default SIGINT disposition raises Interrupt on the main thread. Leaving it to
+            // the platform instead makes `Signal.trap(:INT, :SIG_DFL); Process.kill :INT; sleep`
+            // hang, because .NET's own SIGINT handling swallows it.
+            Action<int> defaultInvoke = (number == SignalInterrupt && mainThread != null)
+                ? new Action<int>(_ => RubyUtils.RaiseAsyncException(mainThread, new Interrupt()))
+                : null;
+
+            // No try/catch around the call: PosixSignals runs handlers on the main thread at a
+            // safe point, so an exception out of one propagates there by itself, which is where
+            // MRI raises it too.
             return PosixSignals.Trap(number, command, signalNumber =>
-                site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber))
+                site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber)),
+                defaultInvoke
             );
         }
 
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
         public static object Trap(
             CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            ConversionStorage<MutableString>/*!*/ stringCast,
             RubyContext/*!*/ context,
             BlockParam block,
             object self,
@@ -84,7 +107,7 @@ namespace IronRuby.Builtins {
             if (block == null) {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
-            return Trap(callStorage, context, self, signalId, block.Proc);
+            return Trap(callStorage, stringCast, context, self, signalId, block.Proc);
         }
 
         private const int SignalInterrupt = 2;

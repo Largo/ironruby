@@ -660,11 +660,15 @@ namespace IronRuby.Runtime {
         private void InitializeGlobalConstants() {
             Debug.Assert(_objectClass != null);
 
-            MutableString version = MutableString.CreateAscii(MriVersion);
-            MutableString platform = MakePlatformString();
+            // MRI freezes every RUBY_* string constant; ruby/spec asserts it directly
+            // (spec/core/builtin_constants), and user code relies on being able to hand
+            // them out without defensive dups.
+            MutableString version = MutableString.CreateAscii(MriVersion).Freeze();
+            MutableString platform = MakePlatformString().Freeze();
 
-            MutableString releaseDate = MutableString.CreateAscii(MriReleaseDate);
-            MutableString rubyEngine = MutableString.CreateAscii("ironruby");
+            MutableString releaseDate = MutableString.CreateAscii(MriReleaseDate).Freeze();
+            MutableString rubyEngine = MutableString.CreateAscii("ironruby").Freeze();
+            MutableString revision = MutableString.CreateAscii(MakeRevisionString()).Freeze();
 
             using (ClassHierarchyLocker()) {
                 RubyClass obj = _objectClass;
@@ -674,7 +678,8 @@ namespace IronRuby.Runtime {
                 obj.SetConstantNoMutateNoLock("RUBY_PATCHLEVEL", MriPatchLevel);
                 obj.SetConstantNoMutateNoLock("RUBY_PLATFORM", platform);
                 obj.SetConstantNoMutateNoLock("RUBY_RELEASE_DATE", releaseDate);
-                obj.SetConstantNoMutateNoLock("RUBY_DESCRIPTION", MutableString.CreateAscii(MakeDescriptionString()));
+                obj.SetConstantNoMutateNoLock("RUBY_DESCRIPTION", MutableString.CreateAscii(MakeDescriptionString()).Freeze());
+                obj.SetConstantNoMutateNoLock("RUBY_REVISION", revision);
 
                 obj.SetConstantNoMutateNoLock("VERSION", version);
                 obj.SetConstantNoMutateNoLock("PLATFORM", platform);
@@ -696,6 +701,33 @@ namespace IronRuby.Runtime {
                 // Hash
                 // SCRIPT_LINES__
             }
+        }
+
+        /// <summary>
+        /// MRI's RUBY_REVISION is the git commit the interpreter was built from. The
+        /// closest equivalent here is the source-revision suffix SourceLink writes into
+        /// AssemblyInformationalVersion ("1.2.0-dev+&lt;sha&gt;"); when the assembly was
+        /// built without it we report the empty string rather than omitting the constant,
+        /// so that `defined?(RUBY_REVISION)` and RUBY_REVISION.is_a?(String) both hold.
+        /// </summary>
+        public static string/*!*/ MakeRevisionString() {
+            try {
+                var attribute = (AssemblyInformationalVersionAttribute)Attribute.GetCustomAttribute(
+                    typeof(RubyContext).Assembly, typeof(AssemblyInformationalVersionAttribute)
+                );
+
+                if (attribute != null) {
+                    string informationalVersion = attribute.InformationalVersion;
+                    int plus = informationalVersion.IndexOf('+');
+                    if (plus >= 0 && plus + 1 < informationalVersion.Length) {
+                        return informationalVersion.Substring(plus + 1);
+                    }
+                }
+            } catch (Exception) {
+                // reflection over our own assembly metadata must never stop the runtime booting
+            }
+
+            return String.Empty;
         }
 
         public static string/*!*/ MakeDescriptionString() {

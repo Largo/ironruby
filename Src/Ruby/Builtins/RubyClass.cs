@@ -325,6 +325,14 @@ namespace IronRuby.Builtins {
             if (superClass != null) {
                 _level = superClass.Level + 1;
                 _structInfo = structInfo ?? superClass._structInfo;
+
+                // Register with the superclass now rather than on the first method lookup.
+                // The dependency itself is only needed for method-cache invalidation, which
+                // cannot happen before anyone looks a method up, but Class#subclasses reads
+                // the same list and has to see a class nobody has touched yet.
+                using (context.ClassHierarchyLocker()) {
+                    InitializeDependencies();
+                }
             } else {
                 _level = 0;
             }

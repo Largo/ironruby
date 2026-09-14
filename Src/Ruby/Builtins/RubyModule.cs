@@ -879,6 +879,26 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// The classes that name this one as their direct superclass, excluding singleton
+        /// classes -- Ruby 3.1's Class#subclasses. The dependent-class list exists to
+        /// propagate method-cache invalidation and holds every descendant, so it is filtered
+        /// down to the direct ones here.
+        /// </summary>
+        public List<RubyClass>/*!*/ GetDirectSubclasses() {
+            var result = new List<RubyClass>();
+            using (Context.ClassHierarchyLocker()) {
+                if (_dependentClasses != null) {
+                    foreach (var cls in _dependentClasses) {
+                        if (cls != null && !cls.IsSingletonClass && ReferenceEquals(cls.SuperClass, this)) {
+                            result.Add(cls);
+                        }
+                    }
+                }
+            }
+            return result;
+        }
+
         internal void AddDependentClass(RubyClass/*!*/ dependentClass) {
             Context.RequiresClassHierarchyLock();
             Assert.NotNull(dependentClass);
