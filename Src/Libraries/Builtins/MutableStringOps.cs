@@ -47,6 +47,26 @@ namespace IronRuby.Builtins {
             return MutableString.Create(value);
         }
 
+        // Ruby 2.x: String.new(str, encoding: enc, capacity: n). The capacity is only a hint
+        // about how much room to reserve, so it is accepted and ignored.
+        [RubyConstructor]
+        public static MutableString/*!*/ Create(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, RubyClass/*!*/ self,
+            [DefaultProtocol, Optional, NotNull]MutableString value, [NotNull]IDictionary<object, object>/*!*/ options) {
+
+            MutableString result = (value != null) ? MutableString.Create(value) : MutableString.CreateEmpty();
+            foreach (var entry in options) {
+                var name = (entry.Key as RubySymbol)?.ToString();
+                if (name == "encoding") {
+                    if (entry.Value != null) {
+                        result.ForceEncoding(Protocols.ConvertToEncoding(toStr, entry.Value));
+                    }
+                } else if (name != "capacity") {
+                    throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(entry.Key).ToString());
+                }
+            }
+            return result;
+        }
+
         [RubyConstructor]
         public static MutableString/*!*/ Create(RubyClass/*!*/ self, [NotNull]byte[]/*!*/ value) {
             return MutableString.CreateBinary(value);
@@ -69,8 +89,9 @@ namespace IronRuby.Builtins {
         }
 
         internal static bool NormalizeSubstringRange(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length, out int begin, out int count) {
-            begin = Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = Protocols.CastToFixnum(fixnumCast, range.End);
+            // Ruby 2.6/2.7 beginless and endless ranges: a missing bound is the
+            // start resp. the end of the string, and an open end is never exclusive.
+            begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
 
             begin = IListOps.NormalizeIndex(length, begin);
             if (begin < 0 || begin > length) {
@@ -78,7 +99,12 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            end = IListOps.NormalizeIndex(length, end); 
+            if (range.End == null) {
+                count = length - begin;
+                return true;
+            }
+
+            int end = IListOps.NormalizeIndex(length, Protocols.CastToFixnum(fixnumCast, range.End));
 
             count = range.ExcludeEnd ? end - begin : end - begin + 1;
             return true;
@@ -345,15 +371,128 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// The set of characters a tr-style selector ("a-z", "^abc", "a\\-b") describes.
+        ///
+        /// This replaces IntervalParser.Parse's 256-entry BitArray for #count, #delete and
+        /// #squeeze: a selector may name any character, not just a Latin-1 one, and an
+        /// unrepresentable one used to index past the end of the bit array and surface as a
+        /// CLR IndexOutOfRangeException. The parse follows MRI's trnext: a backslash escapes
+        /// the next character unless it is the last one, a trailing '-' is a literal, and a
+        /// descending range is an error rather than an empty set.
+        /// </summary>
+        public sealed class CharacterSelector {
+            private readonly bool _negated;
+            private readonly HashSet<int>/*!*/ _singles = new HashSet<int>();
+            private readonly List<int>/*!*/ _rangeBounds = new List<int>();
+
+            private CharacterSelector(bool negated) {
+                _negated = negated;
+            }
+
+            public bool Contains(int c) {
+                bool hit = _singles.Contains(c);
+                if (!hit) {
+                    for (int i = 0; i < _rangeBounds.Count; i += 2) {
+                        if (c >= _rangeBounds[i] && c <= _rangeBounds[i + 1]) {
+                            hit = true;
+                            break;
+                        }
+                    }
+                }
+                return _negated ? !hit : hit;
+            }
+
+            private static int CodepointAt(MutableString/*!*/ str, ref int position) {
+                char c = str.GetChar(position++);
+                if (Char.IsHighSurrogate(c) && position < str.Length) {
+                    char low = str.GetChar(position);
+                    if (Char.IsLowSurrogate(low)) {
+                        position++;
+                        return Char.ConvertToUtf32(c, low);
+                    }
+                }
+                return c;
+            }
+
+            public static CharacterSelector/*!*/ Parse(MutableString/*!*/ selector) {
+                selector.PrepareForCharacterRead();
+                int length = selector.Length;
+                int position = 0;
+
+                // A lone "^" selects the circumflex itself.
+                bool negated = length > 1 && selector.GetChar(0) == '^';
+                if (negated) {
+                    position = 1;
+                }
+
+                var result = new CharacterSelector(negated);
+                while (position < length) {
+                    if (selector.GetChar(position) == '\\' && position < length - 1) {
+                        position++;
+                    }
+                    int first = CodepointAt(selector, ref position);
+
+                    // "a-z" is a range only when something follows the dash.
+                    if (position < length - 1 && selector.GetChar(position) == '-') {
+                        position++;
+                        int last = CodepointAt(selector, ref position);
+                        if (first > last) {
+                            if (first < 0x80 && last < 0x80) {
+                                throw RubyExceptions.CreateArgumentError(
+                                    String.Format("invalid range \"{0}-{1}\" in string transliteration", (char)first, (char)last)
+                                );
+                            }
+                            throw RubyExceptions.CreateArgumentError("invalid range in string transliteration");
+                        }
+                        result._rangeBounds.Add(first);
+                        result._rangeBounds.Add(last);
+                    } else {
+                        result._singles.Add(first);
+                    }
+                }
+
+                return result;
+            }
+        }
+
+        /// <summary>A character is selected when every one of the selectors picks it.</summary>
+        public sealed class CharacterSelectorSet {
+            private readonly CharacterSelector[]/*!*/ _selectors;
+
+            private CharacterSelectorSet(CharacterSelector[]/*!*/ selectors) {
+                _selectors = selectors;
+            }
+
+            public bool Contains(int c) {
+                for (int i = 0; i < _selectors.Length; i++) {
+                    if (!_selectors[i].Contains(c)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            public static CharacterSelectorSet/*!*/ Parse(MutableString/*!*/ self, MutableString[]/*!*/ selectors) {
+                var parsed = new CharacterSelector[selectors.Length];
+                for (int i = 0; i < selectors.Length; i++) {
+                    self.RequireCompatibleEncoding(selectors[i]);
+                    RequireValidEncoding(selectors[i]);
+                    parsed[i] = CharacterSelector.Parse(selectors[i]);
+                }
+                return new CharacterSelectorSet(parsed);
+            }
+        }
+
         #endregion
 
 
         #region initialize, initialize_copy
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
+        // Nothing is changed, so MRI does not object to a frozen receiver here.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static MutableString/*!*/ Reinitialize(MutableString/*!*/ self) {
-            self.RequireNotFrozen();
             return self;
         }
 
@@ -362,12 +501,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static MutableString/*!*/ Reinitialize(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString other) {
+            self.RequireNotFrozen();
             if (ReferenceEquals(self, other)) {
                 return self;
             }
 
             self.Clear();
             self.Append(other);
+            // The encoding comes across too: "".send(:initialize, utf16) is a UTF-16 string.
+            self.ForceEncoding(other.Encoding);
             return self.TaintBy(other);
         }
 
@@ -464,6 +606,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("<<")]
         [RubyMethod("concat")]
         public static MutableString/*!*/ Append(MutableString/*!*/ self, int c) {
+            if (c < 0) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", c);
+            }
+
             // #5855: appending a 0x80-0xff code point to a US-ASCII string widens the receiver
             // to BINARY instead of failing. Integer#chr is stricter - 0x80.chr("US-ASCII") is a
             // RangeError - so this case cannot go through ToChr.
@@ -472,6 +618,42 @@ namespace IronRuby.Builtins {
                 return self.Append((byte)c);
             }
             return self.Append(Integer.ToChr(self.Encoding, self.Encoding, c));
+        }
+
+        [RubyMethod("<<")]
+        [RubyMethod("concat")]
+        public static MutableString/*!*/ Append(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ c) {
+            throw RubyExceptions.CreateRangeError("bignum out of char range");
+        }
+
+        // Ruby 1.9 gave #concat - but not #<< - any number of arguments. Each one is an
+        // Integer codepoint or something String-convertible, and they are appended in order,
+        // so "s.concat(s, s)" triples s rather than looping.
+        [RubyMethod("concat")]
+        public static MutableString/*!*/ Append(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self,
+            [NotNull]params object/*!*/[]/*!*/ others) {
+            self.RequireNotFrozen();
+
+            var pieces = new object[others.Length];
+            for (int i = 0; i < others.Length; i++) {
+                if (others[i] is int || others[i] is BigInteger) {
+                    pieces[i] = others[i];
+                } else {
+                    // A copy, so that "s.concat(s, s)" sees the original both times.
+                    pieces[i] = Protocols.CastToString(stringCast, others[i]).Clone();
+                }
+            }
+
+            for (int i = 0; i < pieces.Length; i++) {
+                if (pieces[i] is int) {
+                    Append(self, (int)pieces[i]);
+                } else if (pieces[i] is BigInteger) {
+                    Append(self, (BigInteger)pieces[i]);
+                } else {
+                    Append(self, (MutableString)pieces[i]);
+                }
+            }
+            return self;
         }
 
         #endregion
@@ -488,25 +670,51 @@ namespace IronRuby.Builtins {
             return Math.Sign(self.CompareTo(other));
         }
 
+        /// <summary>Pairs whose inverse comparison is in progress; see Compare below.</summary>
+        [ThreadStatic]
+        private static List<object> _inverseComparisons;
+
         [RubyMethod("<=>")]
-        public static object Compare(BinaryOpStorage/*!*/ comparisonStorage, RespondToStorage/*!*/ respondToStorage, object/*!*/ self, object other) {
-            // Self is object so that we can reuse this method.
+        public static object Compare(ConversionStorage<MutableString>/*!*/ stringTryCast, BinaryOpStorage/*!*/ comparisonStorage,
+            RespondToStorage/*!*/ respondToStorage, MutableString/*!*/ self, object other) {
+            // MRI converts with #to_str and compares the result; only when that is not
+            // available does it ask the argument to compare itself and negate the answer.
+            MutableString converted = (other is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, other);
+            if (converted != null) {
+                return ScriptingRuntimeHelpers.Int32ToObject(Compare(self, converted));
+            }
+            return Compare(comparisonStorage, respondToStorage, (object)self, other);
+        }
 
-            // We test to see if other responds to to_str AND <=>
-            // Ruby never attempts to convert other to a string via to_str and call Compare ... which is strange -- feels like a BUG in Ruby
-
-            if (Protocols.RespondTo(respondToStorage, other, "to_str") && Protocols.RespondTo(respondToStorage, other, "<=>")) {
-                var site = comparisonStorage.GetCallSite("<=>");
-                object result = Integer.TryUnaryMinus(site.Target(site, other, self));
-                if (result == null) {
-                    throw RubyExceptions.CreateTypeError("{0} can't be coerced into Integer",
-                        comparisonStorage.Context.GetClassDisplayName(result));
-                }
-
-                return result;
+        /// <summary>
+        /// The "ask the other object and negate" half, which is all the CLR String and ClrName
+        /// wrappers need.
+        /// </summary>
+        public static object Compare(BinaryOpStorage/*!*/ comparisonStorage, RespondToStorage/*!*/ respondToStorage,
+            object/*!*/ self, object other) {
+            if (!Protocols.RespondTo(respondToStorage, other, "<=>")) {
+                return null;
             }
 
-            return null;
+            // "other <=> self" may well be defined as "self <=> other", so the pair being
+            // compared is remembered and a second, identical question answers nil - which is
+            // what MRI's rb_invcmp recursion guard does.
+            var pending = _inverseComparisons ?? (_inverseComparisons = new List<object>());
+            for (int i = 0; i + 1 < pending.Count; i += 2) {
+                if (ReferenceEquals(pending[i], self) && ReferenceEquals(pending[i + 1], other)) {
+                    return null;
+                }
+            }
+
+            pending.Add(self);
+            pending.Add(other);
+            try {
+                var site = comparisonStorage.GetCallSite("<=>");
+                object answer = site.Target(site, other, self);
+                return (answer == null) ? null : Integer.TryUnaryMinus(answer);
+            } finally {
+                pending.RemoveRange(pending.Count - 2, 2);
+            }
         }
 
         [RubyMethod("eql?")]
@@ -557,18 +765,23 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("slice!")]
         public static object RemoveCharInPlace(RubyContext/*!*/ context, MutableString/*!*/ self, [DefaultProtocol]int index) {
-            if (!InExclusiveRangeNormalized(self.GetByteCount(), ref index)) {
+            // The frozen check happens before the index is bounds checked: MRI raises
+            // FrozenError even when the call would be a no-op.
+            self.RequireNotFrozen();
+
+            // Ruby 1.9 returns the character at the index, not its first byte.
+            if (!InExclusiveRangeNormalized(self.GetCharCount(), ref index)) {
                 return null;
             }
 
-            // TODO: optimize if the value is not read:
-            int result = self.GetByte(index);
+            MutableString result = self.GetSlice(index, 1);
             self.Remove(index, 1);
             return result;
         }
 
         [RubyMethod("slice!")]
         public static MutableString RemoveSubstringInPlace(MutableString/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int length) {
+            self.RequireNotFrozen();
             if (length < 0) {
                 return null;
             }
@@ -589,6 +802,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice!")]
         public static MutableString RemoveSubstringInPlace(ConversionStorage<int>/*!*/ fixnumCast, 
             MutableString/*!*/ self, [NotNull]Range/*!*/ range) {
+            self.RequireNotFrozen();
             int begin = Protocols.CastToFixnum(fixnumCast, range.Begin);
             int end = Protocols.CastToFixnum(fixnumCast, range.End);
 
@@ -604,6 +818,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("slice!")]
         public static MutableString RemoveSubstringInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
+            self.RequireNotFrozen();
             if (regex.IsEmpty) {
                 return self.CloneDerived().TaintBy(regex, scope);
             }
@@ -620,6 +835,7 @@ namespace IronRuby.Builtins {
         public static MutableString RemoveSubstringInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int occurrance) {
 
+            self.RequireNotFrozen();
             if (regex.IsEmpty) {
                 return self.CloneDerived().TaintBy(regex, scope);
             }
@@ -635,6 +851,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("slice!")]
         public static MutableString RemoveSubstringInPlace(MutableString/*!*/ self, [NotNull]MutableString/*!*/ searchStr) {
+            self.RequireNotFrozen();
             if (searchStr.IsEmpty) {
                 return searchStr.CloneDerived();
             }
@@ -717,6 +934,36 @@ namespace IronRuby.Builtins {
             return result != null ? result.TaintBy(regex, scope) : null;
         }
 
+        // MRI also addresses a capture by its name, as a String or a Symbol.
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static MutableString GetSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regex, [NotNull]MutableString/*!*/ groupName) {
+            return GetNamedGroupSubstring(scope, self, regex, groupName.ConvertToString());
+        }
+
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static MutableString GetSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regex, [NotNull]RubySymbol/*!*/ groupName) {
+            return GetNamedGroupSubstring(scope, self, regex, groupName.ToString());
+        }
+
+        private static MutableString GetNamedGroupSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self,
+            RubyRegex/*!*/ regex, string/*!*/ groupName) {
+            MatchData match = RegexpOps.Match(scope, regex, self);
+            if (match == null) {
+                // MRI only reports an unknown name once something matched.
+                return null;
+            }
+
+            if (!match.HasNamedGroup(groupName)) {
+                throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", groupName);
+            }
+
+            return match.GetNamedGroupValue(groupName);
+        }
+
         [RubyMethod("getbyte")]
         public static object GetByte(MutableString/*!*/ self, [DefaultProtocol]int index) {
             return InExclusiveRangeNormalized(self.GetByteCount(), ref index) ? ScriptingRuntimeHelpers.Int32ToObject(self.GetByte(index)) : null;
@@ -746,11 +993,17 @@ namespace IronRuby.Builtins {
 
         #region []=
 
-        // TODO:
         [RubyMethod("setbyte")]
-        public static MutableString/*!*/ SetByte(MutableString/*!*/ self, [DefaultProtocol]int index, [DefaultProtocol]int value) {
-            self.SetByte(index, (byte)value);
-            return self;
+        public static object SetByte(MutableString/*!*/ self, [DefaultProtocol]int index, [DefaultProtocol]int value) {
+            self.RequireNotFrozen();
+            int count = self.GetByteCount();
+            int at = index < 0 ? index + count : index;
+            if (at < 0 || at >= count) {
+                throw RubyExceptions.CreateIndexError("index {0} out of string", index);
+            }
+            self.SetByte(at, unchecked((byte)value));
+            // MRI answers the value that was written, not the receiver.
+            return ScriptingRuntimeHelpers.Int32ToObject(value);
         }
 
         [RubyMethod("[]=")]
@@ -758,8 +1011,14 @@ namespace IronRuby.Builtins {
             [DefaultProtocol]int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
             index = index < 0 ? index + self.Length : index;
-            if (index < 0 || index >= self.Length) {
+            // Appending at the very end is allowed, which is the only way "" can be assigned to.
+            if (index < 0 || index > self.Length) {
                 throw RubyExceptions.CreateIndexError("index {0} out of string", index);
+            }
+
+            if (index == self.Length) {
+                self.Append(value).TaintBy(value);
+                return value;
             }
 
             if (value.IsEmpty) {
@@ -768,19 +1027,6 @@ namespace IronRuby.Builtins {
             }
 
             self.Replace(index, 1, value).TaintBy(value);
-            return value;
-        }
-
-        [RubyMethod("[]=")]
-        public static int SetCharacter(MutableString/*!*/ self, 
-            [DefaultProtocol]int index, int value) {
-
-            index = index < 0 ? index + self.Length : index;
-            if (index < 0 || index >= self.Length) {
-                throw RubyExceptions.CreateIndexError("index {0} out of string", index);
-            }
-
-            self.SetByte(index, unchecked((byte)value));
             return value;
         }
 
@@ -825,19 +1071,21 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ ReplaceSubstring(ConversionStorage<int>/*!*/ fixnumCast, MutableString/*!*/ self, 
             [NotNull]Range/*!*/ range, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
-            int begin = Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = Protocols.CastToFixnum(fixnumCast, range.End);
+            int begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            int end = (range.End == null) ? self.Length : Protocols.CastToFixnum(fixnumCast, range.End);
 
-            begin = begin < 0 ? begin + self.Length : begin;
+            int normalizedBegin = begin < 0 ? begin + self.Length : begin;
 
-            if (begin < 0 || begin > self.Length) {
+            if (normalizedBegin < 0 || normalizedBegin > self.Length) {
+                // MRI quotes the range as it was written, not as it was normalized.
                 throw RubyExceptions.CreateRangeError("{0}..{1} out of range", begin, end);
             }
 
             end = end < 0 ? end + self.Length : end;
 
-            int count = range.ExcludeEnd ? end - begin : end - begin + 1;
-            return ReplaceSubstring(self, begin, count, value);
+            int count = range.ExcludeEnd ? end - normalizedBegin : end - normalizedBegin + 1;
+            // An end before the beginning is an insertion, not a negative-length error.
+            return ReplaceSubstring(self, normalizedBegin, count < 0 ? 0 : count, value);
         }
 
         [RubyMethod("[]=")]
@@ -853,9 +1101,26 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("[]=")]
-        public static MutableString ReplaceSubstring(RubyContext/*!*/ context, MutableString/*!*/ self,
-            [NotNull]RubyRegex/*!*/ regex, [Optional, DefaultProtocol]int groupIndex, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyContext/*!*/ context,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [NotNull]object/*!*/ value) {
+            return ReplaceSubstring(stringCast, context, self, regex, 0, value);
+        }
 
+        // A String replacement gets its own three-argument overload so that the binder still
+        // has a better match than "[]=(Fixnum, Fixnum, String)" for "str[/re/, n] = s".
+        [RubyMethod("[]=")]
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyContext/*!*/ context,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int groupIndex,
+            [NotNull]MutableString/*!*/ value) {
+            return ReplaceSubstring(stringCast, context, self, regex, groupIndex, (object)value);
+        }
+
+        [RubyMethod("[]=")]
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyContext/*!*/ context,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int groupIndex, [NotNull]object/*!*/ value) {
+
+            // MRI checks the match, and the capture index, before it asks the replacement for
+            // #to_str - so the conversion is done by hand rather than by the binder.
             MatchData match = regex.Match(self);
             if (match == null) {
                 throw RubyExceptions.CreateIndexError("regexp not matched");
@@ -869,7 +1134,13 @@ namespace IronRuby.Builtins {
                 groupIndex += match.GroupCount;
             }
 
-            return ReplaceSubstring(self, match.GetGroupStart(groupIndex), match.GetGroupLength(groupIndex), value);
+            if (!match.GroupSuccess(groupIndex)) {
+                throw RubyExceptions.CreateIndexError("regexp group {0} not matched", groupIndex);
+            }
+
+            var replacement = value as MutableString ?? Protocols.CastToString(stringCast, value);
+
+            return ReplaceSubstring(self, match.GetGroupStart(groupIndex), match.GetGroupLength(groupIndex), replacement);
         }
 
         #endregion
@@ -953,9 +1224,29 @@ namespace IronRuby.Builtins {
             return changed;
         }
 
-        [RubyMethod("casecmp")]
-        public static int Casecmp(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ other) {
+        // Ruby 3.4: a chilled literal counts as frozen here, so +"str" answers a copy that
+        // can be mutated without the warning.
+        [RubyMethod("+@")]
+        public static MutableString/*!*/ Unchill(MutableString/*!*/ self) {
+            return (self.IsFrozen || self.IsChilled) ? self.Clone() : self;
+        }
+
+        public static int Casecmp(MutableString/*!*/ self, MutableString/*!*/ other) {
             return Compare(DownCase(self), DownCase(other));
+        }
+
+        // MRI answers nil rather than raising when the argument is not a String, and also when
+        // the two encodings are not compatible.
+        [RubyMethod("casecmp")]
+        public static object Casecmp(ConversionStorage<MutableString>/*!*/ stringTryCast, MutableString/*!*/ self, object other) {
+            MutableString str = (other is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, other);
+            if (str == null) {
+                return null;
+            }
+            if (!self.Encoding.Equals(str.Encoding) && !(self.IsAscii() || str.IsAscii())) {
+                return null;
+            }
+            return ScriptingRuntimeHelpers.Int32ToObject(Casecmp(self, str));
         }
 
         [RubyMethod("capitalize")]
@@ -1192,6 +1483,15 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Dump(MutableString/*!*/ self) {
             // Note that "self" could be a subclass of MutableString, and the return value should be
             // of the same type
+            if (!self.Encoding.IsAsciiIdentity) {
+                // A string whose encoding is not ASCII-compatible cannot be dumped as text:
+                // MRI escapes its *bytes* and appends the call that puts the encoding back.
+                var bytes = MutableString.CreateBinary(self.ToByteArray());
+                string quoted = GetQuotedStringRepresentation(bytes, true, '"')
+                    + ".force_encoding(\"" + self.Encoding.Name + "\")";
+                return MutableString.Create(quoted, RubyEncoding.Ascii).TaintBy(self);
+            }
+
             return self.CreateDerived().Append(GetQuotedStringRepresentation(self, true, '"')).TaintBy(self);
         }
 
@@ -1260,10 +1560,25 @@ namespace IronRuby.Builtins {
             return enumerator.Current.ToMutableString(self.Encoding);
         }
 
-        [RubyMethod("codepoints")]
         [RubyMethod("each_codepoint")]
         public static Enumerator/*!*/ EachCodePoint(MutableString/*!*/ self) {
             return new Enumerator(self, "each_codepoint");
+        }
+
+        // Ruby 1.9: #codepoints is the array, #each_codepoint the enumerator. The array form
+        // walks the string straight away, so a broken byte sequence is reported there and not
+        // at the first #next.
+        [RubyMethod("codepoints")]
+        public static RubyArray/*!*/ GetCodePoints(MutableString/*!*/ self) {
+            var result = new RubyArray();
+            var enumerator = self.GetCharacters();
+            while (enumerator.MoveNext()) {
+                if (!enumerator.Current.IsValid) {
+                    throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", self.Encoding.Name);
+                }
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject((int)enumerator.Current.Codepoint));
+            }
+            return result;
         }
 
         [RubyMethod("codepoints")]
@@ -1410,6 +1725,8 @@ namespace IronRuby.Builtins {
         // encoding aware
         [RubyMethod("force_encoding")]
         public static MutableString/*!*/ ForceEncoding(MutableString/*!*/ self, [NotNull]RubyEncoding/*!*/ encoding) {
+            // Retagging is a mutation as far as frozen-ness is concerned.
+            self.RequireNotFrozen();
             self.ForceEncoding(encoding);
             return self;
         }
@@ -1417,7 +1734,21 @@ namespace IronRuby.Builtins {
         // encoding aware
         [RubyMethod("force_encoding")]
         public static MutableString/*!*/ ForceEncoding(RubyContext/*!*/ context, MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ encodingName) {
-            return ForceEncoding(self, context.GetRubyEncoding(encodingName));
+            return ForceEncoding(self, ResolveEncodingName(context, encodingName));
+        }
+
+        /// <summary>
+        /// "internal", "external", "locale" and "filesystem" name the current defaults rather
+        /// than an encoding of their own; an unset default_internal means BINARY here.
+        /// </summary>
+        private static RubyEncoding/*!*/ ResolveEncodingName(RubyContext/*!*/ context, MutableString/*!*/ name) {
+            switch (name.ConvertToString().ToLowerInvariant()) {
+                case "internal": return context.DefaultInternalEncoding ?? RubyEncoding.Binary;
+                case "external": return context.DefaultExternalEncoding;
+                case "locale":
+                case "filesystem": return context.DefaultExternalEncoding;
+                default: return context.GetRubyEncoding(name);
+            }
         }
 
         [RubyMethod("encode")]
@@ -1450,10 +1781,9 @@ namespace IronRuby.Builtins {
             RubyEncoding to, from;
             MutableString toEncodingName = null, fromEncodingName = null;
             if (toEncoding == Missing.Value) {
-                to = toStr.Context.DefaultInternalEncoding;
-                if (to == null) {
-                    return self;
-                }
+                // Without a target and without a default_internal the encoding does not change,
+                // but the newline decorators still have to run.
+                to = toStr.Context.DefaultInternalEncoding ?? self.Encoding;
             } else {
                 to = toEncoding as RubyEncoding;
                 if (to == null) {
@@ -1700,9 +2030,17 @@ namespace IronRuby.Builtins {
 
                 // A character the target has no room for. :fallback gets first refusal, then
                 // :undef => :replace, and otherwise it is an error.
-                MutableString substitute = CallFallback(fallbackStorage, toStr, settings.Fallback, piece, from);
+                // An explicit :replace with undef: :replace wins over :fallback.
+                MutableString substitute = (settings.ReplaceUndefined && settings.Replacement != null)
+                    ? null
+                    : CallFallback(fallbackStorage, toStr, settings.Fallback, piece, from);
                 if (substitute != null) {
-                    result.Append(substitute.ConvertToString());
+                    string replacementText = substitute.ConvertToString();
+                    // The substitute has to fit in the target encoding too.
+                    if (!CanEncode(encoder, replacementText.ToCharArray(), replacementText.Length)) {
+                        throw RubyExceptions.CreateArgumentError("too big fallback string");
+                    }
+                    result.Append(replacementText);
                     continue;
                 }
 
@@ -1886,6 +2224,11 @@ namespace IronRuby.Builtins {
             ConversionStorage<MutableString>/*!*/ toStr, object fallback, string/*!*/ piece, RubyEncoding/*!*/ from) {
 
             if (fallback == null) {
+                return null;
+            }
+
+            // MRI ignores a :fallback that cannot be indexed rather than calling it.
+            if (!fallbackStorage.Context.RespondTo(fallback, "[]")) {
                 return null;
             }
 
@@ -2186,31 +2529,19 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("sub")]
-        public static MutableString/*!*/ ReplaceFirst(RubyScope/*!*/ scope, MutableString/*!*/ self, 
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]MutableString/*!*/ replacement) {
+        public static MutableString/*!*/ ReplaceFirst(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault,
+            ConversionStorage<MutableString>/*!*/ toStr, RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]object/*!*/ replacement) {
 
-            return ReplaceFirst(null, null, scope, self, replacement, pattern) ?? self.CloneDerived();
+            return ReplaceFirst(toS, hashDefault, scope, self, ToReplacement(toStr, replacement), pattern) ?? self.CloneDerived();
         }
 
         [RubyMethod("gsub")]
-        public static MutableString/*!*/ ReplaceAll(RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]MutableString/*!*/ replacement) {
+        public static MutableString/*!*/ ReplaceAll(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault,
+            ConversionStorage<MutableString>/*!*/ toStr, RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]object/*!*/ replacement) {
 
-            return ReplaceAll(null, null, scope, self, replacement, pattern) ?? self.CloneDerived();
-        }
-
-        [RubyMethod("sub")]
-        public static MutableString/*!*/ ReplaceFirst(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault, RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]Union<IDictionary<object, object>, MutableString>/*!*/ replacement) {
-
-            return ReplaceFirst(toS, hashDefault, scope, self, replacement, pattern) ?? self.CloneDerived();
-        }
-
-        [RubyMethod("gsub")]
-        public static MutableString/*!*/ ReplaceAll(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault, RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]Union<IDictionary<object, object>, MutableString>/*!*/ replacement) {
-
-            return ReplaceAll(toS, hashDefault, scope, self, replacement, pattern) ?? self.CloneDerived();
+            return ReplaceAll(toS, hashDefault, scope, self, ToReplacement(toStr, replacement), pattern) ?? self.CloneDerived();
         }
 
         #endregion
@@ -2285,33 +2616,48 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("sub!")]
-        public static MutableString ReplaceFirstInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, 
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]MutableString/*!*/ replacement) {
-
-            return ReplaceInPlace(null, null, scope, self, pattern, replacement, false);
-        }
-
-        [RubyMethod("gsub!")]
-        public static MutableString ReplaceAllInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, 
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]MutableString/*!*/ replacement) {
-
-            return ReplaceInPlace(null, null, scope, self, pattern, replacement, true);
-        }
-
-        [RubyMethod("sub!")]
         public static MutableString ReplaceFirstInPlace(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault,
-            RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]Union<IDictionary<object, object>, MutableString>/*!*/ replacement) {
+            ConversionStorage<MutableString>/*!*/ toStr, RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]object/*!*/ replacement) {
 
-            return ReplaceInPlace(toS, hashDefault, scope, self, pattern, replacement, false);
+            return ReplaceInPlace(toS, hashDefault, scope, self, pattern, ToReplacement(toStr, replacement), false);
         }
 
         [RubyMethod("gsub!")]
-        public static MutableString ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault, 
-            RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]Union<IDictionary<object, object>, MutableString>/*!*/ replacement) {
+        public static MutableString ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault,
+            ConversionStorage<MutableString>/*!*/ toStr, RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]object/*!*/ replacement) {
 
-            return ReplaceInPlace(toS, hashDefault, scope, self, pattern, replacement, true);
+            return ReplaceInPlace(toS, hashDefault, scope, self, pattern, ToReplacement(toStr, replacement), true);
+        }
+
+        /// <summary>
+        /// The replacement argument of #sub/#gsub is a Hash or a String, and the binder cannot
+        /// be left to choose between the two: a Union parameter never reaches #to_str, and two
+        /// separate overloads make a Hash fail the String conversion before the Hash one is
+        /// tried. So it arrives as an object and is sorted out here.
+        /// </summary>
+        private static Union<IDictionary<object, object>, MutableString> ToReplacement(
+            ConversionStorage<MutableString>/*!*/ toStr, object/*!*/ replacement) {
+            var hash = replacement as IDictionary<object, object>;
+            if (hash != null) {
+                return new Union<IDictionary<object, object>, MutableString>(hash, null);
+            }
+            return new Union<IDictionary<object, object>, MutableString>(null, Protocols.CastToString(toStr, replacement));
+        }
+
+        // Ruby 1.9: with neither a replacement nor a block, #sub/#gsub and their in-place
+        // forms answer an Enumerator that yields the matched substrings.
+        [RubyMethod("gsub")]
+        public static object ReplaceAll(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+            return new Enumerator((_, block) => BlockReplaceAll(tosConversion, scope, block, self, pattern));
+        }
+
+        [RubyMethod("gsub!")]
+        public static object ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+            return new Enumerator((_, block) => BlockReplaceInPlace(tosConversion, scope, block, self, pattern, true));
         }
 
         #endregion
@@ -2424,14 +2770,31 @@ namespace IronRuby.Builtins {
             return true;
         }
 
+        // Ruby 1.9 takes any number of prefixes and answers true as soon as one matches,
+        // which is why the arguments are converted one at a time: MRI never asks the ones
+        // it did not need for #to_str. A Regexp prefix (Ruby 2.5) has to match at position 0.
         [RubyMethod("start_with?")]
-        public static bool StartsWith(RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, Optional]MutableString subString) {
+        public static bool StartsWith(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [NotNull]params object/*!*/[]/*!*/ prefixes) {
 
-            if (subString == null) {
-                return false;
+            for (int i = 0; i < prefixes.Length; i++) {
+                RubyRegex regex = prefixes[i] as RubyRegex;
+                if (regex != null) {
+                    MatchData match = RegexpOps.Match(scope, regex, self);
+                    if (match != null && match.Index == 0) {
+                        return true;
+                    }
+                    continue;
+                }
+
+                if (StartsWith(self, Protocols.CastToString(stringCast, prefixes[i]))) {
+                    return true;
+                }
             }
+            return false;
+        }
 
+        private static bool StartsWith(MutableString/*!*/ self, MutableString/*!*/ subString) {
             int prefix = subString.GetByteCount();
             if (self.GetByteCount() < prefix) {
                 return false;
@@ -2467,19 +2830,35 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("end_with?")]
-        public static bool EndsWith(RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, Optional]MutableString subString) {
+        public static bool EndsWith(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [NotNull]params object/*!*/[]/*!*/ suffixes) {
 
-            // TODO: Deal with encodings
+            for (int i = 0; i < suffixes.Length; i++) {
+                MutableString suffix = Protocols.CastToString(stringCast, suffixes[i]);
+                self.RequireCompatibleEncoding(suffix);
+                if (EndsWith(self, suffix)) {
+                    return true;
+                }
+            }
+            return false;
+        }
 
-            if (subString == null || self.Length < subString.Length) {
+        private static bool EndsWith(MutableString/*!*/ self, MutableString/*!*/ subString) {
+            int suffix = subString.GetByteCount();
+            if (self.GetByteCount() < suffix) {
                 return false;
             }
 
             // Comparing the strings rather than converting the argument to a CLR string keeps
             // this working for a string holding bytes that are invalid in its encoding, which
             // MRI answers from the trailing bytes.
-            return self.EndsWith(subString);
+            if (!self.EndsWith(subString)) {
+                return false;
+            }
+
+            // ... and the suffix has to begin on a character boundary: "\xC3\xA9" does not end
+            // with "\xA9".
+            return EndsOnCharacterBoundary(self, self.GetByteCount() - suffix);
         }
 
         #endregion
@@ -2488,10 +2867,11 @@ namespace IronRuby.Builtins {
         #region delete, delete!, clear
 
         private static MutableString/*!*/ InternalDelete(MutableString/*!*/ self, MutableString[]/*!*/ ranges) {
-            BitArray map = new RangeParser(ranges).Parse();
+            var map = CharacterSelectorSet.Parse(self, ranges);
+            self.PrepareForCharacterRead();
             MutableString result = self.CreateDerived().TaintBy(self);
             for (int i = 0; i < self.Length; i++) {
-                if (!map.Get(self.GetChar(i))) {
+                if (!map.Contains(self.GetChar(i))) {
                     result.Append(self.GetChar(i));
                 }
             }
@@ -2551,10 +2931,11 @@ namespace IronRuby.Builtins {
         #region count
         
         private static object InternalCount(MutableString/*!*/ self, MutableString[]/*!*/ ranges) {
-            BitArray map = new RangeParser(ranges).Parse();
+            var map = CharacterSelectorSet.Parse(self, ranges);
+            self.PrepareForCharacterRead();
             int count = 0;
             for (int i = 0; i < self.Length; i++) {
-                if (map.Get(self.GetChar(i))) {
+                if (map.Contains(self.GetChar(i))) {
                     count++;
                 }
             }
@@ -2633,16 +3014,64 @@ namespace IronRuby.Builtins {
             return site.Target(site, scope, obj, self);
         }
 
-        [RubyMethod("match")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
             var site = storage.GetCallSite("match", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope));
             return site.Target(site, scope, regex, self);
         }
 
-        [RubyMethod("match")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern) {
             var site = storage.GetCallSite("match", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope));
             return site.Target(site, scope, new RubyRegex(pattern, RubyRegexOptions.NONE), self);
+        }
+
+        // Ruby 1.9 gave #match a block that receives the MatchData, and an optional start
+        // offset. Without an offset the call still goes through Regexp#match dynamically, so
+        // a Regexp subclass that overrides it is honoured; with one it goes straight to the
+        // implementation, which already knows about offsets. The pattern must be a Regexp or
+        // a String - unlike most String arguments a Symbol is not accepted.
+        [RubyMethod("match")]
+        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
+            return YieldMatch(block, Match(storage, scope, self, regex));
+        }
+
+        [RubyMethod("match")]
+        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            MutableString/*!*/ self, [NotNull]MutableString/*!*/ pattern) {
+            return YieldMatch(block, Match(storage, scope, self, pattern));
+        }
+
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, MutableString/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int start) {
+            return RegexpOps.Match(scope, block, regex, self, start);
+        }
+
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, MutableString/*!*/ self,
+            [NotNull]MutableString/*!*/ pattern, [DefaultProtocol]int start) {
+            return RegexpOps.Match(scope, block, new RubyRegex(pattern, RubyRegexOptions.NONE), self, start);
+        }
+
+        [RubyMethod("match")]
+        public static object Match(ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope,
+            [Optional]BlockParam block, MutableString/*!*/ self, object pattern, [DefaultProtocol, Optional]int start) {
+            // A Symbol converts to a String elsewhere in IronRuby, but MRI's #match takes only
+            // a Regexp or a String.
+            MutableString converted = (pattern is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, pattern);
+            if (converted == null) {
+                throw RubyExceptions.CreateUnexpectedTypeError(scope.RubyContext, pattern, "Regexp");
+            }
+            return RegexpOps.Match(scope, block, new RubyRegex(converted, RubyRegexOptions.NONE), self, start);
+        }
+
+        private static object YieldMatch(BlockParam block, object match) {
+            if (block == null || match == null) {
+                return match;
+            }
+            object blockResult;
+            block.Yield(match, out blockResult);
+            return blockResult;
         }
        
         #endregion
@@ -2830,21 +3259,59 @@ namespace IronRuby.Builtins {
             return result;
         }
         
-        private static char[] _WhiteSpaceSeparators = new char[] { ' ', '\n', '\r', '\t', '\v' };
+        private static char[] _WhiteSpaceSeparators = new char[] { ' ', '\n', '\r', '\t', '\v', '\f' };
 
+        private static bool IsAwkWhiteSpace(char c) {
+            return c == ' ' || c == '\n' || c == '\r' || c == '\t' || c == '\v' || c == '\f';
+        }
+
+        /// <summary>
+        /// "awk" split: the separator is a single space or absent. This follows MRI's
+        /// rb_str_split_m loop, which is not simply "split on runs of whitespace and drop
+        /// the empties" once a positive limit is involved: the limit counts fields, the
+        /// remainder of the string becomes the last field verbatim, and an empty trailing
+        /// field survives unless no limit was given at all.
+        /// </summary>
         private static RubyArray/*!*/ WhitespaceSplit(MutableString/*!*/ str, int limit) {
-            int maxComponents = limit <= 0 ? Int32.MaxValue : limit;
+            str.PrepareForCharacterRead();
 
-            MutableString[] elements = str.Split(_WhiteSpaceSeparators, maxComponents, StringSplitOptions.RemoveEmptyEntries);
+            RubyArray result = new RubyArray();
+            int length = str.GetCharCount();
+            int begin = 0, end = 0, position = 0, fields = 1;
+            bool skipping = true;
 
-            RubyArray result = new RubyArray(elements.Length + (limit < 0 ? 1 : 0)); 
-            foreach (MutableString element in elements) {
-                result.Add(str.CreateDerived().Append(element).TaintBy(str));
+            while (position < length) {
+                char c = str.GetChar(position);
+                position++;
+
+                if (skipping) {
+                    if (IsAwkWhiteSpace(c)) {
+                        begin = position;
+                    } else {
+                        end = position;
+                        skipping = false;
+                        if (limit > 0 && limit <= fields) {
+                            break;
+                        }
+                    }
+                } else if (IsAwkWhiteSpace(c)) {
+                    result.Add(str.CreateDerived().Append(str, begin, end - begin).TaintBy(str));
+                    skipping = true;
+                    begin = position;
+                    if (limit > 0) {
+                        fields++;
+                    }
+                } else {
+                    end = position;
+                }
             }
 
-            // Strange behavior to match Ruby semantics
-            if (limit < 0) {
-                result.Add(str.CreateDerived().TaintBy(str));
+            if (length > 0 && (limit != 0 || length > begin)) {
+                result.Add(str.CreateDerived().Append(str, begin, length - begin).TaintBy(str));
+            }
+
+            if (limit == 0) {
+                RemoveTrailingEmptyItems(result);
             }
 
             return result;
@@ -2853,9 +3320,9 @@ namespace IronRuby.Builtins {
         private static RubyArray/*!*/ InternalSplit(MutableString/*!*/ str, MutableString separator, int limit) {
             RubyArray result;
             if (limit == 1) {
-                // returns an array with original string
+                // one field: the whole string, but as a fresh String
                 result = new RubyArray(1);
-                result.Add(str);
+                result.Add(str.CreateDerived().Append(str).TaintBy(str));
                 return result;
             }
 
@@ -2915,19 +3382,17 @@ namespace IronRuby.Builtins {
                 i++;
             }
 
-            if (charEnum.HasMore || limit < 0) {
+            if (charEnum.HasMore || limit != 0) {
                 result.Add(str.CreateDerived().AppendRemaining(charEnum).TaintBy(str));
             }
             
             return result;
         }
 
-        [RubyMethod("split")]
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self) {
             return Split(stringCast, self, (MutableString)null, 0);
         }
 
-        [RubyMethod("split")]
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, 
             [DefaultProtocol]MutableString separator, [DefaultProtocol, Optional]int limit) {
 
@@ -2957,7 +3422,6 @@ namespace IronRuby.Builtins {
             return InternalSplit(self, separator, limit);            
         }
 
-        [RubyMethod("split")]
         public static RubyArray/*!*/ Split(ConversionStorage<MutableString>/*!*/ stringCast, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regexp, [DefaultProtocol, Optional]int limit) {
 
@@ -2981,9 +3445,9 @@ namespace IronRuby.Builtins {
                 }
                 return array;
             } else if (limit == 1) {
-                // returns an array with original string
+                // one field: the whole string, but as a fresh String
                 RubyArray result = new RubyArray(1);
-                result.Add(self);
+                result.Add(self.CreateDerived().Append(self).TaintBy(self));
                 return result;
             } else if (limit < 0) {
                 // does not suppress trailing fields when negative 
@@ -2992,6 +3456,41 @@ namespace IronRuby.Builtins {
                 // limit > 1 limits to N fields
                 return MakeRubyArray(self, regexp.Split(self, limit));
             }
+        }
+
+        // Ruby 2.6: #split yields each field to a block and answers self instead of
+        // building the array. The three splitting overloads above stay the plain
+        // array-producing versions and are what the CLR String extension calls.
+        [RubyMethod("split")]
+        public static object Split(ConversionStorage<MutableString>/*!*/ stringCast, BlockParam block, MutableString/*!*/ self) {
+            return YieldSplit(block, self, Split(stringCast, self));
+        }
+
+        [RubyMethod("split")]
+        public static object Split(ConversionStorage<MutableString>/*!*/ stringCast, BlockParam block, MutableString/*!*/ self,
+            [DefaultProtocol]MutableString separator, [DefaultProtocol, Optional]int limit) {
+            return YieldSplit(block, self, Split(stringCast, self, separator, limit));
+        }
+
+        [RubyMethod("split")]
+        public static object Split(ConversionStorage<MutableString>/*!*/ stringCast, BlockParam block, MutableString/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regexp, [DefaultProtocol, Optional]int limit) {
+            return YieldSplit(block, self, Split(stringCast, self, regexp, limit));
+        }
+
+        private static object YieldSplit(BlockParam block, MutableString/*!*/ self, RubyArray/*!*/ fields) {
+            if (block == null) {
+                return fields;
+            }
+
+            foreach (object field in fields) {
+                object blockResult;
+                if (block.Yield(field, out blockResult)) {
+                    return blockResult;
+                }
+            }
+
+            return self;
         }
 
         #endregion
@@ -3030,19 +3529,23 @@ namespace IronRuby.Builtins {
         }
         
         private static MutableString/*!*/ Strip(MutableString/*!*/ str, bool trimLeft, bool trimRight) {
+            RequireStrippable(str, trimLeft);
             int left, right;
             GetTrimRange(str, trimLeft, trimRight, out left, out right);
             return str.GetSlice(left, right - left).TaintBy(str);
         }
 
         public static MutableString StripInPlace(MutableString/*!*/ self, bool trimLeft, bool trimRight) {
+            // MRI checks frozen-ness before it works out whether there is anything to trim.
+            self.RequireNotFrozen();
+            RequireStrippable(self, trimLeft);
+
             int left, right;
             GetTrimRange(self, trimLeft, trimRight, out left, out right);
             int remaining = right - left;
 
             // nothing to trim:
             if (remaining == self.Length) {
-                self.RequireNotFrozen();
                 return null;
             }
 
@@ -3055,14 +3558,34 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        /// <summary>
+        /// Stripping has to read characters, so a broken byte sequence stops it. MRI reports
+        /// that as ArgumentError from the left-hand scan and Encoding::CompatibilityError from
+        /// the right-hand one - #lstrip and #rstrip really do raise different classes.
+        /// </summary>
+        private static void RequireStrippable(MutableString/*!*/ str, bool trimLeft) {
+            if (!str.ContainsInvalidCharacters()) {
+                return;
+            }
+            if (trimLeft) {
+                throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", str.Encoding.Name);
+            }
+            throw new EncodingCompatibilityError(
+                String.Format("invalid byte sequence in {0}", str.Encoding.Name)
+            );
+        }
+
+        // MRI strips ASCII whitespace and NUL, on both sides; it does not strip the
+        // non-ASCII characters that Char.IsWhiteSpace also reports (U+00A0 and friends).
+        private static bool IsStrippedCharacter(char c) {
+            return c == ' ' || (c >= '\t' && c <= '\r') || c == '\0';
+        }
+
         private static void GetTrimRange(MutableString/*!*/ str, bool left, bool right, out int leftIndex, out int rightIndex) {
             GetTrimRange(
                 str.Length,
-                !left ? (Func<int, bool>)null : (i) => Char.IsWhiteSpace(str.GetChar(i)),
-                !right ? (Func<int, bool>)null : (i) => {
-                    char c = str.GetChar(i);
-                    return Char.IsWhiteSpace(c) || c == '\0';
-                },
+                !left ? (Func<int, bool>)null : (i) => IsStrippedCharacter(str.GetChar(i)),
+                !right ? (Func<int, bool>)null : (i) => IsStrippedCharacter(str.GetChar(i)),
                 out leftIndex, 
                 out rightIndex
             );
@@ -3133,15 +3656,16 @@ namespace IronRuby.Builtins {
             Assert.NotNull(str, ranges);
 
             // convert the args into a map of characters to be squeezed (same algorithm as count)
-            BitArray map = null;
+            CharacterSelectorSet map = null;
             if (ranges.Length > 0) {
-                map = new RangeParser(ranges).Parse();
+                map = CharacterSelectorSet.Parse(str, ranges);
             }
+            str.PrepareForCharacterRead();
 
             // Do the squeeze in place
             int j = 1, k = 1;
             while (j < str.Length) {
-                if (str.GetChar(j) == str.GetChar(j-1) && (ranges.Length == 0 || map.Get(str.GetChar(j)))) {
+                if (str.GetChar(j) == str.GetChar(j-1) && (ranges.Length == 0 || map.Contains(str.GetChar(j)))) {
                     j++;
                 } else {
                     str.SetChar(k, str.GetChar(j));
@@ -3182,6 +3706,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_f")]
         public static double ToDouble(MutableString/*!*/ self) {
+            if (!self.Encoding.IsAsciiIdentity) {
+                throw new EncodingCompatibilityError(
+                    String.Format("ASCII incompatible encoding: {0}", self.Encoding.Name)
+                );
+            }
             return ClrString.ToDouble(self.ConvertToString());
         }
 
@@ -3281,6 +3810,7 @@ namespace IronRuby.Builtins {
 
             self.Clear();
             self.Append(other);
+            self.ForceEncoding(other.Encoding);
             return self.TaintBy(other);
         }
 

@@ -37,6 +37,16 @@ class Object
 end
 
 module Kernel
+  # MRI unified Fixnum and Bignum into Integer in 2.4; IronRuby still has the
+  # split classes, so messages that name a class have to hide it.
+  def __ir_message_type_name__(value)
+    name = value.class.to_s
+    (name == "Fixnum" || name == "Bignum") ? "Integer" : name
+  end
+  private :__ir_message_type_name__
+end
+
+module Kernel
   private
 
   def require_relative(path)
@@ -616,7 +626,7 @@ module Enumerable
         return converted if converted.is_a?(Array)
       end
       unless other.respond_to?(:each)
-        raise TypeError, "wrong argument type #{other.class} (must respond to :each)"
+        raise TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)"
       end
       other.to_enum(:each)
     end
@@ -1262,15 +1272,29 @@ class Hash
 end
 
 class String
+  # Both take a String or something with #to_str, and both answer a copy when
+  # there is nothing to remove - including for an empty affix, where
+  # "self[0...-0]" would otherwise answer "".
+  def __affix__(affix)
+    return affix if affix.is_a?(::String)
+    converted = affix.respond_to?(:to_str) ? affix.to_str : nil
+    unless converted.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(affix)} into String")
+    end
+    converted
+  end
+  private :__affix__
+
   def delete_prefix(prefix)
-    start_with?(prefix) ? self[prefix.length..-1] : dup
+    prefix = __affix__(prefix)
+    (!prefix.empty? && start_with?(prefix)) ? self[prefix.length..-1] : dup
   end unless method_defined?(:delete_prefix)
 
   def delete_suffix(suffix)
-    end_with?(suffix) ? self[0...-suffix.length] : dup
+    suffix = __affix__(suffix)
+    (!suffix.empty? && end_with?(suffix)) ? self[0...-suffix.length] : dup
   end unless method_defined?(:delete_suffix)
 
-  alias_method :+@, :dup unless method_defined?(:+@)
 end
 
 module Comparable
@@ -2938,6 +2962,21 @@ module Kernel
 end
 
 class String
+  # The name MRI puts in a "no implicit conversion of X into Y" message: the
+  # three singletons by value, everything else by class - with IronRuby's
+  # Fixnum/Bignum split hidden, because MRI only knows Integer.
+  def __ir_type_name__(value)
+    case value
+    when nil then "nil"
+    when true then "true"
+    when false then "false"
+    else
+      name = value.class.to_s
+      (name == "Fixnum" || name == "Bignum") ? "Integer" : name
+    end
+  end
+  private :__ir_type_name__
+
   # Byte-oriented slicing.  Done over a binary copy so that the indices really
   # are byte indices, then tagged back with the receiver's encoding the way
   # rb_str_byteslice does.
@@ -2973,8 +3012,11 @@ class String
   private :__ir_char_starts__
 
   def __ir_byte_search__(reverse, needle, offset)
-    starts = __ir_char_starts__
-    size = starts.last
+    # When every character is one byte wide the byte offsets and the character
+    # offsets coincide, so the (linear) character table is not needed.
+    size = bytesize
+    simple = (size == length)
+    starts = simple ? nil : __ir_char_starts__
 
     offset += size if offset < 0
     return nil if offset < 0
@@ -2984,28 +3026,57 @@ class String
       offset = size
     end
 
-    char_offset = starts.index(offset)
-    raise IndexError, "offset #{offset} does not land on character boundary" if char_offset.nil?
+    if simple
+      char_offset = offset
+    else
+      char_offset = starts.index(offset)
+      raise ::IndexError, "offset #{offset} does not land on character boundary" if char_offset.nil?
+    end
 
     found = reverse ? rindex(needle, char_offset) : index(needle, char_offset)
-    found.nil? ? nil : starts[found]
+    return nil if found.nil?
+    simple ? found : starts[found]
   end
   private :__ir_byte_search__
 
+  # A byte search needle is a Regexp or something String-convertible; unlike
+  # #index it never accepts an Integer codepoint.
+  def __ir_byte_needle__(needle)
+    return needle if needle.is_a?(::Regexp) || needle.is_a?(::String)
+    if needle.respond_to?(:to_str)
+      converted = needle.to_str
+      return converted if converted.is_a?(::String)
+    end
+    ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(needle)} into String")
+  end
+  private :__ir_byte_needle__
+
+  def __ir_byte_offset__(value)
+    return value if value.is_a?(::Integer)
+    unless value.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion from #{__ir_type_name__(value)} to integer")
+    end
+    converted = value.to_int
+    unless converted.is_a?(::Integer)
+      ::Kernel.raise(::TypeError, "can't convert #{__ir_type_name__(value)} to Integer")
+    end
+    converted
+  end
+  private :__ir_byte_offset__
+
   def byteindex(needle, offset = 0)
-    binary = dup
-    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
-    needle = needle.dup
-    needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
-    binary.index(needle, offset)
+    __ir_byte_search__(false, __ir_byte_needle__(needle), __ir_byte_offset__(offset))
   end unless method_defined?(:byteindex)
 
-  def byterindex(needle, offset = -1)
-    binary = dup
-    binary.force_encoding(Encoding::BINARY) if binary.respond_to?(:force_encoding)
-    needle = needle.dup
-    needle.force_encoding(Encoding::BINARY) if needle.respond_to?(:force_encoding)
-    binary.rindex(needle, offset)
+  # MRI's default offset is the end of the string, not -1: "hello".byterindex("")
+  # answers 5. An explicitly passed nil is still a TypeError.
+  def byterindex(needle, *rest)
+    if rest.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{rest.size + 1}, expected 1..2)")
+    end
+    needle = __ir_byte_needle__(needle)
+    offset = rest.empty? ? bytesize : __ir_byte_offset__(rest[0])
+    __ir_byte_search__(true, needle, offset)
   end unless method_defined?(:byterindex)
 
   # Replaces a byte range in place. Every index here is a byte index, so the
@@ -3034,13 +3105,13 @@ class String
     end
 
     unless str.is_a?(::String)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{str.nil? ? 'nil' : str.class} into String")
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(str)} into String")
     end
 
     if index_args.size == 1
       range = index_args[0]
       unless range.is_a?(::Range)
-        ::Kernel.raise(::TypeError, "wrong argument type #{range.nil? ? 'nil' : range.class} (expected Range)")
+        ::Kernel.raise(::TypeError, "wrong argument type #{__ir_type_name__(range)} (expected Range)")
       end
       index, length = __byte_range__(range)
     else
@@ -3055,9 +3126,11 @@ class String
     if sub_args && sub_args.size == 1
       sub_range = sub_args[0]
       unless sub_range.is_a?(::Range)
-        ::Kernel.raise(::TypeError, "wrong argument type #{sub_range.nil? ? 'nil' : sub_range.class} (expected Range)")
+        ::Kernel.raise(::TypeError, "wrong argument type #{__ir_type_name__(sub_range)} (expected Range)")
       end
       sub_index, sub_length = str.__send__(:__byte_range__, sub_range)
+      str.__send__(:__require_byte_boundary__, sub_index)
+      str.__send__(:__require_byte_boundary__, sub_index + sub_length)
       str = str.byteslice(sub_index, sub_length) || str[0, 0]
     elsif sub_args
       sub_index = ::Kernel.Integer(sub_args[0])
@@ -3067,19 +3140,45 @@ class String
       if sub_index < 0 || sub_index > str.bytesize
         ::Kernel.raise(::IndexError, "index #{sub_args[0]} out of string")
       end
+      str.__send__(:__require_byte_boundary__, sub_index)
+      str.__send__(:__require_byte_boundary__, sub_index + sub_length)
       str = str.byteslice(sub_index, sub_length) || str[0, 0]
     end
 
     length = bytesize - index if index + length > bytesize
+
+    # Both ends of the replaced range have to sit on a character boundary.
+    __require_byte_boundary__(index)
+    __require_byte_boundary__(index + length)
+
+    # The result's encoding is the compatible one: an ASCII-only operand gives
+    # way to the other side.
+    target_encoding = encoding
+    if str.encoding != encoding
+      if ascii_only? && !str.ascii_only?
+        target_encoding = str.encoding
+      elsif !str.ascii_only?
+        ::Kernel.raise(::Encoding::CompatibilityError,
+          "incompatible character encodings: #{encoding} and #{str.encoding}")
+      end
+    end
 
     binary = dup
     binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
     piece = str.dup
     piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
     result = binary[0, index] + piece + binary[(index + length)..-1].to_s
-    result.force_encoding(encoding) if result.respond_to?(:force_encoding)
+    result.force_encoding(target_encoding) if result.respond_to?(:force_encoding)
     replace(result)
   end unless method_defined?(:bytesplice)
+
+  # MRI refuses a byte offset that falls inside a character.
+  def __require_byte_boundary__(offset)
+    return if offset <= 0 || offset >= bytesize || bytesize == length
+    return if __ir_char_starts__.include?(offset)
+    ::Kernel.raise(::IndexError, "offset #{offset} does not land on character boundary")
+  end
+  private :__require_byte_boundary__
 
   def __byte_range__(range)
     size = bytesize
@@ -3183,7 +3282,11 @@ class String
   end unless method_defined?(:prepend)
 
   def casecmp?(other)
-    return nil unless other.is_a?(::String)
+    unless other.is_a?(::String)
+      return nil if other.is_a?(::Symbol) || !other.respond_to?(:to_str)
+      other = other.to_str
+      return nil unless other.is_a?(::String)
+    end
     # Two strings in encodings that cannot be compared are not unequal, they are
     # incomparable, and #casecmp? answers nil for them just as #casecmp does.
     return nil if ::Encoding.compatible?(self, other).nil?
@@ -3191,21 +3294,30 @@ class String
     c.nil? ? nil : c == 0
   end unless method_defined?(:casecmp?)
 
+  # The frozen check happens before the affix is even looked at: MRI raises
+  # FrozenError even when nothing would have been removed.
   def delete_prefix!(prefix)
+    prefix = __affix__(prefix)
+    __ir_require_unfrozen__
     result = delete_prefix(prefix)
     result == self ? nil : replace(result)
   end unless method_defined?(:delete_prefix!)
 
   def delete_suffix!(suffix)
+    suffix = __affix__(suffix)
+    __ir_require_unfrozen__
     result = delete_suffix(suffix)
     result == self ? nil : replace(result)
   end unless method_defined?(:delete_suffix!)
 
+  def __ir_require_unfrozen__
+    return unless frozen?
+    ::Kernel.raise(::FrozenError.new("can't modify frozen String: #{inspect}", receiver: self))
+  end
+  private :__ir_require_unfrozen__
+
   # 3.4's name for -@. Spelled out rather than aliased: String#-@ is itself
   # defined further down this file.
-  def dedup
-    frozen? ? self : dup.freeze
-  end unless method_defined?(:dedup)
 
   # Parses as much of a complex/rational number as it can and answers (0+0i) /
   # (0/1) for the rest. Both are MRI's own scanners (complex.c read_comp,
@@ -3218,8 +3330,7 @@ class String
   end
 
   def to_r
-    ::Rational.__parse_string__(self, false)
-  end
+    ::Rational.__parse_string__(self, false)  end
 
   # The inverse of #dump. Anything that is not something #dump could have
   # produced is a RuntimeError, which is what MRI raises here.
@@ -3230,13 +3341,27 @@ class String
       s = m[1]
       forced = m[2]
     end
+    if s.start_with?('"') && !s.end_with?('"') && s.count('"') < 2
+      ::Kernel.raise(::RuntimeError, "unterminated dumped string")
+    end
     unless s.start_with?('"') && s.end_with?('"') && s.length >= 2
       ::Kernel.raise(::RuntimeError, "invalid dumped string; not wrapped with '\"' nor '\"...\".force_encoding(\"...\")' form")
     end
+    if forced && !__known_encoding__(forced)
+      ::Kernel.raise(::RuntimeError, "dumped string has unknown encoding name")
+    end
     body = s[1...-1]
     ::Kernel.raise(::RuntimeError, "invalid dumped string") if body.nil?
+    # The dumped form is plain ASCII; a NUL or a non-ASCII character in it means
+    # it did not come from #dump.
+    body.each_char do |ch|
+      if ch == "\0"
+        ::Kernel.raise(::RuntimeError, "string contains null byte")
+      elsif ch.ord > 0x7f
+        ::Kernel.raise(::RuntimeError, "non-ASCII character detected")
+      end
+    end
     out = +""
-    forced = nil
     i = 0
     while i < body.length
       c = body[i]
@@ -3268,7 +3393,7 @@ class String
         when "u"
           if body[i + 1] == "{"
             close = body.index("}", i + 1)
-            ::Kernel.raise(::RuntimeError, "unterminated Unicode escape") unless close
+            ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless close
             body[(i + 2)...close].split(" ").each { |cp| out << __undump_cp__(cp) }
             i = close
           else
@@ -3286,9 +3411,21 @@ class String
       end
       i += 1
     end
-    out.force_encoding(forced) if forced && out.respond_to?(:force_encoding)
+    # Without a .force_encoding(...) suffix the answer carries the receiver's
+    # own encoding, not UTF-8.
+    if out.respond_to?(:force_encoding)
+      out.force_encoding(forced || encoding)
+    end
     out
   end unless method_defined?(:undump)
+
+  def __known_encoding__(name)
+    ::Encoding.find(name)
+    true
+  rescue ::ArgumentError
+    false
+  end
+  private :__known_encoding__
 
   def __undump_cp__(hex)
     ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless hex =~ /\A[0-9a-fA-F]+\z/
@@ -3444,8 +3581,25 @@ class String
   alias_method :__ir_rstrip__, :rstrip
   private :__ir_strip__, :__ir_lstrip__, :__ir_rstrip__
 
+  # #count is asked once per character, so the selectors are converted up front:
+  # MRI calls #to_str on each argument exactly once however long the receiver is.
+  def __strip_selectors__(selectors)
+    selectors.map do |selector|
+      next selector if selector.is_a?(::String)
+      converted = selector.respond_to?(:to_str) ? selector.to_str : nil
+      unless converted.is_a?(::String)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(selector)} into String")
+      end
+      converted
+    end
+  end
+  private :__strip_selectors__
+
   def lstrip(*selectors)
     return __ir_lstrip__ if selectors.empty?
+    selectors = __strip_selectors__(selectors)
+    # An invalid selector is an error even when the receiver is empty.
+    "".count(*selectors) if empty?
     i = 0
     i += 1 while i < length && __selected__(self[i, 1], selectors)
     self[i..-1] || self[0, 0]
@@ -3453,6 +3607,8 @@ class String
 
   def rstrip(*selectors)
     return __ir_rstrip__ if selectors.empty?
+    selectors = __strip_selectors__(selectors)
+    "".count(*selectors) if empty?
     i = length
     i -= 1 while i > 0 && __selected__(self[i - 1, 1], selectors)
     self[0, i]
@@ -3460,6 +3616,7 @@ class String
 
   def strip(*selectors)
     return __ir_strip__ if selectors.empty?
+    selectors = __strip_selectors__(selectors)
     lstrip(*selectors).rstrip(*selectors)
   end
 
@@ -3471,6 +3628,11 @@ class String
     private plain_bang
     define_method(bang) do |*selectors|
       return __send__(plain_bang) if selectors.empty?
+      # The frozen check comes before the work: MRI raises even when the
+      # selectors would leave the string alone.
+      if frozen?
+        ::Kernel.raise(::FrozenError.new("can't modify frozen String: #{inspect}", receiver: self))
+      end
       result = __send__(name, *selectors)
       result == self ? nil : replace(result)
     end
@@ -3519,23 +3681,43 @@ class String
     to_clr_string.IsNormalized(__normalization_form__(form))
   end unless method_defined?(:unicode_normalized?)
 
-  def each_grapheme_cluster
-    return ::Enumerator.new(grapheme_clusters.size) { |y| grapheme_clusters.each { |g| y << g } } unless block_given?
-    grapheme_clusters.each { |g| yield g }
+  def each_grapheme_cluster(&block)
+    clusters = __ir_grapheme_clusters__
+    return ::Enumerator.new(clusters.size) { |y| clusters.each { |g| y << g } } unless block
+    clusters.each { |g| block.call(g) }
     self
   end unless method_defined?(:each_grapheme_cluster)
 
-  def grapheme_clusters
-    return chars unless valid_encoding?
+  # MRI still yields when a block is passed, answering self rather than the array.
+  def grapheme_clusters(&block)
+    return __ir_grapheme_clusters__ unless block
+    __ir_grapheme_clusters__.each { |g| block.call(g) }
+    self
+  end unless method_defined?(:grapheme_clusters)
+
+  UNICODE_ENCODINGS__ = [
+    ::Encoding::UTF_8, ::Encoding::US_ASCII, ::Encoding::UTF_16LE, ::Encoding::UTF_16BE,
+    ::Encoding::UTF_32LE, ::Encoding::UTF_32BE
+  ]
+
+  # Segmentation is the CLR's, which speaks UTF-16. Anything that is not a
+  # Unicode encoding - BINARY, the dummy encodings, the legacy code pages -
+  # has no clusters to find, so MRI's answer there is one element per
+  # character.
+  def __ir_grapheme_clusters__
+    return chars unless valid_encoding? && UNICODE_ENCODINGS__.include?(encoding)
+    source = (encoding == ::Encoding::UTF_8 || encoding == ::Encoding::US_ASCII) ? self : encode(::Encoding::UTF_8)
     result = []
-    e = ::System::Globalization::StringInfo.GetTextElementEnumerator(to_clr_string)
+    e = ::System::Globalization::StringInfo.GetTextElementEnumerator(source.to_clr_string)
     while e.MoveNext
       piece = e.GetTextElement.to_s
-      piece.force_encoding(encoding) if piece.respond_to?(:force_encoding)
+      piece.force_encoding(::Encoding::UTF_8) if piece.respond_to?(:force_encoding)
+      piece = piece.encode(encoding) unless source.equal?(self)
       result << piece
     end
     result
-  end unless method_defined?(:grapheme_clusters)
+  end
+  private :__ir_grapheme_clusters__
 
   # `str =~ x` is `x =~ str` for a Regexp and a TypeError for anything that is
   # not, which is how MRI stops the common `"a" =~ "b"` mistake.
@@ -5321,6 +5503,10 @@ class Array
 
   def uniq!(&block)
     return __uniq_in_place_without_block__ unless block
+    # The frozen check comes before the block runs.
+    if frozen?
+      ::Kernel.raise(::FrozenError.new("can't modify frozen Array: #{inspect}", receiver: self))
+    end
     result = uniq(&block)
     return nil if result.size == size
     replace(result)
@@ -5348,7 +5534,7 @@ class Array
         end
         collected
       else
-        raise TypeError, "wrong argument type #{other.class} (must respond to :each)"
+        raise TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)"
       end
     end
     __zip_arrays__(*converted, &block)
@@ -5610,7 +5796,12 @@ class Enumerator
     def yield(*args)
       @block.call(*args)
     end
-    alias_method :<<, :yield
+
+    # Unlike #yield, #<< answers the yielder so that it can be chained.
+    def <<(value)
+      @block.call(value)
+      self
+    end
 
     def call(*args)
       @block.call(*args)
@@ -5634,16 +5825,28 @@ class Enumerator
         @generator = block
         @__size__ = args[0] unless args.empty?
       else
-        if args.empty?
-          ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1+)")
-        end
-        target = args[0]
-        method = args.size > 1 ? args[1] : :each
-        __enum_init__(target, method, args[2..-1] || [])
+        # Ruby 3.0 removed Enumerator.new(obj, meth, *args); only the block form
+        # is left. __enum_init__ is still how the prelude builds one internally.
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
       end
+      @__initialized__ = true
+      self
     end
 
-    def each(&block)
+    # Ruby 1.9: extra arguments are appended to the ones the enumerator was built
+    # with and handed to the underlying method; without a block that produces a
+    # new enumerator rather than iterating.
+    def each(*args, &block)
+      unless args.empty?
+        target = __enum_target__
+        if target
+          receiver, method, initial = target
+          arguments = initial + args
+          return receiver.to_enum(method, *arguments) unless block
+          return receiver.__send__(method, *arguments, &block)
+        end
+      end
+
       return self unless block
       if @generator
         @generator.call(Yielder.new(&block))
@@ -5654,7 +5857,24 @@ class Enumerator
     end
   end
 
+  # nil means "no offset", and anything else has to answer #to_int - a Float
+  # offset is truncated rather than counted up in halves.
+  def __index_offset__(offset)
+    return 0 if offset.nil?
+    return offset if offset.is_a?(::Integer)
+    unless offset.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{offset.class} into Integer")
+    end
+    converted = offset.to_int
+    unless converted.is_a?(::Integer)
+      ::Kernel.raise(::TypeError, "can't convert #{offset.class} to Integer")
+    end
+    converted
+  end
+  private :__index_offset__
+
   def with_index(offset = 0)
+    offset = __index_offset__(offset)
     unless block_given?
       # yield [value, index] pairs, lazily, via the generator form above
       source = self
@@ -5673,9 +5893,15 @@ class Enumerator
     end
   end unless method_defined?(:with_index)
 
-  def each_with_index(&block)
+  # Enumerable's #each_with_index would win here and it answers self; MRI's
+  # Enumerator#each_with_index is #with_index(0), which answers whatever the
+  # underlying #each answered, and it takes no arguments at all.
+  def each_with_index(*args, &block)
+    unless args.empty?
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)")
+    end
     with_index(0, &block)
-  end unless method_defined?(:each_with_index)
+  end
 
   def with_object(memo)
     unless block_given?
@@ -5688,7 +5914,9 @@ class Enumerator
     end
     memo
   end unless method_defined?(:with_object)
-  alias_method :each_with_object, :with_object unless method_defined?(:each_with_object)
+  # Same story as #each_with_index: Enumerable's version would shadow this one,
+  # and the specs check that the two really are the same method.
+  alias_method :each_with_object, :with_object
 
   # --- #size -----------------------------------------------------------
   # MRI gives every enumerator a size function: an Integer, a Proc, or nil when
@@ -5702,7 +5930,7 @@ class Enumerator
 
   def size
     n = @__size__
-    return n.call if n.is_a?(::Proc) || n.is_a?(::Method)
+    return n.call if !n.is_a?(::Numeric) && n.respond_to?(:call)
     return n unless n.nil?
     info = __enum_size_info__
     return __size_from_info__(info[0], info[1], info[2]) if info
@@ -5801,9 +6029,10 @@ class Enumerator
     when :times
       source
     when :upto
-      args[0] < source ? 0 : args[0] - source + 1
+      # String#upto also lands here, and its length is not arithmetic.
+      (source.is_a?(::Numeric) && args[0].is_a?(::Numeric)) ? (args[0] < source ? 0 : args[0] - source + 1) : nil
     when :downto
-      source < args[0] ? 0 : source - args[0] + 1
+      (source.is_a?(::Numeric) && args[0].is_a?(::Numeric)) ? (source < args[0] ? 0 : source - args[0] + 1) : nil
     when :cycle
       __cycle_size__(__source_count__(source), args[0])
     else
@@ -5816,6 +6045,8 @@ class Enumerator
     target = (@generator ? nil : __enum_target__)
     return "#<#{self.class}: #{@generator ? 'generator' : '...'}>" unless target
     recv, meth, args = target
+    # Enumerator.allocate never got a receiver.
+    return "#<#{self.class}: uninitialized>" if recv.nil? && meth == :each && args.empty?
     detail = "#{recv.inspect}:#{meth}"
     detail += "(#{args.map { |a| a.inspect }.join(', ')})" unless args.empty?
     "#<#{self.class}: #{detail}>"
@@ -6139,7 +6370,8 @@ class Enumerator
     end
 
     def with_index(offset = 0, &block)
-      offset = __to_int__(offset)
+      # nil means "no offset", same as Enumerator#with_index.
+      offset = offset.nil? ? 0 : __to_int__(offset)
       source = self
       if block
         __chain__(size) do |y|
@@ -6187,7 +6419,7 @@ class Enumerator
         elsif other.respond_to?(:each)
           other.to_enum(:each)
         else
-          ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (must respond to :each)")
+          ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)")
         end
       end
 
@@ -6369,12 +6601,19 @@ class Enumerator
   class Chain < Enumerator
     def initialize(*enums)
       @__enums__ = enums
+      @__iterated__ = 0
       self
     end
 
     def each(&block)
       return to_enum(:each) { size } unless block
-      @__enums__.each { |enum| enum.each { |*values| block.call(*values) } }
+      # #rewind only rewinds what was actually iterated, so how far the last
+      # iteration got is recorded as it goes.
+      @__iterated__ = 0
+      @__enums__.each do |enum|
+        @__iterated__ += 1
+        enum.each { |*values| block.call(*values) }
+      end
       self
     end
 
@@ -6390,11 +6629,13 @@ class Enumerator
     end
 
     def rewind
-      @__enums__.reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
+      iterated = @__iterated__ || 0
+      @__enums__.first(iterated).reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
       self
     end
 
     def inspect
+      return "#<Enumerator::Chain: uninitialized>" if @__enums__.nil?
       "#<Enumerator::Chain: #{@__enums__.inspect}>"
     end
     alias_method :to_s, :inspect
@@ -6506,7 +6747,10 @@ class Enumerator
     Chain.new(self, other)
   end unless method_defined?(:+)
 
-  def self.product(*enums, &block)
+  def self.product(*enums, **options, &block)
+    unless options.empty?
+      ::Kernel.raise(::ArgumentError, "unknown keywords: #{options.keys.map { |k| k.inspect }.join(', ')}")
+    end
     product = Product.new(*enums)
     return product unless block
     product.each(&block)
@@ -6515,14 +6759,19 @@ class Enumerator
 
   # Enumerator.produce(initial = nil) { |previous| ... } - an endless sequence
   # built by feeding each value back into the block. StopIteration ends it.
-  def self.produce(*args, &block)
+  def self.produce(*args, **options, &block)
     ::Kernel.raise(::ArgumentError, "no block given") unless block
     if args.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
     end
+    unknown = options.keys - [:size]
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError, "unknown keywords: #{unknown.map { |k| k.inspect }.join(', ')}")
+    end
     has_initial = !args.empty?
     initial = args[0]
-    Enumerator.new(::Float::INFINITY) do |y|
+    size = options.key?(:size) ? options[:size] : ::Float::INFINITY
+    Enumerator.new(size) do |y|
       value = has_initial ? initial : block.call(nil)
       loop do
         y << value
@@ -6571,7 +6820,10 @@ module Kernel
   # MRI defaults the method to :each and takes an optional block returning the
   # enumerator's #size.
   def to_enum(method = :each, *args, &size_block)
-    enum = ::Enumerator.new(self, method, *args)
+    # Not Enumerator.new: Ruby 3.0 removed its (obj, meth, *args) form, and the
+    # class-level initializer is what to_enum used to reach through.
+    enum = ::Enumerator.allocate
+    enum.__send__(:__enum_init__, self, method, args)
     enum.__set_size__(size_block) if size_block
     enum
   end
@@ -6644,6 +6896,125 @@ class String
       bytes_enumerator.to_a
     end
   end
+end
+
+# String#each_line / String#lines.
+#
+# The C# implementation is frozen at Ruby 1.8: it has no `chomp:` keyword, its
+# paragraph mode (separator "") keeps every newline of the run instead of the
+# first two, it accepts separators that are not String-convertible, and it
+# raises "string modified" when the block mutates the receiver (checked in 1.8,
+# not checked at all from 1.9 on). Everything here is layered on top of the C#
+# splitter so encodings and the String-instances-for-subclasses rule keep
+# working; only the grouping and the trimming are redone.
+class String
+  alias_method :__ir_each_line__, :each_line
+
+  def each_line(*args, chomp: false, &block)
+    lines = __ir_split_lines__(args, chomp)
+    return ::Enumerator.new { |y| lines.each { |l| y << l } } unless block
+    lines.each { |line| block.call(line) }
+    self
+  end
+
+  # MRI's #lines still behaves exactly like #each_line when a block is passed:
+  # it yields and answers self rather than the array.
+  def lines(*args, chomp: false, &block)
+    return each_line(*args, chomp: chomp, &block) if block
+    __ir_split_lines__(args, chomp)
+  end
+
+  private
+
+  def __ir_split_lines__(args, chomp)
+    if args.size > 1
+      raise ::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    end
+    separator = args.empty? ? $/ : args[0]
+    unless separator.nil? || separator.is_a?(::String)
+      unless separator.respond_to?(:to_str)
+        raise ::TypeError, "no implicit conversion of #{__ir_type_name__(separator)} into String"
+      end
+      separator = separator.to_str
+      unless separator.is_a?(::String)
+        raise ::TypeError, "can't convert #{separator.class} to String"
+      end
+    end
+
+    # A non-ASCII-compatible encoding (UTF-16, UTF-7, ...) is never split: MRI
+    # has to transcode the separator first, which either fails outright or
+    # cannot match. The transcode is still attempted so that an encoding with
+    # no converter raises Encoding::ConverterNotFoundError.
+    unless encoding.ascii_compatible?
+      separator.encode(encoding) if separator
+      return [] if empty?
+      return [__ir_each_line_all__(nil)]
+    end
+
+    return empty? ? [] : [__ir_chomp_line__(__ir_each_line_all__(nil), nil, chomp)] if separator.nil?
+
+    if separator.empty?
+      lines = __ir_paragraphs__(__ir_each_line_all__("\n"))
+    else
+      lines = __ir_each_line_all__(separator)
+    end
+    return lines unless chomp
+    lines.map { |line| __ir_chomp_line__(line, separator, chomp) }
+  end
+
+  # Collects the physical lines without letting the 1.8 "string modified"
+  # check fire: the block below never touches the receiver.
+  def __ir_each_line_all__(separator)
+    return dup if separator.nil?
+    lines = []
+    __ir_each_line__(separator) { |line| lines << line }
+    lines
+  end
+
+  # Paragraph mode: a paragraph ends at the first blank line after some
+  # content, that blank line is kept, and every further blank line of the run
+  # is dropped.
+  def __ir_paragraphs__(physical)
+    result = []
+    buffer = nil
+    skipping = false
+    physical.each do |line|
+      blank = (line == "\n" || line == "\r\n")
+      if skipping
+        next if blank
+        skipping = false
+      end
+      if blank && buffer
+        result << (buffer + line)
+        buffer = nil
+        skipping = true
+      elsif buffer
+        buffer = buffer + line
+      else
+        buffer = line.dup
+      end
+    end
+    result << buffer if buffer
+    result
+  end
+
+  def __ir_chomp_line__(line, separator, chomp)
+    return line unless chomp
+    if separator.nil? || separator == "\n"
+      line = line[0...-1] if line.end_with?("\n")
+      line = line[0...-1] if line.end_with?("\r")
+      line
+    elsif separator.empty?
+      line = line[0...-1] while line.end_with?("\n") || line.end_with?("\r")
+      line
+    elsif line.end_with?(separator)
+      line[0, line.length - separator.length]
+    else
+      line
+    end
+  end
+
+  public
 end
 
 class Hash
@@ -6917,10 +7288,85 @@ class Symbol
 end
 
 class String
-  # Ruby 2.3: -"str" returns a frozen (deduplicated) string, +"str" an unfrozen one.
+  # Ruby 2.3: -"str" answers a frozen *deduplicated* string, so that -"x" and
+  # -"x" are the same object; +"str" answers a mutable one, which is the
+  # receiver itself when it is not frozen.
+  FSTRING_TABLE__ = {}
+
   def -@
-    frozen? ? self : dup.freeze
+    # A subclass instance or a string carrying instance variables is not
+    # interned - MRI only shares plain, bare Strings.
+    unless instance_of?(::String) && instance_variables.empty?
+      return frozen? ? self : dup.freeze
+    end
+    table = ::String::FSTRING_TABLE__
+    existing = table[self]
+    return existing if existing
+    interned = frozen? ? self : dup.freeze
+    table[interned] = interned
+    interned
   end unless method_defined?(:-@)
+
+  alias_method :dedup, :-@
+
+  # The C# #upto is Range#each in disguise, which loses the numeric-sequence
+  # case ("8".upto("11")), the exclusive-end argument, the "stop is shorter than
+  # self" cut-off and the type and encoding checks.
+  alias_method :__ir_upto__, :upto
+  private :__ir_upto__
+
+  def upto(stop, exclusive = false, &block)
+    unless stop.is_a?(::String)
+      converted = (!stop.is_a?(::Symbol) && stop.respond_to?(:to_str)) ? stop.to_str : nil
+      unless converted.is_a?(::String)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(stop)} into String")
+      end
+      stop = converted
+    end
+
+    unless encoding == stop.encoding || ascii_only? && stop.ascii_only?
+      ::Kernel.raise(::Encoding::CompatibilityError,
+        "incompatible character encodings: #{encoding} and #{stop.encoding}")
+    end
+
+    return to_enum(:upto, stop, exclusive) unless block
+
+    # A pair of decimal strings counts like Integer#upto, with the receiver's
+    # width kept: "08".upto("11") answers "08", "09", "10", "11".
+    if self =~ /\A\d+\z/ && stop =~ /\A\d+\z/
+      from = to_i
+      to = exclusive ? stop.to_i - 1 : stop.to_i
+      width = length
+      from.upto(to) do |n|
+        text = n.to_s
+        text = text.rjust(width, "0") if text.length < width
+        block.call(text)
+      end
+      return self
+    end
+
+    # Two single characters walk the codepoints between them: "9".upto("A")
+    # answers 9 : ; < = > ? @ A.
+    if length == 1 && stop.length == 1
+      from = ord
+      to = stop.ord
+      to -= 1 if exclusive
+      from.upto(to) { |c| block.call(c.chr(encoding)) }
+      return self
+    end
+
+    return self if length > stop.length || (length == stop.length && self > stop)
+
+    current = self
+    loop do
+      break if exclusive && current == stop
+      block.call(current)
+      break if current == stop
+      current = current.succ
+      break if current.length > stop.length
+    end
+    self
+  end
 end
 
 # --- pieces the Ruby 4.0 standard library expects --------------------------
@@ -9465,7 +9911,12 @@ end
 # Class.try_convert (1.9): the conversion protocol, returning nil instead of raising.
 class String
   def self.try_convert(obj)
-    obj.respond_to?(:to_str) ? obj.to_str : nil
+    return obj if obj.is_a?(::String)
+    return nil unless obj.respond_to?(:to_str)
+    converted = obj.to_str
+    return converted if converted.nil? || converted.is_a?(::String)
+    ::Kernel.raise(::TypeError,
+      "can't convert #{obj.class} to String (#{obj.class}#to_str gives #{converted.class})")
   end unless respond_to?(:try_convert)
 end
 
