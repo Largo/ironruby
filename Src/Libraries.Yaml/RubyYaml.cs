@@ -94,7 +94,7 @@ namespace IronRuby.StandardLibrary.Yaml {
             taggedClasses.Add(MutableString.CreateAscii("tag:ruby.yaml.org,2002:time"), context.GetClass(typeof(RubyTime)));
             taggedClasses.Add(MutableString.CreateAscii(Tags.Binary), context.GetClass(typeof(MutableString)));
             taggedClasses.Add(MutableString.CreateAscii(Tags.Float), context.GetClass(typeof(Double)));
-            taggedClasses.Add(MutableString.CreateAscii(Tags.Int), context.GetClass(typeof(Integer)));
+            taggedClasses.Add(MutableString.CreateAscii(Tags.Int), context.GetClass(typeof(int)));
             taggedClasses.Add(MutableString.CreateAscii(Tags.Map), context.GetClass(typeof(Hash)));
             taggedClasses.Add(MutableString.CreateAscii(Tags.Seq), context.GetClass(typeof(RubyArray)));
             taggedClasses.Add(MutableString.CreateAscii(Tags.Str), context.GetClass(typeof(MutableString)));

@@ -24,6 +24,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
 using System.IO;
+using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Security;
@@ -552,6 +553,20 @@ namespace IronRuby.Runtime {
 
             _loader.LoadBuiltins();
             Debug.Assert(_exceptionClass != null && _standardErrorClass != null && _nilClass != null);
+
+            // Ruby 2.4 unified Fixnum and Bignum into Integer, so both CLR representations of an
+            // integer have to report the same Ruby class.  Integer is declared as extending
+            // System.Int32; alias System.Numerics.BigInteger onto that very same RubyClass so
+            // GetClassOf() answers Integer for a bignum too.  Object is aliased the same way for
+            // RubyObject in InitializeCoreClasses.
+            using (ClassHierarchyLocker()) {
+                lock (ModuleCacheLock) {
+                    RubyClass integerClass;
+                    if (TryGetClassNoLock(typeof(int), out integerClass)) {
+                        AddModuleToCacheNoLock(typeof(BigInteger), integerClass);
+                    }
+                }
+            }
 
             Debug.Assert(_classClass != null && _moduleClass != null);
             

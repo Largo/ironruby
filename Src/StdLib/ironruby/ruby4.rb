@@ -6277,7 +6277,7 @@ end
 # took a single bit index, so both were a TypeError or an ArgumentError. All of
 # them reduce to (self >> i) & ((1 << len) - 1), with a negative index shifting
 # the other way and a non-positive length meaning "no mask".
-[Fixnum, Bignum].each do |klass|
+[Integer].each do |klass|
   next unless klass.instance_method(:[]).arity == 1
 
   klass.class_eval do

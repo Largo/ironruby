@@ -27,8 +27,15 @@ using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
 
-    [RubyClass("Integer"), Includes(typeof(Precision))]
-    public class Integer : Numeric {
+    // Ruby 2.4 unified Fixnum and Bignum into a single Integer and 3.2 removed both
+    // constants, so this one class backs both CLR representations of an integer: it extends
+    // System.Int32, and RubyContext additionally maps System.Numerics.BigInteger onto the
+    // very same RubyClass.  The int-self and BigInteger-self operations are therefore
+    // overloads of one Ruby method, which is why ClrInteger is a single trait type.
+    [RubyClass("Integer", Extends = typeof(int), Inherits = typeof(Numeric))]
+    [Includes(typeof(Precision))]
+    [Includes(typeof(ClrInteger), Copy = true)]
+    public partial class Integer : Numeric {
         public Integer(RubyClass/*!*/ cls) 
             : base(cls) { 
         }

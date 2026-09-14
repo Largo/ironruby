@@ -417,7 +417,7 @@ module URI
       if @registry || @opaque
         raise InvalidURIError,
           "can not set port with registry or opaque"
-      elsif !v.kind_of?(Fixnum) && parser.regexp[:PORT] !~ v
+      elsif !v.kind_of?(Integer) && parser.regexp[:PORT] !~ v
         raise InvalidComponentError,
           "bad component(expected port component): #{v}"
       end
@@ -427,7 +427,7 @@ module URI
     private :check_port
 
     def set_port(v)
-      unless !v || v.kind_of?(Fixnum)
+      unless !v || v.kind_of?(Integer)
         if v.empty?
           v = nil
         else
