@@ -61,6 +61,19 @@ namespace IronRuby.Builtins {
             _writerClosedEvent.Set();
         }
 
+        /// <summary>
+        /// Whether a Read would return rather than block: there are bytes queued, or the writer is
+        /// gone and the read is an immediate end of file. This is what IO.select asks of a pipe,
+        /// there being no kernel descriptor to poll.
+        /// </summary>
+        internal bool CanReadWithoutBlocking {
+            get {
+                lock (((ICollection)_queue).SyncRoot) {
+                    return _queue.Count > 0 || _writerClosedEvent.WaitOne(0) || _readerClosedEvent.WaitOne(0);
+                }
+            }
+        }
+
         internal void CloseReader() {
             // Wakes up a thread parked in Read so that closing the read end of a pipe from another
             // thread terminates the blocked read, the way CRuby does.

@@ -421,115 +421,252 @@ namespace IronRuby.Builtins {
 
         #region select
 
+        /// <summary>
+        /// IO.select(read, write, error, timeout). Blocks until one of the objects is ready, the
+        /// timeout expires (nil), or - with no objects at all - forever.
+        ///
+        /// IronRuby's IOs are not all kernel descriptors: IO.pipe is an in-process queue, while a
+        /// File or the read end of a popen really is a descriptor. So readiness is asked of the
+        /// thing itself - poll(2) where there is a descriptor, the pipe's own state where there is
+        /// not - and the wait is a poll loop rather than one blocking syscall. The loop also keeps
+        /// the wait interruptible by Thread#kill and Thread#raise, and reports the thread as
+        /// sleeping while it runs, which is what ruby/spec watches for before it writes to a pipe.
+        /// </summary>
         [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray Select(RubyContext/*!*/ context, object self, RubyArray read, [Optional]RubyArray write, [Optional]RubyArray error) {
-            return SelectInternal(context, read, write, error, new TimeSpan(0, 0, 0, 0, Timeout.Infinite));
+        public static RubyArray Select(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            RubyContext/*!*/ context, object self,
+            object read, [Optional]object write, [Optional]object error, [Optional]object timeout) {
+
+            return SelectInternal(respondToStorage, toIoStorage, context, read, write, error, ToTimeInterval(context, timeout));
         }
 
-        [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray Select(RubyContext/*!*/ context, object self, RubyArray read, RubyArray write, RubyArray error, int timeoutInSeconds) {
-            if (timeoutInSeconds < 0) {
-                throw RubyExceptions.CreateArgumentError("time interval must be positive");
+        /// <summary>
+        /// The timeout in milliseconds, or Timeout.Infinite for "wait as long as it takes". MRI
+        /// reports a negative interval and NaN with these exact messages, which ruby/spec asserts.
+        /// </summary>
+        private static int ToTimeInterval(RubyContext/*!*/ context, object timeout) {
+            if (timeout == null || timeout is Missing) {
+                return Timeout.Infinite;
             }
-            return SelectInternal(context, read, write, error, new TimeSpan(0, 0, timeoutInSeconds));
+
+            double seconds;
+            if (timeout is int) {
+                seconds = (int)timeout;
+            } else if (timeout is double) {
+                seconds = (double)timeout;
+            } else if (timeout is BigInteger) {
+                seconds = (double)(BigInteger)timeout;
+            } else {
+                throw RubyExceptions.CreateTypeError("can't convert {0} into time interval",
+                    context.GetClassDisplayName(timeout));
+            }
+
+            if (Double.IsNaN(seconds)) {
+                throw RubyExceptions.CreateRangeError("NaN out of Time range");
+            }
+            if (seconds < 0) {
+                throw RubyExceptions.CreateArgumentError("time interval must not be negative");
+            }
+            if (Double.IsPositiveInfinity(seconds)) {
+                return Timeout.Infinite;
+            }
+
+            double ms = seconds * 1000;
+            return (ms >= Int32.MaxValue) ? Timeout.Infinite : (int)ms;
         }
 
-        [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray Select(RubyContext/*!*/ context, object self, RubyArray read, RubyArray write, RubyArray error, double timeoutInSeconds) {
-            if (timeoutInSeconds < 0) {
-                throw RubyExceptions.CreateArgumentError("time interval must be positive");
-            }
-            return SelectInternal(context, read, write, error, TimeSpan.FromSeconds(timeoutInSeconds));
+        /// <summary>What a select set asks of an IO.</summary>
+        private enum Readiness { Read, Write, Error }
+
+        /// <summary>One entry of a select set: the object the caller passed, and the IO behind it.</summary>
+        private struct SelectEntry {
+            public object Object;
+            public RubyIO IO;
         }
 
-        private static RubyArray SelectInternal(RubyContext/*!*/ context, RubyArray read, RubyArray write, RubyArray error, TimeSpan timeout) {
-            WaitHandle[] handles = null;
-            RubyArray result;
+        private static SelectEntry[]/*!*/ ToEntries(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, RubyContext/*!*/ context,
+            object set, string/*!*/ argumentName) {
 
-            if (read == null && write == null && error == null) {
-                Thread.Sleep(timeout);
-                return null;
+            if (set == null || set is Missing) {
+                return new SelectEntry[0];
             }
 
-            try {
-                handles = GetWaitHandles(context, read, write, error);
-                int index;
-                try {
-                    index = WaitHandle.WaitAny(handles, timeout, false);
-                    if (index == WaitHandle.WaitTimeout) {
-                        return null;
-                    }
-                } catch (Exception e) {
-                    throw RubyExceptions.CreateEINVAL(e.Message, e);
-                }
+            var array = set as RubyArray;
+            if (array == null) {
+                throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Array)",
+                    context.GetClassDisplayName(set));
+            }
 
-                result = new RubyArray();
-                int handleIndex = 0;
-                result.Add(MakeResult(handles, ref handleIndex, index, read));
-                result.Add(MakeResult(handles, ref handleIndex, index, write));
-                result.Add(MakeResult(handles, ref handleIndex, index, error));
-            } finally {
-                // should we close the handles? 
-                //if (handles != null) {
-                //    for (int i = 0; i < handles.Length; i++) {
-                //        if (handles[i] != null) {
-                //            handles[i].Close();
-                //        }
-                //    }
-                //}
+            var result = new SelectEntry[array.Count];
+            for (int i = 0; i < array.Count; i++) {
+                result[i] = new SelectEntry { Object = array[i], IO = ToSelectableIo(respondToStorage, toIoStorage, context, array[i]) };
             }
             return result;
         }
 
-        private static RubyArray/*!*/ MakeResult(WaitHandle/*!*/[]/*!*/ handles, ref int handleIndex, int signaling, RubyArray ioObjects) {
-            RubyArray result = new RubyArray();
-            if (ioObjects != null) {
-                for (int i = 0; i < ioObjects.Count; i++) {
-                    if (handleIndex == signaling || handles[handleIndex].WaitOne(0, false)) {
-                        result.Add(ioObjects[i]);
-                    }
-                    handleIndex++;
-                }
-            }
-            return result;
-        }
+        /// <summary>
+        /// MRI's rb_io_check_io: an IO is itself, anything else is asked for #to_io, and whatever
+        /// comes back has to be an IO. The object the caller passed is what goes in the result, not
+        /// the IO it named.
+        /// </summary>
+        private static RubyIO/*!*/ ToSelectableIo(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, RubyContext/*!*/ context, object obj) {
 
-        private static WaitHandle/*!*/[]/*!*/ GetWaitHandles(RubyContext/*!*/ context, RubyArray read, RubyArray write, RubyArray error) {
-            WaitHandle[] handles = new WaitHandle[
-                (read != null ? read.Count : 0) +
-                (write != null ? write.Count : 0) +
-                (error != null ? error.Count : 0)
-            ];
-
-            int i = 0;
-            if (read != null) {
-                foreach (object obj in read) {
-                    handles[i++] = ToIo(context, obj).CreateReadWaitHandle();
-                }
+            var io = obj as RubyIO;
+            if (io == null && Protocols.RespondTo(respondToStorage, obj, "to_io")) {
+                var site = toIoStorage.GetCallSite("to_io", 0);
+                io = site.Target(site, obj) as RubyIO;
             }
 
-            if (write != null) {
-                foreach (object obj in write) {
-                    handles[i++] = ToIo(context, obj).CreateWriteWaitHandle();
-                }
-            }
-
-            if (error != null) {
-                foreach (object obj in error) {
-                    handles[i++] = ToIo(context, obj).CreateErrorWaitHandle();
-                }
-            }
-
-            return handles;
-        }
-
-        private static RubyIO/*!*/ ToIo(RubyContext/*!*/ context, object obj) {
-            RubyIO io = obj as RubyIO;
             if (io == null) {
-                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(obj), "IO");
+                throw RubyExceptions.CreateTypeError("can't convert {0} into IO", context.GetClassDisplayName(obj));
             }
             return io;
         }
+
+        private static RubyArray SelectInternal(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, RubyContext/*!*/ context,
+            object read, object write, object error, int timeoutMilliseconds) {
+
+            var reads = ToEntries(respondToStorage, toIoStorage, context, read, "read");
+            var writes = ToEntries(respondToStorage, toIoStorage, context, write, "write");
+            var errors = ToEntries(respondToStorage, toIoStorage, context, error, "error");
+
+            if (reads.Length == 0 && writes.Length == 0 && errors.Length == 0) {
+                // Nothing to watch: MRI just sleeps, and IO.select(nil, nil, nil) is the documented
+                // way to sleep forever in a thread that Thread#kill can still end.
+                if (timeoutMilliseconds == Timeout.Infinite) {
+                    ThreadOps.SleepForLibrary(Timeout.Infinite);
+                } else if (timeoutMilliseconds > 0) {
+                    ThreadOps.SleepForLibrary(timeoutMilliseconds);
+                }
+                return null;
+            }
+
+            long deadline = (timeoutMilliseconds == Timeout.Infinite)
+                ? Int64.MaxValue
+                : Environment.TickCount64 + timeoutMilliseconds;
+
+            var info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
+            bool wasBlocked = info.Blocked;
+            try {
+                // A thread parked in select is asleep as far as Ruby is concerned.
+                info.Blocked = true;
+
+                while (true) {
+                    RubyArray ready = CollectReady(reads, writes, errors);
+                    if (ready != null) {
+                        return ready;
+                    }
+
+                    long remaining = deadline - Environment.TickCount64;
+                    if (remaining <= 0) {
+                        return null;
+                    }
+
+                    RubyUtils.CheckAsyncException();
+                    Thread.Sleep((int)Math.Min(remaining, SelectPollIntervalMilliseconds));
+                }
+            } finally {
+                info.Blocked = wasBlocked;
+            }
+        }
+
+        // How long the select loop waits between readiness checks. Short enough that a spec timing
+        // a 1 ms select does not notice, long enough not to spin a core.
+        private const int SelectPollIntervalMilliseconds = 1;
+
+        /// <summary>The three result arrays, or null when nothing is ready yet.</summary>
+        private static RubyArray CollectReady(SelectEntry[]/*!*/ reads, SelectEntry[]/*!*/ writes, SelectEntry[]/*!*/ errors) {
+            RubyArray readReady = CollectReady(reads, Readiness.Read);
+            RubyArray writeReady = CollectReady(writes, Readiness.Write);
+            RubyArray errorReady = CollectReady(errors, Readiness.Error);
+
+            if (readReady.Count == 0 && writeReady.Count == 0 && errorReady.Count == 0) {
+                return null;
+            }
+
+            var result = new RubyArray(3);
+            result.Add(readReady);
+            result.Add(writeReady);
+            result.Add(errorReady);
+            return result;
+        }
+
+        private static RubyArray/*!*/ CollectReady(SelectEntry[]/*!*/ entries, Readiness kind) {
+            var result = new RubyArray();
+            for (int i = 0; i < entries.Length; i++) {
+                if (IsReady(entries[i].IO, kind)) {
+                    result.Add(entries[i].Object);
+                }
+            }
+            return result;
+        }
+
+        private static bool IsReady(RubyIO/*!*/ io, Readiness kind) {
+            if (io.Closed) {
+                throw RubyExceptions.CreateIOError("closed stream");
+            }
+
+            // The mode settles the two ends of a pipe: they share a queue, so only the mode says
+            // which of them a read would ever come from. MRI gets the same answer from the kernel,
+            // which knows each end by its own descriptor.
+            if (kind == Readiness.Read && !io.Mode.CanRead()) {
+                return false;
+            }
+            if (kind == Readiness.Write && !io.Mode.CanWrite()) {
+                return false;
+            }
+
+            var stream = io.GetStream();
+            if (kind == Readiness.Read && stream.DataBuffered) {
+                return true;
+            }
+
+            var pipe = stream.BaseStream as RubyPipe;
+            if (pipe != null) {
+                switch (kind) {
+                    case Readiness.Read: return pipe.CanReadWithoutBlocking;
+                    // The queue is unbounded, so a write never blocks, and there is no out-of-band
+                    // data on an in-process pipe for the error set to report.
+                    case Readiness.Write: return true;
+                    default: return false;
+                }
+            }
+
+            int descriptor = io.NativeDescriptor;
+            if (descriptor < 0) {
+                // No descriptor and no pipe - a StringIO-like stream. MRI says a regular file is
+                // always ready, and this is as close as we get.
+                return kind != Readiness.Error;
+            }
+
+            short events;
+            switch (kind) {
+                case Readiness.Read: events = RubyIO.POLLIN; break;
+                case Readiness.Write: events = RubyIO.POLLOUT; break;
+                default: events = POLLPRI; break;
+            }
+
+            short[] revents = RubyIO.Poll(new object[] { descriptor }, new object[] { events }, 0);
+            if (revents == null) {
+                // No poll on this platform: MRI's answer for a plain file, which is what is left.
+                return kind != Readiness.Error;
+            }
+
+            // A hung-up or broken descriptor is ready in the sense that the operation will not
+            // block - it returns EOF or fails at once, which is what MRI reports too.
+            const short broken = RubyIO.POLLERR | RubyIO.POLLHUP | RubyIO.POLLNVAL;
+            if (kind != Readiness.Error && (revents[0] & broken) != 0) {
+                return true;
+            }
+            return (revents[0] & events) != 0;
+        }
+
+        // Out-of-band data; only sockets ever report it, but the error set means nothing else.
+        private const short POLLPRI = 0x002;
 
         #endregion
 
