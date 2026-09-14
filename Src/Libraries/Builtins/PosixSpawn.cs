@@ -526,10 +526,12 @@ namespace IronRuby.Builtins {
             // close from another thread, which is what Ruby's IO#close promises.
             var reader = new DescriptorStream(fds[0], true, false, true);
             var writer = new DescriptorStream(fds[1], false, true, true);
-            return new RubyArray {
-                new RubyIO(context, reader, Adopt(context, fds[0], reader), IOMode.ReadOnly),
-                new RubyIO(context, writer, Adopt(context, fds[1], writer), IOMode.WriteOnly)
-            };
+            var reading = new RubyIO(context, reader, Adopt(context, fds[0], reader), IOMode.ReadOnly);
+            var writing = new RubyIO(context, writer, Adopt(context, fds[1], writer), IOMode.WriteOnly);
+            // Both ends resolve the current defaults, as every other freshly opened stream does.
+            reading.SetEncodings(null, null);
+            writing.SetEncodings(null, null);
+            return new RubyArray { reading, writing };
         }
 
         /// <summary>

@@ -386,8 +386,13 @@ namespace IronRuby.Builtins {
             Stream reader, writer;
             RubyPipe.CreatePipe(out reader, out writer);
             RubyArray result = new RubyArray(2);
-            result.Add(new RubyIO(self.Context, reader, IOMode.ReadOnly));
-            result.Add(new RubyIO(self.Context, writer, IOMode.WriteOnly));
+            var reading = new RubyIO(self.Context, reader, IOMode.ReadOnly);
+            var writing = new RubyIO(self.Context, writer, IOMode.WriteOnly);
+            // Both ends resolve the current defaults, as every other freshly opened stream does.
+            reading.SetEncodings(null, null);
+            writing.SetEncodings(null, null);
+            result.Add(reading);
+            result.Add(writing);
             return result;
         }
 
@@ -711,10 +716,14 @@ namespace IronRuby.Builtins {
 
         #region close, close_read, close_write, closed?, close_on_exec (1.9)
 
+        /// <summary>
+        /// Closing a stream that is already closed has been a no-op since Ruby 2.3 - which is
+        /// what makes the usual "@io.close if @io" cleanup safe to run twice.
+        /// </summary>
         [RubyMethod("close")]
         public static void Close(RubyIO/*!*/ self) {
             if (self.Closed) {
-                throw RubyExceptions.CreateIOError("closed stream");
+                return;
             }
             self.Close();
         }
@@ -723,7 +732,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("close_read")]
         public static void CloseReader(RubyIO/*!*/ self) {
             if (self.Closed) {
-                throw RubyExceptions.CreateIOError("closed stream");
+                return;
             }
             self.CloseReader();
         }
@@ -732,7 +741,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("close_write")]
         public static void CloseWriter(RubyIO/*!*/ self) {
             if (self.Closed) {
-                throw RubyExceptions.CreateIOError("closed stream");
+                return;
             }
             self.CloseWriter();
         }
@@ -1046,6 +1055,25 @@ namespace IronRuby.Builtins {
             if (stream.DataBuffered) {
                 PrintOps.ReportWarning(writeStorage, tosConversion, MutableString.CreateAscii("syswrite for buffered IO"));
             }
+
+            // MRI's syswrite is one write(2), so a pipe that only had room for part of the string
+            // reports what it took rather than waiting for the rest to fit.
+            var pipe = self.GetStream().BaseStream as DescriptorStream;
+            int count = val.GetByteCount();
+            if (pipe != null && count > 0) {
+                self.Flush();
+                int written;
+                try {
+                    written = pipe.WriteOnce(val.ToByteArray(), 0, count);
+                } catch (IOException e) {
+                    throw TranslateStreamError(e);
+                }
+                if (written < 0) {
+                    throw NonBlockingError(self.Context, new Errno.ResourceTemporarilyUnavailableError(), false);
+                }
+                return written;
+            }
+
             int bytes = Write(self, val);
             self.Flush();
             return bytes;
@@ -1061,8 +1089,48 @@ namespace IronRuby.Builtins {
         public static int WriteNoBlock(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
             self.RequireWritable();
             int result = -1;
-            self.NonBlockingOperation(() => result = Write(self, val), false);
+            self.NonBlockingOperation(() => result = WriteOnceWithoutWaiting(self, val), false);
             return result;
+        }
+
+        /// <summary>
+        /// One write(2) that does not wait for room, which is what #write_nonblock is. Only a
+        /// stream the kernel knows can refuse; everything else - a regular file above all -
+        /// takes the whole string, which is MRI's behaviour too.
+        /// </summary>
+        private static int WriteOnceWithoutWaiting(RubyIO/*!*/ io, MutableString/*!*/ val) {
+            var pipe = io.GetStream().BaseStream as DescriptorStream;
+            if (pipe == null) {
+                // MRI's write_nonblock is a bare write(2): nothing of it stays in a buffer.
+                int all = Write(io, val);
+                io.Flush();
+                return all;
+            }
+
+            io.Flush();
+            int count = val.GetByteCount();
+            if (count == 0) {
+                return 0;
+            }
+
+            int written;
+            try {
+                written = pipe.WriteNonBlocking(val.ToByteArray(), 0, count);
+            } catch (IOException e) {
+                throw TranslateStreamError(e);
+            }
+            if (written < 0) {
+                throw NonBlockingError(io.Context, new Errno.ResourceTemporarilyUnavailableError(), false);
+            }
+            return written;
+        }
+
+        /// <summary>
+        /// The errno DescriptorStream reports back as the Ruby exception for it. Only EPIPE is
+        /// worth naming: MRI raises Errno::EPIPE rather than dying of SIGPIPE.
+        /// </summary>
+        private static Exception/*!*/ TranslateStreamError(IOException/*!*/ e) {
+            return e.HResult == DescriptorStream.EPIPE ? new Errno.PipeError() : (Exception)e;
         }
 
         [RubyMethod("write_nonblock")]
@@ -1144,11 +1212,44 @@ namespace IronRuby.Builtins {
         public static MutableString ReadNoBlock(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
             self.RequireReadable();
             MutableString result = null;
-            self.NonBlockingOperation(() => result = Read(self, bytes, buffer), true);
+            self.NonBlockingOperation(() => result = ReadOnceWithoutWaiting(self, bytes, buffer), true);
             if (result == null) {
                 throw new EOFError("end of file reached");
             }
             return result;
+        }
+
+        /// <summary>
+        /// One read(2) that does not wait for data, which is what #read_nonblock is. Buffered
+        /// bytes are served first - they are already here, so the read cannot block - and a
+        /// stream with no descriptor behind it reads as it would blocking.
+        /// </summary>
+        private static MutableString ReadOnceWithoutWaiting(RubyIO/*!*/ io, int count, MutableString buffer) {
+            if (count < 0) {
+                throw RubyExceptions.CreateArgumentError("negative length " + count + " given");
+            }
+
+            var stream = io.GetReadableStream();
+            var pipe = stream.BaseStream as DescriptorStream;
+            if (pipe == null || stream.DataBuffered) {
+                return Read(io, count, buffer);
+            }
+
+            buffer = PrepareReadBuffer(io, buffer);
+            if (count == 0) {
+                return buffer;
+            }
+
+            var bytes = new byte[count];
+            int read = pipe.ReadNonBlocking(bytes, 0, count);
+            if (read < 0) {
+                throw NonBlockingError(io.Context, new Errno.ResourceTemporarilyUnavailableError(), true);
+            }
+            if (read == 0) {
+                return null;
+            }
+            buffer.Append(bytes, 0, read);
+            return buffer;
         }
 
         [RubyMethod("read", RubyMethodAttributes.PublicSingleton)]

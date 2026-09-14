@@ -490,8 +490,15 @@ namespace IronRuby.Builtins {
             return 0;
         }
 
+        /// <summary>
+        /// Runs a read or a write in the non-blocking mode #read_nonblock / #write_nonblock ask
+        /// for. The default is to just run it: a regular file never blocks, which is also why
+        /// O_NONBLOCK has no effect on one in MRI. A pipe or a socket overrides this, or the
+        /// caller reaches for the single-shot syscall on the descriptor directly.
+        /// </summary>
         public virtual void NonBlockingOperation(Action operation, bool isRead) {
-            throw RubyExceptions.CreateEBADF();
+            RequireOpen();
+            operation();
         }
 
         /// <summary>

@@ -1558,11 +1558,16 @@ class IO
     alias_method :__read_nonblock_raising__, :read_nonblock
 
     def read_nonblock(len, buf = nil, exception: true)
+      unless exception == true || exception == false
+        raise ArgumentError, "expected true or false as exception: #{exception.inspect}"
+      end
       begin
         result = buf.nil? ? __read_nonblock_raising__(len) : __read_nonblock_raising__(len, buf)
-      rescue IO::WaitReadable
-        raise if exception
-        return :wait_readable
+      rescue IO::WaitReadable, Errno::EAGAIN => e
+        return :wait_readable unless exception
+        # MRI raises IO::EAGAINWaitReadable, an Errno::EAGAIN that is also a WaitReadable.
+        e.extend(IO::WaitReadable) unless e.is_a?(IO::WaitReadable)
+        raise e
       rescue EOFError
         raise if exception
         return nil
@@ -1575,11 +1580,15 @@ class IO
     alias_method :__write_nonblock_raising__, :write_nonblock
 
     def write_nonblock(buf, exception: true)
+      unless exception == true || exception == false
+        raise ArgumentError, "expected true or false as exception: #{exception.inspect}"
+      end
       begin
         result = __write_nonblock_raising__(buf)
-      rescue IO::WaitWritable
-        raise if exception
-        return :wait_writable
+      rescue IO::WaitWritable, Errno::EAGAIN => e
+        return :wait_writable unless exception
+        e.extend(IO::WaitWritable) unless e.is_a?(IO::WaitWritable)
+        raise e
       end
       result
     end
