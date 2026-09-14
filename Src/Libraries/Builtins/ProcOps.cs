@@ -237,15 +237,7 @@ namespace IronRuby.Builtins {
         }
 
         private static void RequireParameterCount(Proc/*!*/ proc, int argCount) {
-            int arity;
-            if (proc.Kind == ProcKind.Lambda && argCount != (arity = proc.Dispatcher.Arity)) {
-                if (arity >= 0) {
-                    throw RubyOps.MakeWrongNumberOfArgumentsError(argCount, arity);
-                } else if (argCount < -arity - 1) {
-                    // MRI spells an unbounded arity "expected 1+".
-                    throw RubyOps.MakeWrongNumberOfArgumentsErrorN(argCount, (-arity - 1).ToString(CultureInfo.InvariantCulture) + "+");
-                }
-            }
+            RubyOps.RequireLambdaArity(proc, argCount);
         }
 
         #endregion

@@ -338,6 +338,7 @@ namespace IronRuby.Runtime {
         public static object Yield0(Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 0);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg);
             } catch(EvalUnwinder evalUnwinder) {
@@ -347,12 +348,40 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// A lambda checks the number of arguments wherever it is called, including when it is
+        /// the block a method yields to. A plain block does not.
+        /// </summary>
+        public static void RequireLambdaArity(Proc/*!*/ proc, int argCount) {
+            if (proc.Kind != ProcKind.Lambda) {
+                return;
+            }
+
+            int arity = proc.Dispatcher.Arity;
+            if (argCount == arity) {
+                return;
+            }
+
+            if (arity >= 0) {
+                throw MakeWrongNumberOfArgumentsError(argCount, arity);
+            }
+            if (argCount < -arity - 1) {
+                // MRI spells an unbounded arity "expected 1+".
+                throw MakeWrongNumberOfArgumentsErrorN(argCount,
+                    (-arity - 1).ToString(System.Globalization.CultureInfo.InvariantCulture) + "+");
+            }
+        }
+
         [Emitted]
         public static object Yield1(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 1);
             try {
-                result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1);
+                // a lambda takes the single argument as it is: no auto-splatting
+                result = proc.Kind == ProcKind.Lambda
+                    ? proc.Dispatcher.InvokeNoAutoSplat(blockParam, self, procArg, arg1)
+                    : proc.Dispatcher.Invoke(blockParam, self, procArg, arg1);
             } catch (EvalUnwinder evalUnwinder) {
                 result = blockParam.GetUnwinderResult(evalUnwinder);
             }
@@ -377,6 +406,7 @@ namespace IronRuby.Runtime {
         public static object Yield2(object arg1, object arg2, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 2);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1, arg2);
             } catch (EvalUnwinder evalUnwinder) {
@@ -390,6 +420,7 @@ namespace IronRuby.Runtime {
         public static object Yield3(object arg1, object arg2, object arg3, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 3);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1, arg2, arg3);
             } catch (EvalUnwinder evalUnwinder) {
@@ -403,6 +434,7 @@ namespace IronRuby.Runtime {
         public static object Yield4(object arg1, object arg2, object arg3, object arg4, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 4);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1, arg2, arg3, arg4);
             } catch (EvalUnwinder evalUnwinder) {
@@ -418,6 +450,7 @@ namespace IronRuby.Runtime {
 
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, args.Length);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, args);
             } catch (EvalUnwinder evalUnwinder) {
