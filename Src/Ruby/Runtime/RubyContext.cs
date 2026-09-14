@@ -3362,6 +3362,8 @@ namespace IronRuby.Runtime {
 
         private CallSite<Func<CallSite, object, object, object>> _respondTo;
         private CallSite<Func<CallSite, object, object>> _moduleName;
+        private CallSite<Func<CallSite, object, object>> _toInt;
+        private CallSite<Func<CallSite, object, object>> _toStr;
 
         internal object Send(ref CallSite<Func<CallSite, object, object, object>> site, string/*!*/ eventName,
             object target, string/*!*/ memberName) {
@@ -3375,6 +3377,55 @@ namespace IronRuby.Runtime {
             }
 
             return site.Target(site, target, EncodeIdentifier(memberName));
+        }
+
+        /// <summary>
+        /// The to_int protocol, for the few places that need it without a call-site cache of
+        /// their own (assignment to $. and friends). A Float truncates, as it does in MRI.
+        /// </summary>
+        internal int CastToFixnum(object value) {
+            if (value is int) {
+                return (int)value;
+            }
+            if (value is double) {
+                return (int)(double)value;
+            }
+
+            if (value != null && RespondTo(value, "to_int")) {
+                if (_toInt == null) {
+                    Interlocked.CompareExchange(ref _toInt,
+                        CallSite<Func<CallSite, object, object>>.Create(RubyCallAction.Make(this, "to_int", RubyCallSignature.WithImplicitSelf(0))),
+                        null);
+                }
+                object converted = _toInt.Target(_toInt, value);
+                if (converted is int) {
+                    return (int)converted;
+                }
+            }
+
+            throw RubyExceptions.CreateImplicitConversionError(GetClassDisplayName(value), "Integer");
+        }
+
+        /// <summary>The to_str protocol, for assignment to $0.</summary>
+        internal MutableString/*!*/ CastToString(object value) {
+            var str = value as MutableString;
+            if (str != null) {
+                return str;
+            }
+
+            if (value != null && RespondTo(value, "to_str")) {
+                if (_toStr == null) {
+                    Interlocked.CompareExchange(ref _toStr,
+                        CallSite<Func<CallSite, object, object>>.Create(RubyCallAction.Make(this, "to_str", RubyCallSignature.WithImplicitSelf(0))),
+                        null);
+                }
+                var converted = _toStr.Target(_toStr, value) as MutableString;
+                if (converted != null) {
+                    return converted;
+                }
+            }
+
+            throw RubyExceptions.CreateImplicitConversionError(GetClassDisplayName(value), "String");
         }
 
         public bool RespondTo(object target, string/*!*/ methodName) {

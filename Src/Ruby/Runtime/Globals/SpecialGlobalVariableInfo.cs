@@ -169,7 +169,7 @@ namespace IronRuby.Runtime {
                     return;
 
                 case GlobalVariableId.LastInputLineNumber:
-                    context.InputProvider.LastInputLineNumber = RequireType<int>(value, name, "Fixnum");
+                    context.InputProvider.LastInputLineNumber = context.CastToFixnum(value);
                     return;
 
                 case GlobalVariableId.CommandLineArguments:
@@ -225,11 +225,12 @@ namespace IronRuby.Runtime {
                     return;
 
                 case GlobalVariableId.Verbose:
-                    context.Verbose = value;
+                    // nil means "no warnings at all"; anything else truthy is plain true
+                    context.Verbose = (value == null) ? null : (object)RubyOps.IsTrue(value);
                     return;
 
                 case GlobalVariableId.CommandLineProgramPath:
-                    context.CommandLineProgramPath = (value != null) ? RequireType<MutableString>(value, name, "String") : null;
+                    context.CommandLineProgramPath = context.CastToString(value);
                     return;
                 
                 case GlobalVariableId.KCode:
