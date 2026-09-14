@@ -21,6 +21,7 @@ using IronRuby.Compiler;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace IronRuby.Builtins {
     using BinaryOpStorageWithScope = CallSiteStorage<Func<CallSite, RubyScope, object, object, object>>;
@@ -46,13 +47,23 @@ namespace IronRuby.Builtins {
             var str = self.ToString();
             var result = self.String.Clone();
 
+            // A symbol whose bytes cannot be written out as they stand is quoted whatever its
+            // name looks like: :"foo" for a UTF-16 symbol, :"foo\xA4" for a binary one. MRI's
+            // rule here is the encoding's, not the name's - a UTF-8 :привет stays bare.
+            if (!self.String.IsAscii() && self.String.Encoding != RubyEncoding.UTF8) {
+                result = MutableStringOps.Inspect(context, self.String);
+                result.Insert(0, ':');
+                return result;
+            }
+
             // simple cases:
             if (
                 Tokenizer.IsMethodName(str) ||
                 Tokenizer.IsConstantName(str) ||
                 Tokenizer.IsInstanceVariableName(str) ||
                 Tokenizer.IsClassVariableName(str) ||
-                Tokenizer.IsGlobalVariableName(str)
+                Tokenizer.IsGlobalVariableName(str) ||
+                IsCommandLineOptionGlobal(str)
             ) {
                 result.Insert(0, ':');
             } else {
@@ -132,6 +143,15 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// The command-line-option globals - $-w, $-d, $-0, $-I - are global variable names that
+        /// the tokenizer's IsGlobalVariableName does not recognise, so :"$-w" inspects as :$-w.
+        /// </summary>
+        private static bool IsCommandLineOptionGlobal(string name) {
+            return name != null && name.Length == 3 && name[0] == '$' && name[1] == '-'
+                && (Char.IsLetterOrDigit(name[2]) || name[2] == '_');
+        }
+
         [RubyMethod("to_sym")]
         [RubyMethod("intern", Compatibility = RubyCompatibility.Ruby19)]
         public static RubySymbol/*!*/ ToSymbol(RubySymbol/*!*/ self) {
@@ -199,13 +219,15 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("casecmp")]
-        public static int Casecmp(RubySymbol/*!*/ self, [NotNull]RubySymbol/*!*/ other) {
-            return MutableStringOps.Casecmp(self.String, other.String);
+        public static object Casecmp(RubySymbol/*!*/ self, [NotNull]RubySymbol/*!*/ other) {
+            return ScriptingRuntimeHelpers.Int32ToObject(MutableStringOps.Casecmp(self.String, other.String));
         }
 
+        // Only a Symbol is comparable with a Symbol - :abc.casecmp("abc") is nil, not 0, and
+        // no conversion is attempted on anything else either (CRuby 4.0.6).
         [RubyMethod("casecmp")]
-        public static int Casecmp(RubySymbol/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ other) {
-            return MutableStringOps.Casecmp(self.String, other);
+        public static object Casecmp(RubySymbol/*!*/ self, object other) {
+            return null;
         }
 
         #endregion
@@ -228,13 +250,35 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("match", Compatibility = RubyCompatibility.Ruby19)]
-        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, RubySymbol/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
-            return MutableStringOps.Match(storage, scope, self.String.Clone(), regex);
+        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            RubySymbol/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
+            return MutableStringOps.Match(storage, scope, block, self.String.Clone(), regex);
         }
 
         [RubyMethod("match", Compatibility = RubyCompatibility.Ruby19)]
-        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, RubySymbol/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern) {
-            return MutableStringOps.Match(storage, scope, self.String.Clone(), pattern);
+        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            RubySymbol/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern) {
+            return MutableStringOps.Match(storage, scope, block, self.String.Clone(), pattern);
+        }
+
+        // Delegating from Ruby would put an extra frame between the =~ a Regexp prefix performs
+        // and the caller, and $~ is frame-local, so Regexp.last_match would come back nil.
+        [RubyMethod("start_with?")]
+        public static bool StartsWith(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubySymbol/*!*/ self, [NotNull]params object/*!*/[]/*!*/ prefixes) {
+            return MutableStringOps.StartsWith(stringCast, scope, self.String, prefixes);
+        }
+
+        [RubyMethod("end_with?")]
+        public static bool EndsWith(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubySymbol/*!*/ self, [NotNull]params object/*!*/[]/*!*/ suffixes) {
+            return MutableStringOps.EndsWith(stringCast, scope, self.String, suffixes);
+        }
+
+        /// <summary>The same frozen String every time: :sym.name.equal?(:sym.name).</summary>
+        [RubyMethod("name")]
+        public static MutableString/*!*/ Name(RubySymbol/*!*/ self) {
+            return self.FrozenName;
         }
 
         #endregion
@@ -304,24 +348,25 @@ namespace IronRuby.Builtins {
 
         #region downcase, upcase, swapcase, capitalize, next/succ
 
+        // Symbol's case methods take the same options String's do.
         [RubyMethod("downcase")]
-        public static RubySymbol/*!*/ DownCase(RubyContext/*!*/ context, RubySymbol/*!*/ self) {
-            return context.CreateSymbol(MutableStringOps.DownCase(self.String));
+        public static RubySymbol/*!*/ DownCase(RubyContext/*!*/ context, RubySymbol/*!*/ self, params object[]/*!*/ options) {
+            return context.CreateSymbol(MutableStringOps.DownCase(self.String, options));
         }
 
         [RubyMethod("upcase")]
-        public static RubySymbol/*!*/ UpCase(RubyContext/*!*/ context, RubySymbol/*!*/ self) {
-            return context.CreateSymbol(MutableStringOps.UpCase(self.String));
+        public static RubySymbol/*!*/ UpCase(RubyContext/*!*/ context, RubySymbol/*!*/ self, params object[]/*!*/ options) {
+            return context.CreateSymbol(MutableStringOps.UpCase(self.String, options));
         }
 
         [RubyMethod("swapcase")]
-        public static RubySymbol/*!*/ SwapCase(RubyContext/*!*/ context, RubySymbol/*!*/ self) {
-            return context.CreateSymbol(MutableStringOps.SwapCase(self.String));
+        public static RubySymbol/*!*/ SwapCase(RubyContext/*!*/ context, RubySymbol/*!*/ self, params object[]/*!*/ options) {
+            return context.CreateSymbol(MutableStringOps.SwapCase(self.String, options));
         }
 
         [RubyMethod("capitalize")]
-        public static RubySymbol/*!*/ Capitalize(RubyContext/*!*/ context, RubySymbol/*!*/ self) {
-            return context.CreateSymbol(MutableStringOps.Capitalize(self.String));
+        public static RubySymbol/*!*/ Capitalize(RubyContext/*!*/ context, RubySymbol/*!*/ self, params object[]/*!*/ options) {
+            return context.CreateSymbol(MutableStringOps.Capitalize(self.String, options));
         }
 
         [RubyMethod("next")]

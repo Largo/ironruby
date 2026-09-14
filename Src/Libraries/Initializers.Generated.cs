@@ -5365,9 +5365,37 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.MatchData, IronRuby.Builtins.Range, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.GetGroup)
             );
             
+            DefineLibraryMethod(module, "==", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MatchData, System.Object, System.Boolean>(IronRuby.Builtins.MatchDataOps.Equals)
+            );
+            
             DefineLibraryMethod(module, "begin", 0x51, 
-                0x00010000U, 
-                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.Begin)
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.Begin), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.MatchDataOps.Begin), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MatchDataOps.Begin)
+            );
+            
+            DefineLibraryMethod(module, "bytebegin", 0x51, 
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.ByteBegin), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.MatchDataOps.ByteBegin), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MatchDataOps.ByteBegin)
+            );
+            
+            DefineLibraryMethod(module, "byteend", 0x51, 
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.ByteEnd), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.MatchDataOps.ByteEnd), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MatchDataOps.ByteEnd)
+            );
+            
+            DefineLibraryMethod(module, "byteoffset", 0x51, 
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.ByteOffset), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.ByteOffset), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.ByteOffset)
             );
             
             DefineLibraryMethod(module, "captures", 0x51, 
@@ -5376,8 +5404,15 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "end", 0x51, 
-                0x00010000U, 
-                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.End)
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, System.Object>(IronRuby.Builtins.MatchDataOps.End), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.MatchDataOps.End), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MatchDataOps.End)
+            );
+            
+            DefineLibraryMethod(module, "eql?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MatchData, System.Object, System.Boolean>(IronRuby.Builtins.MatchDataOps.Equals)
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
@@ -5396,8 +5431,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "offset", 0x51, 
-                0x00010000U, 
-                new Func<IronRuby.Builtins.MatchData, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.Offset)
+                0x00010000U, 0x00000002U, 0x00000002U, 
+                new Func<IronRuby.Builtins.MatchData, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.Offset), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.Offset), 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MatchDataOps.Offset)
             );
             
             DefineLibraryMethod(module, "post_match", 0x51, 
@@ -5408,6 +5445,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "pre_match", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MatchDataOps.PreMatch)
+            );
+            
+            DefineLibraryMethod(module, "regexp", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.MatchDataOps.Regexp)
             );
             
             DefineLibraryMethod(module, "select", 0x51, 
@@ -5422,7 +5464,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "string", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MatchDataOps.ReturnFrozenString)
+                new Func<IronRuby.Builtins.MatchData, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MatchDataOps.ReturnFrozenString)
             );
             
             DefineLibraryMethod(module, "to_a", 0x51, 
@@ -5443,6 +5485,7 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadMatchData_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            module.UndefineMethodNoEvent("allocate");
             module.UndefineMethodNoEvent("new");
         }
         
@@ -7439,18 +7482,23 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "capitalize", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Capitalize)
+                0x80000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Capitalize)
             );
             
             DefineLibraryMethod(module, "capitalize!", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.CapitalizeInPlace)
+                0x80000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.CapitalizeInPlace)
             );
             
             DefineLibraryMethod(module, "casecmp", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.MutableStringOps.Casecmp)
+            );
+            
+            DefineLibraryMethod(module, "casecmp?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.MutableStringOps.CasecmpQ)
             );
             
             DefineLibraryMethod(module, "center", 0x51, 
@@ -7526,13 +7574,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "downcase", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.DownCase)
+                0x80000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.DownCase)
             );
             
             DefineLibraryMethod(module, "downcase!", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.DownCaseInPlace)
+                0x80000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.DownCaseInPlace)
             );
             
             DefineLibraryMethod(module, "dump", 0x51, 
@@ -7863,13 +7911,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "swapcase", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.SwapCase)
+                0x80000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.SwapCase)
             );
             
             DefineLibraryMethod(module, "swapcase!", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.SwapCaseInPlace)
+                0x80000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.SwapCaseInPlace)
             );
             
             DefineLibraryMethod(module, "to_clr_string", 0x51, 
@@ -7938,13 +7986,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "upcase", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.UpCase)
+                0x80000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.UpCase)
             );
             
             DefineLibraryMethod(module, "upcase!", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.UpCaseInPlace)
+                0x80000000U, 
+                new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.UpCaseInPlace)
             );
             
             DefineLibraryMethod(module, "upto", 0x51, 
@@ -8117,19 +8165,19 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "capitalize", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.SymbolOps.Capitalize)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubySymbol, System.Object[], IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.SymbolOps.Capitalize)
             );
             
             DefineLibraryMethod(module, "casecmp", 0x51, 
-                0x00000002U, 0x00010002U, 
-                new Func<IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubySymbol, System.Int32>(IronRuby.Builtins.SymbolOps.Casecmp), 
-                new Func<IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString, System.Int32>(IronRuby.Builtins.SymbolOps.Casecmp)
+                0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.SymbolOps.Casecmp), 
+                new Func<IronRuby.Builtins.RubySymbol, System.Object, System.Object>(IronRuby.Builtins.SymbolOps.Casecmp)
             );
             
             DefineLibraryMethod(module, "downcase", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.SymbolOps.DownCase)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubySymbol, System.Object[], IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.SymbolOps.DownCase)
             );
             
             DefineLibraryMethod(module, "empty?", 0x51, 
@@ -8140,6 +8188,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "encoding", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.SymbolOps.GetEncoding)
+            );
+            
+            DefineLibraryMethod(module, "end_with?", 0x51, 
+                0x80000008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubySymbol, System.Object[], System.Boolean>(IronRuby.Builtins.SymbolOps.EndsWith)
             );
             
             DefineLibraryMethod(module, "eql?", 0x51, 
@@ -8169,9 +8222,14 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "match", 0x51, 
-                0x00000008U, 0x00040008U, 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.SymbolOps.Match), 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.SymbolOps.Match)
+                0x00000010U, 0x00080010U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.Builtins.SymbolOps.Match), 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.SymbolOps.Match)
+            );
+            
+            DefineLibraryMethod(module, "name", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString>(IronRuby.Builtins.SymbolOps.Name)
             );
             
             DefineLibraryMethod(module, "next", 0x51, 
@@ -8194,14 +8252,19 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyRegex, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.SymbolOps.GetSubstring)
             );
             
+            DefineLibraryMethod(module, "start_with?", 0x51, 
+                0x80000008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubySymbol, System.Object[], System.Boolean>(IronRuby.Builtins.SymbolOps.StartsWith)
+            );
+            
             DefineLibraryMethod(module, "succ", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.SymbolOps.Succ)
             );
             
             DefineLibraryMethod(module, "swapcase", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.SymbolOps.SwapCase)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubySymbol, System.Object[], IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.SymbolOps.SwapCase)
             );
             
             DefineLibraryMethod(module, "to_clr_string", 0x51, 
@@ -8225,8 +8288,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "upcase", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.SymbolOps.UpCase)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubySymbol, System.Object[], IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.SymbolOps.UpCase)
             );
             
         }

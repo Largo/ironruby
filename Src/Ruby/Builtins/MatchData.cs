@@ -38,8 +38,23 @@ namespace IronRuby.Builtins {
         private string _encodedInput;
         private Encoding _encoding;
         private int _startByteOffset;
+        private int _startCharOffset;
+
+        // The pattern that produced the match. MatchData#regexp has to answer the very object
+        // the caller matched with - the spec compares object_id - so it cannot be rebuilt from
+        // the CLR Regex and has to be carried here from every construction site.
+        private RubyRegex _regexp;
+
+        // #string answers the same frozen String every time it is called, so it is made once.
+        private MutableString _frozenInput;
 
         public MutableString/*!*/ OriginalString { get { return _originalString; } }
+
+        public RubyRegex Regexp { get { return _regexp; } }
+
+        public MutableString/*!*/ FrozenOriginalString {
+            get { return _frozenInput ?? (_frozenInput = MutableString.Create(_originalString).Freeze()); }
+        }
 
         /// <summary>
         /// The encoding of the match data is always the same as encoding of the input string 
@@ -78,6 +93,11 @@ namespace IronRuby.Builtins {
             _encodedInput = encodedInput;
             _encoding = encoding;
             _startByteOffset = startByteOffset;
+            if (startByteOffset > 0) {
+                int byteCount;
+                byte[] bytes = originalString.GetByteArray(out byteCount);
+                _startCharOffset = encoding.GetCharCount(bytes, 0, Math.Min(startByteOffset, byteCount));
+            }
         }
 
         public MatchData() {
@@ -105,10 +125,9 @@ namespace IronRuby.Builtins {
             _encodedInput = other._encodedInput;
             _encoding = other._encoding;
             _startByteOffset = other._startByteOffset;
-        }
-
-        internal static MatchData Create(Match/*!*/ match, MutableString/*!*/ input, bool freezeInput, string/*!*/ encodedInput) {
-            return Create(match, input, freezeInput, encodedInput, null, 0);
+            _startCharOffset = other._startCharOffset;
+            _regexp = other._regexp;
+            _frozenInput = other._frozenInput;
         }
 
         /// <summary>
@@ -118,7 +137,7 @@ namespace IronRuby.Builtins {
         /// while <paramref name="input"/> is still addressed by byte, so they must be translated.
         /// </summary>
         internal static MatchData Create(Match/*!*/ match, MutableString/*!*/ input, bool freezeInput, string/*!*/ encodedInput,
-            RubyEncoding kcode, int startByteOffset) {
+            RubyEncoding kcode, int startByteOffset, RubyRegex regexp) {
 
             if (!match.Success) {
                 return null;
@@ -128,10 +147,11 @@ namespace IronRuby.Builtins {
                 input = input.Clone().Freeze();
             }
 
-            if (kcode == null || encodedInput == null) {
-                return new MatchData(match, input);
-            }
-            return new MatchData(match, input, encodedInput, kcode.Encoding, startByteOffset);
+            MatchData result = (kcode == null || encodedInput == null)
+                ? new MatchData(match, input)
+                : new MatchData(match, input, encodedInput, kcode.Encoding, startByteOffset);
+            result._regexp = regexp;
+            return result;
         }
 
         #endregion
@@ -160,6 +180,59 @@ namespace IronRuby.Builtins {
                 return clrLength;
             }
             return ToOriginalIndex(clrIndex + clrLength) - ToOriginalIndex(clrIndex);
+        }
+
+        /// <summary>
+        /// The character offset a CLR offset stands for. Without a k-code decoding the regex ran
+        /// on the string's own characters and the two agree; with one, the CLR offset already
+        /// counts characters of the decoded input, only from the position the match started at.
+        /// </summary>
+        private int ToCharIndex(int clrIndex) {
+            if (_encodedInput == null) {
+                return clrIndex;
+            }
+            return _startCharOffset + Math.Min(Math.Max(clrIndex, 0), _encodedInput.Length);
+        }
+
+        /// <summary>
+        /// The byte offset a CLR offset stands for. With a k-code decoding that is what
+        /// ToOriginalIndex already answers; without one the CLR offset counts characters, so the
+        /// bytes they occupy in the subject have to be counted out.
+        /// </summary>
+        private int ToByteIndex(int clrIndex) {
+            if (_encodedInput != null) {
+                return ToOriginalIndex(clrIndex);
+            }
+            if (clrIndex <= 0) {
+                return 0;
+            }
+            return _originalString.GetSlice(0, Math.Min(clrIndex, _originalString.GetCharCount())).GetByteCount();
+        }
+
+        /// <summary>
+        /// The [start, end] offsets of a group, in characters or in bytes, or null when the group
+        /// did not take part in the match. <paramref name="groupIndex"/> is checked against the
+        /// pattern's group count.
+        /// </summary>
+        public int[] GetGroupOffsets(int groupIndex, bool inBytes) {
+            RequireExistingGroup(groupIndex);
+            return OffsetsOf(_match.Groups[groupIndex], inBytes);
+        }
+
+        public int[] GetGroupOffsets(string/*!*/ name, bool inBytes) {
+            if (!HasNamedGroup(name)) {
+                throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", name);
+            }
+            return OffsetsOf(_match.Groups[name], inBytes);
+        }
+
+        private int[] OffsetsOf(Group/*!*/ group, bool inBytes) {
+            if (!group.Success) {
+                return null;
+            }
+            return inBytes
+                ? new[] { ToByteIndex(group.Index), ToByteIndex(group.Index + group.Length) }
+                : new[] { ToCharIndex(group.Index), ToCharIndex(group.Index + group.Length) };
         }
 
         #endregion
@@ -220,6 +293,11 @@ namespace IronRuby.Builtins {
                 }
             }
             return result.ToArray();
+        }
+
+        /// <summary>The group's name if it has one, otherwise its number as a string.</summary>
+        public string/*!*/ GetGroupName(int index) {
+            return _match.Groups[index].Name;
         }
 
         public bool HasNamedGroup(string/*!*/ name) {
