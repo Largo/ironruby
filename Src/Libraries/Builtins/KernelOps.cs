@@ -866,7 +866,10 @@ namespace IronRuby.Builtins {
 
             object result;
             if (!RubyUtils.TryDuplicateObject(initializeCopyStorage, allocateStorage, self, isClone, out result)) {
-                throw RubyExceptions.CreateTypeError("can't {0} {1}", isClone ? "clone" : "dup", context.GetClassDisplayName(self));
+                // Ruby 2.4 stopped raising here: #dup and #clone of one of MRI's "special objects"
+                // (nil, true, false, Integer, Float, Symbol - and Rational/Complex, which handle
+                // themselves in ruby4.rb) answer the receiver rather than TypeError("can't dup NilClass").
+                return self;
             }
             return context.TaintObjectBy(result, self);
         }

@@ -2073,8 +2073,10 @@ class Object
         end
         freeze_opt = opts[:freeze]
         unless freeze_opt.nil? || freeze_opt == true || freeze_opt == false
-          raise ArgumentError,
-                "unexpected value for freeze: #{freeze_opt.class}"
+          # Fixnum/Bignum are still distinct classes here; MRI says Integer.
+          name = freeze_opt.class.to_s
+          name = "Integer" if name == "Fixnum" || name == "Bignum"
+          raise ArgumentError, "unexpected value for freeze: #{name}"
         end
       elsif !opts.nil?
         raise TypeError, "no implicit conversion of #{opts.class} into Hash"
@@ -4487,6 +4489,23 @@ class Complex
       rectangular(a1, a2)
     else
       rectangular(a1, 0)
+    end
+  end
+end
+
+# Rational and Complex are "special objects" in MRI's sense: #dup and #clone
+# answer the receiver, like Integer and Symbol, rather than allocating a copy.
+[::Rational, ::Complex].each do |klass|
+  klass.class_eval do
+    def dup
+      self
+    end
+
+    def clone(freeze: nil)
+      unless freeze.nil? || freeze == true || freeze == false
+        ::Kernel.raise(::ArgumentError, "unexpected value for freeze: #{freeze.class}")
+      end
+      self
     end
   end
 end
@@ -11772,9 +11791,74 @@ class Complex
   end
 end
 
+# Kernel#open, as MRI's rb_f_open has it since Ruby 4.0: an argument that
+# answers #to_open is redirected to it (and closed after the block, like
+# File.open), a leading "|" is no longer a subprocess but an ordinary - and
+# therefore missing - filename, and options are keyword arguments, so a fourth
+# *positional* Hash is an arity error rather than an option set.
+module Kernel
+  def open(*args, **options, &block)
+    if args.empty?
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1..3)")
+    end
+
+    target = args[0]
+    rest = args[1..-1]
+
+    if target.respond_to?(:to_open)
+      io = options.empty? ? target.to_open(*rest) : target.to_open(*rest, **options)
+      return io unless block
+      begin
+        return block.call(io)
+      ensure
+        if io.respond_to?(:close) && !(io.respond_to?(:closed?) && io.closed?)
+          io.close
+        end
+      end
+    end
+
+    # Only the file-opening form is limited to (path, mode, permission); #to_open
+    # above takes as many arguments as it likes.
+    if args.size > 3
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..3)")
+    end
+
+    # File.open's mode/permission parameters are typed, so an explicit nil is a
+    # conversion error there where MRI treats it as "not given".
+    rest.pop while !rest.empty? && rest.last.nil?
+
+    if options.empty?
+      ::File.open(target, *rest, &block)
+    else
+      ::File.open(target, *rest, **options, &block)
+    end
+  end
+  module_function :open
+end
+
 # --- a batch of small post-1.9 additions ------------------------------------
 
 module Kernel
+  # rb_obj_public_method: #method restricted to public methods. A private or
+  # protected method is reported as undefined, but #method_missing/
+  # #respond_to_missing? are consulted exactly as #method consults them.
+  def public_method(name)
+    sym = name.is_a?(::Symbol) ? name : (name.respond_to?(:to_str) ? name.to_str.to_sym : name)
+    if sym.is_a?(::Symbol)
+      begin
+        visible = singleton_class.public_method_defined?(sym)
+      rescue ::TypeError
+        visible = self.class.public_method_defined?(sym)
+      end
+      # Not a real public method: only #respond_to_missing?(name, false) - which
+      # is what #respond_to? consults - can still produce one.
+      unless visible || respond_to?(sym)
+        ::Kernel.raise(::NameError, "undefined method `#{sym}' for class `#{self.class}'")
+      end
+    end
+    method(name)
+  end
+
   # Kernel#Hash (1.9). Only nil and [] are special-cased; everything else must
   # answer #to_hash with a Hash.
   def Hash(object)
