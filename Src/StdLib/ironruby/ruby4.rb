@@ -7577,17 +7577,17 @@ module Process
     module_function :setrlimit
 
     # MRI takes the number, or the constant's name with or without the RLIMIT_ prefix.
+    # Anything else is asked for #to_str first and only then for #to_int, which is the order
+    # MRI's rlimit_resource_type uses.
     def __rlimit_resource__(resource)
       case resource
       when Integer then resource
-      when Symbol, String
-        name = resource.to_s
-        name = "RLIMIT_#{name}" unless name.start_with?("RLIMIT_")
-        unless const_defined?(name)
-          raise ArgumentError, "invalid resource name: #{resource}"
-        end
-        const_get(name)
+      when Symbol, String then __rlimit_by_name__(resource.to_s, resource)
       else
+        if resource.respond_to?(:to_str)
+          name = resource.to_str
+          return __rlimit_by_name__(name, resource) if name.is_a?(String)
+        end
         unless resource.respond_to?(:to_int)
           raise TypeError, "no implicit conversion of #{resource.class} into Integer"
         end
@@ -7600,12 +7600,31 @@ module Process
     end
     module_function :__rlimit_resource__
 
-    def __rlimit_value__(value)
-      return value if value.is_a?(Integer)
-      unless value.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{value.class} into Integer"
+    def __rlimit_by_name__(name, original)
+      name = "RLIMIT_#{name}" unless name.start_with?("RLIMIT_")
+      unless const_defined?(name)
+        raise ArgumentError, "invalid resource name: #{original}"
       end
-      value.to_int
+      const_get(name)
+    end
+    module_function :__rlimit_by_name__
+
+    # rlim_t is unsigned, so RLIM_INFINITY is 2**64-1 and getrlimit hands it back that way.
+    # __setrlimit__ takes it as a signed long and reinterprets the bits, so anything above
+    # Integer::MAX has to be folded into the negative half first or the conversion overflows.
+    def __rlimit_value__(value)
+      unless value.is_a?(Integer)
+        unless value.respond_to?(:to_int)
+          raise TypeError, "no implicit conversion of #{value.class} into Integer"
+        end
+        value = value.to_int
+        unless value.is_a?(Integer)
+          raise TypeError, "can't convert to Integer"
+        end
+      end
+      # Named inline rather than as constants: Process.constants is part of the API and
+      # ruby/spec walks everything matching /\ARLIMIT_/ through getrlimit.
+      value > 0x7fff_ffff_ffff_ffff ? value - 0x1_0000_0000_0000_0000 : value
     end
     module_function :__rlimit_value__
   end
