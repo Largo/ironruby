@@ -247,9 +247,10 @@ namespace IronRuby.Prism {
                     return new ArrayConstructor(new Arguments(items.ToArray()), span);
                 }
                 case Pm.HashNode hash:
-                    return HashExpression(hash.Elements, span);
+                    return HashExpression(hash.Elements, false, span);
                 case Pm.KeywordHashNode keywordHash:
-                    return HashExpression(keywordHash.Elements, span);
+                    // the trailing hash of a call written with keyword syntax: `f(a: 1)`
+                    return HashExpression(keywordHash.Elements, true, span);
                 case Pm.FlipFlopNode flipFlop: {
                     var rangeExpr = new RangeExpression(
                         flipFlop.Left != null ? Expr(flipFlop.Left) : Literal.Nil(span),
@@ -896,7 +897,7 @@ namespace IronRuby.Prism {
             return new IfExpression(Condition(node.Predicate), BuildStatements(node.Statements), elseIfClauses, span);
         }
 
-        private Expression/*!*/ HashExpression(Pm.PmNode[]/*!*/ elements, SourceSpan span) {
+        private Expression/*!*/ HashExpression(Pm.PmNode[]/*!*/ elements, bool isKeywordArguments, SourceSpan span) {
             // fold AssocNode runs and ** splats into successive Hash#merge calls
             Expression result = null;
             var maplets = new List<Maplet>();
@@ -907,7 +908,7 @@ namespace IronRuby.Prism {
                         maplets.Add(new Maplet(Expr(assoc.Key), Expr(assoc.Value), Span(assoc)));
                         break;
                     case Pm.AssocSplatNode splat when splat.Value != null:
-                        result = MergeHash(result, maplets, span);
+                        result = MergeHash(result, maplets, isKeywordArguments, span);
                         result = result == null
                             ? Expr(splat.Value)
                             : new MethodCall(result, "merge", new Arguments(Expr(splat.Value)), span);
@@ -916,13 +917,13 @@ namespace IronRuby.Prism {
                         throw Unsupported(element);
                 }
             }
-            result = MergeHash(result, maplets, span);
-            return result ?? new HashConstructor(new Maplet[0], span);
+            result = MergeHash(result, maplets, isKeywordArguments, span);
+            return result ?? new HashConstructor(new Maplet[0], isKeywordArguments, span);
         }
 
-        private Expression MergeHash(Expression result, List<Maplet>/*!*/ maplets, SourceSpan span) {
+        private Expression MergeHash(Expression result, List<Maplet>/*!*/ maplets, bool isKeywordArguments, SourceSpan span) {
             if (maplets.Count == 0) return result;
-            var ctor = new HashConstructor(maplets.ToArray(), span);
+            var ctor = new HashConstructor(maplets.ToArray(), isKeywordArguments, span);
             maplets.Clear();
             return result == null ? (Expression)ctor : new MethodCall(result, "merge", new Arguments(ctor), span);
         }
@@ -1534,7 +1535,7 @@ namespace IronRuby.Prism {
                 if (optional.Count > 0 || unsplat != null || node.Posts.Length > 0) {
                     return LowerGeneralParameters(node, autoSplat, isMethod, span, out prologue);
                 }
-                prologue = LowerKeywords(node, optional, span);
+                prologue = LowerKeywords(node, optional, isMethod, mandatory, span);
                 if (isMethod) {
                     // only leading mandatory parameters can be here, and they are all locals
                     _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
@@ -1620,8 +1621,7 @@ namespace IronRuby.Prism {
             // (Ruby 3 keyword separation).
             var popKeywords = new SimpleAssignmentExpression(kwVar,
                 new ConditionalExpression(
-                    CaseEqual(new ConstantVariable("Hash", span),
-                        new MethodCall(args, "last", null, span), span),
+                    new KeywordArgumentsTest(new MethodCall(args, "last", null, span), span),
                     new MethodCall(args, "pop", null, span),
                     new HashConstructor(new Maplet[0], span), span),
                 null, span);
@@ -1718,20 +1718,63 @@ namespace IronRuby.Prism {
         ///   k = ?kw?.key?(:k) ? ?kw?[:k] : 1
         ///   rest = ?kw?.dup ; rest.delete(:j) ; rest.delete(:k)
         /// </summary>
-        private Statements/*!*/ LowerKeywords(Pm.ParametersNode/*!*/ node, List<SimpleAssignmentExpression>/*!*/ optional, SourceSpan span) {
+        private Statements/*!*/ LowerKeywords(Pm.ParametersNode/*!*/ node, List<SimpleAssignmentExpression>/*!*/ optional,
+            bool isMethod, List<LeftValue>/*!*/ mandatory, SourceSpan span) {
+
             var kwVar = CurrentScope.AddVariable("?kw?", span);
-            optional.Add(new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], span), null, span));
+            // The default stands for "the caller passed no keywords", so it is marked as keyword
+            // arguments itself - that is what tells it apart from a Hash passed positionally.
+            optional.Add(new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], true, span), null, span));
 
             var prologue = new Statements();
             // blocks and lambdas pass nil for parameters the caller omitted, so the
             // optional-parameter default above does not fire for them
             prologue.Add(new SimpleAssignmentExpression(kwVar,
-                new HashConstructor(new Maplet[0], span), "||", span));
+                new HashConstructor(new Maplet[0], true, span), "||", span));
+
+            if (isMethod) {
+                foreach (var check in KeywordSeparationChecks(kwVar, mandatory, span)) {
+                    prologue.Add(check);
+                }
+            }
 
             foreach (var statement in BindKeywordsFrom(node, kwVar)) {
                 prologue.Add(statement);
             }
             return prologue;
+        }
+
+        /// <summary>
+        /// Ruby 3 does not convert a positional Hash into keyword arguments, and the hash a
+        /// keyword call really did produce is not an extra positional argument either. Both
+        /// mistakes surface as an arity error, which the lowered signature (keywords became a
+        /// trailing optional parameter) would otherwise not report:
+        ///
+        ///   def m(a, b: 1)
+        ///   m(1, {"x" =&gt; 1})    # the hash landed in ?kw?: given 2, expected 1
+        ///   m("a" =&gt; 1, b: 2)   # the keywords landed in a:  given 0, expected 1
+        /// </summary>
+        private List<Expression>/*!*/ KeywordSeparationChecks(LocalVariable/*!*/ kwVar, List<LeftValue>/*!*/ mandatory, SourceSpan span) {
+            var checks = new List<Expression>();
+            int count = mandatory.Count;
+
+            var lastMandatory = count > 0 ? mandatory[count - 1] as LocalVariable : null;
+            if (lastMandatory != null) {
+                checks.Add(new IfExpression(
+                    new KeywordArgumentsTest(lastMandatory, span),
+                    new Statements(RaiseArityError(count - 1, count, span)), new List<ElseIfClause>(), span));
+            }
+
+            checks.Add(new UnlessExpression(
+                new KeywordArgumentsTest(kwVar, span),
+                new Statements(RaiseArityError(count + 1, count, span)), null, span));
+
+            return checks;
+        }
+
+        private Expression/*!*/ RaiseArityError(int given, int expected, SourceSpan span) {
+            return RaiseError("ArgumentError",
+                "wrong number of arguments (given " + given + ", expected " + expected + ")", span);
         }
 
         /// <summary>

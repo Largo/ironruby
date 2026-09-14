@@ -41,6 +41,7 @@ namespace IronRuby.Builtins {
         private const uint IsFrozenFlag = 1;
         private const uint IsTaintedFlag = 2;
         private const uint IsUntrustedFlag = 4;
+        private const uint IsKeywordArgumentsFlag = 8;
 
         // Hash#compare_by_identity has to swap the comparer of an *existing* dictionary, which
         // Dictionary<,> offers no API for; the field is patched directly and the entries rehashed.
@@ -233,6 +234,19 @@ namespace IronRuby.Builtins {
             get {
                 return (_flags & IsFrozenFlag) != 0;
             }
+        }
+
+        /// <summary>
+        /// True for a hash that a call site built out of keyword-argument syntax - `f(a: 1)`,
+        /// `f("a" =&gt; 1, b: 2)` or `f(**h)`. Keyword arguments have no slot of their own in this
+        /// calling convention: they travel as a trailing positional Hash, and this is what tells
+        /// the callee whether the caller wrote keywords or passed a Hash (Ruby 3 separates the
+        /// two). Such a hash is always freshly made by the call site, and the flag is not copied
+        /// by #dup, so it never shows up on a hash user code holds on to.
+        /// </summary>
+        public bool IsKeywordArguments {
+            get { return (_flags & IsKeywordArgumentsFlag) != 0; }
+            set { _flags = (_flags & ~IsKeywordArgumentsFlag) | (value ? IsKeywordArgumentsFlag : 0); }
         }
 
         void IRubyObjectState.Freeze() {

@@ -1114,13 +1114,30 @@ namespace IronRuby.Runtime {
         /// The result is fed to the ordinary splatting machinery, so it is either [] or [hash].
         /// </summary>
         [Emitted]
-        public static RubyArray/*!*/ SplatKeywordHash(object hash) {
-            var dict = hash as IDictionary<object, object>;
-            if (dict != null && dict.Count == 0) {
+        public static RubyArray/*!*/ SplatKeywordHash(RubyScope/*!*/ scope, object hash) {
+            // `f(**nil)` passes no keywords at all
+            if (hash == null) {
                 return new RubyArray(0);
             }
+
+            var dict = hash as IDictionary<object, object>;
+            if (dict == null) {
+                throw RubyExceptions.CreateImplicitConversionError(scope.RubyContext.GetClassDisplayName(hash), "Hash");
+            }
+
+            if (dict.Count == 0) {
+                return new RubyArray(0);
+            }
+
+            // MRI copies: the callee's **rest must not alias the hash the caller splatted
+            var copy = new Hash(scope.RubyContext.EqualityComparer, dict.Count);
+            foreach (var entry in dict) {
+                copy[entry.Key] = entry.Value;
+            }
+            copy.IsKeywordArguments = true;
+
             var result = new RubyArray(1);
-            result.Add(hash);
+            result.Add(copy);
             return result;
         }
 
@@ -1189,6 +1206,31 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static Hash/*!*/ MakeHash(RubyScope/*!*/ scope, object[]/*!*/ items) {
             return RubyUtils.SetHashElements(scope.RubyContext, new Hash(scope.RubyContext.EqualityComparer, items.Length / 2), items);
+        }
+
+        /// <summary>
+        /// The trailing hash a call site builds for keyword arguments, marked as such so the
+        /// callee can tell `f(a: 1)` from `f({a: 1})`.
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash(RubyScope/*!*/ scope, object[]/*!*/ items) {
+            var result = MakeHash(scope, items);
+            result.IsKeywordArguments = true;
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash0(RubyScope/*!*/ scope) {
+            var result = MakeHash0(scope);
+            result.IsKeywordArguments = true;
+            return result;
+        }
+
+        /// <summary>True for the hash a call site built out of keyword syntax.</summary>
+        [Emitted]
+        public static bool IsKeywordArgumentsHash(object obj) {
+            var hash = obj as Hash;
+            return hash != null && hash.IsKeywordArguments;
         }
 
         #endregion

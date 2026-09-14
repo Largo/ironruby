@@ -39,6 +39,8 @@ namespace IronRuby.Compiler.Ast {
         public virtual void Exit(Arguments/*!*/ node) { }
         public virtual bool Enter(SplattedArgument/*!*/ node) { return true; }
         public virtual void Exit(SplattedArgument/*!*/ node) { }
+        public virtual bool Enter(KeywordArgumentsTest/*!*/ node) { return true; }
+        public virtual void Exit(KeywordArgumentsTest/*!*/ node) { }
 
         // declarations:
         public virtual bool Enter(ClassDefinition/*!*/ node) { return true; }

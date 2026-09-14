@@ -44,7 +44,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
-            return Methods.SplatKeywordHash.OpCall(AstUtils.Box(Argument.TransformRead(gen)));
+            return Methods.SplatKeywordHash.OpCall(gen.CurrentScopeVariable, AstUtils.Box(Argument.TransformRead(gen)));
         }
     }
 }

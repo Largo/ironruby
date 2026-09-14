@@ -34,14 +34,29 @@ namespace IronRuby.Compiler.Ast {
             get { return _maplets; }
         }
 
+        // True for the hash a call site builds out of keyword syntax - `f(a: 1)` - as opposed to
+        // a hash literal - `f({a: 1})`. Ruby 3 keeps the two apart, and the flag on the resulting
+        // hash is how the callee tells which one it got.
+        private readonly bool _isKeywordArguments;
+
+        public bool IsKeywordArguments {
+            get { return _isKeywordArguments; }
+        }
+
         public HashConstructor(Maplet/*!*/[]/*!*/ maplets, SourceSpan location)
+            : this(maplets, false, location) {
+        }
+
+        public HashConstructor(Maplet/*!*/[]/*!*/ maplets, bool isKeywordArguments, SourceSpan location)
             : base(location) {
             Assert.NotNullItems(maplets);
             _maplets = maplets;
+            _isKeywordArguments = isKeywordArguments;
         }
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
-            return gen.MakeHashOpCall(gen.TransformMapletsToExpressions(_maplets));
+            var items = gen.TransformMapletsToExpressions(_maplets);
+            return _isKeywordArguments ? gen.MakeKeywordArgumentsHashOpCall(items) : gen.MakeHashOpCall(items);
         }
     }
 }

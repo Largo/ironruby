@@ -414,6 +414,12 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MakeHash;
         public static MethodInfo/*!*/ MakeHash0 { get { return _MakeHash0 ?? (_MakeHash0 = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, IronRuby.Builtins.Hash>(RubyOps.MakeHash0)); } }
         private static MethodInfo _MakeHash0;
+        public static MethodInfo/*!*/ MakeKeywordArgumentsHash { get { return _MakeKeywordArgumentsHash ?? (_MakeKeywordArgumentsHash = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object[], IronRuby.Builtins.Hash>(RubyOps.MakeKeywordArgumentsHash)); } }
+        private static MethodInfo _MakeKeywordArgumentsHash;
+        public static MethodInfo/*!*/ MakeKeywordArgumentsHash0 { get { return _MakeKeywordArgumentsHash0 ?? (_MakeKeywordArgumentsHash0 = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, IronRuby.Builtins.Hash>(RubyOps.MakeKeywordArgumentsHash0)); } }
+        private static MethodInfo _MakeKeywordArgumentsHash0;
+        public static MethodInfo/*!*/ IsKeywordArgumentsHash { get { return _IsKeywordArgumentsHash ?? (_IsKeywordArgumentsHash = CallInstruction.CacheFunc<System.Object, System.Boolean>(RubyOps.IsKeywordArgumentsHash)); } }
+        private static MethodInfo _IsKeywordArgumentsHash;
         public static MethodInfo/*!*/ MakeImplicitSuperInBlockMethodError { get { return _MakeImplicitSuperInBlockMethodError ?? (_MakeImplicitSuperInBlockMethodError = CallInstruction.CacheFunc<System.Exception>(RubyOps.MakeImplicitSuperInBlockMethodError)); } }
         private static MethodInfo _MakeImplicitSuperInBlockMethodError;
         public static MethodInfo/*!*/ MakeInvalidArgumentTypesError { get { return _MakeInvalidArgumentTypesError ?? (_MakeInvalidArgumentTypesError = CallInstruction.CacheFunc<System.String, System.Exception>(RubyOps.MakeInvalidArgumentTypesError)); } }
@@ -508,7 +514,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _Splat;
         public static MethodInfo/*!*/ SplatAppend { get { return _SplatAppend ?? (_SplatAppend = CallInstruction.CacheFunc<System.Collections.IList, System.Collections.IList, System.Collections.IList>(RubyOps.SplatAppend)); } }
         private static MethodInfo _SplatAppend;
-        public static MethodInfo/*!*/ SplatKeywordHash { get { return _SplatKeywordHash ?? (_SplatKeywordHash = CallInstruction.CacheFunc<System.Object, IronRuby.Builtins.RubyArray>(RubyOps.SplatKeywordHash)); } }
+        public static MethodInfo/*!*/ SplatKeywordHash { get { return _SplatKeywordHash ?? (_SplatKeywordHash = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyArray>(RubyOps.SplatKeywordHash)); } }
         private static MethodInfo _SplatKeywordHash;
         public static MethodInfo/*!*/ SplatPair { get { return _SplatPair ?? (_SplatPair = CallInstruction.CacheFunc<System.Object, System.Collections.IList, System.Object>(RubyOps.SplatPair)); } }
         private static MethodInfo _SplatPair;

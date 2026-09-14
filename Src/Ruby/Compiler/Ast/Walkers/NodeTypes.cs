@@ -29,6 +29,7 @@ namespace IronRuby.Compiler.Ast {
         Maplet,
         Parameters,
         SplattedArgument,
+        KeywordArgumentsTest,
 
         // definitions:
         ClassDefinition,
@@ -117,6 +118,7 @@ namespace IronRuby.Compiler.Ast {
     public partial class Maplet { public override NodeTypes NodeType { get { return NodeTypes.Maplet; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class Parameters { public override NodeTypes NodeType { get { return NodeTypes.Parameters; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class SplattedArgument { public override NodeTypes NodeType { get { return NodeTypes.SplattedArgument; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
+    public partial class KeywordArgumentsTest { public override NodeTypes NodeType { get { return NodeTypes.KeywordArgumentsTest; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
 
     public partial class ClassDefinition { public override NodeTypes NodeType { get { return NodeTypes.ClassDefinition; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class ModuleDefinition { public override NodeTypes NodeType { get { return NodeTypes.ModuleDefinition; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }

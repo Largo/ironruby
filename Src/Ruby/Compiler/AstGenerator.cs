@@ -813,6 +813,10 @@ namespace IronRuby.Compiler.Ast {
             return Methods.MakeHash.OpCall(CurrentScopeVariable, AstUtils.NewArrayHelper(typeof(object), expressions));
         }
 
+        internal MSA.Expression/*!*/ MakeKeywordArgumentsHashOpCall(IEnumerable<MSA.Expression>/*!*/ expressions) {
+            return Methods.MakeKeywordArgumentsHash.OpCall(CurrentScopeVariable, AstUtils.NewArrayHelper(typeof(object), expressions));
+        }
+
         internal static bool CanAssign(Type/*!*/ to, Type/*!*/ from) {
             return to.IsAssignableFrom(from) && (to.IsValueType() == from.IsValueType());
         }
