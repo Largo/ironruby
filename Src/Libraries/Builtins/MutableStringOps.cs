@@ -47,6 +47,26 @@ namespace IronRuby.Builtins {
             return MutableString.Create(value);
         }
 
+        // Ruby 2.x: String.new(str, encoding: enc, capacity: n). The capacity is only a hint
+        // about how much room to reserve, so it is accepted and ignored.
+        [RubyConstructor]
+        public static MutableString/*!*/ Create(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, RubyClass/*!*/ self,
+            [DefaultProtocol, Optional, NotNull]MutableString value, [NotNull]IDictionary<object, object>/*!*/ options) {
+
+            MutableString result = (value != null) ? MutableString.Create(value) : MutableString.CreateEmpty();
+            foreach (var entry in options) {
+                var name = (entry.Key as RubySymbol)?.ToString();
+                if (name == "encoding") {
+                    if (entry.Value != null) {
+                        result.ForceEncoding(Protocols.ConvertToEncoding(toStr, entry.Value));
+                    }
+                } else if (name != "capacity") {
+                    throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(entry.Key).ToString());
+                }
+            }
+            return result;
+        }
+
         [RubyConstructor]
         public static MutableString/*!*/ Create(RubyClass/*!*/ self, [NotNull]byte[]/*!*/ value) {
             return MutableString.CreateBinary(value);
@@ -470,9 +490,9 @@ namespace IronRuby.Builtins {
         #region initialize, initialize_copy
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
+        // Nothing is changed, so MRI does not object to a frozen receiver here.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static MutableString/*!*/ Reinitialize(MutableString/*!*/ self) {
-            self.RequireNotFrozen();
             return self;
         }
 
@@ -481,12 +501,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static MutableString/*!*/ Reinitialize(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString other) {
+            self.RequireNotFrozen();
             if (ReferenceEquals(self, other)) {
                 return self;
             }
 
             self.Clear();
             self.Append(other);
+            // The encoding comes across too: "".send(:initialize, utf16) is a UTF-16 string.
+            self.ForceEncoding(other.Encoding);
             return self.TaintBy(other);
         }
 
@@ -970,11 +993,17 @@ namespace IronRuby.Builtins {
 
         #region []=
 
-        // TODO:
         [RubyMethod("setbyte")]
-        public static MutableString/*!*/ SetByte(MutableString/*!*/ self, [DefaultProtocol]int index, [DefaultProtocol]int value) {
-            self.SetByte(index, (byte)value);
-            return self;
+        public static object SetByte(MutableString/*!*/ self, [DefaultProtocol]int index, [DefaultProtocol]int value) {
+            self.RequireNotFrozen();
+            int count = self.GetByteCount();
+            int at = index < 0 ? index + count : index;
+            if (at < 0 || at >= count) {
+                throw RubyExceptions.CreateIndexError("index {0} out of string", index);
+            }
+            self.SetByte(at, unchecked((byte)value));
+            // MRI answers the value that was written, not the receiver.
+            return ScriptingRuntimeHelpers.Int32ToObject(value);
         }
 
         [RubyMethod("[]=")]
@@ -1522,10 +1551,25 @@ namespace IronRuby.Builtins {
             return enumerator.Current.ToMutableString(self.Encoding);
         }
 
-        [RubyMethod("codepoints")]
         [RubyMethod("each_codepoint")]
         public static Enumerator/*!*/ EachCodePoint(MutableString/*!*/ self) {
             return new Enumerator(self, "each_codepoint");
+        }
+
+        // Ruby 1.9: #codepoints is the array, #each_codepoint the enumerator. The array form
+        // walks the string straight away, so a broken byte sequence is reported there and not
+        // at the first #next.
+        [RubyMethod("codepoints")]
+        public static RubyArray/*!*/ GetCodePoints(MutableString/*!*/ self) {
+            var result = new RubyArray();
+            var enumerator = self.GetCharacters();
+            while (enumerator.MoveNext()) {
+                if (!enumerator.Current.IsValid) {
+                    throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", self.Encoding.Name);
+                }
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject((int)enumerator.Current.Codepoint));
+            }
+            return result;
         }
 
         [RubyMethod("codepoints")]
@@ -1672,6 +1716,8 @@ namespace IronRuby.Builtins {
         // encoding aware
         [RubyMethod("force_encoding")]
         public static MutableString/*!*/ ForceEncoding(MutableString/*!*/ self, [NotNull]RubyEncoding/*!*/ encoding) {
+            // Retagging is a mutation as far as frozen-ness is concerned.
+            self.RequireNotFrozen();
             self.ForceEncoding(encoding);
             return self;
         }
@@ -1679,7 +1725,21 @@ namespace IronRuby.Builtins {
         // encoding aware
         [RubyMethod("force_encoding")]
         public static MutableString/*!*/ ForceEncoding(RubyContext/*!*/ context, MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ encodingName) {
-            return ForceEncoding(self, context.GetRubyEncoding(encodingName));
+            return ForceEncoding(self, ResolveEncodingName(context, encodingName));
+        }
+
+        /// <summary>
+        /// "internal", "external", "locale" and "filesystem" name the current defaults rather
+        /// than an encoding of their own; an unset default_internal means BINARY here.
+        /// </summary>
+        private static RubyEncoding/*!*/ ResolveEncodingName(RubyContext/*!*/ context, MutableString/*!*/ name) {
+            switch (name.ConvertToString().ToLowerInvariant()) {
+                case "internal": return context.DefaultInternalEncoding ?? RubyEncoding.Binary;
+                case "external": return context.DefaultExternalEncoding;
+                case "locale":
+                case "filesystem": return context.DefaultExternalEncoding;
+                default: return context.GetRubyEncoding(name);
+            }
         }
 
         [RubyMethod("encode")]
@@ -3729,6 +3789,7 @@ namespace IronRuby.Builtins {
 
             self.Clear();
             self.Append(other);
+            self.ForceEncoding(other.Encoding);
             return self.TaintBy(other);
         }
 
