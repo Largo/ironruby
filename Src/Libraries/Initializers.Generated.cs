@@ -9416,6 +9416,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Threading.Thread, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.ThreadOps.SetName)
             );
             
+            DefineLibraryMethod(module, "pending_interrupt?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.HasPendingInterrupt)
+            );
+            
             DefineLibraryMethod(module, "priority", 0x51, 
                 0x00000000U, 
                 new Func<System.Threading.Thread, System.Object>(IronRuby.Builtins.ThreadOps.Priority)
@@ -9547,6 +9552,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.CreateThread)
             );
             
+            DefineLibraryMethod(module, "handle_interrupt", 0x61, 
+                0x00000008U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, IronRuby.Builtins.Hash, System.Object>(IronRuby.Builtins.ThreadOps.HandleInterrupt)
+            );
+            
             DefineLibraryMethod(module, "ignore_deadlock", 0x61, 
                 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetIgnoreDeadlock)
@@ -9580,6 +9590,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "pass", 0x61, 
                 0x00000000U, 
                 new Action<System.Object>(IronRuby.Builtins.ThreadOps.Yield)
+            );
+            
+            DefineLibraryMethod(module, "pending_interrupt?", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.HasPendingInterrupt)
             );
             
             DefineLibraryMethod(module, "report_on_exception", 0x61, 

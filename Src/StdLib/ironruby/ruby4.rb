@@ -2267,6 +2267,10 @@ unless defined?(Fiber)
       unless f
         f = allocate
         f.__init_root__
+        # A thread's root fiber starts with the storage of the fiber that created the
+        # thread; Thread.new leaves that fiber here for us.
+        parent = t[:__ir_fiber_parent__]
+        f.__inherit_storage__(parent) if parent
         t[:__ir_fiber_root__] = f
         t[:__ir_fiber_current__] = f
       end
@@ -2321,6 +2325,12 @@ unless defined?(Fiber)
     def __root_fiber__; @root_fiber; end
     def __thread__; @thread; end
     def __storage_raw__; @storage; end
+
+    def __inherit_storage__(parent)
+      raw = parent.__storage_raw__
+      @storage = raw && raw.dup
+      self
+    end
     def __resuming__; @resuming; end
     def __set_resuming__(f); @resuming = f; end
     def __set_status__(s); @status = s; end
@@ -11266,29 +11276,6 @@ class IO
   end unless method_defined?(:wait_writable)
 end
 
-class Thread
-  # Validates the mask and runs the block, but does NOT defer anything: masking an
-  # asynchronous interrupt and delivering it later needs Thread.Abort, which .NET Core
-  # does not have. Code that only uses handle_interrupt to scope a section behaves
-  # correctly; code that depends on a Thread#raise actually being held back does not.
-  #
-  # It has to exist even so. Without it the method call raises NoMethodError inside a
-  # worker thread, and anything waiting on that thread to reach a queue - which is how
-  # the thread specs synchronise - blocks forever. One missing method deadlocked the
-  # whole of spec/core/thread.
-  def self.handle_interrupt(mask)
-    raise ArgumentError, "block is needed." unless block_given?
-
-    mask.each_value do |timing|
-      unless [:immediate, :on_blocking, :never].include?(timing)
-        raise ArgumentError, "unknown mask signature"
-      end
-    end
-
-    yield
-  end unless respond_to?(:handle_interrupt)
-end
-
 # caller_locations (2.0) and the Location objects it yields. The runtime only
 # offers caller strings, so parse those: "path:lineno:in `label'".
 class Thread
@@ -11355,15 +11342,6 @@ class Thread
     return default[0] unless default.empty?
     ::Kernel.raise ::KeyError.new("key not found: #{key.inspect}", receiver: self, key: key)
   end
-
-  # There is no asynchronous-interrupt queue here, so nothing is ever pending.
-  def pending_interrupt?(error = nil)
-    false
-  end unless method_defined?(:pending_interrupt?)
-
-  def self.pending_interrupt?(error = nil)
-    false
-  end unless respond_to?(:pending_interrupt?)
 
   # Starts at the caller of the frame that called it, exactly where a plain
   # caller_locations in that frame would start.  The block is yielded to rather than

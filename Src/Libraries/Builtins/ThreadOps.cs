@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using IronRuby.Runtime;
@@ -881,6 +882,14 @@ namespace IronRuby.Builtins {
             info.Priority = creator.Priority;
             info.Location = GetCallerLocation(context);
 
+            // MRI: a new thread's root fiber inherits the storage of the fiber that created it.
+            // Fiber is implemented in Ruby, so all that is needed here is to carry the creating
+            // fiber over; Fiber.__root__ reads it (Src/StdLib/ironruby/ruby4.rb).
+            object creatorFiber = RubyThreadInfo.FromThread(Thread.CurrentThread)[context.CreateAsciiSymbol("__ir_fiber_current__")];
+            if (creatorFiber != null) {
+                info[context.CreateAsciiSymbol("__ir_fiber_parent__")] = creatorFiber;
+            }
+
             // Ruby exits when the main thread exits. So all other threads need to be marked as background threads
             result.IsBackground = true;
 
@@ -1026,8 +1035,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("pass", RubyMethodAttributes.PublicSingleton)]
         public static void Yield(object self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
-            // Thread.pass is a safe point for a pending Thread#kill / Thread#raise.
-            RubyUtils.CheckAsyncException();
+            // Thread.pass is a safe point for a pending Thread#kill / Thread#raise, but it is not
+            // a blocking call - Thread.handle_interrupt's :on_blocking still defers here.
+            RubyUtils.CheckAsyncException(false);
 
             // Thread.Yield rather than Thread.Sleep(0): Sleep puts the thread into
             // WaitSleepJoin, so a thread spinning on `Thread.pass until ...` - which is how the
@@ -1172,6 +1182,77 @@ namespace IronRuby.Builtins {
         public static Thread/*!*/ ExitCurrentThread(object self) {
             return Kill(Thread.CurrentThread);
         }
+
+        #region handle_interrupt, pending_interrupt?
+
+        /// <summary>
+        /// Thread.handle_interrupt(ExceptionClass => :immediate | :on_blocking | :never) { ... }.
+        ///
+        /// Thread#raise and Thread#kill are delivered cooperatively here - the exception is parked
+        /// for the target thread and thrown at its next safe point - so masking one is a matter of
+        /// telling the safe point to leave it parked. That is all this does: push the mask, run the
+        /// block, pop it, and then take whatever accumulated while it was up.
+        ///
+        /// The check at the top delivers an already-pending interrupt that the *new* mask makes
+        /// :immediate, which is MRI's documented way of forcing a deferred interrupt to be taken.
+        /// </summary>
+        [RubyMethod("handle_interrupt", RubyMethodAttributes.PublicSingleton)]
+        public static object HandleInterrupt(RubyContext/*!*/ context, BlockParam block, object self, [NotNull]Hash/*!*/ mask) {
+            if (block == null) {
+                throw RubyExceptions.CreateArgumentError("block is needed.");
+            }
+
+            var classes = new RubyModule[mask.Count];
+            var timings = new int[mask.Count];
+            int i = 0;
+            foreach (var entry in mask) {
+                classes[i] = entry.Key as RubyModule;
+                var timing = entry.Value as RubySymbol;
+                string name = (timing != null) ? timing.ToString() : null;
+                switch (name) {
+                    case "immediate": timings[i] = RubyUtils.InterruptImmediate; break;
+                    case "on_blocking": timings[i] = RubyUtils.InterruptOnBlocking; break;
+                    case "never": timings[i] = RubyUtils.InterruptNever; break;
+                    default: throw RubyExceptions.CreateArgumentError("unknown mask signature");
+                }
+                i++;
+            }
+
+            RubyUtils.PushInterruptMask(classes, timings);
+            try {
+                RubyUtils.CheckAsyncException(true);
+
+                object result;
+                block.Yield(out result);
+                return result;
+            } finally {
+                RubyUtils.PopInterruptMask();
+                // Anything the mask held back is taken here, replacing an exception the block was
+                // already unwinding with - which is what MRI does.
+                RubyUtils.CheckAsyncException(true);
+            }
+        }
+
+        private static bool IsInterruptPending(RubyContext/*!*/ context, Thread/*!*/ thread, object error) {
+            Exception e = RubyUtils.PeekPendingAsyncException(thread);
+            if (e == null || RubyUtils.IsRubyThreadExit(e)) {
+                return false;
+            }
+            RubyModule cls = error as RubyModule;
+            return (cls == null) || context.GetClassOf(e).HasAncestor(cls);
+        }
+
+        [RubyMethod("pending_interrupt?", RubyMethodAttributes.PublicSingleton)]
+        public static bool HasPendingInterrupt(RubyContext/*!*/ context, object self, [Optional]object error) {
+            return IsInterruptPending(context, Thread.CurrentThread, error == Missing.Value ? null : error);
+        }
+
+        [RubyMethod("pending_interrupt?")]
+        public static bool HasPendingInterrupt(RubyContext/*!*/ context, Thread/*!*/ self, [Optional]object error) {
+            return IsInterruptPending(context, self, error == Missing.Value ? null : error);
+        }
+
+        #endregion
 
         /// <summary>Backs Thread::Backtrace.limit, which is written in Ruby.</summary>
         [RubyMethod("__backtrace_limit__", RubyMethodAttributes.PrivateSingleton)]
