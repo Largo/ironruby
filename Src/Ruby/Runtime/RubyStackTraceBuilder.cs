@@ -290,7 +290,10 @@ namespace IronRuby.Runtime {
         }
 #endif
         internal const string TopLevelMethodName = "#"; 
-        private const char NamePartsSeparator = ':';
+        // Not ':': since 3.4 a method frame's label carries the owner ("M::C#foo"), which
+        // contains colons, and the parser below splits on the first separator it finds.
+        // U+2236 cannot occur in a label.
+        private const char NamePartsSeparator = '\u2236';
         private const string RubyMethodPrefix = "\u2111\u211c:";
         private static int _Id = 0;
         internal const int MaxDebugModePathSize = 256; // PDB limit

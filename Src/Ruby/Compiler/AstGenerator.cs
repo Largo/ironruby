@@ -337,6 +337,14 @@ namespace IronRuby.Compiler.Ast {
                 get { return _methodName; }
             }
 
+            /// <summary>
+            /// The name this method's frame carries in a backtrace: the same as MethodName, but
+            /// qualified with the owner ("M::C#foo") once the owner is known - which is at
+            /// definition time, when the body is compiled. Blocks inside the method read it to
+            /// build their own "block in ..." labels.
+            /// </summary>
+            public string FrameLabel { get; set; }
+
             // null for code that is evaluated outside a method scope, used by super-call
             public Parameters Parameters {
                 get { return _parameters; }

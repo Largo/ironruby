@@ -11404,10 +11404,14 @@ class Thread
         File.expand_path(@path) rescue @path
       end
 
-      # The label without the "block in" / "block (N levels) in" prefix that a block
-      # frame carries: MRI's base_label names the method the block is written in.
+      # MRI's base_label is the bare method name: without the "block in" /
+      # "block (N levels) in" prefix a block frame carries, and without the owner that
+      # #label has been qualified with since 3.4.  A label that is entirely a <...> form
+      # ("<main>", "<module:A>") has no owner part to strip.
       def base_label
-        @label && @label.sub(/\Ablock (\(\d+ levels\) )?in /, "")
+        return nil if @label.nil?
+        base = @label.sub(/\Ablock (\(\d+ levels\) )?in /, "")
+        base.start_with?("<") ? base : base.sub(/\A[^ ]*[#.]/, "")
       end
 
       # "path:lineno:in `label'" -> a Location.  Both Kernel#caller_locations and

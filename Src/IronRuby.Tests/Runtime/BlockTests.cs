@@ -1695,7 +1695,7 @@ end
 baz { |a,b| p b }
 ", @"
 nil
-#<TypeError: can't convert C to Array (C#to_ary gives Integer)>
+#<TypeError: can't convert C into Array (C#to_ary gives Integer)>
 4
 ");
         }
