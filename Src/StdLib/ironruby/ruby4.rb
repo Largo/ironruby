@@ -1914,12 +1914,11 @@ module Warning
   # inside MutableString's mutation guard - and -W:category has to be able to set
   # them before any Ruby code runs.
 
-  # Warning.warn is the single hook every Kernel#warn call funnels through in
-  # CRuby; user code overrides it to filter or redirect warnings.
-  def warn(message, *rest)
-    $stderr.write(message)
-    nil
-  end unless method_defined?(:warn)
+  # Warning#warn is implemented in C# (WarningOps) too: it is the single hook every
+  # warning - Kernel#warn, runtime warnings and parser warnings alike - funnels
+  # through, and the first of those are emitted while this very file is being parsed.
+  # `extend self' is what makes Warning.warn find it while keeping Method#owner
+  # == Warning, as CRuby has it.
 
   extend self
 end
