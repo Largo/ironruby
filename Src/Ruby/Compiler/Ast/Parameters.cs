@@ -122,6 +122,10 @@ namespace IronRuby.Compiler.Ast {
                 result = AstUtils.IfThen(
                     Ast.Equal(_optional[i].Left.TransformRead(gen), singleton),
                     Ast.Block(
+                        // A parameter that is about to take its default is nil while the default
+                        // is being evaluated, so `def m(a = a)` binds nil rather than leaking the
+                        // "no argument given" sentinel.
+                        _optional[i].Left.TransformWrite(gen, AstUtils.Constant(null, typeof(object))),
                         result,
                         _optional[i].TransformRead(gen) // assignment
                     )

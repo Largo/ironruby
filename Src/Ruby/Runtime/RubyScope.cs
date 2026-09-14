@@ -588,7 +588,11 @@ namespace IronRuby.Runtime {
                         return scope.Module;
 
                     case ScopeKind.Method:
-                        return scope.GetInnerMostModuleForMethodLookup();
+                        // A `def` nested in a method body defines into the same place the
+                        // enclosing definition went, so keep walking the lexical chain - which
+                        // may well end in a class_eval-like block scope (`Class.new { def m; def
+                        // n; end; end }` defines n on the new class, not on Object).
+                        break;
 
                     case ScopeKind.BlockMethod:
                         if (RubyContext.RubyOptions.Compatibility == RubyCompatibility.Ruby19) {
