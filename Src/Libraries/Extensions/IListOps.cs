@@ -737,20 +737,31 @@ namespace IronRuby.Builtins {
             IList/*!*/ self, [DefaultProtocol, NotNull]IList/*!*/ other) {
             Dictionary<object, bool> items = new Dictionary<object, bool>(new EqualityComparer(hashStorage, eqlStorage));
             RubyArray result = new RubyArray();
+            // nil cannot be a Dictionary key, so it is tracked on the side.
+            bool nilInOther = false, nilTaken = false;
 
             // first get the items in the RHS
             foreach (object item in other) {
-                items[item] = true;
+                if (item == null) {
+                    nilInOther = true;
+                } else {
+                    items[item] = true;
+                }
             }
 
             // now, go through the items in the LHS, adding ones that were also in the RHS
             // this ensures that we return the items in the correct order
             foreach (object item in self) {
+                if (item == null) {
+                    if (nilInOther && !nilTaken) {
+                        nilTaken = true;
+                        result.Add(null);
+                    }
+                    continue;
+                }
+
                 if (items.Remove(item)) {
                     result.Add(item);
-                    if (items.Count == 0) {
-                        break; // all done
-                    }
                 }
             }
 

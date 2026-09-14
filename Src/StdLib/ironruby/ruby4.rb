@@ -37,6 +37,16 @@ class Object
 end
 
 module Kernel
+  # MRI unified Fixnum and Bignum into Integer in 2.4; IronRuby still has the
+  # split classes, so messages that name a class have to hide it.
+  def __ir_message_type_name__(value)
+    name = value.class.to_s
+    (name == "Fixnum" || name == "Bignum") ? "Integer" : name
+  end
+  private :__ir_message_type_name__
+end
+
+module Kernel
   private
 
   def require_relative(path)
@@ -616,7 +626,7 @@ module Enumerable
         return converted if converted.is_a?(Array)
       end
       unless other.respond_to?(:each)
-        raise TypeError, "wrong argument type #{other.class} (must respond to :each)"
+        raise TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)"
       end
       other.to_enum(:each)
     end
@@ -3304,7 +3314,11 @@ class String
   end unless method_defined?(:prepend)
 
   def casecmp?(other)
-    return nil unless other.is_a?(::String)
+    unless other.is_a?(::String)
+      return nil if other.is_a?(::Symbol) || !other.respond_to?(:to_str)
+      other = other.to_str
+      return nil unless other.is_a?(::String)
+    end
     # Two strings in encodings that cannot be compared are not unequal, they are
     # incomparable, and #casecmp? answers nil for them just as #casecmp does.
     return nil if ::Encoding.compatible?(self, other).nil?
@@ -4940,6 +4954,10 @@ class Array
 
   def uniq!(&block)
     return __uniq_in_place_without_block__ unless block
+    # The frozen check comes before the block runs.
+    if frozen?
+      ::Kernel.raise(::FrozenError.new("can't modify frozen Array: #{inspect}", receiver: self))
+    end
     result = uniq(&block)
     return nil if result.size == size
     replace(result)
@@ -4967,7 +4985,7 @@ class Array
         end
         collected
       else
-        raise TypeError, "wrong argument type #{other.class} (must respond to :each)"
+        raise TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)"
       end
     end
     __zip_arrays__(*converted, &block)
@@ -5852,7 +5870,7 @@ class Enumerator
         elsif other.respond_to?(:each)
           other.to_enum(:each)
         else
-          ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (must respond to :each)")
+          ::Kernel.raise(::TypeError, "wrong argument type #{__ir_message_type_name__(other)} (must respond to :each)")
         end
       end
 
