@@ -1285,7 +1285,6 @@ class String
     (!suffix.empty? && end_with?(suffix)) ? self[0...-suffix.length] : dup
   end unless method_defined?(:delete_suffix)
 
-  alias_method :+@, :dup unless method_defined?(:+@)
 end
 
 module Comparable
@@ -3309,9 +3308,6 @@ class String
 
   # 3.4's name for -@. Spelled out rather than aliased: String#-@ is itself
   # defined further down this file.
-  def dedup
-    frozen? ? self : dup.freeze
-  end unless method_defined?(:dedup)
 
   # Parses as much of a complex number as it can and answers (0+0i) for the
   # rest, the way Kernel#Complex(str, exception: false) does. The grammar is
@@ -6670,10 +6666,26 @@ class Symbol
 end
 
 class String
-  # Ruby 2.3: -"str" returns a frozen (deduplicated) string, +"str" an unfrozen one.
+  # Ruby 2.3: -"str" answers a frozen *deduplicated* string, so that -"x" and
+  # -"x" are the same object; +"str" answers a mutable one, which is the
+  # receiver itself when it is not frozen.
+  FSTRING_TABLE__ = {}
+
   def -@
-    frozen? ? self : dup.freeze
+    # A subclass instance or a string carrying instance variables is not
+    # interned - MRI only shares plain, bare Strings.
+    unless instance_of?(::String) && instance_variables.empty?
+      return frozen? ? self : dup.freeze
+    end
+    table = ::String::FSTRING_TABLE__
+    existing = table[self]
+    return existing if existing
+    interned = frozen? ? self : dup.freeze
+    table[interned] = interned
+    interned
   end unless method_defined?(:-@)
+
+  alias_method :dedup, :-@
 end
 
 # --- pieces the Ruby 4.0 standard library expects --------------------------

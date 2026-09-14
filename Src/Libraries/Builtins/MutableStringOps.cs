@@ -647,25 +647,51 @@ namespace IronRuby.Builtins {
             return Math.Sign(self.CompareTo(other));
         }
 
+        /// <summary>Pairs whose inverse comparison is in progress; see Compare below.</summary>
+        [ThreadStatic]
+        private static List<object> _inverseComparisons;
+
         [RubyMethod("<=>")]
-        public static object Compare(BinaryOpStorage/*!*/ comparisonStorage, RespondToStorage/*!*/ respondToStorage, object/*!*/ self, object other) {
-            // Self is object so that we can reuse this method.
+        public static object Compare(ConversionStorage<MutableString>/*!*/ stringTryCast, BinaryOpStorage/*!*/ comparisonStorage,
+            RespondToStorage/*!*/ respondToStorage, MutableString/*!*/ self, object other) {
+            // MRI converts with #to_str and compares the result; only when that is not
+            // available does it ask the argument to compare itself and negate the answer.
+            MutableString converted = (other is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, other);
+            if (converted != null) {
+                return ScriptingRuntimeHelpers.Int32ToObject(Compare(self, converted));
+            }
+            return Compare(comparisonStorage, respondToStorage, (object)self, other);
+        }
 
-            // We test to see if other responds to to_str AND <=>
-            // Ruby never attempts to convert other to a string via to_str and call Compare ... which is strange -- feels like a BUG in Ruby
-
-            if (Protocols.RespondTo(respondToStorage, other, "to_str") && Protocols.RespondTo(respondToStorage, other, "<=>")) {
-                var site = comparisonStorage.GetCallSite("<=>");
-                object result = Integer.TryUnaryMinus(site.Target(site, other, self));
-                if (result == null) {
-                    throw RubyExceptions.CreateTypeError("{0} can't be coerced into Fixnum",
-                        comparisonStorage.Context.GetClassDisplayName(result));
-                }
-
-                return result;
+        /// <summary>
+        /// The "ask the other object and negate" half, which is all the CLR String and ClrName
+        /// wrappers need.
+        /// </summary>
+        public static object Compare(BinaryOpStorage/*!*/ comparisonStorage, RespondToStorage/*!*/ respondToStorage,
+            object/*!*/ self, object other) {
+            if (!Protocols.RespondTo(respondToStorage, other, "<=>")) {
+                return null;
             }
 
-            return null;
+            // "other <=> self" may well be defined as "self <=> other", so the pair being
+            // compared is remembered and a second, identical question answers nil - which is
+            // what MRI's rb_invcmp recursion guard does.
+            var pending = _inverseComparisons ?? (_inverseComparisons = new List<object>());
+            for (int i = 0; i + 1 < pending.Count; i += 2) {
+                if (ReferenceEquals(pending[i], self) && ReferenceEquals(pending[i + 1], other)) {
+                    return null;
+                }
+            }
+
+            pending.Add(self);
+            pending.Add(other);
+            try {
+                var site = comparisonStorage.GetCallSite("<=>");
+                object answer = site.Target(site, other, self);
+                return (answer == null) ? null : Integer.TryUnaryMinus(answer);
+            } finally {
+                pending.RemoveRange(pending.Count - 2, 2);
+            }
         }
 
         [RubyMethod("eql?")]
@@ -1151,9 +1177,29 @@ namespace IronRuby.Builtins {
             return changed;
         }
 
-        [RubyMethod("casecmp")]
-        public static int Casecmp(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ other) {
+        // Ruby 3.4: a chilled literal counts as frozen here, so +"str" answers a copy that
+        // can be mutated without the warning.
+        [RubyMethod("+@")]
+        public static MutableString/*!*/ Unchill(MutableString/*!*/ self) {
+            return (self.IsFrozen || self.IsChilled) ? self.Clone() : self;
+        }
+
+        public static int Casecmp(MutableString/*!*/ self, MutableString/*!*/ other) {
             return Compare(DownCase(self), DownCase(other));
+        }
+
+        // MRI answers nil rather than raising when the argument is not a String, and also when
+        // the two encodings are not compatible.
+        [RubyMethod("casecmp")]
+        public static object Casecmp(ConversionStorage<MutableString>/*!*/ stringTryCast, MutableString/*!*/ self, object other) {
+            MutableString str = (other is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, other);
+            if (str == null) {
+                return null;
+            }
+            if (!self.Encoding.Equals(str.Encoding) && !(self.IsAscii() || str.IsAscii())) {
+                return null;
+            }
+            return ScriptingRuntimeHelpers.Int32ToObject(Casecmp(self, str));
         }
 
         [RubyMethod("capitalize")]
@@ -2384,31 +2430,19 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("sub")]
-        public static MutableString/*!*/ ReplaceFirst(RubyScope/*!*/ scope, MutableString/*!*/ self, 
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]MutableString/*!*/ replacement) {
+        public static MutableString/*!*/ ReplaceFirst(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault,
+            ConversionStorage<MutableString>/*!*/ toStr, RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]object/*!*/ replacement) {
 
-            return ReplaceFirst(null, null, scope, self, replacement, pattern) ?? self.CloneDerived();
+            return ReplaceFirst(toS, hashDefault, scope, self, ToReplacement(toStr, replacement), pattern) ?? self.CloneDerived();
         }
 
         [RubyMethod("gsub")]
-        public static MutableString/*!*/ ReplaceAll(RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]MutableString/*!*/ replacement) {
+        public static MutableString/*!*/ ReplaceAll(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault,
+            ConversionStorage<MutableString>/*!*/ toStr, RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]object/*!*/ replacement) {
 
-            return ReplaceAll(null, null, scope, self, replacement, pattern) ?? self.CloneDerived();
-        }
-
-        [RubyMethod("sub")]
-        public static MutableString/*!*/ ReplaceFirst(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault, RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]Union<IDictionary<object, object>, MutableString>/*!*/ replacement) {
-
-            return ReplaceFirst(toS, hashDefault, scope, self, replacement, pattern) ?? self.CloneDerived();
-        }
-
-        [RubyMethod("gsub")]
-        public static MutableString/*!*/ ReplaceAll(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault, RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]Union<IDictionary<object, object>, MutableString>/*!*/ replacement) {
-
-            return ReplaceAll(toS, hashDefault, scope, self, replacement, pattern) ?? self.CloneDerived();
+            return ReplaceAll(toS, hashDefault, scope, self, ToReplacement(toStr, replacement), pattern) ?? self.CloneDerived();
         }
 
         #endregion
@@ -2483,33 +2517,48 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("sub!")]
-        public static MutableString ReplaceFirstInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, 
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]MutableString/*!*/ replacement) {
-
-            return ReplaceInPlace(null, null, scope, self, pattern, replacement, false);
-        }
-
-        [RubyMethod("gsub!")]
-        public static MutableString ReplaceAllInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, 
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]MutableString/*!*/ replacement) {
-
-            return ReplaceInPlace(null, null, scope, self, pattern, replacement, true);
-        }
-
-        [RubyMethod("sub!")]
         public static MutableString ReplaceFirstInPlace(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault,
-            RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]Union<IDictionary<object, object>, MutableString>/*!*/ replacement) {
+            ConversionStorage<MutableString>/*!*/ toStr, RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]object/*!*/ replacement) {
 
-            return ReplaceInPlace(toS, hashDefault, scope, self, pattern, replacement, false);
+            return ReplaceInPlace(toS, hashDefault, scope, self, pattern, ToReplacement(toStr, replacement), false);
         }
 
         [RubyMethod("gsub!")]
-        public static MutableString ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault, 
-            RubyScope/*!*/ scope, MutableString/*!*/ self,
-            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [DefaultProtocol, NotNull]Union<IDictionary<object, object>, MutableString>/*!*/ replacement) {
+        public static MutableString ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ toS, BinaryOpStorage/*!*/ hashDefault,
+            ConversionStorage<MutableString>/*!*/ toStr, RubyScope/*!*/ scope, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern, [NotNull]object/*!*/ replacement) {
 
-            return ReplaceInPlace(toS, hashDefault, scope, self, pattern, replacement, true);
+            return ReplaceInPlace(toS, hashDefault, scope, self, pattern, ToReplacement(toStr, replacement), true);
+        }
+
+        /// <summary>
+        /// The replacement argument of #sub/#gsub is a Hash or a String, and the binder cannot
+        /// be left to choose between the two: a Union parameter never reaches #to_str, and two
+        /// separate overloads make a Hash fail the String conversion before the Hash one is
+        /// tried. So it arrives as an object and is sorted out here.
+        /// </summary>
+        private static Union<IDictionary<object, object>, MutableString> ToReplacement(
+            ConversionStorage<MutableString>/*!*/ toStr, object/*!*/ replacement) {
+            var hash = replacement as IDictionary<object, object>;
+            if (hash != null) {
+                return new Union<IDictionary<object, object>, MutableString>(hash, null);
+            }
+            return new Union<IDictionary<object, object>, MutableString>(null, Protocols.CastToString(toStr, replacement));
+        }
+
+        // Ruby 1.9: with neither a replacement nor a block, #sub/#gsub and their in-place
+        // forms answer an Enumerator that yields the matched substrings.
+        [RubyMethod("gsub")]
+        public static object ReplaceAll(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+            return new Enumerator((_, block) => BlockReplaceAll(tosConversion, scope, block, self, pattern));
+        }
+
+        [RubyMethod("gsub!")]
+        public static object ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+            return new Enumerator((_, block) => BlockReplaceInPlace(tosConversion, scope, block, self, pattern, true));
         }
 
         #endregion
