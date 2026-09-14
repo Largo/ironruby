@@ -18,7 +18,31 @@ namespace IronRuby.Prism {
         public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
             int frozenStringLiteral) {
 
-            return PrismLoader.LoadParse(ParseSerialized(source, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral)));
+            byte[] sourceBytes = Encoding.UTF8.GetBytes(source);
+            PrismParseResult result = PrismLoader.LoadParse(
+                ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral)));
+            result.DataOffset = ComputeDataOffset(result.DataLocation, sourceBytes);
+            return result;
+        }
+
+        /// <summary>
+        /// prism reports the __END__ token's own start offset; DATA is positioned after
+        /// the token and its line terminator (CRuby: `offset = data_loc-&gt;start + 7` then
+        /// skip \r\n). These are UTF-8 byte offsets, so the skip must index the byte
+        /// array rather than the UTF-16 source string.
+        /// </summary>
+        private static int ComputeDataOffset(IronRuby.Prism.Ast.PmLocation? dataLocation, byte[]/*!*/ sourceBytes) {
+            if (dataLocation == null) {
+                return -1;
+            }
+
+            int offset = dataLocation.Value.Start + 7; // "__END__".Length
+            if (offset < 0 || offset > sourceBytes.Length) {
+                return -1;
+            }
+            if (offset < sourceBytes.Length && sourceBytes[offset] == (byte)'\r') offset++;
+            if (offset < sourceBytes.Length && sourceBytes[offset] == (byte)'\n') offset++;
+            return offset;
         }
 
         public static byte[]/*!*/ ParseSerialized(string/*!*/ source) {
@@ -26,7 +50,10 @@ namespace IronRuby.Prism {
         }
 
         public static byte[]/*!*/ ParseSerialized(string/*!*/ source, byte[] optionsData) {
-            byte[] bytes = Encoding.UTF8.GetBytes(source);
+            return ParseSerializedBytes(Encoding.UTF8.GetBytes(source), optionsData);
+        }
+
+        private static byte[]/*!*/ ParseSerializedBytes(byte[]/*!*/ bytes, byte[] optionsData) {
             IntPtr buffer = IntPtr.Zero;
             GCHandle pinned = GCHandle.Alloc(bytes, GCHandleType.Pinned);
             GCHandle options = optionsData != null ? GCHandle.Alloc(optionsData, GCHandleType.Pinned) : default;

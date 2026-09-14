@@ -120,15 +120,16 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static void SetDataConstant(RubyScope/*!*/ scope, string/*!*/ dataPath, int dataOffset) {
             Debug.Assert(dataOffset >= 0);
-            RubyFile dataFile;
             RubyContext context = scope.RubyContext;
-            if (context.DomainManager.Platform.FileExists(dataPath)) {
-                dataFile = new RubyFile(context, dataPath, IOMode.ReadOnly);
-                dataFile.Seek(dataOffset, SeekOrigin.Begin);
-            } else {
-                dataFile = null;
+            if (!context.DomainManager.Platform.FileExists(dataPath)) {
+                // -e and stdin scripts also compile as TopScopeFactoryKind.Main and can contain
+                // __END__. MRI does not define DATA for those; defining it as nil would make
+                // defined?(DATA) truthy, so leave the constant undefined instead.
+                return;
             }
 
+            RubyFile dataFile = new RubyFile(context, dataPath, IOMode.ReadOnly);
+            dataFile.Seek(dataOffset, SeekOrigin.Begin);
             context.ObjectClass.SetConstant("DATA", dataFile);
         }
 
