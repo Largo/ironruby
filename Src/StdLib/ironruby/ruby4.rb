@@ -6047,6 +6047,98 @@ class MatchData
   def values_at(*indexes)
     indexes.map { |i| self[i] }
   end
+
+  # 1.9 let #begin/#end/#offset name a group. The C# signatures only take an
+  # Integer, so a name was a TypeError; __group_bounds__ already knows how to
+  # resolve both forms.
+  unless method_defined?(:__ir_begin__)
+    alias_method :__ir_begin__, :begin
+    alias_method :__ir_end__, :end
+    alias_method :__ir_offset__, :offset
+
+    def begin(n)
+      return __ir_begin__(n) if n.is_a?(::Integer) || n.respond_to?(:to_int)
+      bounds = __group_bounds__(n)
+      bounds && bounds[0]
+    end
+
+    def end(n)
+      return __ir_end__(n) if n.is_a?(::Integer) || n.respond_to?(:to_int)
+      bounds = __group_bounds__(n)
+      bounds && bounds[1]
+    end
+
+    def offset(n)
+      return __ir_offset__(n) if n.is_a?(::Integer) || n.respond_to?(:to_int)
+      __group_bounds__(n) || [nil, nil]
+    end
+  end
+end
+
+# Integer#[] grew (index, length) and Range forms in 2.7. The builtin only ever
+# took a single bit index, so both were a TypeError or an ArgumentError. All of
+# them reduce to (self >> i) & ((1 << len) - 1), with a negative index shifting
+# the other way and a non-positive length meaning "no mask".
+[Fixnum, Bignum].each do |klass|
+  next unless klass.instance_method(:[]).arity == 1
+
+  klass.class_eval do
+    alias_method :__ir_bit__, :[]
+
+    def __bit_position__(value)
+      return value if value.is_a?(::Integer)
+      if value.is_a?(::Float)
+        if value.nan? || value.infinite?
+          ::Kernel.raise(::FloatDomainError, value.to_s)
+        end
+        return value.truncate
+      end
+      unless value.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+      end
+      converted = value.to_int
+      unless converted.is_a?(::Integer)
+        ::Kernel.raise(::TypeError, "can't convert #{value.class} to Integer")
+      end
+      converted
+    end
+    private :__bit_position__
+
+    def __bits_from__(first, length)
+      shifted = first >= 0 ? (self >> first) : (self << -first)
+      return shifted if length.nil? || length <= 0
+      shifted & ((1 << length) - 1)
+    end
+    private :__bits_from__
+
+    def [](index, length = nil)
+      unless index.is_a?(::Range)
+        return __ir_bit__(index) if length.nil?
+        return __bits_from__(__bit_position__(index), __bit_position__(length))
+      end
+
+      unless length.nil?
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 2, expected 1)")
+      end
+
+      first = index.begin.nil? ? nil : __bit_position__(index.begin)
+      last = index.end.nil? ? nil : __bit_position__(index.end)
+
+      if first.nil?
+        # A beginless range asks for every bit below `last`; that is only a finite
+        # answer when they are all zero.
+        if last.nil? || (self & ((1 << (last + 1)) - 1)) != 0
+          ::Kernel.raise(::ArgumentError, "The beginless range for Integer#[] results in infinity")
+        end
+        return 0
+      end
+
+      return __bits_from__(first, nil) if last.nil?
+      span = last - first + 1
+      span -= 1 if index.exclude_end?
+      __bits_from__(first, span)
+    end
+  end
 end
 
 class Symbol
