@@ -9088,6 +9088,16 @@ class IO
       @parent = parent
     end
 
+    # The "address" a buffer shows in #to_s. There is no real one here, so the object
+    # identity stands in for it - until #transfer hands the memory to another buffer.
+    def __address__
+      @address ||= object_id << 1
+    end
+
+    def __set_address__(value)
+      @address = value
+    end
+
     def __take_over__(data, offset, size, flags)
       @data = data
       @offset = offset
@@ -9181,8 +9191,14 @@ class IO
 
     def transfer
       __check__
+      if locked?
+        ::Kernel.raise(LockedError, "Cannot transfer ownership of locked buffer!")
+      end
       other = self.class.allocate
       other.__take_over__(@data, @offset, @size, @flags)
+      # The address names the memory, and transfer moves the memory rather than
+      # copying it, so it goes across with the rest.
+      other.__set_address__(__address__)
       @freed = true
       @storage_dead = true
       @data = "".b
@@ -9350,7 +9366,7 @@ class IO
       parts << "PRIVATE" if private?
       parts << "READONLY" if readonly?
       parts << "NULL" if null?
-      "#<IO::Buffer 0x#{(object_id << 1).to_s(16).rjust(16, '0')}+#{@size} #{parts.join(' ')}>"
+      "#<IO::Buffer 0x#{__address__.to_s(16).rjust(16, '0')}+#{@size} #{parts.join(' ')}>"
     end
     # MRI's inspect is the header with the hexdump under it; to_s is the
     # header on its own.
