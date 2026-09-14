@@ -1102,7 +1102,7 @@ puts A.send(:remove_method, :foo) rescue puts B.send(:remove_method, :foo)
 
         private string MethodDefinitionInModuleEvalCode = @"
 class A
-  $p = lambda { def foo; end }
+  $p = lambda { |m| def foo; end }
 end
 
 class B

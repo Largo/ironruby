@@ -140,7 +140,7 @@ def foo
 end     
 
 def test
-  l = lambda {
+  l = lambda { |i|
     puts(foo..false ? 'true' : 'false')
   }
   

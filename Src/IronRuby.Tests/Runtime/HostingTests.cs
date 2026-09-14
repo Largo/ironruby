@@ -390,7 +390,7 @@ end
         public void HostingDefaultOptions1() {
             // this reports warnings that the default ErrorSink should ignore:
             Engine.Execute(@"
-x = lambda { }
+x = lambda { |i| }
 1.times &x
 
 a = 'ba'.gsub /b/, '1'

@@ -1773,10 +1773,10 @@ class C
 end
 
 class D
-  def to_proc; lambda { puts 'ok2' }; end
+  def to_proc; lambda { |i| puts 'ok2' }; end
 end
 
-1.times(&lambda { puts 'ok1' })
+1.times(&lambda { |i| puts 'ok1' })
 1.times(&C.new) rescue puts $!
 1.times(&D.new)
 ");
@@ -1809,7 +1809,7 @@ class C
   end
 
   def to_proc
-    lambda { puts 'ok' }
+    lambda { |i| puts 'ok' }
   end
 end
 
