@@ -48,8 +48,17 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "close")]
         private static extern int sys_close(int fd);
 
+        [DllImport("libc", SetLastError = true, EntryPoint = "fcntl")]
+        private static extern int sys_fcntl(int fd, int cmd, int arg);
+
         private const short POLLIN = 0x001;
+        private const short POLLOUT = 0x004;
         private const int EINTR = 4;
+        private const int EAGAIN = 11;   // == EWOULDBLOCK on Linux
+        public const int EPIPE = 32;
+        private const int F_GETFL = 3;
+        private const int F_SETFL = 4;
+        private const int O_NONBLOCK = 0x800;
 
         private readonly System.Threading.ManualResetEvent _closing = new System.Threading.ManualResetEvent(false);
         private int _descriptor;
@@ -133,7 +142,10 @@ namespace IronRuby.Builtins {
 
                 int read = (int)sys_read(_descriptor, chunk, (IntPtr)count);
                 if (read < 0) {
-                    if (Marshal.GetLastWin32Error() == EINTR) {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error == EINTR || error == EAGAIN) {
+                        // EAGAIN: another reader took the bytes poll(2) saw, or the descriptor
+                        // was left non-blocking by #read_nonblock. Wait for more either way.
                         continue;
                     }
                     throw new IOException("read failed");
@@ -157,12 +169,118 @@ namespace IronRuby.Builtins {
                 }
                 int n = (int)sys_write(_descriptor, rest, (IntPtr)(count - written));
                 if (n < 0) {
-                    if (Marshal.GetLastWin32Error() == EINTR) {
+                    int error = Marshal.GetLastWin32Error();
+                    if (error == EINTR) {
                         continue;
                     }
-                    throw new IOException("write failed");
+                    if (error == EAGAIN) {
+                        // #write_nonblock left the descriptor non-blocking, which MRI does too;
+                        // a blocking write on it has to wait for room itself.
+                        WaitFor(POLLOUT);
+                        continue;
+                    }
+                    // EPIPE and the rest: the caller turns the errno into the Ruby exception.
+                    throw new IOException("write failed", error);
                 }
                 written += n;
+            }
+        }
+
+        /// <summary>
+        /// Blocks until poll(2) reports the given event, waking early if another thread closes
+        /// this end. Same managed-wait reasoning as Read.
+        /// </summary>
+        private void WaitFor(short events) {
+            while (!_closed) {
+                var fds = new PollFd[1];
+                fds[0].fd = _descriptor;
+                fds[0].events = events;
+                int ready = sys_poll(fds, 1, 0);
+                if (ready > 0) {
+                    return;
+                }
+                if (ready < 0 && Marshal.GetLastWin32Error() != EINTR) {
+                    throw new IOException("poll failed");
+                }
+                _closing.WaitOne(5);
+            }
+        }
+
+        /// <summary>
+        /// Puts the descriptor into O_NONBLOCK, as MRI's read_nonblock/write_nonblock do - and,
+        /// like MRI, leaves it there, which is what io/nonblock then reports.
+        /// </summary>
+        private void SetNonBlocking() {
+            int flags = sys_fcntl(_descriptor, F_GETFL, 0);
+            if (flags >= 0 && (flags & O_NONBLOCK) == 0) {
+                sys_fcntl(_descriptor, F_SETFL, flags | O_NONBLOCK);
+            }
+        }
+
+        /// <summary>
+        /// One read(2) that does not wait: the number of bytes read, 0 at end of file, or -1
+        /// when the read would have blocked.
+        /// </summary>
+        public int ReadNonBlocking(byte[]/*!*/ buffer, int offset, int count) {
+            if (_closed) {
+                throw RubyExceptions.CreateIOError("stream closed in another thread");
+            }
+            SetNonBlocking();
+            byte[] chunk = new byte[count];
+            while (true) {
+                int read = (int)sys_read(_descriptor, chunk, (IntPtr)count);
+                if (read >= 0) {
+                    Buffer.BlockCopy(chunk, 0, buffer, offset, read);
+                    return read;
+                }
+                int error = Marshal.GetLastWin32Error();
+                if (error == EINTR) {
+                    continue;
+                }
+                if (error == EAGAIN) {
+                    return -1;
+                }
+                throw new IOException("read failed");
+            }
+        }
+
+        /// <summary>
+        /// One write(2) that does not wait: the number of bytes the kernel took, which may be
+        /// fewer than asked for just as with O_NONBLOCK, or -1 when the write would have blocked.
+        /// </summary>
+        public int WriteNonBlocking(byte[]/*!*/ buffer, int offset, int count) {
+            if (_closed) {
+                throw RubyExceptions.CreateIOError("stream closed in another thread");
+            }
+            SetNonBlocking();
+            return WriteOnce(buffer, offset, count);
+        }
+
+        /// <summary>
+        /// One write(2), leaving the descriptor's blocking mode as it is: IO#syswrite is a single
+        /// syscall in MRI too, which is why it can report a short write on a full pipe rather than
+        /// waiting for room. Returns -1 when a non-blocking descriptor refused the write.
+        /// </summary>
+        public int WriteOnce(byte[]/*!*/ buffer, int offset, int count) {
+            if (_closed) {
+                throw RubyExceptions.CreateIOError("stream closed in another thread");
+            }
+            byte[] chunk = new byte[count];
+            Buffer.BlockCopy(buffer, offset, chunk, 0, count);
+            while (true) {
+                int written = (int)sys_write(_descriptor, chunk, (IntPtr)count);
+                if (written >= 0) {
+                    return written;
+                }
+                int error = Marshal.GetLastWin32Error();
+                if (error == EINTR) {
+                    continue;
+                }
+                if (error == EAGAIN) {
+                    return -1;
+                }
+                // EPIPE and the rest: the caller turns the errno into the Ruby exception.
+                throw new IOException("write failed", error);
             }
         }
 

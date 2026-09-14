@@ -1536,17 +1536,41 @@ class File
   # the instance-level operations.  offset nil means truncate, an integer seeks
   # first and leaves the rest of the file intact, matching IO.write.
   def self.write(name, string, offset = nil, **opts)
-    # "rb+" not "r+b": IronRuby's mode parser only accepts the letter before the
-    # plus, though CRuby takes either order.
-    mode = offset ? "rb+" : (opts[:mode] || "w")
+    open_args = opts[:open_args]
+    if open_args
+      # :open_args is the whole argument list for the open, and it displaces every
+      # other option - including the mode, which is then read-only if it is absent.
+      extra = open_args.find { |a| a.is_a?(::Hash) } || {}
+      mode = open_args.find { |a| a.is_a?(::String) || a.is_a?(::Integer) } || extra[:mode] || "r"
+      encoding = extra[:encoding]
+      if extra[:binmode] && mode.is_a?(::String) && !mode.include?("b")
+        mode = mode.sub(/\A([^:]*)/) { "#{$1}b" }
+      end
+    else
+      mode = opts[:mode]
+      encoding = opts[:encoding]
+      if encoding && mode.is_a?(::String) && mode.include?(":")
+        ::Kernel.raise(::ArgumentError, "encoding specified twice")
+      end
+      # No mode and an offset: write into the file where it is, creating it if it is
+      # not there, but leaving the rest of it alone. No mode string says that.
+      mode ||= offset ? (::File::WRONLY | ::File::CREAT) : "w"
+      if opts[:binmode] && mode.is_a?(::String) && !mode.include?("b")
+        mode = mode.sub(/\A([^:]*)/) { "#{$1}b" }
+      end
+    end
+
     open(name, mode) do |io|
+      io.set_encoding(encoding) if encoding
       io.seek(offset) if offset
       io.write(string)
     end
   end unless respond_to?(:write)
 
-  def self.binwrite(name, string, offset = nil)
-    write(name, string, offset, mode: "wb")
+  def self.binwrite(name, string, offset = nil, **opts)
+    # binwrite is write in binary mode; it keeps every other option it was given,
+    # including the rule that an offset means "do not truncate".
+    write(name, string, offset, **opts, binmode: true)
   end unless respond_to?(:binwrite)
 
   def self.binread(name, length = nil, offset = 0)
@@ -1566,8 +1590,8 @@ class IO
     File.write(name, string, offset, **opts)
   end unless respond_to?(:write)
 
-  def self.binwrite(name, string, offset = nil)
-    File.binwrite(name, string, offset)
+  def self.binwrite(name, string, offset = nil, **opts)
+    File.binwrite(name, string, offset, **opts)
   end unless respond_to?(:binwrite)
 
   def self.binread(name, length = nil, offset = 0)
@@ -1582,11 +1606,16 @@ class IO
     alias_method :__read_nonblock_raising__, :read_nonblock
 
     def read_nonblock(len, buf = nil, exception: true)
+      unless exception == true || exception == false
+        raise ArgumentError, "expected true or false as exception: #{exception.inspect}"
+      end
       begin
         result = buf.nil? ? __read_nonblock_raising__(len) : __read_nonblock_raising__(len, buf)
-      rescue IO::WaitReadable
-        raise if exception
-        return :wait_readable
+      rescue IO::WaitReadable, Errno::EAGAIN => e
+        return :wait_readable unless exception
+        # MRI raises IO::EAGAINWaitReadable, an Errno::EAGAIN that is also a WaitReadable.
+        e.extend(IO::WaitReadable) unless e.is_a?(IO::WaitReadable)
+        raise e
       rescue EOFError
         raise if exception
         return nil
@@ -1599,11 +1628,15 @@ class IO
     alias_method :__write_nonblock_raising__, :write_nonblock
 
     def write_nonblock(buf, exception: true)
+      unless exception == true || exception == false
+        raise ArgumentError, "expected true or false as exception: #{exception.inspect}"
+      end
       begin
         result = __write_nonblock_raising__(buf)
-      rescue IO::WaitWritable
-        raise if exception
-        return :wait_writable
+      rescue IO::WaitWritable, Errno::EAGAIN => e
+        return :wait_writable unless exception
+        e.extend(IO::WaitWritable) unless e.is_a?(IO::WaitWritable)
+        raise e
       end
       result
     end
@@ -1746,10 +1779,28 @@ class << IO
     end
 
     command = args.shift
+    # A trailing Hash inside the command array is exec options, not an argument.
+    if command.is_a?(Array) && command.size > 1 && command.last.is_a?(Hash)
+      command = command.dup
+      options = command.pop.to_hash.merge(options)
+    end
     mode = args.shift
     mode = "r" if mode.nil?
     mode = mode.to_str if !mode.is_a?(String) && mode.respond_to?(:to_str)
+    mode_encodings = mode.to_s[/:(.*)\z/, 1]
     mode = mode.to_s.sub(/:.*\z/, "")
+
+    # The encoding options belong to the IO this hands back, not to the child; spawn
+    # rejects anything it does not know.
+    external = options.delete(:external_encoding) || options.delete(:encoding)
+    internal = options.delete(:internal_encoding)
+    if mode_encodings
+      external ||= mode_encodings.split(":", 2)[0]
+      internal ||= mode_encodings.split(":", 2)[1]
+    end
+    if external.is_a?(String) && external.include?(":")
+      external, internal = external.split(":", 2)
+    end
 
     if command == "-" || (command.is_a?(Array) && command.first == "-")
       raise NotImplementedError, "fork() function is unimplemented on this machine"
@@ -1790,6 +1841,11 @@ class << IO
          else
            readable ? parent_read : parent_write
          end
+
+    if external || internal
+      # An internal encoding on its own still transcodes, from the default external one.
+      io.set_encoding(external || Encoding.default_external, internal)
+    end
 
     io.instance_variable_set(:@__popen_pid__, pid)
     io.extend(IO::PopenChild)
@@ -10065,6 +10121,16 @@ class IO
       @parent = parent
     end
 
+    # The "address" a buffer shows in #to_s. There is no real one here, so the object
+    # identity stands in for it - until #transfer hands the memory to another buffer.
+    def __address__
+      @address ||= object_id << 1
+    end
+
+    def __set_address__(value)
+      @address = value
+    end
+
     def __take_over__(data, offset, size, flags)
       @data = data
       @offset = offset
@@ -10158,8 +10224,14 @@ class IO
 
     def transfer
       __check__
+      if locked?
+        ::Kernel.raise(LockedError, "Cannot transfer ownership of locked buffer!")
+      end
       other = self.class.allocate
       other.__take_over__(@data, @offset, @size, @flags)
+      # The address names the memory, and transfer moves the memory rather than
+      # copying it, so it goes across with the rest.
+      other.__set_address__(__address__)
       @freed = true
       @storage_dead = true
       @data = "".b
@@ -10327,7 +10399,7 @@ class IO
       parts << "PRIVATE" if private?
       parts << "READONLY" if readonly?
       parts << "NULL" if null?
-      "#<IO::Buffer 0x#{(object_id << 1).to_s(16).rjust(16, '0')}+#{@size} #{parts.join(' ')}>"
+      "#<IO::Buffer 0x#{__address__.to_s(16).rjust(16, '0')}+#{@size} #{parts.join(' ')}>"
     end
     # MRI's inspect is the header with the hexdump under it; to_s is the
     # header on its own.
@@ -10350,15 +10422,16 @@ class IO
       other.is_a?(::IO::Buffer) && get_string == other.get_string
     end
 
-    # The copying operators also want a Buffer, and also work over the bytes
-    # the two have in common - the result is the size of the receiver.
+    # The copying operators also want a Buffer. The result is the size of the
+    # receiver: a shorter mask repeats over it, and a longer one is cut off.
     def __binary_op__(other, op)
       __require_buffer__(other)
       a = get_string
       b = other.get_string
-      n = [a.bytesize, b.bytesize].min
       bytes = a.bytes
-      n.times { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i)) & 0xff }
+      unless b.empty?
+        bytes.each_index { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i % b.bytesize)) & 0xff }
+      end
       result = ::IO::Buffer.new(bytes.size)
       result.set_string(bytes.pack("C*"))
       result
@@ -10382,9 +10455,10 @@ class IO
       __require_buffer__(other)
       a = get_string
       b = other.get_string
-      n = [a.bytesize, b.bytesize].min
       bytes = a.bytes
-      n.times { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i)) & 0xff }
+      unless b.empty?
+        bytes.each_index { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i % b.bytesize)) & 0xff }
+      end
       set_string(bytes.pack("C*"))
       self
     end
@@ -10465,27 +10539,48 @@ class IO
     alias_method :__ir_class_read__, :read
     private :__ir_class_read__
 
+    # IO.read opens the file itself, so mode:, encoding: and :open_args all get
+    # their chance; the whole-file form is tagged with the stream's encoding and
+    # the length form is bytes, which is MRI's split too.
     def read(name, *args)
       options = args.last.is_a?(::Hash) ? args.pop : nil
-      result = args.empty? ? __ir_class_read__(name) : __ir_class_read__(name, *args)
-      return result if result.nil? || !result.respond_to?(:force_encoding)
-      return result unless args.empty? || args[0].nil?
-      enc = nil
-      internal = nil
-      if options
-        enc = options[:encoding] || options["encoding"]
-        if enc.is_a?(::String) && enc.include?(":")
-          # "external:internal" asks for a conversion, same as the mode string.
-          external, internal = enc.split(":", 2)
-          enc = external
-        end
-        enc = ::Encoding.find(enc) if enc
-        internal = ::Encoding.find(internal) if internal
+      length = args[0]
+      offset = args[1]
+      ::Kernel.raise(::ArgumentError, "negative offset #{offset} given") if offset && offset < 0
+      ::Kernel.raise(::ArgumentError, "negative length #{length} given") if length && length < 0
+
+      open_args = options && options[:open_args]
+      if open_args
+        extra = open_args.find { |a| a.is_a?(::Hash) } || {}
+        mode = open_args.find { |a| a.is_a?(::String) || a.is_a?(::Integer) } || extra[:mode] || "r"
+        enc = extra[:encoding] || extra[:external_encoding]
+      else
+        mode = (options && options[:mode]) || "r"
+        enc = options && (options[:encoding] || options[:external_encoding])
       end
-      enc ||= ::Encoding.default_external
-      result.force_encoding(enc) if enc
-      if internal && enc != internal && enc != ::Encoding::BINARY
-        result = result.encode(internal)
+
+      internal = nil
+      if enc.is_a?(::String) && enc.include?(":")
+        # "external:internal" asks for a conversion, same as the mode string.
+        enc, internal = enc.split(":", 2)
+      end
+
+      # "BOM|<encoding>" means "read the byte-order mark if there is one, and let it
+      # name the encoding"; the mode parser underneath does not know the prefix.
+      bom = mode.is_a?(::String) && mode =~ /:\s*BOM\|/i
+      mode = mode.sub(/BOM\|/i, "") if bom
+
+      result = ::File.open(name, mode) do |io|
+        io.set_encoding(enc) if enc
+        io.set_encoding_by_bom if bom
+        io.seek(offset) if offset && offset > 0
+        length ? io.read(length) : io.read
+      end
+
+      return result if result.nil? || !result.respond_to?(:force_encoding)
+      return result if length
+      if internal
+        result = result.encode(::Encoding.find(internal))
       end
       result
     end
@@ -10519,6 +10614,24 @@ class IO
   alias_method :__ir_set_encoding__, :set_encoding
 
   def set_encoding(*args)
+    # Anything string-shaped names an encoding, and one name may carry both sides.
+    if args.size >= 1 && !args[0].is_a?(::String) && !args[0].is_a?(::Encoding) &&
+       !args[0].nil? && args[0].respond_to?(:to_str)
+      args = args.dup
+      args[0] = args[0].to_str
+    end
+    if args.size >= 2 && args[0].nil? && !args[1].nil?
+      # MRI reads the pair as two names and trips over the nil on the way.
+      ::Kernel.raise(::TypeError, "no implicit conversion of nil into String")
+    end
+    if args.size >= 2 && args[1] == "-"
+      # "-" in the second position is MRI's way of saying "no internal encoding at
+      # all", as opposed to "not given", which falls back to Encoding.default_internal.
+      # Naming the external encoding twice is how that is said here.
+      args = args.dup
+      args[1] = args[0]
+    end
+    __check_set_encoding_options__(args)
     if args.size >= 1 && args[0].is_a?(::String) && args[0].include?(":")
       external, internal = args[0].split(":", 2)
       rest = args[1..-1] || []
@@ -10526,6 +10639,54 @@ class IO
     end
     __ir_set_encoding__(*args)
   end
+
+  # MRI validates the pair before it takes it: an encoding that is not ASCII
+  # compatible needs either binmode or a conversion to something that is, and the
+  # newline decorator only takes the three values it knows.
+  def __check_set_encoding_options__(args)
+    options = args.last.is_a?(::Hash) ? args.last : nil
+    if options
+      if options.key?(:newline)
+        value = options[:newline]
+        unless [:universal, :crlf, :cr, :lf].include?(value)
+          # Only a Symbol gets named in the message; anything else is just wrong.
+          ::Kernel.raise(::ArgumentError, value.is_a?(::Symbol) ?
+            "unexpected value for newline option: #{value}" : "unexpected value for newline option")
+        end
+      end
+      decorator = options.key?(:newline) || options[:universal_newline] ||
+                  options[:crlf_newline] || options[:cr_newline]
+      if decorator && (@__binmode__ || binmode?)
+        ::Kernel.raise(::ArgumentError, "newline decorator with binary mode")
+      end
+    end
+
+    external = args[0]
+    if external.nil?
+      # A nil external encoding is Encoding.default_external, which still has to be
+      # something this stream can decode.
+      external = ::Encoding.default_external
+    end
+    external = external.to_str if !external.is_a?(::String) && !external.is_a?(::Encoding) && external.respond_to?(:to_str)
+    encoding = external.is_a?(::Encoding) ? external : (::Encoding.find(external) rescue nil)
+    return if encoding.nil? || encoding.ascii_compatible?
+
+    internal = args[1].is_a?(::Hash) ? nil : args[1]
+    return unless internal.nil?
+    return if @__binmode__ || binmode?
+    # A write-only stream never decodes what it wrote, so it does not need binmode.
+    return unless __readable_stream__?
+    ::Kernel.raise(::ArgumentError, "ASCII incompatible encoding needs binmode")
+  end
+  private :__check_set_encoding_options__
+
+  def __readable_stream__?
+    lineno
+    true
+  rescue ::IOError
+    false
+  end
+  private :__readable_stream__?
 
   # binmode is implemented for a File and throws for everything else - a pipe,
   # a socket, the standard streams. On this platform it has nothing to do but
@@ -10653,10 +10814,25 @@ class IO
   end
   private :__take_chomp__
 
-  def __chomp_line__(line, separator)
+  # chomp removes the separator that was actually found, so what counts is which
+  # separator the read used - and whether one was given at all. An explicit nil
+  # separator reads the whole content and has nothing to chomp; an empty one reads
+  # paragraphs, whose separator is the run of newlines that ended them, and the
+  # last chunk of a file ends at end of file rather than at a separator.
+  def __chomp_line__(line, args)
     return line if line.nil?
-    sep = separator.is_a?(::String) ? separator : $/
-    return line if sep.nil? || sep.empty?
+    if args.empty?
+      sep = $/
+    else
+      sep = args[0]
+      return line if sep.nil?
+      sep = $/ unless sep.is_a?(::String)
+    end
+    return line if sep.nil?
+    if sep.empty?
+      return line unless line.end_with?("\n\n")
+      return line.sub(/\n+\z/, "")
+    end
     line.end_with?(sep) ? line[0...(line.length - sep.length)] : line
   end
   private :__chomp_line__
@@ -10666,7 +10842,7 @@ class IO
   def gets(*args)
     args, chomp = __take_chomp__(args)
     line = __transcode__(__ir_gets__(*args))
-    chomp ? __chomp_line__(line, args[0]) : line
+    chomp ? __chomp_line__(line, args) : line
   end
 
   alias_method :__ir_readline__, :readline
@@ -10674,7 +10850,7 @@ class IO
   def readline(*args)
     args, chomp = __take_chomp__(args)
     line = __transcode__(__ir_readline__(*args))
-    chomp ? __chomp_line__(line, args[0]) : line
+    chomp ? __chomp_line__(line, args) : line
   end
 
   alias_method :__ir_readlines__, :readlines
@@ -10682,7 +10858,7 @@ class IO
   def readlines(*args)
     args, chomp = __take_chomp__(args)
     lines = __ir_readlines__(*args).map { |l| __transcode__(l) }
-    chomp ? lines.map { |l| __chomp_line__(l, args[0]) } : lines
+    chomp ? lines.map { |l| __chomp_line__(l, args) } : lines
   end
 
   alias_method :__ir_each_line__, :each_line
@@ -10694,7 +10870,7 @@ class IO
     end
     __ir_each_line__(*args) do |line|
       line = __transcode__(line)
-      block.call(chomp ? __chomp_line__(line, args[0]) : line)
+      block.call(chomp ? __chomp_line__(line, args) : line)
     end
   end
 
@@ -10708,30 +10884,33 @@ class IO
   class << self
     alias_method :__ir_class_readlines__, :readlines
 
+    # IO.readlines and IO.foreach are the instance methods on a stream opened for
+    # the occasion, which is how the mode: and encoding options in the trailing
+    # hash get a chance to apply - the specs open a file for writing that way and
+    # expect the read to fail.
     def readlines(name, *args)
       options = args.last.is_a?(::Hash) ? args.pop : nil
-      chomp = options && options[:chomp]
-      lines = __ir_class_readlines__(name, *args)
-      return lines unless chomp
-      sep = args[0].is_a?(::String) ? args[0] : $/
-      lines.map { |l| (sep && !sep.empty? && l.end_with?(sep)) ? l[0...(l.length - sep.length)] : l }
+      ::File.open(name, (options && options[:mode]) || "r") do |io|
+        options ? io.readlines(*args, **options.reject { |k, _| k == :mode }) : io.readlines(*args)
+      end
     end
 
     alias_method :__ir_foreach__, :foreach
 
     def foreach(name, *args, &block)
       options = args.last.is_a?(::Hash) ? args.pop : nil
-      chomp = options && options[:chomp]
       unless block
-        return ::Enumerator.new { |y| foreach(name, *args, chomp: chomp) { |l| y << l } }
+        return ::Enumerator.new { |y| foreach(name, *args, **(options || {})) { |l| y << l } }
       end
-      sep = args[0].is_a?(::String) ? args[0] : $/
-      __ir_foreach__(name, *args) do |line|
-        if chomp && sep && !sep.empty? && line.end_with?(sep)
-          line = line[0...(line.length - sep.length)]
+      ::File.open(name, (options && options[:mode]) || "r") do |io|
+        if options
+          io.each_line(*args, **options.reject { |k, _| k == :mode }, &block)
+        else
+          io.each_line(*args, &block)
         end
-        block.call(line)
       end
+      # MRI's IO.foreach answers nil when it was given a block.
+      nil
     end
   end
 
@@ -10744,11 +10923,14 @@ class IO
     maxlen = ::Kernel.Integer(maxlen)
     ::Kernel.raise(::ArgumentError, "negative length #{maxlen} given") if maxlen < 0
     if maxlen == 0
+      # Even a zero-length readpartial looks at the stream, so a closed one is an error.
+      ::Kernel.raise(::IOError, "closed stream") if closed?
       result = "".b
       return outbuf ? outbuf.replace(result) : result
     end
-    data = __ir_read__(maxlen)
+    data = __read_available__(maxlen)
     if data.nil? || data.empty?
+      outbuf.replace("".b) if outbuf
       ::Kernel.raise(::EOFError, "end of file reached")
     end
     data.force_encoding(::Encoding::BINARY) if data.respond_to?(:force_encoding)
@@ -10847,6 +11029,39 @@ class IO
     end
   end
 
+  # seek and sysseek take the whence as a symbol as well as an Integer.
+  SEEK_WHENCE__ = { CUR: 1, SET: 0, END: 2, DATA: 3, HOLE: 4 }.freeze
+
+  def __seek_whence__(whence)
+    return whence unless whence.is_a?(::Symbol)
+    value = SEEK_WHENCE__[whence]
+    ::Kernel.raise(::TypeError, "no implicit conversion of Symbol into Integer") if value.nil?
+    value
+  end
+  private :__seek_whence__
+
+  alias_method :__ir_seek__, :seek
+  private :__ir_seek__
+
+  def seek(amount, whence = 0)
+    __ir_seek__(amount, __seek_whence__(whence))
+  end
+
+  alias_method :__ir_sysseek__, :sysseek
+  private :__ir_sysseek__
+
+  def sysseek(amount, whence = 0)
+    __ir_sysseek__(amount, __seek_whence__(whence))
+  end
+
+  # readchar is getc with an EOFError at the end, so it answers a one-character
+  # String too; the built-in still answers the first byte as an Integer.
+  def readchar
+    c = getc
+    ::Kernel.raise(::EOFError, "end of file reached") if c.nil?
+    c
+  end
+
   def getbyte
     s = read(1)
     return nil if s.nil? || s.empty?
@@ -10859,12 +11074,44 @@ class IO
     b
   end unless method_defined?(:readbyte)
 
+  # ungetc takes a String as well as a codepoint, and a codepoint is a character
+  # in the stream's external encoding rather than a single byte. The built-in only
+  # ever pushed one byte back.
+  alias_method :__ir_ungetc__, :ungetc
+  private :__ir_ungetc__
+
+  def ungetc(value)
+    if value.is_a?(::Integer)
+      enc = (external_encoding rescue nil) || ::Encoding.default_external
+      text = (value.chr(enc) rescue value.chr)
+    else
+      unless value.is_a?(::String)
+        unless value.respond_to?(:to_str)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{value.nil? ? "nil" : value.class} into String")
+        end
+        value = value.to_str
+      end
+      text = value
+    end
+    text.bytes.reverse_each { |b| __ir_ungetc__(b) }
+    nil
+  end
+
+  # ungetbyte pushes bytes, never characters, so it goes straight to the built-in
+  # rather than through #ungetc - and an Integer is taken modulo 256 rather than
+  # being out of range.
   def ungetbyte(byte)
     return nil if byte.nil?
     if byte.is_a?(::Integer)
-      ungetc(byte & 0xff)
+      __ir_ungetc__(byte & 0xff)
     else
-      ::Kernel.String(byte).bytes.reverse_each { |b| ungetc(b) }
+      unless byte.is_a?(::String)
+        unless byte.respond_to?(:to_str)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{byte.class} into String")
+        end
+        byte = byte.to_str
+      end
+      byte.bytes.reverse_each { |b| __ir_ungetc__(b) }
     end
     nil
   end unless method_defined?(:ungetbyte)
@@ -10934,26 +11181,69 @@ class IO
     0
   end unless method_defined?(:fdatasync)
 
-  def to_path
-    respond_to?(:path) ? path : nil
-  end unless method_defined?(:to_path)
+  # IO#path answers the path the stream was opened with - File overrides it with the
+  # real one - and the standard streams answer the names MRI gives them. An IO built
+  # from a descriptor keeps whatever path: it was told about.
+  def path
+    case fileno
+    when 0 then "<STDIN>"
+    when 1 then "<STDOUT>"
+    when 2 then "<STDERR>"
+    else @__io_path__
+    end
+  end unless method_defined?(:path)
+
+  alias_method :to_path, :path unless method_defined?(:to_path)
 
   # Positional read/write, done by saving and restoring the file position since
   # there is no pread/pwrite underneath.
+  def __io_to_int__(value)
+    return value if value.is_a?(::Integer)
+    unless value.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+    end
+    value.to_int
+  end
+  private :__io_to_int__
+
   def pread(maxlen, offset, buffer = nil)
-    ::Kernel.raise(::ArgumentError, "negative string size") if maxlen < 0
+    maxlen = __io_to_int__(maxlen)
+    offset = __io_to_int__(offset)
+    ::Kernel.raise(::ArgumentError, "negative string size (or size too big)") if maxlen < 0
+    ::Kernel.raise(::Errno::EINVAL, "pread") if offset < 0
+    # A zero-length read touches neither the file nor the buffer, which is why an
+    # offset past the end of the file is not an error either.
+    return buffer || "".b if maxlen == 0
+    if buffer && !buffer.is_a?(::String)
+      unless buffer.respond_to?(:to_str)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{buffer.class} into String")
+      end
+      target = buffer
+      buffer = buffer.to_str
+    end
     saved = pos
     begin
       seek(offset)
       result = read(maxlen)
-      ::Kernel.raise(::EOFError, "end of file reached") if result.nil?
-      buffer ? buffer.replace(result) : result
+      if result.nil?
+        # End of file empties the buffer before raising, which is what the caller
+        # sees if it kept a reference to it.
+        buffer.replace("") if buffer
+        ::Kernel.raise(::EOFError, "end of file reached")
+      end
+      if buffer
+        buffer.replace(result)
+        target || buffer
+      else
+        result
+      end
     ensure
       seek(saved)
     end
   end unless method_defined?(:pread)
 
   def pwrite(string, offset)
+    offset = __io_to_int__(offset)
     saved = pos
     begin
       seek(offset)

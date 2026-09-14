@@ -27,8 +27,12 @@ namespace IronRuby.Builtins {
     /// </summary>
     public partial class RubyIO : IDisposable {
         private RubyContext/*!*/ _context;
-        private RubyEncoding/*!*/ _externalEncoding;
-        private RubyEncoding _internalEncoding;
+        // CRuby's fptr->encs.enc / fptr->encs.enc2. Either may be null, which means
+        // "no encoding was pinned onto this stream, follow Encoding.default_external
+        // whenever it is asked for". _enc2 is non-null only when a transcoding is in
+        // effect, and then _enc2 is the external side and _enc the internal one.
+        private RubyEncoding _enc;
+        private RubyEncoding _enc2;
 
         // the :invalid, :undef, :replace and decorator options the stream was opened with,
         // which the transcoding on the way in and on the way out has to honour
@@ -78,8 +82,6 @@ namespace IronRuby.Builtins {
             _context = context;
             _fileDescriptor = -1;
             _stream = null;
-            _externalEncoding = context.DefaultExternalEncoding;
-            _internalEncoding = context.DefaultInternalEncoding;
         }
 
         public RubyIO(RubyContext/*!*/ context, Stream/*!*/ stream, IOMode mode) 
@@ -114,20 +116,80 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Whether an encoding was actually asked for - in the mode string, in the options
-        /// hash, or through #set_encoding - as opposed to being inherited from the context
-        /// defaults. MRI only reports an external encoding it was told about.
+        /// CRuby's fptr->encs.enc: the encoding reads produce. Null when nothing was pinned.
         /// </summary>
-        public bool EncodingSpecified { get; set; }
-
-        public RubyEncoding ExternalEncoding {
-            get { return _externalEncoding; }
-            set { _externalEncoding = value; }
+        public RubyEncoding Enc {
+            get { return _enc; }
         }
 
+        /// <summary>
+        /// CRuby's fptr->encs.enc2: the external encoding when a transcoding is in effect,
+        /// null otherwise.
+        /// </summary>
+        public RubyEncoding Enc2 {
+            get { return _enc2; }
+        }
+
+        /// <summary>
+        /// Whether an encoding was actually pinned onto this stream - in the mode string, in
+        /// the options hash, or through #set_encoding - as opposed to being left to follow
+        /// the context defaults.
+        /// </summary>
+        public bool EncodingSpecified {
+            get { return _enc != null || _enc2 != null; }
+        }
+
+        /// <summary>
+        /// The external encoding actually in force, for the code that has to turn characters
+        /// into bytes. Never null: an unpinned stream follows Encoding.default_external.
+        /// </summary>
+        public RubyEncoding/*!*/ ExternalEncoding {
+            get { return _enc2 ?? _enc ?? _context.DefaultExternalEncoding; }
+        }
+
+        /// <summary>
+        /// The internal encoding actually in force, i.e. what reads transcode *to*. Null when
+        /// there is no transcoding, which is CRuby's answer for #internal_encoding too.
+        /// </summary>
         public RubyEncoding InternalEncoding {
-            get { return _internalEncoding; }
-            set { _internalEncoding = value; }
+            get { return _enc2 != null ? _enc : null; }
+        }
+
+        /// <summary>
+        /// CRuby's rb_io_ext_int_to_encs (io.c). A null external means "the default"; the
+        /// distinction matters, because a stream that merely inherited the default external
+        /// encoding keeps following it when Encoding.default_external is reassigned, while
+        /// one that was given an encoding explicitly does not.
+        /// </summary>
+        public void SetEncodings(RubyEncoding external, RubyEncoding @internal) {
+            bool defaultExternal = false;
+            if (external == null) {
+                external = _context.DefaultExternalEncoding;
+                defaultExternal = true;
+            }
+
+            if (external == RubyEncoding.Binary) {
+                // Binary on the outside means the bytes come through untouched.
+                @internal = null;
+            } else if (@internal == null) {
+                @internal = _context.DefaultInternalEncoding;
+            }
+
+            if (@internal == null || @internal == external) {
+                _enc = (defaultExternal && @internal != external) ? null : external;
+                _enc2 = null;
+            } else {
+                _enc = @internal;
+                _enc2 = external;
+            }
+        }
+
+        /// <summary>
+        /// Copies the encoding state verbatim, for #dup and #clone.
+        /// </summary>
+        public void CopyEncodingsFrom(RubyIO/*!*/ other) {
+            _enc = other._enc;
+            _enc2 = other._enc2;
         }
 
         public IDictionary<object, object> ConversionOptions {
@@ -428,8 +490,15 @@ namespace IronRuby.Builtins {
             return 0;
         }
 
+        /// <summary>
+        /// Runs a read or a write in the non-blocking mode #read_nonblock / #write_nonblock ask
+        /// for. The default is to just run it: a regular file never blocks, which is also why
+        /// O_NONBLOCK has no effect on one in MRI. A pipe or a socket overrides this, or the
+        /// caller reaches for the single-shot syscall on the descriptor directly.
+        /// </summary>
         public virtual void NonBlockingOperation(Action operation, bool isRead) {
-            throw RubyExceptions.CreateEBADF();
+            RequireOpen();
+            operation();
         }
 
         /// <summary>
@@ -669,13 +738,13 @@ namespace IronRuby.Builtins {
 
         // returns the number of bytes written to the stream:
         public int WriteBytes(char[]/*!*/ buffer, int index, int count) {
-            byte[] bytes = _externalEncoding.StrictEncoding.GetBytes(buffer, index, count);
+            byte[] bytes = ExternalEncoding.StrictEncoding.GetBytes(buffer, index, count);
             return WriteBytes(bytes, 0, bytes.Length);
         }
 
         // returns the number of bytes written to the stream:
         public int WriteBytes(string/*!*/ value) {
-            byte[] bytes = _externalEncoding.StrictEncoding.GetBytes(value);
+            byte[] bytes = ExternalEncoding.StrictEncoding.GetBytes(value);
             return WriteBytes(bytes, 0, bytes.Length);
         }
 
@@ -688,6 +757,18 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// One IO#readpartial worth of bytes: what is buffered, or a single read when nothing is.
+        /// </summary>
+        public int AppendAvailableBytes(MutableString/*!*/ buffer, int count) {
+            var stream = GetReadableStream();
+            try {
+                return stream.AppendAvailableBytes(buffer, count);
+            } catch (ObjectDisposedException) {
+                throw RubyExceptions.CreateEBADF();
+            }
+        }
+
         public MutableString ReadLineOrParagraph(MutableString separator, int limit) {
             if (limit == 0) {
                 // A zero limit reads an empty string forever, so IO#each_line(0) never returned.
@@ -695,7 +776,7 @@ namespace IronRuby.Builtins {
             }
             var stream = GetReadableStream();
             try {
-                return stream.ReadLineOrParagraph(separator, _externalEncoding, PreserveEndOfLines, limit >= 0 ? limit : Int32.MaxValue);
+                return stream.ReadLineOrParagraph(separator, ExternalEncoding, PreserveEndOfLines, limit >= 0 ? limit : Int32.MaxValue);
             } catch (ObjectDisposedException) {
                 throw RubyExceptions.CreateEBADF();
             }
