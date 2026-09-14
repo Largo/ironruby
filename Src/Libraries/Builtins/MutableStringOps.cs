@@ -982,8 +982,14 @@ namespace IronRuby.Builtins {
             [DefaultProtocol]int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
             index = index < 0 ? index + self.Length : index;
-            if (index < 0 || index >= self.Length) {
+            // Appending at the very end is allowed, which is the only way "" can be assigned to.
+            if (index < 0 || index > self.Length) {
                 throw RubyExceptions.CreateIndexError("index {0} out of string", index);
+            }
+
+            if (index == self.Length) {
+                self.Append(value).TaintBy(value);
+                return value;
             }
 
             if (value.IsEmpty) {
@@ -992,19 +998,6 @@ namespace IronRuby.Builtins {
             }
 
             self.Replace(index, 1, value).TaintBy(value);
-            return value;
-        }
-
-        [RubyMethod("[]=")]
-        public static int SetCharacter(MutableString/*!*/ self, 
-            [DefaultProtocol]int index, int value) {
-
-            index = index < 0 ? index + self.Length : index;
-            if (index < 0 || index >= self.Length) {
-                throw RubyExceptions.CreateIndexError("index {0} out of string", index);
-            }
-
-            self.SetByte(index, unchecked((byte)value));
             return value;
         }
 
@@ -1049,19 +1042,21 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ ReplaceSubstring(ConversionStorage<int>/*!*/ fixnumCast, MutableString/*!*/ self, 
             [NotNull]Range/*!*/ range, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
-            int begin = Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = Protocols.CastToFixnum(fixnumCast, range.End);
+            int begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
+            int end = (range.End == null) ? self.Length : Protocols.CastToFixnum(fixnumCast, range.End);
 
-            begin = begin < 0 ? begin + self.Length : begin;
+            int normalizedBegin = begin < 0 ? begin + self.Length : begin;
 
-            if (begin < 0 || begin > self.Length) {
+            if (normalizedBegin < 0 || normalizedBegin > self.Length) {
+                // MRI quotes the range as it was written, not as it was normalized.
                 throw RubyExceptions.CreateRangeError("{0}..{1} out of range", begin, end);
             }
 
             end = end < 0 ? end + self.Length : end;
 
-            int count = range.ExcludeEnd ? end - begin : end - begin + 1;
-            return ReplaceSubstring(self, begin, count, value);
+            int count = range.ExcludeEnd ? end - normalizedBegin : end - normalizedBegin + 1;
+            // An end before the beginning is an insertion, not a negative-length error.
+            return ReplaceSubstring(self, normalizedBegin, count < 0 ? 0 : count, value);
         }
 
         [RubyMethod("[]=")]
@@ -1077,9 +1072,26 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("[]=")]
-        public static MutableString ReplaceSubstring(RubyContext/*!*/ context, MutableString/*!*/ self,
-            [NotNull]RubyRegex/*!*/ regex, [Optional, DefaultProtocol]int groupIndex, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyContext/*!*/ context,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [NotNull]object/*!*/ value) {
+            return ReplaceSubstring(stringCast, context, self, regex, 0, value);
+        }
 
+        // A String replacement gets its own three-argument overload so that the binder still
+        // has a better match than "[]=(Fixnum, Fixnum, String)" for "str[/re/, n] = s".
+        [RubyMethod("[]=")]
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyContext/*!*/ context,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int groupIndex,
+            [NotNull]MutableString/*!*/ value) {
+            return ReplaceSubstring(stringCast, context, self, regex, groupIndex, (object)value);
+        }
+
+        [RubyMethod("[]=")]
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyContext/*!*/ context,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int groupIndex, [NotNull]object/*!*/ value) {
+
+            // MRI checks the match, and the capture index, before it asks the replacement for
+            // #to_str - so the conversion is done by hand rather than by the binder.
             MatchData match = regex.Match(self);
             if (match == null) {
                 throw RubyExceptions.CreateIndexError("regexp not matched");
@@ -1093,7 +1105,13 @@ namespace IronRuby.Builtins {
                 groupIndex += match.GroupCount;
             }
 
-            return ReplaceSubstring(self, match.GetGroupStart(groupIndex), match.GetGroupLength(groupIndex), value);
+            if (!match.GroupSuccess(groupIndex)) {
+                throw RubyExceptions.CreateIndexError("regexp group {0} not matched", groupIndex);
+            }
+
+            var replacement = value as MutableString ?? Protocols.CastToString(stringCast, value);
+
+            return ReplaceSubstring(self, match.GetGroupStart(groupIndex), match.GetGroupLength(groupIndex), replacement);
         }
 
         #endregion

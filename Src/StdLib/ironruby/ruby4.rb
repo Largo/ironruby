@@ -5408,9 +5408,10 @@ class Enumerator
     when :times
       source
     when :upto
-      args[0] < source ? 0 : args[0] - source + 1
+      # String#upto also lands here, and its length is not arithmetic.
+      (source.is_a?(::Numeric) && args[0].is_a?(::Numeric)) ? (args[0] < source ? 0 : args[0] - source + 1) : nil
     when :downto
-      source < args[0] ? 0 : source - args[0] + 1
+      (source.is_a?(::Numeric) && args[0].is_a?(::Numeric)) ? (source < args[0] ? 0 : source - args[0] + 1) : nil
     when :cycle
       __cycle_size__(__source_count__(source), args[0])
     else
@@ -6686,6 +6687,65 @@ class String
   end unless method_defined?(:-@)
 
   alias_method :dedup, :-@
+
+  # The C# #upto is Range#each in disguise, which loses the numeric-sequence
+  # case ("8".upto("11")), the exclusive-end argument, the "stop is shorter than
+  # self" cut-off and the type and encoding checks.
+  alias_method :__ir_upto__, :upto
+  private :__ir_upto__
+
+  def upto(stop, exclusive = false, &block)
+    unless stop.is_a?(::String)
+      converted = (!stop.is_a?(::Symbol) && stop.respond_to?(:to_str)) ? stop.to_str : nil
+      unless converted.is_a?(::String)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(stop)} into String")
+      end
+      stop = converted
+    end
+
+    unless encoding == stop.encoding || ascii_only? && stop.ascii_only?
+      ::Kernel.raise(::Encoding::CompatibilityError,
+        "incompatible character encodings: #{encoding} and #{stop.encoding}")
+    end
+
+    return to_enum(:upto, stop, exclusive) unless block
+
+    # A pair of decimal strings counts like Integer#upto, with the receiver's
+    # width kept: "08".upto("11") answers "08", "09", "10", "11".
+    if self =~ /\A\d+\z/ && stop =~ /\A\d+\z/
+      from = to_i
+      to = exclusive ? stop.to_i - 1 : stop.to_i
+      width = length
+      from.upto(to) do |n|
+        text = n.to_s
+        text = text.rjust(width, "0") if text.length < width
+        block.call(text)
+      end
+      return self
+    end
+
+    # Two single characters walk the codepoints between them: "9".upto("A")
+    # answers 9 : ; < = > ? @ A.
+    if length == 1 && stop.length == 1
+      from = ord
+      to = stop.ord
+      to -= 1 if exclusive
+      from.upto(to) { |c| block.call(c.chr(encoding)) }
+      return self
+    end
+
+    return self if length > stop.length || (length == stop.length && self > stop)
+
+    current = self
+    loop do
+      break if exclusive && current == stop
+      block.call(current)
+      break if current == stop
+      current = current.succ
+      break if current.length > stop.length
+    end
+    self
+  end
 end
 
 # --- pieces the Ruby 4.0 standard library expects --------------------------
