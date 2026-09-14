@@ -1785,20 +1785,15 @@ namespace IronRuby.Prism {
             var span = Span(node);
             var prologue = new List<Expression>();
             var names = new List<string>();
+            var requiredNames = new List<string>();
 
             foreach (var keyword in node.Keywords) {
                 var kwSpan = Span(keyword);
                 switch (keyword) {
                     case Pm.RequiredKeywordParameterNode required: {
                         names.Add(required.Name);
+                        requiredNames.Add(required.Name);
                         var local = CurrentScope.ResolveOrAddVariable(required.Name, kwSpan);
-                        prologue.Add(new UnlessExpression(
-                            new MethodCall(kwVar, "key?", new Arguments(new SymbolLiteral(required.Name, _encoding, kwSpan)), kwSpan),
-                            new Statements(new MethodCall(null, "raise", new Arguments(new Expression[] {
-                                new ConstantVariable("ArgumentError", kwSpan),
-                                new StringLiteral("missing keyword: :" + required.Name, _encoding, kwSpan)
-                            }), kwSpan)),
-                            null, kwSpan));
                         prologue.Add(new SimpleAssignmentExpression(local,
                             new MethodCall(kwVar, "[]", new Arguments(new SymbolLiteral(required.Name, _encoding, kwSpan)), kwSpan),
                             null, kwSpan));
@@ -1831,7 +1826,56 @@ namespace IronRuby.Prism {
                 }
             }
 
-            return prologue;
+            // MRI reports every missing keyword in one error, and does so before complaining
+            // about keywords it does not know; a signature with **rest knows them all.
+            var checks = new List<Expression>();
+            if (requiredNames.Count > 0) {
+                checks.Add(RaiseForKeywordList(
+                    new MethodCall(SymbolArray(requiredNames, span), "-",
+                        new Arguments(new MethodCall(kwVar, "keys", null, span)), span),
+                    "missing keyword: ", "missing keywords: ", span));
+            }
+            if (!(node.KeywordRest is Pm.KeywordRestParameterNode)) {
+                checks.Add(RaiseForKeywordList(
+                    new MethodCall(new MethodCall(kwVar, "keys", null, span), "-",
+                        new Arguments(SymbolArray(names, span)), span),
+                    "unknown keyword: ", "unknown keywords: ", span));
+            }
+            checks.AddRange(prologue);
+            return checks;
+        }
+
+        private Expression/*!*/ SymbolArray(List<string>/*!*/ names, SourceSpan span) {
+            var items = new List<Expression>();
+            foreach (var name in names) items.Add(new SymbolLiteral(name, _encoding, span));
+            return new ArrayConstructor(new Arguments(items.ToArray()), span);
+        }
+
+        /// <summary>
+        /// `raise ArgumentError, "&lt;singular|plural&gt;#{list}" unless list.empty?`, where the list
+        /// is spelled the way MRI spells it: ":a, :b, :c" - Array#inspect without the brackets.
+        /// </summary>
+        private Expression/*!*/ RaiseForKeywordList(Expression/*!*/ list, string/*!*/ singular, string/*!*/ plural, SourceSpan span) {
+            var listVar = CurrentScope.AddVariable("?kwlist" + _tempCounter++ + "?", span);
+            var message = new MethodCall(
+                new ConditionalExpression(
+                    new MethodCall(new MethodCall(listVar, "size", null, span), "==",
+                        new Arguments(Literal.Integer(1, span)), span),
+                    new StringLiteral(singular, _encoding, span),
+                    new StringLiteral(plural, _encoding, span), span),
+                "+",
+                new Arguments(new MethodCall(new MethodCall(listVar, "inspect", null, span), "[]",
+                    new Arguments(new RangeExpression(Literal.Integer(1, span), Literal.Integer(-2, span), false, span)), span)),
+                span);
+
+            return new BlockExpression(MakeStatements(
+                new SimpleAssignmentExpression(listVar, list, null, span),
+                new UnlessExpression(
+                    new MethodCall(listVar, "empty?", null, span),
+                    new Statements(new MethodCall(null, "raise", new Arguments(new Expression[] {
+                        new ConstantVariable("ArgumentError", span), message
+                    }), span)),
+                    null, span)), span);
         }
 
 
