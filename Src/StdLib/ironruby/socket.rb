@@ -1569,3 +1569,361 @@ class Socket
     udp_server_sockets(host, port) { |sockets| udp_server_loop_on(sockets, &block) }
   end
 end
+
+# ---------------------------------------------------------------------------
+# Argument shapes the C# layer does not accept, and the few singletons that are
+# pure bookkeeping over what it does expose.
+
+class BasicSocket
+  alias_method :__ir_raw_recv, :recv
+  alias_method :__ir_raw_recv_nonblock, :recv_nonblock
+
+  # CRuby's optional third argument is an output buffer, and the result is that
+  # very String -- with its encoding preserved.
+  def __ir_into_buffer(data, buffer) # :nodoc:
+    return data if buffer.nil?
+    encoding = buffer.encoding
+    buffer.replace(data)
+    buffer.force_encoding(encoding)
+    buffer
+  end
+  private :__ir_into_buffer
+
+  def recv(length, flags = nil, buffer = nil)
+    data = flags.nil? ? __ir_raw_recv(length) : __ir_raw_recv(length, flags)
+    __ir_into_buffer(data, buffer)
+  end
+
+  def recv_nonblock(length, flags = nil, buffer = nil, exception: true)
+    data = flags.nil? ? __ir_raw_recv_nonblock(length) : __ir_raw_recv_nonblock(length, flags)
+    __ir_into_buffer(data, buffer)
+  rescue SocketError => e
+    raise unless Socket.__ir_socket_error_code(e) == "WouldBlock"
+    raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+    :wait_readable
+  end
+end
+
+class IPSocket
+  alias_method :__ir_raw_addr, :addr
+  alias_method :__ir_raw_peeraddr, :peeraddr
+
+  # CRuby takes an optional reverse_lookup override; without it the tuple's
+  # third element follows BasicSocket.do_not_reverse_lookup.
+  def __ir_with_reverse_lookup(reverse_lookup) # :nodoc:
+    return yield if reverse_lookup.nil?
+    case reverse_lookup
+    when true, :hostname then flag = false
+    when false, :numeric then flag = true
+    else raise ArgumentError, "invalid reverse_lookup flag: #{reverse_lookup.inspect}"
+    end
+    saved = do_not_reverse_lookup
+    begin
+      self.do_not_reverse_lookup = flag
+      yield
+    ensure
+      self.do_not_reverse_lookup = saved
+    end
+  end
+  private :__ir_with_reverse_lookup
+
+  def addr(reverse_lookup = nil)
+    __ir_with_reverse_lookup(reverse_lookup) { __ir_raw_addr }
+  end
+
+  def peeraddr(reverse_lookup = nil)
+    __ir_with_reverse_lookup(reverse_lookup) { __ir_raw_peeraddr }
+  end
+
+  def inspect
+    return "#<#{self.class}:(closed)>" if closed?
+    family, port, _, address = __ir_raw_addr
+    "#<#{self.class}:fd #{fileno}, #{family}, #{address}, #{port}>"
+  rescue StandardError
+    "#<#{self.class}:fd #{fileno}>"
+  end
+end
+
+class TCPServer
+  # TCPServer.new takes (port) or (host, port); the TCPSocket singleton #new
+  # defined above is about the *client* shape and must not be inherited here.
+  class << self
+    # __ir_raw_new is TCPSocket's alias for the builtin constructor; aliasing it
+    # again here would make TCPSocket.new recurse back into this override.
+    def new(*args, &block)
+      unless block.nil?
+        warn "warning: TCPServer::new() does not take block; use TCPServer::open() instead"
+      end
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)" if args.size > 2
+      host, port = args.size == 1 ? [nil, args[0]] : args
+      host = nil if !host.nil? && host.respond_to?(:to_str) && host.to_str.empty?
+      __ir_raw_new(host, Socket.__ir_port_arg(port))
+    end
+
+    def open(*args, &block)
+      sock = new(*args)
+      return sock unless block
+      begin
+        block.call(sock)
+      ensure
+        sock.close unless sock.closed?
+      end
+    end
+  end
+end
+
+class UDPSocket
+  class << self
+    alias_method :__ir_raw_new, :new
+
+    def new(family = Socket::AF_INET)
+      __ir_raw_new(Socket.__ir_family_arg(family))
+    end
+
+    def open(*args, &block)
+      sock = new(*args)
+      return sock unless block
+      begin
+        block.call(sock)
+      ensure
+        sock.close unless sock.closed?
+      end
+    end
+  end
+end
+
+class Socket
+  # bind/connect accept an Addrinfo as well as a packed sockaddr.
+  alias_method :__ir_raw_bind, :bind
+  alias_method :__ir_raw_connect, :connect
+
+  def bind(sockaddr)
+    __ir_raw_bind(Addrinfo === sockaddr ? sockaddr.to_sockaddr : sockaddr)
+  end
+
+  def connect(sockaddr)
+    __ir_raw_connect(Addrinfo === sockaddr ? sockaddr.to_sockaddr : sockaddr)
+  end
+
+  def connect_nonblock(sockaddr, exception: true)
+    __ir_raw_connect_nonblock(Addrinfo === sockaddr ? sockaddr.to_sockaddr : sockaddr)
+    0
+  rescue SocketError => e
+    case Socket.__ir_socket_error_code(e)
+    when "WouldBlock", "InProgress"
+      raise IO::EINPROGRESSWaitWritable, "Operation now in progress" if exception
+      :wait_writable
+    when "IsConnected"
+      raise Errno::EISCONN
+    else
+      raise
+    end
+  end
+
+  # Socket#recvfrom_nonblock has no C# counterpart (only UDPSocket's has); poll
+  # for readiness first and then do the ordinary recvfrom, which cannot block
+  # once poll(2) has said the socket is readable.
+  def recvfrom_nonblock(length, flags = nil, buffer = nil, exception: true)
+    unless IO.select([self], nil, nil, 0)
+      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      return :wait_readable
+    end
+    data, sender = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
+    unless buffer.nil?
+      encoding = buffer.encoding
+      buffer.replace(data)
+      buffer.force_encoding(encoding)
+      data = buffer
+    end
+    [data, Addrinfo.new(sender, nil, Socket::SOCK_DGRAM, 0)]
+  end
+
+  class << self
+    alias_method :__ir_raw_getaddrinfo, :getaddrinfo
+    alias_method :__ir_raw_gethostbyname, :gethostbyname
+
+    # The C# Socket.getaddrinfo resolves names but ignores the family, socktype,
+    # protocol and flags arguments and always reports socktype 0 / protocol 0.
+    # Do the getaddrinfo(3) part of the job here: family filtering, the
+    # AI_PASSIVE wildcard-vs-loopback choice for a nil host, one entry per
+    # (socktype, protocol) pair, and the reverse_lookup override CRuby takes as
+    # a 7th argument.
+    def getaddrinfo(host, service = nil, family = nil, socktype = nil,
+                    protocol = nil, flags = nil, reverse_lookup = nil)
+      fam = family.nil? ? AF_UNSPEC : __ir_family_arg(family)
+      unless fam == AF_UNSPEC || fam == AF_INET || fam == AF_INET6
+        raise __ir_resolution_error("getaddrinfo: Address family for hostname not supported",
+                                    EAI_FAMILY)
+      end
+      socktype = socktype.nil? ? 0 : __ir_socktype_arg(socktype)
+      protocol = __ir_protocol_arg(protocol)
+      port = __ir_service_arg(service) || 0
+      passive = !flags.nil? && (flags.to_i & AI_PASSIVE) != 0
+
+      addresses =
+        if host.nil? || (host.respond_to?(:to_str) && host.to_str.empty?)
+          fam == AF_INET6 ? [passive ? "::" : "::1"] : [passive ? "0.0.0.0" : "127.0.0.1"]
+        else
+          found = __ir_raw_getaddrinfo(host, nil, 0, 0, 0, 0).map { |entry| entry[3] }
+          wanted = found.select { |a| a.include?(":") == (fam == AF_INET6) }
+          fam == AF_UNSPEC || wanted.empty? ? found : wanted
+        end
+
+      reverse = if reverse_lookup.nil?
+        !BasicSocket.do_not_reverse_lookup
+      else
+        reverse_lookup == true || reverse_lookup == :hostname
+      end
+
+      pairs = __ir_socktype_pairs(socktype, protocol)
+      addresses.uniq.flat_map do |address|
+        af = address.include?(":") ? AF_INET6 : AF_INET
+        name = address
+        if reverse
+          name = begin
+            getnameinfo([af == AF_INET6 ? "AF_INET6" : "AF_INET", port, address])[0]
+          rescue StandardError
+            address
+          end
+        end
+        pairs.map do |st, pr|
+          [af == AF_INET6 ? "AF_INET6" : "AF_INET", port, name, address, af, st, pr]
+        end
+      end
+    end
+
+    # getaddrinfo(3) with neither a socket type nor a protocol reports one entry
+    # per usable pair; with one of the two given it fills in the other.
+    def __ir_socktype_pairs(socktype, protocol) # :nodoc:
+      return [[socktype, protocol]] unless protocol == 0
+      case socktype
+      when 0
+        [[SOCK_STREAM, IPPROTO_TCP], [SOCK_DGRAM, IPPROTO_UDP]]
+      when SOCK_STREAM then [[SOCK_STREAM, IPPROTO_TCP]]
+      when SOCK_DGRAM then [[SOCK_DGRAM, IPPROTO_UDP]]
+      else [[socktype, 0]]
+      end
+    end
+
+    def __ir_resolution_error(message, code) # :nodoc:
+      error = ResolutionError.new(message)
+      error.instance_variable_set(:@__ir_error_code, code)
+      error
+    end
+
+    def __ir_service_arg(service) # :nodoc:
+      return nil if service.nil?
+      return service if service.kind_of?(Integer)
+      name = service.to_s
+      return name.to_i if name =~ /\A\d+\z/
+      return 0 if name.empty?
+      begin
+        getservbyname(name)
+      rescue StandardError
+        raise SocketError, "getaddrinfo: Servname not supported for ai_socktype"
+      end
+    end
+
+    # TCPServer.new / TCPSocket.new coerce the port through #to_str and then
+    # read it as a number or a service name.
+    def __ir_port_arg(port) # :nodoc:
+      return 0 if port.nil?
+      return port if port.kind_of?(Integer)
+      unless port.respond_to?(:to_str)
+        raise TypeError, "no implicit conversion of #{port.class} into String"
+      end
+      __ir_service_arg(port.to_str)
+    end
+  end
+
+  class ResolutionError
+    def error_code
+      @__ir_error_code
+    end
+
+    # gethostbyname(3) understands the two magic names inet_addr(3) does.
+    def gethostbyname(host)
+      case host.to_s
+      when "<broadcast>" then ["255.255.255.255", [], AF_INET, [255, 255, 255, 255].pack("C4")]
+      when "<any>" then ["0.0.0.0", [], AF_INET, [0, 0, 0, 0].pack("C4")]
+      else __ir_raw_gethostbyname(host)
+      end
+    end
+  end
+end
+
+# Socket.ip_address_list / Socket.getifaddrs over System.Net.NetworkInformation,
+# which is the only interface enumeration .NET exposes.  It has no notion of the
+# ifaddr flags or of a point-to-point destination address, so #flags reports the
+# subset that can be derived from the interface status and #dstaddr is nil.
+class Socket
+  load_assembly 'System.Net.NetworkInformation'
+
+  class Ifaddr
+    def initialize(name, ifindex, flags, addr, netmask, broadaddr, dstaddr)
+      @name, @ifindex, @flags = name, ifindex, flags
+      @addr, @netmask, @broadaddr, @dstaddr = addr, netmask, broadaddr, dstaddr
+    end
+
+    attr_reader :name, :ifindex, :flags, :addr, :netmask, :broadaddr, :dstaddr
+
+    def inspect
+      "#<Socket::Ifaddr #{@name} #{@addr ? @addr.inspect_sockaddr : ""}>"
+    end
+  end
+
+  IFF_UP__ = 0x1 unless const_defined?(:IFF_UP__, false)
+  IFF_LOOPBACK__ = 0x8 unless const_defined?(:IFF_LOOPBACK__, false)
+
+  def self.__ir_interfaces # :nodoc:
+    System::Net::NetworkInformation::NetworkInterface.get_all_network_interfaces
+  rescue Exception
+    []
+  end
+
+  def self.__ir_netmask_for(address, prefix) # :nodoc:
+    return nil if prefix.nil? || prefix < 0
+    if address.include?(":")
+      words = (0...8).map do |i|
+        bits = [[prefix - i * 16, 0].max, 16].min
+        (0xffff << (16 - bits)) & 0xffff
+      end
+      Addrinfo.ip(Socket.__ir_unpack_ipv6(words.pack("n8")))
+    else
+      mask = prefix.zero? ? 0 : ((0xffffffff << (32 - prefix)) & 0xffffffff)
+      Addrinfo.ip([mask].pack("N").unpack("C4").join("."))
+    end
+  end
+
+  def self.getifaddrs
+    index = 0
+    __ir_interfaces.flat_map do |ni|
+      index += 1
+      up = ni.operational_status.to_s == "Up"
+      loopback = ni.network_interface_type.to_s == "Loopback"
+      flags = (up ? IFF_UP__ : 0) | (loopback ? IFF_LOOPBACK__ : 0)
+      name = ni.name.to_s
+      unicast = begin
+        ni.get_ip_properties.unicast_addresses.to_a
+      rescue Exception
+        []
+      end
+      unicast.map do |u|
+        address = u.address.to_s.split("%").first.to_s
+        prefix = begin
+          u.prefix_length
+        rescue Exception
+          nil
+        end
+        Ifaddr.new(name, index, flags, Addrinfo.ip(address),
+                   __ir_netmask_for(address, prefix), nil, nil)
+      end
+    end
+  end
+
+  def self.ip_address_list
+    list = getifaddrs.map { |ifaddr| ifaddr.addr }.compact
+    return list unless list.empty?
+    [Addrinfo.ip("127.0.0.1")]
+  end
+end
