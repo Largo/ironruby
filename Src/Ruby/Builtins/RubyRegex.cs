@@ -24,7 +24,7 @@ using IronRuby.Runtime;
 using System.Collections.Generic;
 
 namespace IronRuby.Builtins {
-    public partial class RubyRegex : IEquatable<RubyRegex>, IDuplicable {
+    public partial class RubyRegex : IEquatable<RubyRegex>, IDuplicable, IRubyObjectState {
         // 1.9: correctly encoded, switched to characters 
         // 1.8: k-coded binary data, if _options specify encoding, or raw binary data otherwise.
         private MutableString/*!*/ _pattern;
@@ -39,6 +39,36 @@ namespace IronRuby.Builtins {
 
         // Ruby 1.8: match operations use KCODE encoding so we need to remember the one for which we have cached CLR Regex.
         private RubyRegexOptions _cachedKCode;
+
+        private const int FrozenFlag = 1;
+        private const int TaintedFlag = 2;
+        private const int UntrustedFlag = 4;
+
+        // A regexp literal is frozen by MRI, so the state has to live on the object itself rather
+        // than in the context's instance data, which the literal-construction path has no access to.
+        private int _flags;
+
+        #region IRubyObjectState Members
+
+        public bool IsFrozen {
+            get { return (_flags & FrozenFlag) != 0; }
+        }
+
+        public bool IsTainted {
+            get { return (_flags & TaintedFlag) != 0; }
+            set { _flags = (_flags & ~TaintedFlag) | (value ? TaintedFlag : 0); }
+        }
+
+        public bool IsUntrusted {
+            get { return (_flags & UntrustedFlag) != 0; }
+            set { _flags = (_flags & ~UntrustedFlag) | (value ? UntrustedFlag : 0); }
+        }
+
+        public void Freeze() {
+            _flags |= FrozenFlag;
+        }
+
+        #endregion
 
         #region Construction
 

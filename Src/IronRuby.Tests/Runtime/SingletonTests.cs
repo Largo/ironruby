@@ -285,8 +285,11 @@ p $Sx.class_variables.sort
 
         public void AllowedSingletons1() {
             TestOutput(@"
-ok = ['x', true, false, nil, //]
-error = [1 << 70, 1, 1.0, :foo]
+# a regexp literal is frozen, so defining a singleton method on one raises FrozenError,
+# which is what CRuby 4.0.6 does too. Opening its singleton class still works, see
+# AllowedSingletons2.
+ok = ['x', true, false, nil]
+error = [1 << 70, 1, 1.0, :foo, //]
 
 ok.each do |x| 
   def x.foo; end 

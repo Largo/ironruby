@@ -41,6 +41,11 @@ namespace IronRuby.Builtins {
         // backreference in the pattern, including one written before the named group.
         private readonly bool _hasNamedGroup;
 
+        // Nesting depth of groups and of the absent operator's sub-buffer. \K rewrites everything
+        // emitted so far as a lookbehind, which is only meaningful at the top level.
+        private int _groupDepth;
+        private int _absentDepth;
+
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
@@ -558,7 +563,9 @@ namespace IronRuby.Builtins {
                 _groupCount++;
                 Append('(');
             }
+            _groupDepth++;
             Parse(true);
+            _groupDepth--;
             Append(')');
         }
 
@@ -583,7 +590,9 @@ namespace IronRuby.Builtins {
         private void ParseAbsentExpression() {
             var outer = _sb;
             _sb = new StringBuilder();
+            _absentDepth++;
             Parse(true);
+            _absentDepth--;
             string absent = _sb.ToString();
             _sb = outer;
 
@@ -672,6 +681,22 @@ namespace IronRuby.Builtins {
                 
                 case 'k':
                     ParseBackreference();
+                    break;
+
+                case 'R':
+                    // A generic line break: CRLF as a unit, or any single line terminator.
+                    // Atomic so that CRLF never backtracks into matching just the CR.
+                    _sb.Append("(?>\\r\\n|[\\n\\v\\f\\r\\u0085\\u2028\\u2029])");
+                    break;
+
+                case 'K':
+                    // Keep: everything matched so far is excluded from the reported match. .NET
+                    // has no such operator but does support variable-length lookbehind, so the
+                    // pattern emitted so far becomes the lookbehind of what follows.
+                    if (_absentDepth != 0 || _groupDepth != 0) {
+                        throw MakeError("\\K is only supported at the top level of a pattern");
+                    }
+                    _sb.Insert(0, "(?<=").Append(')');
                     break;
 
                 case 'G':   // start position

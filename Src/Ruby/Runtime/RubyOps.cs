@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -1726,13 +1726,13 @@ namespace IronRuby.Runtime {
                 if (once) {
                     // Note that the user is responsible for thread synchronization
                     if (regexpCache.Value == null) {
-                        regexpCache.Value = createRegex();
+                        regexpCache.Value = CreateFrozen(createRegex);
                     }
                     return regexpCache.Value;
                 } else {
                     // In the future, we can consider caching the last Regexp. For some regexp literals 
                     // with substitution, the substition will be the same most of the time
-                    return createRegex();
+                    return CreateFrozen(createRegex);
                 }
             } catch (RegexpError e) {
                 if (isLiteralWithoutSubstitutions) {
@@ -1743,6 +1743,17 @@ namespace IronRuby.Runtime {
                     throw;
                 }
             }
+        }
+
+        /// <summary>
+        /// MRI freezes a regexp literal, interpolated or not, but leaves Regexp.new unfrozen.
+        /// Every literal is built through here, so this is the one place that has to do it.
+        /// It does not intern them: /x/.equal?(/x/) is false in MRI too.
+        /// </summary>
+        private static RubyRegex/*!*/ CreateFrozen(Func<RubyRegex> createRegex) {
+            var result = createRegex();
+            result.Freeze();
+            return result;
         }
 
         [Emitted]
