@@ -2115,3 +2115,207 @@ module IronRubySocketErrors__ # :nodoc: all
 end
 
 IronRubySocketErrors__.wrap(Socket, :accept, :sysaccept)
+
+# ---------------------------------------------------------------------------
+# The remaining shapes: half-closed sockets, Addrinfo destinations, the IPv6
+# arms of the name-lookup singletons, and the Socket-returning factories.
+
+class BasicSocket
+  alias_method :__ir_half_close_read, :close_read
+  alias_method :__ir_half_close_write, :close_write
+  alias_method :__ir_dest_send, :send
+
+  # CRuby's close_read/close_write only shut one direction down; the socket stays
+  # open until both have been closed, and the closed direction answers IOError
+  # rather than whatever errno the shutdown left behind.
+  def close_read
+    raise IOError, "closed stream" if closed?
+    unless @__ir_read_closed
+      @__ir_read_closed = true
+      __ir_half_close_read rescue nil
+    end
+    close if @__ir_write_closed
+    nil
+  end
+
+  def close_write
+    raise IOError, "closed stream" if closed?
+    unless @__ir_write_closed
+      @__ir_write_closed = true
+      __ir_half_close_write rescue nil
+    end
+    close if @__ir_read_closed
+    nil
+  end
+
+  def __ir_check_readable # :nodoc:
+    raise IOError, "not opened for reading" if @__ir_read_closed && !closed?
+  end
+  private :__ir_check_readable
+
+  def __ir_check_writable # :nodoc:
+    raise IOError, "not opened for writing" if @__ir_write_closed && !closed?
+  end
+  private :__ir_check_writable
+
+  # A destination may be an Addrinfo as well as a packed sockaddr.
+  def send(message, flags = 0, dest = nil)
+    __ir_check_writable
+    return __ir_dest_send(message, flags) if dest.nil?
+    dest = dest.to_sockaddr if Addrinfo === dest
+    __ir_dest_send(message, flags, dest)
+  end
+end
+
+class Socket
+  class << self
+    alias_method :__ir_raw_getnameinfo, :getnameinfo
+    alias_method :__ir_raw_gethostbyaddr, :gethostbyaddr
+
+    # The C# getnameinfo builds an IPv4 endpoint out of the Array form, so an
+    # AF_INET6 tuple never reached the resolver.  Pack it instead.
+    def getnameinfo(sockaddr, flags = 0)
+      if sockaddr.kind_of?(Array)
+        port = sockaddr[1].to_i
+        address = (sockaddr[3] || sockaddr[2]).to_s
+        host, service = __ir_raw_getnameinfo(sockaddr_in(port, address), flags)
+      else
+        sockaddr = sockaddr.to_sockaddr if Addrinfo === sockaddr
+        host, service = __ir_raw_getnameinfo(sockaddr, flags)
+        port = sockaddr.to_str.byteslice(2, 2).unpack("n")[0]
+        address = nil
+      end
+      if (flags.to_i & NI_NUMERICSERV) != 0
+        service = port.to_s
+      end
+      if (flags.to_i & NI_NUMERICHOST) != 0 && address
+        host = address
+      end
+      [host, service]
+    end
+
+    def __ir_hostent(name, aliases, addresses) # :nodoc:
+      addresses = addresses.uniq
+      family = addresses.first.to_s.include?(":") ? AF_INET6 : AF_INET
+      packed = addresses.map do |address|
+        address.include?(":") ? __ir_pack_ipv6(address) : address.split(".").map { |o| o.to_i }.pack("C4")
+      end
+      [name, aliases, family, *packed]
+    end
+
+    # The C# gethostbyname/gethostbyaddr stop at [name, aliases] for IPv6 and
+    # never report the family or the packed address.
+    def gethostbyname(host)
+      text = host.to_s
+      case text
+      when "<broadcast>" then return ["255.255.255.255", [], AF_INET, [255, 255, 255, 255].pack("C4")]
+      when "<any>" then return ["0.0.0.0", [], AF_INET, [0, 0, 0, 0].pack("C4")]
+      end
+      raw = __ir_raw_gethostbyname(host)
+      addresses = begin
+        __ir_raw_getaddrinfo(host, nil, 0, 0, 0, 0).map { |entry| entry[3] }
+      rescue StandardError
+        []
+      end
+      addresses = [text] if addresses.empty?
+      numeric = text.include?(":") || text =~ /\A\d{1,3}(\.\d{1,3}){3}\z/
+      __ir_hostent(numeric ? text : raw[0], raw[1] || [], addresses)
+    end
+
+    def gethostbyaddr(address, family = nil)
+      raw = family.nil? ? __ir_raw_gethostbyaddr(address) : __ir_raw_gethostbyaddr(address, __ir_family_arg(family))
+      bytes = address.kind_of?(String) ? address : address.to_str
+      text = if bytes.bytesize == 16
+        __ir_unpack_ipv6(bytes)
+      else
+        bytes.unpack("C4").join(".")
+      end
+      __ir_hostent(raw[0], raw[1] || [], [text])
+    end
+  end
+
+  # CRuby's Socket.tcp / .tcp_server_sockets / .udp_server_sockets return Socket
+  # instances, not TCPSocket/TCPServer/UDPSocket.
+  def self.tcp(host, port, local_host = nil, local_port = nil,
+               connect_timeout: nil, resolv_timeout: nil) # :yield: socket
+    remote = Addrinfo.tcp(host, port)
+    sock = if local_host || local_port
+      remote.connect_from(local_host || (remote.ipv6? ? "::" : "0.0.0.0"), local_port.to_i)
+    else
+      remote.connect
+    end
+    return sock unless block_given?
+    begin
+      yield sock
+    ensure
+      sock.close unless sock.closed?
+    end
+  end
+
+  def self.tcp_server_sockets(host = nil, port = nil)
+    host, port = nil, host if port.nil?
+    sockets = [Addrinfo.tcp(host || "0.0.0.0", port.to_i).listen]
+    return sockets unless block_given?
+    begin
+      yield sockets
+    ensure
+      sockets.each { |s| s.close unless s.closed? }
+    end
+  end
+
+  def self.udp_server_sockets(host = nil, port = nil)
+    host, port = nil, host if port.nil?
+    sock = Socket.new(host.to_s.include?(":") ? AF_INET6 : AF_INET, SOCK_DGRAM, 0)
+    sock.bind(Socket.sockaddr_in(port.to_i, host || "0.0.0.0"))
+    sockets = [sock]
+    return sockets unless block_given?
+    begin
+      yield sockets
+    ensure
+      sockets.each { |s| s.close unless s.closed? }
+    end
+  end
+end
+
+class TCPSocket
+  class << self
+    def gethostbyname(host)
+      Socket.gethostbyname(host)
+    end
+  end
+end
+
+IronRubySocketErrors__.wrap(BasicSocket, :close_read, :close_write, :send)
+
+class BasicSocket
+  # Reading from a socket whose read half is closed is IOError in CRuby, not the
+  # errno the shutdown left behind.
+  [[:read, :__ir_check_readable], [:readpartial, :__ir_check_readable],
+   [:sysread, :__ir_check_readable], [:gets, :__ir_check_readable],
+   [:readline, :__ir_check_readable], [:readlines, :__ir_check_readable],
+   [:each_line, :__ir_check_readable], [:recv, :__ir_check_readable],
+   [:write, :__ir_check_writable], [:syswrite, :__ir_check_writable],
+   [:print, :__ir_check_writable], [:puts, :__ir_check_writable],
+   [:<<, :__ir_check_writable]].each do |name, check|
+    next unless method_defined?(name)
+    raw = :"__ir_halfclose_#{name}"
+    next if method_defined?(raw)
+    alias_method raw, name
+    define_method(name) do |*args, &block|
+      __send__(check)
+      __send__(raw, *args, &block)
+    end
+  end
+end
+
+class UDPSocket
+  # UDPSocket defines its own #send (it also takes host/port), so the Addrinfo
+  # destination has to be unpacked here too.
+  alias_method :__ir_dest_send, :send
+
+  def send(message, flags = 0, *dest)
+    __ir_dest_send(message, flags, *dest.map { |d| Addrinfo === d ? d.to_sockaddr : d })
+  end
+end
+
+IronRubySocketErrors__.wrap(UDPSocket, :send)

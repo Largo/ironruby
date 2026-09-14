@@ -340,8 +340,8 @@ namespace IronRuby.StandardLibrary.Sockets {
             // here to stop the RubySocket from being garbage collected?
             RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, () => self.Socket.Accept()));
             result.Add(s.GetFileDescriptor());
-            SocketAddress addr = s.Socket.RemoteEndPoint.Serialize();
-            result.Add(MutableString.CreateAscii(addr.ToString()));
+            // As for #accept: the packed sockaddr, which socket.rb turns into an Addrinfo.
+            result.Add(GetPeerName(s));
             return result;
         }
 
