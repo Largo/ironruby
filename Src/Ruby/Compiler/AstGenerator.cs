@@ -601,6 +601,21 @@ namespace IronRuby.Compiler.Ast {
             _currentVariableScope = oldScope.ParentVariableScope;
         }
 
+        /// <summary>
+        /// The label a top-level frame carries in a backtrace. An eval keeps the anonymous
+        /// name: MRI reports the enclosing frame's label there rather than one of its own.
+        /// </summary>
+        internal string/*!*/ TopLevelFrameLabel {
+            get {
+                switch (CompilerOptions.FactoryKind) {
+                    case TopScopeFactoryKind.Main: return "<main>";
+                    case TopScopeFactoryKind.File:
+                    case TopScopeFactoryKind.WrappedFile: return "<top (required)>";
+                    default: return RubyStackTraceBuilder.TopLevelMethodName;
+                }
+            }
+        }
+
         public void EnterSourceUnit(
             ScopeBuilder/*!*/ locals,
             MSA.Expression/*!*/ selfParameter,

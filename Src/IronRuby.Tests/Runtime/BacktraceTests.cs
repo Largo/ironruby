@@ -177,13 +177,13 @@ foo
 ");
             }, PreciseSinglePassTraces ? @"
 Backtrace4.rb:7:in `baz'
-Backtrace4.rb:11:in `foo'
+Backtrace4.rb:11:in `block in foo'
 *:*:in `Bar'
 Backtrace4.rb:11:in `foo'
 Backtrace4.rb:14
 " : @"
 Backtrace4.rb:6:in `baz'
-Backtrace4.rb:11:in `foo'
+Backtrace4.rb:11:in `block in foo'
 *:*:in `Bar'
 Backtrace4.rb:10:in `foo'
 Backtrace4.rb:0
@@ -260,14 +260,14 @@ end
 f1 rescue puts $@[0..5]
 ", PreciseSinglePassTraces ? @"
 Backtrace6.rb:23:in `f3'
-Backtrace6.rb:13:in `f2'
+Backtrace6.rb:13:in `block in f2'
 Backtrace6.rb:10:in `times'
 Backtrace6.rb:10:in `f2'
 Backtrace6.rb:3:in `f1'
 Backtrace6.rb:26
 " : @"
 Backtrace6.rb:22:in `f3'
-Backtrace6.rb:10:in `f2'
+Backtrace6.rb:10:in `block in f2'
 Backtrace6.rb:6:in `times'
 Backtrace6.rb:6:in `f2'
 Backtrace6.rb:2:in `f1'

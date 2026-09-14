@@ -236,7 +236,7 @@ namespace IronRuby.Compiler.Ast {
                 (isLambda ? Methods.DefineLambda : Methods.DefineBlock).OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, dispatcher,
                     BlockDispatcher.CreateLambda(
                         body,
-                        RubyStackTraceBuilder.EncodeMethodName(gen.CurrentMethod.MethodName, gen.SourcePath, Location, gen.DebugMode),
+                        RubyStackTraceBuilder.EncodeMethodName(BlockFrameLabel(gen), gen.SourcePath, Location, gen.DebugMode),
                         parameters,
                         parameterCount,
                         PostParameterCount,
@@ -244,6 +244,22 @@ namespace IronRuby.Compiler.Ast {
                     )
                 )
             );
+        }
+
+        // MRI labels a block frame "block in <enclosing>", and counts the nesting once there
+        // is more than one level. This runs after LeaveBlockDefinition, so the generator's
+        // block chain is already the enclosing one and this block is the extra level.
+        private static string/*!*/ BlockFrameLabel(AstGenerator/*!*/ gen) {
+            string enclosing = gen.CurrentMethod.MethodName ?? gen.TopLevelFrameLabel;
+
+            int levels = 1;
+            for (var block = gen.CurrentBlock; block != null; block = block.ParentBlock) {
+                levels++;
+            }
+
+            return levels == 1
+                ? "block in " + enclosing
+                : "block (" + levels + " levels) in " + enclosing;
         }
 
         private MSA.Expression/*!*/ GetParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i) {
