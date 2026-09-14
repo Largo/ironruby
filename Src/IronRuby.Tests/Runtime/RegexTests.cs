@@ -251,7 +251,9 @@ puts(/b#{/a/}/)
         (?:\#((?:[-_.!~*'()a-zA-Z\d;/?:@&=+$,\[\]]|%[a-fA-F\d]{2})*))?            (?# 9: fragment)
       $";
 
-            string e = @"^
+            // ^ is expanded: .NET's Multiline ^ also matches the empty line it considers a
+            // trailing \n to open, which Ruby has no equivalent of.
+            string e = @"(?:\A|(?<=\n)(?!\z))
         ([a-zA-Z][\-+.a-zA-Z0-9]*):                     
         (?:
            ((?:[\-_.!~*'()a-zA-Z0-9;?:@&=+$,]|%[a-fA-F0-9]{2})(?:[\-_.!~*'()a-zA-Z0-9;/?:@&=+$,\[\]]|%[a-fA-F0-9]{2})*)              

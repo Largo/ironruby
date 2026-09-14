@@ -347,6 +347,16 @@ namespace IronRuby.Builtins {
                         lastWasQuantifier = false;
                         break;
 
+                    case '^':
+                        // RegexOptions.Multiline is always on, and .NET's ^ then also matches the
+                        // empty line it considers a trailing \n to open. Ruby has no such line:
+                        // ^ matches at the start of the string and after a \n that is not the last
+                        // character. "a\n\nb".scan(/^/).size is 3 in Ruby, 4 in .NET.
+                        lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
+                        _sb.Append("(?:\\A|(?<=\\n)(?!\\z))");
+                        break;
+
                     default:
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
