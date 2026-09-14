@@ -3127,13 +3127,13 @@ class String
     end
 
     unless str.is_a?(::String)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{str.nil? ? 'nil' : str.class} into String")
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(str)} into String")
     end
 
     if index_args.size == 1
       range = index_args[0]
       unless range.is_a?(::Range)
-        ::Kernel.raise(::TypeError, "wrong argument type #{range.nil? ? 'nil' : range.class} (expected Range)")
+        ::Kernel.raise(::TypeError, "wrong argument type #{__ir_type_name__(range)} (expected Range)")
       end
       index, length = __byte_range__(range)
     else
@@ -3148,9 +3148,11 @@ class String
     if sub_args && sub_args.size == 1
       sub_range = sub_args[0]
       unless sub_range.is_a?(::Range)
-        ::Kernel.raise(::TypeError, "wrong argument type #{sub_range.nil? ? 'nil' : sub_range.class} (expected Range)")
+        ::Kernel.raise(::TypeError, "wrong argument type #{__ir_type_name__(sub_range)} (expected Range)")
       end
       sub_index, sub_length = str.__send__(:__byte_range__, sub_range)
+      str.__send__(:__require_byte_boundary__, sub_index)
+      str.__send__(:__require_byte_boundary__, sub_index + sub_length)
       str = str.byteslice(sub_index, sub_length) || str[0, 0]
     elsif sub_args
       sub_index = ::Kernel.Integer(sub_args[0])
@@ -3160,19 +3162,45 @@ class String
       if sub_index < 0 || sub_index > str.bytesize
         ::Kernel.raise(::IndexError, "index #{sub_args[0]} out of string")
       end
+      str.__send__(:__require_byte_boundary__, sub_index)
+      str.__send__(:__require_byte_boundary__, sub_index + sub_length)
       str = str.byteslice(sub_index, sub_length) || str[0, 0]
     end
 
     length = bytesize - index if index + length > bytesize
+
+    # Both ends of the replaced range have to sit on a character boundary.
+    __require_byte_boundary__(index)
+    __require_byte_boundary__(index + length)
+
+    # The result's encoding is the compatible one: an ASCII-only operand gives
+    # way to the other side.
+    target_encoding = encoding
+    if str.encoding != encoding
+      if ascii_only? && !str.ascii_only?
+        target_encoding = str.encoding
+      elsif !str.ascii_only?
+        ::Kernel.raise(::Encoding::CompatibilityError,
+          "incompatible character encodings: #{encoding} and #{str.encoding}")
+      end
+    end
 
     binary = dup
     binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
     piece = str.dup
     piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
     result = binary[0, index] + piece + binary[(index + length)..-1].to_s
-    result.force_encoding(encoding) if result.respond_to?(:force_encoding)
+    result.force_encoding(target_encoding) if result.respond_to?(:force_encoding)
     replace(result)
   end unless method_defined?(:bytesplice)
+
+  # MRI refuses a byte offset that falls inside a character.
+  def __require_byte_boundary__(offset)
+    return if offset <= 0 || offset >= bytesize || bytesize == length
+    return if __ir_char_starts__.include?(offset)
+    ::Kernel.raise(::IndexError, "offset #{offset} does not land on character boundary")
+  end
+  private :__require_byte_boundary__
 
   def __byte_range__(range)
     size = bytesize

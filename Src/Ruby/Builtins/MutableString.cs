@@ -2491,9 +2491,13 @@ namespace IronRuby.Builtins {
                 result.Append('\\');
             } else if (currentChar < 0x0080) {
                 if (IsUnnamedControlCharacter(currentChar) && currentChar != quote) {
-                    // In a Unicode string MRI spells a control character that has no
-                    // single-letter escape as \uXXXX, not as \xXX.
-                    AppendUnicodeEscape(result, currentChar);
+                    // #inspect spells a control character with no single-letter escape as
+                    // \uXXXX; #dump - which is the escape-everything mode - uses \xXX.
+                    if ((escape & Escape.NonAscii) != 0) {
+                        AppendHexEscape(result, currentChar);
+                    } else {
+                        AppendUnicodeEscape(result, currentChar);
+                    }
                 } else {
                     AppendBinaryCharRepresentation(result, currentChar, nextChar, escape, quote);
                 }
@@ -2502,22 +2506,63 @@ namespace IronRuby.Builtins {
                     currentChar = Tokenizer.ToCodePoint(currentChar, nextChar);
                     inc = 2;
                 }
-                result.Append("\\u{");
-                result.Append(Convert.ToString(currentChar, 16));
-                result.Append('}');
+                AppendCodepointEscape(result, currentChar);
             } else if (nextChar != -1 && Char.IsSurrogatePair((char)currentChar, (char)nextChar)) {
-                result.Append((char)currentChar);
-                result.Append((char)nextChar);
+                int codepoint = Tokenizer.ToCodePoint(currentChar, nextChar);
                 inc = 2;
+                if (IsPrintableCodepoint(codepoint)) {
+                    result.Append((char)currentChar);
+                    result.Append((char)nextChar);
+                } else {
+                    AppendCodepointEscape(result, codepoint);
+                }
             } else if (Char.IsSurrogate((char)currentChar)) {
                 // we have to escape - the character is incomplete:
                 result.Append("\\u{");
                 result.Append(Convert.ToString(currentChar, 16));
                 result.Append('}');
+            } else if (!IsPrintableCodepoint(currentChar)) {
+                // MRI's #inspect escapes anything Onigmo does not call printable, which is
+                // how "\u0080".inspect is "\"\\u0080\"" and not an invisible byte.
+                AppendCodepointEscape(result, currentChar);
             } else {
                 result.Append((char)currentChar);
             }
             return inc;
+        }
+
+        /// <summary>\uXXXX up to U+FFFF, \u{XXXXXX} above it - MRI writes both in upper case.</summary>
+        private static void AppendCodepointEscape(StringBuilder/*!*/ result, int c) {
+            if (c <= 0xFFFF) {
+                AppendUnicodeEscape(result, c);
+            } else {
+                result.Append("\\u{");
+                result.Append(Convert.ToString(c, 16).ToUpperInvariant());
+                result.Append('}');
+            }
+        }
+
+        /// <summary>Approximates Onigmo's ONIGENC_IS_CODE_PRINT for Unicode.</summary>
+        private static bool IsPrintableCodepoint(int c) {
+            if (c < 0 || c > 0x10FFFF) {
+                return false;
+            }
+            UnicodeCategory category = (c <= 0xFFFF)
+                ? CharUnicodeInfo.GetUnicodeCategory((char)c)
+                : CharUnicodeInfo.GetUnicodeCategory(Char.ConvertFromUtf32(c), 0);
+
+            // Cf (soft hyphen, ZWSP, BOM, ...) and Co (private use) are printable to MRI;
+            // Cc, Cs, Cn, Zl and Zp are not.
+            switch (category) {
+                case UnicodeCategory.Control:
+                case UnicodeCategory.Surrogate:
+                case UnicodeCategory.OtherNotAssigned:
+                case UnicodeCategory.LineSeparator:
+                case UnicodeCategory.ParagraphSeparator:
+                    return false;
+                default:
+                    return true;
+            }
         }
 
         public static void AppendCharRepresentation(StringBuilder/*!*/ result, int currentChar, int nextChar, Escape escape, 

@@ -730,8 +730,10 @@ namespace IronRuby.Tests {
             var result = MutableString.AppendUnicodeRepresentation(new StringBuilder(), Encoding.UTF8.GetString(u12345), MutableString.Escape.NonAscii, -1, -1);
             Assert(result.ToString() == "\\u{12345}");
 
+            // Checked against CRuby 4.0.6: "\u{215C}".dump is "\"\\u215C\"" - a codepoint that
+            // fits in four digits is written \uXXXX, and the hex digits are upper case.
             result = MutableString.AppendUnicodeRepresentation(new StringBuilder(), Encoding.UTF8.GetString(u215c), MutableString.Escape.NonAscii, -1, -1);
-            Assert(result.ToString() == "\\u{215c}");
+            Assert(result.ToString() == "\\u215C");
 
             //var incompleteChar = MS(new byte[] { 0xF0, 0x92 }, RubyEncoding.UTF8);
             //AssertExceptionThrown<DecoderFallbackException>(() => incompleteChar.Append('x'));
