@@ -27,7 +27,7 @@ namespace IronRuby.Builtins {
     /// For the purposes of the bitwise operations and [], a Bignum is treated as if it were an infinite-length bitstring with 2s complement representation. 
     /// While Fixnum values are immediate, Bignum objects are notassignment and parameter passing work with references to objects, not the objects themselves. 
     /// </summary>
-    [RubyClass("Bignum", Extends = typeof(BigInteger), Inherits = typeof(Integer)), Includes(typeof(ClrBigInteger), Copy = true)]
+    [RubyClass("Bignum", Extends = typeof(BigInteger), Inherits = typeof(Integer)), Includes(typeof(ClrInteger), Copy = true)]
     [HideMethod(">")]
     [HideMethod(">=")]
     [HideMethod("<")]

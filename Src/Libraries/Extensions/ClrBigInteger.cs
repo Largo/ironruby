@@ -28,8 +28,11 @@ namespace IronRuby.Builtins {
     /// Mixed-in all .NET numeric primitive types that cannot be widened to 32 bit signed integer.
     /// (uint, long, ulong, BigInteger). 
     /// </summary>
-    [RubyModule("BigInteger", DefineIn = typeof(IronRubyOps.Clr))]
-    public sealed class ClrBigInteger {
+    // Merged into the Integer class: Ruby 2.4 unified Fixnum and Bignum into a
+    // single Integer, so the int-self and BigInteger-self operations have to live
+    // in one trait type to end up as overloads of one method rather than two
+    // definitions where the second silently replaces the first.
+    public static partial class ClrInteger {
         #region Arithmetic Operators
 
         #region -@
@@ -513,8 +516,15 @@ namespace IronRuby.Builtins {
             }
 
             double selfFloat = self.ToFloat64();
-            BigInteger div = new BigInteger(selfFloat / other);
+            // Ruby floors the quotient and gives the remainder the sign of the divisor;
+            // C#'s % takes the sign of the dividend and truncates towards zero.  Derive
+            // the remainder from % rather than from div * other, which loses every
+            // significant digit once self is far outside double's exact integer range.
+            BigInteger div = new BigInteger(Math.Floor(selfFloat / other));
             double mod = selfFloat % other;
+            if (mod != 0.0 && (mod < 0.0) != (other < 0.0)) {
+                mod += other;
+            }
 
             return RubyOps.MakeArray2(Protocols.Normalize(div), mod);
         }
@@ -594,6 +604,74 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region Comparisons
+
+        // Bignum used to inherit <, <=, > and >= from Comparable, because the Bignum
+        // class carried no definitions of its own.  Integer does carry them (they came
+        // from the old Fixnum class), and their catch-all overload coerces and retries,
+        // which for two integers is an infinite recursion.  Define the numeric cases.
+        #region <, <=, >, >=
+
+        [RubyMethod("<")]
+        public static bool LessThan(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
+            return self < other;
+        }
+
+        [RubyMethod("<")]
+        public static bool LessThan(BigInteger/*!*/ self, int other) {
+            return self < (BigInteger)other;
+        }
+
+        [RubyMethod("<")]
+        public static bool LessThan(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return ToFloat(context, self) < other;
+        }
+
+        [RubyMethod("<=")]
+        public static bool LessThanOrEqual(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
+            return self <= other;
+        }
+
+        [RubyMethod("<=")]
+        public static bool LessThanOrEqual(BigInteger/*!*/ self, int other) {
+            return self <= (BigInteger)other;
+        }
+
+        [RubyMethod("<=")]
+        public static bool LessThanOrEqual(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return ToFloat(context, self) <= other;
+        }
+
+        [RubyMethod(">")]
+        public static bool GreaterThan(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
+            return self > other;
+        }
+
+        [RubyMethod(">")]
+        public static bool GreaterThan(BigInteger/*!*/ self, int other) {
+            return self > (BigInteger)other;
+        }
+
+        [RubyMethod(">")]
+        public static bool GreaterThan(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return ToFloat(context, self) > other;
+        }
+
+        [RubyMethod(">=")]
+        public static bool GreaterThanOrEqual(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
+            return self >= other;
+        }
+
+        [RubyMethod(">=")]
+        public static bool GreaterThanOrEqual(BigInteger/*!*/ self, int other) {
+            return self >= (BigInteger)other;
+        }
+
+        [RubyMethod(">=")]
+        public static bool GreaterThanOrEqual(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            return ToFloat(context, self) >= other;
+        }
+
+        #endregion
 
         #region <=>
 
@@ -683,57 +761,9 @@ namespace IronRuby.Builtins {
             return !Double.IsNaN(other) && Protocols.ConvertToDouble(context, self) == other;
         }
 
-        /// <summary>
-        /// Returns true if other has the same value as self, where other is not Fixnum, Bignum or Float.
-        /// Contrast this with Bignum#eql?, which requires other to be a Bignum.
-        /// </summary>
-        /// <returns>true or false</returns>
-        /// <remarks>Dynamically invokes other == self (i.e. swaps self and other around)</remarks>
-        [RubyMethod("==")]
-        public static bool Equal(BinaryOpStorage/*!*/ equals, BigInteger/*!*/ self, object other) {
-            // If we can't convert then swap self and other and try again.
-            return Protocols.IsEqual(equals, other, self);
-        }
-
         #endregion
 
         #region eql?
-
-        /// <summary>
-        /// Returns true only if other is a Bignum with the same value as self.
-        /// Contrast this with Bignum#==, which performs type conversions. 
-        /// </summary>
-        /// <returns>true if other is Bignum and self == other</returns>
-        [RubyMethod("eql?")]
-        public static bool Eql(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return self == other;
-        }
-
-        /// <summary>
-        /// Returns true only if other is a Bignum with the same value as self, where other is Fixnum.
-        /// Contrast this with Bignum#==, which performs type conversions. 
-        /// </summary>
-        /// <returns>false</returns>
-        /// <remarks>
-        /// Always returns false since other is not Bignum.
-        /// This overload is necessary otherwise the int will be implicitly cast to BigInteger,
-        /// even though it should always then return false in that case since other should
-        /// be too small to be equal to self, it is just a waste of a conversion.</remarks>
-        [RubyMethod("eql?")]
-        public static bool Eql(BigInteger/*!*/ self, int other) {
-            return false;
-        }
-
-        /// <summary>
-        /// Returns true only if other is a Bignum with the same value as self, where other is not Bignum or Fixnum.
-        /// Contrast this with Bignum#==, which performs type conversions. 
-        /// </summary>
-        /// <returns>false</returns>
-        /// <remarks>Always returns false since other is not Bignum</remarks>
-        [RubyMethod("eql?")]
-        public static bool Eql(BigInteger/*!*/ self, object other) {
-            return false;
-        }
 
         #endregion
 
@@ -993,21 +1023,27 @@ namespace IronRuby.Builtins {
         #region coerce
 
         /// <summary>
-        /// Attempts to coerce other to a Bignum.
+        /// Coerces two integers to each other: [other, self].
         /// </summary>
-        /// <returns>[other, self] as Bignums</returns>
+        /// <remarks>
+        /// The Bignum-era pair of coerce overloads is gone - it answered [other, self] only for
+        /// another Bignum and raised "can't coerce Float to Bignum" for everything else, which
+        /// was written when a Fixnum could never be a Bignum.  Numeric#coerce would be enough
+        /// on its own except that it decides "are these the same kind of number?" by comparing
+        /// <c>GetClassOf</c>, and an int self and a BigInteger self are only the same Ruby class
+        /// once Fixnum and Bignum are unified.  This overload states that directly, so a small
+        /// and a large integer coerce to integers rather than to Floats; anything else falls
+        /// through to Numeric's own to_f behaviour.
+        /// </remarks>
         [RubyMethod("coerce")]
-        public static RubyArray Coerce(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return RubyOps.MakeArray2(other, self);
+        public static RubyArray/*!*/ Coerce(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
+            return RubyOps.MakeArray2(Protocols.Normalize(other), Protocols.Normalize(self));
         }
 
-        /// <summary>
-        /// Attempts to coerce other to a Bignum, where other is not Fixnum or Bignum.
-        /// </summary>
-        /// <exception cref="InvalidOperationException">For any value of other.</exception>
         [RubyMethod("coerce")]
-        public static RubyArray Coerce(RubyContext/*!*/ context, BigInteger/*!*/ self, object other) {
-            throw RubyExceptions.CreateTypeError("can't coerce {0} to Bignum", context.GetClassDisplayName(other));
+        public static RubyArray/*!*/ Coerce(ConversionStorage<double>/*!*/ tof1, ConversionStorage<double>/*!*/ tof2,
+            object/*!*/ self, object other) {
+            return Numeric.Coerce(tof1, tof2, self, other);
         }
 
         #endregion

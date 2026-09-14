@@ -35,15 +35,15 @@ namespace IronRuby.Builtins {
     public static partial class UInt16Ops {
     }
 
-    [RubyClass(Extends = typeof(UInt32), Inherits = typeof(Integer), Restrictions = ModuleRestrictions.None), Includes(typeof(ClrBigInteger), Copy = true)]
+    [RubyClass(Extends = typeof(UInt32), Inherits = typeof(Integer), Restrictions = ModuleRestrictions.None), Includes(typeof(ClrInteger), Copy = true)]
     public static partial class UInt32Ops {
     }
 
-    [RubyClass(Extends = typeof(Int64), Inherits = typeof(Integer), Restrictions = ModuleRestrictions.None), Includes(typeof(ClrBigInteger), Copy = true)]
+    [RubyClass(Extends = typeof(Int64), Inherits = typeof(Integer), Restrictions = ModuleRestrictions.None), Includes(typeof(ClrInteger), Copy = true)]
     public static partial class Int64Ops {
     }
 
-    [RubyClass(Extends = typeof(UInt64), Inherits = typeof(Integer), Restrictions = ModuleRestrictions.None), Includes(typeof(ClrBigInteger), Copy = true)]
+    [RubyClass(Extends = typeof(UInt64), Inherits = typeof(Integer), Restrictions = ModuleRestrictions.None), Includes(typeof(ClrInteger), Copy = true)]
     public static partial class UInt64Ops {
     }
 

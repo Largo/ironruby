@@ -30,7 +30,7 @@ namespace IronRuby.Builtins {
     /// TODO: we might want to specialize some of the methods to preserve the exact type if possible (like adding byte and byte).
     /// </summary>
     [RubyModule("Integer", DefineIn = typeof(IronRubyOps.Clr))]
-    public static class ClrInteger {
+    public static partial class ClrInteger {
         public static readonly object Zero = ScriptingRuntimeHelpers.Int32ToObject(0);
         public static readonly object One = ScriptingRuntimeHelpers.Int32ToObject(1);
         public static readonly object MinusOne = ScriptingRuntimeHelpers.Int32ToObject(-1);
@@ -79,17 +79,6 @@ namespace IronRuby.Builtins {
             return self << shift;
         }
 
-        /// <summary>
-        /// Returns the value after shifting to the left (right if count is negative) the value in self by other bits.
-        /// (where other is not Fixnum)
-        /// </summary>
-        /// <returns>The value after the shift</returns>
-        /// <remarks>Converts to Bignum if the result cannot fit into Fixnum</remarks>
-        [RubyMethod("<<")]
-        public static object/*!*/ LeftShift(RubyContext/*!*/ context, int self, [DefaultProtocol]IntegerValue other) {
-            return ClrBigInteger.LeftShift(context, self, other);
-        }
-
         #endregion
 
         #region >>
@@ -115,17 +104,6 @@ namespace IronRuby.Builtins {
             } else {
                 return self >> shift;
             }
-        }
-
-        /// <summary>
-        /// Returns the value after shifting to the right (left if count is negative) the value in self by other bits.
-        /// (where other is not Fixnum)
-        /// </summary>
-        /// <returns>The value after the shift</returns>
-        /// <remarks>Converts to Bignum if the result cannot fit into Fixnum</remarks>
-        [RubyMethod(">>")]
-        public static object/*!*/ RightShift(RubyContext/*!*/ context, int self, [DefaultProtocol]IntegerValue other) {
-            return ClrBigInteger.RightShift(context, self, other);
         }
 
         #endregion
@@ -200,14 +178,6 @@ namespace IronRuby.Builtins {
             return other ^ self;
         }
 
-        /// <summary>
-        /// Performs bitwise XOR on self and other, where other is not Fixnum or Bignum
-        /// </summary>
-        [RubyMethod("^")]
-        public static object/*!*/ BitwiseXor(RubyContext/*!*/ context, int self, [DefaultProtocol]IntegerValue other) {
-            return ClrBigInteger.Xor(context, self, other);
-        }
-
         #endregion
 
         #region &
@@ -234,14 +204,6 @@ namespace IronRuby.Builtins {
             }
         }
 
-        /// <summary>
-        /// Performs bitwise AND on self and other, where other is not Fixnum or Bignum
-        /// </summary>
-        [RubyMethod("&")]
-        public static object/*!*/ BitwiseAnd(RubyContext/*!*/ context, int self, [DefaultProtocol]IntegerValue other) {
-            return ClrBigInteger.And(context, self, other);
-        }
-
         #endregion
 
         #region |
@@ -266,14 +228,6 @@ namespace IronRuby.Builtins {
             } else {
                 return result;
             }
-        }
-
-        /// <summary>
-        /// Performs bitwise OR on self and other, where other is not Fixnum or Bignum
-        /// </summary>
-        [RubyMethod("|")]
-        public static object/*!*/ BitwiseOr(RubyContext/*!*/ context, int self, [DefaultProtocol]IntegerValue other) {
-            return ClrBigInteger.BitwiseOr(context, self, other);
         }
 
         #endregion
@@ -332,21 +286,6 @@ namespace IronRuby.Builtins {
             return (double)self * other;
         }
 
-        /// <summary>
-        /// Returns self multiplied by other.
-        /// </summary>
-        /// <returns>
-        /// The class of the resulting object depends on the class of other and on the magnitude of the result. 
-        /// </returns>
-        /// <remarks>
-        /// Self is first coerced by other and then the * operator is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("*")]
-        public static object/*!*/ Multiply(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
-            object/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "*", self, other);
-        }
-
         #endregion
 
         #region **
@@ -361,7 +300,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("**")]
         public static object/*!*/ Power(int self, int other) {
             if (other >= 0) {
-                return ClrBigInteger.PowerNonNegative(self, other);
+                return ClrInteger.PowerNonNegative(self, other);
             } else if (self == 1) {
                 return One;
             } else {
@@ -376,18 +315,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("**")]
         public static double Power(int self, double other) {
             return Math.Pow(self, other);
-        }
-
-        /// <summary>
-        /// Raises self to the other power, where other is not Integer or Float.
-        /// </summary>
-        /// <remarks>
-        /// Self is first coerced by other and then the ** operator is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("**")]
-        public static object/*!*/ Power(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
-            RubyContext/*!*/ context, int self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "**", self, other);
         }
 
         #endregion
@@ -420,21 +347,6 @@ namespace IronRuby.Builtins {
             return (double)self + other;
         }
 
-        /// <summary>
-        /// Returns self added to other.
-        /// </summary>
-        /// <returns>
-        /// The class of the resulting object depends on the class of other and on the magnitude of the result. 
-        /// </returns>
-        /// <remarks>
-        /// Self is first coerced by other and then the + operator is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("+")]
-        public static object/*!*/ Add(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
-            object/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "+", self, other);
-        }
-
         #endregion
 
         #region -
@@ -463,21 +375,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("-")]
         public static double Subtract(int self, double other) {
             return (double)self - other;
-        }
-
-        /// <summary>
-        /// Subtracts other from self (i.e. self - other), where other is not Fixnum, or Float.
-        /// </summary>
-        /// <returns>
-        /// The class of the resulting object depends on the class of other and on the magnitude of the result. 
-        /// </returns>
-        /// <remarks>
-        /// Self is first coerced by other and then the - operator is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("-")]
-        public static object Subtract(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
-            RubyContext/*!*/ context, object self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "-", self, other);
         }
 
         #endregion
@@ -509,37 +406,25 @@ namespace IronRuby.Builtins {
             return MathUtils.FloorDivideUnchecked(self, other);
         }
 
-        /// <summary>
-        /// Divides self by other, where other is not a Fixnum.
-        /// </summary>
-        /// <returns>
-        /// The class of the resulting object depends on the class of other and on the magnitude of the result. 
-        /// </returns>
-        /// <remarks>
-        /// Self is first coerced by other and then the / operator is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("/")]
-        public static object DivideOp(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "/", self, other);
-        }
-
-        /// <summary>
-        /// Divides self by other, where other is not a Fixnum.
-        /// </summary>
-        /// <returns>
-        /// The class of the resulting object depends on the class of other and on the magnitude of the result. 
-        /// </returns>
-        /// <remarks>
-        /// Self is first coerced by other and then the div method is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("div")]
-        public static object Divide(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "div", self, other);
-        }
-
         [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
-        public static double FDiv(int self, [DefaultProtocol]int other) {
-            return self / (double)other;
+        public static double FDiv([NotNull]BigInteger/*!*/ self, double other) {
+            return self.ToFloat64() / other;
+        }
+
+        /// <summary>
+        /// Returns self / other as a Float, where other is neither an Integer nor a Float.
+        /// </summary>
+        /// <remarks>
+        /// Coerce and retry, like every other binary operator here.  The overload this replaces
+        /// took [DefaultProtocol]int, so it answered Rational(3,2) by calling to_int on it and
+        /// dividing by 1; CRuby coerces, so 1.fdiv(Rational(3,2)) is 0.666... and an argument
+        /// that is not a number at all gets "String can't be coerced into Integer" rather than
+        /// "no implicit conversion of String into Integer".
+        /// </remarks>
+        [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
+        public static object FDiv(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
+            object/*!*/ self, object other) {
+            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "fdiv", self, other);
         }
         /// <summary>
         /// Returns self modulo other, where other is Fixnum.  See <see cref="FloatOps.Divmod"/> for more information.
@@ -547,28 +432,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("%"), RubyMethod("modulo")]
         public static int Modulo(int self, int other) {
             return MathUtils.FloorRemainder(self, other);
-        }
-
-        /// <summary>
-        /// Returns self % other, where other is not Fixnum.
-        /// </summary>
-        /// <remarks>
-        /// First coerces self on other then calls % on the coerced self value.
-        /// </remarks>
-        [RubyMethod("%")]
-        public static object ModuloOp(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "%", self, other);
-        }
-
-        /// <summary>
-        /// Returns self modulo other, where other is not Fixnum.
-        /// </summary>
-        /// <remarks>
-        /// First coerces self on other then calls modulo on the coerced self value.
-        /// </remarks>
-        [RubyMethod("modulo")]
-        public static object Modulo(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "modulo", self, other);
         }
 
         /// <summary>
@@ -602,18 +465,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("divmod")]
         public static RubyArray/*!*/ DivMod(int self, int other) {
             return RubyOps.MakeArray2(Divide(self, other), Modulo(self, other));
-        }
-
-        /// <summary>
-        /// Returns an array containing the quotient and modulus obtained by dividing self by other.
-        /// </summary>
-        /// <returns>RubyArray of the form: [div, mod], where div is Integer</returns>
-        /// <remarks>
-        /// Self is first coerced by other and then the divmod method is invoked on the coerced self.
-        /// </remarks>
-        [RubyMethod("divmod")]
-        public static object DivMod(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, int self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "divmod", self, other);
         }
 
         #endregion
@@ -664,6 +515,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("zero?")]
         public static bool IsZero(int self) {
             return self == 0;
+        }
+
+        [RubyMethod("zero?")]
+        public static bool IsZero([NotNull]BigInteger/*!*/ self) {
+            return self.IsZero();
         }
 
         #endregion
@@ -780,7 +636,7 @@ namespace IronRuby.Builtins {
         /// i.e. call other == self
         /// </remarks>
         [RubyMethod("==")]
-        public static bool Equal(BinaryOpStorage/*!*/ equals, int self, object other) {
+        public static bool Equal(BinaryOpStorage/*!*/ equals, object/*!*/ self, object other) {
             // If self == other doesn't work then try other == self
             return Protocols.IsEqual(equals, other, self);
         }
@@ -865,27 +721,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_s")]
         public static object ToString(object/*!*/ self) {
             return MutableString.CreateAscii(self.ToString());
-        }
-
-        /// <summary>
-        /// Returns a string representing the value of self using base radix.
-        /// </summary>
-        /// <returns>MutableString</returns>
-        /// <example>
-        /// 12345.to_s(2)    #=> "11000000111001"
-        /// 12345.to_s(8)    #=> "30071"
-        /// 12345.to_s(10)   #=> "12345"
-        /// 12345.to_s(16)   #=> "3039"
-        /// 12345.to_s(36)   #=> "9ix"
-        /// </example>
-        [RubyMethod("to_s")]
-        public static object ToString([NotNull]BigInteger/*!*/ self, int radix) {
-            if (radix < 2 || radix > 36) {
-                throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);
-            }
-            // TODO: Should we try to use a Fixnum specific ToString?
-            // TODO: Can we do the ToLower in BigInteger?
-            return MutableString.CreateAscii(self.ToString(radix).ToLowerInvariant());
         }
 
         #endregion

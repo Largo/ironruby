@@ -735,7 +735,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("gcd")]
         public static object/*!*/ Gcd(BigInteger/*!*/ self, BigInteger/*!*/ other) {
-            return ClrBigInteger.Abs(SignedGcd(self, other));
+            return ClrInteger.Abs(SignedGcd(self, other));
         }
 
         [RubyMethod("gcd")]
@@ -767,7 +767,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("gcdlcm")]
         public static RubyArray/*!*/ GcdLcm(BigInteger/*!*/ self, BigInteger/*!*/ other) {
             BigInteger gcd = SignedGcd(self, other);
-            return new RubyArray { ClrBigInteger.Abs(gcd), Lcm(self, other, gcd) };
+            return new RubyArray { ClrInteger.Abs(gcd), Lcm(self, other, gcd) };
         }
 
         [RubyMethod("gcdlcm")]
