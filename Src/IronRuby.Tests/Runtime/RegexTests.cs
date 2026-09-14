@@ -83,10 +83,10 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"\u{5b 2a}", @"\[\*");
 
             // Posix categories
-            TestCorrectPatternTranslation(@"[x[:alnum:]y]", @"[x\p{L}\p{N}\p{M}y]");
-            TestCorrectPatternTranslation(@"[a[^:alnum:]b]", @"[a\P{L}b-[\p{N}\p{M}-[ab]]]");
-            TestCorrectPatternTranslation(@"[[:alpha:]]", @"[\p{L}\p{M}]");
-            TestCorrectPatternTranslation(@"[[^:alpha:]]", @"[\P{L}-[\p{M}]]");
+            TestCorrectPatternTranslation(@"[x[:alnum:]y]", @"[x\p{L}\p{Nd}\p{Nl}y]");
+            TestCorrectPatternTranslation(@"[a[^:alnum:]b]", @"[a\P{L}b-[\p{Nd}\p{Nl}-[ab]]]");
+            TestCorrectPatternTranslation(@"[[:alpha:]]", @"[\p{L}\p{Nl}]");
+            TestCorrectPatternTranslation(@"[[^:alpha:]]", @"[\P{L}-[\p{Nl}]]");
             TestCorrectPatternTranslation(@"[[:ascii:]]", @"[\p{IsBasicLatin}]");
             TestCorrectPatternTranslation(@"[[^:ascii:]]", @"[\P{IsBasicLatin}]");
             TestCorrectPatternTranslation(@"[[:blank:]]", "[\\p{Zs}\t]");
@@ -108,18 +108,18 @@ puts(/b#{/a/}/)
 
             // Unicode categories
             TestCorrectPatternTranslation(@"\p{L}", @"[\p{L}]");
-            TestCorrectPatternTranslation(@"\p{Alnum}", @"[\p{L}\p{N}\p{M}]");
-            TestCorrectPatternTranslation(@"\P{Alnum}*", @"[\P{L}-[\p{N}\p{M}]]*");
-            TestCorrectPatternTranslation(@"\P{^Alnum}", @"[\p{L}\p{N}\p{M}]");
-            TestCorrectPatternTranslation(@"[a\p{Alnum}b]", @"[a\p{L}\p{N}\p{M}b]");
-            TestCorrectPatternTranslation(@"[^\p{Alnum}]", "[\0-\uffff-[\\p{L}\\p{N}\\p{M}]]");
-            TestCorrectPatternTranslation(@"[\P{Alnum}]", @"[\P{L}-[\p{N}\p{M}]]");
-            TestCorrectPatternTranslation(@"\P{^Alnum}", @"[\p{L}\p{N}\p{M}]");
-            TestCorrectPatternTranslation(@"\p{^Alnum}", @"[\P{L}-[\p{N}\p{M}]]");
-            TestCorrectPatternTranslation(@"\p{Alnum}", @"[\p{L}\p{N}\p{M}]");
-            TestCorrectPatternTranslation(@"\P{Alnum}", @"[\P{L}-[\p{N}\p{M}]]");
-            TestCorrectPatternTranslation(@"\p{Alpha}", @"[\p{L}\p{M}]");
-            TestCorrectPatternTranslation(@"\P{Alpha}", @"[\P{L}-[\p{M}]]");
+            TestCorrectPatternTranslation(@"\p{Alnum}", @"[\p{L}\p{Nd}\p{Nl}]");
+            TestCorrectPatternTranslation(@"\P{Alnum}*", @"[\P{L}-[\p{Nd}\p{Nl}]]*");
+            TestCorrectPatternTranslation(@"\P{^Alnum}", @"[\p{L}\p{Nd}\p{Nl}]");
+            TestCorrectPatternTranslation(@"[a\p{Alnum}b]", @"[a\p{L}\p{Nd}\p{Nl}b]");
+            TestCorrectPatternTranslation(@"[^\p{Alnum}]", "[\0-\uffff-[\\p{L}\\p{Nd}\\p{Nl}]]");
+            TestCorrectPatternTranslation(@"[\P{Alnum}]", @"[\P{L}-[\p{Nd}\p{Nl}]]");
+            TestCorrectPatternTranslation(@"\P{^Alnum}", @"[\p{L}\p{Nd}\p{Nl}]");
+            TestCorrectPatternTranslation(@"\p{^Alnum}", @"[\P{L}-[\p{Nd}\p{Nl}]]");
+            TestCorrectPatternTranslation(@"\p{Alnum}", @"[\p{L}\p{Nd}\p{Nl}]");
+            TestCorrectPatternTranslation(@"\P{Alnum}", @"[\P{L}-[\p{Nd}\p{Nl}]]");
+            TestCorrectPatternTranslation(@"\p{Alpha}", @"[\p{L}\p{Nl}]");
+            TestCorrectPatternTranslation(@"\P{Alpha}", @"[\P{L}-[\p{Nl}]]");
             TestCorrectPatternTranslation(@"\p{ASCII}", "[\\p{IsBasicLatin}]");
             TestCorrectPatternTranslation(@"\P{ASCII}", "[\\P{IsBasicLatin}]");
             TestCorrectPatternTranslation(@"\p{Blank}", "[\\p{Zs}\t]");
@@ -165,7 +165,7 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"[\u{1 2 40}-z]", "[\u0001\u0002\u0040-z]");
             TestCorrectPatternTranslation(@"[\x3f-\u{40 1 2}]", "[\\\u003f-\u0040\u0001\u0002]");
             TestCorrectPatternTranslation(@"[\w-]", @"[\w\-]");
-            TestCorrectPatternTranslation(@"[\p{Alnum}-]", @"[\p{L}\p{N}\p{M}\-]");
+            TestCorrectPatternTranslation(@"[\p{Alnum}-]", @"[\p{L}\p{Nd}\p{Nl}\-]");
 
             // character set operations
             TestCorrectPatternTranslation("[a-z&&d-e]", "[a-z-[\0-\uffff-[d-e]]]");

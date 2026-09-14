@@ -369,6 +369,33 @@ namespace IronRuby.Builtins {
                         ParseGroupName(Read(), '\'');
                         break;
 
+                    case '(': {
+                        // conditional group: (?(1)yes|no), (?(<name>)...) or (?('name')...).
+                        // .NET has the same construct but spells the named form without the
+                        // brackets Onigmo requires around the name.
+                        Append('(');
+                        int delimiter = Read();
+                        int closing = (delimiter == '<') ? '>' : (delimiter == '\'') ? '\'' : -1;
+                        if (closing == -1) {
+                            Back();
+                        }
+                        while (true) {
+                            c = Read();
+                            if (c == -1) {
+                                throw MakeError("end pattern in group");
+                            }
+                            if (c == (closing == -1 ? ')' : closing)) {
+                                if (closing != -1 && Read() != ')') {
+                                    throw MakeError("invalid conditional pattern");
+                                }
+                                break;
+                            }
+                            Append((char)c);
+                        }
+                        Append(')');
+                        break;
+                    }
+
                     default:
                         throw MakeError("undefined group option");
                 }
@@ -1346,18 +1373,18 @@ namespace IronRuby.Builtins {
 
         private CharacterSet MakePosixCharacterClass(PosixCharacterClass charClass, bool positive) {
             switch (charClass) {
-                case PosixCharacterClass.Alnum: 
+                case PosixCharacterClass.Alnum:
                     if (positive) {
-                        return new CharacterSet(@"\p{L}\p{N}\p{M}"); 
+                        return new CharacterSet(@"\p{L}\p{Nd}\p{Nl}");
                     } else {
-                        return new CharacterSet(@"\P{L}", new CharacterSet(@"\p{N}\p{M}")); 
+                        return new CharacterSet(@"\P{L}", new CharacterSet(@"\p{Nd}\p{Nl}"));
                     }
 
                 case PosixCharacterClass.Alpha:
                     if (positive) {
-                        return new CharacterSet(@"\p{L}\p{M}"); 
+                        return new CharacterSet(@"\p{L}\p{Nl}");
                     } else {
-                        return new CharacterSet(@"\P{L}", new CharacterSet(@"\p{M}")); 
+                        return new CharacterSet(@"\P{L}", new CharacterSet(@"\p{Nl}"));
                     }
 
                 case PosixCharacterClass.Ascii:
@@ -1389,11 +1416,10 @@ namespace IronRuby.Builtins {
                     }
 
                 case PosixCharacterClass.Graph:
-                    // TODO: there are some differences (Unicode version?)
                     if (positive) {
-                        return new CharacterSet(@"\P{Z}", new CharacterSet(@"\p{C}")); 
+                        return new CharacterSet(@"\P{Z}", new CharacterSet(@"\p{Cc}\p{Cn}\p{Cs}"));
                     } else {
-                        return new CharacterSet(@"\p{Z}\p{C}"); 
+                        return new CharacterSet(@"\p{Z}\p{Cc}\p{Cn}\p{Cs}");
                     }
 
                 case PosixCharacterClass.Lower:
@@ -1406,9 +1432,9 @@ namespace IronRuby.Builtins {
 
                 case PosixCharacterClass.Print:
                     if (positive) {
-                        return new CharacterSet(@"\P{C}");
+                        return new CharacterSet(@"\P{Zl}", new CharacterSet(@"\p{Zp}\p{Cc}\p{Cn}\p{Cs}"));
                     } else {
-                        return new CharacterSet(@"\p{C}");
+                        return new CharacterSet(@"\p{Zl}\p{Zp}\p{Cc}\p{Cn}\p{Cs}");
                     }
 
                 case PosixCharacterClass.Punct:
@@ -1441,11 +1467,10 @@ namespace IronRuby.Builtins {
                     }
 
                 case PosixCharacterClass.Word:
-                    // TODO: there are some differences (Unicode version?)
                     if (positive) {
-                        return new CharacterSet(@"\p{L}\p{Nd}\p{Pc}\p{M}");
+                        return new CharacterSet("\\p{L}\\p{M}\\p{Nd}\\p{Nl}\\p{Pc}\u200c\u200d");
                     } else {
-                        return new CharacterSet(@"\P{L}", new CharacterSet(@"\p{Nd}\p{Pc}\p{M}"));
+                        return new CharacterSet(@"\P{L}", new CharacterSet("\\p{M}\\p{Nd}\\p{Nl}\\p{Pc}\u200c\u200d"));
                     }
             }
 
