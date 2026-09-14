@@ -75,6 +75,14 @@ namespace IronRuby.Prism {
                     $"syntax error: {first.Message} (line {bridge.Location(first.Location.Start).Line})");
             }
 
+            if (errorSink != null && sourceUnit != null) {
+                foreach (var warning in result.Warnings) {
+                    // prism levels: 0 = always, 1 = only when $VERBOSE is true
+                    errorSink.Add(sourceUnit, warning.Message, bridge.Span(warning.Location),
+                        warning.Level == 0 ? Errors.RuntimeWarning : Errors.RuntimeVerboseWarning, Severity.Warning);
+                }
+            }
+
             return bridge.Program((Pm.ProgramNode)result.Root, outerLocalNames);
         }
 
@@ -918,12 +926,13 @@ namespace IronRuby.Prism {
                         break;
                     case Pm.AssocSplatNode splat when splat.Value != null:
                         result = MergeHash(result, maplets, isKeywordArguments, span);
-                        // `**nil` contributes no keywords (Ruby 3.4); it is only known at run time
+                        // `**nil` contributes nothing (Ruby 3.4); it is only known at run time
                         var splatted = new OrExpression(Expr(splat.Value),
                             new HashConstructor(new Maplet[0], span), span);
-                        result = result == null
-                            ? (Expression)splatted
-                            : new MethodCall(result, "merge", new Arguments(splatted), span);
+                        // always merge rather than pass the splatted object along: Hash#merge is
+                        // what applies the #to_hash protocol to it
+                        result = new MethodCall(result ?? new HashConstructor(new Maplet[0], isKeywordArguments, span),
+                            "merge", new Arguments(splatted), span);
                         break;
                     default:
                         throw Unsupported(element);
