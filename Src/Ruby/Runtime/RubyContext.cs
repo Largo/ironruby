@@ -3207,7 +3207,12 @@ namespace IronRuby.Runtime {
                 sb.AppendFormat("{0}: {1} ({2})", Protocols.ToClrStringNoThrow(this, backtrace[0]), message, exceptionClass.Name);
                 sb.AppendLine();
 
+                // --backtrace-limit=N caps the number of "from" lines; -1 means no cap.
+                int limit = RubyOptions.BacktraceLimit;
                 for (int i = 1; i < backtrace.Count; i++) {
+                    if (limit >= 0 && i > limit) {
+                        break;
+                    }
                     sb.Append("\tfrom ").Append(Protocols.ToClrStringNoThrow(this, backtrace[i])).AppendLine();
                 }
             } else {

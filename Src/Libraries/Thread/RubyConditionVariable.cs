@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -64,14 +65,28 @@ namespace IronRuby.StandardLibrary.Threading {
             return self;
         }
 
+        /// <summary>
+        /// MRI's ConditionVariable#wait does not require a Mutex: it releases the lock by calling
+        /// #unlock on whatever it was handed, sleeps with #sleep, and re-locks with #lock. Only the
+        /// real Mutex takes the fast path below; anything else is driven through those three calls.
+        /// </summary>
         [RubyMethod("wait")]
-        public static RubyConditionVariable/*!*/ Wait(RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex) {
-            return Wait(self, mutex, null);
+        public static object Wait(BinaryOpStorage/*!*/ sleepStorage, RubyContext/*!*/ context, RubyConditionVariable/*!*/ self,
+            object mutex, [Optional]object timeout) {
+
+            var site = sleepStorage.GetCallSite("sleep", 1);
+            site.Target(site, mutex, timeout);
+            return self;
         }
 
         [RubyMethod("wait")]
-        public static RubyConditionVariable/*!*/ Wait(RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex, object timeout) {
-            int ms = RubyQueue.GetTimeoutMilliseconds(timeout);
+        public static RubyConditionVariable/*!*/ Wait(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex) {
+            return Wait(context, self, mutex, null);
+        }
+
+        [RubyMethod("wait")]
+        public static RubyConditionVariable/*!*/ Wait(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex, object timeout) {
+            int ms = RubyQueue.GetTimeoutMilliseconds(context, timeout);
 
             var info = IronRuby.Builtins.ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
             LinkedListNode<IronRuby.Builtins.ThreadOps.RubyThreadInfo> node;
@@ -92,9 +107,16 @@ namespace IronRuby.StandardLibrary.Threading {
                         self._waiters.Remove(node);
                     }
                 }
-                RubyMutex.Lock(mutex);
+                // Uninterruptibly: MRI promises the mutex is held again when #wait returns, even
+                // if the thread was killed while it was waiting to get it back.
+                RubyMutex.DoLock(mutex, false);
             }
             return self;
+        }
+
+        [RubyMethod("marshal_dump")]
+        public static object MarshalDump(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self) {
+            throw RubyExceptions.CreateTypeError("can't dump {0}", context.GetClassDisplayName(self));
         }
     }
 }

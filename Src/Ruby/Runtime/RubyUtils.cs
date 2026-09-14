@@ -1300,6 +1300,77 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>The exception parked for a thread, left in place. Null when there is none.</summary>
+        public static Exception PeekPendingAsyncException(Thread/*!*/ thread) {
+            lock (_pendingAsyncExceptions) {
+                Exception e;
+                return _pendingAsyncExceptions.TryGetValue(thread.ManagedThreadId, out e) ? e : null;
+            }
+        }
+
+        #region Thread.handle_interrupt
+
+        /// <summary>MRI's three timings, in the order of increasing deferral.</summary>
+        public const int InterruptImmediate = 0;
+        public const int InterruptOnBlocking = 1;
+        public const int InterruptNever = 2;
+
+        private sealed class InterruptMask {
+            internal RubyModule[] Classes;
+            internal int[] Timings;
+        }
+
+        // One entry per enclosing Thread.handle_interrupt block. Per CLR thread, which here is
+        // also per fiber - MRI's mask is per thread, but a fiber that sets one is the only thing
+        // running on its thread anyway.
+        [ThreadStatic]
+        private static List<InterruptMask> _interruptMasks;
+
+        public static void PushInterruptMask(RubyModule[]/*!*/ classes, int[]/*!*/ timings) {
+            var masks = _interruptMasks ?? (_interruptMasks = new List<InterruptMask>());
+            masks.Add(new InterruptMask { Classes = classes, Timings = timings });
+        }
+
+        public static void PopInterruptMask() {
+            var masks = _interruptMasks;
+            if (masks != null && masks.Count > 0) {
+                masks.RemoveAt(masks.Count - 1);
+            }
+        }
+
+        /// <summary>
+        /// How soon <paramref name="e"/> may be delivered to the current thread. The mask stack is
+        /// searched innermost first, and within one mask the last matching class wins - which is
+        /// what MRI's "most recently given" comes to for a Hash literal.
+        ///
+        /// Thread#kill is never deferred: it is not a Ruby exception and MRI does not let a mask
+        /// hold it back either.
+        /// </summary>
+        public static int GetInterruptTiming(Exception/*!*/ e) {
+            var masks = _interruptMasks;
+            if (masks == null || masks.Count == 0 || e is ThreadExitSignal) {
+                return InterruptImmediate;
+            }
+
+            var context = RubyContext._Default;
+            if (context == null) {
+                return InterruptImmediate;
+            }
+
+            RubyClass cls = context.GetClassOf(e);
+            for (int i = masks.Count - 1; i >= 0; i--) {
+                InterruptMask mask = masks[i];
+                for (int j = mask.Classes.Length - 1; j >= 0; j--) {
+                    if (mask.Classes[j] != null && cls.HasAncestor(mask.Classes[j])) {
+                        return mask.Timings[j];
+                    }
+                }
+            }
+            return InterruptImmediate;
+        }
+
+        #endregion
+
         /// <summary>
         /// A safe point: throws the asynchronous exception parked for the current thread, if there is one.
         /// Called from the blocking primitives and from Thread.pass. Ruby code that neither blocks nor calls
@@ -1307,6 +1378,15 @@ namespace IronRuby.Runtime {
         /// every VM instruction. That difference is not fixable without a check in the interpreter loop.
         /// </summary>
         public static void CheckAsyncException() {
+            CheckAsyncException(true);
+        }
+
+        /// <summary>
+        /// <paramref name="atBlockingCall"/> distinguishes MRI's two kinds of safe point: a
+        /// blocking operation (Kernel#sleep, Queue#pop, a Monitor wait) from Thread.pass, which
+        /// blocks on nothing.  Thread.handle_interrupt's :on_blocking only delivers at the former.
+        /// </summary>
+        public static void CheckAsyncException(bool atBlockingCall) {
             // Trap handlers run on the main thread at a safe point, like MRI's interrupt check.
             // The hook is installed by the Signal library, which lives in another assembly.
             Action safePoint = SafePointHandler;
@@ -1314,7 +1394,20 @@ namespace IronRuby.Runtime {
                 safePoint();
             }
 
-            Exception e = GetPendingAsyncException(Thread.CurrentThread);
+            Exception e = PeekPendingAsyncException(Thread.CurrentThread);
+            if (e == null) {
+                return;
+            }
+
+            int timing = GetInterruptTiming(e);
+            if (timing == InterruptNever || (timing == InterruptOnBlocking && !atBlockingCall)) {
+                // masked by an enclosing Thread.handle_interrupt; it stays parked
+                return;
+            }
+
+            // Take it only now: a masked exception has to stay parked for Thread.pending_interrupt?
+            // and for the delivery at the end of the handle_interrupt block.
+            e = GetPendingAsyncException(Thread.CurrentThread);
             if (e != null) {
                 throw e;
             }

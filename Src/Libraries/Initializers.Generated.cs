@@ -9410,8 +9410,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "[]=", 0x51, 
-                0x00000002U, 0x00000004U, 0x00000000U, 
-                new Func<System.Threading.Thread, IronRuby.Builtins.RubySymbol, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetElement), 
+                0x00000004U, 0x00000004U, 0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, IronRuby.Builtins.RubySymbol, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetElement), 
                 new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetElement), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetElement)
             );
@@ -9436,15 +9436,14 @@ namespace IronRuby.Builtins {
                 new Func<System.Threading.Thread, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Kill)
             );
             
-            DefineLibraryMethod(module, "fetch", 0x51, 
-                0x00000000U, 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Threading.Thread, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.Fetch), 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Threading.Thread, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.Fetch)
-            );
-            
             DefineLibraryMethod(module, "group", 0x51, 
                 0x00000000U, 
                 new Func<System.Threading.Thread, IronRuby.Builtins.ThreadGroup>(IronRuby.Builtins.ThreadOps.Group)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x52, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Threading.Thread, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Reinitialize)
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 
@@ -9455,7 +9454,7 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "join", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<System.Threading.Thread, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Join), 
-                new Func<System.Threading.Thread, System.Double, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Join)
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Join)
             );
             
             DefineLibraryMethod(module, "key?", 0x51, 
@@ -9485,14 +9484,19 @@ namespace IronRuby.Builtins {
                 new Func<System.Threading.Thread, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.ThreadOps.SetName)
             );
             
+            DefineLibraryMethod(module, "pending_interrupt?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.HasPendingInterrupt)
+            );
+            
             DefineLibraryMethod(module, "priority", 0x51, 
                 0x00000000U, 
                 new Func<System.Threading.Thread, System.Object>(IronRuby.Builtins.ThreadOps.Priority)
             );
             
             DefineLibraryMethod(module, "priority=", 0x51, 
-                0x00000000U, 
-                new Func<System.Threading.Thread, System.Int32, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Priority)
+                0x00010000U, 
+                new Func<System.Threading.Thread, System.Int32, System.Object>(IronRuby.Builtins.ThreadOps.Priority)
             );
             
             DefineLibraryMethod(module, "raise", 0x51, 
@@ -9552,7 +9556,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ThreadOps.ToS)
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ThreadOps.Inspect)
             );
             
             DefineLibraryMethod(module, "value", 0x51, 
@@ -9570,6 +9574,11 @@ namespace IronRuby.Builtins {
         
         #if FEATURE_THREAD
         private static void LoadThread_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__backtrace_limit__", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32>(IronRuby.Builtins.ThreadOps.GetBacktraceLimit)
+            );
+            
             DefineLibraryMethod(module, "__set_fiber_owner__", 0x61, 
                 0x00000002U, 
                 new Func<System.Object, System.Threading.Thread, System.Object>(IronRuby.Builtins.ThreadOps.SetFiberOwner)
@@ -9601,8 +9610,29 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "exit", 0x61, 
-                0x00000002U, 
-                new Func<System.Object, System.Threading.Thread, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.KillThread)
+                0x00000002U, 0x00000000U, 
+                new Func<System.Object, System.Threading.Thread, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.KillThread), 
+                new Func<System.Object, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.ExitCurrentThread)
+            );
+            
+            DefineLibraryMethod(module, "fork", 0x61, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.StartThread)
+            );
+            
+            DefineLibraryMethod(module, "handle_interrupt", 0x61, 
+                0x00000008U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, IronRuby.Builtins.Hash, System.Object>(IronRuby.Builtins.ThreadOps.HandleInterrupt)
+            );
+            
+            DefineLibraryMethod(module, "ignore_deadlock", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetIgnoreDeadlock)
+            );
+            
+            DefineLibraryMethod(module, "ignore_deadlock=", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetIgnoreDeadlock)
             );
             
             DefineLibraryMethod(module, "kill", 0x61, 
@@ -9630,6 +9660,11 @@ namespace IronRuby.Builtins {
                 new Action<System.Object>(IronRuby.Builtins.ThreadOps.Yield)
             );
             
+            DefineLibraryMethod(module, "pending_interrupt?", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.HasPendingInterrupt)
+            );
+            
             DefineLibraryMethod(module, "report_on_exception", 0x61, 
                 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GlobalReportOnException)
@@ -9642,7 +9677,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "start", 0x61, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.CreateThread)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.StartThread)
             );
             
             DefineLibraryMethod(module, "stop", 0x61, 
@@ -9665,6 +9700,16 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "add", 0x51, 
                 0x00000003U, 
                 new Func<IronRuby.Builtins.ThreadGroup, System.Threading.Thread, IronRuby.Builtins.ThreadGroup>(IronRuby.Builtins.ThreadGroup.Add)
+            );
+            
+            DefineLibraryMethod(module, "enclose", 0x51, 
+                0x00000001U, 
+                new Func<IronRuby.Builtins.ThreadGroup, IronRuby.Builtins.ThreadGroup>(IronRuby.Builtins.ThreadGroup.Enclose)
+            );
+            
+            DefineLibraryMethod(module, "enclosed?", 0x51, 
+                0x00000001U, 
+                new Func<IronRuby.Builtins.ThreadGroup, System.Boolean>(IronRuby.Builtins.ThreadGroup.IsEnclosed)
             );
             
             DefineLibraryMethod(module, "list", 0x51, 
@@ -10361,7 +10406,7 @@ namespace IronRuby.StandardLibrary.Threading {
             DefineGlobalClass("Mutex", typeof(IronRuby.StandardLibrary.Threading.RubyMutex), 0x00000008, classRef0, LoadMutex_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyClass def1 = DefineGlobalClass("Queue", typeof(IronRuby.StandardLibrary.Threading.RubyQueue), 0x00000008, classRef0, LoadQueue_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.StandardLibrary.Threading.RubyQueue>(IronRuby.StandardLibrary.Threading.RubyQueue.CreateQueue), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Threading.RubyQueue>(IronRuby.StandardLibrary.Threading.RubyQueue.CreateQueue)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Threading.RubyQueue>(IronRuby.StandardLibrary.Threading.RubyQueue.CreateQueue)
             );
             #if FEATURE_THREAD
             ExtendClass(typeof(System.Threading.Thread), 0x00000000, classRef0, null, LoadSystem__Threading__Thread_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -10375,15 +10420,21 @@ namespace IronRuby.StandardLibrary.Threading {
                 new Func<IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyConditionVariable>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Broadcast)
             );
             
+            DefineLibraryMethod(module, "marshal_dump", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyConditionVariable, System.Object>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.MarshalDump)
+            );
+            
             DefineLibraryMethod(module, "signal", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyConditionVariable>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Signal)
             );
             
             DefineLibraryMethod(module, "wait", 0x11, 
-                0x00000002U, 0x00000002U, 
-                new Func<IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyMutex, IronRuby.StandardLibrary.Threading.RubyConditionVariable>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait), 
-                new Func<IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyMutex, System.Object, IronRuby.StandardLibrary.Threading.RubyConditionVariable>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait)
+                0x00000000U, 0x00000004U, 0x00000004U, 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyConditionVariable, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyMutex, IronRuby.StandardLibrary.Threading.RubyConditionVariable>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyConditionVariable, IronRuby.StandardLibrary.Threading.RubyMutex, System.Object, IronRuby.StandardLibrary.Threading.RubyConditionVariable>(IronRuby.StandardLibrary.Threading.RubyConditionVariable.Wait)
             );
             
         }
@@ -10478,7 +10529,7 @@ namespace IronRuby.StandardLibrary.Threading {
             DefineLibraryMethod(module, "initialize", 0x12, 
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Threading.RubyQueue, IronRuby.StandardLibrary.Threading.RubyQueue>(IronRuby.StandardLibrary.Threading.RubyQueue.Reinitialize), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.StandardLibrary.Threading.RubyQueue, System.Object, IronRuby.StandardLibrary.Threading.RubyQueue>(IronRuby.StandardLibrary.Threading.RubyQueue.Reinitialize)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Threading.RubyQueue, System.Object, IronRuby.StandardLibrary.Threading.RubyQueue>(IronRuby.StandardLibrary.Threading.RubyQueue.Reinitialize)
             );
             
             DefineLibraryMethod(module, "length", 0x11, 

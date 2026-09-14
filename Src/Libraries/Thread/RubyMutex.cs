@@ -84,6 +84,16 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         private static void DoLock(RubyMutex/*!*/ self) {
+            DoLock(self, true);
+        }
+
+        /// <summary>
+        /// <paramref name="interruptible"/> false keeps a parked Thread#kill / Thread#raise parked
+        /// until the lock has been taken. ConditionVariable#wait needs that: MRI guarantees the
+        /// mutex is held again when #wait returns, even when the thread was killed while it was
+        /// waiting for it, and code in an ensure clause relies on still owning it.
+        /// </summary>
+        internal static void DoLock(RubyMutex/*!*/ self, bool interruptible) {
             Thread me = CurrentOwner;
             lock (self._syncRoot) {
                 if (self._owner == me) {
@@ -94,7 +104,9 @@ namespace IronRuby.StandardLibrary.Threading {
                         Monitor.Wait(self._syncRoot);
                     } catch (ThreadInterruptedException) {
                         // Thread#kill / Thread#raise nudged us; if nothing is parked the wait restarts.
-                        RubyUtils.TranslateThreadInterrupt();
+                        if (interruptible) {
+                            RubyUtils.TranslateThreadInterrupt();
+                        }
                     }
                 }
                 self.Acquire();

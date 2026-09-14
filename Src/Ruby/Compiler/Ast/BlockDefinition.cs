@@ -250,7 +250,7 @@ namespace IronRuby.Compiler.Ast {
         // is more than one level. This runs after LeaveBlockDefinition, so the generator's
         // block chain is already the enclosing one and this block is the extra level.
         private static string/*!*/ BlockFrameLabel(AstGenerator/*!*/ gen) {
-            string enclosing = gen.CurrentMethod.MethodName ?? gen.TopLevelFrameLabel;
+            string enclosing = gen.CurrentMethod.FrameLabel ?? gen.CurrentMethod.MethodName ?? gen.TopLevelFrameLabel;
 
             int levels = 1;
             for (var block = gen.CurrentBlock; block != null; block = block.ParentBlock) {

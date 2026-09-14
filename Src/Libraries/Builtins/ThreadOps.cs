@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Reflection;
 using System.Text;
 using System.Threading;
 using IronRuby.Runtime;
@@ -84,6 +85,7 @@ namespace IronRuby.Builtins {
                 _threadLocalStorage = new Dictionary<RubySymbol, object>();
                 _group = ThreadGroup.Default;
                 _thread = thread;
+                ReportOnException = _globalReportOnException;
             }
 
             internal static RubyThreadInfo FromThread(Thread t) {
@@ -160,6 +162,16 @@ namespace IronRuby.Builtins {
             internal bool ExitRequested { get; set; }
             internal MutableString Name { get; set; }
             internal bool ReportOnException { get; set; }
+
+            /// <summary>
+            /// MRI's Thread#priority is a small integer clamped to -3..3 that outlives the thread;
+            /// the CLR's is a five-valued enum that a dead thread refuses to answer at all. Keep the
+            /// Ruby value here and treat the CLR priority as a write-only projection of it.
+            /// </summary>
+            internal int Priority { get; set; }
+
+            /// <summary>"file:line" of the Thread.new call, which MRI puts in Thread#inspect.</summary>
+            internal string Location { get; set; }
 
             // Thread#[] is fiber-local in MRI (and, since every fiber is its own CLR thread here, the
             // dictionary above already is); Thread#thread_variable_get is thread-local, so it needs
@@ -315,10 +327,20 @@ namespace IronRuby.Builtins {
             return context.CreateSymbol(str);
         }
 
+        /// <summary>
+        /// Thread#[] and friends are fiber-local in MRI. Every fiber runs on its own CLR thread
+        /// here, so "the current fiber's storage" is the current CLR thread's - which stopped
+        /// being the same object as Thread.current when Thread.current started answering the
+        /// fiber's owning thread. Another thread is addressed by its own storage, as in MRI,
+        /// where it is that thread's root fiber's.
+        /// </summary>
+        private static RubyThreadInfo/*!*/ FiberLocals(Thread/*!*/ self) {
+            return RubyThreadInfo.FromThread(self == RubyUtils.CurrentRubyThread ? Thread.CurrentThread : self);
+        }
+
         [RubyMethod("[]")]
         public static object GetElement(Thread/*!*/ self, [NotNull]RubySymbol/*!*/ key) {
-            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            return info[key];
+            return FiberLocals(self)[key];
         }
 
         [RubyMethod("[]")]
@@ -331,21 +353,31 @@ namespace IronRuby.Builtins {
             return GetElement(self, ToKey(toStr, context, key));
         }
 
+        /// <summary>
+        /// Freezing a Thread freezes its local storage: MRI raises FrozenError with a message about
+        /// the locals rather than about the thread object.
+        /// </summary>
+        private static void CheckLocalsNotFrozen(RubyContext/*!*/ context, Thread/*!*/ self) {
+            if (context.IsObjectFrozen(self)) {
+                throw new FrozenError("can't modify frozen thread locals");
+            }
+        }
+
         [RubyMethod("[]=")]
-        public static object SetElement(Thread/*!*/ self, [NotNull]RubySymbol/*!*/ key, object value) {
-            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            info[key] = value;
+        public static object SetElement(RubyContext/*!*/ context, Thread/*!*/ self, [NotNull]RubySymbol/*!*/ key, object value) {
+            CheckLocalsNotFrozen(context, self);
+            FiberLocals(self)[key] = value;
             return value;
         }
 
         [RubyMethod("[]=")]
         public static object SetElement(RubyContext/*!*/ context, Thread/*!*/ self, [NotNull]MutableString/*!*/ key, object value) {
-            return SetElement(self, context.CreateSymbol(key), value);
+            return SetElement(context, self, context.CreateSymbol(key), value);
         }
 
         [RubyMethod("[]=")]
         public static object SetElement(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, Thread/*!*/ self, object key, object value) {
-            return SetElement(self, ToKey(toStr, context, key), value);
+            return SetElement(context, self, ToKey(toStr, context, key), value);
         }
 
         [RubyMethod("abort_on_exception")]
@@ -391,20 +423,32 @@ namespace IronRuby.Builtins {
             return info.Group;
         }
 
+        /// <summary>
+        /// MRI: "#&lt;Thread:0x... file:line status&gt;", with "@name" after the id when the thread has
+        /// one.  The string is BINARY unless a name forces a wider encoding, because the file name
+        /// is a path and paths have no encoding of their own.
+        /// </summary>
         [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
         public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, Thread/*!*/ self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
 
-            MutableString result = MutableString.CreateMutable(context.GetIdentifierEncoding());
+            MutableString result = MutableString.CreateMutable(RubyEncoding.Binary);
             result.Append("#<");
             result.Append(context.GetClassDisplayName(self));
             result.Append(':');
             RubyUtils.AppendFormatHexObjectId(result, RubyUtils.GetObjectId(context, self));
 
-            MutableString name = RubyThreadInfo.FromThread(self).Name;
+            RubyThreadInfo selfInfo = RubyThreadInfo.FromThread(self);
+            MutableString name = selfInfo.Name;
             if (name != null) {
                 result.Append('@');
                 result.Append(name);
+            }
+
+            if (selfInfo.Location != null) {
+                result.Append(' ');
+                result.Append(selfInfo.Location);
             }
 
             result.Append(' ');
@@ -454,7 +498,30 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        /// <summary>
+        /// Thread#join(timeout). A nil timeout means "no timeout", so it cannot go through the
+        /// Float conversion the other values do.
+        /// </summary>
         [RubyMethod("join")]
+        public static Thread Join(RubyContext/*!*/ context, Thread/*!*/ self, object timeout) {
+            if (timeout == null) {
+                return Join(self);
+            }
+            // MRI's time-interval conversion, not Float(): a String is a TypeError here rather
+            // than the ArgumentError that Float("bar") would raise.
+            double seconds;
+            if (timeout is int) {
+                seconds = (int)timeout;
+            } else if (timeout is double) {
+                seconds = (double)timeout;
+            } else if (timeout is System.Numerics.BigInteger) {
+                seconds = (double)(System.Numerics.BigInteger)timeout;
+            } else {
+                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(timeout), "Float");
+            }
+            return Join(self, seconds);
+        }
+
         public static Thread/*!*/ Join(Thread/*!*/ self, double seconds) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
 
@@ -512,8 +579,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("key?")]
         public static object HasKey(Thread/*!*/ self, [NotNull]RubySymbol/*!*/ key) {
-            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            return info.HasKey(key);
+            return FiberLocals(self).HasKey(key);
         }
 
         [RubyMethod("key?")]
@@ -528,45 +594,42 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("keys")]
         public static object Keys(RubyContext/*!*/ context, Thread/*!*/ self) {
-            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            return info.GetKeys();
+            return FiberLocals(self).GetKeys();
         }
 
         #region priority, priority=
         [RubyMethod("priority")]
         public static object Priority(Thread/*!*/ self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
-            switch (self.Priority) {
-                case ThreadPriority.Lowest:
-                    return -2;
-                case ThreadPriority.BelowNormal:
-                    return -1;
-                case ThreadPriority.Normal:
-                    return 0;
-                case ThreadPriority.AboveNormal:
-                    return 1;
-                case ThreadPriority.Highest:
-                    return 2;
-                default:
-                    return 0;
-            }
+            return RubyThreadInfo.FromThread(self).Priority;
         }
 
         [RubyMethod("priority=")]
-        public static Thread Priority(Thread/*!*/ self, int priority) {
+        public static object Priority(Thread/*!*/ self, [DefaultProtocol]int priority) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
-            if (priority <= -2)
-                self.Priority = ThreadPriority.Lowest;
-            else if (priority == -1)
-                self.Priority = ThreadPriority.BelowNormal;
-            else if (priority == 0)
-                self.Priority = ThreadPriority.Normal;
-            else if (priority == 1)
-                self.Priority = ThreadPriority.AboveNormal;
-            else
-                self.Priority = ThreadPriority.Highest;
 
-            return self;
+            // MRI clamps to -3..3 and reports back the clamped value.
+            int clamped = priority < -3 ? -3 : (priority > 3 ? 3 : priority);
+            RubyThreadInfo.FromThread(self).Priority = clamped;
+
+            try {
+                if (clamped <= -2) {
+                    self.Priority = ThreadPriority.Lowest;
+                } else if (clamped == -1) {
+                    self.Priority = ThreadPriority.BelowNormal;
+                } else if (clamped == 0) {
+                    self.Priority = ThreadPriority.Normal;
+                } else if (clamped == 1) {
+                    self.Priority = ThreadPriority.AboveNormal;
+                } else {
+                    self.Priority = ThreadPriority.Highest;
+                }
+            } catch (ThreadStateException) {
+                // The thread has already finished. MRI still remembers the value, so we do too;
+                // there is simply nothing left to apply it to.
+            }
+
+            return priority;
         }
         #endregion
         #region raise, fail
@@ -603,15 +666,18 @@ namespace IronRuby.Builtins {
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyContext/*!*/ context, Thread/*!*/ self, params object[]/*!*/ args) {
 
-            if (self == Thread.CurrentThread) {
-                KernelOps.RaiseException(respondToStorage, storage0, storage1, setBackTraceStorage, context, self, args);
-                return;
+#if FEATURE_EXCEPTION_STATE
+            // A bare Thread#raise is a plain RuntimeError even on the current thread: unlike
+            // Kernel#raise it does not re-raise $!, and on another thread MRI cannot see that
+            // thread's $! anyway.
+            Exception e = KernelOps.CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args, false);
+
+            // Inside a fiber the current Ruby thread is the fiber's owner; raising on it means
+            // raising here, not nudging the thread the fiber was started from.
+            if (self == RubyUtils.CurrentRubyThread) {
+                throw e;
             }
 
-#if FEATURE_EXCEPTION_STATE
-            // A bare `thread.raise` on *another* thread is a plain RuntimeError; it does not
-            // re-raise the caller's $! (MRI can't see the target thread's $! either).
-            Exception e = KernelOps.CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args, false);
             RaiseAsyncException(self, e);
 #else
             throw new NotImplementedError("Thread#raise not supported on this platform");
@@ -631,6 +697,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("wakeup")]
         public static Thread Run(Thread/*!*/ self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+            if (!self.IsAlive) {
+                throw new ThreadError("killed thread");
+            }
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
             info.Run();
             return self;
@@ -668,6 +737,13 @@ namespace IronRuby.Builtins {
             }
 
             if ((state & ThreadState.AbortRequested) != 0) {
+                return RubyThreadStatus.Aborting;
+            }
+
+            // Thread#kill has been called and the thread is still winding its ensure blocks down.
+            // MRI reports "aborting" for exactly that window; it is not a CLR thread state, so it
+            // has to come from the exit flag we set in Kill.
+            if (info.ExitRequested) {
                 return RubyThreadStatus.Aborting;
             }
 
@@ -756,10 +832,15 @@ namespace IronRuby.Builtins {
             SetCritical(context, value);
         }
 
+        /// <summary>
+        /// Every fiber runs on its own CLR thread here, but Ruby says a fiber belongs to the
+        /// thread that created it - so inside a fiber this answers that thread, not the one the
+        /// fiber happens to be running on.
+        /// </summary>
         [RubyMethod("current", RubyMethodAttributes.PublicSingleton)]
         public static Thread/*!*/ Current(object self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
-            return Thread.CurrentThread;
+            return RubyUtils.CurrentRubyThread;
         }
 
         //    exclusive
@@ -786,19 +867,89 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("start", RubyMethodAttributes.PublicSingleton)]
         public static Thread/*!*/ CreateThread(RubyContext/*!*/ context, BlockParam startRoutine, object self, params object[]/*!*/ args) {
             if (startRoutine == null) {
                 throw new ThreadError("must be called with a block");
             }
-            ThreadGroup group = Group(Thread.CurrentThread);
+            return StartThread(context, startRoutine, args);
+        }
+
+        // Thread.start and Thread.fork bypass #initialize; without a block they fail the way
+        // building a Proc without one does, not the way Thread.new does.
+        [RubyMethod("start", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("fork", RubyMethodAttributes.PublicSingleton)]
+        public static Thread/*!*/ StartThread(RubyContext/*!*/ context, BlockParam startRoutine, object self, params object[]/*!*/ args) {
+            if (startRoutine == null) {
+                throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
+            }
+            return StartThread(context, startRoutine, args);
+        }
+
+        /// <summary>
+        /// A Ruby subclass of Thread cannot have instances: System.Threading.Thread is sealed, so
+        /// there is no CLR type to allocate for one. Every thread created here is a plain Thread.
+        /// </summary>
+        private static Thread/*!*/ StartThread(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
+            RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
+            ThreadGroup group = creator.Group;
             Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, startRoutine, args, group)));
+
+            // Everything the thread answers about itself before it has run a single instruction -
+            // #inspect, #priority, #report_on_exception - has to be in place before Start().
+            RubyThreadInfo info = RubyThreadInfo.FromThread(result);
+            info.CreatedFromRuby = true;
+            info.Group = group;
+            info.Priority = creator.Priority;
+            info.Location = GetCallerLocation(context);
+
+            // MRI: a new thread's root fiber inherits the storage of the fiber that created it.
+            // Fiber is implemented in Ruby, so all that is needed here is to carry the creating
+            // fiber over; Fiber.__root__ reads it (Src/StdLib/ironruby/ruby4.rb).
+            object creatorFiber = RubyThreadInfo.FromThread(Thread.CurrentThread)[context.CreateAsciiSymbol("__ir_fiber_current__")];
+            if (creatorFiber != null) {
+                info[context.CreateAsciiSymbol("__ir_fiber_parent__")] = creatorFiber;
+            }
 
             // Ruby exits when the main thread exits. So all other threads need to be marked as background threads
             result.IsBackground = true;
 
             result.Start();
             return result;
+        }
+
+        /// <summary>
+        /// "file:line" of the Ruby frame that called Thread.new, for Thread#inspect.
+        /// </summary>
+        private static string GetCallerLocation(RubyContext/*!*/ context) {
+            try {
+                RubyArray trace = RubyExceptionData.CreateBacktrace(context, 1);
+                if (trace != null && trace.Count > 0) {
+                    string frame = trace[0].ToString();
+                    int inIndex = frame.LastIndexOf(":in ", StringComparison.Ordinal);
+                    return inIndex > 0 ? frame.Substring(0, inIndex) : frame;
+                }
+            } catch (Exception) {
+                // A location is decoration; never let looking for one break Thread.new.
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// MRI's thread error report: the thread that died, then the exception exactly as an
+        /// unhandled exception is printed at top level. It goes to $stderr rather than to the CLR
+        /// console, because $stderr is what Ruby code (and the specs) can redirect.
+        /// </summary>
+        private static void ReportThreadException(RubyContext/*!*/ context, RubyThreadInfo/*!*/ info, Exception/*!*/ e) {
+            try {
+                StringBuilder report = new StringBuilder();
+                report.Append(Inspect(context, info.Thread).ToString());
+                report.Append(" terminated with exception (report_on_exception is true):");
+                report.Append('\n');
+                report.Append(context.FormatException(e));
+                context.WriteWarningMessage(MutableString.CreateMutable(report.ToString(), RubyEncoding.UTF8));
+            } catch (Exception) {
+                // Reporting must never be what kills the process.
+            }
         }
 
         private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args, ThreadGroup group) {
@@ -835,7 +986,14 @@ namespace IronRuby.Builtins {
                     Utils.Log(String.Format("Thread {0} exited.", info.Thread.ManagedThreadId), "THREAD");
                     info.Result = null;
                     if (!RubyUtils.IsRubyThreadExit(e) && !(e is ThreadInterruptedException)) {
-                        info.Exception = RubyUtils.GetVisibleException(e);
+                        Exception visible = RubyUtils.GetVisibleException(e);
+                        info.Exception = visible;
+
+                        // A thread killed while it was already unwinding a Thread#raise still dies
+                        // of that exception, and MRI reports it.
+                        if (info.ReportOnException && !(visible is SystemExit)) {
+                            ReportThreadException(context, info, visible);
+                        }
                     }
                 } else {
                     e = RubyUtils.GetVisibleException(e);
@@ -863,18 +1021,16 @@ namespace IronRuby.Builtins {
                     // says - and without the "terminated with exception" report.
                     bool exiting = e is SystemExit;
 
+                    if (!exiting && info.ReportOnException) {
+                        ReportThreadException(context, info, e);
+                    }
+
                     if (exiting || _globalAbortOnException || info.AbortOnException) {
                         // MRI re-raises the exception on the main thread. Never rethrow it here:
                         // this is a background thread, and an unhandled exception on one takes the
                         // whole process down. Park it for the main thread instead - it is delivered
                         // at the main thread's next blocking point, and #join still re-raises it
                         // because info.Exception is set.
-                        if (!exiting) {
-                            Console.Error.WriteLine("#<Thread:0x{0:x8}> terminated with exception:",
-                                info.Thread.ManagedThreadId);
-                            Console.Error.WriteLine(e.Message);
-                        }
-
                         Thread mainThread = context.MainThread;
                         if (mainThread != null && mainThread != Thread.CurrentThread) {
                             RubyUtils.RaiseAsyncException(mainThread, e);
@@ -899,9 +1055,16 @@ namespace IronRuby.Builtins {
         [RubyMethod("pass", RubyMethodAttributes.PublicSingleton)]
         public static void Yield(object self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
-            // Thread.pass is a safe point for a pending Thread#kill / Thread#raise.
-            RubyUtils.CheckAsyncException();
-            Thread.Sleep(0);
+            // Thread.pass is a safe point for a pending Thread#kill / Thread#raise, but it is not
+            // a blocking call - Thread.handle_interrupt's :on_blocking still defers here.
+            RubyUtils.CheckAsyncException(false);
+
+            // Thread.Yield rather than Thread.Sleep(0): Sleep puts the thread into
+            // WaitSleepJoin, so a thread spinning on `Thread.pass until ...` - which is how the
+            // specs wait for each other - reported its status as "sleep" instead of "run".
+            if (!Thread.Yield()) {
+                Thread.Sleep(0);
+            }
         }
 
         [RubyMethod("stop", RubyMethodAttributes.PublicSingleton)]
@@ -948,11 +1111,6 @@ namespace IronRuby.Builtins {
             return DoSleep(milliseconds);
         }
 
-        [RubyMethod("to_s")]
-        public static MutableString/*!*/ ToS(RubyContext/*!*/ context, Thread/*!*/ self) {
-            return Inspect(context, self);
-        }
-
         #region name, name=
 
         [RubyMethod("name")]
@@ -987,6 +1145,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("thread_variable_set")]
         public static object SetThreadVariable(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, Thread/*!*/ self, object key, object value) {
+            CheckLocalsNotFrozen(context, self);
             RubyThreadInfo.FromThread(self).SetThreadVariable(ToKey(toStr, context, key), value);
             return value;
         }
@@ -1003,41 +1162,8 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region fetch
-
-        [RubyMethod("fetch")]
-        public static object Fetch(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key) {
-            return FetchInternal(toStr, context, block, self, key, true, null);
-        }
-
-        [RubyMethod("fetch")]
-        public static object Fetch(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, object key, object defaultValue) {
-            return FetchInternal(toStr, context, block, self, key, false, defaultValue);
-        }
-
-        private static object FetchInternal(ConversionStorage<MutableString>/*!*/ toStr, RubyContext/*!*/ context,
-            BlockParam block, Thread/*!*/ self, object key, bool noDefault, object defaultValue) {
-
-            RubySymbol symbol = ToKey(toStr, context, key);
-            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            if (info.HasKey(symbol)) {
-                return info[symbol];
-            }
-
-            if (block != null) {
-                object result;
-                block.Yield(key, out result);
-                return result;
-            }
-
-            if (!noDefault) {
-                return defaultValue;
-            }
-
-            throw RubyExceptions.CreateIndexError("key not found: {0}", context.Inspect(key).ToString());
-        }
-
-        #endregion
+        // Thread#fetch lives in Src/StdLib/ironruby/ruby4.rb: the miss has to raise KeyError, and
+        // KeyError is one of the exception classes defined in Ruby above the runtime.
 
         #region report_on_exception
 
@@ -1070,6 +1196,116 @@ namespace IronRuby.Builtins {
         public static Thread/*!*/ KillThread(object self, [NotNull]Thread/*!*/ thread) {
             return Kill(thread);
         }
+
+        /// <summary>Thread.exit / Thread.stop take no argument and act on the current thread.</summary>
+        [RubyMethod("exit", RubyMethodAttributes.PublicSingleton)]
+        public static Thread/*!*/ ExitCurrentThread(object self) {
+            return Kill(Thread.CurrentThread);
+        }
+
+        /// <summary>
+        /// Thread.new starts the thread itself, so anything that reaches #initialize is a second
+        /// initialization of a thread that is already running - which MRI refuses.
+        /// </summary>
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static Thread/*!*/ Reinitialize(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, params object[]/*!*/ args) {
+            throw new ThreadError("already initialized thread");
+        }
+
+        #region handle_interrupt, pending_interrupt?
+
+        /// <summary>
+        /// Thread.handle_interrupt(ExceptionClass => :immediate | :on_blocking | :never) { ... }.
+        ///
+        /// Thread#raise and Thread#kill are delivered cooperatively here - the exception is parked
+        /// for the target thread and thrown at its next safe point - so masking one is a matter of
+        /// telling the safe point to leave it parked. That is all this does: push the mask, run the
+        /// block, pop it, and then take whatever accumulated while it was up.
+        ///
+        /// The check at the top delivers an already-pending interrupt that the *new* mask makes
+        /// :immediate, which is MRI's documented way of forcing a deferred interrupt to be taken.
+        /// </summary>
+        [RubyMethod("handle_interrupt", RubyMethodAttributes.PublicSingleton)]
+        public static object HandleInterrupt(RubyContext/*!*/ context, BlockParam block, object self, [NotNull]Hash/*!*/ mask) {
+            if (block == null) {
+                throw RubyExceptions.CreateArgumentError("block is needed.");
+            }
+
+            var classes = new RubyModule[mask.Count];
+            var timings = new int[mask.Count];
+            int i = 0;
+            foreach (var entry in mask) {
+                classes[i] = entry.Key as RubyModule;
+                var timing = entry.Value as RubySymbol;
+                string name = (timing != null) ? timing.ToString() : null;
+                switch (name) {
+                    case "immediate": timings[i] = RubyUtils.InterruptImmediate; break;
+                    case "on_blocking": timings[i] = RubyUtils.InterruptOnBlocking; break;
+                    case "never": timings[i] = RubyUtils.InterruptNever; break;
+                    default: throw RubyExceptions.CreateArgumentError("unknown mask signature");
+                }
+                i++;
+            }
+
+            RubyUtils.PushInterruptMask(classes, timings);
+            try {
+                RubyUtils.CheckAsyncException(true);
+
+                object result;
+                block.Yield(out result);
+                return result;
+            } finally {
+                RubyUtils.PopInterruptMask();
+                // Anything the mask held back is taken here, replacing an exception the block was
+                // already unwinding with - which is what MRI does.
+                RubyUtils.CheckAsyncException(true);
+            }
+        }
+
+        private static bool IsInterruptPending(RubyContext/*!*/ context, Thread/*!*/ thread, object error) {
+            Exception e = RubyUtils.PeekPendingAsyncException(thread);
+            if (e == null || RubyUtils.IsRubyThreadExit(e)) {
+                return false;
+            }
+            RubyModule cls = error as RubyModule;
+            return (cls == null) || context.GetClassOf(e).HasAncestor(cls);
+        }
+
+        [RubyMethod("pending_interrupt?", RubyMethodAttributes.PublicSingleton)]
+        public static bool HasPendingInterrupt(RubyContext/*!*/ context, object self, [Optional]object error) {
+            return IsInterruptPending(context, Thread.CurrentThread, error == Missing.Value ? null : error);
+        }
+
+        [RubyMethod("pending_interrupt?")]
+        public static bool HasPendingInterrupt(RubyContext/*!*/ context, Thread/*!*/ self, [Optional]object error) {
+            return IsInterruptPending(context, self, error == Missing.Value ? null : error);
+        }
+
+        #endregion
+
+        /// <summary>Backs Thread::Backtrace.limit, which is written in Ruby.</summary>
+        [RubyMethod("__backtrace_limit__", RubyMethodAttributes.PrivateSingleton)]
+        public static int GetBacktraceLimit(RubyContext/*!*/ context, object self) {
+            return context.RubyOptions.BacktraceLimit;
+        }
+
+        #region ignore_deadlock
+
+        // Deadlock detection is MRI's; there is none here, so the flag is remembered and does nothing.
+        private static bool _ignoreDeadlock;
+
+        [RubyMethod("ignore_deadlock", RubyMethodAttributes.PublicSingleton)]
+        public static object GetIgnoreDeadlock(object self) {
+            return _ignoreDeadlock;
+        }
+
+        [RubyMethod("ignore_deadlock=", RubyMethodAttributes.PublicSingleton)]
+        public static object SetIgnoreDeadlock(object self, object value) {
+            _ignoreDeadlock = RubyOps.IsTrue(value);
+            return value;
+        }
+
+        #endregion
 
         /// <summary>
         /// Called by the Fiber implementation: a fiber runs on its own CLR thread but has to count as the

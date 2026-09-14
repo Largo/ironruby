@@ -2267,6 +2267,10 @@ unless defined?(Fiber)
       unless f
         f = allocate
         f.__init_root__
+        # A thread's root fiber starts with the storage of the fiber that created the
+        # thread; Thread.new leaves that fiber here for us.
+        parent = t[:__ir_fiber_parent__]
+        f.__inherit_storage__(parent) if parent
         t[:__ir_fiber_root__] = f
         t[:__ir_fiber_current__] = f
       end
@@ -2321,6 +2325,12 @@ unless defined?(Fiber)
     def __root_fiber__; @root_fiber; end
     def __thread__; @thread; end
     def __storage_raw__; @storage; end
+
+    def __inherit_storage__(parent)
+      raw = parent.__storage_raw__
+      @storage = raw && raw.dup
+      self
+    end
     def __resuming__; @resuming; end
     def __set_resuming__(f); @resuming = f; end
     def __set_status__(s); @status = s; end
@@ -11146,29 +11156,6 @@ class IO
   end unless method_defined?(:wait_writable)
 end
 
-class Thread
-  # Validates the mask and runs the block, but does NOT defer anything: masking an
-  # asynchronous interrupt and delivering it later needs Thread.Abort, which .NET Core
-  # does not have. Code that only uses handle_interrupt to scope a section behaves
-  # correctly; code that depends on a Thread#raise actually being held back does not.
-  #
-  # It has to exist even so. Without it the method call raises NoMethodError inside a
-  # worker thread, and anything waiting on that thread to reach a queue - which is how
-  # the thread specs synchronise - blocks forever. One missing method deadlocked the
-  # whole of spec/core/thread.
-  def self.handle_interrupt(mask)
-    raise ArgumentError, "block is needed." unless block_given?
-
-    mask.each_value do |timing|
-      unless [:immediate, :on_blocking, :never].include?(timing)
-        raise ArgumentError, "unknown mask signature"
-      end
-    end
-
-    yield
-  end unless respond_to?(:handle_interrupt)
-end
-
 # caller_locations (2.0) and the Location objects it yields. The runtime only
 # offers caller strings, so parse those: "path:lineno:in `label'".
 class Thread
@@ -11186,6 +11173,13 @@ class Thread
   def backtrace_locations(*args)
     if self == ::Thread.current
       frames = ::Kernel.send(:caller_locations, 1)
+      # MRI's first location is the #backtrace_locations frame itself, and a frame for a
+      # method implemented natively reports the call site rather than a place in the
+      # method.  This one is written in Ruby, so say where it was called from by hand.
+      if frames.size > 1
+        frames = frames.dup
+        frames[0] = ::Thread::Backtrace::Location.new(frames[1].path, frames[1].lineno, "Thread#backtrace_locations")
+      end
     else
       entries = __native_backtrace__
       return nil if entries.nil?
@@ -11201,24 +11195,41 @@ class Thread
       return frames[args[0]]
     end
     start = ::Kernel.Integer(args[0])
+    ::Kernel.raise ::ArgumentError, "negative level (#{start})" if start < 0
     return nil if start > frames.size
     frames = frames[start..-1] || []
-    args.size > 1 && !args[1].nil? ? frames.first(::Kernel.Integer(args[1])) : frames
+    if args.size > 1 && !args[1].nil?
+      length = ::Kernel.Integer(args[1])
+      ::Kernel.raise ::ArgumentError, "negative size (#{length})" if length < 0
+      frames.first(length)
+    else
+      frames
+    end
   end
   private :__slice_stack__
 
-  # There is no asynchronous-interrupt queue here, so nothing is ever pending.
-  def pending_interrupt?(error = nil)
-    false
-  end unless method_defined?(:pending_interrupt?)
+  # The core Thread#fetch would have to raise KeyError, and KeyError is one of the
+  # exception classes defined in Ruby, above the runtime - so the method lives here.
+  def fetch(key, *default, &block)
+    if default.size > 1
+      ::Kernel.raise ::ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)"
+    end
+    if block && !default.empty?
+      ::Kernel.warn "warning: block supersedes default value argument"
+    end
+    return self[key] if key?(key)
+    return block.call(key) if block
+    return default[0] unless default.empty?
+    ::Kernel.raise ::KeyError.new("key not found: #{key.inspect}", receiver: self, key: key)
+  end
 
-  def self.pending_interrupt?(error = nil)
-    false
-  end unless respond_to?(:pending_interrupt?)
-
-  def self.each_caller_location(&block)
-    return ::Kernel.send(:caller_locations, 1).each unless block
-    ::Kernel.send(:caller_locations, 1).each { |l| block.call(l) }
+  # Starts at the caller of the frame that called it, exactly where a plain
+  # caller_locations in that frame would start.  The block is yielded to rather than
+  # called through a Proc so that a `break' in it breaks out of this method, which is
+  # what MRI's C implementation does and what the specs check.
+  def self.each_caller_location
+    ::Kernel.raise ::LocalJumpError, "no block given" unless block_given?
+    ::Kernel.send(:caller_locations, 3).each { |l| yield l }
     nil
   end unless respond_to?(:each_caller_location)
 
@@ -11237,6 +11248,11 @@ class Thread
   private :__native_thread_id__
 
   class Backtrace
+    # --backtrace-limit=N, or -1 when it was not given.
+    def self.limit
+      ::Thread.send(:__backtrace_limit__)
+    end unless respond_to?(:limit)
+
     class Location
       attr_reader :path, :lineno, :label
 
@@ -11246,12 +11262,22 @@ class Thread
         @label = label
       end
 
+      # MRI resolves symlinks here, and answers nil when there is no real file behind the
+      # frame - code eval'd under a made-up file name, or a <internal:...> frame.
       def absolute_path
-        return nil if @path.nil? || @path.start_with?("(")
-        File.expand_path(@path) rescue @path
+        return nil if @path.nil? || @path.start_with?("(") || @path.start_with?("<")
+        File.realpath(@path) rescue nil
       end
 
-      def base_label; @label; end
+      # MRI's base_label is the bare method name: without the "block in" /
+      # "block (N levels) in" prefix a block frame carries, and without the owner that
+      # #label has been qualified with since 3.4.  A label that is entirely a <...> form
+      # ("<main>", "<module:A>") has no owner part to strip.
+      def base_label
+        return nil if @label.nil?
+        base = @label.sub(/\Ablock (\(\d+ levels\) )?in /, "")
+        base.start_with?("<") ? base : base.sub(/\A[^ ]*[#.]/, "")
+      end
 
       # "path:lineno:in `label'" -> a Location.  Both Kernel#caller_locations and
       # Thread#backtrace_locations have only the string form to work from.
@@ -11802,12 +11828,26 @@ end
 # missing \e[m below is deliberate.
 
 class Exception
-  # MRI answers nil when the exception carries no captured locations, which is
-  # every exception here: the backtrace is kept as strings, not as Location
-  # objects. Rebuilding Locations from the strings would be guesswork, so this
-  # gives the honest answer rather than a fabricated one.
+  # The runtime keeps a backtrace as strings, so an exception has no captured
+  # Location objects of its own and #backtrace_locations is nil - MRI's answer for
+  # an exception that was never raised. The one case where there are real Locations
+  # is `raise Klass, message, caller_locations`: set_backtrace was handed them, so
+  # keep them and hand them back.
+  alias_method :__core_set_backtrace__, :set_backtrace
+
+  def set_backtrace(value)
+    if ::Array === value && !value.empty? &&
+       value.all? { |v| ::Thread::Backtrace::Location === v }
+      @__backtrace_locations = value
+      __core_set_backtrace__(value.map(&:to_s))
+    else
+      @__backtrace_locations = nil
+      __core_set_backtrace__(value)
+    end
+  end
+
   def backtrace_locations
-    nil
+    @__backtrace_locations
   end unless method_defined?(:backtrace_locations)
 
   # Whether an uncaught exception would be printed to a terminal. Decides the

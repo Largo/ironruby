@@ -33,9 +33,6 @@ namespace IronRuby.StandardLibrary.Threading {
             SetLimitChecked(limit);
         }
 
-        public SizedQueue() {
-        }
-
         private void SetLimitChecked(int limit) {
             if (limit <= 0) {
                 throw RubyExceptions.CreateArgumentError("queue size must be positive");
@@ -122,7 +119,7 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("push")]
         [RubyMethod("<<")]
         public static object Enqueue(RubyContext/*!*/ context, SizedQueue/*!*/ self, object value, [NotNull]Hash/*!*/ options) {
-            int ms = RubyQueue.GetTimeoutMilliseconds(RubyQueue.GetTimeoutOption(context, options));
+            int ms = RubyQueue.GetTimeoutMilliseconds(context, RubyQueue.GetTimeoutOption(context, options));
             return self.Enqueue(value, ms) ? (object)self : null;
         }
 

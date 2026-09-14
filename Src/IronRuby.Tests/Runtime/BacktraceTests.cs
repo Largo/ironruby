@@ -52,14 +52,14 @@ end
 goo
 ", "Backtrace1.rb", SourceCodeKind.File).Execute();
             }, PreciseSinglePassTraces ? @"
-Backtrace1.rb:11:in `bar'
-Backtrace1.rb:7:in `foo'
-Backtrace1.rb:3:in `goo'
+Backtrace1.rb:11:in `Object#bar'
+Backtrace1.rb:7:in `Object#foo'
+Backtrace1.rb:3:in `Object#goo'
 Backtrace1.rb:18
 " : @"
-Backtrace1.rb:10:in `bar'
-Backtrace1.rb:6:in `foo'
-Backtrace1.rb:2:in `goo'
+Backtrace1.rb:10:in `Object#bar'
+Backtrace1.rb:6:in `Object#foo'
+Backtrace1.rb:2:in `Object#goo'
 Backtrace1.rb:0
 ");
         }

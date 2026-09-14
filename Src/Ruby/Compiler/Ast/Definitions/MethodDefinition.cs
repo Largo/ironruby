@@ -123,8 +123,32 @@ namespace IronRuby.Compiler.Ast {
             return new ScopeBuilder(parameters, firstClosureParam, localCount, null, DefinedScope);
         }
 
+        /// <summary>
+        /// The label MRI 3.4 and later puts on a method frame: "M::C#foo" for an instance method,
+        /// "M::C.foo" for a method on a module's singleton, and the bare name where there is no
+        /// module to name - a singleton method of an ordinary object (including main), or a method
+        /// defined in an anonymous module.
+        ///
+        /// The owner is only known once the method is defined, which is also when the body is
+        /// compiled, so the label can be baked into the frame name along with everything else.
+        /// </summary>
+        private static string/*!*/ QualifyFrameLabel(string/*!*/ name, RubyModule declaringModule) {
+            if (declaringModule == null) {
+                return name;
+            }
+
+            RubyClass cls = declaringModule as RubyClass;
+            if (cls != null && cls.IsSingletonClass) {
+                RubyModule attached = cls.SingletonClassOf as RubyModule;
+                return (attached != null && attached.Name != null) ? attached.Name + "." + name : name;
+            }
+
+            return (declaringModule.Name != null) ? declaringModule.Name + "#" + name : name;
+        }
+
         internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
-            string encodedName = RubyStackTraceBuilder.EncodeMethodName(_name, gen.SourcePath, Location, gen.DebugMode);
+            string frameLabel = QualifyFrameLabel(_name, declaringModule);
+            string encodedName = RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode);
 
             AstParameters parameters;
             ScopeBuilder scope = DefineLocals(out parameters);
@@ -150,6 +174,10 @@ namespace IronRuby.Compiler.Ast {
                 _name,
                 _parameters
             );
+
+            // Blocks written inside this method are labelled "block in <this frame's label>",
+            // so they need the qualified form rather than the bare method name.
+            gen.CurrentMethod.FrameLabel = frameLabel;
 
             // profiling:
             MSA.Expression profileStart = AstUtils.Empty();
