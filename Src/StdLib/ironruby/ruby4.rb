@@ -1485,10 +1485,12 @@ class IO
   # autoclose is tracked but not acted on: IronRuby closes descriptors it owns
   # through the CLR stream, and never closes one handed to it from outside.
   def autoclose?
+    ::Kernel.raise(::IOError, "closed stream") if closed?
     defined?(@__autoclose) ? @__autoclose : true
   end unless method_defined?(:autoclose?)
 
   def autoclose=(value)
+    ::Kernel.raise(::IOError, "closed stream") if closed?
     @__autoclose = !!value
   end unless method_defined?(:autoclose=)
 end

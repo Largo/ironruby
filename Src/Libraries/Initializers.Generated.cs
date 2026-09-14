@@ -3351,12 +3351,12 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "flush", 0x51, 
                 0x00000000U, 
-                new Action<IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.Flush)
+                new Func<IronRuby.Builtins.RubyIO, IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.Flush)
             );
             
             DefineLibraryMethod(module, "fsync", 0x51, 
                 0x00000000U, 
-                new Action<IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.Flush)
+                new Func<IronRuby.Builtins.RubyIO, System.Int32>(IronRuby.Builtins.RubyIOOps.FSync)
             );
             
             DefineLibraryMethod(module, "getc", 0x51, 
@@ -3470,7 +3470,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "rewind", 0x51, 
                 0x00000000U, 
-                new Action<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.Rewind)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyIO, System.Int32>(IronRuby.Builtins.RubyIOOps.Rewind)
             );
             
             DefineLibraryMethod(module, "seek", 0x51, 
@@ -4458,9 +4458,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "putc", 0x51, 
-                0x00000004U, 0x00020000U, 
+                0x00000004U, 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.PrintOps.Putc), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Int32, System.Int32>(IronRuby.Builtins.PrintOps.Putc)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.PrintOps.Putc)
             );
             
             DefineLibraryMethod(module, "puts", 0x51, 
@@ -4861,9 +4861,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "putc", 0x52, 
-                0x00000004U, 0x00020000U, 
+                0x00000004U, 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Putc), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Int32, System.Int32>(IronRuby.Builtins.KernelOps.Putc)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Putc)
             );
             
             DefineLibraryMethod(module, "puts", 0x52, 
@@ -5240,9 +5240,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "putc", 0x61, 
-                0x00000004U, 0x00020000U, 
+                0x00000004U, 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.Putc), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Int32, System.Int32>(IronRuby.Builtins.KernelOps.Putc)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Putc)
             );
             
             DefineLibraryMethod(module, "puts", 0x61, 
@@ -12079,9 +12079,9 @@ namespace IronRuby.StandardLibrary.StringIO {
             );
             
             DefineLibraryMethod(module, "putc", 0x11, 
-                0x00000004U, 0x00020000U, 
+                0x00000004U, 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Putc), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Int32, System.Int32>(IronRuby.StandardLibrary.StringIO.StringIO.Putc)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.Putc)
             );
             
             DefineLibraryMethod(module, "puts", 0x11, 

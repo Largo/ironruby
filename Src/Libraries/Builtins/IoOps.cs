@@ -822,14 +822,21 @@ namespace IronRuby.Builtins {
             return self.FileControl(commandId, arg);
         }
 
-        [RubyMethod("fsync")]
         [RubyMethod("flush")]
-        public static void Flush(RubyIO/*!*/ self) {
+        public static RubyIO/*!*/ Flush(RubyIO/*!*/ self) {
             try {
                 self.Flush();
             } catch (IOException e) {
                 throw TranslateStreamError(e);
             }
+            return self;
+        }
+
+        // fsync is flush plus the write-back the name promises, and MRI answers 0 for it.
+        [RubyMethod("fsync")]
+        public static int FSync(RubyIO/*!*/ self) {
+            Flush(self);
+            return 0;
         }
 
         #endregion
@@ -845,6 +852,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("pid")]
         public static object Pid(RubyIO/*!*/ self) {
+            self.RequireOpen();
             return null;  // OK to return null on Windows
         }
 
@@ -856,7 +864,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binmode")]
         public static RubyIO/*!*/ Binmode(RubyIO/*!*/ self) {
-            if (!self.Closed && self.Position == 0) {
+            self.RequireOpen();
+            if (self.Position == 0) {
                 self.PreserveEndOfLines = true;
             }
             return self;
@@ -864,11 +873,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binmode?")]
         public static bool IsBinmode(RubyIO/*!*/ self) {
+            self.RequireOpen();
             return self.IsBinmode;
         }
 
         [RubyMethod("stat", BuildConfig = "FEATURE_FILESYSTEM")]
         public static System.IO.FileSystemInfo/*!*/ Stat(RubyIO/*!*/ self) {
+            self.RequireOpen();
             return RubyFileOps.RubyStatOps.Create(self);
         }
 
@@ -1037,9 +1048,10 @@ namespace IronRuby.Builtins {
         #region rewind, seek, sysseek, pos, tell, lineno
 
         [RubyMethod("rewind")]
-        public static void Rewind(RubyContext/*!*/ context, RubyIO/*!*/ self) {
+        public static int Rewind(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             self.Seek(0, SeekOrigin.Begin);
             self.LineNumber = 0;
+            return 0;
         }
 
         [RubyMethod("seek")]

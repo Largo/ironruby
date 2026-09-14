@@ -358,8 +358,8 @@ namespace IronRuby.StandardLibrary.StringIO {
         }
 
         [RubyMethod("putc")]
-        public static int Putc(BinaryOpStorage/*!*/ writeStorage, object self, [DefaultProtocol]int c) {
-            return PrintOps.Putc(writeStorage, self, c);
+        public static object Putc(ConversionStorage<int>/*!*/ fixnumCast, BinaryOpStorage/*!*/ writeStorage, object self, object c) {
+            return PrintOps.Putc(fixnumCast, writeStorage, self, c);
         }
 
         [RubyMethod("puts")]
