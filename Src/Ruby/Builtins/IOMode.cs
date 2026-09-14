@@ -16,6 +16,7 @@
 using System;
 using System.IO;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Conversions;
 using System.Collections.Generic;
 using System.Reflection;
 
@@ -50,8 +51,13 @@ namespace IronRuby.Builtins {
         private readonly IOMode? _mode;
         private readonly RubyEncoding _externalEncoding;
         private readonly RubyEncoding _internalEncoding;
+        // Whether a mode string said "b" or "t". MRI refuses to be told the same thing twice,
+        // so :binmode and :textmode contradict a mode string that already decided the question -
+        // whatever they say. There is no room for it in IOMode: "t" leaves no trace there.
+        private readonly bool _textOrBinarySpecified;
 
         public IOMode Mode { get { return _mode ?? IOMode.Default; } }
+        public bool HasMode { get { return _mode.HasValue; } }
         public RubyEncoding ExternalEncoding { get { return _externalEncoding; } }
         public RubyEncoding InternalEncoding { get { return _internalEncoding; } }
         // Either side on its own counts: "internal_encoding: 'ISO-8859-1'" asks for a
@@ -62,10 +68,15 @@ namespace IronRuby.Builtins {
             : this(mode, null, null) {
         }
 
-        public IOInfo(IOMode? mode, RubyEncoding externalEncoding, RubyEncoding internalEncoding) {
+        public IOInfo(IOMode? mode, RubyEncoding externalEncoding, RubyEncoding internalEncoding)
+            : this(mode, externalEncoding, internalEncoding, false) {
+        }
+
+        public IOInfo(IOMode? mode, RubyEncoding externalEncoding, RubyEncoding internalEncoding, bool textOrBinarySpecified) {
             _mode = mode;
             _externalEncoding = externalEncoding;
             _internalEncoding = internalEncoding;
+            _textOrBinarySpecified = textOrBinarySpecified;
         }
 
         public static IOInfo Parse(RubyContext/*!*/ context, MutableString/*!*/ modeAndEncoding) {
@@ -74,10 +85,13 @@ namespace IronRuby.Builtins {
             }
 
             string[] parts = modeAndEncoding.ToString().Split(':');
+            bool textOrBinary;
+            IOMode mode = IOModeEnum.Parse(parts[0], out textOrBinary);
             return new IOInfo(
-                IOModeEnum.Parse(parts[0]),
+                mode,
                 (parts.Length > 1) ? TryParseEncoding(context, parts[1]) : null,
-                (parts.Length > 2) ? TryParseEncoding(context, parts[2]) : null
+                (parts.Length > 2) ? TryParseEncoding(context, parts[2]) : null,
+                textOrBinary
             );
         }
 
@@ -92,7 +106,7 @@ namespace IronRuby.Builtins {
             }
 
             if (!info.HasEncoding) {
-                return new IOInfo(info.Mode, _externalEncoding, _internalEncoding);
+                return new IOInfo(info.Mode, _externalEncoding, _internalEncoding, info._textOrBinarySpecified);
             }
 
             throw RubyExceptions.CreateArgumentError("encoding specified twice");
@@ -112,7 +126,8 @@ namespace IronRuby.Builtins {
             return new IOInfo(
                 _mode,
                 TryParseEncoding(context, parts[0]),
-                (parts.Length > 1) ? TryParseEncoding(context, parts[1]) : null
+                (parts.Length > 1) ? TryParseEncoding(context, parts[1]) : null,
+                _textOrBinarySpecified
             );
         }
 
@@ -143,30 +158,51 @@ namespace IronRuby.Builtins {
 
             IOInfo result = this;
             object optionValue;
-            if (options.TryGetValue(context.CreateAsciiSymbol("encoding"), out optionValue)) {
-                result = result.AddEncoding(context, Protocols.CastToString(toStr, optionValue));
-            }
-
-            if (options.TryGetValue(context.CreateAsciiSymbol("mode"), out optionValue)) {
-                result = result.AddModeAndEncoding(context, Protocols.CastToString(toStr, optionValue));
-            }
 
             // :external_encoding and :internal_encoding say separately what "ext:int" says
-            // together, and either of them may appear on its own. The mode is carried over as
-            // the nullable it is: turning it into a concrete mode here would make a later
-            // "mode" option look like a second one.
+            // together, and either of them may appear on its own. They also outrank :encoding,
+            // which MRI warns about and ignores rather than refusing.
             object externalValue, internalValue;
             bool hasExternal = options.TryGetValue(context.CreateAsciiSymbol("external_encoding"), out externalValue);
             bool hasInternal = options.TryGetValue(context.CreateAsciiSymbol("internal_encoding"), out internalValue);
+
+            if (options.TryGetValue(context.CreateAsciiSymbol("encoding"), out optionValue) && optionValue != null) {
+                if (hasExternal || hasInternal) {
+                    context.ReportWarning(String.Format("Ignoring encoding parameter '{0}': {1}_encoding is used",
+                        EncodingOptionName(toStr, optionValue), hasExternal ? "external" : "internal"));
+                } else {
+                    result = result.AddEncoding(context, toStr, optionValue);
+                }
+            }
+
+            // A nil :mode is MRI's way of saying "no mode here", not an empty one.
+            if (options.TryGetValue(context.CreateAsciiSymbol("mode"), out optionValue) && optionValue != null) {
+                // The option takes a File::Constants integer as readily as a string.
+                var toIntStorage = new ConversionStorage<int?>(context);
+                var toIntSite = toIntStorage.GetSite(TryConvertToFixnumAction.Make(context));
+                int? numeric = toIntSite.Target(toIntSite, optionValue);
+                result = numeric.HasValue
+                    ? result.AddMode(context, (IOMode)numeric.Value)
+                    : result.AddModeAndEncoding(context, Protocols.CastToString(toStr, optionValue));
+            }
+
             if (hasExternal || hasInternal) {
-                if (result.HasEncoding) {
+                // Encodings that came from the mode argument are a genuine conflict - unlike
+                // :encoding, which MRI merely warns about.
+                if (HasEncoding) {
                     throw RubyExceptions.CreateArgumentError("encoding specified twice");
                 }
+
+                // The mode is carried over as the nullable it is: turning it into a concrete mode
+                // here would make a later "mode" option look like a second one.
                 result = new IOInfo(result._mode,
                     hasExternal ? ToEncoding(toStr, externalValue) : null,
-                    hasInternal ? ToEncoding(toStr, internalValue) : null
+                    hasInternal ? ToEncoding(toStr, internalValue) : null,
+                    result._textOrBinarySpecified
                 );
             }
+
+            result = result.AddTextOrBinaryMode(context, options);
 
             // :newline is a text-mode decorator, so it contradicts "b".
             if (options.TryGetValue(context.CreateAsciiSymbol("newline"), out optionValue)
@@ -177,10 +213,70 @@ namespace IronRuby.Builtins {
             // :flags is OR'd into whatever the mode argument already said.
             if (options.TryGetValue(context.CreateAsciiSymbol("flags"), out optionValue)) {
                 int extra = Protocols.CastToFixnum(new ConversionStorage<int>(context), optionValue);
-                result = new IOInfo(result.Mode | (IOMode)extra, result.ExternalEncoding, result.InternalEncoding);
+                result = new IOInfo(result.Mode | (IOMode)extra, result.ExternalEncoding, result.InternalEncoding, result._textOrBinarySpecified);
             }
 
             return result;
+        }
+
+        private IOInfo AddMode(RubyContext/*!*/ context, IOMode mode) {
+            if (_mode.HasValue) {
+                throw RubyExceptions.CreateArgumentError("mode specified twice");
+            }
+            return new IOInfo(mode, _externalEncoding, _internalEncoding, _textOrBinarySpecified);
+        }
+
+        /// <summary>
+        /// :binmode and :textmode. MRI rejects them outright once a mode string has answered the
+        /// question - even when they agree with it - and rejects asking for both at once.
+        /// </summary>
+        private IOInfo AddTextOrBinaryMode(RubyContext/*!*/ context, IDictionary<object, object> options) {
+            object binValue, textValue;
+            bool hasBin = options.TryGetValue(context.CreateAsciiSymbol("binmode"), out binValue);
+            bool hasText = options.TryGetValue(context.CreateAsciiSymbol("textmode"), out textValue);
+            if (!hasBin && !hasText) {
+                return this;
+            }
+
+            if (_textOrBinarySpecified) {
+                throw RubyExceptions.CreateArgumentError("{0} specified twice", hasBin ? "binmode" : "textmode");
+            }
+
+            bool binmode = hasBin && Protocols.IsTrue(binValue);
+            bool textmode = hasText && Protocols.IsTrue(textValue);
+            if (binmode && textmode) {
+                throw RubyExceptions.CreateArgumentError("both textmode and binmode specified");
+            }
+
+            IOMode mode = Mode;
+            if (binmode) {
+                mode |= IOMode.PreserveEndOfLines;
+            } else if (textmode) {
+                mode &= ~IOMode.PreserveEndOfLines;
+            }
+            return new IOInfo(_mode.HasValue ? (IOMode?)mode : null, _externalEncoding, _internalEncoding, true);
+        }
+
+        /// <summary>The :encoding option as it reads back in MRI's warning about ignoring it.</summary>
+        private static string EncodingOptionName(ConversionStorage<MutableString>/*!*/ toStr, object value) {
+            var encoding = value as RubyEncoding;
+            if (encoding != null) {
+                return encoding.Name;
+            }
+            return Protocols.CastToString(toStr, value).ToString();
+        }
+
+        /// <summary>The :encoding option takes an Encoding object as readily as an "ext:int" string.</summary>
+        private IOInfo AddEncoding(RubyContext/*!*/ context, ConversionStorage<MutableString>/*!*/ toStr, object value) {
+            var encoding = value as RubyEncoding;
+            if (encoding == null) {
+                return AddEncoding(context, Protocols.CastToString(toStr, value));
+            }
+
+            if (HasEncoding) {
+                throw RubyExceptions.CreateArgumentError("encoding specified twice");
+            }
+            return new IOInfo(_mode, encoding, null, _textOrBinarySpecified);
         }
     }
 
@@ -227,6 +323,12 @@ namespace IronRuby.Builtins {
         }
 
         public static IOMode Parse(string mode) {
+            bool textOrBinary;
+            return Parse(mode, out textOrBinary);
+        }
+
+        public static IOMode Parse(string mode, out bool textOrBinarySpecified) {
+            textOrBinarySpecified = false;
             if (String.IsNullOrEmpty(mode)) {
                 throw IllegalMode(mode);
             }
@@ -263,6 +365,8 @@ namespace IronRuby.Builtins {
                         throw IllegalMode(mode);
                 }
             }
+
+            textOrBinarySpecified = binary || text;
 
             if (binary) {
                 result |= IOMode.PreserveEndOfLines;

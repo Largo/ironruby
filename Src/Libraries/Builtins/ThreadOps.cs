@@ -917,6 +917,17 @@ namespace IronRuby.Builtins {
             // TODO: MRI throws an exception if you try to stop the main thread
             RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.Sleep();
+            // Waking up is a safe point: a signal that arrived while we slept runs its trap handler
+            // here, which is where MRI runs it too.
+            RubyUtils.CheckAsyncException();
+        }
+
+        /// <summary>
+        /// Ends a Kernel#sleep on another thread without interrupting it, so that a signal parked
+        /// for the main thread is picked up at the safe point right after the sleep.
+        /// </summary>
+        internal static void WakeForSignal(Thread/*!*/ thread) {
+            RubyThreadInfo.FromThread(thread).Run();
         }
 
         /// <summary>
@@ -928,6 +939,7 @@ namespace IronRuby.Builtins {
             RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
             long start = Environment.TickCount64;
             info.Sleep(milliseconds);
+            RubyUtils.CheckAsyncException();
             return (int)Math.Round((Environment.TickCount64 - start) / 1000.0);
         }
 

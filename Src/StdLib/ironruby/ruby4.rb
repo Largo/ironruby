@@ -7088,7 +7088,7 @@ module Process
     # We have no way to ask the platform, so report the resolution the source we
     # actually use has: Stopwatch for the monotonic clocks, and Time for the rest.
     def clock_getres(clock_id = CLOCK_MONOTONIC, unit = :float_second)
-      seconds = 1.0 / System::Diagnostics::Stopwatch.frequency.to_f
+      seconds = CLOCK_RESOLUTIONS__[clock_id.to_s] || 1.0 / System::Diagnostics::Stopwatch.frequency.to_f
       case unit
       when :float_second then seconds
       when :float_millisecond then seconds * 1_000.0
@@ -7620,17 +7620,17 @@ module Process
     module_function :setrlimit
 
     # MRI takes the number, or the constant's name with or without the RLIMIT_ prefix.
+    # Anything else is asked for #to_str first and only then for #to_int, which is the order
+    # MRI's rlimit_resource_type uses.
     def __rlimit_resource__(resource)
       case resource
       when Integer then resource
-      when Symbol, String
-        name = resource.to_s
-        name = "RLIMIT_#{name}" unless name.start_with?("RLIMIT_")
-        unless const_defined?(name)
-          raise ArgumentError, "invalid resource name: #{resource}"
-        end
-        const_get(name)
+      when Symbol, String then __rlimit_by_name__(resource.to_s, resource)
       else
+        if resource.respond_to?(:to_str)
+          name = resource.to_str
+          return __rlimit_by_name__(name, resource) if name.is_a?(String)
+        end
         unless resource.respond_to?(:to_int)
           raise TypeError, "no implicit conversion of #{resource.class} into Integer"
         end
@@ -7643,12 +7643,31 @@ module Process
     end
     module_function :__rlimit_resource__
 
-    def __rlimit_value__(value)
-      return value if value.is_a?(Integer)
-      unless value.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{value.class} into Integer"
+    def __rlimit_by_name__(name, original)
+      name = "RLIMIT_#{name}" unless name.start_with?("RLIMIT_")
+      unless const_defined?(name)
+        raise ArgumentError, "invalid resource name: #{original}"
       end
-      value.to_int
+      const_get(name)
+    end
+    module_function :__rlimit_by_name__
+
+    # rlim_t is unsigned, so RLIM_INFINITY is 2**64-1 and getrlimit hands it back that way.
+    # __setrlimit__ takes it as a signed long and reinterprets the bits, so anything above
+    # Integer::MAX has to be folded into the negative half first or the conversion overflows.
+    def __rlimit_value__(value)
+      unless value.is_a?(Integer)
+        unless value.respond_to?(:to_int)
+          raise TypeError, "no implicit conversion of #{value.class} into Integer"
+        end
+        value = value.to_int
+        unless value.is_a?(Integer)
+          raise TypeError, "can't convert to Integer"
+        end
+      end
+      # Named inline rather than as constants: Process.constants is part of the API and
+      # ruby/spec walks everything matching /\ARLIMIT_/ through getrlimit.
+      value > 0x7fff_ffff_ffff_ffff ? value - 0x1_0000_0000_0000_0000 : value
     end
     module_function :__rlimit_value__
   end
@@ -7808,7 +7827,7 @@ module Process
   # on platforms that cannot do it too, as the function that raises NotImplementedError,
   # and that function is exactly the case respond_to? answers false for - so portable
   # code asks whether the feature is there rather than whether the name is.
-  NOT_IMPLEMENTED_METHODS = [:daemon, :fork].freeze unless const_defined?(:NOT_IMPLEMENTED_METHODS)
+  NOT_IMPLEMENTED_METHODS = [:daemon, :fork, :_fork].freeze unless const_defined?(:NOT_IMPLEMENTED_METHODS)
 
   unless respond_to?(:daemon)
     def daemon(nochdir = nil, noclose = nil)
@@ -7816,6 +7835,34 @@ module Process
     end
     module_function :daemon
   end
+
+  # Process.fork and Process._fork exist for the same reason daemon does: MRI defines
+  # them everywhere and lets respond_to? be the portable answer. Kernel#fork is private
+  # and so was never reachable as Process.fork.
+  unless singleton_class.method_defined?(:fork)
+    def fork(&block)
+      raise NotImplementedError, "fork() function is unimplemented on this machine"
+    end
+    module_function :fork
+
+    def _fork
+      raise NotImplementedError, "fork() function is unimplemented on this machine"
+    end
+    module_function :_fork
+  end
+
+  # The resolution of the clock we would actually read, per clock. The two named after
+  # the calls MRI emulates them with have the resolution of those calls, whatever the
+  # platform timer manages.
+  CLOCK_RESOLUTIONS__ = {
+    "GETTIMEOFDAY_BASED_CLOCK_REALTIME" => 1.0e-6,
+    "TIME_BASED_CLOCK_REALTIME" => 1.0,
+    "GETRUSAGE_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1.0e-6,
+    "CLOCK_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1.0e-6,
+    "TIMES_BASED_CLOCK_PROCESS_CPUTIME_ID" => 1.0e-2,
+    "TIMES_BASED_CLOCK_MONOTONIC" => 1.0e-2,
+    "MACH_ABSOLUTE_TIME_BASED_CLOCK_MONOTONIC" => 1.0e-9,
+  }.freeze unless const_defined?(:CLOCK_RESOLUTIONS__)
 
   def self.respond_to?(name, include_all = false)
     return false if NOT_IMPLEMENTED_METHODS.include?(name.to_sym)
@@ -8914,90 +8961,6 @@ class IO
         read_end.close unless read_end.closed?
         write_end.close unless write_end.closed?
       end
-    end
-
-    # Multiplexing through poll(2), for the streams that have an operating
-    # system descriptor to poll. Not all of them do: IronRuby's IO.pipe is not
-    # backed by a FileStream, so IO#GetNativeDescriptor answers -1 for a pipe
-    # and there is nothing to ask the kernel about. Those streams are reported
-    # ready - the same guess as before, but now confined to the cases where no
-    # better answer exists, and never allowed to turn into an indefinite wait.
-    POLLIN__ = 0x001
-    POLLOUT__ = 0x004
-    POLLERR__ = 0x008
-    POLLHUP__ = 0x010
-    POLLNVAL__ = 0x020
-
-    def select(reads = nil, writes = nil, errors = nil, timeout = nil)
-      [reads, writes, errors].each do |list|
-        next if list.nil? || list.respond_to?(:to_ary)
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{list.class} into Array")
-      end
-      reads = (reads || []).to_a
-      writes = (writes || []).to_a
-      errors = (errors || []).to_a
-      return nil if reads.empty? && writes.empty? && errors.empty?
-
-      pollable = []
-      unpollable = []
-      [[reads, POLLIN__, :read], [writes, POLLOUT__, :write], [errors, 0, :error]].each do |list, event, kind|
-        list.each do |io|
-          fd = ::IO.GetNativeDescriptor(io) rescue -1
-          (fd >= 0 ? pollable : unpollable) << [io, event, kind, fd]
-        end
-      end
-
-      readable = []
-      writable = []
-      failing = []
-
-      unless unpollable.empty?
-        unpollable.each do |io, _, kind, _|
-          next if io.closed?
-          case kind
-          when :read then readable << io
-          when :write then writable << io
-          end
-        end
-      end
-
-      unless pollable.empty?
-        # If anything was answered without polling there is already a result, so
-        # the poll must not wait; otherwise honour the caller's timeout.
-        millis =
-          if !readable.empty? || !writable.empty?
-            0
-          elsif timeout.nil?
-            -1
-          else
-            (timeout.to_f * 1000).round
-          end
-        revents = ::IO.Poll(pollable.map { |_, _, _, fd| fd }, pollable.map { |_, e, _, _| e }, millis)
-        if revents.nil?
-          pollable.each do |io, _, kind, _|
-            next if io.closed?
-            case kind
-            when :read then readable << io
-            when :write then writable << io
-            end
-          end
-        else
-          pollable.each_with_index do |(io, _, kind, _), i|
-            got = revents[i]
-            case kind
-            when :read
-              readable << io if (got & (POLLIN__ | POLLHUP__ | POLLERR__ | POLLNVAL__)) != 0
-            when :write
-              writable << io if (got & (POLLOUT__ | POLLERR__ | POLLNVAL__)) != 0
-            else
-              failing << io if (got & (POLLERR__ | POLLNVAL__)) != 0
-            end
-          end
-        end
-      end
-
-      return nil if readable.empty? && writable.empty? && failing.empty?
-      [readable, writable, failing]
     end
   end
 

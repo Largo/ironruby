@@ -59,23 +59,18 @@ namespace IronRuby.Builtins {
                 context.InterruptSignalHandler = (proc != null) ? new Action(() => proc.Call(null)) : null;
             }
 
+            // MRI runs trap handlers on the main thread at an interrupt check, not on whatever
+            // thread the signal landed on. PosixSignals parks them; this is where the main thread
+            // is named and where the safe point that drains them is hooked up.
+            PosixSignals.MainThread = context.MainThread;
+            RubyUtils.SafePointHandler = PosixSignals.RunPending;
+
             // MRI takes a block, a Proc, a Method - anything that answers #call - so dispatch
             // dynamically rather than insisting on a Proc.
             var site = callStorage.GetCallSite("call", 1);
-            var mainThread = context.MainThread;
-            return PosixSignals.Trap(number, command, signalNumber => {
-                try {
-                    site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber));
-                } catch (Exception e) {
-                    // MRI runs trap handlers on the main thread, so an exception out of one - a
-                    // NoMethodError from a handler that turned out not to be callable, say -
-                    // surfaces there.  We run them on the signal thread, where throwing would only
-                    // lose the exception, so hand it to the main thread instead.
-                    if (mainThread != null && mainThread != System.Threading.Thread.CurrentThread) {
-                        RubyUtils.RaiseAsyncException(mainThread, e);
-                    }
-                }
-            });
+            return PosixSignals.Trap(number, command, signalNumber =>
+                site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber))
+            );
         }
 
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]

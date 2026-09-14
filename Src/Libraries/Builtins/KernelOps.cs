@@ -1528,20 +1528,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("select", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray Select(RubyContext/*!*/ context, object self, RubyArray read, [Optional]RubyArray write, [Optional]RubyArray error) {
-            return RubyIOOps.Select(context, null, read, write, error);
-        }
-
-        [RubyMethod("select", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray Select(RubyContext/*!*/ context, object self, RubyArray read, [Optional]RubyArray write, [Optional]RubyArray error, int timeoutInSeconds) {
-            return RubyIOOps.Select(context, null, read, write, error, timeoutInSeconds);
-        }
-
-        [RubyMethod("select", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("select", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray Select(RubyContext/*!*/ context, object self, RubyArray read, [Optional]RubyArray write, [Optional]RubyArray error, double timeoutInSeconds) {
-            return RubyIOOps.Select(context, null, read, write, error, timeoutInSeconds);
+        public static RubyArray Select(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            RubyContext/*!*/ context, object self,
+            object read, [Optional]object write, [Optional]object error, [Optional]object timeout) {
+            return RubyIOOps.Select(respondToStorage, toIoStorage, context, null, read, write, error, timeout);
         }
 
 #if FEATURE_THREAD

@@ -8,6 +8,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 
@@ -167,10 +168,40 @@ namespace IronRuby.Builtins {
 
         private sealed class Handler {
             public object Command;                       // Proc, or a MutableString such as "DEFAULT"
+            public Action<int> Invoke;                   // null for "IGNORE"
             public PosixSignalRegistration Registration;
         }
 
         private static readonly Dictionary<int, Handler> _handlers = new Dictionary<int, Handler>();
+
+        /// <summary>
+        /// Signals whose handler is waiting to run. MRI does not run a trap handler on whatever
+        /// thread the signal happened to land on: it records the signal and the *main* thread runs
+        /// the handler at its next interrupt check. .NET hands POSIX signals to a dedicated thread
+        /// of its own, so we do the same thing - park the signal here and let the main thread pick
+        /// it up at a safe point (Thread.pass, Kernel#sleep, ...).
+        ///
+        /// Running handlers on the signal thread instead was actively harmful: an exception out of
+        /// a handler had to be re-raised asynchronously on the main thread, which landed in the
+        /// middle of unrelated code. In ruby/spec that arrived inside the next example's `before`
+        /// block, abandoning a half-constructed fixture and leaking its child process.
+        /// </summary>
+        private static readonly Queue<int> _pending = new Queue<int>();
+
+        private static Thread _mainThread;
+
+        [ThreadStatic]
+        private static bool _running;
+
+        /// <summary>The thread MRI would run trap handlers on. Set from the Ruby context.</summary>
+        internal static Thread MainThread {
+            get { return _mainThread; }
+            set { _mainThread = value; }
+        }
+
+        internal static bool IsMainThread {
+            get { return _mainThread != null && _mainThread == Thread.CurrentThread; }
+        }
 
         /// <summary>
         /// Installs a handler for the signal and returns whatever was installed before, using MRI's
@@ -194,10 +225,70 @@ namespace IronRuby.Builtins {
                     return previous;
                 }
 
-                var installed = new Handler { Command = command };
-                installed.Registration = TryRegister(signal, IsIgnore(command) ? null : invoke);
+                var installed = new Handler { Command = command, Invoke = IsIgnore(command) ? null : invoke };
+                installed.Registration = TryRegister(signal);
                 _handlers[signal] = installed;
                 return previous;
+            }
+        }
+
+        /// <summary>
+        /// Runs the handler for a signal on the calling thread. Used by Process.kill when a process
+        /// signals itself from the main thread, which MRI answers before kill(2) even returns.
+        /// </summary>
+        internal static void RunHandler(int signal) {
+            Action<int> invoke;
+            lock (_handlers) {
+                Handler handler;
+                invoke = _handlers.TryGetValue(signal, out handler) ? handler.Invoke : null;
+            }
+            if (invoke == null) {
+                return;
+            }
+
+            bool wasRunning = _running;
+            _running = true;
+            try {
+                invoke(signal);
+            } finally {
+                _running = wasRunning;
+            }
+        }
+
+        /// <summary>
+        /// A safe point on the main thread: runs whatever handlers the signal thread parked. Called
+        /// from RubyUtils.CheckAsyncException, which is what Thread.pass and Kernel#sleep reach.
+        /// An exception out of a handler propagates from here, which is where MRI raises it too.
+        /// </summary>
+        internal static void RunPending() {
+            if (_running || _mainThread == null || _mainThread != Thread.CurrentThread) {
+                return;
+            }
+
+            while (true) {
+                int signal;
+                lock (_handlers) {
+                    if (_pending.Count == 0) {
+                        return;
+                    }
+                    signal = _pending.Dequeue();
+                }
+                RunHandler(signal);
+            }
+        }
+
+        /// <summary>Records a signal for the main thread and nudges it if it is asleep.</summary>
+        private static void Enqueue(int signal) {
+            lock (_handlers) {
+                _pending.Enqueue(signal);
+            }
+
+            Thread main = _mainThread;
+            if (main != null && main != Thread.CurrentThread) {
+                // Ends a Kernel#sleep the way a signal does in MRI. Deliberately not
+                // Thread.Interrupt: that throws at arbitrary managed waits, including ones with no
+                // handler for it.
+                ThreadOps.WakeForSignal(main);
             }
         }
 
@@ -219,18 +310,12 @@ namespace IronRuby.Builtins {
             return s == "IGNORE" || s == "SIG_IGN";
         }
 
-        private static PosixSignalRegistration TryRegister(int signal, Action<int> invoke) {
+        private static PosixSignalRegistration TryRegister(int signal) {
             try {
                 return PosixSignalRegistration.Create((PosixSignal)signal, context => {
                     // Whatever the signal would normally do to the process, a Ruby handler replaces it.
                     context.Cancel = true;
-                    if (invoke != null) {
-                        try {
-                            invoke(signal);
-                        } catch (Exception) {
-                            // A raise out of a signal handler has nowhere to go on this thread.
-                        }
-                    }
+                    Enqueue(signal);
                 });
             } catch (Exception) {
                 // Unsupported signal number, or a platform without POSIX signals: the handler is
