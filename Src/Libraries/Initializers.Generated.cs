@@ -6270,8 +6270,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "method_defined?", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.MethodDefined)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Boolean>(IronRuby.Builtins.ModuleOps.MethodDefined)
             );
             
             DefineLibraryMethod(module, "method_removed", 0x5a, 
@@ -6296,8 +6296,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "module_function", 0x52, 
-                0x80020004U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.CopyMethodsToModuleSingleton)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.CopyMethodsToModuleSingleton)
             );
             
             DefineLibraryMethod(module, "name", 0x51, 
@@ -6327,13 +6327,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "private", 0x52, 
-                0x80020004U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.SetPrivateVisibility)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.SetPrivateVisibility)
             );
             
             DefineLibraryMethod(module, "private_class_method", 0x51, 
-                0x80010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPrivate)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPrivate)
             );
             
             DefineLibraryMethod(module, "private_constant", 0x51, 
@@ -6348,13 +6348,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "private_method_defined?", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.PrivateMethodDefined)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Boolean>(IronRuby.Builtins.ModuleOps.PrivateMethodDefined)
             );
             
             DefineLibraryMethod(module, "protected", 0x52, 
-                0x80020004U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.SetProtectedVisibility)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.SetProtectedVisibility)
             );
             
             DefineLibraryMethod(module, "protected_instance_methods", 0x51, 
@@ -6364,18 +6364,18 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "protected_method_defined?", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.ProtectedMethodDefined)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Boolean>(IronRuby.Builtins.ModuleOps.ProtectedMethodDefined)
             );
             
             DefineLibraryMethod(module, "public", 0x52, 
-                0x80020004U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.SetPublicVisibility)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.SetPublicVisibility)
             );
             
             DefineLibraryMethod(module, "public_class_method", 0x51, 
-                0x80010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPublic)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPublic)
             );
             
             DefineLibraryMethod(module, "public_constant", 0x51, 
@@ -6395,8 +6395,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "public_method_defined?", 0x51, 
-                0x00010002U, 
-                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.PublicMethodDefined)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.Boolean>(IronRuby.Builtins.ModuleOps.PublicMethodDefined)
             );
             
             DefineLibraryMethod(module, "refine", 0x52, 

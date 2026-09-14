@@ -253,54 +253,88 @@ namespace IronRuby.Builtins {
 
         #region private, protected, public, private_class_method, public_class_method, module_function
 
+        /// <summary>
+        /// The names a visibility modifier was given. Since Ruby 3.0 a single Array argument is
+        /// the list of names - `private [:a, :b]` - so it is spread here; everything else is
+        /// converted with the usual symbol-or-string protocol.
+        /// </summary>
+        private static string/*!*/[]/*!*/ ToMethodNames(ConversionStorage<MutableString>/*!*/ stringCast, object[]/*!*/ argv) {
+            object[] names = argv;
+            if (argv.Length == 1 && argv[0] is System.Collections.IList list) {
+                names = new object[list.Count];
+                for (int i = 0; i < list.Count; i++) {
+                    names[i] = list[i];
+                }
+            }
+
+            var result = new string[names.Length];
+            for (int i = 0; i < names.Length; i++) {
+                result[i] = Protocols.CastToString(stringCast, names[i]).ToString();
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// What a visibility modifier answers since Ruby 3.1: nil with no arguments, the single
+        /// argument as it was passed, or an Array of the arguments. Not the module.
+        /// </summary>
+        private static object VisibilityResult(object[]/*!*/ argv) {
+            switch (argv.Length) {
+                case 0: return null;
+                case 1: return argv[0];
+                default: return new RubyArray(argv);
+            }
+        }
+
         // thread-safe:
         [RubyMethod("private", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ SetPrivateVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object SetPrivateVisibility(ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
 
             // overwrites methods to instance:
-            SetMethodAttributes(scope, self, methodNames, RubyMethodAttributes.PrivateInstance);
-            return self;
+            SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PrivateInstance);
+            return VisibilityResult(methodNames);
         }
 
         // thread-safe:
         [RubyMethod("protected", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ SetProtectedVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object SetProtectedVisibility(ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
             // overwrites methods to instance:
-            SetMethodAttributes(scope, self, methodNames, RubyMethodAttributes.ProtectedInstance);
-            return self;
+            SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.ProtectedInstance);
+            return VisibilityResult(methodNames);
         }
 
         // thread-safe:
         [RubyMethod("public", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ SetPublicVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object SetPublicVisibility(ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
             // overwrites methods to instance:
-            SetMethodAttributes(scope, self, methodNames, RubyMethodAttributes.PublicInstance);
-            return self;
+            SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PublicInstance);
+            return VisibilityResult(methodNames);
         }
 
         // thread-safe:
         [RubyMethodAttribute("private_class_method")]
-        public static RubyModule/*!*/ MakeClassMethodsPrivate(RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
-            SetMethodAttributes(self.GetOrCreateSingletonClass(), methodNames, RubyMethodAttributes.Private);
+        public static RubyModule/*!*/ MakeClassMethodsPrivate(ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
+            SetMethodAttributes(self.GetOrCreateSingletonClass(), ToMethodNames(stringCast, methodNames), RubyMethodAttributes.Private);
+            // unlike #private/#public, the _class_method pair answers the module
             return self;
         }
 
         // thread-safe:
         [RubyMethodAttribute("public_class_method")]
-        public static RubyModule/*!*/ MakeClassMethodsPublic(RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
-            SetMethodAttributes(self.GetOrCreateSingletonClass(), methodNames, RubyMethodAttributes.Public);
+        public static RubyModule/*!*/ MakeClassMethodsPublic(ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
+            SetMethodAttributes(self.GetOrCreateSingletonClass(), ToMethodNames(stringCast, methodNames), RubyMethodAttributes.Public);
             return self;
         }
 
         // thread-safe:
         [RubyMethod("module_function", RubyMethodAttributes.PrivateInstance)]
-        public static RubyModule/*!*/ CopyMethodsToModuleSingleton(RubyScope/*!*/ scope, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object CopyMethodsToModuleSingleton(ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyScope/*!*/ scope, RubyModule/*!*/ self, params object[]/*!*/ methodNames) {
 
             // This is an important restriction for correct super calls in module functions (see RubyOps.DefineMethod). 
             // MRI has it wrong. It checks just here and not in method definition.
@@ -309,8 +343,8 @@ namespace IronRuby.Builtins {
             }
             
             // overwrites visibility to public:
-            SetMethodAttributes(scope, self, methodNames, RubyMethodAttributes.ModuleFunction);
-            return self;
+            SetMethodAttributes(scope, self, ToMethodNames(stringCast, methodNames), RubyMethodAttributes.ModuleFunction);
+            return VisibilityResult(methodNames);
         }
 
         internal static void SetMethodAttributes(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/[]/*!*/ methodNames, RubyMethodAttributes attributes) {
@@ -1426,28 +1460,40 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("method_defined?")]
-        public static bool MethodDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+        public static bool MethodDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object name) {
+            // MRI raises TypeError for anything that is not a Symbol or a String; the
+            // [DefaultProtocol]string binding quietly turned an Integer into its digits.
+            string methodName = Protocols.CastToString(stringCast, name).ToString();
             RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
             return method != null && method.Visibility != RubyMethodVisibility.Private;
         }
 
         // thread-safe:
         [RubyMethod("private_method_defined?")]
-        public static bool PrivateMethodDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+        public static bool PrivateMethodDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object name) {
+            // MRI raises TypeError for anything that is not a Symbol or a String; the
+            // [DefaultProtocol]string binding quietly turned an Integer into its digits.
+            string methodName = Protocols.CastToString(stringCast, name).ToString();
             RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
             return method != null && method.Visibility == RubyMethodVisibility.Private;
         }
 
         // thread-safe:
         [RubyMethod("protected_method_defined?")]
-        public static bool ProtectedMethodDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+        public static bool ProtectedMethodDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object name) {
+            // MRI raises TypeError for anything that is not a Symbol or a String; the
+            // [DefaultProtocol]string binding quietly turned an Integer into its digits.
+            string methodName = Protocols.CastToString(stringCast, name).ToString();
             RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
             return method != null && method.Visibility == RubyMethodVisibility.Protected;
         }
 
         // thread-safe:
         [RubyMethod("public_method_defined?")]
-        public static bool PublicMethodDefined(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+        public static bool PublicMethodDefined(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self, object name) {
+            // MRI raises TypeError for anything that is not a Symbol or a String; the
+            // [DefaultProtocol]string binding quietly turned an Integer into its digits.
+            string methodName = Protocols.CastToString(stringCast, name).ToString();
             RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
             return method != null && method.Visibility == RubyMethodVisibility.Public;
         }
