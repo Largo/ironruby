@@ -10837,7 +10837,19 @@ class IO
   # "unknown encoding name - utf-8:ISO-8859-1".
   alias_method :__ir_set_encoding__, :set_encoding
 
-  def set_encoding(*args)
+  def set_encoding(*args, **opts)
+    args = args + [opts] unless opts.empty?
+    if args.size > 3 || (args.size == 3 && !args[2].is_a?(::Hash))
+      ::Kernel.raise(::ArgumentError,
+                     "wrong number of arguments (given #{args.size}, expected 0..2)")
+    end
+    # An encoding name that is not itself ASCII compatible cannot name anything.
+    args.first(2).each do |name|
+      next unless name.is_a?(::String)
+      unless name.encoding.ascii_compatible?
+        ::Kernel.raise(::ArgumentError, "invalid name encoding (non ASCII)")
+      end
+    end
     # Anything string-shaped names an encoding, and one name may carry both sides.
     if args.size >= 1 && !args[0].is_a?(::String) && !args[0].is_a?(::Encoding) &&
        !args[0].nil? && args[0].respond_to?(:to_str)
@@ -10854,6 +10866,12 @@ class IO
       # Naming the external encoding twice is how that is said here.
       args = args.dup
       args[1] = args[0]
+    end
+    # "BOM|<encoding>" asks for the byte-order mark to have the last word; the
+    # name underneath is what goes in when there is no mark to read.
+    if args.size >= 1 && args[0].is_a?(::String) && args[0] =~ /\ABOM\|/i
+      args = args.dup
+      args[0] = args[0].sub(/\ABOM\|/i, "")
     end
     __check_set_encoding_options__(args)
     if args.size >= 1 && args[0].is_a?(::String) && args[0].include?(":")
@@ -11211,6 +11229,16 @@ class IO
     unless binmode?
       ::Kernel.raise(::ArgumentError, "ASCII incompatible encoding needs binmode")
     end
+    # The BOM is what names the encoding, so there must be nothing named already.
+    if internal_encoding
+      ::Kernel.raise(::ArgumentError, "encoding conversion is set")
+    end
+    external = external_encoding
+    if external && external != ::Encoding::BINARY
+      ::Kernel.raise(::ArgumentError, "encoding is set to #{external} already")
+    end
+    # Nothing to read a mark out of on a write-only stream.
+    return nil unless __readable_stream__?
     start = pos
     head = __ir_read__(4).to_s
     head.force_encoding(::Encoding::BINARY) if head.respond_to?(:force_encoding)
@@ -11391,14 +11419,38 @@ class IO
 
   # A hint to the kernel about the access pattern; there is nothing to pass it
   # to here, but MRI still validates the arguments and answers nil.
+  # There is no posix_fadvise here, so the advice is checked and then dropped -
+  # but the checking is the part callers can observe.
   def advise(advice, offset = 0, len = 0)
+    unless advice.is_a?(::Symbol)
+      ::Kernel.raise(::TypeError,
+                     "advice must be a Symbol: #{advice.nil? ? 'nil' : advice.inspect}")
+    end
     unless %i[normal sequential random willneed dontneed noreuse].include?(advice)
       ::Kernel.raise(::NotImplementedError, "Unsupported advice: #{advice.inspect}")
     end
-    ::Kernel.Integer(offset)
-    ::Kernel.Integer(len)
+    offset = __advise_offset__(offset)
+    len = __advise_offset__(len)
+    ::Kernel.raise(::IOError, "closed stream") if closed?
     nil
   end unless method_defined?(:advise)
+
+  # The offset and length go to off_t parameters: they take #to_int and nothing
+  # else, and anything that does not fit is out of range rather than convertible.
+  def __advise_offset__(value)
+    unless value.is_a?(::Integer)
+      unless value.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError,
+                       "no implicit conversion of #{value.class} into Integer")
+      end
+      value = value.to_int
+    end
+    if value > 0x7fffffffffffffff || value < -0x8000000000000000
+      ::Kernel.raise(::RangeError, "bignum too big to convert into 'long long'")
+    end
+    value
+  end
+  private :__advise_offset__
 
   def fdatasync
     fsync
