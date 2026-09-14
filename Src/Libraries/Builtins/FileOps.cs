@@ -1372,14 +1372,25 @@ namespace IronRuby.Builtins {
         internal sealed class StatInfo : FileSystemInfo {
             internal readonly Posix.StatData Data;
 
+            // Off Unix there is no statx result to hold, so the FileInfo/DirectoryInfo the
+            // old implementation used rides along instead. File::Stat is this class either
+            // way, which is what makes File.stat(...).instance_of?(File::Stat) true.
+            internal readonly FileSystemInfo Legacy;
+
             internal StatInfo(string/*!*/ path, Posix.StatData/*!*/ data) {
                 Data = data;
                 OriginalPath = path;
                 FullPath = path;
             }
 
+            internal StatInfo(FileSystemInfo/*!*/ legacy) {
+                Legacy = legacy;
+                OriginalPath = legacy.FullName;
+                FullPath = legacy.FullName;
+            }
+
             public override bool Exists {
-                get { return true; }
+                get { return Legacy == null || Legacy.Exists; }
             }
 
             public override string/*!*/ Name {
@@ -1387,14 +1398,18 @@ namespace IronRuby.Builtins {
             }
 
             public override void Delete() {
-                File.Delete(FullPath);
+                if (Legacy != null) {
+                    Legacy.Delete();
+                } else {
+                    File.Delete(FullPath);
+                }
             }
         }
 
         /// <summary>
         /// Stat
         /// </summary>
-        [RubyClass("Stat", Extends = typeof(FileSystemInfo), Inherits = typeof(object), BuildConfig = "FEATURE_FILESYSTEM"), Includes(typeof(Comparable))]
+        [RubyClass("Stat", Extends = typeof(StatInfo), Inherits = typeof(object), BuildConfig = "FEATURE_FILESYSTEM"), Includes(typeof(Comparable))]
         public class RubyStatOps {
 
             /// <summary>
@@ -1486,11 +1501,11 @@ namespace IronRuby.Builtins {
 
                 PlatformAdaptationLayer pal = context.Platform;
                 if (pal.FileExists(path)) {
-                    result = new FileInfo(path);
+                    result = new StatInfo(new FileInfo(path));
                 } else if (pal.DirectoryExists(path)) {
-                    result = new DirectoryInfo(path);
+                    result = new StatInfo(new DirectoryInfo(path));
                 } else if (path.ToUpperInvariant().Equals(NUL_VALUE)) {
-                    result = new DeviceInfo(NUL_VALUE);
+                    result = new StatInfo(new DeviceInfo(NUL_VALUE));
                 } else {
                     errno = Posix.ENOENT;
                     return false;
@@ -1501,6 +1516,12 @@ namespace IronRuby.Builtins {
             private static Posix.StatData D(FileSystemInfo/*!*/ self) {
                 var si = self as StatInfo;
                 return si != null ? si.Data : null;
+            }
+
+            /// <summary>The System.IO object behind an off-Unix File::Stat, if there is one.</summary>
+            private static FileSystemInfo L(FileSystemInfo self) {
+                var si = self as StatInfo;
+                return si != null ? si.Legacy : self;
             }
 
             [RubyConstructor]
@@ -1626,13 +1647,13 @@ namespace IronRuby.Builtins {
             [RubyMethod("directory?")]
             public static bool IsDirectory(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null ? d.FileType == Posix.S_IFDIR : (self is DirectoryInfo);
+                return d != null ? d.FileType == Posix.S_IFDIR : (L(self) is DirectoryInfo);
             }
 
             [RubyMethod("file?")]
             public static bool IsFile(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null ? d.FileType == Posix.S_IFREG : (self is FileInfo);
+                return d != null ? d.FileType == Posix.S_IFREG : (L(self) is FileInfo);
             }
 
             [RubyMethod("pipe?")]
@@ -1827,9 +1848,9 @@ namespace IronRuby.Builtins {
                 if (d != null) {
                     return d.Mode;
                 }
-                int mode = (self is FileInfo) ? 0x8000 : 0x4000;
+                int mode = (L(self) is FileInfo) ? 0x8000 : 0x4000;
                 mode |= 0x100; // S_IREAD;
-                if ((self.Attributes & FileAttributes.ReadOnly) == 0) {
+                if ((L(self).Attributes & FileAttributes.ReadOnly) == 0) {
                     mode |= 0x80; // S_IWRITE;
                 }
                 return mode;
@@ -1841,10 +1862,10 @@ namespace IronRuby.Builtins {
                 if (d != null) {
                     return Protocols.Normalize(d.Size);
                 }
-                if (self is DeviceInfo) {
+                if (L(self) is DeviceInfo) {
                     return 0;
                 }
-                FileInfo info = (self as FileInfo);
+                FileInfo info = (L(self) as FileInfo);
                 return (info == null) ? 0 : (object)Protocols.Normalize(info.Length);
             }
 
@@ -1854,10 +1875,10 @@ namespace IronRuby.Builtins {
                 if (d != null) {
                     return d.Size == 0 ? null : Protocols.Normalize(d.Size);
                 }
-                if (self is DeviceInfo) {
+                if (L(self) is DeviceInfo) {
                     return 0;
                 }
-                FileInfo info = (self as FileInfo);
+                FileInfo info = (L(self) as FileInfo);
                 if (info == null) {
                     return null;
                 }
@@ -1870,10 +1891,10 @@ namespace IronRuby.Builtins {
                 if (d != null) {
                     return d.FileType != Posix.S_IFDIR && d.Size == 0;
                 }
-                if (self is DeviceInfo) {
+                if (L(self) is DeviceInfo) {
                     return true;
                 }
-                FileInfo info = (self as FileInfo);
+                FileInfo info = (L(self) as FileInfo);
                 return (info == null) ? false : info.Length == 0;
             }
 

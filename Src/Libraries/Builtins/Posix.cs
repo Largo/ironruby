@@ -256,6 +256,18 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "fchown", SetLastError = true)]
         private static extern int sys_fchown(int fd, int owner, int group);
 
+        [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+        private static extern int sys_open(byte[] path, int flags, int mode);
+
+        [DllImport("libc", EntryPoint = "close", SetLastError = true)]
+        private static extern int sys_close(int fd);
+
+        [DllImport("libc", EntryPoint = "fchdir", SetLastError = true)]
+        private static extern int sys_fchdir(int fd);
+
+        [DllImport("libc", EntryPoint = "chroot", SetLastError = true)]
+        private static extern int sys_chroot(byte[] path);
+
         [DllImport("libc", EntryPoint = "flock", SetLastError = true)]
         private static extern int sys_flock(int fd, int operation);
 
@@ -315,6 +327,40 @@ namespace IronRuby.Builtins {
 
         internal static int FChown(int fd, int owner, int group, out int errno) {
             return Run(() => sys_fchown(fd, owner, group), out errno);
+        }
+
+        #region open(2) flags
+
+        internal const int O_RDONLY = 0;
+        internal const int O_DIRECTORY = 0x10000;
+        internal const int O_CLOEXEC = 0x80000;
+
+        #endregion
+
+        /// <summary>
+        /// open(2). Unlike the calls above a successful return is positive rather than
+        /// zero, so it cannot go through Run.
+        /// </summary>
+        internal static int Open(string path, int flags, out int errno) {
+            errno = 0;
+            Marshal.SetLastSystemError(0);
+            int fd = sys_open(ToPath(path), flags, 0);
+            if (fd < 0) {
+                errno = Marshal.GetLastWin32Error();
+            }
+            return fd;
+        }
+
+        internal static int Close(int fd, out int errno) {
+            return Run(() => sys_close(fd), out errno);
+        }
+
+        internal static int FChDir(int fd, out int errno) {
+            return Run(() => sys_fchdir(fd), out errno);
+        }
+
+        internal static int ChRoot(string path, out int errno) {
+            return Run(() => sys_chroot(ToPath(path)), out errno);
         }
 
         internal static int Flock(int fd, int operation, out int errno) {

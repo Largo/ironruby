@@ -30,6 +30,11 @@ namespace IronRuby.Builtins {
         private MutableString _dirName;
         private string[] _rawEntries;
 
+        // The real directory descriptor behind #fileno, opened on demand: the entries come
+        // out of System.IO, so nothing else here needs one and a Dir that is never asked
+        // for its descriptor should not hold one open. -1 means "not open".
+        private int _fd = -1;
+
         // _pos starts from -2 as ".", -1 as "..", 
         // 0 will be the first item from Directory.GetFileSystemEntries.
         private int _pos;
@@ -125,8 +130,52 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("chroot", RubyMethodAttributes.PublicSingleton)]
-        public static int ChangeRoot(object self) {
-            throw new InvalidOperationException();
+        public static int ChangeRoot(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dir) {
+            if (!Posix.IsAvailable) {
+                throw new InvalidOperationException();
+            }
+            var path = Protocols.CastToPath(toPath, dir);
+            string strPath = self.Context.DecodePath(path);
+
+            int errno;
+            if (Posix.ChRoot(strPath, out errno) != 0) {
+                throw Posix.Error(errno, strPath);
+            }
+            return 0;
+        }
+
+        /// <summary>
+        /// fchdir(2): chdir to whatever directory a descriptor names. With a block the change
+        /// lasts for the block only, and the block's value is the result.
+        /// </summary>
+        [RubyMethod("fchdir", RubyMethodAttributes.PublicSingleton)]
+        public static object ChangeDirectoryToDescriptor(BlockParam block, RubyClass/*!*/ self, [DefaultProtocol]int fd) {
+            if (!Posix.IsAvailable) {
+                throw new NotImplementedException("fchdir");
+            }
+
+            var pal = self.Context.Platform;
+            string current = block != null ? pal.CurrentDirectory : null;
+
+            int errno;
+            if (Posix.FChDir(fd, out errno) != 0) {
+                throw SyscallError(errno, "fchdir");
+            }
+
+            // The process directory moved behind the PAL's back, which keeps its own idea of it.
+            SyncCurrentDirectory(pal);
+
+            if (block == null) {
+                return 0;
+            }
+
+            try {
+                object result;
+                block.Yield(out result);
+                return result;
+            } finally {
+                pal.CurrentDirectory = current;
+            }
         }
 
 #if FEATURE_FILESYSTEM
@@ -389,6 +438,37 @@ namespace IronRuby.Builtins {
             self.Close();
         }
 
+        /// <summary>
+        /// The descriptor MRI's DIR* holds. Nothing here needs one to read the directory, so it
+        /// is opened the first time it is asked for and closed with the Dir.
+        /// </summary>
+        [RubyMethod("fileno")]
+        public static int FileNo(RubyDir/*!*/ self) {
+            self.ThrowIfClosed();
+            return self.GetFileDescriptor();
+        }
+
+        [RubyMethod("for_fd", RubyMethodAttributes.PublicSingleton)]
+        public static RubyDir/*!*/ ForFileDescriptor(RubyClass/*!*/ self, [DefaultProtocol]int fd) {
+            if (!Posix.IsAvailable) {
+                throw new NotImplementedException("Dir.for_fd");
+            }
+
+            // There is no fdopendir here, so the descriptor is turned back into the path it
+            // names and the directory is read the ordinary way. The descriptor itself is kept,
+            // so that #fileno answers it and #close closes it - including the second close of
+            // a descriptor two Dirs share, which is the EBADF MRI reports.
+            int errno;
+            string path = Posix.ReadLink("/proc/self/fd/" + fd, out errno);
+            if (path == null) {
+                throw SyscallError(errno == 0 ? Posix.EBADF : errno, "fdopendir");
+            }
+
+            var result = new RubyDir(self, self.Context.EncodePath(path));
+            result._fd = fd;
+            return result;
+        }
+
         [RubyMethod("each")]
         public static object Each(RubyContext/*!*/ context, BlockParam block, RubyDir/*!*/ self) {
             return self.EnumerateEntries(context, block, self);
@@ -491,6 +571,57 @@ namespace IronRuby.Builtins {
 
         private void Close() {
             _rawEntries = null;
+
+            int fd = _fd;
+            _fd = -1;
+            if (fd >= 0) {
+                int errno;
+                if (Posix.Close(fd, out errno) != 0) {
+                    throw SyscallError(errno, "closedir");
+                }
+            }
+        }
+
+        private int GetFileDescriptor() {
+            if (_fd >= 0) {
+                return _fd;
+            }
+            if (!Posix.IsAvailable) {
+                throw new NotImplementedException("Dir#fileno");
+            }
+
+            string path = ImmediateClass.Context.DecodePath(_dirName);
+            int errno;
+            // Close-on-exec is the default for every descriptor Ruby opens.
+            int fd = Posix.Open(path, Posix.O_RDONLY | Posix.O_DIRECTORY | Posix.O_CLOEXEC, out errno);
+            if (fd < 0) {
+                throw Posix.Error(errno, path);
+            }
+            _fd = fd;
+            return fd;
+        }
+
+        /// <summary>
+        /// Posix.Error names the path a call failed on; a descriptor-taking call has no path,
+        /// and MRI names the system call instead.
+        /// </summary>
+        private static Exception/*!*/ SyscallError(int errno, string/*!*/ syscall) {
+            if (errno == Posix.EBADF) {
+                // The exception is rebuilt through Errno::EBADF.new when it crosses into
+                // Ruby, and that is what prefixes "Bad file descriptor - ", so what is
+                // recorded here is the suffix on its own.
+                return (Exception)RubyExceptionData.InitializeException(
+                    new BadFileDescriptorError(), MutableString.CreateAscii(syscall));
+            }
+            return Posix.Error(errno, syscall);
+        }
+
+        /// <summary>
+        /// The PAL keeps its own current directory, so a chdir done behind its back - fchdir(2),
+        /// here - has to be read back out of the process.
+        /// </summary>
+        private static void SyncCurrentDirectory(PlatformAdaptationLayer/*!*/ pal) {
+            pal.CurrentDirectory = Directory.GetCurrentDirectory();
         }
 
         private void ThrowIfClosed() {
