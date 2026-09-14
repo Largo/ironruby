@@ -1961,8 +1961,10 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("directory?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
-        public static bool IsDirectory(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
-            return FileTest.IsDirectory(toPath, self, path);
+        public static bool IsDirectory(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+            return FileTest.IsDirectory(respondToStorage, toIoStorage, toPath, self, path);
         }
 
         [RubyMethod("executable?", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]

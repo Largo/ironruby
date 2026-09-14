@@ -17,6 +17,7 @@
 
 using System;
 using System.IO;
+using System.Runtime.CompilerServices;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
 
@@ -60,10 +61,35 @@ namespace IronRuby.Builtins {
             return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsCharDevice);
         }
 
+        /// <summary>
+        /// #directory? takes a stream as well as a path: an IO, or anything that answers
+        /// #to_io. Only what is neither is asked for its path.
+        /// </summary>
         [RubyMethod("directory?", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("directory?", RubyMethodAttributes.PrivateInstance)]
-        public static bool IsDirectory(ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+        public static bool IsDirectory(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            ConversionStorage<MutableString>/*!*/ toPath, RubyModule/*!*/ self, object path) {
+
+            var io = ToIO(respondToStorage, toIoStorage, path);
+            if (io != null) {
+                return RubyFileOps.RubyStatOps.IsDirectory(RubyFileOps.RubyStatOps.Create(io));
+            }
             return Query(self.Context, Protocols.CastToPath(toPath, path), true, RubyFileOps.RubyStatOps.IsDirectory);
+        }
+
+        internal static RubyIO ToIO(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, object obj) {
+
+            var io = obj as RubyIO;
+            if (io != null) {
+                return io;
+            }
+            if (obj is MutableString || !Protocols.RespondTo(respondToStorage, obj, "to_io")) {
+                return null;
+            }
+            var site = toIoStorage.GetCallSite("to_io", 0);
+            return site.Target(site, obj) as RubyIO;
         }
 
         [RubyMethod("executable?", RubyMethodAttributes.PublicSingleton)]
