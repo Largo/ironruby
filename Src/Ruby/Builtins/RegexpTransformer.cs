@@ -60,6 +60,23 @@ namespace IronRuby.Builtins {
 
         private CharacterClassMode _characterClassMode;
 
+        // The Ruby source text of each capturing group's body, so that a \g<...> subexpression call
+        // can be served by re-transforming it. Shared with the sub-transformers a call spawns.
+        private Dictionary<int, string> _groupSourcesByNumber = new Dictionary<int, string>();
+        private Dictionary<string, string> _groupSourcesByName = new Dictionary<string, string>();
+
+        // The groups currently being inlined, so a call that re-enters one can be reported as the
+        // recursion it is rather than expanded forever. .NET has no recursion construct.
+        private HashSet<string> _callsInProgress = new HashSet<string>();
+
+        // The groups whose body is currently being parsed. A call naming one of these is a direct
+        // self-reference, which is the other way recursion shows up.
+        private HashSet<string> _groupsBeingParsed = new HashSet<string>();
+
+        // Set on the sub-transformer that expands a \g<...> call: the copy must not capture,
+        // otherwise it would shift every group number in the pattern.
+        private bool _suppressCaptures;
+
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
@@ -442,6 +459,8 @@ namespace IronRuby.Builtins {
         //
         private void ParseGroup() {
             Debug.Assert(_rubyPattern[_index - 1] == '(');
+            int groupNumber = -1;
+            string groupName = null;
             if (Read('?')) {
                 int c = Read();
                 if (c == '#') {
@@ -492,21 +511,22 @@ namespace IronRuby.Builtins {
                         break;
 
                     case '<':
-                        Append('<');
                         c = Read();
                         if (c == '=' || c == '!') {
                             // positive/negative lookbehind assertion
+                            Append('<');
                             Append((char)c);
                         } else {
                             _groupCount++;
-                            ParseGroupName(c, '>');
+                            groupNumber = _groupCount;
+                            groupName = ParseGroupName(c, '>', '<');
                         }
                         break;
 
                     case '\'':
-                        Append('\'');
                         _groupCount++;
-                        ParseGroupName(Read(), '\'');
+                        groupNumber = _groupCount;
+                        groupName = ParseGroupName(Read(), '\'', '\'');
                         break;
 
                     case '(': {
@@ -557,13 +577,33 @@ namespace IronRuby.Builtins {
                 }
             } else {
                 _groupCount++;
-                Append('(');
+                groupNumber = _groupCount;
+                _sb.Append(_suppressCaptures ? "(?:" : "(");
             }
             var savedMode = _characterClassMode;
+            int bodyStart = _index;
+            if (groupNumber >= 0) {
+                _groupsBeingParsed.Add("#" + groupNumber);
+                if (groupName != null) {
+                    _groupsBeingParsed.Add(groupName);
+                }
+            }
             _groupDepth++;
             Parse(true);
             _groupDepth--;
             _characterClassMode = savedMode;
+            if (groupNumber >= 0) {
+                _groupsBeingParsed.Remove("#" + groupNumber);
+                if (groupName != null) {
+                    _groupsBeingParsed.Remove(groupName);
+                }
+                // _index is now just past the ')' Parse consumed
+                string source = _rubyPattern.Substring(bodyStart, _index - 1 - bodyStart);
+                _groupSourcesByNumber[groupNumber] = source;
+                if (groupName != null) {
+                    _groupSourcesByName[groupName] = source;
+                }
+            }
             Append(')');
         }
 
@@ -690,20 +730,35 @@ namespace IronRuby.Builtins {
             return length;
         }
 
-        private void ParseGroupName(int c, int terminator) {
+        /// <summary>
+        /// Reads a group name and emits the .NET spelling of the declaration, unless captures are
+        /// being suppressed - a \g&lt;...&gt; expansion emits (?: instead. Returns the name.
+        /// </summary>
+        private string/*!*/ ParseGroupName(int c, int terminator, int opening) {
             if (c == terminator || c == -1) {
                 throw MakeError("group name is empty");
             }
+            var name = new StringBuilder();
+            int closing;
             while (true) {
-                Append((char)c); 
+                name.Append((char)c);
                 c = Read();
                 if (c == terminator || c == ')') {
-                    Append((char)c);
+                    closing = c;
                     break;
                 } else if (c == -1) {
                     throw MakeError("unterminated group name");
                 }
             }
+
+            if (_suppressCaptures) {
+                Append(':');
+            } else {
+                Append((char)opening);
+                _sb.Append(name);
+                Append((char)closing);
+            }
+            return name.ToString();
         }
 
         #region Escapes
@@ -735,8 +790,8 @@ namespace IronRuby.Builtins {
                 // \g<name>
                 // \g'name'
                 case 'g':
-                    // TODO: this can be implemented by copying the pattern with removed groups
-                    throw MakeError("\\g not supported");
+                    ParseSubexpressionCall();
+                    break;
                 
                 case 'k':
                     ParseBackreference();
@@ -785,6 +840,98 @@ namespace IronRuby.Builtins {
                     ParseCharacterEscape(escape).AppendTo(_sb, false);
                     break;
             }
+        }
+
+        // \g<n>  \g'n'  \g<-n>  \g'-n'  \g<name>  \g'name'
+        //
+        // A subexpression call re-runs a group's pattern at this point. .NET has no such construct,
+        // so the group's Ruby source is transformed again and spliced in here. The copy is emitted
+        // under the called group's own name or number, which .NET permits and treats as the same
+        // group, so - as in Onigmo - running the copy updates that group's capture. Groups nested
+        // inside the copy do not capture, so the numbering of the rest of the pattern is unchanged.
+        private void ParseSubexpressionCall() {
+            int terminator;
+            int c = Read();
+            if (c == '<') {
+                terminator = '>';
+            } else if (c == '\'') {
+                terminator = '\'';
+            } else {
+                throw MakeError("invalid group call");
+            }
+
+            var reference = new StringBuilder();
+            while (true) {
+                c = Read();
+                if (c == terminator) {
+                    break;
+                } else if (c == -1) {
+                    throw MakeError("invalid group name");
+                }
+                reference.Append((char)c);
+            }
+
+            string name = reference.ToString();
+            if (name.Length == 0) {
+                throw MakeError("group name is empty");
+            }
+
+            if (name == "0") {
+                // \g<0> calls the whole pattern, which is recursion by construction.
+                throw MakeError("recursive subexpression call is not supported");
+            }
+
+            // Unlike \k<...>, a call may name a group whose name carries a '+' or a '-'.
+            string source;
+            string key;
+            int number = IsGroupNumber(name) ? ResolveGroupNumber(name) : -1;
+            key = (number >= 0) ? "#" + number : name;
+            if (_groupsBeingParsed.Contains(key)) {
+                throw MakeError("recursive subexpression call is not supported");
+            }
+            if (number >= 0) {
+                if (!_groupSourcesByNumber.TryGetValue(number, out source)) {
+                    throw MakeError("undefined group <" + name + ">");
+                }
+            } else {
+                if (!_groupSourcesByName.TryGetValue(name, out source)) {
+                    throw MakeError("undefined group name <" + name + ">");
+                }
+            }
+
+            if (_groupsBeingParsed.Contains(key) || !_callsInProgress.Add(key)) {
+                // .NET's Regex has no recursion construct and no way to express one; producing a
+                // finite approximation here would silently match the wrong language.
+                throw MakeError("recursive subexpression call is not supported");
+            }
+            try {
+                var inner = new RegexpTransformer(source);
+                inner._suppressCaptures = true;
+                inner._characterClassMode = _characterClassMode;
+                inner._groupSourcesByNumber = _groupSourcesByNumber;
+                inner._groupSourcesByName = _groupSourcesByName;
+                inner._callsInProgress = _callsInProgress;
+                inner._groupsBeingParsed = _groupsBeingParsed;
+
+                _sb.Append("(?<").Append(key.StartsWith("#") ? key.Substring(1) : key).Append('>');
+                _sb.Append(inner.Transform()).Append(')');
+                _hasGAnchor |= inner._hasGAnchor;
+            } finally {
+                _callsInProgress.Remove(key);
+            }
+        }
+
+        private static bool IsGroupNumber(string/*!*/ text) {
+            int i = (text.Length != 0 && text[0] == '-') ? 1 : 0;
+            if (i == text.Length) {
+                return false;
+            }
+            for (; i < text.Length; i++) {
+                if (!Tokenizer.IsDecimalDigit(text[i])) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         /// <summary>
