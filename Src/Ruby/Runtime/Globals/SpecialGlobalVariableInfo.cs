@@ -194,11 +194,12 @@ namespace IronRuby.Runtime {
                     throw ReadOnlyError(name);
 
                 case GlobalVariableId.InputSeparator:
-                    context.InputSeparator = RequireSeparator(value, name);
+                    context.InputSeparator = RequireInputSeparator(context, value, name);
                     return;
 
                 case GlobalVariableId.OutputSeparator:
-                    context.OutputSeparator = RequireSeparator(value, name);
+                    // unlike $/, the output separator keeps the very string it was given
+                    context.OutputSeparator = (value != null) ? RequireType<MutableString>(value, name, "String") : null;
                     return;
 
                 case GlobalVariableId.StringSeparator:
@@ -209,7 +210,7 @@ namespace IronRuby.Runtime {
                     return;
 
                 case GlobalVariableId.ItemSeparator:
-                    context.ItemSeparator = RequireSeparator(value, name);
+                    context.ItemSeparator = (value != null) ? RequireType<MutableString>(value, name, "String") : null;
                     return;
 
 

@@ -50,15 +50,21 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// A separator global ($/, $,, $-0, ...) keeps a frozen copy of the string assigned to it,
-        /// so that later changes to the caller's string do not change the separator.
+        /// The input separator ($/, $-0) keeps a frozen plain String, so that neither a later
+        /// change to the caller's string nor a String subclass or its instance variables come
+        /// along. An already frozen plain String is kept as it is.
         /// </summary>
-        internal MutableString RequireSeparator(object value, string/*!*/ variableName) {
+        internal MutableString RequireInputSeparator(RubyContext/*!*/ context, object value, string/*!*/ variableName) {
             if (value == null) {
                 return null;
             }
+
             var str = RequireType<MutableString>(value, variableName, "String");
-            return str.IsFrozen ? str : str.Clone().Freeze();
+            bool isPlainFrozenString = str.IsFrozen
+                && !context.HasInstanceVariables(str)
+                && context.GetClassOf(str) == context.GetClass(typeof(MutableString));
+
+            return isPlainFrozenString ? str : MutableString.Create(str).Freeze();
         }
     }
 }
