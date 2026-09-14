@@ -2142,10 +2142,16 @@ namespace IronRuby.Runtime {
                 GlobalVariable global;
                 if (_globalVariables.TryGetValue(name, out global)) {
                     global.SetValue(this, scope, name, value);
-                    return;
+                } else {
+                    _globalVariables[name] = new GlobalVariableInfo(value);
                 }
+            }
 
-                _globalVariables[name] = new GlobalVariableInfo(value);
+            // Kernel#trace_var handlers run after the assignment and outside the lock: they are
+            // arbitrary Ruby code and may well touch other globals. The flag keeps the common
+            // case - nothing traced at all - to a single field read.
+            if (_anyGlobalVariableTraced) {
+                FireGlobalVariableTraces(scope, name, value);
             }
         }
 
@@ -2166,6 +2172,104 @@ namespace IronRuby.Runtime {
         internal bool TryGetGlobalVariable(string/*!*/ name, out GlobalVariable variable) {
             lock (GlobalVariablesLock) {
                 return _globalVariables.TryGetValue(name, out variable);
+            }
+        }
+
+        #endregion
+
+        #region Global Variables: Kernel#trace_var handlers (thread-safe)
+
+        /// <summary>
+        /// Name (without the $) to the handlers registered for it, most recent first - which is
+        /// the order MRI fires them in. Created on the first trace_var; null until then, so an
+        /// untraced program pays nothing but the _anyGlobalVariableTraced read.
+        /// </summary>
+        private Dictionary<string/*!*/, List<object>/*!*/> _globalVariableTraces;
+        private volatile bool _anyGlobalVariableTraced;
+
+        /// <summary>A trace_var handler given as a string, with the context it is evaluated in.</summary>
+        public sealed class GlobalVariableTraceCommand {
+            public readonly MutableString/*!*/ Code;
+            public readonly RubyScope Scope;
+            public readonly object Self;
+
+            public GlobalVariableTraceCommand(MutableString/*!*/ code, RubyScope scope, object self) {
+                Code = code;
+                Scope = scope;
+                Self = self;
+            }
+        }
+
+        public void AddGlobalVariableTrace(string/*!*/ name, object/*!*/ handler) {
+            lock (GlobalVariablesLock) {
+                if (_globalVariableTraces == null) {
+                    _globalVariableTraces = new Dictionary<string, List<object>>();
+                }
+                List<object> handlers;
+                if (!_globalVariableTraces.TryGetValue(name, out handlers)) {
+                    _globalVariableTraces[name] = handlers = new List<object>();
+                }
+                handlers.Insert(0, handler);
+                _anyGlobalVariableTraced = true;
+            }
+        }
+
+        /// <summary>
+        /// Removes the handlers registered for the variable - all of them, or the one equal to
+        /// <paramref name="handler"/> - and returns those removed, or null if there were none.
+        /// </summary>
+        public List<object> RemoveGlobalVariableTraces(string/*!*/ name, object handler) {
+            lock (GlobalVariablesLock) {
+                List<object> handlers;
+                if (_globalVariableTraces == null || !_globalVariableTraces.TryGetValue(name, out handlers)) {
+                    return null;
+                }
+
+                List<object> removed;
+                if (handler == null) {
+                    removed = handlers;
+                    _globalVariableTraces.Remove(name);
+                } else {
+                    removed = new List<object>();
+                    for (int i = handlers.Count - 1; i >= 0; i--) {
+                        if (ReferenceEquals(handlers[i], handler)) {
+                            removed.Insert(0, handlers[i]);
+                            handlers.RemoveAt(i);
+                        }
+                    }
+                    if (handlers.Count == 0) {
+                        _globalVariableTraces.Remove(name);
+                    }
+                    if (removed.Count == 0) {
+                        return null;
+                    }
+                }
+
+                _anyGlobalVariableTraced = _globalVariableTraces.Count > 0;
+                return removed;
+            }
+        }
+
+        private void FireGlobalVariableTraces(RubyScope scope, string/*!*/ name, object value) {
+            object[] handlers;
+            lock (GlobalVariablesLock) {
+                List<object> registered;
+                if (_globalVariableTraces == null || !_globalVariableTraces.TryGetValue(name, out registered)) {
+                    return;
+                }
+                // A copy, so that a handler that calls trace_var or untrace_var on the same
+                // variable does not mutate the list being walked.
+                handlers = registered.ToArray();
+            }
+
+            foreach (var handler in handlers) {
+                var command = handler as GlobalVariableTraceCommand;
+                if (command != null) {
+                    RubyUtils.Evaluate(command.Code, command.Scope ?? scope, command.Self, null, null, 1);
+                } else {
+                    var site = GetOrCreateSendSite<Func<CallSite, object, object, object>>("call", RubyCallSignature.Simple(1));
+                    site.Target(site, handler, value);
+                }
             }
         }
 

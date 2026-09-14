@@ -4988,6 +4988,12 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.ToS)
             );
             
+            DefineLibraryMethod(module, "trace_var", 0x52, 
+                0x00040008U, 0x00040008U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.TraceVariable), 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.String, System.Object, System.Object>(IronRuby.Builtins.KernelOps.TraceVariable)
+            );
+            
             #if FEATURE_PROCESS
             DefineLibraryMethod(module, "trap", 0x52, 
                 0x00000000U, 0x00000008U, 
@@ -5009,6 +5015,12 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "untaint", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Untaint)
+            );
+            
+            DefineLibraryMethod(module, "untrace_var", 0x52, 
+                0x00020004U, 0x00020004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.UntraceVariable), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object, System.Object>(IronRuby.Builtins.KernelOps.UntraceVariable)
             );
             
             DefineLibraryMethod(module, "untrust", 0x51, 
@@ -5306,6 +5318,12 @@ namespace IronRuby.Builtins {
                 new Action<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Throw)
             );
             
+            DefineLibraryMethod(module, "trace_var", 0x61, 
+                0x00040008U, 0x00040008U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.TraceVariable), 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.String, System.Object, System.Object>(IronRuby.Builtins.KernelOps.TraceVariable)
+            );
+            
             #if FEATURE_PROCESS
             DefineLibraryMethod(module, "trap", 0x61, 
                 0x00000000U, 0x00000008U, 
@@ -5314,6 +5332,12 @@ namespace IronRuby.Builtins {
             );
             
             #endif
+            DefineLibraryMethod(module, "untrace_var", 0x61, 
+                0x00020004U, 0x00020004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.UntraceVariable), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object, System.Object>(IronRuby.Builtins.KernelOps.UntraceVariable)
+            );
+            
             DefineLibraryMethod(module, "using_clr_extensions", 0x61, 
                 0x00000000U, 
                 new Action<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.KernelOps.UsingClrExtensions)

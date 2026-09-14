@@ -1138,9 +1138,86 @@ namespace IronRuby.Builtins {
             lock (context.GlobalVariablesLock) {
                 foreach (KeyValuePair<string, GlobalVariable> global in context.GlobalVariables) {
                     if (global.Value.IsEnumerated) {
-                        result.Add(context.StringifyIdentifier(global.Key));
+                        // The table keys the variables without the sigil, because that is what the
+                        // compiler passes around, but the names are `$stdin`, `$-I`, `$~`.
+                        result.Add(context.StringifyIdentifier("$" + global.Key));
                     }
                 }
+            }
+            return result;
+        }
+
+        #endregion
+
+        #region trace_var, untrace_var
+
+        /// <summary>
+        /// The variable name as the global variable table keys it - `$` stripped, since that is
+        /// what the compiler passes to RubyContext.SetGlobalVariable - and checked for existence,
+        /// which is what MRI reports on before it looks at the handler.
+        /// </summary>
+        private static string/*!*/ GlobalVariableName(RubyContext/*!*/ context, string/*!*/ name, bool mustExist) {
+            string key = name.StartsWith("$", StringComparison.Ordinal) ? name.Substring(1) : name;
+            object value;
+            if (mustExist && !context.TryGetGlobalVariable(null, key, out value)) {
+                throw RubyExceptions.CreateNameError(String.Format("undefined global variable ${0}", key));
+            }
+            return key;
+        }
+
+        [RubyMethod("trace_var", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("trace_var", RubyMethodAttributes.PublicSingleton)]
+        public static object TraceVariable(RubyScope/*!*/ scope, BlockParam block, object self,
+            [DefaultProtocol, NotNull]string/*!*/ name) {
+
+            return TraceVariable(scope, block, self, name, null);
+        }
+
+        [RubyMethod("trace_var", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("trace_var", RubyMethodAttributes.PublicSingleton)]
+        public static object TraceVariable(RubyScope/*!*/ scope, BlockParam block, object self,
+            [DefaultProtocol, NotNull]string/*!*/ name, object command) {
+
+            object handler;
+            var code = command as MutableString;
+            if (code != null) {
+                // A string is evaluated when the variable is assigned, in the context that
+                // registered it - so it is the scope and self of this call that are kept.
+                handler = new RubyContext.GlobalVariableTraceCommand(code, scope, self);
+            } else if (command != null) {
+                handler = command;
+            } else if (block != null) {
+                handler = block.Proc;
+            } else {
+                throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
+            }
+
+            scope.RubyContext.AddGlobalVariableTrace(GlobalVariableName(scope.RubyContext, name, false), handler);
+            return null;
+        }
+
+        [RubyMethod("untrace_var", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("untrace_var", RubyMethodAttributes.PublicSingleton)]
+        public static object UntraceVariable(RubyContext/*!*/ context, object self,
+            [DefaultProtocol, NotNull]string/*!*/ name) {
+
+            return UntraceVariable(context, self, name, null);
+        }
+
+        [RubyMethod("untrace_var", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("untrace_var", RubyMethodAttributes.PublicSingleton)]
+        public static object UntraceVariable(RubyContext/*!*/ context, object self,
+            [DefaultProtocol, NotNull]string/*!*/ name, object command) {
+
+            var removed = context.RemoveGlobalVariableTraces(GlobalVariableName(context, name, true), command);
+            if (removed == null) {
+                return null;
+            }
+
+            var result = new RubyArray(removed.Count);
+            foreach (var handler in removed) {
+                var traceCommand = handler as RubyContext.GlobalVariableTraceCommand;
+                result.Add(traceCommand != null ? traceCommand.Code : handler);
             }
             return result;
         }
