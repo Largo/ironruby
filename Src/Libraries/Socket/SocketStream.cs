@@ -20,14 +20,24 @@ using System.Net.Sockets;
 using System.IO;
 using System.Diagnostics;
 using Microsoft.Scripting.Utils;
+using IronRuby.Builtins;
 
 namespace IronRuby.StandardLibrary.Sockets {
-    internal class SocketStream : Stream {
+    internal class SocketStream : Stream, IDescriptorStream {
         internal readonly Socket/*!*/ _socket;
 
         public SocketStream(Socket/*!*/ s) {
             Assert.NotNull(s);
             _socket = s;
+        }
+
+        /// <summary>
+        /// The socket's own descriptor. Without it IO.select had nothing to hand poll(2) and
+        /// fell back to "no descriptor, so assume ready", which reported every socket as
+        /// readable whether or not anything had arrived.
+        /// </summary>
+        public int Descriptor {
+            get { return (int)_socket.Handle; }
         }
 
         public override bool CanRead {
