@@ -90,28 +90,34 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         private static Socket/*!*/ CreateSocket(MutableString remoteHost, int port) {
-            Socket socket = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp);
+            // Resolve first: the address family has to follow the address, not be pinned to
+            // InterNetwork, or TCPSocket.new("::1", port) can never work and every IPv6-guarded
+            // spec in the tree silently skips.
+            IPAddress address = remoteHost != null ? GetHostAddress(remoteHost.ConvertToString()) : IPAddress.Loopback;
+            Socket socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             try {
-                if (remoteHost != null) {
-                    socket.Connect(remoteHost.ConvertToString(), port);
-                } else {
-                    socket.Connect(IPAddress.Loopback, port);
-                }
+                socket.Connect(address, port);
             } catch (SocketException e) {
-                switch (e.SocketErrorCode) {
-                    case SocketError.ConnectionRefused:
-                        throw new Errno.ConnectionRefusedError();
-                    default:
-                        throw;
-                }
+                socket.Close();
+                throw SocketErrorOps.ToRubyException(e);
             }
             return socket;
         }
 
         private static TCPSocket/*!*/ BindLocalEndPoint(TCPSocket/*!*/ socket, MutableString localHost, int localPort) {
-            IPAddress localIPAddress = localHost != null ? GetHostAddress(localHost.ConvertToString()) : IPAddress.Loopback;
+            AddressFamily family = socket.Socket.AddressFamily;
+            IPAddress localIPAddress;
+            if (localHost != null) {
+                localIPAddress = GetHostAddress(localHost.ConvertToString(), family);
+            } else {
+                localIPAddress = family == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Loopback : IPAddress.Loopback;
+            }
             IPEndPoint localEndPoint = new IPEndPoint(localIPAddress, localPort);
-            socket.Socket.Bind(localEndPoint);
+            try {
+                socket.Socket.Bind(localEndPoint);
+            } catch (SocketException e) {
+                throw SocketErrorOps.ToRubyException(e);
+            }
             return socket;
         }
 

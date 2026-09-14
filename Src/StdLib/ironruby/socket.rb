@@ -1927,3 +1927,121 @@ class Socket
     [Addrinfo.ip("127.0.0.1")]
   end
 end
+
+# ---------------------------------------------------------------------------
+# SocketException -> Errno.
+#
+# .NET reports every socket failure as a SocketException, and because
+# Socket::SocketError *is* that CLR type an unmapped one surfaces in Ruby as
+# SocketError.  CRuby raises an Errno for anything the kernel reported through
+# errno and keeps SocketError for name resolution.  SocketError.cs translates
+# the handful of codes that have a CLR Errno class; the rest of the errno table
+# only exists in Ruby, so the general mapping lives here.
+
+module IronRubySocketErrors__ # :nodoc: all
+  BY_CODE = {
+    "AccessDenied"                => :EACCES,
+    "AddressAlreadyInUse"         => :EADDRINUSE,
+    "AddressFamilyNotSupported"   => :EAFNOSUPPORT,
+    "AddressNotAvailable"         => :EADDRNOTAVAIL,
+    "ConnectionAborted"           => :ECONNABORTED,
+    "ConnectionRefused"           => :ECONNREFUSED,
+    "ConnectionReset"             => :ECONNRESET,
+    "DestinationAddressRequired"  => :EDESTADDRREQ,
+    "HostDown"                    => :EHOSTDOWN,
+    "HostUnreachable"             => :EHOSTUNREACH,
+    "Interrupted"                 => :EINTR,
+    "InvalidArgument"             => :EINVAL,
+    "IsConnected"                 => :EISCONN,
+    "MessageSize"                 => :EMSGSIZE,
+    "NetworkDown"                 => :ENETDOWN,
+    "NetworkReset"                => :ENETRESET,
+    "NetworkUnreachable"          => :ENETUNREACH,
+    "NoBufferSpaceAvailable"      => :ENOBUFS,
+    "NotConnected"                => :ENOTCONN,
+    "NotSocket"                   => :ENOTSOCK,
+    "OperationNotSupported"       => :EOPNOTSUPP,
+    "ProtocolFamilyNotSupported"  => :EPFNOSUPPORT,
+    "ProtocolNotSupported"        => :EPROTONOSUPPORT,
+    "ProtocolOption"              => :ENOPROTOOPT,
+    "ProtocolType"                => :EPROTOTYPE,
+    "Shutdown"                    => :EPIPE,
+    "SocketNotSupported"          => :ESOCKTNOSUPPORT,
+    "TimedOut"                    => :ETIMEDOUT,
+  }.freeze
+
+  # WouldBlock has its own IO::WaitReadable/WaitWritable treatment at each
+  # non-blocking entry point, and the resolver codes are what SocketError is for.
+  KEEP = %w[WouldBlock InProgress Success HostNotFound NoData TryAgain NoRecovery
+            TypeNotFound SystemNotReady VersionNotSupported].freeze
+
+  def self.translate(error)
+    if error.kind_of?(SocketError)
+      code = Socket.__ir_socket_error_code(error)
+      return error if KEEP.include?(code)
+      name = BY_CODE[code]
+      return error if name.nil? || !Errno.const_defined?(name)
+      return Errno.const_get(name).new
+    end
+    if error.class.name == "System::ObjectDisposedException"
+      return IOError.new("closed stream")
+    end
+    error
+  end
+
+  def self.wrap(klass, *names)
+    names.each do |name|
+      next unless klass.method_defined?(name) || klass.private_method_defined?(name)
+      raw = :"__ir_errmap_#{name}"
+      next if klass.method_defined?(raw) || klass.private_method_defined?(raw)
+      klass.__send__(:alias_method, raw, name)
+      klass.__send__(:define_method, name) do |*args, &block|
+        begin
+          __send__(raw, *args, &block)
+        rescue Exception => error
+          mapped = IronRubySocketErrors__.translate(error)
+          raise mapped.equal?(error) ? error : mapped
+        end
+      end
+      klass.__send__(:private, name) if klass.private_method_defined?(raw)
+    end
+  end
+end
+
+IronRubySocketErrors__.wrap(BasicSocket,
+                            :recv, :send, :getsockname, :getpeername,
+                            :setsockopt, :getsockopt, :shutdown,
+                            :close_read, :close_write,
+                            :read, :write, :sysread, :syswrite, :readpartial,
+                            :gets, :readline, :readlines, :print, :puts, :<<, :flush,
+                            :each_line)
+IronRubySocketErrors__.wrap(Socket, :bind, :connect, :listen, :accept, :sysaccept, :recvfrom)
+IronRubySocketErrors__.wrap(TCPServer, :accept, :listen, :sysaccept)
+IronRubySocketErrors__.wrap(TCPSocket, :recvfrom)
+IronRubySocketErrors__.wrap(UDPSocket, :bind, :connect, :recvfrom)
+
+class TCPServer
+  class << self
+    alias_method :__ir_errmap_new, :new
+
+    def new(*args, &block)
+      __ir_errmap_new(*args, &block)
+    rescue Exception => error
+      mapped = IronRubySocketErrors__.translate(error)
+      raise mapped.equal?(error) ? error : mapped
+    end
+  end
+end
+
+class TCPSocket
+  class << self
+    alias_method :__ir_errmap_new, :new
+
+    def new(*args, **opts, &block)
+      __ir_errmap_new(*args, **opts, &block)
+    rescue Exception => error
+      mapped = IronRubySocketErrors__.translate(error)
+      raise mapped.equal?(error) ? error : mapped
+    end
+  end
+end
