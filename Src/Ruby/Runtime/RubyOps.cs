@@ -1146,8 +1146,17 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
-            if (owner.Context == context && owner.IsPrivateConstantInAncestors(name)) {
+            if (owner.Context != context) {
+                return true;
+            }
+
+            if (owner.IsPrivateConstantInAncestors(name)) {
                 RubyContext.SetPrivateConstantReference(owner);
+                storage = default(ConstantStorage);
+                return false;
+            }
+
+            if (owner.IsTopLevelConstantOnly(name)) {
                 storage = default(ConstantStorage);
                 return false;
             }
@@ -1163,7 +1172,8 @@ namespace IronRuby.Runtime {
             if (owner == null || !owner.TryResolveConstant(context, null, name, out storage)) {
                 return false;
             }
-            return owner.Context != context || !owner.IsPrivateConstantInAncestors(name);
+            return owner.Context != context
+                || (!owner.IsPrivateConstantInAncestors(name) && !owner.IsTopLevelConstantOnly(name));
         }
 
         [Emitted]
@@ -2076,6 +2086,10 @@ namespace IronRuby.Runtime {
         [Emitted] //RescueClause:
         public static bool CompareException(BinaryOpStorage/*!*/ comparisonStorage, RubyScope/*!*/ scope, object classObject) {            
             var context = scope.RubyContext;
+            if (!(classObject is RubyModule)) {
+                throw RubyExceptions.CreateTypeError("class or module required for rescue clause");
+            }
+
             var site = comparisonStorage.GetCallSite("===");
             bool result = IsTrue(site.Target(site, classObject, context.CurrentException));
             if (result) {

@@ -827,6 +827,8 @@ namespace IronRuby.Prism {
                 case Pm.IndexAndWriteNode _:
                 case Pm.CallOrWriteNode _:
                 case Pm.CallAndWriteNode _:
+                case Pm.IndexOperatorWriteNode _:
+                case Pm.CallOperatorWriteNode _:
                     return DefinedAs(new IsDefinedExpression(Expr(node), span), "assignment", span);
 
                 // 1.8 answered with the variable's own name ($&, $1, ...); 1.9+ says "global-variable"

@@ -1198,22 +1198,44 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// True if the module that declares <paramref name="name"/> - this one or the first
-        /// ancestor that has it - declared it private.
+        /// The module that declares <paramref name="name"/>: this one or the first ancestor that
+        /// has it, or null if none does.
         /// </summary>
-        internal bool IsPrivateConstantInAncestors(string/*!*/ name) {
+        internal RubyModule GetConstantOwnerNoLock(string/*!*/ name) {
             Context.RequiresClassHierarchyLock();
 
-            bool isPrivate = false;
+            RubyModule owner = null;
             ForEachAncestor(true, (module) => {
                 ConstantStorage storage;
                 if (module.TryGetConstantNoAutoloadCheck(name, out storage)) {
-                    isPrivate = module.IsPrivateConstant(name);
+                    owner = module;
                     return true;
                 }
                 return false;
             });
-            return isPrivate;
+            return owner;
+        }
+
+        /// <summary>
+        /// True if the module that declares <paramref name="name"/> - this one or the first
+        /// ancestor that has it - declared it private.
+        /// </summary>
+        internal bool IsPrivateConstantInAncestors(string/*!*/ name) {
+            var owner = GetConstantOwnerNoLock(name);
+            return owner != null && owner.IsPrivateConstant(name);
+        }
+
+        /// <summary>
+        /// True if the only place <paramref name="name"/> is found is Object. A qualified
+        /// reference - `Mod::NAME` - does not reach a top-level constant that way: MRI stops the
+        /// ancestor search before Object unless the receiver is Object itself.
+        /// </summary>
+        internal bool IsTopLevelConstantOnly(string/*!*/ name) {
+            if (IsObjectClass) {
+                return false;
+            }
+            var owner = GetConstantOwnerNoLock(name);
+            return owner != null && owner.IsObjectClass;
         }
 
         // thread-safe:
