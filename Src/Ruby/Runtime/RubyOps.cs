@@ -2319,6 +2319,40 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// Validates the result of #to_a called on a splatted argument. MRI's rb_check_array_type:
+        /// a #to_a that answers nil means "not an Array after all" and the splattee itself becomes
+        /// the single element; any other non-Array result is a broken promise and raises.
+        /// </summary>
+        [Emitted] // ProtocolConversionAction
+        public static IList/*!*/ SplatToAValidator(string/*!*/ className, object splattee, object obj) {
+            if (obj == null) {
+                var wrapped = new RubyArray(1);
+                wrapped.Add(splattee);
+                return wrapped;
+            }
+            var result = obj as IList;
+            if (result == null) {
+                throw RubyExceptions.CreateReturnTypeError(className, "to_a", "Array", obj);
+            }
+            return result;
+        }
+
+        /// <summary>Same for #to_ary (multiple assignment).</summary>
+        [Emitted] // ProtocolConversionAction
+        public static IList/*!*/ SplatToAryValidator(string/*!*/ className, object splattee, object obj) {
+            if (obj == null) {
+                var wrapped = new RubyArray(1);
+                wrapped.Add(splattee);
+                return wrapped;
+            }
+            var result = obj as IList;
+            if (result == null) {
+                throw RubyExceptions.CreateReturnTypeError(className, "to_ary", "Array", obj);
+            }
+            return result;
+        }
+
         [Emitted] // ProtocolConversionAction
         public static IDictionary<object, object>/*!*/ ToHashValidator(string/*!*/ className, object obj) {
             var result = obj as IDictionary<object, object>;

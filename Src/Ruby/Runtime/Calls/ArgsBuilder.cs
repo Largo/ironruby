@@ -121,6 +121,29 @@ namespace IronRuby.Runtime.Calls {
             _arguments[index] = arg;
         }
 
+        /// <summary>
+        /// MRI spells the expected count of a variable-arity signature as a range:
+        /// "2+" (mandatory + rest), "1..3" (mandatory + optionals), plain "2" otherwise.
+        /// </summary>
+        private void SetArityError(MetaObjectBuilder/*!*/ metaBuilder) {
+            if (_hasUnsplatParameter) {
+                metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    AstUtils.Constant(_actualArgumentCount),
+                    AstUtils.Constant(_mandatoryParamCount.ToString(System.Globalization.CultureInfo.InvariantCulture) + "+")
+                ));
+            } else if (_optionalParamCount > 0) {
+                metaBuilder.SetError(Methods.MakeWrongNumberOfArgumentsErrorN.OpCall(
+                    AstUtils.Constant(_actualArgumentCount),
+                    AstUtils.Constant(
+                        _mandatoryParamCount.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".." +
+                        (_mandatoryParamCount + _optionalParamCount).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    )
+                ));
+            } else {
+                metaBuilder.SetWrongNumberOfArgumentsError(_actualArgumentCount, _mandatoryParamCount);
+            }
+        }
+
         private Expression GetArgument(int argIndex, out bool isSplatted) {
             if (argIndex < _callArguments.SimpleArgumentCount) {
                 isSplatted = false;
@@ -157,13 +180,8 @@ namespace IronRuby.Runtime.Calls {
             }
 
             // check:
-            if (HasTooFewArguments) {
-                metaBuilder.SetWrongNumberOfArgumentsError(_actualArgumentCount, _mandatoryParamCount);
-                return;
-            }
-
-            if (HasTooManyArguments) {
-                metaBuilder.SetWrongNumberOfArgumentsError(_actualArgumentCount, _mandatoryParamCount);
+            if (HasTooFewArguments || HasTooManyArguments) {
+                SetArityError(metaBuilder);
                 return;
             }
 

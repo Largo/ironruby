@@ -668,6 +668,16 @@ namespace IronRuby.Runtime.Conversions {
 
         protected override string/*!*/ TargetTypeName { get { return "Array"; } }
 
+        /// <summary>
+        /// Validator that receives the splattee as well: a conversion answering nil wraps the
+        /// splattee in a one-element array (MRI) instead of raising.
+        /// </summary>
+        protected abstract MethodInfo/*!*/ SplatResultValidator { get; }
+
+        protected override Expression/*!*/ MakeValidatorCall(CallArguments/*!*/ args, Expression/*!*/ targetClassNameConstant, Expression/*!*/ result) {
+            return SplatResultValidator.OpCall(targetClassNameConstant, AstUtils.Box(args.TargetExpression), AstUtils.Box(result));
+        }
+
         protected internal override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             var convertedTarget = args.Target as IList;
             if (convertedTarget != null) {
@@ -721,6 +731,7 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ExplicitSplatAction : SplatAction<ExplicitSplatAction> {
         protected sealed override string/*!*/ ToMethodName { get { return Symbols.ToA; } }
         protected sealed override MethodInfo ConversionResultValidator { get { return Methods.ToAValidator; } }
+        protected sealed override MethodInfo/*!*/ SplatResultValidator { get { return Methods.SplatToAValidator; } }
     }
 
     /// <summary>
@@ -731,6 +742,7 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ImplicitSplatAction : SplatAction<ImplicitSplatAction> {
         protected sealed override string/*!*/ ToMethodName { get { return Symbols.ToAry; } }
         protected sealed override MethodInfo ConversionResultValidator { get { return Methods.ToArrayValidator; } }
+        protected sealed override MethodInfo/*!*/ SplatResultValidator { get { return Methods.SplatToAryValidator; } }
     }
 
     #endregion

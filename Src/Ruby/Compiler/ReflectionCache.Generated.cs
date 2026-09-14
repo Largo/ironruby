@@ -518,6 +518,10 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ToArrayValidator;
         public static MethodInfo/*!*/ ToAValidator { get { return _ToAValidator ?? (_ToAValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Collections.IList>(RubyOps.ToAValidator)); } }
         private static MethodInfo _ToAValidator;
+        public static MethodInfo/*!*/ SplatToAValidator { get { return _SplatToAValidator ?? (_SplatToAValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Object, System.Collections.IList>(RubyOps.SplatToAValidator)); } }
+        private static MethodInfo _SplatToAValidator;
+        public static MethodInfo/*!*/ SplatToAryValidator { get { return _SplatToAryValidator ?? (_SplatToAryValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Object, System.Collections.IList>(RubyOps.SplatToAryValidator)); } }
+        private static MethodInfo _SplatToAryValidator;
         public static MethodInfo/*!*/ TryToArrayValidator { get { return _TryToArrayValidator ?? (_TryToArrayValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Collections.IList>(RubyOps.TryToArrayValidator)); } }
         private static MethodInfo _TryToArrayValidator;
         public static MethodInfo/*!*/ TryToStringValidator { get { return _TryToStringValidator ?? (_TryToStringValidator = CallInstruction.CacheFunc<System.String, System.Object, IronRuby.Builtins.MutableString>(RubyOps.TryToStringValidator)); } }
