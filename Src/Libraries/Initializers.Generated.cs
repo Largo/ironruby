@@ -6091,28 +6091,28 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.AppendFeatures)
             );
             
-            DefineLibraryMethod(module, "attr", 0x52, 
+            DefineLibraryMethod(module, "attr", 0x51, 
                 0x00020004U, 0x80020004U, 
-                new Action<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.Attr), 
-                new Action<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[]>(IronRuby.Builtins.ModuleOps.Attr)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.Attr), 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.Attr)
             );
             
-            DefineLibraryMethod(module, "attr_accessor", 0x52, 
+            DefineLibraryMethod(module, "attr_accessor", 0x51, 
                 0x00020004U, 0x80020004U, 
-                new Action<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String>(IronRuby.Builtins.ModuleOps.AttrAccessor), 
-                new Action<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[]>(IronRuby.Builtins.ModuleOps.AttrAccessor)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.AttrAccessor), 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.AttrAccessor)
             );
             
-            DefineLibraryMethod(module, "attr_reader", 0x52, 
+            DefineLibraryMethod(module, "attr_reader", 0x51, 
                 0x00020004U, 0x80020004U, 
-                new Action<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String>(IronRuby.Builtins.ModuleOps.AttrReader), 
-                new Action<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[]>(IronRuby.Builtins.ModuleOps.AttrReader)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.AttrReader), 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.AttrReader)
             );
             
-            DefineLibraryMethod(module, "attr_writer", 0x52, 
+            DefineLibraryMethod(module, "attr_writer", 0x51, 
                 0x00020004U, 0x80020004U, 
-                new Action<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String>(IronRuby.Builtins.ModuleOps.AttrWriter), 
-                new Action<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[]>(IronRuby.Builtins.ModuleOps.AttrWriter)
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.AttrWriter), 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.AttrWriter)
             );
             
             DefineLibraryMethod(module, "autoload", 0x51, 
@@ -6335,7 +6335,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPrivate)
             );
             
-            DefineLibraryMethod(module, "private_constant", 0x52, 
+            DefineLibraryMethod(module, "private_constant", 0x51, 
                 0x80000004U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.PrivateConstant)
             );
@@ -6377,7 +6377,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.MakeClassMethodsPublic)
             );
             
-            DefineLibraryMethod(module, "public_constant", 0x52, 
+            DefineLibraryMethod(module, "public_constant", 0x51, 
                 0x80000004U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.PublicConstant)
             );
@@ -6418,7 +6418,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.String, System.Object>(IronRuby.Builtins.ModuleOps.RemoveConstant)
             );
             
-            DefineLibraryMethod(module, "remove_method", 0x52, 
+            DefineLibraryMethod(module, "remove_method", 0x51, 
                 0x80010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.RemoveMethod)
             );
@@ -6448,7 +6448,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ModuleOps.ToS)
             );
             
-            DefineLibraryMethod(module, "undef_method", 0x52, 
+            DefineLibraryMethod(module, "undef_method", 0x51, 
                 0x80010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.UndefineMethod)
             );

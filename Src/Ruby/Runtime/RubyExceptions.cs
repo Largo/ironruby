@@ -284,13 +284,24 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateUndefinedMethodError(RubyModule/*!*/ module, string/*!*/ methodName) {
-            // MRI doesn't display the singleton's name:
-            if (module.IsSingletonClass) {
-                module = ((RubyClass)module).GetNonSingletonClass();
-            }
+            return WithNameAndReceiver(module.Context,
+                CreateNameError("undefined method `{0}' for {2} `{1}'",
+                    methodName, GetModuleErrorName(module), module.IsClass ? "class" : "module"),
+                methodName, module);
+        }
 
-            return CreateNameError("undefined method `{0}' for {2} `{1}'",
-                methodName, module.Name, module.IsClass ? "class" : "module");
+        /// <summary>
+        /// How MRI names a module in an error message. A metaclass is reported as the class or
+        /// module it is attached to ("for class `String'" rather than "#&lt;Class:String&gt;"),
+        /// but the singleton class of an ordinary object keeps its own description. An anonymous
+        /// module has no Name at all, so it falls back to #to_s - which is what the specs
+        /// interpolate into their expected messages.
+        /// </summary>
+        public static string/*!*/ GetModuleErrorName(RubyModule/*!*/ module) {
+            if (module.IsSingletonClass && ((RubyClass)module).SingletonClassOf is RubyModule attached) {
+                module = attached;
+            }
+            return module.Name ?? module.GetDisplayName(module.Context, false).ToString();
         }
 
         #endregion

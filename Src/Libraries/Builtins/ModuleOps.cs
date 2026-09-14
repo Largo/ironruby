@@ -517,7 +517,12 @@ namespace IronRuby.Builtins {
 
         #region attr, attr_{reader|writer|accessor} (thread-safe)
 
-        private static void DefineAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ name, bool readable, bool writable) {
+        /// <summary>
+        /// Defines the accessor(s) and appends their names to <paramref name="definedNames"/>,
+        /// which is what Ruby 3.0's attr/attr_reader/attr_writer/attr_accessor return.
+        /// </summary>
+        private static void DefineAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ name, bool readable, bool writable,
+            RubyArray definedNames = null) {
             // MRI: ignores ModuleFunction scope flag (doesn't create singleton methods):
 
             if (!Tokenizer.IsVariableName(name)) {
@@ -526,6 +531,16 @@ namespace IronRuby.Builtins {
 
             var varName = "@" + name;
             var attributesScope = scope.GetMethodAttributesDefinitionScope();
+
+            if (definedNames != null) {
+                var context = scope.RubyContext;
+                if (readable) {
+                    definedNames.Add(context.CreateSymbol(name, RubyEncoding.UTF8));
+                }
+                if (writable) {
+                    definedNames.Add(context.CreateSymbol(name + "=", RubyEncoding.UTF8));
+                }
+            }
 
             if (readable) {
                 var flags = (RubyMemberFlags)RubyUtils.GetSpecialMethodVisibility(attributesScope.Visibility, name);
@@ -538,59 +553,75 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
-        [RubyMethod("attr", RubyMethodAttributes.PrivateInstance)]
-        public static void Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name, [Optional]bool writable) {
-            DefineAccessor(scope, self, name, true, writable);
+        [RubyMethod("attr")]
+        public static RubyArray/*!*/ Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name, [Optional]bool writable) {
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, true, writable, result);
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr", RubyMethodAttributes.PrivateInstance)]
-        public static void Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+        [RubyMethod("attr")]
+        public static RubyArray/*!*/ Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+            var result = new RubyArray();
             foreach (string name in names) {
-                DefineAccessor(scope, self, name, true, false);
+                DefineAccessor(scope, self, name, true, false, result);
             }
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_accessor", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
-            DefineAccessor(scope, self, name, true, true);
+        [RubyMethod("attr_accessor")]
+        public static RubyArray/*!*/ AttrAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, true, true, result);
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_accessor", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+        [RubyMethod("attr_accessor")]
+        public static RubyArray/*!*/ AttrAccessor(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+            var result = new RubyArray();
             foreach (string name in names) {
-                DefineAccessor(scope, self, name, true, true);
+                DefineAccessor(scope, self, name, true, true, result);
             }
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_reader", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrReader(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
-            DefineAccessor(scope, self, name, true, false);
+        [RubyMethod("attr_reader")]
+        public static RubyArray/*!*/ AttrReader(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, true, false, result);
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_reader", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrReader(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+        [RubyMethod("attr_reader")]
+        public static RubyArray/*!*/ AttrReader(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+            var result = new RubyArray();
             foreach (string name in names) {
-                DefineAccessor(scope, self, name, true, false);
+                DefineAccessor(scope, self, name, true, false, result);
             }
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_writer", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrWriter(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
-            DefineAccessor(scope, self, name, false, true);
+        [RubyMethod("attr_writer")]
+        public static RubyArray/*!*/ AttrWriter(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, false, true, result);
+            return result;
         }
 
         // thread-safe:
-        [RubyMethod("attr_writer", RubyMethodAttributes.PrivateInstance)]
-        public static void AttrWriter(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+        [RubyMethod("attr_writer")]
+        public static RubyArray/*!*/ AttrWriter(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ names) {
+            var result = new RubyArray();
             foreach (string name in names) {
-                DefineAccessor(scope, self, name, false, true);
+                DefineAccessor(scope, self, name, false, true, result);
             }
+            return result;
         }
 
         #endregion
@@ -607,9 +638,28 @@ namespace IronRuby.Builtins {
             return context.CreateSymbol(newName, RubyEncoding.UTF8);
         }
 
+        /// <summary>
+        /// MRI checks frozen-ness before it looks the method up, so undef_method/remove_method on a
+        /// frozen module raise FrozenError even when the name does not exist.
+        /// </summary>
+        private static void RequireMutable(RubyModule/*!*/ self) {
+            if (!self.IsFrozen) {
+                return;
+            }
+            var cls = self as RubyClass;
+            if (cls != null && cls.IsSingletonClass) {
+                throw RubyExceptions.CreateObjectFrozenError(self.Context, cls.SingletonClassOf);
+            }
+            throw RubyExceptions.CreateObjectFrozenError(self.Context, self);
+        }
+
         // thread-safe:
-        [RubyMethod("remove_method", RubyMethodAttributes.PrivateInstance)]
+        // public since Ruby 3.0
+        [RubyMethod("remove_method")]
         public static RubyModule/*!*/ RemoveMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string[]/*!*/ methodNames) {
+            if (methodNames.Length != 0) {
+                RequireMutable(self);
+            }
             foreach (var methodName in methodNames) {
                 // MRI: reports a warning and allows removal
                 if (self.IsBasicObjectClass && methodName == Symbols.Initialize) {
@@ -617,15 +667,22 @@ namespace IronRuby.Builtins {
                 }
 
                 if (!self.RemoveMethod(methodName)) {
-                    throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
+                    // MRI's wording for remove_method differs from undef_method's:
+                    //   "method `x' not defined in C"
+                    throw RubyExceptions.CreateNameError("method `{0}' not defined in {1}",
+                        methodName, RubyExceptions.GetModuleErrorName(self));
                 }
             }
             return self;
         }
 
         // thread-safe:
-        [RubyMethod("undef_method", RubyMethodAttributes.PrivateInstance)]
+        // public since Ruby 3.0
+        [RubyMethod("undef_method")]
         public static RubyModule/*!*/ UndefineMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNullItems]params string[]/*!*/ methodNames) {
+            if (methodNames.Length != 0) {
+                RequireMutable(self);
+            }
             foreach (var methodName in methodNames) {
                 if (!self.ResolveMethod(methodName, VisibilityContext.AllVisible).Found) {
                     throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
@@ -1056,14 +1113,16 @@ namespace IronRuby.Builtins {
             return value;
         }
 
-        [RubyMethod("private_constant", RubyMethodAttributes.PrivateInstance)]
+        // public since Ruby 3.0
+        [RubyMethod("private_constant")]
         public static RubyModule/*!*/ PrivateConstant(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self,
             [NotNull]params object[]/*!*/ constantNames) {
             SetConstantVisibility(stringCast, self, constantNames, true);
             return self;
         }
 
-        [RubyMethod("public_constant", RubyMethodAttributes.PrivateInstance)]
+        // public since Ruby 3.0
+        [RubyMethod("public_constant")]
         public static RubyModule/*!*/ PublicConstant(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self,
             [NotNull]params object[]/*!*/ constantNames) {
             SetConstantVisibility(stringCast, self, constantNames, false);
