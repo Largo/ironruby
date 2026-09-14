@@ -11390,6 +11390,11 @@ class Thread
   private :__native_thread_id__
 
   class Backtrace
+    # --backtrace-limit=N, or -1 when it was not given.
+    def self.limit
+      ::Thread.send(:__backtrace_limit__)
+    end unless respond_to?(:limit)
+
     class Location
       attr_reader :path, :lineno, :label
 
@@ -11963,12 +11968,26 @@ end
 # missing \e[m below is deliberate.
 
 class Exception
-  # MRI answers nil when the exception carries no captured locations, which is
-  # every exception here: the backtrace is kept as strings, not as Location
-  # objects. Rebuilding Locations from the strings would be guesswork, so this
-  # gives the honest answer rather than a fabricated one.
+  # The runtime keeps a backtrace as strings, so an exception has no captured
+  # Location objects of its own and #backtrace_locations is nil - MRI's answer for
+  # an exception that was never raised. The one case where there are real Locations
+  # is `raise Klass, message, caller_locations`: set_backtrace was handed them, so
+  # keep them and hand them back.
+  alias_method :__core_set_backtrace__, :set_backtrace
+
+  def set_backtrace(value)
+    if ::Array === value && !value.empty? &&
+       value.all? { |v| ::Thread::Backtrace::Location === v }
+      @__backtrace_locations = value
+      __core_set_backtrace__(value.map(&:to_s))
+    else
+      @__backtrace_locations = nil
+      __core_set_backtrace__(value)
+    end
+  end
+
   def backtrace_locations
-    nil
+    @__backtrace_locations
   end unless method_defined?(:backtrace_locations)
 
   # Whether an uncaught exception would be printed to a terminal. Decides the

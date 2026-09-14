@@ -9501,6 +9501,11 @@ namespace IronRuby.Builtins {
         
         #if FEATURE_THREAD
         private static void LoadThread_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__backtrace_limit__", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32>(IronRuby.Builtins.ThreadOps.GetBacktraceLimit)
+            );
+            
             DefineLibraryMethod(module, "__set_fiber_owner__", 0x61, 
                 0x00000002U, 
                 new Func<System.Object, System.Threading.Thread, System.Object>(IronRuby.Builtins.ThreadOps.SetFiberOwner)

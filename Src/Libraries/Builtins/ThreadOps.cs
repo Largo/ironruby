@@ -1161,6 +1161,12 @@ namespace IronRuby.Builtins {
             return Kill(Thread.CurrentThread);
         }
 
+        /// <summary>Backs Thread::Backtrace.limit, which is written in Ruby.</summary>
+        [RubyMethod("__backtrace_limit__", RubyMethodAttributes.PrivateSingleton)]
+        public static int GetBacktraceLimit(RubyContext/*!*/ context, object self) {
+            return context.RubyOptions.BacktraceLimit;
+        }
+
         #region ignore_deadlock
 
         // Deadlock detection is MRI's; there is none here, so the flag is remembered and does nothing.

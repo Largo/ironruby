@@ -37,6 +37,7 @@ namespace IronRuby.Runtime {
         private readonly string _inputRecordSeparator;
         private readonly int _frozenStringLiteral;
         private readonly bool _debugFrozenStringLiteral;
+        private readonly int _backtraceLimit;
         private readonly ReadOnlyCollection<string>/*!*/ _warningCategoryFlags;
         private readonly string _standardLibraryPath;
         private readonly string _applicationBase;
@@ -126,6 +127,14 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// --backtrace-limit=N: the most frames an uncaught exception prints. -1 (the default)
+        /// means no limit. Thread::Backtrace.limit reads it back.
+        /// </summary>
+        public int BacktraceLimit {
+            get { return _backtraceLimit; }
+        }
+
+        /// <summary>
         /// The -W:category and -W:no-category flags, in the order they were given.
         /// </summary>
         public ReadOnlyCollection<string>/*!*/ WarningCategoryFlags {
@@ -207,6 +216,7 @@ namespace IronRuby.Runtime {
             _inputRecordSeparator = GetOption<string>(options, "InputRecordSeparator", null);
             _frozenStringLiteral = GetOption(options, "FrozenStringLiteral", 0);
             _debugFrozenStringLiteral = GetOption(options, "DebugFrozenStringLiteral", false);
+            _backtraceLimit = GetOption(options, "BacktraceLimit", -1);
             _warningCategoryFlags = GetStringCollectionOption(options, "WarningCategoryFlags") ?? EmptyStringCollection;
 
             _mainFile = GetOption(options, "MainFile", (string)null);

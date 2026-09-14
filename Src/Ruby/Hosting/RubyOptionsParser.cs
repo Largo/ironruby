@@ -154,6 +154,18 @@ namespace IronRuby.Hosting {
                 return;
             }
 
+            // --backtrace-limit=N caps how many frames an uncaught exception prints; Ruby code
+            // reads the setting back through Thread::Backtrace.limit.
+            if (arg.StartsWith("--backtrace-limit", StringComparison.Ordinal)) {
+                string value = (arg == "--backtrace-limit") ? PopNextArg() : arg.Substring("--backtrace-limit".Length).TrimStart('=');
+                int limit;
+                if (!Int32.TryParse(value, out limit)) {
+                    throw new InvalidOptionException(String.Format("invalid argument for --backtrace-limit: {0}", value));
+                }
+                LanguageSetup.Options["BacktraceLimit"] = limit;
+                return;
+            }
+
             if (arg.StartsWith("-S", StringComparison.Ordinal)) {
                 mainFileFromPath = arg == "-S" ? PopNextArg() : arg.Substring(2);
             }

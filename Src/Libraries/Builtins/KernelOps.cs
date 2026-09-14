@@ -675,10 +675,10 @@ namespace IronRuby.Builtins {
         /// Splits a trailing `cause:` keyword off the argument list.
         ///
         /// IronRuby has no real keyword arguments - they arrive as a trailing Hash - so this can
-        /// only go by shape: a trailing Hash whose single key is :cause. That is deliberate,
-        /// because MRI passes any *other* trailing hash on to the exception constructor
-        /// (`raise MyError, data: 42`). The one case it gets wrong is an explicitly braced
-        /// `raise "msg", {cause: e}`, which MRI treats as positional.
+        /// only go by shape: a trailing Hash that was written as keywords and whose single key
+        /// is :cause. That is deliberate, because MRI passes any *other* trailing hash on to the
+        /// exception constructor (`raise MyError, data: 42`); and an explicitly braced
+        /// `raise "msg", {cause: e}` is positional, which is why the keyword flag is checked.
         /// </summary>
         private static bool TryTakeCauseKeyword(ref object[]/*!*/ args, out object cause) {
             cause = null;
@@ -686,8 +686,8 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            var hash = args[args.Length - 1] as IDictionary<object, object>;
-            if (hash == null || hash.Count != 1) {
+            var hash = args[args.Length - 1] as Hash;
+            if (hash == null || hash.Count != 1 || !hash.IsKeywordArguments) {
                 return false;
             }
 
