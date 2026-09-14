@@ -554,7 +554,7 @@ namespace IronRuby.Builtins {
         public MatchData Match(MutableString/*!*/ input) {
             string str;
             RubyEncoding kcode = null;
-            return MatchData.Create(Transform(ref kcode, input, 0, out str).Match(str), input, true, str);
+            return MatchData.Create(Transform(ref kcode, input, 0, out str).Match(str), input, true, str, kcode, 0);
         }
 
         /// <summary>
@@ -581,7 +581,7 @@ namespace IronRuby.Builtins {
                 match = regex.Match(str, start);
             }
 
-            return MatchData.Create(match, input, freezeInput, str);
+            return MatchData.Create(match, input, freezeInput, str, kcode, (kcode != null) ? ((start < 0) ? start + input.GetByteCount() : start) : 0);
         }
 
         public MatchData LastMatch(MutableString/*!*/ input) {
@@ -630,7 +630,7 @@ namespace IronRuby.Builtins {
                     return null;
                 }
             }
-            return MatchData.Create(match, input, true, str);
+            return MatchData.Create(match, input, true, str, kcode, 0);
         }
 
         /// <summary>
@@ -670,7 +670,7 @@ namespace IronRuby.Builtins {
             }
 
             for (int i = 0; i < result.Length; i++) {
-                result[i] = MatchData.Create(matches[i], input, false, str);
+                result[i] = MatchData.Create(matches[i], input, false, str, kcode, 0);
             }
 
             return result;
