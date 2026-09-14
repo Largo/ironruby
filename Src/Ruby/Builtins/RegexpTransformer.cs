@@ -1349,6 +1349,11 @@ namespace IronRuby.Builtins {
             string name = _rubyPattern.Substring(start, _index - start);
             Skip();
 
+            var script = MakeScriptCharacterClass(name);
+            if (script != null) {
+                return positive ? script : script.Complement();
+            }
+
             switch (name) {
                 // CLR unsupported, any encoding:
                 case "Alnum": return MakePosixCharacterClass(PosixCharacterClass.Alnum, positive); 
@@ -1384,50 +1389,28 @@ namespace IronRuby.Builtins {
                 case "Armenian": 
                 case "Bengali": 
                 case "Bopomofo": 
-                case "Braille": 
-                case "Buginese":
                 case "Buhid": 
                 case "Cherokee": 
-                case "Common": 
-                case "Coptic":
-                case "Cypriot": 
                 case "Cyrillic": 
-                case "Deseret": 
                 case "Devanagari": 
                 case "Ethiopic": 
                 case "Georgian":
-                case "Glagolitic": 
-                case "Gothic": 
                 case "Greek": 
                 case "Gujarati": 
                 case "Gurmukhi": 
-                case "Han": 
-                case "Hangul":
                 case "Hanunoo": 
                 case "Hebrew": 
-                case "Hiragana": 
-                case "Inherited":
                 case "Kannada": 
-                case "Katakana":
-                case "Kharoshthi": 
                 case "Khmer": 
                 case "Lao": 
-                case "Latin": 
                 case "Limbu": 
-                case "Linear_B":
                 case "Malayalam":
                 case "Mongolian": 
                 case "Myanmar": 
-                case "New_Tai_Lue":
                 case "Ogham": 
-                case "Old_Italic":
-                case "Old_Persian":
                 case "Oriya": 
-                case "Osmanya": 
                 case "Runic": 
-                case "Shavian": 
                 case "Sinhala": 
-                case "Syloti_Nagri": 
                 case "Syriac":
                 case "Tagalog": 
                 case "Tagbanwa": 
@@ -1437,10 +1420,8 @@ namespace IronRuby.Builtins {
                 case "Thaana": 
                 case "Thai": 
                 case "Tibetan":
-                case "Tifinagh": 
-                case "Ugaritic": 
-                case "Yi":
-                    // TODO: not all of the above are prefixed Is-
+                    // For these scripts .NET happens to have a block of the same name. A block is
+                    // not a script, so this over-matches at the edges, but it is what is available.
                     name = "Is" + name;
                     goto default;
 
@@ -1450,6 +1431,88 @@ namespace IronRuby.Builtins {
 
                 default:
                     return new CharacterSet(@"\" + (positive ? 'p' : 'P') + "{" + name + "}");
+            }
+        }
+
+        /// <summary>
+        /// Unicode *script* properties for the scripts .NET has no identically named block for.
+        /// .NET's Regex knows nothing about scripts, only about a fixed list of Unicode 4.0 era
+        /// BMP blocks, so these are approximations: a script's codepoints are enumerated as
+        /// explicit ranges. Returns null for a name this method does not handle.
+        /// </summary>
+        private CharacterSet MakeScriptCharacterClass(string/*!*/ name) {
+            switch (name) {
+                case "Han":
+                    // CJK Radicals Supplement, Kangxi Radicals, the Han characters scattered
+                    // through CJK Symbols and Punctuation, Extension A, the URO and the
+                    // compatibility ideographs. Non-BMP extensions are out of reach (see
+                    // CharacterSet._astral: a class cannot hold a surrogate pair).
+                    return new CharacterSet("\u2e80-\u2e99\u2e9b-\u2ef3\u2f00-\u2fd5\u3005\u3007" +
+                        "\u3021-\u3029\u3038-\u303b\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufa6d\ufa70-\ufad9");
+
+                case "Hangul":
+                    // Jamo, Compatibility Jamo, Jamo Extended-A/B and the syllables block.
+                    return new CharacterSet("\u1100-\u11ff\u302e\u302f\u3131-\u318e\ua960-\ua97c" +
+                        "\uac00-\ud7a3\ud7b0-\ud7c6\ud7cb-\ud7fb\uffa0-\uffbe\uffc2-\uffc7" +
+                        "\uffca-\uffcf\uffd2-\uffd7\uffda-\uffdc");
+
+                case "Latin":
+                    return new CharacterSet(@"\p{IsBasicLatin}\p{IsLatin-1Supplement}\p{IsLatinExtended-A}" +
+                        @"\p{IsLatinExtended-B}\p{IsLatinExtendedAdditional}" +
+                        "\u2c60-\u2c7f\ua720-\ua7ff\ufb00-\ufb06\uff21-\uff3a\uff41-\uff5a");
+
+                case "Braille":
+                    return new CharacterSet(@"\p{IsBraillePatterns}");
+
+                case "Hiragana":
+                    // Not the whole IsHiragana block: U+3099-U+309C are Inherited/Common and
+                    // U+309B/U+309C are not Hiragana either.
+                    return new CharacterSet("\u3041-\u3096\u309d-\u309f");
+
+                case "Katakana":
+                    // U+30A0, U+30FB and U+30FC (the prolonged sound mark) sit inside the
+                    // IsKatakana block but are script Common, so the block over-matches.
+                    return new CharacterSet("\u30a1-\u30fa\u30fd-\u30ff\u31f0-\u31ff" +
+                        "\u32d0-\u32fe\u3300-\u3357\uff66-\uff6f\uff71-\uff9d");
+
+                case "Coptic":
+                    return new CharacterSet("\u03e2-\u03ef\u2c80-\u2cff\u2e00-\u2e01");
+
+                case "Glagolitic":
+                    return new CharacterSet("\u2c00-\u2c5f");
+
+                case "Tifinagh":
+                    return new CharacterSet("\u2d30-\u2d7f");
+
+                case "Syloti_Nagri":
+                    return new CharacterSet("\ua800-\ua82c");
+
+                case "New_Tai_Lue":
+                    return new CharacterSet("\u1980-\u19df");
+
+                case "Buginese":
+                    return new CharacterSet("\u1a00-\u1a1f");
+
+                case "Yi":
+                    return new CharacterSet(@"\p{IsYiSyllables}\p{IsYiRadicals}");
+
+                case "Common":
+                case "Inherited":
+                case "Cypriot":
+                case "Deseret":
+                case "Gothic":
+                case "Kharoshthi":
+                case "Linear_B":
+                case "Old_Italic":
+                case "Old_Persian":
+                case "Osmanya":
+                case "Shavian":
+                    // Either not a block at all (Common, Inherited span the whole repertoire) or
+                    // entirely outside the BMP, which .NET cannot address in a character class.
+                    throw MakeError("character property '" + name + "' is not supported");
+
+                default:
+                    return null;
             }
         }
 
