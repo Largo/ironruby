@@ -1721,6 +1721,19 @@ namespace IronRuby.Prism {
                 statements.Add(popKeywords);
             }
 
+            // The lowered signature is a single splat, so nothing checks how many
+            // positional arguments actually arrived - a method or lambda has to do it
+            // itself, after the keyword hash was taken off the end. Without this a Hash
+            // passed positionally to `def m(a, b = nil, **o)` looked like the keywords
+            // it is not and was silently dropped.
+            if (isMethod || !autoSplat) {
+                int minimum = node.Requireds.Length + postCount;
+                int maximum = node.Rest != null ? -1 : minimum + node.Optionals.Length;
+                if (minimum > 0 || maximum >= 0) {
+                    statements.Add(ArityCheck(args, minimum, maximum, span));
+                }
+            }
+
             foreach (var required in node.Requireds) {
                 statements.Add(AssignNext(required, args, span));
             }
@@ -1872,6 +1885,36 @@ namespace IronRuby.Prism {
                 prologue.Add(check);
             }
             return prologue;
+        }
+
+        /// <summary>
+        /// `raise ArgumentError, "wrong number of arguments (given N, expected ...)"` unless
+        /// the splat holding the positional arguments has between <paramref name="minimum"/>
+        /// and <paramref name="maximum"/> entries. A negative maximum means a rest parameter
+        /// took the cap off, which MRI reports as "expected N+".
+        /// </summary>
+        private Expression/*!*/ ArityCheck(LocalVariable/*!*/ args, int minimum, int maximum, SourceSpan span) {
+            Expression condition = new MethodCall(new MethodCall(args, "size", null, span), "<",
+                new Arguments(Literal.Integer(minimum, span)), span);
+
+            if (maximum >= 0) {
+                condition = new OrExpression(condition,
+                    new MethodCall(new MethodCall(args, "size", null, span), ">",
+                        new Arguments(Literal.Integer(maximum, span)), span), span);
+            }
+
+            string expected = maximum < 0 ? minimum + "+" :
+                minimum == maximum ? minimum.ToString() : minimum + ".." + maximum;
+
+            Expression message = new MethodCall(
+                new MethodCall(new StringLiteral("wrong number of arguments (given ", _encoding, span), "+",
+                    new Arguments(new MethodCall(new MethodCall(args, "size", null, span), "to_s", null, span)), span),
+                "+", new Arguments(new StringLiteral(", expected " + expected + ")", _encoding, span)), span);
+
+            return new IfExpression(condition, new Statements(
+                new MethodCall(null, "raise", new Arguments(new Expression[] {
+                    new ConstantVariable("ArgumentError", span), message
+                }), span)), new List<ElseIfClause>(), span);
         }
 
         private Expression/*!*/ RaiseArityError(int given, int expected, SourceSpan span) {

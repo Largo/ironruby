@@ -2139,9 +2139,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("putc", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("putc", RubyMethodAttributes.PublicSingleton)]
-        public static int Putc(BinaryOpStorage/*!*/ writeStorage, object self, [DefaultProtocol]int arg) {
+        public static object Putc(ConversionStorage<int>/*!*/ fixnumCast, BinaryOpStorage/*!*/ writeStorage, object self, object arg) {
             // no dynamic dispatch:
-            return PrintOps.Putc(writeStorage, writeStorage.Context.StandardOutput, arg);
+            return PrintOps.Putc(fixnumCast, writeStorage, writeStorage.Context.StandardOutput, arg);
         }
 
         [RubyMethod("puts", RubyMethodAttributes.PrivateInstance)]

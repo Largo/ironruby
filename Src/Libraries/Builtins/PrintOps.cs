@@ -37,10 +37,21 @@ namespace IronRuby.Builtins {
             Print(writeStorage, self, scope.GetInnerMostClosureScope().LastInputLine);
         }
 
+        // $, goes between the arguments and $\ after the last one; writing $\ after every
+        // argument made `print a, b` come out as "a$\b$\".
         [RubyMethod("print")]
         public static void Print(BinaryOpStorage/*!*/ writeStorage, object self, params object[]/*!*/ args) {
-            foreach (object arg in args) {
-                Print(writeStorage, self, arg);
+            MutableString fieldSeparator = writeStorage.Context.ItemSeparator;
+            for (int i = 0; i < args.Length; i++) {
+                if (i > 0 && fieldSeparator != null) {
+                    Protocols.Write(writeStorage, self, fieldSeparator);
+                }
+                Protocols.Write(writeStorage, self, args[i] ?? MutableString.CreateAscii("nil"));
+            }
+
+            MutableString recordSeparator = writeStorage.Context.OutputSeparator;
+            if (recordSeparator != null) {
+                Protocols.Write(writeStorage, self, recordSeparator);
             }
         }
 
@@ -66,9 +77,11 @@ namespace IronRuby.Builtins {
             return val;
         }
 
+        // MRI hands back the argument it was given, not the Integer it made of it.
         [RubyMethod("putc")]
-        public static int Putc(BinaryOpStorage/*!*/ writeStorage, object self, [DefaultProtocol]int c) {
-            MutableString str = MutableString.CreateBinary(1).Append(unchecked((byte)c));
+        public static object Putc(ConversionStorage<int>/*!*/ fixnumCast, BinaryOpStorage/*!*/ writeStorage, object self, object c) {
+            int value = Protocols.CastToFixnum(fixnumCast, c);
+            MutableString str = MutableString.CreateBinary(1).Append(unchecked((byte)value));
             Protocols.Write(writeStorage, self, str);
             return c;
         }

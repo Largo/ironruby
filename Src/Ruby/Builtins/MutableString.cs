@@ -79,7 +79,13 @@ namespace IronRuby.Builtins {
         // copy-on-write, so an ordinary string pays nothing for it.
         private const uint IsChilledFlag = 1 << 11;
 
-        private const uint MutationGuardFlags = IsFrozenFlag | CopyOnWriteFlag | IsChilledFlag;
+        // rb_str_locktmp: the string is lent out - IO::Buffer.for hands a window onto its
+        // bytes to Ruby code - and must not be modified until it is handed back. Unlike
+        // freezing this is temporary and reversible, so it gets its own bit.
+        private const uint IsTemporarilyLockedFlag = 1 << 12;
+
+        private const uint MutationGuardFlags =
+            IsFrozenFlag | CopyOnWriteFlag | IsChilledFlag | IsTemporarilyLockedFlag;
 
         /// <summary>
         /// Called the first time a chilled string is mutated. Set by RubyContext, because the
@@ -395,6 +401,10 @@ namespace IronRuby.Builtins {
         private uint FrozenOrCopyOnWrite(uint flags) {
             if ((flags & IsFrozenFlag) != 0) {
                 throw RubyExceptions.CreateStringFrozenError(this);
+            }
+
+            if ((flags & IsTemporarilyLockedFlag) != 0) {
+                throw RubyExceptions.CreateTemporarilyLockedError();
             }
 
             if ((flags & CopyOnWriteFlag) != 0) {
@@ -868,6 +878,29 @@ namespace IronRuby.Builtins {
             if (IsFrozen) {
                 throw RubyExceptions.CreateObjectFrozenError("String");
             }
+        }
+
+        /// <summary>
+        /// rb_str_locktmp. A locked string refuses every mutation until it is unlocked,
+        /// with a message of its own so the caller can tell it from a frozen string.
+        /// </summary>
+        public MutableString/*!*/ LockTemporarily() {
+            if ((_flags & IsTemporarilyLockedFlag) != 0) {
+                throw RubyExceptions.CreateTemporarilyLockedError();
+            }
+            RequireNotFrozen();
+            _flags |= IsTemporarilyLockedFlag;
+            return this;
+        }
+
+        /// <summary>rb_str_unlocktmp.</summary>
+        public MutableString/*!*/ UnlockTemporarily() {
+            _flags &= ~IsTemporarilyLockedFlag;
+            return this;
+        }
+
+        public bool IsTemporarilyLocked {
+            get { return (_flags & IsTemporarilyLockedFlag) != 0; }
         }
 
         /// <summary>

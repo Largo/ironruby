@@ -163,6 +163,13 @@ namespace IronRuby.Builtins {
                 context.SetInstanceVariable(self, "@__autoclose", Protocols.IsTrue(autoclose));
             }
 
+            // IO.new(fd, path: "...") is how a descriptor is told the name it came from; #path
+            // and #inspect answer it, and nothing else in the stream knows it.
+            object path;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("path"), out path) && path != null) {
+                context.SetInstanceVariable(self, "@__io_path__", Protocols.CastToPath(toStr, path));
+            }
+
             return self;
         }
 
@@ -822,14 +829,21 @@ namespace IronRuby.Builtins {
             return self.FileControl(commandId, arg);
         }
 
-        [RubyMethod("fsync")]
         [RubyMethod("flush")]
-        public static void Flush(RubyIO/*!*/ self) {
+        public static RubyIO/*!*/ Flush(RubyIO/*!*/ self) {
             try {
                 self.Flush();
             } catch (IOException e) {
                 throw TranslateStreamError(e);
             }
+            return self;
+        }
+
+        // fsync is flush plus the write-back the name promises, and MRI answers 0 for it.
+        [RubyMethod("fsync")]
+        public static int FSync(RubyIO/*!*/ self) {
+            Flush(self);
+            return 0;
         }
 
         #endregion
@@ -845,6 +859,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("pid")]
         public static object Pid(RubyIO/*!*/ self) {
+            self.RequireOpen();
             return null;  // OK to return null on Windows
         }
 
@@ -856,7 +871,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binmode")]
         public static RubyIO/*!*/ Binmode(RubyIO/*!*/ self) {
-            if (!self.Closed && self.Position == 0) {
+            self.RequireOpen();
+            if (self.Position == 0) {
                 self.PreserveEndOfLines = true;
             }
             return self;
@@ -864,11 +880,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("binmode?")]
         public static bool IsBinmode(RubyIO/*!*/ self) {
+            self.RequireOpen();
             return self.IsBinmode;
         }
 
         [RubyMethod("stat", BuildConfig = "FEATURE_FILESYSTEM")]
         public static System.IO.FileSystemInfo/*!*/ Stat(RubyIO/*!*/ self) {
+            self.RequireOpen();
             return RubyFileOps.RubyStatOps.Create(self);
         }
 
@@ -901,7 +919,24 @@ namespace IronRuby.Builtins {
                     case ConsoleStreamType.Input: result.Append("<STDIN>"); break;
                     case ConsoleStreamType.Output: result.Append("<STDOUT>"); break;
                     case ConsoleStreamType.ErrorOutput: result.Append("<STDERR>"); break;
-                    case null: result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture)); break;
+                    case null: {
+                        // A stream that knows its path shows it; one that does not shows its
+                        // descriptor, which a closed stream no longer has.
+                        object path;
+                        self.Context.TryGetInstanceVariable(self, "@__io_path__", out path);
+                        var pathString = path as MutableString;
+                        if (pathString != null) {
+                            result.Append(pathString);
+                            if (self.Closed) {
+                                result.Append(" (closed)");
+                            }
+                        } else if (self.Closed) {
+                            result.Append("(closed)");
+                        } else {
+                            result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture));
+                        }
+                        break;
+                    }
                 }
             } else {
                 RubyUtils.AppendFormatHexObjectId(result, RubyUtils.GetObjectId(self.Context, self));
@@ -1037,9 +1072,10 @@ namespace IronRuby.Builtins {
         #region rewind, seek, sysseek, pos, tell, lineno
 
         [RubyMethod("rewind")]
-        public static void Rewind(RubyContext/*!*/ context, RubyIO/*!*/ self) {
+        public static int Rewind(RubyContext/*!*/ context, RubyIO/*!*/ self) {
             self.Seek(0, SeekOrigin.Begin);
             self.LineNumber = 0;
+            return 0;
         }
 
         [RubyMethod("seek")]
@@ -1086,6 +1122,16 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region write, syswrite, write_nonblock
+        /// <summary>
+        /// Whether the descriptor was opened for writing. IO::Buffer.map needs to know,
+        /// because a shared mapping asks mmap for PROT_WRITE and the kernel refuses that on
+        /// a read-only descriptor; there is no public Ruby way to ask.
+        /// </summary>
+        [RubyMethod("__writable__?")]
+        public static bool IsWritable(RubyIO/*!*/ self) {
+            return self.Mode.CanWrite();
+        }
+
 
         [RubyMethod("write")]
         public static int Write(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
