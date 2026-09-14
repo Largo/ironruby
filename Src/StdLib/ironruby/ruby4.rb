@@ -2554,31 +2554,19 @@ end
 
 # Kernel#Complex and Kernel#Rational never learned to read a String - they went
 # straight for #real and #numerator on it - so every `Complex("1+2i")` in the
-# specs was a NoMethodError. Parsing is String#to_c / String#to_r; what these
-# add is MRI's strictness, because Complex("abc") is an ArgumentError where
-# "abc".to_c is (0+0i).
+# specs was a NoMethodError. Both now follow complex.c's nucomp_convert and
+# rational.c's nurat_convert; the string grammar lives on Complex/Rational (see
+# "MRI's numeric string scanners" further down this file).
 module Kernel
-  NUMERIC_STRING__ = /\A[+-]?[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9][0-9_]*)?(?:\/[0-9][0-9_]*)?\z/
-  COMPLEX_STRING__ = /\A[0-9+\-._eE\/i@]+\z/
-
-  def __convert_error__(value)
-    ::Kernel.raise(::ArgumentError, "invalid value for convert(): #{value.inspect}")
+  # rb_opts_exception_p. Only the two singletons are accepted - anything else,
+  # including nil, is an ArgumentError naming the offending value.
+  def __opts_exception__(value)
+    return true if value.equal?(true)
+    return false if value.equal?(false)
+    ::Kernel.raise(::ArgumentError, "expected true or false as exception: #{value.inspect}")
   end
-  private :__convert_error__
-
-  def __string_to_c__(str)
-    t = str.strip
-    __convert_error__(str) if t.empty? || t !~ COMPLEX_STRING__ || t !~ /[0-9]/
-    t.to_c
-  end
-  private :__string_to_c__
-
-  def __string_to_r__(str)
-    t = str.strip
-    __convert_error__(str) unless t =~ NUMERIC_STRING__
-    t.to_r
-  end
-  private :__string_to_r__
+  private :__opts_exception__
+  module_function :__opts_exception__
 
   # The built-in Complex/Rational are stubs that load complex18.rb and then
   # redefine themselves, so they have to be run once before they can be wrapped
@@ -2603,6 +2591,7 @@ module Kernel
     private :__ir_Integer__
 
     def Integer(arg, base = nil, exception: true)
+      exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         if arg.nil?
           raise ::TypeError, "can't convert nil into Integer"
@@ -2627,19 +2616,19 @@ module Kernel
           next arg.to_i
         end
 
+        # #to_int first, then #to_str, then #to_i; a non-Integer from #to_int is
+        # not an error by itself, it just falls through to the next candidate.
+        if arg.respond_to?(:to_int)
+          value = arg.to_int
+          next value if value.is_a?(::Integer)
+        end
+
         if arg.respond_to?(:to_str)
           text = arg.to_str
           unless text.is_a?(::String)
             raise ::TypeError, "can't convert #{arg.class} into Integer"
           end
           next base ? __ir_Integer__(text, base) : __ir_Integer__(text)
-        end
-
-        # #to_int first, then #to_i; a non-Integer from #to_int is not an error
-        # by itself, it just falls through to #to_i.
-        if arg.respond_to?(:to_int)
-          value = arg.to_int
-          next value if value.is_a?(::Integer)
         end
 
         unless arg.respond_to?(:to_i)
@@ -2663,6 +2652,7 @@ module Kernel
     private :__ir_Float__
 
     def Float(arg, exception: true)
+      exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         raise ::TypeError, "can't convert nil into Float" if arg.nil?
         __ir_Float__(arg)
@@ -2688,57 +2678,24 @@ module Kernel
   private :__conversion_class_name__
   module_function :__conversion_class_name__
 
-  if private_method_defined?(:Complex) || method_defined?(:Complex)
-    alias_method :__ir_Complex__, :Complex
-    private :__ir_Complex__
-
-    def Complex(real, imaginary = nil, exception: true)
-      if real.is_a?(::String) || imaginary.is_a?(::String)
-        begin
-          r = real.is_a?(::String) ? __string_to_c__(real) : real
-          return r if imaginary.nil?
-          i = imaginary.is_a?(::String) ? __string_to_c__(imaginary) : imaginary
-        rescue ::ArgumentError
-          raise if exception
-          return nil
-        end
-        return r + i * ::Complex.new(0, 1)
-      end
-      begin
-        imaginary.nil? ? __ir_Complex__(real) : __ir_Complex__(real, imaginary)
-      rescue ::ArgumentError, ::TypeError
-        raise if exception
-        nil
-      end
+  # Both take (a, b = <undef>, exception: true). "b omitted" and "b is nil" are
+  # different cases in MRI - `Complex(1)` is (1+0i) while `Complex(1, nil)` is a
+  # TypeError - so the arity has to be read off *args rather than from a default.
+  def Complex(*args, exception: true)
+    if args.size < 1 || args.size > 2
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)")
     end
-    module_function :Complex
+    ::Complex.__convert__(args[0], args[1], args.size == 2, ::Kernel.__opts_exception__(exception))
   end
+  module_function :Complex
 
-  if private_method_defined?(:Rational) || method_defined?(:Rational)
-    alias_method :__ir_Rational__, :Rational
-    private :__ir_Rational__
-
-    def Rational(numerator, denominator = nil, exception: true)
-      if numerator.is_a?(::String) || denominator.is_a?(::String)
-        begin
-          n = numerator.is_a?(::String) ? __string_to_r__(numerator) : numerator
-          return n if denominator.nil?
-          d = denominator.is_a?(::String) ? __string_to_r__(denominator) : denominator
-        rescue ::ArgumentError
-          raise if exception
-          return nil
-        end
-        return n / d
-      end
-      begin
-        denominator.nil? ? __ir_Rational__(numerator) : __ir_Rational__(numerator, denominator)
-      rescue ::ArgumentError, ::TypeError
-        raise if exception
-        nil
-      end
+  def Rational(*args, exception: true)
+    if args.size < 1 || args.size > 2
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)")
     end
-    module_function :Rational
+    ::Rational.__convert__(args[0], args[1], args.size == 2, ::Kernel.__opts_exception__(exception))
   end
+  module_function :Rational
 end
 
 # A non-blocking fiber does not sleep on the thread: it hands the wait to the
@@ -3239,42 +3196,19 @@ class String
     frozen? ? self : dup.freeze
   end unless method_defined?(:dedup)
 
-  # Parses as much of a complex number as it can and answers (0+0i) for the
-  # rest, the way Kernel#Complex(str, exception: false) does. The grammar is
-  # MRI's: [real][sign imaginary"i"], or "real@angle" for polar form, with the
-  # real and imaginary parts each an integer, a float or a rational.
-  NUMBER__ = '[+-]?(?:\d[\d_]*)?(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?(?:\/\d[\d_]*)?'
-
+  # Parses as much of a complex/rational number as it can and answers (0+0i) /
+  # (0/1) for the rest. Both are MRI's own scanners (complex.c read_comp,
+  # rational.c parse_rat), run in their lenient mode; Kernel#Complex and
+  # Kernel#Rational run the same scanners in strict mode. A regexp cannot
+  # stand in for them: they are prefix parsers whose backtracking on a doubled
+  # underscore is observable ("7__9".to_c is (7+0i)).
   def to_c
-    s = strip
-    if (m = /\A(#{NUMBER__})@(#{NUMBER__})/o.match(s)) && !m[1].empty? && !m[2].empty?
-      return ::Complex.polar(__to_num__(m[1]), __to_num__(m[2]))
-    end
-    if (m = /\A(#{NUMBER__})?([+-](?:\d[\d_]*)?(?:\.\d[\d_]*)?(?:[eE][+-]?\d[\d_]*)?(?:\/\d[\d_]*)?)i/o.match(s))
-      real = m[1].nil? || m[1].empty? ? 0 : __to_num__(m[1])
-      imag = m[2] == "+" ? 1 : (m[2] == "-" ? -1 : __to_num__(m[2]))
-      return ::Complex.new(real, imag)
-    end
-    if (m = /\A(#{NUMBER__})i/o.match(s)) && !m[1].empty? && m[1] != "+" && m[1] != "-"
-      return ::Complex.new(0, __to_num__(m[1]))
-    end
-    if (m = /\A(#{NUMBER__})/o.match(s)) && !m[1].empty?
-      return ::Complex.new(__to_num__(m[1]), 0)
-    end
-    ::Complex.new(0, 0)
-  end unless method_defined?(:to_c)
-
-  def __to_num__(text)
-    text = text.delete("_")
-    if text.include?("/")
-      text.to_r
-    elsif text.include?(".") || text.include?("e") || text.include?("E")
-      text.to_f
-    else
-      text.to_i
-    end
+    ::Complex.__parse_string__(self, false)
   end
-  private :__to_num__
+
+  def to_r
+    ::Rational.__parse_string__(self, false)
+  end
 
   # The inverse of #dump. Anything that is not something #dump could have
   # produced is a RuntimeError, which is what MRI raises here.
@@ -3676,12 +3610,12 @@ end
 
 class Numeric
   def i
-    ::Complex.new(0, self)
-  end unless method_defined?(:i)
+    ::Complex.__raw__(0, self)
+  end
 
   def to_c
-    ::Complex.new(self, 0)
-  end unless method_defined?(:to_c)
+    ::Complex.__raw__(self, 0)
+  end
 
   def numerator
     to_r.numerator
@@ -3922,7 +3856,8 @@ class Complex
   def self.__raw__(real, imag)
     c = allocate
     c.__send__(:__set_parts__, real, imag)
-    c
+    # OBJ_FREEZE in nucomp_s_new_internal: every Complex MRI hands out is frozen.
+    c.freeze
   end
 
   def __set_parts__(real, imag)
@@ -4228,6 +4163,603 @@ class Complex
 
   def integer?
     false
+  end
+end
+
+# --- MRI's numeric string scanners ------------------------------------------
+#
+# Ports of complex.c's read_comp/parse_comp and rational.c's read_num/parse_rat,
+# character for character. They cannot be replaced by regexps: both are *prefix*
+# parsers that back up over a trailing or doubled underscore, and the position
+# they back up to is what decides whether the strict caller (Kernel#Complex,
+# Kernel#Rational) sees trailing garbage. "7__9".to_c is (7+0i) and
+# Complex("7__9") is an ArgumentError precisely because of that rewind.
+#
+# Each scanner has a lenient mode (String#to_c / String#to_r: take the leading
+# substring that parses, ignore the rest) and a strict mode (Kernel#Complex /
+# Kernel#Rational: the whole string, bar surrounding whitespace, must parse).
+
+module IronRubyNumericScan__
+  WS__ = " \t\n\v\f\r"
+
+  def self.digit?(c)
+    !c.nil? && c >= "0" && c <= "9"
+  end
+
+  def self.skip_ws(s, i, n)
+    i += 1 while i < n && WS__.include?(s[i])
+    i
+  end
+
+  # rb_int_parse_cstr(base 10, RB_INT_PARSE_UNDERSCORE, no sign, no badcheck).
+  # Underscores are allowed between digits; a doubled underscore stops the scan,
+  # and the reported end is always just past the last *digit*, which is why
+  # "1_" leaves the underscore behind for the strict check to trip over.
+  # Answers [value, end_index, digit_count], or nil when no digit was read.
+  def self.read_int(s, i, n)
+    # A leading underscore is not "between digits", so it fails outright.
+    return nil unless i < n && digit?(s[i])
+    digits = +""
+    last = i
+    nondigit = false
+    while i < n
+      c = s[i]
+      if c == "_"
+        break if nondigit
+        nondigit = true
+      elsif digit?(c)
+        nondigit = false
+        digits << c
+        last = i + 1
+      else
+        break
+      end
+      i += 1
+    end
+    return nil if digits.empty?
+    [digits.to_i, last, digits.length]
+  end
+end
+
+class Complex
+  # complex.c's read_digits/read_num/read_rat_nos/read_comp. `@b` is MRI's
+  # scratch buffer: the digits seen so far, with the underscores removed, which
+  # is what str2num is finally handed.
+  class Scanner__ # :nodoc:
+    S = ::IronRubyNumericScan__
+
+    def initialize(str, strict)
+      @s = str
+      # complex.c works on a C string, so an embedded NUL ends the input.
+      nul = str.index("\0")
+      @n = nul || str.length
+      @i = 0
+      @strict = strict
+      @b = +""
+    end
+
+    def cur
+      @i < @n ? @s[@i] : nil
+    end
+
+    def sign?(c)
+      c == "-" || c == "+"
+    end
+
+    def imagunit?(c)
+      c == "i" || c == "I" || c == "j" || c == "J"
+    end
+
+    def read_sign
+      c = cur
+      if sign?(c)
+        @b << c
+        @i += 1
+        return c
+      end
+      "?"
+    end
+
+    def read_digits
+      return false unless S.digit?(cur)
+      us = true
+      while S.digit?(cur) || cur == "_"
+        if cur == "_"
+          if us
+            return false if @strict
+            break
+          end
+          us = true
+        else
+          @b << cur
+          us = false
+        end
+        @i += 1
+      end
+      if us
+        loop do
+          @i -= 1
+          break unless @i >= 0 && @s[@i] == "_"
+        end
+      end
+      true
+    end
+
+    def read_num
+      if cur != "."
+        return false unless read_digits
+      end
+      if cur == "."
+        @b << "."
+        @i += 1
+        unless read_digits
+          @b.slice!(-1)
+          return false
+        end
+      end
+      if cur == "e" || cur == "E"
+        @b << cur
+        @i += 1
+        read_sign
+        unless read_digits
+          @b.slice!(-1)
+          return false
+        end
+      end
+      true
+    end
+
+    def read_rat_nos
+      return false unless read_num
+      if cur == "/"
+        @b << "/"
+        @i += 1
+        unless read_digits
+          @b.slice!(-1)
+          return false
+        end
+      end
+      true
+    end
+
+    def read_rat
+      read_sign
+      read_rat_nos
+    end
+
+    # str2num: a "/" makes it a Rational, a "." or an exponent makes it a Float,
+    # otherwise a decimal Integer. An empty buffer is 0, as strtol would give.
+    def str2num(text)
+      return ::Rational.__parse_string__(text, false) if text.include?("/")
+      return text.to_f if text =~ /[.eE]/
+      text.to_i
+    end
+
+    def buffered(from)
+      @b[from..-1] || ""
+    end
+
+    # read_comp. Answers [complete?, value]; `complete?` false means the scan
+    # stopped early, which only the strict caller cares about.
+    def read_comp
+      bb = @b.length
+      sign = read_sign
+
+      if imagunit?(cur)
+        @i += 1
+        return [true, ::Complex.__raw__(0, sign == "-" ? -1 : 1)]
+      end
+
+      unless read_rat_nos
+        return [false, ::Complex.__raw__(str2num(buffered(bb)), 0)]
+      end
+      num = str2num(buffered(bb))
+
+      if imagunit?(cur)
+        @i += 1
+        return [true, ::Complex.__raw__(0, num)]
+      end
+
+      if cur == "@"
+        @i += 1
+        bb = @b.length
+        st = read_rat
+        text = buffered(bb)
+        if text.empty? || !S.digit?(text[-1])
+          return [false, ::Complex.__raw__(num, 0)]
+        end
+        [st, ::Complex.polar(num, str2num(text))]
+      elsif sign?(cur)
+        bb = @b.length
+        sign = read_sign
+        if imagunit?(cur)
+          num2 = sign == "-" ? -1 : 1
+        else
+          return [false, ::Complex.__raw__(num, 0)] unless read_rat_nos
+          num2 = str2num(buffered(bb))
+        end
+        return [false, ::Complex.__raw__(num, 0)] unless imagunit?(cur)
+        @i += 1
+        [true, ::Complex.__raw__(num, num2)]
+      else
+        [true, ::Complex.__raw__(num, 0)]
+      end
+    end
+
+    # parse_comp
+    def parse
+      @i = S.skip_ws(@s, @i, @n)
+      ok, value = read_comp
+      if ok
+        @i = S.skip_ws(@s, @i, @n)
+        ok = false if @strict && @i < @n
+      end
+      [ok, value]
+    end
+  end
+
+  # string_to_c_strict / string_to_c.
+  def self.__parse_string__(str, strict, raise_error = true)
+    __must_ascii_compatible__(str)
+    if strict
+      if str.include?("\0")
+        return nil unless raise_error
+        ::Kernel.raise(::ArgumentError, "string contains null byte")
+      end
+      ok, value = Scanner__.new(str, true).parse
+      unless ok
+        return nil unless raise_error
+        ::Kernel.raise(::ArgumentError, "invalid value for convert(): #{str.inspect}")
+      end
+      value
+    else
+      Scanner__.new(str, false).parse[1]
+    end
+  end
+
+  # rb_must_asciicompat
+  def self.__must_ascii_compatible__(str)
+    return if str.encoding.ascii_compatible?
+    ::Kernel.raise(::Encoding::CompatibilityError, "ASCII incompatible encoding: #{str.encoding}")
+  end
+
+  # k_exact_zero_p: an exact zero, so 0.0 does not qualify.
+  def self.__exact_zero__(x)
+    !x.is_a?(::Float) && x.is_a?(::Numeric) && x == 0
+  end
+
+  # rb_convert_type_with_id(val, T_COMPLEX, "Complex", :to_c)
+  def self.__to_complex__(value)
+    unless value.respond_to?(:to_c)
+      ::Kernel.raise(::TypeError, "can't convert #{value.nil? ? 'nil' : value.class} into Complex")
+    end
+    result = value.to_c
+    unless result.is_a?(::Complex)
+      ::Kernel.raise(::TypeError,
+        "can't convert #{value.class} to Complex (#{value.class}#to_c gives #{result.class})")
+    end
+    result
+  end
+
+  # nucomp_convert. `given2` distinguishes Complex(x) from Complex(x, nil).
+  def self.__convert__(a1, a2, given2, raise_)
+    if a1.nil? || (given2 && a2.nil?)
+      return nil unless raise_
+      ::Kernel.raise(::TypeError, "can't convert nil into Complex")
+    end
+
+    if a1.is_a?(::String)
+      a1 = __parse_string__(a1, true, raise_)
+      return nil if a1.nil?
+    end
+    if given2 && a2.is_a?(::String)
+      a2 = __parse_string__(a2, true, raise_)
+      return nil if a2.nil?
+    end
+
+    a1 = a1.real if a1.is_a?(::Complex) && __exact_zero__(a1.imaginary)
+    a2 = a2.real if given2 && a2.is_a?(::Complex) && __exact_zero__(a2.imaginary)
+
+    if a1.is_a?(::Complex)
+      return a1 if !given2 || __exact_zero__(a2)
+    end
+
+    if !given2
+      return a1 if a1.is_a?(::Numeric) && !a1.real?
+      unless a1.is_a?(::Numeric)
+        return __to_complex__(a1) if raise_
+        begin
+          return __to_complex__(a1)
+        rescue ::Exception
+          return nil
+        end
+      end
+    elsif a1.is_a?(::Numeric) && a2.is_a?(::Numeric) && (!a1.real? || !a2.real?)
+      return a1 + a2 * __raw__(0, 1)
+    end
+
+    if given2
+      # With exception: false a non-real *second* argument is swallowed; a
+      # non-real first argument still raises, which is MRI's asymmetry.
+      unless raise_ || a2.is_a?(::Integer) || a2.is_a?(::Float) || a2.is_a?(::Rational)
+        return nil
+      end
+      rectangular(a1, a2)
+    else
+      rectangular(a1, 0)
+    end
+  end
+end
+
+class Rational
+  # rational18's Rational.reduce still builds instances behind our back, so the
+  # freeze goes on #initialize rather than only on the constructors below.
+  alias_method :__ir_rational_init__, :initialize
+  def initialize(num, den)
+    __ir_rational_init__(num, den)
+    freeze
+  end
+  private :initialize
+
+  # rational.c's read_num/parse_rat. `nexp` is the decimal exponent still owed:
+  # the value is num * 10**(-nexp) / den.
+  def self.__read_num__(s, i, n)
+    ns = ::IronRubyNumericScan__
+    num = 0
+    nexp = 0
+    fn = 0
+    ok = false
+
+    if i < n && s[i] != "."
+      r = ns.read_int(s, i, n)
+      return [false, i, 0, 0] if r.nil?
+      num = r[0]
+      i = r[1]
+      ok = true
+    end
+
+    if i < n && s[i] == "."
+      i += 1
+      r = ns.read_int(s, i, n)
+      return [true, i, num, nexp] if r.nil?
+      fp, i, count = r
+      num = num == 0 ? fp : num * (10**count) + fp
+      nexp = count
+      fn = count
+      ok = true
+    end
+
+    if ok && i + 1 < n && (s[i] == "e" || s[i] == "E")
+      i += 1
+      expsign = "?"
+      if i < n && (s[i] == "-" || s[i] == "+")
+        expsign = s[i]
+        i += 1
+      end
+      r = ns.read_int(s, i, n)
+      return [true, i, num, nexp] if r.nil?
+      exp = r[0]
+      i = r[1]
+      if exp != 0
+        if expsign == "-"
+          exp += fn if fn != 0
+        else
+          exp -= fn if fn != 0
+          exp = -exp
+        end
+        nexp = exp
+      end
+    end
+
+    [ok, i, num, nexp]
+  end
+
+  # nurat_reduce
+  def self.__reduce__(num, den)
+    return [num, den] if num == 1 || den == 1
+    g = num.gcd(den)
+    [num / g, den / g]
+  end
+
+  # parse_rat. Answers nil when a strict parse fails; an over-large decimal
+  # exponent degenerates to a Float, which the strict caller turns into a
+  # FloatDomainError.
+  EXP_LIMIT__ = 1_000_000
+
+  def self.__parse_rat__(s, strict, raise_)
+    ns = ::IronRubyNumericScan__
+    n = s.length
+    i = ns.skip_ws(s, 0, n)
+    sign = "?"
+    if i < n && (s[i] == "-" || s[i] == "+")
+      sign = s[i]
+      i += 1
+    end
+
+    ok, i, num, nexp = __read_num__(s, i, n)
+    unless ok
+      return nil if strict
+      return __raw__(0, 1)
+    end
+
+    den = 1
+    if i < n && s[i] == "/"
+      i += 1
+      ok2, i, den2, dexp = __read_num__(s, i, n)
+      if !ok2
+        return nil if strict
+      elsif den2 == 0
+        return nil unless raise_
+        ::Kernel.raise(::ZeroDivisionError, "divided by 0")
+      elsif strict && ns.skip_ws(s, i, n) != n
+        return nil
+      else
+        den = den2
+        nexp -= dexp
+        num, den = __reduce__(num, den)
+      end
+    elsif strict && ns.skip_ws(s, i, n) != n
+      return nil
+    end
+
+    if nexp != 0
+      if nexp < 0
+        return sign == "-" ? -::Float::INFINITY : ::Float::INFINITY if -nexp > EXP_LIMIT__
+        num *= 10**(-nexp)
+      else
+        return sign == "-" ? -0.0 : 0.0 if nexp > EXP_LIMIT__
+        den *= 10**nexp
+      end
+      num, den = __reduce__(num, den)
+    end
+
+    num = -num if sign == "-"
+    __raw__(num, den)
+  end
+
+  # string_to_r_strict / string_to_r.
+  def self.__parse_string__(str, strict, raise_error = true)
+    ::Complex.__must_ascii_compatible__(str)
+    value = __parse_rat__(str, strict, raise_error)
+    if value.nil?
+      return nil unless raise_error
+      ::Kernel.raise(::ArgumentError, "invalid value for convert(): #{str.inspect}")
+    end
+    if value.is_a?(::Float) && value != 0.0
+      return nil unless raise_error
+      ::Kernel.raise(::FloatDomainError, "Infinity")
+    end
+    value
+  end
+
+  # nurat_s_new_internal, with the sign pushed onto the numerator. OBJ_FREEZE:
+  # every Rational MRI hands out is frozen.
+  def self.__raw__(num, den)
+    num, den = -num, -den if den < 0
+    new!(num, den).freeze
+  end
+
+  # nurat_int_check / nurat_int_value
+  def self.__int_value__(num)
+    unless num.is_a?(::Integer)
+      unless num.is_a?(::Numeric) && num.integer?
+        ::Kernel.raise(::TypeError, "not an integer")
+      end
+      num = num.to_i
+    end
+    num
+  end
+
+  def self.__to_rational__(value)
+    unless value.respond_to?(:to_r)
+      ::Kernel.raise(::TypeError, "can't convert #{value.nil? ? 'nil' : value.class} into Rational")
+    end
+    result = value.to_r
+    unless result.is_a?(::Rational)
+      ::Kernel.raise(::TypeError,
+        "can't convert #{value.class} to Rational (#{value.class}#to_r gives #{result.class})")
+    end
+    result
+  end
+
+  # rb_check_convert_type_with_id: a missing #to_r is not an error here.
+  def self.__check_to_rational__(value)
+    return value unless value.respond_to?(:to_r)
+    __to_rational__(value)
+  end
+
+  # nurat_convert.
+  def self.__convert__(a1, a2, given2, raise_)
+    if a1.nil? || (given2 && a2.nil?)
+      return nil unless raise_
+      ::Kernel.raise(::TypeError, "can't convert nil into Rational")
+    end
+
+    a1 = a1.real if a1.is_a?(::Complex) && ::Complex.__exact_zero__(a1.imaginary)
+    a2 = a2.real if given2 && a2.is_a?(::Complex) && ::Complex.__exact_zero__(a2.imaginary)
+
+    a1 = __normalize_arg__(a1, raise_)
+    return nil if a1.nil?
+    if given2
+      a2 = __normalize_arg__(a2, raise_)
+      return nil if a2.nil?
+    end
+
+    if a1.is_a?(::Rational)
+      return a1 if !given2 || (!a2.is_a?(::Float) && a2.is_a?(::Numeric) && a2 == 1)
+    end
+
+    if !given2
+      unless a1.is_a?(::Integer)
+        return __to_rational__(a1) if raise_
+        begin
+          return __to_rational__(a1)
+        rescue ::Exception
+          return nil
+        end
+      end
+    else
+      unless a1.is_a?(::Numeric)
+        if raise_
+          a1 = __check_to_rational__(a1)
+        else
+          begin
+            a1 = __to_rational__(a1)
+          rescue ::Exception
+            return nil
+          end
+        end
+      end
+      unless a2.is_a?(::Numeric)
+        if raise_
+          a2 = __check_to_rational__(a2)
+        else
+          begin
+            a2 = __to_rational__(a2)
+          rescue ::Exception
+            return nil
+          end
+        end
+      end
+      if a1.is_a?(::Numeric) && a2.is_a?(::Numeric) && (!a1.integer? || !a2.integer?)
+        a1 = (__to_rational__(a1) rescue a1)
+        return a1 / a2
+      end
+    end
+
+    a1 = __int_value__(a1)
+    if !given2
+      a2 = 1
+    elsif !a2.is_a?(::Integer) && !raise_
+      return nil
+    else
+      a2 = __int_value__(a2)
+    end
+
+    if a2 == 0
+      return nil unless raise_
+      ::Kernel.raise(::ZeroDivisionError, "divided by 0")
+    end
+    num, den = __reduce__(a1.abs, a2.abs)
+    num = -num if (a1 < 0) ^ (a2 < 0)
+    __raw__(num, den)
+  end
+
+  # The a1/a2 pre-pass shared by both positions: Float becomes exact, String is
+  # parsed strictly, and an object with no #to_r is offered #to_int.
+  def self.__normalize_arg__(value, raise_)
+    return value if value.is_a?(::Integer) || value.is_a?(::Rational)
+    return value.to_r if value.is_a?(::Float)
+    if value.is_a?(::String)
+      parsed = __parse_string__(value, true, raise_)
+      return nil if parsed.nil?
+      return parsed
+    end
+    unless value.respond_to?(:to_r)
+      converted = (value.to_int rescue nil)
+      return converted unless converted.nil?
+    end
+    value
   end
 end
 
