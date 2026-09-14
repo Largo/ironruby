@@ -127,8 +127,34 @@ namespace IronRuby.Builtins {
 
         #region Transformation to CLR Regex
 
+        /// <summary>
+        /// MRI's rb_reg_prepare_enc. A broken string can never be matched, and a regexp that has
+        /// pinned its encoding can only be matched against a string of that encoding - or, when the
+        /// pinned encoding is ASCII compatible, against an ASCII-only string of any encoding.
+        /// This is a regexp-versus-string rule, distinct from the string-versus-string
+        /// compatibility MutableString.RequireCompatibleEncoding applies.
+        /// </summary>
+        private void RequireMatchableEncoding(MutableString/*!*/ input) {
+            if (input.ContainsInvalidCharacters()) {
+                throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", input.Encoding.Name);
+            }
+
+            if (!IsFixedEncoding) {
+                return;
+            }
+
+            var patternEncoding = Encoding;
+            if (input.Encoding != patternEncoding && (!patternEncoding.IsAsciiIdentity || !input.IsAscii())) {
+                throw new EncodingCompatibilityError(
+                    "incompatible encoding regexp match (" + patternEncoding.Name + " regexp with " + input.Encoding.Name + " string)"
+                );
+            }
+        }
+
         private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput) {
             ContractUtils.RequiresNotNull(input, "input");
+
+            RequireMatchableEncoding(input);
 
             // TODO:
 
