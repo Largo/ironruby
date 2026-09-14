@@ -11252,20 +11252,14 @@ class SyntaxError
   end unless method_defined?(:path)
 end
 
-class Regexp
-  # Ruby 3.2's match timeout. The value round-trips; IronRuby's matcher does not
-  # enforce it, so Regexp::TimeoutError is defined but never raised.
-  class TimeoutError < RegexpError
-  end unless const_defined?(:TimeoutError, false)
-
-  def self.timeout
-    defined?(@timeout) ? @timeout : nil
-  end unless respond_to?(:timeout)
-
-  def self.timeout=(value)
-    @timeout = value
-  end unless respond_to?(:timeout=)
-end
+# Deliberately not defined: Regexp.timeout / Regexp.timeout= (Ruby 3.2).
+# An accessor that only stores the value is worse than no accessor at all. The
+# point of the setting is to bound catastrophic backtracking, and ruby/spec tests
+# it by running /^(a*)*$/ against a million characters -- which hangs the .NET
+# matcher outright once Regexp.timeout= stops being a NoMethodError.
+# Implementing it means passing System.Text.RegularExpressions' matchTimeout into
+# RubyRegex.TransformPattern (invalidating the cached Regex when the global
+# changes) and mapping RegexMatchTimeoutException onto a real Regexp::TimeoutError.
 
 class Random
   # 2.0's Random#random_number: rand's behaviour, but a bare call always answers
