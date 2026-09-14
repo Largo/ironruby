@@ -1482,6 +1482,48 @@ module Ruby
 end unless defined?(Ruby)
 
 class IO
+  # Keyword arguments and a Hash in the last positional slot are different things,
+  # and only a Ruby-level signature can tell them apart: the library method behind
+  # this one takes options as an ordinary parameter and so sees them as the same.
+  alias_method :__ir_initialize__, :initialize
+  private :__ir_initialize__
+
+  def initialize(*args, **opts)
+    if args.size > 2
+      ::Kernel.raise(::ArgumentError,
+                     "wrong number of arguments (given #{args.size}, expected 1..2)")
+    end
+    opts.empty? ? __ir_initialize__(*args) : __ir_initialize__(*args, opts)
+  end
+
+  class << self
+    alias_method :__ir_new__, :new
+
+    # IO.open is the form that takes a block; IO.new ignores one and says so.
+    def new(*args, **opts, &block)
+      if block
+        ::Kernel.warn("warning: #{self}::new() does not take block; use #{self}::open() instead")
+      end
+      opts.empty? ? __ir_new__(*args) : __ir_new__(*args, **opts)
+    end
+  end
+end
+
+class File
+  alias_method :__ir_initialize__, :initialize
+  private :__ir_initialize__
+
+  # File takes a permission argument between the mode and the options.
+  def initialize(*args, **opts)
+    if args.size > 3
+      ::Kernel.raise(::ArgumentError,
+                     "wrong number of arguments (given #{args.size}, expected 1..3)")
+    end
+    opts.empty? ? __ir_initialize__(*args) : __ir_initialize__(*args, opts)
+  end
+end
+
+class IO
   # autoclose is tracked but not acted on: IronRuby closes descriptors it owns
   # through the CLR stream, and never closes one handed to it from outside.
   def autoclose?
@@ -10766,8 +10808,12 @@ class IO
     # IO.read opens the file itself, so mode:, encoding: and :open_args all get
     # their chance; the whole-file form is tagged with the stream's encoding and
     # the length form is bytes, which is MRI's split too.
-    def read(name, *args)
-      options = args.last.is_a?(::Hash) ? args.pop : nil
+    def read(name, *args, **options)
+      if args.size > 2
+        ::Kernel.raise(::ArgumentError,
+                       "wrong number of arguments (given #{args.size + 1}, expected 1..3)")
+      end
+      options = options.empty? ? nil : options
       length = args[0]
       offset = args[1]
       ::Kernel.raise(::ArgumentError, "negative offset #{offset} given") if offset && offset < 0
