@@ -9841,6 +9841,14 @@ class IO
     end
   end
 
+  # readchar is getc with an EOFError at the end, so it answers a one-character
+  # String too; the built-in still answers the first byte as an Integer.
+  def readchar
+    c = getc
+    ::Kernel.raise(::EOFError, "end of file reached") if c.nil?
+    c
+  end
+
   def getbyte
     s = read(1)
     return nil if s.nil? || s.empty?
@@ -9934,20 +9942,53 @@ class IO
 
   # Positional read/write, done by saving and restoring the file position since
   # there is no pread/pwrite underneath.
+  def __io_to_int__(value)
+    return value if value.is_a?(::Integer)
+    unless value.respond_to?(:to_int)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+    end
+    value.to_int
+  end
+  private :__io_to_int__
+
   def pread(maxlen, offset, buffer = nil)
-    ::Kernel.raise(::ArgumentError, "negative string size") if maxlen < 0
+    maxlen = __io_to_int__(maxlen)
+    offset = __io_to_int__(offset)
+    ::Kernel.raise(::ArgumentError, "negative string size (or size too big)") if maxlen < 0
+    ::Kernel.raise(::Errno::EINVAL, "pread") if offset < 0
+    # A zero-length read touches neither the file nor the buffer, which is why an
+    # offset past the end of the file is not an error either.
+    return buffer || "".b if maxlen == 0
+    if buffer && !buffer.is_a?(::String)
+      unless buffer.respond_to?(:to_str)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{buffer.class} into String")
+      end
+      target = buffer
+      buffer = buffer.to_str
+    end
     saved = pos
     begin
       seek(offset)
       result = read(maxlen)
-      ::Kernel.raise(::EOFError, "end of file reached") if result.nil?
-      buffer ? buffer.replace(result) : result
+      if result.nil?
+        # End of file empties the buffer before raising, which is what the caller
+        # sees if it kept a reference to it.
+        buffer.replace("") if buffer
+        ::Kernel.raise(::EOFError, "end of file reached")
+      end
+      if buffer
+        buffer.replace(result)
+        target || buffer
+      else
+        result
+      end
     ensure
       seek(saved)
     end
   end unless method_defined?(:pread)
 
   def pwrite(string, offset)
+    offset = __io_to_int__(offset)
     saved = pos
     begin
       seek(offset)

@@ -245,10 +245,39 @@ namespace IronRuby.Builtins {
 
         #region reopen, sysopen
 
-        // TODO: to_io
+        /// <summary>
+        /// MRI's rb_io_check_io for #reopen's argument: anything that is not a path is asked for
+        /// #to_io, and what comes back has to be an IO. Answers null when the argument names a
+        /// file instead.
+        /// </summary>
+        private static RubyIO TryToIO(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, RubyContext/*!*/ context, object obj) {
+
+            var io = obj as RubyIO;
+            if (io != null) {
+                return io;
+            }
+            if (obj is MutableString || !Protocols.RespondTo(respondToStorage, obj, "to_io")) {
+                return null;
+            }
+
+            var site = toIoStorage.GetCallSite("to_io", 0);
+            object converted = site.Target(site, obj);
+            io = converted as RubyIO;
+            if (io == null) {
+                throw RubyExceptions.CreateTypeError("can't convert {0} to IO ({0}#to_io gives {1})",
+                    context.GetClassDisplayName(obj), context.GetClassDisplayName(converted));
+            }
+            return io;
+        }
 
         [RubyMethod("reopen")]
         public static RubyIO/*!*/ Reopen(RubyIO/*!*/ self, [NotNull]RubyIO/*!*/ source) {
+            // Neither end of a dup2 can be a stream that is already gone.
+            if (self.Closed || source.Closed) {
+                throw RubyExceptions.CreateIOError("closed stream");
+            }
+
             // MRI's reopen is dup2(2): it points *this descriptor* at the other one's file,
             // which is why everything started afterwards inherits the redirection. Pointing
             // IronRuby's table entry at the other stream only redirects reads and writes made
@@ -267,18 +296,38 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("reopen")]
-        public static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ self, object path, [DefaultProtocol, Optional, NotNull]MutableString mode) {
+        public static RubyIO/*!*/ Reopen(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, ConversionStorage<MutableString>/*!*/ toPath,
+            RubyIO/*!*/ self, object path, [DefaultProtocol, Optional, NotNull]MutableString mode) {
+
+            var source = TryToIO(respondToStorage, toIoStorage, self.Context, path);
+            if (source != null) {
+                return Reopen(self, source);
+            }
             return Reopen(toPath, self, path, mode != null ? IOInfo.Parse(self.Context, mode) : new IOInfo(self.Mode));
         }
 
         [RubyMethod("reopen")]
-        public static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ self, object path, int mode) {
+        public static RubyIO/*!*/ Reopen(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, ConversionStorage<MutableString>/*!*/ toPath,
+            RubyIO/*!*/ self, object path, int mode) {
+
+            var source = TryToIO(respondToStorage, toIoStorage, self.Context, path);
+            if (source != null) {
+                return Reopen(self, source);
+            }
             return Reopen(toPath, self, path, new IOInfo((IOMode)mode));
         }
 
         private static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ io, object pathObj, IOInfo info) {
             MutableString path = Protocols.CastToPath(toPath, pathObj);
             Stream newStream = RubyFile.OpenFileStream(io.Context, path.ToString(path.Encoding.Encoding), info.Mode);
+            if (io.Closed) {
+                // Reopening a closed stream with a path is how it is brought back to life, so
+                // this one needs a descriptor again rather than the IOError a read would get.
+                io.Reset(newStream, info.Mode);
+                return io;
+            }
             io.Context.SetStream(io.GetFileDescriptor(), newStream);
             io.SetStream(newStream);
             io.Mode = info.Mode;
