@@ -67,9 +67,10 @@ class Addrinfo
       raise SocketError, "unknown address family: #{sockaddr[0]}"
     end
     @afamily = Addrinfo.__af(sockaddr[0], (sockaddr[3] || sockaddr[2]).to_s)
-    @ir_host = sockaddr[2].nil? ? nil : sockaddr[2].to_s
     @ip_address = (sockaddr[3] || sockaddr[2]).to_s
     @ip_port = sockaddr[1].to_i
+    host = sockaddr[2].nil? ? nil : sockaddr[2].to_s
+    @ir_host = (host == @ip_address) ? nil : host
 
     if family.nil?
       @pfamily = @afamily
@@ -719,8 +720,14 @@ class BasicSocket
   end
   private :__ir_sockname_bytes
 
+  # SO_TYPE is the only way to tell a datagram Socket from a stream one -- the
+  # class does not say, since plain Socket covers both.
   def __ir_socktype # :nodoc:
-    kind_of?(UDPSocket) ? Socket::SOCK_DGRAM : Socket::SOCK_STREAM
+    @__ir_socktype ||= begin
+      getsockopt(Socket::SOL_SOCKET, Socket::SO_TYPE).int
+    rescue Exception
+      kind_of?(UDPSocket) ? Socket::SOCK_DGRAM : Socket::SOCK_STREAM
+    end
   end
   private :__ir_socktype
 end
@@ -2319,3 +2326,50 @@ class UDPSocket
 end
 
 IronRubySocketErrors__.wrap(UDPSocket, :send)
+
+class Socket
+  # Socket#recvfrom answers [message, Addrinfo]; only IPSocket#recvfrom keeps the
+  # ["AF_INET", port, host, ip] tuple.
+  alias_method :__ir_tuple_recvfrom, :recvfrom
+
+  def recvfrom(length, flags = nil)
+    data, sender = flags.nil? ? __ir_tuple_recvfrom(length) : __ir_tuple_recvfrom(length, flags)
+    [data, Addrinfo.__ir_from_peer(sender, __ir_socktype)]
+  end
+
+  def recvfrom_nonblock(length, flags = nil, buffer = nil, exception: true)
+    unless IO.select([self], nil, nil, 0)
+      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      return :wait_readable
+    end
+    data, sender = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
+    unless buffer.nil?
+      encoding = buffer.encoding
+      buffer.replace(data)
+      buffer.force_encoding(encoding)
+      data = buffer
+    end
+    [data, sender]
+  end
+end
+
+class Addrinfo
+  # The peer of a recvfrom: either the tuple IPSocket#addr shapes or a packed
+  # sockaddr.  Either way pfamily follows afamily, as it does for #local_address.
+  def self.__ir_from_peer(sender, socktype = 0) # :nodoc:
+    return sender if sender.kind_of?(Addrinfo)
+    info = new(sender, nil, socktype, 0)
+    info.__ir_set_pfamily(info.afamily)
+    info
+  end
+end
+
+class TCPServer
+  alias_method :__ir_void_listen, :listen
+
+  # CRuby's BasicSocket#listen returns 0.
+  def listen(backlog)
+    __ir_void_listen(backlog)
+    0
+  end
+end
