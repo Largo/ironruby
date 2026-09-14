@@ -26,6 +26,14 @@ namespace IronRuby.Builtins {
         private readonly int _runtimeId;
         private readonly MutableString/*!*/ _string;
 
+        // Symbol#name answers the same frozen String every time it is called, so it is made once.
+        private MutableString _frozenName;
+
+        /// <summary>The String Symbol#name answers - one per symbol, frozen.</summary>
+        public MutableString/*!*/ FrozenName {
+            get { return _frozenName ?? (_frozenName = MutableString.Create(_string).Freeze()); }
+        }
+
         internal RubySymbol(MutableString/*!*/ str, int id, int runtimeId) {
             Assert.NotNull(str);
             Debug.Assert(str.IsFrozen);

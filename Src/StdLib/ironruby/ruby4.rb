@@ -3878,10 +3878,6 @@ end
 class Symbol
   include ::Comparable unless ancestors.include?(::Comparable)
 
-  def name
-    to_s.freeze
-  end unless method_defined?(:name)
-
   def casecmp?(other)
     return nil unless other.is_a?(::Symbol)
     to_s.casecmp?(other.to_s)
@@ -7221,17 +7217,10 @@ end
 end
 
 class Symbol
-  def match?(pattern)
-    !to_s.match(pattern).nil?
+  def match?(pattern, pos = 0)
+    to_s.match?(pattern, pos)
   end unless method_defined?(:match?)
 
-  def start_with?(*prefixes)
-    to_s.start_with?(*prefixes)
-  end unless method_defined?(:start_with?)
-
-  def end_with?(*suffixes)
-    to_s.end_with?(*suffixes)
-  end unless method_defined?(:end_with?)
 end
 
 class String

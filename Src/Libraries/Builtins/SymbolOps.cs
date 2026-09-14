@@ -21,6 +21,7 @@ using IronRuby.Compiler;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 
 namespace IronRuby.Builtins {
     using BinaryOpStorageWithScope = CallSiteStorage<Func<CallSite, RubyScope, object, object, object>>;
@@ -46,13 +47,23 @@ namespace IronRuby.Builtins {
             var str = self.ToString();
             var result = self.String.Clone();
 
+            // A symbol whose bytes cannot be written out as they stand is quoted whatever its
+            // name looks like: :"foo" for a UTF-16 symbol, :"foo\xA4" for a binary one. MRI's
+            // rule here is the encoding's, not the name's - a UTF-8 :привет stays bare.
+            if (!self.String.IsAscii() && self.String.Encoding != RubyEncoding.UTF8) {
+                result = MutableStringOps.Inspect(context, self.String);
+                result.Insert(0, ':');
+                return result;
+            }
+
             // simple cases:
             if (
                 Tokenizer.IsMethodName(str) ||
                 Tokenizer.IsConstantName(str) ||
                 Tokenizer.IsInstanceVariableName(str) ||
                 Tokenizer.IsClassVariableName(str) ||
-                Tokenizer.IsGlobalVariableName(str)
+                Tokenizer.IsGlobalVariableName(str) ||
+                IsCommandLineOptionGlobal(str)
             ) {
                 result.Insert(0, ':');
             } else {
@@ -130,6 +141,15 @@ namespace IronRuby.Builtins {
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// The command-line-option globals - $-w, $-d, $-0, $-I - are global variable names that
+        /// the tokenizer's IsGlobalVariableName does not recognise, so :"$-w" inspects as :$-w.
+        /// </summary>
+        private static bool IsCommandLineOptionGlobal(string name) {
+            return name != null && name.Length == 3 && name[0] == '$' && name[1] == '-'
+                && (Char.IsLetterOrDigit(name[2]) || name[2] == '_');
         }
 
         [RubyMethod("to_sym")]
@@ -230,13 +250,35 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("match", Compatibility = RubyCompatibility.Ruby19)]
-        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, RubySymbol/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
-            return MutableStringOps.Match(storage, scope, self.String.Clone(), regex);
+        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            RubySymbol/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
+            return MutableStringOps.Match(storage, scope, block, self.String.Clone(), regex);
         }
 
         [RubyMethod("match", Compatibility = RubyCompatibility.Ruby19)]
-        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, RubySymbol/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern) {
-            return MutableStringOps.Match(storage, scope, self.String.Clone(), pattern);
+        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            RubySymbol/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern) {
+            return MutableStringOps.Match(storage, scope, block, self.String.Clone(), pattern);
+        }
+
+        // Delegating from Ruby would put an extra frame between the =~ a Regexp prefix performs
+        // and the caller, and $~ is frame-local, so Regexp.last_match would come back nil.
+        [RubyMethod("start_with?")]
+        public static bool StartsWith(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubySymbol/*!*/ self, [NotNull]params object/*!*/[]/*!*/ prefixes) {
+            return MutableStringOps.StartsWith(stringCast, scope, self.String, prefixes);
+        }
+
+        [RubyMethod("end_with?")]
+        public static bool EndsWith(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            RubySymbol/*!*/ self, [NotNull]params object/*!*/[]/*!*/ suffixes) {
+            return MutableStringOps.EndsWith(stringCast, scope, self.String, suffixes);
+        }
+
+        /// <summary>The same frozen String every time: :sym.name.equal?(:sym.name).</summary>
+        [RubyMethod("name")]
+        public static MutableString/*!*/ Name(RubySymbol/*!*/ self) {
+            return self.FrozenName;
         }
 
         #endregion

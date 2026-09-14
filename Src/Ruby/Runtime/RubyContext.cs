@@ -2271,6 +2271,16 @@ namespace IronRuby.Runtime {
         /// Freezes the string the symbol holds on.
         /// </summary>
         public RubySymbol/*!*/ CreateSymbol(MutableString/*!*/ str, bool clone) {
+            // A symbol whose name is ASCII-only is US-ASCII whatever the string it was interned
+            // from was tagged with, so that "abc".b.to_sym.equal?(:abc) and the encoding does
+            // not depend on which spelling happened to reach the symbol table first. An
+            // ASCII-incompatible encoding is left alone: "abc".encode("utf-16le").to_sym keeps
+            // UTF-16LE in MRI, because its bytes are not those of the name. (CRuby 4.0.6.)
+            if (str.Encoding != RubyEncoding.Ascii && str.Encoding.IsAsciiIdentity && str.IsAscii()) {
+                str = MutableString.Create(str.ToString(), RubyEncoding.Ascii);
+                clone = false;
+            }
+
             RubySymbol result;
             lock (SymbolsLock) {
                 if (!_symbols.TryGetValue(str, out result)) {

@@ -1582,10 +1582,83 @@ namespace IronRuby.Builtins {
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, MutableString/*!*/ self) {
             // TODO: RubyEncoding encoding = context.DefaultInternalEncoding ?? context.DefaultExternalEncoding;
-            
-            // Note that "self" could be a subclass of MutableString, but the return value should 
+
+            RubyEncoding encoding = self.Encoding;
+            if (!self.IsAscii() && encoding != RubyEncoding.Binary && encoding != RubyEncoding.UTF8) {
+                return InspectForeignEncoding(self).TaintBy(self);
+            }
+
+            // Note that "self" could be a subclass of MutableString, but the return value should
             // always be just a MutableString
-            return MutableString.Create(GetQuotedStringRepresentation(self, false, '"'), self.Encoding).TaintBy(self);
+            return MutableString.Create(GetQuotedStringRepresentation(self, false, '"'), encoding).TaintBy(self);
+        }
+
+        /// <summary>
+        /// A string in an encoding the result cannot be written in gets its non-ASCII characters
+        /// escaped rather than emitted raw, and the result is plain ASCII. Which escape depends
+        /// on what is known about the character. Verified against CRuby 4.0.6:
+        ///   "hello привет".encode("utf-16le").inspect   == "\"hello \\u043F\\u0440\\u0438\\u0432\\u0435\\u0442\""
+        ///     - a Unicode encoding still names codepoints, so \uXXXX;
+        ///   "\u{3042}".encode("EUC-JP").inspect         == "\"\\x{A4A2}\""
+        ///     - a non-Unicode one does not, so the character's own bytes;
+        ///   "abcd".dup.force_encoding("UTF-16").inspect == "\"\\x61\\x62\\x63\\x64\""
+        ///     - a dummy encoding has no characters at all, so every byte on its own.
+        /// </summary>
+        private static MutableString/*!*/ InspectForeignEncoding(MutableString/*!*/ self) {
+            var result = new StringBuilder();
+            result.Append('"');
+
+            RubyEncoding encoding = self.Encoding;
+            if (encoding.IsDummy) {
+                foreach (byte b in self.ToByteArray()) {
+                    AppendByteEscape(result, b);
+                }
+            } else if (encoding.IsUnicodeEncoding) {
+                string str = self.ToString();
+                int i = 0;
+                while (i < str.Length) {
+                    int next = (i < str.Length - 1) ? (int)str[i + 1] : -1;
+                    // Escape.NonAscii would also spell an ASCII control character \xNN, where
+                    // #inspect wants \uXXXX, so only the non-ASCII characters are asked for it.
+                    i += MutableString.AppendUnicodeCharRepresentation(result, str[i], next,
+                        str[i] < 0x80 ? MutableString.Escape.Special : MutableString.Escape.NonAscii, '"', -1);
+                }
+            } else {
+                var characters = self.GetCharacters();
+                while (characters.MoveNext()) {
+                    MutableString character = characters.Current.ToMutableString(encoding);
+                    if (characters.Current.IsValid && characters.Current.Codepoint < 0x80) {
+                        MutableString.AppendCharRepresentation(result, characters.Current.Codepoint, -1,
+                            MutableString.Escape.Special, '"', -1);
+                        continue;
+                    }
+                    byte[] bytes = character.ToByteArray();
+                    if (!characters.Current.IsValid) {
+                        foreach (byte b in bytes) {
+                            AppendByteEscape(result, b);
+                        }
+                        continue;
+                    }
+                    // A single byte is written \xNN; only a multi-byte character gets braces.
+                    if (bytes.Length == 1) {
+                        AppendByteEscape(result, bytes[0]);
+                        continue;
+                    }
+                    result.Append("\\x{");
+                    foreach (byte b in bytes) {
+                        result.Append(((int)b).ToString("X2", CultureInfo.InvariantCulture));
+                    }
+                    result.Append('}');
+                }
+            }
+
+            result.Append('"');
+            return MutableString.CreateAscii(result.ToString());
+        }
+
+        private static void AppendByteEscape(StringBuilder/*!*/ result, byte b) {
+            result.Append("\\x");
+            result.Append(((int)b).ToString("X2", CultureInfo.InvariantCulture));
         }
 
         #endregion
