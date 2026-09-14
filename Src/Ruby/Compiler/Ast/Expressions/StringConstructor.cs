@@ -73,12 +73,22 @@ namespace IronRuby.Compiler.Ast {
                 case StringKind.Symbol:
                     return TransformConcatentation(gen, _parts, SymbolFactory.Instance);
 
-                case StringKind.Command:
+                case StringKind.Command: {
+                    var command = TransformConcatentation(gen, _parts, StringFactory.Instance);
+
+                    // `cmd` hands ` a frozen string, whatever the frozen_string_literal
+                    // setting; an interpolated `cmd #{x}` hands it a mutable one. The
+                    // concatenation allocates per evaluation, so freezing it is safe.
+                    if (_parts.Count == 1 && _parts[0] is StringLiteral) {
+                        command = Ast.Call(command, Methods.MutableString_Freeze);
+                    }
+
                     return CallSiteBuilder.InvokeMethod(gen.Context, "`", new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf),
                         gen.CurrentScopeVariable,
                         gen.CurrentSelfVariable,
-                        TransformConcatentation(gen, _parts, StringFactory.Instance)
+                        command
                     );
+                }
             }
 
             throw Assert.Unreachable;

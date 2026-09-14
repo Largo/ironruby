@@ -118,6 +118,14 @@ namespace IronRuby.Compiler {
             }
         }
 
+        private static MethodInfo _MutableString_Freeze;
+        public static MethodInfo/*!*/ MutableString_Freeze {
+            get {
+                return _MutableString_Freeze ?? (_MutableString_Freeze = GetMethod(typeof(MutableString),
+                    "Freeze", BindingFlags.Instance, ReflectionUtils.EmptyTypes));
+            }
+        }
+
         private static MethodInfo _Stopwatch_GetTimestamp;
         public static MethodInfo Stopwatch_GetTimestamp { get { return _Stopwatch_GetTimestamp ?? (_Stopwatch_GetTimestamp = GetMethod(typeof(Stopwatch), "GetTimestamp")); } }
         public static MethodInfo IList_get_Item { get { return _IList_get_Item ?? (_IList_get_Item = GetMethod(typeof(IList), "get_Item")); } }
