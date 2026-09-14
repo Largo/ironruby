@@ -15,6 +15,18 @@
 
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Sockets'
 
+# IO#initialize is a Ruby method (ruby4.rb wraps the library one so that a trailing
+# Hash and keyword arguments can be told apart).  Class#new sends any class whose
+# initialize is Ruby-defined down the allocate-then-initialize path - and none of the
+# socket classes can be allocated, because System.Net.Sockets.Socket has no
+# parameterless constructor, so `Socket.new(AF_INET, SOCK_STREAM, 0)` failed outright.
+# Aliasing the library initialize back onto BasicSocket puts these classes on the
+# constructor path again, where their [RubyConstructor] factories do the work.
+class BasicSocket
+  alias_method :initialize, :__ir_initialize__
+  private :initialize
+end
+
 # Addrinfo.  CRuby implements this in C over getaddrinfo(3); here it is a thin
 # Ruby object over a (family, port, address) triple plus the pfamily/socktype/
 # protocol tuple, with the packed-sockaddr parsing, the getaddrinfo(3) argument
