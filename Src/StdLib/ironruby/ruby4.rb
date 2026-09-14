@@ -6601,19 +6601,189 @@ end
 # written in terms of the accessors it does have, so it stays in step with the
 # real environment rather than a snapshot of it.
 class << ENV
+  # Names and values go through #to_str, not #to_s: ENV is as strict as Hash about
+  # implicit conversion and reports the failure the same way.
+  def __env_str__(object)
+    return object if object.is_a?(::String)
+    unless object.respond_to?(:to_str)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{object.class} into String")
+    end
+    converted = object.to_str
+    unless converted.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{object.class} into String")
+    end
+    converted
+  end
+  private :__env_str__
+
+  # setenv(3) rejects a name that is empty or contains '='. The CLR reports that as its
+  # own ArgumentException; MRI reports Errno::EINVAL naming the call.
+  def __env_check_name__(name)
+    if name.empty? || name.include?("=")
+      ::Kernel.raise(::Errno::EINVAL, "setenv(#{name})")
+    end
+    name
+  end
+  private :__env_check_name__
+
+  unless respond_to?(:__clr_store__, true)
+    alias_method :__clr_store__, :[]=
+    alias_method :__clr_fetch__, :[]
+    private :__clr_store__
+    private :__clr_fetch__
+
+    def []=(name, value)
+      name = __env_str__(name)
+      if value.nil?
+        # Deleting a name setenv(3) would have rejected is a no-op, not an error.
+        __clr_store__(name, nil) unless name.empty? || name.include?("=")
+        return nil
+      end
+      value = __env_str__(value)
+      __env_check_name__(name)
+      __clr_store__(name, value)
+      value
+    end
+
+    alias_method :store, :[]=
+  end
+
+  def [](name)
+    __clr_fetch__(__env_str__(name))
+  end
+
+  def fetch(name, *default)
+    if default.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)")
+    end
+    name = __env_str__(name)
+    if block_given? && !default.empty?
+      ::Kernel.warn("warning: block supersedes default value argument")
+    end
+
+    value = __clr_fetch__(name)
+    return value unless value.nil?
+    return yield(name) if block_given?
+    return default[0] unless default.empty?
+
+    ::Kernel.raise(::KeyError.new("key not found: #{name.inspect}", receiver: self, key: name))
+  end
+
+  def delete(name)
+    name = __env_str__(name)
+    value = __clr_fetch__(name)
+    if value.nil?
+      return block_given? ? yield(name) : nil
+    end
+    __clr_store__(name, nil)
+    value
+  end
+
+  def clone(freeze: nil)
+    unless freeze.nil? || freeze == true || freeze == false
+      ::Kernel.raise(::ArgumentError, "unexpected value for freeze: #{freeze.class}")
+    end
+    ::Kernel.raise(::TypeError, "Cannot clone ENV, use ENV.to_h to get a copy of ENV as a hash")
+  end
+
+  def dup
+    ::Kernel.raise(::TypeError, "Cannot dup ENV, use ENV.to_h to get a copy of ENV as a hash")
+  end
+
+  # MRI hands back an Enumerator rather than complaining about the missing block,
+  # and the Enumerator knows how many pairs it will walk.
+  def each(&block)
+    return to_enum(:each) { size } unless block
+    to_hash.each(&block)
+    self
+  end
+  alias_method :each_pair, :each
+
+  def each_key
+    return to_enum(:each_key) { size } unless block_given?
+    to_hash.each_key { |k| yield k }
+    self
+  end
+
+  def each_value
+    return to_enum(:each_value) { size } unless block_given?
+    to_hash.each_value { |v| yield v }
+    self
+  end
+
+  def delete_if
+    return to_enum(:delete_if) { size } unless block_given?
+    to_hash.each { |k, v| __clr_store__(k, nil) if yield(k, v) }
+    self
+  end
+
+  def reject!
+    return to_enum(:reject!) { size } unless block_given?
+    changed = false
+    to_hash.each do |k, v|
+      next unless yield(k, v)
+      __clr_store__(k, nil)
+      changed = true
+    end
+    changed ? self : nil
+  end
+
+  def reject(&block)
+    return to_enum(:reject) { size } unless block
+    to_hash.reject(&block)
+  end
+
+  def select(&block)
+    return to_enum(:select) { size } unless block
+    to_hash.select(&block)
+  end
+  alias_method :filter, :select
+
+  alias_method :member?, :include?
+
+  # Pairs are applied one at a time and in order, so a bad pair leaves everything
+  # before it in place -- which is what MRI's own specs pin down.
   def merge!(*others)
     others.each do |other|
       other.each do |key, value|
-        if block_given? && key?(key.to_s)
-          value = yield(key.to_s, self[key.to_s], value)
+        key = __env_str__(key)
+        if block_given? && !__clr_fetch__(key).nil?
+          value = yield(key, __clr_fetch__(key), value)
         end
-        self[key.to_s] = value.nil? ? nil : value.to_s
+        self[key] = value
       end
     end
     self
-  end unless respond_to?(:merge!)
+  end
 
-  alias_method :update, :merge! unless respond_to?(:update)
+  alias_method :update, :merge!
+
+  # replace is all-or-nothing: everything is converted and checked before the first
+  # variable is touched, so a TypeError halfway through leaves ENV untouched.
+  def replace(other)
+    unless other.is_a?(::Hash)
+      unless other.respond_to?(:to_hash)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{other.class} into Hash")
+      end
+      other = other.to_hash
+    end
+
+    pairs = other.map do |key, value|
+      key = __env_str__(key)
+      value = __env_str__(value)
+      __env_check_name__(key)
+      [key, value]
+    end
+
+    clear
+    pairs.each { |key, value| __clr_store__(key, value) }
+    self
+  end
+
+  # The C# implementation built a CLR dictionary and threw on a duplicate value.
+  def invert
+    to_hash.invert
+  end
 
   def keep_if
     return to_enum(:keep_if) unless block_given?
@@ -6635,38 +6805,54 @@ class << ENV
 
   alias_method :filter!, :select! unless respond_to?(:filter!)
 
+  # MRI keeps the objects it was handed as the result keys, not their #to_str.
   def slice(*keys)
     result = {}
-    keys.each do |k|
-      k = k.to_s
-      result[k] = self[k] if key?(k)
+    keys.each do |key|
+      name = __env_str__(key)
+      value = __clr_fetch__(name)
+      result[key] = value unless value.nil?
     end
     result
-  end unless respond_to?(:slice)
+  end
 
   def except(*keys)
-    keys = keys.map { |k| k.to_s }
+    keys = keys.map { |key| __env_str__(key) }
     to_hash.reject { |k, _| keys.include?(k) }
-  end unless respond_to?(:except)
+  end
 
   def assoc(key)
-    key = key.to_s
-    key?(key) ? [key, self[key]] : nil
-  end unless respond_to?(:assoc)
+    key = __env_str__(key)
+    value = __clr_fetch__(key)
+    value.nil? ? nil : [key, value]
+  end
 
+  # rassoc and value? answer nil for an argument they cannot convert, where assoc
+  # and the key-taking methods raise. That asymmetry is MRI's.
   def rassoc(value)
-    value = value.to_s
+    return nil unless value.is_a?(::String) || value.respond_to?(:to_str)
+    value = __env_str__(value)
     to_hash.each { |k, v| return [k, v] if v == value }
     nil
-  end unless respond_to?(:rassoc)
+  end
+
+  def value?(value)
+    return nil unless value.is_a?(::String) || value.respond_to?(:to_str)
+    value = __env_str__(value)
+    to_hash.each_value { |v| return true if v == value }
+    false
+  end
+  alias_method :has_value?, :value?
+
+  def to_h(&block)
+    to_hash.to_h(&block)
+  end
 
   def key(value)
-    unless value.is_a?(::String)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into String")
-    end
+    value = __env_str__(value)
     to_hash.each { |k, v| return k if v == value }
     nil
-  end unless respond_to?(:key)
+  end
 
   def to_set(*args, &block)
     require 'set'
