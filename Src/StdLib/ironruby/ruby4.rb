@@ -1439,8 +1439,23 @@ module Kernel
 end
 
 RUBY_ENGINE_VERSION = RUBY_VERSION unless defined?(RUBY_ENGINE_VERSION)
-RUBY_COPYRIGHT = "ironruby - Apache License, Version 2.0" unless defined?(RUBY_COPYRIGHT)
-RUBY_DESCRIPTION = "ironruby #{RUBY_VERSION} (.NET)" unless defined?(RUBY_DESCRIPTION)
+RUBY_COPYRIGHT = "ironruby - Apache License, Version 2.0".freeze unless defined?(RUBY_COPYRIGHT)
+RUBY_DESCRIPTION = "ironruby #{RUBY_VERSION} (.NET)".freeze unless defined?(RUBY_DESCRIPTION)
+
+# Ruby 4.0 collects the RUBY_* constants into a module. Every member must be the
+# very same object as its RUBY_* counterpart -- ruby/spec asserts identity with
+# #equal?, not equality -- so these alias rather than re-create.
+module Ruby
+  VERSION = RUBY_VERSION
+  PATCHLEVEL = RUBY_PATCHLEVEL
+  COPYRIGHT = RUBY_COPYRIGHT
+  DESCRIPTION = RUBY_DESCRIPTION
+  ENGINE = RUBY_ENGINE
+  ENGINE_VERSION = RUBY_ENGINE_VERSION
+  PLATFORM = RUBY_PLATFORM
+  RELEASE_DATE = RUBY_RELEASE_DATE
+  REVISION = RUBY_REVISION
+end unless defined?(Ruby)
 
 class IO
   # autoclose is tracked but not acted on: IronRuby closes descriptors it owns
