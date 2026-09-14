@@ -909,9 +909,12 @@ namespace IronRuby.Prism {
                         break;
                     case Pm.AssocSplatNode splat when splat.Value != null:
                         result = MergeHash(result, maplets, isKeywordArguments, span);
+                        // `**nil` contributes no keywords (Ruby 3.4); it is only known at run time
+                        var splatted = new OrExpression(Expr(splat.Value),
+                            new HashConstructor(new Maplet[0], span), span);
                         result = result == null
-                            ? Expr(splat.Value)
-                            : new MethodCall(result, "merge", new Arguments(Expr(splat.Value)), span);
+                            ? (Expression)splatted
+                            : new MethodCall(result, "merge", new Arguments(splatted), span);
                         break;
                     default:
                         throw Unsupported(element);
@@ -1544,7 +1547,13 @@ namespace IronRuby.Prism {
                 // def f(...) => def f(*?fwd?, &?fwdblk?); calls with `...` splat them back
                 if (unsplat != null) throw Unsupported(node.KeywordRest);
                 unsplat = DefineParameter(ForwardingRestName, Span(node.KeywordRest));
-            } else if (node.KeywordRest != null && !(node.KeywordRest is Pm.NoKeywordsParameterNode)) {
+            } else if (node.KeywordRest is Pm.NoKeywordsParameterNode) {
+                // `def m(**nil)` accepts no keywords at all, which is only detectable by
+                // looking at the trailing hash - so it takes one, just to refuse it
+                if (isMethod && optional.Count == 0 && unsplat == null) {
+                    prologue = RefuseKeywords(optional, mandatory, span);
+                }
+            } else if (node.KeywordRest != null) {
                 throw Unsupported(node.KeywordRest);
             }
 
@@ -1733,7 +1742,7 @@ namespace IronRuby.Prism {
                 new HashConstructor(new Maplet[0], true, span), "||", span));
 
             if (isMethod) {
-                foreach (var check in KeywordSeparationChecks(kwVar, mandatory, span)) {
+                foreach (var check in KeywordSeparationChecks(kwVar, mandatory, true, span)) {
                     prologue.Add(check);
                 }
             }
@@ -1754,7 +1763,9 @@ namespace IronRuby.Prism {
         ///   m(1, {"x" =&gt; 1})    # the hash landed in ?kw?: given 2, expected 1
         ///   m("a" =&gt; 1, b: 2)   # the keywords landed in a:  given 0, expected 1
         /// </summary>
-        private List<Expression>/*!*/ KeywordSeparationChecks(LocalVariable/*!*/ kwVar, List<LeftValue>/*!*/ mandatory, SourceSpan span) {
+        private List<Expression>/*!*/ KeywordSeparationChecks(LocalVariable/*!*/ kwVar, List<LeftValue>/*!*/ mandatory,
+            bool acceptsKeywords, SourceSpan span) {
+
             var checks = new List<Expression>();
             int count = mandatory.Count;
 
@@ -1762,14 +1773,38 @@ namespace IronRuby.Prism {
             if (lastMandatory != null) {
                 checks.Add(new IfExpression(
                     new KeywordArgumentsTest(lastMandatory, span),
-                    new Statements(RaiseArityError(count - 1, count, span)), new List<ElseIfClause>(), span));
+                    new Statements(acceptsKeywords
+                        ? RaiseArityError(count - 1, count, span)
+                        : RaiseError("ArgumentError", "no keywords accepted", span)),
+                    new List<ElseIfClause>(), span));
             }
 
             checks.Add(new UnlessExpression(
                 new KeywordArgumentsTest(kwVar, span),
                 new Statements(RaiseArityError(count + 1, count, span)), null, span));
 
+            if (!acceptsKeywords) {
+                checks.Add(new UnlessExpression(
+                    new MethodCall(kwVar, "empty?", null, span),
+                    new Statements(RaiseError("ArgumentError", "no keywords accepted", span)), null, span));
+            }
+
             return checks;
+        }
+
+        /// <summary>
+        /// The prologue of `def m(**nil)`: it takes the trailing hash like any keyword-accepting
+        /// method would, only to reject it.
+        /// </summary>
+        private Statements/*!*/ RefuseKeywords(List<SimpleAssignmentExpression>/*!*/ optional, List<LeftValue>/*!*/ mandatory, SourceSpan span) {
+            var kwVar = CurrentScope.AddVariable("?kw?", span);
+            optional.Add(new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], true, span), null, span));
+
+            var prologue = new Statements();
+            foreach (var check in KeywordSeparationChecks(kwVar, mandatory, false, span)) {
+                prologue.Add(check);
+            }
+            return prologue;
         }
 
         private Expression/*!*/ RaiseArityError(int given, int expected, SourceSpan span) {
