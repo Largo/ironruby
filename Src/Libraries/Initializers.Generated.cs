@@ -836,6 +836,11 @@ namespace IronRuby.Builtins {
             module.UndefineMethodNoEvent("prepend_features");
             DefineRuleGenerator(module, "allocate", 0x51, IronRuby.Builtins.ClassOps.Allocate());
             
+            DefineLibraryMethod(module, "attached_object", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object>(IronRuby.Builtins.ClassOps.GetAttachedObject)
+            );
+            
             DefineLibraryMethod(module, "clr_constructor", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.ClassOps.GetClrConstructor)
@@ -864,6 +869,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineRuleGenerator(module, "new", 0x51, IronRuby.Builtins.ClassOps.New());
+            
+            DefineLibraryMethod(module, "subclasses", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClassOps.GetSubclasses)
+            );
             
             DefineLibraryMethod(module, "superclass", 0x51, 
                 0x00000000U, 
@@ -6422,6 +6432,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "set_temporary_name", 0x51, 
                 0x00020000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.SetTemporaryName)
+            );
+            
+            DefineLibraryMethod(module, "singleton_class?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Boolean>(IronRuby.Builtins.ModuleOps.IsSingletonClass)
             );
             
             DefineLibraryMethod(module, "to_clr_ref", 0x51, 

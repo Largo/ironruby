@@ -72,6 +72,31 @@ namespace IronRuby.Builtins {
             // nop
         }
 
+        /// <summary>
+        /// Ruby 3.1's Class#subclasses: the classes that name this one as their direct
+        /// superclass, excluding singleton classes. The runtime already keeps a weak list
+        /// of every class whose method cache depends on this module (that is how method
+        /// redefinition is propagated); the direct subclasses are the entries whose
+        /// superclass is this class.
+        /// </summary>
+        [RubyMethod("subclasses")]
+        public static RubyArray/*!*/ GetSubclasses(RubyClass/*!*/ self) {
+            var result = new RubyArray();
+            foreach (var cls in self.GetDirectSubclasses()) {
+                result.Add(cls);
+            }
+            return result;
+        }
+
+        /// <summary>Ruby 3.2's Class#attached_object.</summary>
+        [RubyMethod("attached_object")]
+        public static object GetAttachedObject(RubyClass/*!*/ self) {
+            if (!self.IsSingletonClass || self.IsDummySingletonClass) {
+                throw RubyExceptions.CreateTypeError("`{0}' is not a singleton class", self.GetNonNullName(self.Context));
+            }
+            return self.SingletonClassOf;
+        }
+
         #endregion
 
         #region IronRuby: clr_new, clr_ctor

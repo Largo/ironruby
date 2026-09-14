@@ -11055,3 +11055,71 @@ class Complex
     self
   end
 end
+
+# --- a batch of small post-1.9 additions ------------------------------------
+
+module Kernel
+  # Kernel#Hash (1.9). Only nil and [] are special-cased; everything else must
+  # answer #to_hash with a Hash.
+  def Hash(object)
+    return {} if object.nil? || object == []
+    return object if object.instance_of?(::Hash)
+    unless object.respond_to?(:to_hash)
+      ::Kernel.raise(::TypeError, "can't convert #{object.class} into Hash")
+    end
+    converted = object.to_hash
+    unless converted.is_a?(::Hash)
+      ::Kernel.raise(::TypeError, "can't convert #{object.class} into Hash (#{object.class}#to_hash gives #{converted.class})")
+    end
+    converted
+  end
+  module_function :Hash
+  private :Hash
+
+  # MRI has these as private instance methods on Kernel as well as public
+  # singletons; IronRuby declared several of them singleton-only, and #loop was
+  # not private at all.
+  private :loop if public_method_defined?(:loop)
+end
+
+class LoadError
+  # MRI 2.0 records the path that could not be loaded. IronRuby does not thread
+  # it through the raise sites yet, so the reader exists and answers nil unless
+  # something set it.
+  def path
+    defined?(@path) ? @path : nil
+  end unless method_defined?(:path)
+end
+
+class SyntaxError
+  def path
+    defined?(@path) ? @path : nil
+  end unless method_defined?(:path)
+end
+
+class Regexp
+  # Ruby 3.2's match timeout. The value round-trips; IronRuby's matcher does not
+  # enforce it, so Regexp::TimeoutError is defined but never raised.
+  class TimeoutError < RegexpError
+  end unless const_defined?(:TimeoutError, false)
+
+  def self.timeout
+    defined?(@timeout) ? @timeout : nil
+  end unless respond_to?(:timeout)
+
+  def self.timeout=(value)
+    @timeout = value
+  end unless respond_to?(:timeout=)
+end
+
+class Random
+  # 2.0's Random#random_number: rand's behaviour, but a bare call always answers
+  # a Float and an out-of-range argument is an ArgumentError rather than nil.
+  def random_number(limit = nil)
+    limit.nil? ? rand : rand(limit)
+  end unless method_defined?(:random_number)
+
+  def self.random_number(limit = nil)
+    limit.nil? ? rand : rand(limit)
+  end unless respond_to?(:random_number)
+end

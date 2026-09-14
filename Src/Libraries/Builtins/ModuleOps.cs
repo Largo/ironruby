@@ -1247,6 +1247,12 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        /// <summary>Ruby 2.1's Module#singleton_class?.</summary>
+        [RubyMethod("singleton_class?")]
+        public static bool IsSingletonClass(RubyModule/*!*/ self) {
+            return self.IsSingletonClass && !self.IsDummySingletonClass;
+        }
+
         #region {private_|protected_|public_|}instance_methods (thread-safe)
 
         // thread-safe:
