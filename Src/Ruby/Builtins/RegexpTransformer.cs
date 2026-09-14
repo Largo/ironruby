@@ -33,6 +33,14 @@ namespace IronRuby.Builtins {
         private StringBuilder/*!*/ _sb;
         private bool _hasGAnchor;
 
+        // Capturing groups opened so far. Ruby resolves relative references such as \k<-1> and
+        // (?(<-1>)...) against this, and reads \N as a backreference only while N is within it.
+        private int _groupCount;
+
+        // True when the pattern declares a named group anywhere. Ruby then rejects every numbered
+        // backreference in the pattern, including one written before the named group.
+        private readonly bool _hasNamedGroup;
+
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
@@ -48,6 +56,77 @@ namespace IronRuby.Builtins {
 
         private RegexpTransformer(string/*!*/ rubyPattern) {
             _rubyPattern = rubyPattern;
+            _hasNamedGroup = HasNamedGroup(rubyPattern);
+        }
+
+        /// <summary>
+        /// Whether the pattern opens a named group anywhere. Has to be known up front: Ruby
+        /// rejects (a)(?&lt;a&gt;a)\1 as well as (?&lt;a&gt;a)\1, so the decision cannot wait
+        /// until the named group is reached.
+        /// </summary>
+        private static bool HasNamedGroup(string/*!*/ pattern) {
+            bool inCharacterClass = false;
+            for (int i = 0; i < pattern.Length; i++) {
+                char c = pattern[i];
+                if (c == '\\') {
+                    i++;
+                } else if (inCharacterClass) {
+                    inCharacterClass = c != ']';
+                } else if (c == '[') {
+                    inCharacterClass = true;
+                } else if (c == '(' && i + 2 < pattern.Length && pattern[i + 1] == '?') {
+                    char d = pattern[i + 2];
+                    if (d == '\'') {
+                        return true;
+                    }
+                    // (?<= and (?<! are lookbehind, not a named group
+                    if (d == '<' && i + 3 < pattern.Length && pattern[i + 3] != '=' && pattern[i + 3] != '!') {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// A group name that carries a level specifier - anything with a '+' or a '-' in it - can
+        /// be declared but not referenced; Ruby raises when one is used in \k&lt;&gt; or in a
+        /// conditional. .NET rejects such names outright, so this only has to produce the error.
+        /// </summary>
+        private static bool IsLevelSpecifier(string/*!*/ name) {
+            return name.IndexOf('+') >= 0 || name.IndexOf('-') >= 0;
+        }
+
+        /// <summary>
+        /// Parses <paramref name="text"/> as Ruby writes a group number in a reference: an
+        /// optional '-' for a relative index, then decimal digits which may have leading zeros.
+        /// Returns the absolute group number, or -1 when the text is not a number at all.
+        /// </summary>
+        private int ResolveGroupNumber(string/*!*/ text) {
+            if (text.Length == 0) {
+                return -1;
+            }
+            bool relative = text[0] == '-';
+            int i = relative ? 1 : 0;
+            if (i == text.Length) {
+                return -1;
+            }
+
+            int value = 0;
+            for (; i < text.Length; i++) {
+                if (!Tokenizer.IsDecimalDigit(text[i])) {
+                    return -1;
+                }
+                value = value * 10 + (text[i] - '0');
+            }
+
+            if (relative) {
+                value = _groupCount + 1 - value;
+            }
+            if (value <= 0) {
+                throw MakeError("invalid group name <" + text + ">");
+            }
+            return value;
         }
 
         #region Buffer Ops
@@ -192,15 +271,15 @@ namespace IronRuby.Builtins {
                             Append(')');
                         }
                         Append((char)c);
-                        ParsePostQuantifier(lastEntityIndex, true, false);
-                        lastWasQuantifier = true;
+                        // A quantifier that got wrapped is already a group, so a further
+                        // quantifier can apply to it directly.
+                        lastWasQuantifier = !ParsePostQuantifier(lastEntityIndex, true, false);
                         break;
 
                     case '{': {
                         bool isExactCount;
                         if (ParseConstrainedQuantifier(lastWasQuantifier, lastEntityIndex, out isExactCount)) {
-                            ParsePostQuantifier(lastEntityIndex, false, isExactCount);
-                            lastWasQuantifier = true;
+                            lastWasQuantifier = !ParsePostQuantifier(lastEntityIndex, false, isExactCount);
                         } else {
                             goto default;
                         }
@@ -298,7 +377,8 @@ namespace IronRuby.Builtins {
             return true;
         }
 
-        private void ParsePostQuantifier(int lastEntityIndex, bool possessive, bool questionIsQuantifier) {
+        /// <summary>Returns true when the quantified entity was wrapped in a group.</summary>
+        private bool ParsePostQuantifier(int lastEntityIndex, bool possessive, bool questionIsQuantifier) {
             int c = Peek();
 
             if (c == '+') {
@@ -309,6 +389,7 @@ namespace IronRuby.Builtins {
                 if (!possessive) {
                     Append('+');
                 }
+                return true;
             } else if (c == '?') {
                 Skip();
                 if (questionIsQuantifier) {
@@ -316,10 +397,11 @@ namespace IronRuby.Builtins {
                     // After a range it is the ordinary laziness marker: a{1,2}? matches one 'a'.
                     _sb.Insert(lastEntityIndex, "(?:");
                     _sb.Append(")?");
-                } else {
-                    Append('?');
+                    return true;
                 }
+                Append('?');
             }
+            return false;
         }
 
         //
@@ -415,12 +497,14 @@ namespace IronRuby.Builtins {
                             // positive/negative lookbehind assertion
                             Append((char)c);
                         } else {
+                            _groupCount++;
                             ParseGroupName(c, '>');
                         }
                         break;
 
                     case '\'':
                         Append('\'');
+                        _groupCount++;
                         ParseGroupName(Read(), '\'');
                         break;
 
@@ -434,6 +518,8 @@ namespace IronRuby.Builtins {
                         if (closing == -1) {
                             Back();
                         }
+
+                        var condition = new StringBuilder();
                         while (true) {
                             c = Read();
                             if (c == -1) {
@@ -445,7 +531,21 @@ namespace IronRuby.Builtins {
                                 }
                                 break;
                             }
-                            Append((char)c);
+                            condition.Append((char)c);
+                        }
+
+                        string name = condition.ToString();
+                        int number = ResolveGroupNumber(name);
+                        if (number >= 0) {
+                            // (?(01)...), (?(<-1>)...) - .NET only understands a plain number
+                            _sb.Append(number);
+                        } else if (closing == -1) {
+                            // Ruby requires <> or '' around a name; .NET would accept a bare one
+                            throw MakeError("invalid conditional pattern");
+                        } else if (IsLevelSpecifier(name)) {
+                            throw MakeError("invalid group name <" + name + ">");
+                        } else {
+                            _sb.Append(name);
                         }
                         Append(')');
                         break;
@@ -455,6 +555,7 @@ namespace IronRuby.Builtins {
                         throw MakeError("undefined group option");
                 }
             } else {
+                _groupCount++;
                 Append('(');
             }
             Parse(true);
@@ -592,17 +693,69 @@ namespace IronRuby.Builtins {
                     break;
                     
                 default:
-                    // \digit is a backreference to an indexed group or an octal escape
-                    // In any case .NET Regex will decide for us, we don't need to distinguish between these cases.
                     if (Tokenizer.IsDecimalDigit(escape)) {
-                        Append('\\');
-                        Append((char)escape);
+                        ParseNumericEscape(escape);
                         break;
                     }
 
                     ParseCharacterEscape(escape).AppendTo(_sb, false);
                     break;
             }
+        }
+
+        /// <summary>
+        /// \N after a backslash is a backreference, an octal escape or plain text depending on the
+        /// number and on how many groups have been opened. .NET decides differently from Ruby, so
+        /// the choice has to be made here.
+        /// </summary>
+        private void ParseNumericEscape(int firstDigit) {
+            if (firstDigit == '0') {
+                // A leading zero always means an octal escape: (a)\01 matches "a\x01", not "aa".
+                Back();
+                AppendEscaped(ParseSingleByteCharacterEscape(Read()));
+                return;
+            }
+
+            int start = _index - 1;
+            int value = 0;
+            _index = start;
+            while (Tokenizer.IsDecimalDigit(Peek())) {
+                if (value < 100000) {
+                    value = value * 10 + (Read() - '0');
+                } else {
+                    Skip();
+                }
+            }
+            int digitCount = _index - start;
+
+            if (value > 1000) {
+                // Onigmo gives up on a number this large and matches the digits as literal text.
+                AppendEscaped(_sb, _rubyPattern.Substring(start, digitCount));
+                return;
+            }
+
+            if (value <= _groupCount) {
+                if (_hasNamedGroup) {
+                    throw MakeError("numbered backref/call is not allowed. (use name)");
+                }
+                _sb.Append('\\').Append(value);
+                return;
+            }
+
+            if (value >= 10) {
+                // Not a group that exists, and too long to be a forward reference: Ruby re-reads
+                // the digits as an octal escape, so \10 is "\b".
+                _index = start;
+                AppendEscaped(ParseSingleByteCharacterEscape(Read()));
+                return;
+            }
+
+            // A forward reference below 10. .NET accepts these as long as the group eventually
+            // appears; it reports its own error if it does not.
+            if (_hasNamedGroup) {
+                throw MakeError("numbered backref/call is not allowed. (use name)");
+            }
+            _sb.Append('\\').Append(value);
         }
 
         // \k<n>
@@ -632,25 +785,39 @@ namespace IronRuby.Builtins {
                 throw MakeError("invalid back reference");
             }
 
-            Append('\\');
-            Append('k');
-            Append((char)c);
-
-            // TODO: relative names: <name+n>, <m+n>, ..
-            c = Read();
-            if (c == terminator || c == -1) {
-                throw MakeError("group name is empty");
-            }
+            var reference = new StringBuilder();
             while (true) {
-                Append((char)c);
                 c = Read();
                 if (c == terminator) {
-                    Append((char)c);
                     break;
                 } else if (c == -1) {
                     throw MakeError("invalid group name");
                 }
+                reference.Append((char)c);
             }
+
+            string name = reference.ToString();
+            if (name.Length == 0) {
+                throw MakeError("group name is empty");
+            }
+
+            // \k<0> and \k<-n> that reaches past the first group are rejected by ResolveGroupNumber.
+            int number = ResolveGroupNumber(name);
+            if (number >= 0) {
+                if (_hasNamedGroup) {
+                    throw MakeError("numbered backref/call is not allowed. (use name)");
+                }
+                _sb.Append("\\k<").Append(number).Append('>');
+                return;
+            }
+
+            if (IsLevelSpecifier(name)) {
+                // \k<name+n> and \k<name-n> are level-scoped references, which .NET has no
+                // equivalent for; Ruby itself rejects them outside a subexpression call.
+                throw MakeError("invalid group name <" + name + ">");
+            }
+
+            _sb.Append("\\k<").Append(name).Append('>');
         }
 
         //

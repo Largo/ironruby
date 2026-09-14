@@ -60,7 +60,8 @@ puts(/b#{/a/}/)
             // escapes
             TestCorrectPatternTranslation(@"\\", @"\\");
             TestCorrectPatternTranslation(@"\_", @"_");
-            TestCorrectPatternTranslation(@"abc\0\01\011", "abc\\0\\01\\011");
+            // An octal escape is decoded to the character it denotes, the same way \x is.
+            TestCorrectPatternTranslation(@"abc\0\01\011", "abc\u0000\u0001\\\t");
             TestCorrectPatternTranslation(@"\n\t\r\f\v\a\e\b\A\B\Z\z", "\\\n\\\t\\\r\f\v\a\u001B\\b\\A\\B\\Z\\z");
             TestCorrectPatternTranslation(@"[\n\t\r\f\v\a\e\b\A\B\Z\z]", "[\\\n\\\t\\\r\f\v\a\u001B\bABZz]");
             TestCorrectPatternTranslation(@"\G", RubyRegexOptions.NONE, @"\G", true);
@@ -71,7 +72,7 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"\*", @"\*");
             TestCorrectPatternTranslation(@"\[", @"\[");
             TestCorrectPatternTranslation(@"\#", @"\#");
-            TestCorrectPatternTranslation(@"\0", @"\0");
+            TestCorrectPatternTranslation(@"\0", "\u0000");
             TestCorrectPatternTranslation(@"\x09\x0a\x0d\x20\u0009\u000a\u000d\u0020\u{9 a d 20}",
                                            "\\\u0009\\\u000a\\\u000d\\\u0020\\\u0009\\\u000a\\\u000d\\\u0020\\\u0009\\\u000a\\\u000d\\\u0020");
             TestCorrectPatternTranslation(@"[a\-z]", @"[a\-z]");
@@ -202,7 +203,11 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation("(?>(?=(?<!f)(o)(o))(?<bar>))", "(?>(?=(?<!f)(o)(o))(?<bar>))");
             
             // backreferences:
-            TestCorrectPatternTranslation(@"(x) (?'name') \k<1> \k<name> \k'1' \k<name>", @"(x) (?'name') \k<1> \k<name> \k'1' \k<name>");
+            // A numbered backreference is invalid once the pattern declares a named group, so
+            // the two forms cannot appear together. Both halves checked against CRuby 4.0.6:
+            //   Regexp.new("(x) (?'name') \\k<1>")  =>  numbered backref/call is not allowed. (use name)
+            TestCorrectPatternTranslation(@"(x) (y) \k<1> \k'2'", @"(x) (y) \k<1> \k<2>");
+            TestCorrectPatternTranslation(@"(x) (?'name') \k<name> \k'name'", @"(x) (?'name') \k<name> \k<name>");
 
             // error: TestCorrectPatternTranslation("(?<a)b>c)", "(?<a)b>c)");
         }
