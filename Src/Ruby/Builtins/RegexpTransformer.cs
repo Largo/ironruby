@@ -33,6 +33,50 @@ namespace IronRuby.Builtins {
         private StringBuilder/*!*/ _sb;
         private bool _hasGAnchor;
 
+        // Capturing groups opened so far. Ruby resolves relative references such as \k<-1> and
+        // (?(<-1>)...) against this, and reads \N as a backreference only while N is within it.
+        private int _groupCount;
+
+        // True when the pattern declares a named group anywhere. Ruby then rejects every numbered
+        // backreference in the pattern, including one written before the named group.
+        private readonly bool _hasNamedGroup;
+
+        // Nesting depth of groups and of the absent operator's sub-buffer. \K rewrites everything
+        // emitted so far as a lookbehind, which is only meaningful at the top level.
+        private int _groupDepth;
+        private int _absentDepth;
+
+        /// <summary>
+        /// Which repertoire \w \d \s and the POSIX bracket classes range over, selected by the
+        /// (?a) (?d) (?u) inline modifiers. .NET has no equivalent flag, so the expansions have to
+        /// differ instead. Ruby's default is (?d): \w and friends are ASCII only while the POSIX
+        /// classes are Unicode aware.
+        /// </summary>
+        private enum CharacterClassMode {
+            Default,
+            Ascii,
+            Unicode,
+        }
+
+        private CharacterClassMode _characterClassMode;
+
+        // The Ruby source text of each capturing group's body, so that a \g<...> subexpression call
+        // can be served by re-transforming it. Shared with the sub-transformers a call spawns.
+        private Dictionary<int, string> _groupSourcesByNumber = new Dictionary<int, string>();
+        private Dictionary<string, string> _groupSourcesByName = new Dictionary<string, string>();
+
+        // The groups currently being inlined, so a call that re-enters one can be reported as the
+        // recursion it is rather than expanded forever. .NET has no recursion construct.
+        private HashSet<string> _callsInProgress = new HashSet<string>();
+
+        // The groups whose body is currently being parsed. A call naming one of these is a direct
+        // self-reference, which is the other way recursion shows up.
+        private HashSet<string> _groupsBeingParsed = new HashSet<string>();
+
+        // Set on the sub-transformer that expands a \g<...> call: the copy must not capture,
+        // otherwise it would shift every group number in the pattern.
+        private bool _suppressCaptures;
+
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
@@ -48,6 +92,77 @@ namespace IronRuby.Builtins {
 
         private RegexpTransformer(string/*!*/ rubyPattern) {
             _rubyPattern = rubyPattern;
+            _hasNamedGroup = HasNamedGroup(rubyPattern);
+        }
+
+        /// <summary>
+        /// Whether the pattern opens a named group anywhere. Has to be known up front: Ruby
+        /// rejects (a)(?&lt;a&gt;a)\1 as well as (?&lt;a&gt;a)\1, so the decision cannot wait
+        /// until the named group is reached.
+        /// </summary>
+        private static bool HasNamedGroup(string/*!*/ pattern) {
+            bool inCharacterClass = false;
+            for (int i = 0; i < pattern.Length; i++) {
+                char c = pattern[i];
+                if (c == '\\') {
+                    i++;
+                } else if (inCharacterClass) {
+                    inCharacterClass = c != ']';
+                } else if (c == '[') {
+                    inCharacterClass = true;
+                } else if (c == '(' && i + 2 < pattern.Length && pattern[i + 1] == '?') {
+                    char d = pattern[i + 2];
+                    if (d == '\'') {
+                        return true;
+                    }
+                    // (?<= and (?<! are lookbehind, not a named group
+                    if (d == '<' && i + 3 < pattern.Length && pattern[i + 3] != '=' && pattern[i + 3] != '!') {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// A group name that carries a level specifier - anything with a '+' or a '-' in it - can
+        /// be declared but not referenced; Ruby raises when one is used in \k&lt;&gt; or in a
+        /// conditional. .NET rejects such names outright, so this only has to produce the error.
+        /// </summary>
+        private static bool IsLevelSpecifier(string/*!*/ name) {
+            return name.IndexOf('+') >= 0 || name.IndexOf('-') >= 0;
+        }
+
+        /// <summary>
+        /// Parses <paramref name="text"/> as Ruby writes a group number in a reference: an
+        /// optional '-' for a relative index, then decimal digits which may have leading zeros.
+        /// Returns the absolute group number, or -1 when the text is not a number at all.
+        /// </summary>
+        private int ResolveGroupNumber(string/*!*/ text) {
+            if (text.Length == 0) {
+                return -1;
+            }
+            bool relative = text[0] == '-';
+            int i = relative ? 1 : 0;
+            if (i == text.Length) {
+                return -1;
+            }
+
+            int value = 0;
+            for (; i < text.Length; i++) {
+                if (!Tokenizer.IsDecimalDigit(text[i])) {
+                    return -1;
+                }
+                value = value * 10 + (text[i] - '0');
+            }
+
+            if (relative) {
+                value = _groupCount + 1 - value;
+            }
+            if (value <= 0) {
+                throw MakeError("invalid group name <" + text + ">");
+            }
+            return value;
         }
 
         #region Buffer Ops
@@ -165,6 +280,9 @@ namespace IronRuby.Builtins {
 
         private void Parse(bool isSubexpression) {
             int lastEntityIndex = 0;
+            // Ruby allows a quantifier to be quantified again (a***, a+?*); .NET rejects that as a
+            // nested quantifier, so the whole quantified entity has to be wrapped first.
+            bool lastWasQuantifier = false;
             int c;
             while (true) {
                 switch (c = Read()) {
@@ -176,26 +294,37 @@ namespace IronRuby.Builtins {
                     
                     case '\\':
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
                         ParseEscape();
                         break;
 
                     case '?':
                     case '*':
                     case '+':
+                        if (lastWasQuantifier) {
+                            // a*** == (?:(?:a*)*)*
+                            _sb.Insert(lastEntityIndex, "(?:");
+                            Append(')');
+                        }
                         Append((char)c);
-                        ParsePostQuantifier(lastEntityIndex, true);
+                        // A quantifier that got wrapped is already a group, so a further
+                        // quantifier can apply to it directly.
+                        lastWasQuantifier = !ParsePostQuantifier(lastEntityIndex, true, false);
                         break;
 
-                    case '{':
-                        if (ParseConstrainedQuantifier()) {
-                            ParsePostQuantifier(lastEntityIndex, false);
+                    case '{': {
+                        bool isExactCount;
+                        if (ParseConstrainedQuantifier(lastWasQuantifier, lastEntityIndex, out isExactCount)) {
+                            lastWasQuantifier = !ParsePostQuantifier(lastEntityIndex, false, isExactCount);
                         } else {
                             goto default;
                         }
                         break;
+                    }
 
                     case '(':
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
                         ParseGroup();
                         break;
 
@@ -208,16 +337,29 @@ namespace IronRuby.Builtins {
                     
                     case '[':
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
                         ParseCharacterGroup(false).AppendTo(_sb, true);
                         break;
 
                     case '|':
                         Append('|');
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
+                        break;
+
+                    case '^':
+                        // RegexOptions.Multiline is always on, and .NET's ^ then also matches the
+                        // empty line it considers a trailing \n to open. Ruby has no such line:
+                        // ^ matches at the start of the string and after a \n that is not the last
+                        // character. "a\n\nb".scan(/^/).size is 3 in Ruby, 4 in .NET.
+                        lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
+                        _sb.Append("(?:\\A|(?<=\\n)(?!\\z))");
                         break;
 
                     default:
                         lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
                         Append((char)c);
                         break;
                 }
@@ -228,11 +370,14 @@ namespace IronRuby.Builtins {
         // {n,}
         // {,m}
         // {n}
-        private bool ParseConstrainedQuantifier() {
+        private bool ParseConstrainedQuantifier(bool lastWasQuantifier, int lastEntityIndex, out bool isExactCount) {
             Debug.Assert(_rubyPattern[_index - 1] == '{');
+            isExactCount = false;
 
             int c;
             int m = -1;
+            bool hasDigits = false;
+            bool hasDigitsAfterComma = false;
 
             int i = 0;
             while (true) {
@@ -247,15 +392,39 @@ namespace IronRuby.Builtins {
                     break;
                 } else if (!Tokenizer.IsDecimalDigit(c)) {
                     return false;
+                } else {
+                    hasDigits = true;
+                    if (m != -1) {
+                        hasDigitsAfterComma = true;
+                    }
                 }
             }
 
-            _sb.Append(_rubyPattern, _index - 1, i + 1);
+            // {} and {,} carry no count: Ruby and .NET both read them as literal text, so they go
+            // through untouched and are not treated as a quantifier for the purposes below.
+            if (hasDigits) {
+                if (lastWasQuantifier) {
+                    // a*{2} == (?:a*){2}
+                    _sb.Insert(lastEntityIndex, "(?:");
+                    Append(')');
+                }
+                if (m == 1 && hasDigitsAfterComma) {
+                    // Ruby's {,m} means {0,m}; .NET has no such form and reads it as literal text.
+                    _sb.Append("{0");
+                    _sb.Append(_rubyPattern, _index, i);
+                } else {
+                    _sb.Append(_rubyPattern, _index - 1, i + 1);
+                    isExactCount = m == -1;
+                }
+            } else {
+                _sb.Append(_rubyPattern, _index - 1, i + 1);
+            }
             _index += i;
             return true;
         }
 
-        private void ParsePostQuantifier(int lastEntityIndex, bool possessive) {
+        /// <summary>Returns true when the quantified entity was wrapped in a group.</summary>
+        private bool ParsePostQuantifier(int lastEntityIndex, bool possessive, bool questionIsQuantifier) {
             int c = Peek();
 
             if (c == '+') {
@@ -266,10 +435,19 @@ namespace IronRuby.Builtins {
                 if (!possessive) {
                     Append('+');
                 }
+                return true;
             } else if (c == '?') {
                 Skip();
+                if (questionIsQuantifier) {
+                    // After an exact count Ruby reads ? as another quantifier: a{1}? == (?:a{1})?.
+                    // After a range it is the ordinary laziness marker: a{1,2}? matches one 'a'.
+                    _sb.Insert(lastEntityIndex, "(?:");
+                    _sb.Append(")?");
+                    return true;
+                }
                 Append('?');
             }
+            return false;
         }
 
         //
@@ -291,6 +469,8 @@ namespace IronRuby.Builtins {
         //
         private void ParseGroup() {
             Debug.Assert(_rubyPattern[_index - 1] == '(');
+            int groupNumber = -1;
+            string groupName = null;
             if (Read('?')) {
                 int c = Read();
                 if (c == '#') {
@@ -306,33 +486,20 @@ namespace IronRuby.Builtins {
                     return;
                 }
 
+                if (c == '~') {
+                    ParseAbsentExpression();
+                    return;
+                }
+
+                if (c == '-' || c == 'i' || c == 'm' || c == 'x' || c == 'a' || c == 'd' || c == 'u') {
+                    ParseGroupOptions(c);
+                    return;
+                }
+
                 Append('(');
                 Append('?');
 
                 switch (c) {
-                    case '-':
-                    case 'i':
-                    case 'm':
-                    case 'x':
-                        while (true) {
-                            if (c == 'm') {
-                                // Map (?m) to (?s) ie. RegexOptions.SingleLine
-                                Append('s');
-                            } else if (c == 'i' || c == 'x' || c == '-') {
-                                Append((char)c);
-                            } else if (c == ':') {
-                                Append(':');
-                                break;
-                            } else if (c == ')' || c == -1) {
-                                Back();
-                                break;
-                            } else {
-                                throw MakeError("undefined group option");
-                            }
-                            c = Read();
-                        }
-                        break;
-
                     case ':':
                         // non-captured group
                         Append(':');
@@ -354,19 +521,22 @@ namespace IronRuby.Builtins {
                         break;
 
                     case '<':
-                        Append('<');
                         c = Read();
                         if (c == '=' || c == '!') {
                             // positive/negative lookbehind assertion
+                            Append('<');
                             Append((char)c);
                         } else {
-                            ParseGroupName(c, '>');
+                            _groupCount++;
+                            groupNumber = _groupCount;
+                            groupName = ParseGroupName(c, '>', '<');
                         }
                         break;
 
                     case '\'':
-                        Append('\'');
-                        ParseGroupName(Read(), '\'');
+                        _groupCount++;
+                        groupNumber = _groupCount;
+                        groupName = ParseGroupName(Read(), '\'', '\'');
                         break;
 
                     case '(': {
@@ -379,6 +549,8 @@ namespace IronRuby.Builtins {
                         if (closing == -1) {
                             Back();
                         }
+
+                        var condition = new StringBuilder();
                         while (true) {
                             c = Read();
                             if (c == -1) {
@@ -390,7 +562,21 @@ namespace IronRuby.Builtins {
                                 }
                                 break;
                             }
-                            Append((char)c);
+                            condition.Append((char)c);
+                        }
+
+                        string name = condition.ToString();
+                        int number = ResolveGroupNumber(name);
+                        if (number >= 0) {
+                            // (?(01)...), (?(<-1>)...) - .NET only understands a plain number
+                            _sb.Append(number);
+                        } else if (closing == -1) {
+                            // Ruby requires <> or '' around a name; .NET would accept a bare one
+                            throw MakeError("invalid conditional pattern");
+                        } else if (IsLevelSpecifier(name)) {
+                            throw MakeError("invalid group name <" + name + ">");
+                        } else {
+                            _sb.Append(name);
                         }
                         Append(')');
                         break;
@@ -400,26 +586,189 @@ namespace IronRuby.Builtins {
                         throw MakeError("undefined group option");
                 }
             } else {
-                Append('(');
+                _groupCount++;
+                groupNumber = _groupCount;
+                _sb.Append(_suppressCaptures ? "(?:" : "(");
             }
+            var savedMode = _characterClassMode;
+            int bodyStart = _index;
+            if (groupNumber >= 0) {
+                _groupsBeingParsed.Add("#" + groupNumber);
+                if (groupName != null) {
+                    _groupsBeingParsed.Add(groupName);
+                }
+            }
+            _groupDepth++;
             Parse(true);
+            _groupDepth--;
+            _characterClassMode = savedMode;
+            if (groupNumber >= 0) {
+                _groupsBeingParsed.Remove("#" + groupNumber);
+                if (groupName != null) {
+                    _groupsBeingParsed.Remove(groupName);
+                }
+                // _index is now just past the ')' Parse consumed
+                string source = _rubyPattern.Substring(bodyStart, _index - 1 - bodyStart);
+                _groupSourcesByNumber[groupNumber] = source;
+                if (groupName != null) {
+                    _groupSourcesByName[groupName] = source;
+                }
+            }
             Append(')');
         }
 
-        private void ParseGroupName(int c, int terminator) {
+        //
+        // (?imxadu-imx)          option on/off for the rest of the enclosing group
+        // (?imxadu-imx:subexp)   option on/off for subexp
+        //
+        // a, d and u select the repertoire of \w, \d, \s and the POSIX bracket classes. .NET has
+        // no such flag, so they are not emitted; they change how those classes are expanded.
+        //
+        private void ParseGroupOptions(int c) {
+            var flags = new StringBuilder();
+            var mode = _characterClassMode;
+            bool isScoped = false;
+
+            while (true) {
+                if (c == 'm') {
+                    // Map (?m) to (?s) ie. RegexOptions.SingleLine
+                    flags.Append('s');
+                } else if (c == 'i' || c == 'x' || c == '-') {
+                    flags.Append((char)c);
+                } else if (c == 'a') {
+                    mode = CharacterClassMode.Ascii;
+                } else if (c == 'd') {
+                    mode = CharacterClassMode.Default;
+                } else if (c == 'u') {
+                    mode = CharacterClassMode.Unicode;
+                } else if (c == ':') {
+                    isScoped = true;
+                    break;
+                } else if (c == ')') {
+                    break;
+                } else if (c == -1) {
+                    throw MakeError("end pattern in group");
+                } else {
+                    throw MakeError("undefined group option");
+                }
+                c = Read();
+            }
+
+            string options = flags.ToString();
+            if (options == "-") {
+                // a lone '-' turns nothing off and .NET rejects it
+                options = "";
+            }
+
+            if (!isScoped) {
+                _characterClassMode = mode;
+                if (options.Length != 0) {
+                    _sb.Append("(?").Append(options).Append(')');
+                }
+                return;
+            }
+
+            _sb.Append("(?").Append(options).Append(':');
+            var savedMode = _characterClassMode;
+            _characterClassMode = mode;
+            _groupDepth++;
+            Parse(true);
+            _groupDepth--;
+            _characterClassMode = savedMode;
+            _sb.Append(')');
+        }
+
+        /// <summary>
+        /// (?~E) matches the longest string that contains no match of E.
+        ///
+        /// .NET has no absent operator but does support variable-length lookbehind, so
+        /// "consume one character provided we have not just completed an E" renders it.
+        /// (?:(?!E)[\s\S])* is NOT equivalent: the lookahead sees past the intended match end
+        /// and stops too early ("xfooy" would give "x" where Onigmo gives "xfo").
+        ///
+        /// The lookbehind alone is still not enough, because it also sees occurrences of E that
+        /// began before the match started - "foo".scan(/(?~foo)/) would give ["fo", "", ""] where
+        /// Onigmo gives ["fo", "o", ""]. An E of fixed length L can only be completed inside the
+        /// match once L-1 characters have been consumed, so the first L-1 characters are consumed
+        /// unconditionally. Both parts are greedy and consuming in the unconstrained part is never
+        /// worse, so the result is still the longest match.
+        ///
+        /// When E has no computable fixed length the plain lookbehind form is emitted; it is exact
+        /// for a match at the start of the input and conservative elsewhere.
+        /// </summary>
+        private void ParseAbsentExpression() {
+            var outer = _sb;
+            _sb = new StringBuilder();
+            _absentDepth++;
+            Parse(true);
+            _absentDepth--;
+            string absent = _sb.ToString();
+            _sb = outer;
+
+            if (absent.Length == 0) {
+                // (?~) can never complete, so it matches everything remaining.
+                _sb.Append("[\\s\\S]*");
+                return;
+            }
+
+            int fixedLength = GetLiteralLength(absent);
+            _sb.Append("(?:");
+            if (fixedLength > 1) {
+                _sb.Append("[\\s\\S]{0,").Append(fixedLength - 1).Append('}');
+            }
+            _sb.Append("(?:[\\s\\S](?<!").Append(absent).Append("))*)");
+        }
+
+        /// <summary>
+        /// The number of characters a translated pattern matches when it is a plain literal
+        /// sequence, or -1 when it contains anything whose length is not fixed and obvious.
+        /// </summary>
+        private static int GetLiteralLength(string/*!*/ pattern) {
+            int length = 0;
+            for (int i = 0; i < pattern.Length; i++) {
+                char c = pattern[i];
+                if (c == '\\') {
+                    if (i + 1 == pattern.Length || !IsMetaCharacter(pattern[i + 1])) {
+                        return -1;
+                    }
+                    i++;
+                } else if (IsMetaCharacter(c)) {
+                    return -1;
+                }
+                length++;
+            }
+            return length;
+        }
+
+        /// <summary>
+        /// Reads a group name and emits the .NET spelling of the declaration, unless captures are
+        /// being suppressed - a \g&lt;...&gt; expansion emits (?: instead. Returns the name.
+        /// </summary>
+        private string/*!*/ ParseGroupName(int c, int terminator, int opening) {
             if (c == terminator || c == -1) {
                 throw MakeError("group name is empty");
             }
+            var name = new StringBuilder();
+            int closing;
             while (true) {
-                Append((char)c); 
+                name.Append((char)c);
                 c = Read();
                 if (c == terminator || c == ')') {
-                    Append((char)c);
+                    closing = c;
                     break;
                 } else if (c == -1) {
                     throw MakeError("unterminated group name");
                 }
             }
+
+            if (_suppressCaptures) {
+                Append(':');
+            } else {
+                Append((char)opening);
+                _sb.Append(name);
+                Append((char)closing);
+            }
+            return name.ToString();
         }
 
         #region Escapes
@@ -451,11 +800,27 @@ namespace IronRuby.Builtins {
                 // \g<name>
                 // \g'name'
                 case 'g':
-                    // TODO: this can be implemented by copying the pattern with removed groups
-                    throw MakeError("\\g not supported");
+                    ParseSubexpressionCall();
+                    break;
                 
                 case 'k':
                     ParseBackreference();
+                    break;
+
+                case 'R':
+                    // A generic line break: CRLF as a unit, or any single line terminator.
+                    // Atomic so that CRLF never backtracks into matching just the CR.
+                    _sb.Append("(?>\\r\\n|[\\n\\v\\f\\r\\u0085\\u2028\\u2029])");
+                    break;
+
+                case 'K':
+                    // Keep: everything matched so far is excluded from the reported match. .NET
+                    // has no such operator but does support variable-length lookbehind, so the
+                    // pattern emitted so far becomes the lookbehind of what follows.
+                    if (_absentDepth != 0 || _groupDepth != 0) {
+                        throw MakeError("\\K is only supported at the top level of a pattern");
+                    }
+                    _sb.Insert(0, "(?<=").Append(')');
                     break;
 
                 case 'G':   // start position
@@ -468,26 +833,170 @@ namespace IronRuby.Builtins {
                     if (Peek() == '{') {
                         // \u{1234 12345 123}
                         foreach (var codepoint in ParseUnicodeEscapeList()) {
-                            AppendEscaped(codepoint);
+                            AppendUnicodeCodePoint(_sb, codepoint);
                         }
                     } else {
                         // \u1234
-                        AppendEscaped(ParseUnicodeEscape());
+                        AppendUnicodeCodePoint(_sb, ParseUnicodeEscape());
                     }
                     break;
                     
                 default:
-                    // \digit is a backreference to an indexed group or an octal escape
-                    // In any case .NET Regex will decide for us, we don't need to distinguish between these cases.
                     if (Tokenizer.IsDecimalDigit(escape)) {
-                        Append('\\');
-                        Append((char)escape);
+                        ParseNumericEscape(escape);
                         break;
                     }
 
                     ParseCharacterEscape(escape).AppendTo(_sb, false);
                     break;
             }
+        }
+
+        // \g<n>  \g'n'  \g<-n>  \g'-n'  \g<name>  \g'name'
+        //
+        // A subexpression call re-runs a group's pattern at this point. .NET has no such construct,
+        // so the group's Ruby source is transformed again and spliced in here. The copy is emitted
+        // under the called group's own name or number, which .NET permits and treats as the same
+        // group, so - as in Onigmo - running the copy updates that group's capture. Groups nested
+        // inside the copy do not capture, so the numbering of the rest of the pattern is unchanged.
+        private void ParseSubexpressionCall() {
+            int terminator;
+            int c = Read();
+            if (c == '<') {
+                terminator = '>';
+            } else if (c == '\'') {
+                terminator = '\'';
+            } else {
+                throw MakeError("invalid group call");
+            }
+
+            var reference = new StringBuilder();
+            while (true) {
+                c = Read();
+                if (c == terminator) {
+                    break;
+                } else if (c == -1) {
+                    throw MakeError("invalid group name");
+                }
+                reference.Append((char)c);
+            }
+
+            string name = reference.ToString();
+            if (name.Length == 0) {
+                throw MakeError("group name is empty");
+            }
+
+            if (name == "0") {
+                // \g<0> calls the whole pattern, which is recursion by construction.
+                throw MakeError("recursive subexpression call is not supported");
+            }
+
+            // Unlike \k<...>, a call may name a group whose name carries a '+' or a '-'.
+            string source;
+            string key;
+            int number = IsGroupNumber(name) ? ResolveGroupNumber(name) : -1;
+            key = (number >= 0) ? "#" + number : name;
+            if (_groupsBeingParsed.Contains(key)) {
+                throw MakeError("recursive subexpression call is not supported");
+            }
+            if (number >= 0) {
+                if (!_groupSourcesByNumber.TryGetValue(number, out source)) {
+                    throw MakeError("undefined group <" + name + ">");
+                }
+            } else {
+                if (!_groupSourcesByName.TryGetValue(name, out source)) {
+                    throw MakeError("undefined group name <" + name + ">");
+                }
+            }
+
+            if (_groupsBeingParsed.Contains(key) || !_callsInProgress.Add(key)) {
+                // .NET's Regex has no recursion construct and no way to express one; producing a
+                // finite approximation here would silently match the wrong language.
+                throw MakeError("recursive subexpression call is not supported");
+            }
+            try {
+                var inner = new RegexpTransformer(source);
+                inner._suppressCaptures = true;
+                inner._characterClassMode = _characterClassMode;
+                inner._groupSourcesByNumber = _groupSourcesByNumber;
+                inner._groupSourcesByName = _groupSourcesByName;
+                inner._callsInProgress = _callsInProgress;
+                inner._groupsBeingParsed = _groupsBeingParsed;
+
+                _sb.Append("(?<").Append(key.StartsWith("#") ? key.Substring(1) : key).Append('>');
+                _sb.Append(inner.Transform()).Append(')');
+                _hasGAnchor |= inner._hasGAnchor;
+            } finally {
+                _callsInProgress.Remove(key);
+            }
+        }
+
+        private static bool IsGroupNumber(string/*!*/ text) {
+            int i = (text.Length != 0 && text[0] == '-') ? 1 : 0;
+            if (i == text.Length) {
+                return false;
+            }
+            for (; i < text.Length; i++) {
+                if (!Tokenizer.IsDecimalDigit(text[i])) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// \N after a backslash is a backreference, an octal escape or plain text depending on the
+        /// number and on how many groups have been opened. .NET decides differently from Ruby, so
+        /// the choice has to be made here.
+        /// </summary>
+        private void ParseNumericEscape(int firstDigit) {
+            if (firstDigit == '0') {
+                // A leading zero always means an octal escape: (a)\01 matches "a\x01", not "aa".
+                Back();
+                AppendEscaped(ParseSingleByteCharacterEscape(Read()));
+                return;
+            }
+
+            int start = _index - 1;
+            int value = 0;
+            _index = start;
+            while (Tokenizer.IsDecimalDigit(Peek())) {
+                if (value < 100000) {
+                    value = value * 10 + (Read() - '0');
+                } else {
+                    Skip();
+                }
+            }
+            int digitCount = _index - start;
+
+            if (value > 1000) {
+                // Onigmo gives up on a number this large and matches the digits as literal text.
+                AppendEscaped(_sb, _rubyPattern.Substring(start, digitCount));
+                return;
+            }
+
+            if (value <= _groupCount) {
+                if (_hasNamedGroup) {
+                    throw MakeError("numbered backref/call is not allowed. (use name)");
+                }
+                _sb.Append('\\').Append(value);
+                return;
+            }
+
+            if (value >= 10) {
+                // Not a group that exists, and too long to be a forward reference: Ruby re-reads
+                // the digits as an octal escape, so \10 is "\b".
+                _index = start;
+                AppendEscaped(ParseSingleByteCharacterEscape(Read()));
+                return;
+            }
+
+            // A forward reference below 10. .NET accepts these as long as the group eventually
+            // appears; it reports its own error if it does not.
+            if (_hasNamedGroup) {
+                throw MakeError("numbered backref/call is not allowed. (use name)");
+            }
+            _sb.Append('\\').Append(value);
         }
 
         // \k<n>
@@ -517,25 +1026,39 @@ namespace IronRuby.Builtins {
                 throw MakeError("invalid back reference");
             }
 
-            Append('\\');
-            Append('k');
-            Append((char)c);
-
-            // TODO: relative names: <name+n>, <m+n>, ..
-            c = Read();
-            if (c == terminator || c == -1) {
-                throw MakeError("group name is empty");
-            }
+            var reference = new StringBuilder();
             while (true) {
-                Append((char)c);
                 c = Read();
                 if (c == terminator) {
-                    Append((char)c);
                     break;
                 } else if (c == -1) {
                     throw MakeError("invalid group name");
                 }
+                reference.Append((char)c);
             }
+
+            string name = reference.ToString();
+            if (name.Length == 0) {
+                throw MakeError("group name is empty");
+            }
+
+            // \k<0> and \k<-n> that reaches past the first group are rejected by ResolveGroupNumber.
+            int number = ResolveGroupNumber(name);
+            if (number >= 0) {
+                if (_hasNamedGroup) {
+                    throw MakeError("numbered backref/call is not allowed. (use name)");
+                }
+                _sb.Append("\\k<").Append(number).Append('>');
+                return;
+            }
+
+            if (IsLevelSpecifier(name)) {
+                // \k<name+n> and \k<name-n> are level-scoped references, which .NET has no
+                // equivalent for; Ruby itself rejects them outside a subexpression call.
+                throw MakeError("invalid group name <" + name + ">");
+            }
+
+            _sb.Append("\\k<").Append(name).Append('>');
         }
 
         //
@@ -683,28 +1206,41 @@ namespace IronRuby.Builtins {
                 case 'P':
                     return ParseCharacterCategoryName(escape);
 
+                // \w, \d and \s are ASCII only in Ruby unless (?u) is in effect, where .NET's
+                // \w, \d and \s are always Unicode aware.
                 case 's':
-                    return new CharacterSet(@"\s");
+                    return MakeAsciiAware(@"\s", "\u0020\u0009-\u000d", true);
 
                 case 'S':
-                    return new CharacterSet(@"\S");
+                    return MakeAsciiAware(@"\S", "\u0020\u0009-\u000d", false);
 
                 case 'd':
-                    return new CharacterSet(@"\d");
+                    return MakeAsciiAware(@"\d", "0-9", true);
 
                 case 'D':
-                    return new CharacterSet(@"\D");
+                    return MakeAsciiAware(@"\D", "0-9", false);
 
                 case 'w':
-                    return new CharacterSet(@"\w");
+                    return MakeAsciiAware(@"\w", "a-zA-Z0-9_", true);
 
                 case 'W':
-                    return new CharacterSet(@"\W");
+                    return MakeAsciiAware(@"\W", "a-zA-Z0-9_", false);
 
                 default:
                     // ignore backslash unless needed
                     return new CharacterSet(Escape(escape), true);
             }
+        }
+
+        /// <summary>
+        /// Picks between the Unicode-aware .NET shorthand and an explicit ASCII set.
+        /// </summary>
+        private CharacterSet/*!*/ MakeAsciiAware(string/*!*/ unicodeShorthand, string/*!*/ asciiSet, bool positive) {
+            if (_characterClassMode == CharacterClassMode.Unicode) {
+                return new CharacterSet(positive ? unicodeShorthand : unicodeShorthand.ToUpperInvariant());
+            }
+            var result = new CharacterSet(asciiSet);
+            return positive ? result : result.Complement();
         }
 
         #endregion
@@ -781,6 +1317,19 @@ namespace IronRuby.Builtins {
             return sb.ToString();
         }
 
+        /// <summary>
+        /// A character-class member for a single codepoint. Non-BMP codepoints cannot be class
+        /// members in .NET (see CharacterSet._astral), so they get their own representation.
+        /// </summary>
+        private CharacterSet/*!*/ MakeCodePointSet(int codepoint) {
+            if (codepoint >= 0xd800 && codepoint <= 0xdfff || codepoint > 0x10ffff) {
+                throw MakeError("invalid Unicode range");
+            }
+            return (codepoint >= 0x10000)
+                ? CharacterSet.MakeAstralCharacter(codepoint)
+                : new CharacterSet(UnicodeCodePointToString(codepoint), true);
+        }
+
         private void AppendUnicodeCodePoint(StringBuilder/*!*/ builder, int codepoint) {
             if (codepoint >= 0xd800 && codepoint <= 0xdfff || codepoint > 0x10ffff) {
                 throw MakeError("invalid Unicode range");
@@ -788,8 +1337,8 @@ namespace IronRuby.Builtins {
                 AppendEscaped(builder, codepoint);
             } else {
                 codepoint -= 0x10000;
-                Append((char)((codepoint / 0x400) + 0xd800));
-                Append((char)((codepoint % 0x400) + 0xdc00));
+                builder.Append((char)((codepoint / 0x400) + 0xd800));
+                builder.Append((char)((codepoint % 0x400) + 0xdc00));
             }
         }
 
@@ -806,6 +1355,15 @@ namespace IronRuby.Builtins {
             private readonly string/*!*/ _include;
             private readonly CharacterSet/*!*/ _exclude;
             private readonly bool _isSingleCharacter;
+
+            // .NET's Regex matches UTF-16 code units, so a non-BMP codepoint cannot be a member
+            // of a character class: [\uD83E\uDD8A] would match either surrogate half on its own.
+            // Such members are held aside as an alternation of surrogate-pair sequences and the
+            // whole class is emitted as (?:[bmp members]|<pairs>).
+            private readonly string/*!*/ _astral = "";
+            // The single codepoint this set stands for, if it is exactly one non-BMP character.
+            // Needed to build [x-y] ranges, whose endpoints are parsed as separate sets.
+            private readonly int _astralCodepoint = -1;
 
             public CharacterSet() {
                 _include = "";
@@ -837,16 +1395,89 @@ namespace IronRuby.Builtins {
                 _exclude = exclude;
             }
 
+            private CharacterSet(string/*!*/ astral, int astralCodepoint) {
+                _include = "";
+                _exclude = Empty;
+                _astral = astral;
+                _astralCodepoint = astralCodepoint;
+            }
+
+            /// <summary>A set holding the single non-BMP codepoint <paramref name="codepoint"/>.</summary>
+            internal static CharacterSet/*!*/ MakeAstralCharacter(int codepoint) {
+                return new CharacterSet(SurrogatePair(codepoint), codepoint);
+            }
+
+            /// <summary>A set holding the inclusive non-BMP range [<paramref name="low"/>, <paramref name="high"/>].</summary>
+            internal static CharacterSet/*!*/ MakeAstralRange(int low, int high) {
+                return new CharacterSet(SurrogateRange(low, high), -1);
+            }
+
+            internal bool IsAstralCharacter {
+                get { return _astralCodepoint >= 0; }
+            }
+
+            internal int AstralCodepoint {
+                get { return _astralCodepoint; }
+            }
+
+            internal bool HasAstral {
+                get { return _astral.Length != 0; }
+            }
+
+            private static string/*!*/ Unit(int c) {
+                return "\\u" + c.ToString("x4");
+            }
+
+            private static string/*!*/ SurrogatePair(int codepoint) {
+                int v = codepoint - 0x10000;
+                return Unit(0xd800 + (v >> 10)) + Unit(0xdc00 + (v & 0x3ff));
+            }
+
+            private static string/*!*/ SurrogateRange(int low, int high) {
+                int lowLead = 0xd800 + ((low - 0x10000) >> 10), lowTrail = 0xdc00 + ((low - 0x10000) & 0x3ff);
+                int highLead = 0xd800 + ((high - 0x10000) >> 10), highTrail = 0xdc00 + ((high - 0x10000) & 0x3ff);
+
+                if (lowLead == highLead) {
+                    return Unit(lowLead) + "[" + Unit(lowTrail) + "-" + Unit(highTrail) + "]";
+                }
+
+                var sb = new StringBuilder();
+                sb.Append(Unit(lowLead)).Append('[').Append(Unit(lowTrail)).Append("-\\udfff]");
+                if (lowLead + 1 <= highLead - 1) {
+                    sb.Append("|[").Append(Unit(lowLead + 1)).Append('-').Append(Unit(highLead - 1)).Append("][\\udc00-\\udfff]");
+                }
+                sb.Append('|').Append(Unit(highLead)).Append("[\\udc00-").Append(Unit(highTrail)).Append(']');
+                return sb.ToString();
+            }
+
+            private CharacterSet/*!*/ RequireNoAstral(string/*!*/ operation) {
+                if (HasAstral) {
+                    // The surrogate-pair alternation is not a character class, so it cannot take
+                    // part in [a-[b]] subtraction or && intersection.
+                    throw new RegexpError("non-BMP character is not supported in a " + operation + " character class");
+                }
+                return this;
+            }
+
             public string/*!*/ Include {
                 get { return _include; }
             }
 
             public bool IsEmpty {
-                get { return _include.Length == 0 && !_negated; }
+                get { return _include.Length == 0 && _astral.Length == 0 && !_negated; }
             }
 
             public bool IsSingleCharacter {
                 get { return _isSingleCharacter; }
+            }
+
+            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral)
+                : this(negate, include, exclude) {
+                _astral = astral;
+            }
+
+            private static string/*!*/ JoinAstral(string/*!*/ a, string/*!*/ b) {
+                return (a.Length == 0) ? b : (b.Length == 0) ? a : a + "|" + b;
             }
 
             internal CharacterSet/*!*/ GetIncludedSet() {
@@ -854,6 +1485,7 @@ namespace IronRuby.Builtins {
             }
 
             internal CharacterSet/*!*/ Complement() {
+                RequireNoAstral("negated");
                 return new CharacterSet(!_negated, _include, _exclude);
             }
 
@@ -861,6 +1493,8 @@ namespace IronRuby.Builtins {
                 if (IsEmpty || set.IsEmpty) {
                     return this;
                 }
+                RequireNoAstral("subtracted");
+                set.RequireNoAstral("subtracted");
 
                 if (_negated) {
                     if (set._negated) {
@@ -907,10 +1541,11 @@ namespace IronRuby.Builtins {
                 // (a or c) and (a or ^D) and (^B or c) and (^B or ^D) ==
                 // (a or c) \ (^(a or ^D) or ^(^B or c) or ^(^B or ^D)) ==
                 // (a or c) \ ((D \ a) or (B \ c) or (B and D))                QED
-                return new CharacterSet(_include + set._include,
+                return new CharacterSet(false, _include + set._include,
                     set._exclude.Subtract(GetIncludedSet()).
                         Union(this._exclude.Subtract(set.GetIncludedSet())).
-                        Union(this._exclude.Intersect(set._exclude))
+                        Union(this._exclude.Intersect(set._exclude)),
+                    JoinAstral(_astral, set._astral)
                 );
             }
 
@@ -918,6 +1553,8 @@ namespace IronRuby.Builtins {
                 if (IsEmpty || set.IsEmpty) {
                     return Empty;
                 }
+                RequireNoAstral("intersected");
+                set.RequireNoAstral("intersected");
 
                 if (_negated) {
                     if (set._negated) {
@@ -943,6 +1580,20 @@ namespace IronRuby.Builtins {
             }
 
             public StringBuilder/*!*/ AppendTo(StringBuilder/*!*/ sb, bool parenthesize) {
+                if (HasAstral) {
+                    sb.Append("(?:");
+                    if (_include.Length != 0 || !_exclude.IsEmpty) {
+                        sb.Append('[').Append(_include);
+                        if (!_exclude.IsEmpty) {
+                            sb.Append('-');
+                            _exclude.AppendTo(sb, true);
+                        }
+                        sb.Append("]|");
+                    }
+                    sb.Append(_astral);
+                    sb.Append(')');
+                    return sb;
+                }
                 if (IsEmpty) {
                     if (_negated) {
                         sb.Append("[\0-\uffff]");
@@ -1061,17 +1712,28 @@ namespace IronRuby.Builtins {
 
                     // [a-b]-z
                     // \p{L}-z
-                    if (!mayStartRange || !set.IsSingleCharacter) {
+                    if (!mayStartRange || !(set.IsSingleCharacter || set.IsAstralCharacter)) {
                         throw MakeError("char-class value at start of range");
                     }
 
                     // a-[a-z]
                     // a-\p{L}
-                    if (!mayEndRange || !rangeEnd.IsSingleCharacter) {
+                    if (!mayEndRange || !(rangeEnd.IsSingleCharacter || rangeEnd.IsAstralCharacter)) {
                         throw MakeError("char-class value at end of range");
                     }
 
-                    set = new CharacterSet(set.Include + "-" + rangeEnd.Include);
+                    if (set.IsAstralCharacter || rangeEnd.IsAstralCharacter) {
+                        if (!set.IsAstralCharacter || !rangeEnd.IsAstralCharacter) {
+                            // A range straddling U+FFFF would need both a class and an alternation.
+                            throw MakeError("char-class range crosses the BMP boundary");
+                        }
+                        if (set.AstralCodepoint > rangeEnd.AstralCodepoint) {
+                            throw MakeError("empty range in char class");
+                        }
+                        set = CharacterSet.MakeAstralRange(set.AstralCodepoint, rangeEnd.AstralCodepoint);
+                    } else {
+                        set = new CharacterSet(set.Include + "-" + rangeEnd.Include);
+                    }
                 }
 
                 result = result.Union(set);
@@ -1086,7 +1748,7 @@ namespace IronRuby.Builtins {
                 if (!codepoints.MoveNext()) {
                     codepoints = null;
                 }
-                return new CharacterSet(UnicodeCodePointToString(current), true);
+                return MakeCodePointSet(current);
             }
 
             int c;
@@ -1123,7 +1785,7 @@ namespace IronRuby.Builtins {
                             codepoint = ParseUnicodeEscape();
                         }
                         mayStartRange = true;
-                        return new CharacterSet(UnicodeCodePointToString(codepoint), true);
+                        return MakeCodePointSet(codepoint);
                     } else {
                         mayStartRange = true;
                         return ParseCharacterEscape(escape);
@@ -1140,6 +1802,10 @@ namespace IronRuby.Builtins {
 
                 default:
                     mayStartRange = true;
+                    if (c >= 0xd800 && c <= 0xdbff && Peek() >= 0xdc00 && Peek() <= 0xdfff) {
+                        // a literal non-BMP character, written as its surrogate pair
+                        return CharacterSet.MakeAstralCharacter(Char.ConvertToUtf32((char)c, (char)Read()));
+                    }
                     return new CharacterSet(((char)c).ToString(), true);
             }
         }
@@ -1219,6 +1885,11 @@ namespace IronRuby.Builtins {
             string name = _rubyPattern.Substring(start, _index - start);
             Skip();
 
+            var script = MakeScriptCharacterClass(name);
+            if (script != null) {
+                return positive ? script : script.Complement();
+            }
+
             switch (name) {
                 // CLR unsupported, any encoding:
                 case "Alnum": return MakePosixCharacterClass(PosixCharacterClass.Alnum, positive); 
@@ -1254,50 +1925,28 @@ namespace IronRuby.Builtins {
                 case "Armenian": 
                 case "Bengali": 
                 case "Bopomofo": 
-                case "Braille": 
-                case "Buginese":
                 case "Buhid": 
                 case "Cherokee": 
-                case "Common": 
-                case "Coptic":
-                case "Cypriot": 
                 case "Cyrillic": 
-                case "Deseret": 
                 case "Devanagari": 
                 case "Ethiopic": 
                 case "Georgian":
-                case "Glagolitic": 
-                case "Gothic": 
                 case "Greek": 
                 case "Gujarati": 
                 case "Gurmukhi": 
-                case "Han": 
-                case "Hangul":
                 case "Hanunoo": 
                 case "Hebrew": 
-                case "Hiragana": 
-                case "Inherited":
                 case "Kannada": 
-                case "Katakana":
-                case "Kharoshthi": 
                 case "Khmer": 
                 case "Lao": 
-                case "Latin": 
                 case "Limbu": 
-                case "Linear_B":
                 case "Malayalam":
                 case "Mongolian": 
                 case "Myanmar": 
-                case "New_Tai_Lue":
                 case "Ogham": 
-                case "Old_Italic":
-                case "Old_Persian":
                 case "Oriya": 
-                case "Osmanya": 
                 case "Runic": 
-                case "Shavian": 
                 case "Sinhala": 
-                case "Syloti_Nagri": 
                 case "Syriac":
                 case "Tagalog": 
                 case "Tagbanwa": 
@@ -1307,10 +1956,8 @@ namespace IronRuby.Builtins {
                 case "Thaana": 
                 case "Thai": 
                 case "Tibetan":
-                case "Tifinagh": 
-                case "Ugaritic": 
-                case "Yi":
-                    // TODO: not all of the above are prefixed Is-
+                    // For these scripts .NET happens to have a block of the same name. A block is
+                    // not a script, so this over-matches at the edges, but it is what is available.
                     name = "Is" + name;
                     goto default;
 
@@ -1320,6 +1967,88 @@ namespace IronRuby.Builtins {
 
                 default:
                     return new CharacterSet(@"\" + (positive ? 'p' : 'P') + "{" + name + "}");
+            }
+        }
+
+        /// <summary>
+        /// Unicode *script* properties for the scripts .NET has no identically named block for.
+        /// .NET's Regex knows nothing about scripts, only about a fixed list of Unicode 4.0 era
+        /// BMP blocks, so these are approximations: a script's codepoints are enumerated as
+        /// explicit ranges. Returns null for a name this method does not handle.
+        /// </summary>
+        private CharacterSet MakeScriptCharacterClass(string/*!*/ name) {
+            switch (name) {
+                case "Han":
+                    // CJK Radicals Supplement, Kangxi Radicals, the Han characters scattered
+                    // through CJK Symbols and Punctuation, Extension A, the URO and the
+                    // compatibility ideographs. Non-BMP extensions are out of reach (see
+                    // CharacterSet._astral: a class cannot hold a surrogate pair).
+                    return new CharacterSet("\u2e80-\u2e99\u2e9b-\u2ef3\u2f00-\u2fd5\u3005\u3007" +
+                        "\u3021-\u3029\u3038-\u303b\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufa6d\ufa70-\ufad9");
+
+                case "Hangul":
+                    // Jamo, Compatibility Jamo, Jamo Extended-A/B and the syllables block.
+                    return new CharacterSet("\u1100-\u11ff\u302e\u302f\u3131-\u318e\ua960-\ua97c" +
+                        "\uac00-\ud7a3\ud7b0-\ud7c6\ud7cb-\ud7fb\uffa0-\uffbe\uffc2-\uffc7" +
+                        "\uffca-\uffcf\uffd2-\uffd7\uffda-\uffdc");
+
+                case "Latin":
+                    return new CharacterSet(@"\p{IsBasicLatin}\p{IsLatin-1Supplement}\p{IsLatinExtended-A}" +
+                        @"\p{IsLatinExtended-B}\p{IsLatinExtendedAdditional}" +
+                        "\u2c60-\u2c7f\ua720-\ua7ff\ufb00-\ufb06\uff21-\uff3a\uff41-\uff5a");
+
+                case "Braille":
+                    return new CharacterSet(@"\p{IsBraillePatterns}");
+
+                case "Hiragana":
+                    // Not the whole IsHiragana block: U+3099-U+309C are Inherited/Common and
+                    // U+309B/U+309C are not Hiragana either.
+                    return new CharacterSet("\u3041-\u3096\u309d-\u309f");
+
+                case "Katakana":
+                    // U+30A0, U+30FB and U+30FC (the prolonged sound mark) sit inside the
+                    // IsKatakana block but are script Common, so the block over-matches.
+                    return new CharacterSet("\u30a1-\u30fa\u30fd-\u30ff\u31f0-\u31ff" +
+                        "\u32d0-\u32fe\u3300-\u3357\uff66-\uff6f\uff71-\uff9d");
+
+                case "Coptic":
+                    return new CharacterSet("\u03e2-\u03ef\u2c80-\u2cff\u2e00-\u2e01");
+
+                case "Glagolitic":
+                    return new CharacterSet("\u2c00-\u2c5f");
+
+                case "Tifinagh":
+                    return new CharacterSet("\u2d30-\u2d7f");
+
+                case "Syloti_Nagri":
+                    return new CharacterSet("\ua800-\ua82c");
+
+                case "New_Tai_Lue":
+                    return new CharacterSet("\u1980-\u19df");
+
+                case "Buginese":
+                    return new CharacterSet("\u1a00-\u1a1f");
+
+                case "Yi":
+                    return new CharacterSet(@"\p{IsYiSyllables}\p{IsYiRadicals}");
+
+                case "Common":
+                case "Inherited":
+                case "Cypriot":
+                case "Deseret":
+                case "Gothic":
+                case "Kharoshthi":
+                case "Linear_B":
+                case "Old_Italic":
+                case "Old_Persian":
+                case "Osmanya":
+                case "Shavian":
+                    // Either not a block at all (Common, Inherited span the whole repertoire) or
+                    // entirely outside the BMP, which .NET cannot address in a character class.
+                    throw MakeError("character property '" + name + "' is not supported");
+
+                default:
+                    return null;
             }
         }
 
@@ -1372,6 +2101,17 @@ namespace IronRuby.Builtins {
         }
 
         private CharacterSet MakePosixCharacterClass(PosixCharacterClass charClass, bool positive) {
+            if (_characterClassMode == CharacterClassMode.Ascii) {
+                // (?a) restricts the POSIX classes to ASCII. A negated class still matches
+                // non-ASCII: (?a)[[:^alpha:]] accepts a Hiragana character.
+                var ascii = MakePosixCharacterClassCore(charClass, true)
+                    .Intersect(new CharacterSet(@"\p{IsBasicLatin}"));
+                return positive ? ascii : ascii.Complement();
+            }
+            return MakePosixCharacterClassCore(charClass, positive);
+        }
+
+        private CharacterSet MakePosixCharacterClassCore(PosixCharacterClass charClass, bool positive) {
             switch (charClass) {
                 case PosixCharacterClass.Alnum:
                     if (positive) {

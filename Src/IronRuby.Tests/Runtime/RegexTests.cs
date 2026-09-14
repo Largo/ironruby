@@ -60,7 +60,8 @@ puts(/b#{/a/}/)
             // escapes
             TestCorrectPatternTranslation(@"\\", @"\\");
             TestCorrectPatternTranslation(@"\_", @"_");
-            TestCorrectPatternTranslation(@"abc\0\01\011", "abc\\0\\01\\011");
+            // An octal escape is decoded to the character it denotes, the same way \x is.
+            TestCorrectPatternTranslation(@"abc\0\01\011", "abc\u0000\u0001\\\t");
             TestCorrectPatternTranslation(@"\n\t\r\f\v\a\e\b\A\B\Z\z", "\\\n\\\t\\\r\f\v\a\u001B\\b\\A\\B\\Z\\z");
             TestCorrectPatternTranslation(@"[\n\t\r\f\v\a\e\b\A\B\Z\z]", "[\\\n\\\t\\\r\f\v\a\u001B\bABZz]");
             TestCorrectPatternTranslation(@"\G", RubyRegexOptions.NONE, @"\G", true);
@@ -71,7 +72,7 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"\*", @"\*");
             TestCorrectPatternTranslation(@"\[", @"\[");
             TestCorrectPatternTranslation(@"\#", @"\#");
-            TestCorrectPatternTranslation(@"\0", @"\0");
+            TestCorrectPatternTranslation(@"\0", "\u0000");
             TestCorrectPatternTranslation(@"\x09\x0a\x0d\x20\u0009\u000a\u000d\u0020\u{9 a d 20}",
                                            "\\\u0009\\\u000a\\\u000d\\\u0020\\\u0009\\\u000a\\\u000d\\\u0020\\\u0009\\\u000a\\\u000d\\\u0020");
             TestCorrectPatternTranslation(@"[a\-z]", @"[a\-z]");
@@ -164,7 +165,10 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"[\u{1 2 40}-\u0060]", "[\u0001\u0002\u0040-\u0060]");
             TestCorrectPatternTranslation(@"[\u{1 2 40}-z]", "[\u0001\u0002\u0040-z]");
             TestCorrectPatternTranslation(@"[\x3f-\u{40 1 2}]", "[\\\u003f-\u0040\u0001\u0002]");
-            TestCorrectPatternTranslation(@"[\w-]", @"[\w\-]");
+            // \w is ASCII only in Ruby unless (?u) is in effect, so it is expanded rather than
+            // handed to .NET, whose \w is Unicode aware. Checked against CRuby 4.0.6:
+            //   /[\w-]+/.match("a-\u3042")  =>  "a-"
+            TestCorrectPatternTranslation(@"[\w-]", @"[a-zA-Z0-9_\-]");
             TestCorrectPatternTranslation(@"[\p{Alnum}-]", @"[\p{L}\p{Nd}\p{Nl}\-]");
 
             // character set operations
@@ -202,7 +206,11 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation("(?>(?=(?<!f)(o)(o))(?<bar>))", "(?>(?=(?<!f)(o)(o))(?<bar>))");
             
             // backreferences:
-            TestCorrectPatternTranslation(@"(x) (?'name') \k<1> \k<name> \k'1' \k<name>", @"(x) (?'name') \k<1> \k<name> \k'1' \k<name>");
+            // A numbered backreference is invalid once the pattern declares a named group, so
+            // the two forms cannot appear together. Both halves checked against CRuby 4.0.6:
+            //   Regexp.new("(x) (?'name') \\k<1>")  =>  numbered backref/call is not allowed. (use name)
+            TestCorrectPatternTranslation(@"(x) (y) \k<1> \k'2'", @"(x) (y) \k<1> \k<2>");
+            TestCorrectPatternTranslation(@"(x) (?'name') \k<name> \k'name'", @"(x) (?'name') \k<name> \k<name>");
 
             // error: TestCorrectPatternTranslation("(?<a)b>c)", "(?<a)b>c)");
         }
@@ -243,24 +251,26 @@ puts(/b#{/a/}/)
         (?:\#((?:[-_.!~*'()a-zA-Z\d;/?:@&=+$,\[\]]|%[a-fA-F\d]{2})*))?            (?# 9: fragment)
       $";
 
-            string e = @"^
-        ([a-zA-Z][\-+.a-zA-Z\d]*):                     
+            // ^ is expanded: .NET's Multiline ^ also matches the empty line it considers a
+            // trailing \n to open, which Ruby has no equivalent of.
+            string e = @"(?:\A|(?<=\n)(?!\z))
+        ([a-zA-Z][\-+.a-zA-Z0-9]*):                     
         (?:
-           ((?:[\-_.!~*'()a-zA-Z\d;?:@&=+$,]|%[a-fA-F\d]{2})(?:[\-_.!~*'()a-zA-Z\d;/?:@&=+$,\[\]]|%[a-fA-F\d]{2})*)              
+           ((?:[\-_.!~*'()a-zA-Z0-9;?:@&=+$,]|%[a-fA-F0-9]{2})(?:[\-_.!~*'()a-zA-Z0-9;/?:@&=+$,\[\]]|%[a-fA-F0-9]{2})*)              
         |
            (?:(?:
              //(?:
-                 (?:(?:((?:[\-_.!~*'()a-zA-Z\d;:&=+$,]|%[a-fA-F\d]{2})*)@)?  
-                   (?:((?:(?:(?:[a-zA-Z\d](?:[\-a-zA-Z\d]*[a-zA-Z\d])?)\.)*(?:[a-zA-Z](?:[\-a-zA-Z\d]*[a-zA-Z\d])?)\.?|[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}|\[(?:(?:[a-fA-F\d]{1,4}:)*(?:[a-fA-F\d]{1,4}|[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3})|(?:(?:[a-fA-F\d]{1,4}:)*[a-fA-F\d]{1,4})?::(?:(?:[a-fA-F\d]{1,4}:)*(?:[a-fA-F\d]{1,4}|[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}\.[\d]{1,3}))?)\]))(?::([\d]*))?))?
+                 (?:(?:((?:[\-_.!~*'()a-zA-Z0-9;:&=+$,]|%[a-fA-F0-9]{2})*)@)?  
+                   (?:((?:(?:(?:[a-zA-Z0-9](?:[\-a-zA-Z0-9]*[a-zA-Z0-9])?)\.)*(?:[a-zA-Z](?:[\-a-zA-Z0-9]*[a-zA-Z0-9])?)\.?|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|\[(?:(?:[a-fA-F0-9]{1,4}:)*(?:[a-fA-F0-9]{1,4}|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3})|(?:(?:[a-fA-F0-9]{1,4}:)*[a-fA-F0-9]{1,4})?::(?:(?:[a-fA-F0-9]{1,4}:)*(?:[a-fA-F0-9]{1,4}|[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}))?)\]))(?::([0-9]*))?))?
                |
-                 ((?:[\-_.!~*'()a-zA-Z\d$,;+@&=+]|%[a-fA-F\d]{2})+)           
+                 ((?:[\-_.!~*'()a-zA-Z0-9$,;+@&=+]|%[a-fA-F0-9]{2})+)           
                )
              |
              (?!//))                              
-             (/(?:[\-_.!~*'()a-zA-Z\d:@&=+$,]|%[a-fA-F\d]{2})*(?:;(?:[\-_.!~*'()a-zA-Z\d:@&=+$,]|%[a-fA-F\d]{2})*)*(?:/(?:[\-_.!~*'()a-zA-Z\d:@&=+$,]|%[a-fA-F\d]{2})*(?:;(?:[\-_.!~*'()a-zA-Z\d:@&=+$,]|%[a-fA-F\d]{2})*)*)*)?              
-           )(?:\?((?:[\-_.!~*'()a-zA-Z\d;/?:@&=+$,\[\]]|%[a-fA-F\d]{2})*))?           
+             (/(?:[\-_.!~*'()a-zA-Z0-9:@&=+$,]|%[a-fA-F0-9]{2})*(?:;(?:[\-_.!~*'()a-zA-Z0-9:@&=+$,]|%[a-fA-F0-9]{2})*)*(?:/(?:[\-_.!~*'()a-zA-Z0-9:@&=+$,]|%[a-fA-F0-9]{2})*(?:;(?:[\-_.!~*'()a-zA-Z0-9:@&=+$,]|%[a-fA-F0-9]{2})*)*)*)?              
+           )(?:\?((?:[\-_.!~*'()a-zA-Z0-9;/?:@&=+$,\[\]]|%[a-fA-F0-9]{2})*))?           
         )
-        (?:\#((?:[\-_.!~*'()a-zA-Z\d;/?:@&=+$,\[\]]|%[a-fA-F\d]{2})*))?            
+        (?:\#((?:[\-_.!~*'()a-zA-Z0-9;/?:@&=+$,\[\]]|%[a-fA-F0-9]{2})*))?            
       $";
             
             bool hasGAnchor;

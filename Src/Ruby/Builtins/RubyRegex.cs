@@ -24,7 +24,7 @@ using IronRuby.Runtime;
 using System.Collections.Generic;
 
 namespace IronRuby.Builtins {
-    public partial class RubyRegex : IEquatable<RubyRegex>, IDuplicable {
+    public partial class RubyRegex : IEquatable<RubyRegex>, IDuplicable, IRubyObjectState {
         // 1.9: correctly encoded, switched to characters 
         // 1.8: k-coded binary data, if _options specify encoding, or raw binary data otherwise.
         private MutableString/*!*/ _pattern;
@@ -39,6 +39,36 @@ namespace IronRuby.Builtins {
 
         // Ruby 1.8: match operations use KCODE encoding so we need to remember the one for which we have cached CLR Regex.
         private RubyRegexOptions _cachedKCode;
+
+        private const int FrozenFlag = 1;
+        private const int TaintedFlag = 2;
+        private const int UntrustedFlag = 4;
+
+        // A regexp literal is frozen by MRI, so the state has to live on the object itself rather
+        // than in the context's instance data, which the literal-construction path has no access to.
+        private int _flags;
+
+        #region IRubyObjectState Members
+
+        public bool IsFrozen {
+            get { return (_flags & FrozenFlag) != 0; }
+        }
+
+        public bool IsTainted {
+            get { return (_flags & TaintedFlag) != 0; }
+            set { _flags = (_flags & ~TaintedFlag) | (value ? TaintedFlag : 0); }
+        }
+
+        public bool IsUntrusted {
+            get { return (_flags & UntrustedFlag) != 0; }
+            set { _flags = (_flags & ~UntrustedFlag) | (value ? UntrustedFlag : 0); }
+        }
+
+        public void Freeze() {
+            _flags |= FrozenFlag;
+        }
+
+        #endregion
 
         #region Construction
 
@@ -97,8 +127,34 @@ namespace IronRuby.Builtins {
 
         #region Transformation to CLR Regex
 
+        /// <summary>
+        /// MRI's rb_reg_prepare_enc. A broken string can never be matched, and a regexp that has
+        /// pinned its encoding can only be matched against a string of that encoding - or, when the
+        /// pinned encoding is ASCII compatible, against an ASCII-only string of any encoding.
+        /// This is a regexp-versus-string rule, distinct from the string-versus-string
+        /// compatibility MutableString.RequireCompatibleEncoding applies.
+        /// </summary>
+        private void RequireMatchableEncoding(MutableString/*!*/ input) {
+            if (input.ContainsInvalidCharacters()) {
+                throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", input.Encoding.Name);
+            }
+
+            if (!IsFixedEncoding) {
+                return;
+            }
+
+            var patternEncoding = Encoding;
+            if (input.Encoding != patternEncoding && (!patternEncoding.IsAsciiIdentity || !input.IsAscii())) {
+                throw new EncodingCompatibilityError(
+                    "incompatible encoding regexp match (" + patternEncoding.Name + " regexp with " + input.Encoding.Name + " string)"
+                );
+            }
+        }
+
         private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput) {
             ContractUtils.RequiresNotNull(input, "input");
+
+            RequireMatchableEncoding(input);
 
             // TODO:
 
@@ -554,7 +610,7 @@ namespace IronRuby.Builtins {
         public MatchData Match(MutableString/*!*/ input) {
             string str;
             RubyEncoding kcode = null;
-            return MatchData.Create(Transform(ref kcode, input, 0, out str).Match(str), input, true, str);
+            return MatchData.Create(Transform(ref kcode, input, 0, out str).Match(str), input, true, str, kcode, 0);
         }
 
         /// <summary>
@@ -581,7 +637,7 @@ namespace IronRuby.Builtins {
                 match = regex.Match(str, start);
             }
 
-            return MatchData.Create(match, input, freezeInput, str);
+            return MatchData.Create(match, input, freezeInput, str, kcode, (kcode != null) ? ((start < 0) ? start + input.GetByteCount() : start) : 0);
         }
 
         public MatchData LastMatch(MutableString/*!*/ input) {
@@ -630,7 +686,7 @@ namespace IronRuby.Builtins {
                     return null;
                 }
             }
-            return MatchData.Create(match, input, true, str);
+            return MatchData.Create(match, input, true, str, kcode, 0);
         }
 
         /// <summary>
@@ -670,7 +726,7 @@ namespace IronRuby.Builtins {
             }
 
             for (int i = 0; i < result.Length; i++) {
-                result[i] = MatchData.Create(matches[i], input, false, str);
+                result[i] = MatchData.Create(matches[i], input, false, str, kcode, 0);
             }
 
             return result;
