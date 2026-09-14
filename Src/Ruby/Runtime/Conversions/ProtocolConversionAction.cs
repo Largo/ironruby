@@ -617,7 +617,7 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class TryConvertToAAction : TryConvertToReferenceTypeAction<TryConvertToAAction, IList> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToA; } }
         protected override string/*!*/ TargetTypeName { get { return "Array"; } }
-        protected override MethodInfo ConversionResultValidator { get { return Methods.TryToArrayValidator; } }
+        protected override MethodInfo ConversionResultValidator { get { return Methods.TryToAValidator; } }
     }
 
     public sealed class ConvertToHashAction : ConvertToReferenceTypeAction<ConvertToHashAction, IDictionary<object, object>> {

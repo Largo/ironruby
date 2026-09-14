@@ -2476,6 +2476,11 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted] // ProtocolConversionAction
+        public static IList TryToAValidator(string/*!*/ className, object obj) {
+            return (obj == null) ? null : ToAValidator(className, obj);
+        }
+
+        [Emitted] // ProtocolConversionAction
         public static IDictionary<object, object> TryToHashValidator(string/*!*/ className, object obj) {
             return (obj == null) ? null : ToHashValidator(className, obj);
         }

@@ -20,14 +20,39 @@ using IronRuby.Runtime;
 namespace IronRuby.Builtins {
     [RubyClass("ThreadGroup", Inherits = typeof(object), BuildConfig = "FEATURE_THREAD")]
     public class ThreadGroup {
+        private bool _enclosed;
+
         [RubyMethod("add")]
         public static ThreadGroup/*!*/ Add([NotNull]ThreadGroup/*!*/ self, [NotNull]Thread/*!*/ thread) {
-            ThreadOps.RubyThreadInfo.FromThread(thread).Group = self;
+            ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(thread);
+
+            // An enclosed group will not let a thread leave it, and will not take one either.
+            ThreadGroup current = info.Group;
+            if (current != null && current != self && current._enclosed) {
+                throw new ThreadError("can't move from the enclosed thread group");
+            }
+            if (self._enclosed && current != self) {
+                throw new ThreadError("can't move to the enclosed thread group");
+            }
+
+            info.Group = self;
             return self;
         }
 
-        // enclose
-        // enclosed?
+        /// <summary>
+        /// Locks the membership of the group: no thread may be added to or removed from it after
+        /// this, and it cannot be undone.
+        /// </summary>
+        [RubyMethod("enclose")]
+        public static ThreadGroup/*!*/ Enclose([NotNull]ThreadGroup/*!*/ self) {
+            self._enclosed = true;
+            return self;
+        }
+
+        [RubyMethod("enclosed?")]
+        public static bool IsEnclosed([NotNull]ThreadGroup/*!*/ self) {
+            return self._enclosed;
+        }
 
         [RubyMethod("list")]
         public static RubyArray/*!*/ List([NotNull]ThreadGroup/*!*/ self) {

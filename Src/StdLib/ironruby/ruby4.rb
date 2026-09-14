@@ -11321,11 +11321,33 @@ class Thread
       return frames[args[0]]
     end
     start = ::Kernel.Integer(args[0])
+    ::Kernel.raise ::ArgumentError, "negative level (#{start})" if start < 0
     return nil if start > frames.size
     frames = frames[start..-1] || []
-    args.size > 1 && !args[1].nil? ? frames.first(::Kernel.Integer(args[1])) : frames
+    if args.size > 1 && !args[1].nil?
+      length = ::Kernel.Integer(args[1])
+      ::Kernel.raise ::ArgumentError, "negative size (#{length})" if length < 0
+      frames.first(length)
+    else
+      frames
+    end
   end
   private :__slice_stack__
+
+  # The core Thread#fetch would have to raise KeyError, and KeyError is one of the
+  # exception classes defined in Ruby, above the runtime - so the method lives here.
+  def fetch(key, *default, &block)
+    if default.size > 1
+      ::Kernel.raise ::ArgumentError, "wrong number of arguments (given #{default.size + 1}, expected 1..2)"
+    end
+    if block && !default.empty?
+      ::Kernel.warn "warning: block supersedes default value argument"
+    end
+    return self[key] if key?(key)
+    return block.call(key) if block
+    return default[0] unless default.empty?
+    ::Kernel.raise ::KeyError.new("key not found: #{key.inspect}", receiver: self, key: key)
+  end
 
   # There is no asynchronous-interrupt queue here, so nothing is ever pending.
   def pending_interrupt?(error = nil)
@@ -11336,9 +11358,13 @@ class Thread
     false
   end unless respond_to?(:pending_interrupt?)
 
-  def self.each_caller_location(&block)
-    return ::Kernel.send(:caller_locations, 1).each unless block
-    ::Kernel.send(:caller_locations, 1).each { |l| block.call(l) }
+  # Starts at the caller of the frame that called it, exactly where a plain
+  # caller_locations in that frame would start.  The block is yielded to rather than
+  # called through a Proc so that a `break' in it breaks out of this method, which is
+  # what MRI's C implementation does and what the specs check.
+  def self.each_caller_location
+    ::Kernel.raise ::LocalJumpError, "no block given" unless block_given?
+    ::Kernel.send(:caller_locations, 3).each { |l| yield l }
     nil
   end unless respond_to?(:each_caller_location)
 
@@ -11371,7 +11397,11 @@ class Thread
         File.expand_path(@path) rescue @path
       end
 
-      def base_label; @label; end
+      # The label without the "block in" / "block (N levels) in" prefix that a block
+      # frame carries: MRI's base_label names the method the block is written in.
+      def base_label
+        @label && @label.sub(/\Ablock (\(\d+ levels\) )?in /, "")
+      end
 
       # "path:lineno:in `label'" -> a Location.  Both Kernel#caller_locations and
       # Thread#backtrace_locations have only the string form to work from.

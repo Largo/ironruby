@@ -99,7 +99,7 @@ namespace IronRuby.StandardLibrary.Threading {
             }
         }
 
-        internal static int GetTimeoutMilliseconds(object timeout) {
+        internal static int GetTimeoutMilliseconds(RubyContext/*!*/ context, object timeout) {
             if (timeout == null) {
                 return Timeout.Infinite;
             }
@@ -108,8 +108,12 @@ namespace IronRuby.StandardLibrary.Threading {
                 seconds = (int)timeout;
             } else if (timeout is double) {
                 seconds = (double)timeout;
+            } else if (timeout is System.Numerics.BigInteger) {
+                seconds = (double)(System.Numerics.BigInteger)timeout;
             } else {
-                throw RubyExceptions.CreateTypeError("no implicit conversion of {0} into Float", timeout.GetType().Name);
+                // The class has to be spelled the way Ruby spells it, not the way the CLR does:
+                // MutableString is String, and true/false are spelled by value.
+                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(timeout), "Float");
             }
             double ms = seconds * 1000;
             return ms > Int32.MaxValue ? Timeout.Infinite : (ms < 0 ? 0 : (int)ms);
@@ -123,9 +127,9 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         [RubyConstructor]
-        public static RubyQueue/*!*/ CreateQueue(ConversionStorage<IList>/*!*/ toAry, RubyClass/*!*/ self, object items) {
+        public static RubyQueue/*!*/ CreateQueue(ConversionStorage<IList>/*!*/ toA, RubyContext/*!*/ context, RubyClass/*!*/ self, object items) {
             RubyQueue result = new RubyQueue();
-            Fill(toAry, result, items);
+            Fill(toA, context, result, items);
             return result;
         }
 
@@ -135,13 +139,23 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyQueue/*!*/ Reinitialize(ConversionStorage<IList>/*!*/ toAry, RubyQueue/*!*/ self, object items) {
-            Fill(toAry, self, items);
+        public static RubyQueue/*!*/ Reinitialize(ConversionStorage<IList>/*!*/ toA, RubyContext/*!*/ context, RubyQueue/*!*/ self, object items) {
+            Fill(toA, context, self, items);
             return self;
         }
 
-        private static void Fill(ConversionStorage<IList>/*!*/ toAry, RubyQueue/*!*/ queue, object items) {
-            IList list = Protocols.CastToArray(toAry, items);
+        /// <summary>
+        /// MRI seeds a Queue from an Enumerable with #to_a, not with the #to_ary implicit-conversion
+        /// protocol, and words the failure as an explicit conversion ("can't convert X into Array").
+        /// </summary>
+        private static void Fill(ConversionStorage<IList>/*!*/ toA, RubyContext/*!*/ context, RubyQueue/*!*/ queue, object items) {
+            IList list = items as IList;
+            if (list == null) {
+                list = Protocols.TryConvertToArray(toA, items);
+                if (list == null) {
+                    throw RubyExceptions.CreateTypeConversionError(context.GetClassDisplayName(items), "Array");
+                }
+            }
             lock (queue._queue) {
                 foreach (object item in list) {
                     queue._queue.Enqueue(item);
@@ -182,7 +196,7 @@ namespace IronRuby.StandardLibrary.Threading {
         [RubyMethod("pop")]
         [RubyMethod("shift")]
         public static object Dequeue(RubyContext/*!*/ context, RubyQueue/*!*/ self, [NotNull]Hash/*!*/ options) {
-            return self.Dequeue(GetTimeoutMilliseconds(GetTimeoutOption(context, options)));
+            return self.Dequeue(GetTimeoutMilliseconds(context, GetTimeoutOption(context, options)));
         }
 
         [RubyMethod("deq")]
