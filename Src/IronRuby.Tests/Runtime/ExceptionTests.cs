@@ -693,35 +693,29 @@ to_a
         }
 
         public void RescueSplat5() {
+            // a rescue clause takes classes and modules only - anything else is a TypeError,
+            // so the splatted lists here hold exception classes
             TestOutput(@"
 class E < Exception
   
 end
 
-class C
-  def ===(other)
-    puts ""===#{other}""
-    0
-  end
-end
-
 def foo(i)
   puts ""foo(#{i})""
+  ArgumentError
 end
 
 a = []
-b = [1,2,3]
-c = 1
+b = [ArgumentError, TypeError]
 
 begin
   raise E.new
-rescue *a,*b,*[foo(0), C.new],foo(1),C.new,2 => x
+rescue *a, *b, *[foo(0)], foo(1), E => x
   p x
 end
 ", @"
 foo(0)
 foo(1)
-===E
 #<E: E>
 ");
         }
