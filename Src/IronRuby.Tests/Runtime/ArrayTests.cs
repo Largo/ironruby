@@ -79,13 +79,14 @@ w0r1d
 
         public void Scenario_RubyArrays4() {
             AssertOutput(delegate() {
+                // an array literal copies what it splats (MRI does too)
                 CompilerTest(@"
 a = [*x = [1,2]]
 puts a.object_id == x.object_id
 puts a.inspect
 ");
             }, @"
-true
+false
 [1, 2]");
         }
 
