@@ -9386,7 +9386,7 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "join", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<System.Threading.Thread, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Join), 
-                new Func<System.Threading.Thread, System.Double, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Join)
+                new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, System.Object, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Join)
             );
             
             DefineLibraryMethod(module, "key?", 0x51, 

@@ -11306,6 +11306,13 @@ class Thread
   def backtrace_locations(*args)
     if self == ::Thread.current
       frames = ::Kernel.send(:caller_locations, 1)
+      # MRI's first location is the #backtrace_locations frame itself, and a frame for a
+      # method implemented natively reports the call site rather than a place in the
+      # method.  This one is written in Ruby, so say where it was called from by hand.
+      if frames.size > 1
+        frames = frames.dup
+        frames[0] = ::Thread::Backtrace::Location.new(frames[1].path, frames[1].lineno, "Thread#backtrace_locations")
+      end
     else
       entries = __native_backtrace__
       return nil if entries.nil?

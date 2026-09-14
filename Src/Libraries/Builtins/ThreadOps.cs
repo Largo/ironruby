@@ -488,7 +488,30 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        /// <summary>
+        /// Thread#join(timeout). A nil timeout means "no timeout", so it cannot go through the
+        /// Float conversion the other values do.
+        /// </summary>
         [RubyMethod("join")]
+        public static Thread Join(RubyContext/*!*/ context, Thread/*!*/ self, object timeout) {
+            if (timeout == null) {
+                return Join(self);
+            }
+            // MRI's time-interval conversion, not Float(): a String is a TypeError here rather
+            // than the ArgumentError that Float("bar") would raise.
+            double seconds;
+            if (timeout is int) {
+                seconds = (int)timeout;
+            } else if (timeout is double) {
+                seconds = (double)timeout;
+            } else if (timeout is System.Numerics.BigInteger) {
+                seconds = (double)(System.Numerics.BigInteger)timeout;
+            } else {
+                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(timeout), "Float");
+            }
+            return Join(self, seconds);
+        }
+
         public static Thread/*!*/ Join(Thread/*!*/ self, double seconds) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
 
@@ -922,7 +945,14 @@ namespace IronRuby.Builtins {
                     Utils.Log(String.Format("Thread {0} exited.", info.Thread.ManagedThreadId), "THREAD");
                     info.Result = null;
                     if (!RubyUtils.IsRubyThreadExit(e) && !(e is ThreadInterruptedException)) {
-                        info.Exception = RubyUtils.GetVisibleException(e);
+                        Exception visible = RubyUtils.GetVisibleException(e);
+                        info.Exception = visible;
+
+                        // A thread killed while it was already unwinding a Thread#raise still dies
+                        // of that exception, and MRI reports it.
+                        if (info.ReportOnException && !(visible is SystemExit)) {
+                            ReportThreadException(context, info, visible);
+                        }
                     }
                 } else {
                     e = RubyUtils.GetVisibleException(e);
@@ -986,7 +1016,13 @@ namespace IronRuby.Builtins {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
             // Thread.pass is a safe point for a pending Thread#kill / Thread#raise.
             RubyUtils.CheckAsyncException();
-            Thread.Sleep(0);
+
+            // Thread.Yield rather than Thread.Sleep(0): Sleep puts the thread into
+            // WaitSleepJoin, so a thread spinning on `Thread.pass until ...` - which is how the
+            // specs wait for each other - reported its status as "sleep" instead of "run".
+            if (!Thread.Yield()) {
+                Thread.Sleep(0);
+            }
         }
 
         [RubyMethod("stop", RubyMethodAttributes.PublicSingleton)]
