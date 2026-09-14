@@ -194,16 +194,14 @@ namespace IronRuby.Builtins {
             io.SetFileDescriptor(descriptor);
 
             if (info.HasEncoding) {
-                io.ExternalEncoding = info.ExternalEncoding ?? io.ExternalEncoding;
-                // An explicit external encoding on its own does not cancel the default
-                // internal encoding; MRI still transcodes to it.
-                io.InternalEncoding = info.InternalEncoding ?? io.Context.DefaultInternalEncoding;
-                io.EncodingSpecified = info.ExternalEncoding != null;
+                io.SetEncodings(info.ExternalEncoding, info.InternalEncoding);
             } else if ((mode & IOMode.PreserveEndOfLines) != 0) {
                 // Binary mode with nothing said about encoding reads and writes bytes, which MRI
                 // reports as an external encoding of ASCII-8BIT.
-                io.ExternalEncoding = RubyEncoding.Binary;
-                io.InternalEncoding = null;
+                io.SetEncodings(RubyEncoding.Binary, null);
+            } else {
+                // See RubyFileOps.Open: the defaults are resolved when the stream is opened.
+                io.SetEncodings(null, null);
             }
 
             return io;
@@ -233,9 +231,7 @@ namespace IronRuby.Builtins {
             self.SetStream(stream);
             self.SetFileDescriptor(descriptor);
             self.Mode = source.Mode;
-            self.ExternalEncoding = source.ExternalEncoding;
-            self.InternalEncoding = source.InternalEncoding;
-            self.EncodingSpecified = source.EncodingSpecified;
+            self.CopyEncodingsFrom(source);
             self.ConversionOptions = source.ConversionOptions;
             return self;
         }
@@ -288,11 +284,7 @@ namespace IronRuby.Builtins {
             io.Mode = info.Mode;
 
             if (info.HasEncoding) {
-                io.ExternalEncoding = info.ExternalEncoding ?? io.ExternalEncoding;
-                // An explicit external encoding on its own does not cancel the default
-                // internal encoding; MRI still transcodes to it.
-                io.InternalEncoding = info.InternalEncoding ?? io.Context.DefaultInternalEncoding;
-                io.EncodingSpecified = info.ExternalEncoding != null;
+                io.SetEncodings(info.ExternalEncoding, info.InternalEncoding);
             }
 
             return io;
@@ -915,39 +907,28 @@ namespace IronRuby.Builtins {
         #region external_encoding, internal_encoding, set_encoding
 
         /// <summary>
-        /// MRI does not report the external encoding of every stream. It reports one that
-        /// was asked for, one that is binary because the mode said so, and the default for
-        /// a read-only stream or when a default internal encoding is in play - and answers
-        /// nil otherwise, which is what a plain "w" or "r+" gets. See
-        /// Util/io-encoding-matrix.rb, which is where these rules were read off CRuby.
+        /// CRuby's rb_io_external_encoding (io.c): the pinned external encoding if there is
+        /// one, and otherwise the current Encoding.default_external for a readable stream but
+        /// nil for a write-only one - which is what a plain "w" or "r+" gets.
         /// </summary>
         [RubyMethod("external_encoding")]
         public static RubyEncoding GetExternalEncoding(RubyIO/*!*/ self) {
-            if (self.EncodingSpecified
-                || self.ExternalEncoding == RubyEncoding.Binary
-                || self.Context.DefaultInternalEncoding != null
-                || !self.Mode.CanWrite()) {
-                return self.ExternalEncoding;
+            if (self.Enc2 != null) {
+                return self.Enc2;
             }
-            return null;
+            if (self.Mode.CanWrite()) {
+                return self.Enc;
+            }
+            return self.Enc ?? self.Context.DefaultExternalEncoding;
         }
 
         /// <summary>
-        /// The internal encoding is what the bytes get transcoded *to*, so MRI answers nil
-        /// when there is no transcoding to do: when the external side is binary, and when
-        /// the two encodings are the same.
+        /// CRuby's rb_io_internal_encoding (io.c). The internal encoding is what the bytes get
+        /// transcoded *to*, so it is nil whenever there is no transcoding to do.
         /// </summary>
         [RubyMethod("internal_encoding")]
         public static RubyEncoding GetInternalEncoding(RubyIO/*!*/ self) {
-            var result = self.InternalEncoding;
-            if (result == null) {
-                return null;
-            }
-            var external = self.ExternalEncoding;
-            if (external == RubyEncoding.Binary || external == result) {
-                return null;
-            }
-            return result;
+            return self.Enc2 != null ? self.Enc : null;
         }
 
         // TODO: to-str, last param to-hash
@@ -963,7 +944,12 @@ namespace IronRuby.Builtins {
             if (external != Missing.Value && external != null) {
                 externalEncoding = Protocols.ConvertToEncoding(toStr, external);
             }
-            if (@internal != Missing.Value && external != null) {
+            if (@internal != Missing.Value && @internal != null) {
+                if (external == null) {
+                    // set_encoding(nil, <something>) goes down MRI's "the second argument names
+                    // the internal encoding of a pair" path and tries to coerce nil to a String.
+                    throw RubyExceptions.CreateTypeConversionError("nil", "String");
+                }
                 internalEncoding = Protocols.ConvertToEncoding(toStr, @internal);
             }
             return SetEncodings(self, externalEncoding, internalEncoding);
@@ -980,9 +966,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("set_encoding")]
         public static RubyIO/*!*/ SetEncodings(RubyIO/*!*/ self, RubyEncoding external, [DefaultParameterValue(null)]RubyEncoding @internal) {
-            self.ExternalEncoding = external ?? self.Context.RubyOptions.LocaleEncoding;
-            self.InternalEncoding = @internal;
-            self.EncodingSpecified = true;
+            self.SetEncodings(external, @internal);
             return self;
         }
 

@@ -59,8 +59,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         protected RubyBasicSocket(RubyContext/*!*/ context)
             : base(context) {
             Mode = IOMode.ReadWrite | IOMode.PreserveEndOfLines;
-            ExternalEncoding = RubyEncoding.Binary;
-            InternalEncoding = null;
+            SetEncodings(RubyEncoding.Binary, null);
             _doNotReverseLookup = DoNotReverseLookup(context).Value;
         }
 
@@ -70,8 +69,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         protected RubyBasicSocket(RubyContext/*!*/ context, Socket/*!*/ socket)
             : base(context, new SocketStream(socket), IOMode.ReadWrite | IOMode.PreserveEndOfLines) {
             _socket = socket;
-            ExternalEncoding = RubyEncoding.Binary;
-            InternalEncoding = null;
+            SetEncodings(RubyEncoding.Binary, null);
             // CRuby snapshots BasicSocket.do_not_reverse_lookup into the socket at creation.
             _doNotReverseLookup = DoNotReverseLookup(context).Value;
         }

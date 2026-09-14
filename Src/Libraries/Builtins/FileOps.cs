@@ -143,14 +143,15 @@ namespace IronRuby.Builtins {
             file.SetFileDescriptor(file.Context.AllocateFileDescriptor(stream));
 
             if (info.HasEncoding) {
-                file.ExternalEncoding = info.ExternalEncoding;
-                // An explicit external encoding on its own does not cancel the default
-                // internal encoding; MRI still transcodes to it.
-                file.InternalEncoding = info.InternalEncoding ?? file.Context.DefaultInternalEncoding;
-                file.EncodingSpecified = true;
+                file.SetEncodings(info.ExternalEncoding, info.InternalEncoding);
             } else if ((info.Mode & IOMode.PreserveEndOfLines) != 0) {
                 // The "b" flag with no explicit encoding means BINARY.
-                file.ExternalEncoding = RubyEncoding.Binary;
+                file.SetEncodings(RubyEncoding.Binary, null);
+            } else {
+                // MRI still runs the defaults through rb_io_ext_int_to_encs when the stream is
+                // opened, so a stream opened while a default internal encoding was in force keeps
+                // the external encoding it had then, rather than following later reassignments.
+                file.SetEncodings(null, null);
             }
         }
         
