@@ -1148,6 +1148,13 @@ namespace IronRuby.Builtins {
             // (as per MRI behavior, the latter can expand the array if start > length, but the former doesn't)
             start = Math.Max(0, NormalizeIndex(self, start));
 
+            // start + length overflowed Int32 and produced a negative bound, after which the
+            // loop below appended one element at a time until the process died. MRI reports
+            // "argument too big" for a size it cannot represent; the CLR's is Int32.MaxValue.
+            if (length > 0 && (long)start + length > Int32.MaxValue) {
+                throw RubyExceptions.CreateArgumentError("argument too big");
+            }
+
             ExpandList(self, Math.Min(start, start + length));
 
             for (int i = 0; i < length; i++) {
