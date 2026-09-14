@@ -1612,7 +1612,8 @@ namespace IronRuby.Prism {
             } else if (node.KeywordRest is Pm.NoKeywordsParameterNode) {
                 // `def m(**nil)` accepts no keywords at all, which is only detectable by
                 // looking at the trailing hash - so it takes one, just to refuse it
-                if (isMethod && optional.Count == 0 && unsplat == null) {
+                // (a lambda is as strict as a method about this; a plain block is not)
+                if ((isMethod || !autoSplat) && optional.Count == 0 && unsplat == null) {
                     prologue = RefuseKeywords(optional, mandatory, span);
                 }
             } else if (node.KeywordRest != null) {

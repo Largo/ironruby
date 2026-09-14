@@ -685,13 +685,19 @@ namespace IronRuby.Runtime.Conversions {
                 return true;
             }
 
-            if (args.Target == null) {
+            if (args.Target == null && ConvertsNullToEmptyArray) {
                 // `*nil` is no elements at all - MRI 4.0 does not ask nil for #to_a
                 metaBuilder.Result = Ast.Convert(Methods.MakeArray0.OpCall(), typeof(IList));
                 return true;
             }
             return false;
         }
+
+        /// <summary>
+        /// True for the explicit `*x` splat. Destructuring goes through #to_ary instead, where
+        /// nil is a value like any other: `(*f) = nil` binds f to [nil].
+        /// </summary>
+        protected virtual bool ConvertsNullToEmptyArray { get { return false; } }
 
         // return the target object on error:
         protected override Expression/*!*/ MakeErrorExpression(CallArguments/*!*/ args, Expression/*!*/ targetClassNameConstant, Type/*!*/ resultType) {
@@ -736,6 +742,7 @@ namespace IronRuby.Runtime.Conversions {
     /// <remarks>See also http://redmine.ruby-lang.org/issues/show/3680 </remarks>
     public sealed class ExplicitSplatAction : SplatAction<ExplicitSplatAction> {
         protected sealed override string/*!*/ ToMethodName { get { return Symbols.ToA; } }
+        protected sealed override bool ConvertsNullToEmptyArray { get { return true; } }
         protected sealed override MethodInfo ConversionResultValidator { get { return Methods.ToAValidator; } }
         protected sealed override MethodInfo/*!*/ SplatResultValidator { get { return Methods.SplatToAValidator; } }
     }
