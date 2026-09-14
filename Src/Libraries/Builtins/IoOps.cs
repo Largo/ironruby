@@ -1070,15 +1070,16 @@ namespace IronRuby.Builtins {
             self.Seek(pos.ToInt64(), SeekOrigin.Begin);
         }
 
+        // The line number counts lines read, so a stream that cannot be read from has none.
         [RubyMethod("lineno")]
         public static int GetLineNumber(RubyIO/*!*/ self) {
-            self.RequireOpen();
+            self.RequireReadable();
             return self.LineNumber;
         }
 
         [RubyMethod("lineno=")]
         public static void SetLineNumber(RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]int value) {
-            self.RequireOpen();
+            self.RequireReadable();
             self.LineNumber = value;
         }
 

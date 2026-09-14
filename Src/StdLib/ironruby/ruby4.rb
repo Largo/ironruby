@@ -1519,6 +1519,9 @@ class File
       extra = open_args.find { |a| a.is_a?(::Hash) } || {}
       mode = open_args.find { |a| a.is_a?(::String) || a.is_a?(::Integer) } || extra[:mode] || "r"
       encoding = extra[:encoding]
+      if extra[:binmode] && mode.is_a?(::String) && !mode.include?("b")
+        mode = mode.sub(/\A([^:]*)/) { "#{$1}b" }
+      end
     else
       mode = opts[:mode]
       encoding = opts[:encoding]
@@ -9562,6 +9565,24 @@ class IO
   alias_method :__ir_set_encoding__, :set_encoding
 
   def set_encoding(*args)
+    # Anything string-shaped names an encoding, and one name may carry both sides.
+    if args.size >= 1 && !args[0].is_a?(::String) && !args[0].is_a?(::Encoding) &&
+       !args[0].nil? && args[0].respond_to?(:to_str)
+      args = args.dup
+      args[0] = args[0].to_str
+    end
+    if args.size >= 2 && args[0].nil? && !args[1].nil?
+      # MRI reads the pair as two names and trips over the nil on the way.
+      ::Kernel.raise(::TypeError, "no implicit conversion of nil into String")
+    end
+    if args.size >= 2 && args[1] == "-"
+      # "-" in the second position is MRI's way of saying "no internal encoding at
+      # all", as opposed to "not given", which falls back to Encoding.default_internal.
+      # Naming the external encoding twice is how that is said here.
+      args = args.dup
+      args[1] = args[0]
+    end
+    __check_set_encoding_options__(args)
     if args.size >= 1 && args[0].is_a?(::String) && args[0].include?(":")
       external, internal = args[0].split(":", 2)
       rest = args[1..-1] || []
@@ -9569,6 +9590,54 @@ class IO
     end
     __ir_set_encoding__(*args)
   end
+
+  # MRI validates the pair before it takes it: an encoding that is not ASCII
+  # compatible needs either binmode or a conversion to something that is, and the
+  # newline decorator only takes the three values it knows.
+  def __check_set_encoding_options__(args)
+    options = args.last.is_a?(::Hash) ? args.last : nil
+    if options
+      if options.key?(:newline)
+        value = options[:newline]
+        unless [:universal, :crlf, :cr, :lf].include?(value)
+          # Only a Symbol gets named in the message; anything else is just wrong.
+          ::Kernel.raise(::ArgumentError, value.is_a?(::Symbol) ?
+            "unexpected value for newline option: #{value}" : "unexpected value for newline option")
+        end
+      end
+      decorator = options.key?(:newline) || options[:universal_newline] ||
+                  options[:crlf_newline] || options[:cr_newline]
+      if decorator && (@__binmode__ || binmode?)
+        ::Kernel.raise(::ArgumentError, "newline decorator with binary mode")
+      end
+    end
+
+    external = args[0]
+    if external.nil?
+      # A nil external encoding is Encoding.default_external, which still has to be
+      # something this stream can decode.
+      external = ::Encoding.default_external
+    end
+    external = external.to_str if !external.is_a?(::String) && !external.is_a?(::Encoding) && external.respond_to?(:to_str)
+    encoding = external.is_a?(::Encoding) ? external : (::Encoding.find(external) rescue nil)
+    return if encoding.nil? || encoding.ascii_compatible?
+
+    internal = args[1].is_a?(::Hash) ? nil : args[1]
+    return unless internal.nil?
+    return if @__binmode__ || binmode?
+    # A write-only stream never decodes what it wrote, so it does not need binmode.
+    return unless __readable_stream__?
+    ::Kernel.raise(::ArgumentError, "ASCII incompatible encoding needs binmode")
+  end
+  private :__check_set_encoding_options__
+
+  def __readable_stream__?
+    lineno
+    true
+  rescue ::IOError
+    false
+  end
+  private :__readable_stream__?
 
   # binmode is implemented for a File and throws for everything else - a pipe,
   # a socket, the standard streams. On this platform it has nothing to do but
@@ -9911,6 +9980,31 @@ class IO
     end
   end
 
+  # seek and sysseek take the whence as a symbol as well as an Integer.
+  SEEK_WHENCE__ = { CUR: 1, SET: 0, END: 2, DATA: 3, HOLE: 4 }.freeze
+
+  def __seek_whence__(whence)
+    return whence unless whence.is_a?(::Symbol)
+    value = SEEK_WHENCE__[whence]
+    ::Kernel.raise(::TypeError, "no implicit conversion of Symbol into Integer") if value.nil?
+    value
+  end
+  private :__seek_whence__
+
+  alias_method :__ir_seek__, :seek
+  private :__ir_seek__
+
+  def seek(amount, whence = 0)
+    __ir_seek__(amount, __seek_whence__(whence))
+  end
+
+  alias_method :__ir_sysseek__, :sysseek
+  private :__ir_sysseek__
+
+  def sysseek(amount, whence = 0)
+    __ir_sysseek__(amount, __seek_whence__(whence))
+  end
+
   # readchar is getc with an EOFError at the end, so it answers a one-character
   # String too; the built-in still answers the first byte as an Integer.
   def readchar
@@ -10038,9 +10132,19 @@ class IO
     0
   end unless method_defined?(:fdatasync)
 
-  def to_path
-    respond_to?(:path) ? path : nil
-  end unless method_defined?(:to_path)
+  # IO#path answers the path the stream was opened with - File overrides it with the
+  # real one - and the standard streams answer the names MRI gives them. An IO built
+  # from a descriptor keeps whatever path: it was told about.
+  def path
+    case fileno
+    when 0 then "<STDIN>"
+    when 1 then "<STDOUT>"
+    when 2 then "<STDERR>"
+    else @__io_path__
+    end
+  end unless method_defined?(:path)
+
+  alias_method :to_path, :path unless method_defined?(:to_path)
 
   # Positional read/write, done by saving and restoring the file position since
   # there is no pread/pwrite underneath.
