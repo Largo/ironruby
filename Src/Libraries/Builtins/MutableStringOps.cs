@@ -1781,10 +1781,9 @@ namespace IronRuby.Builtins {
             RubyEncoding to, from;
             MutableString toEncodingName = null, fromEncodingName = null;
             if (toEncoding == Missing.Value) {
-                to = toStr.Context.DefaultInternalEncoding;
-                if (to == null) {
-                    return self;
-                }
+                // Without a target and without a default_internal the encoding does not change,
+                // but the newline decorators still have to run.
+                to = toStr.Context.DefaultInternalEncoding ?? self.Encoding;
             } else {
                 to = toEncoding as RubyEncoding;
                 if (to == null) {
@@ -2031,9 +2030,17 @@ namespace IronRuby.Builtins {
 
                 // A character the target has no room for. :fallback gets first refusal, then
                 // :undef => :replace, and otherwise it is an error.
-                MutableString substitute = CallFallback(fallbackStorage, toStr, settings.Fallback, piece, from);
+                // An explicit :replace with undef: :replace wins over :fallback.
+                MutableString substitute = (settings.ReplaceUndefined && settings.Replacement != null)
+                    ? null
+                    : CallFallback(fallbackStorage, toStr, settings.Fallback, piece, from);
                 if (substitute != null) {
-                    result.Append(substitute.ConvertToString());
+                    string replacementText = substitute.ConvertToString();
+                    // The substitute has to fit in the target encoding too.
+                    if (!CanEncode(encoder, replacementText.ToCharArray(), replacementText.Length)) {
+                        throw RubyExceptions.CreateArgumentError("too big fallback string");
+                    }
+                    result.Append(replacementText);
                     continue;
                 }
 
@@ -2217,6 +2224,11 @@ namespace IronRuby.Builtins {
             ConversionStorage<MutableString>/*!*/ toStr, object fallback, string/*!*/ piece, RubyEncoding/*!*/ from) {
 
             if (fallback == null) {
+                return null;
+            }
+
+            // MRI ignores a :fallback that cannot be indexed rather than calling it.
+            if (!fallbackStorage.Context.RespondTo(fallback, "[]")) {
                 return null;
             }
 
