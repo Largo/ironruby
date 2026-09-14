@@ -26,7 +26,7 @@ namespace IronRuby.Builtins {
             { "HUP", 1 }, { "INT", 2 }, { "QUIT", 3 }, { "ILL", 4 }, { "TRAP", 5 },
             { "ABRT", 6 }, { "IOT", 6 }, { "BUS", 7 }, { "FPE", 8 }, { "KILL", 9 },
             { "USR1", 10 }, { "SEGV", 11 }, { "USR2", 12 }, { "PIPE", 13 }, { "ALRM", 14 },
-            { "TERM", 15 }, { "STKFLT", 16 }, { "CHLD", 17 }, { "CLD", 17 }, { "CONT", 18 },
+            { "TERM", 15 }, { "CHLD", 17 }, { "CLD", 17 }, { "CONT", 18 },
             { "STOP", 19 }, { "TSTP", 20 }, { "TTIN", 21 }, { "TTOU", 22 }, { "URG", 23 },
             { "XCPU", 24 }, { "XFSZ", 25 }, { "VTALRM", 26 }, { "PROF", 27 }, { "WINCH", 28 },
             { "IO", 29 }, { "POLL", 29 }, { "PWR", 30 }, { "SYS", 31 },
@@ -41,9 +41,21 @@ namespace IronRuby.Builtins {
         /// the way MRI accepts it, and anything else is an ArgumentError - deliberately without
         /// asking the object for #to_int, which ruby/spec checks for.
         /// </summary>
-        internal static int ToNumber(object signalId) {
+        internal static int ToNumber(RubyContext context, object signalId) {
+            return ToNumber(context, signalId, false);
+        }
+
+        /// <summary>
+        /// <paramref name="forTrap"/> applies the two extra rules #trap has and Process.kill
+        /// does not: a name may not be negated, and the number must name a real signal.
+        /// </summary>
+        internal static int ToNumber(RubyContext context, object signalId, bool forTrap) {
             if (signalId is int) {
-                return (int)signalId;
+                int given = (int)signalId;
+                if (forTrap && (given < 0 || ToName(given) == null)) {
+                    throw RubyExceptions.CreateArgumentError("invalid signal number ({0})", given);
+                }
+                return given;
             }
 
             string name = null;
@@ -58,14 +70,21 @@ namespace IronRuby.Builtins {
             }
 
             if (name == null) {
+                // Deliberately without #to_int: ruby/spec checks that an object which only
+                // answers #to_int is rejected. The Ruby class name, not the CLR one - MRI says
+                // "bad signal type Float", not "Double".
                 throw RubyExceptions.CreateArgumentError("bad signal type {0}",
-                    signalId == null ? "NilClass" : signalId.GetType().Name);
+                    context != null ? context.GetClassName(signalId)
+                                    : (signalId == null ? "NilClass" : signalId.GetType().Name));
             }
 
             // "-TERM" and "-SIGTERM" are the spelled-out forms of a negative signal number,
             // which Process.kill reads as "to the process group".
             bool negated = name.StartsWith("-", StringComparison.Ordinal);
             if (negated) {
+                if (forTrap) {
+                    throw RubyExceptions.CreateArgumentError("negative signal name: {0}", name);
+                }
                 name = name.Substring(1);
             }
 
@@ -83,6 +102,9 @@ namespace IronRuby.Builtins {
         }
 
         internal static string ToName(int number) {
+            if (number == 0) {
+                return "EXIT";
+            }
             foreach (var entry in _numbers) {
                 if (entry.Value == number) {
                     return entry.Key;
@@ -177,10 +199,34 @@ namespace IronRuby.Builtins {
         /// spelling of "nothing was installed" ("DEFAULT"). <paramref name="invoke"/> runs the Ruby
         /// side of the handler; it is null for "IGNORE", which only cancels the default disposition.
         /// </summary>
+        /// <summary>
+        /// MRI refuses to let a Ruby handler replace the signals its own runtime depends on,
+        /// and the kernel refuses KILL and STOP outright.
+        /// </summary>
+        internal static void CheckTrappable(int signal) {
+            switch (signal) {
+                case 4:   // ILL
+                case 7:   // BUS
+                case 8:   // FPE
+                case 11:  // SEGV
+                case 26:  // VTALRM
+                    throw RubyExceptions.CreateArgumentError("can\'t trap reserved signal: SIG{0}", ToName(signal));
+
+                case 9:   // KILL
+                case 19:  // STOP
+                    throw RubyExceptions.CreateArgumentError("Signal already used by VM or OS: SIG{0}", ToName(signal));
+            }
+        }
+
         internal static object Trap(int signal, object command, Action<int> invoke) {
+            CheckTrappable(signal);
+            command = NormalizeCommand(command);
+
             lock (_handlers) {
                 Handler handler;
-                object previous = MutableString.CreateAscii("DEFAULT");
+                // MRI spells "nobody ever trapped this" SYSTEM_DEFAULT; DEFAULT means a handler
+                // was installed and then taken away again.
+                object previous = MutableString.CreateAscii(signal == SignalInterrupt ? "DEFAULT" : "SYSTEM_DEFAULT");
                 if (_handlers.TryGetValue(signal, out handler)) {
                     previous = handler.Command;
                     if (handler.Registration != null) {
@@ -189,34 +235,56 @@ namespace IronRuby.Builtins {
                     _handlers.Remove(signal);
                 }
 
-                if (IsDefault(command)) {
-                    // Nothing left to run: let the platform do whatever it does by default.
-                    return previous;
-                }
-
                 var installed = new Handler { Command = command };
-                installed.Registration = TryRegister(signal, IsIgnore(command) ? null : invoke);
+                if (!IsDefault(command) && !IsSystemDefault(command)) {
+                    // DEFAULT and SYSTEM_DEFAULT are recorded so the next #trap reports them,
+                    // but nothing is registered: the platform disposition is what should run.
+                    installed.Registration = TryRegister(signal, IsIgnore(command) ? null : invoke);
+                }
                 _handlers[signal] = installed;
                 return previous;
             }
         }
 
-        private static bool IsDefault(object command) {
-            var str = command as MutableString;
-            if (str == null) {
-                return command == null;
+        private const int SignalInterrupt = 2;
+
+        /// <summary>
+        /// MRI answers the canonical spelling of a symbolic handler, not the one it was given:
+        /// :SIG_IGN, "SIG_IGN" and :IGNORE all come back as "IGNORE".
+        /// </summary>
+        private static object NormalizeCommand(object command) {
+            string name = CommandName(command);
+            switch (name) {
+                case "DEFAULT":
+                case "SIG_DFL": return MutableString.CreateAscii("DEFAULT");
+                case "IGNORE":
+                case "SIG_IGN": return MutableString.CreateAscii("IGNORE");
+                case "SYSTEM_DEFAULT": return MutableString.CreateAscii("SYSTEM_DEFAULT");
+                case "EXIT": return MutableString.CreateAscii("EXIT");
+                default: return command;
             }
-            string s = str.ConvertToString();
-            return s == "DEFAULT" || s == "SIG_DFL";
         }
 
-        private static bool IsIgnore(object command) {
+        private static string CommandName(object command) {
             var str = command as MutableString;
-            if (str == null) {
-                return false;
+            if (str != null) {
+                return str.ConvertToString();
             }
-            string s = str.ConvertToString();
-            return s == "IGNORE" || s == "SIG_IGN";
+            var symbol = command as RubySymbol;
+            return (symbol != null) ? symbol.ToString() : null;
+        }
+
+        private static bool IsDefault(object command) {
+            return CommandName(command) == "DEFAULT";
+        }
+
+        private static bool IsSystemDefault(object command) {
+            return CommandName(command) == "SYSTEM_DEFAULT";
+        }
+
+        // nil is MRI's third spelling of "ignore this signal".
+        private static bool IsIgnore(object command) {
+            return command == null || CommandName(command) == "IGNORE";
         }
 
         private static PosixSignalRegistration TryRegister(int signal, Action<int> invoke) {

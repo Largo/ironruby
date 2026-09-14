@@ -48,12 +48,21 @@ namespace IronRuby.Builtins {
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
         public static object Trap(
             CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            ConversionStorage<MutableString>/*!*/ stringCast,
             RubyContext/*!*/ context,
             object self,
             object signalId,
             object command) {
 
-            int number = PosixSignals.ToNumber(signalId);
+            // MRI converts the signal with #to_str (never #to_int), and does so on every call.
+            if (!(signalId is int) && !(signalId is MutableString) && !(signalId is RubySymbol)) {
+                var converted = Protocols.TryCastToString(stringCast, signalId);
+                if (converted != null) {
+                    signalId = converted;
+                }
+            }
+
+            int number = PosixSignals.ToNumber(context, signalId, true);
             if (number == SignalInterrupt) {
                 var proc = command as Proc;
                 context.InterruptSignalHandler = (proc != null) ? new Action(() => proc.Call(null)) : null;
@@ -81,6 +90,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
         public static object Trap(
             CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ callStorage,
+            ConversionStorage<MutableString>/*!*/ stringCast,
             RubyContext/*!*/ context,
             BlockParam block,
             object self,
@@ -89,7 +99,7 @@ namespace IronRuby.Builtins {
             if (block == null) {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
-            return Trap(callStorage, context, self, signalId, block.Proc);
+            return Trap(callStorage, stringCast, context, self, signalId, block.Proc);
         }
 
         private const int SignalInterrupt = 2;
