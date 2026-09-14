@@ -78,7 +78,9 @@ namespace IronRuby.Compiler.Ast {
             if (Operation == Symbols.And || Operation == Symbols.Or) {
                 MSA.Expression transformedLeftRead = _left.TransformRead(gen,
                     (transformedLeftTarget != null) ? Ast.Assign(leftTargetTemp, transformedLeftTarget) : null,
-                    true // tryRead
+                    // `X ||= v` assigns an undefined constant instead of raising, but
+                    // `X &&= v` still has to read it, and raise if it is not there.
+                    Operation == Symbols.Or
                 );
 
                 MSA.Expression transformedWrite = _left.TransformWrite(gen, leftTargetTemp, transformedRight);
