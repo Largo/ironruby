@@ -294,17 +294,43 @@ class Socket
     end
   end
 
+  # Builds an Addrinfo from a packed sockaddr as getsockname/getpeername return
+  # it. The family byte there is the *platform* number (AF_INET6 is 10 on Linux),
+  # not Socket::AF_INET6, which carries winsock's 23 -- see Socket.cs.
+  def self.__ir_addrinfo_from_packed(bytes, socktype = SOCK_STREAM) # :nodoc:
+    return nil if bytes.nil? || bytes.bytesize < 8
+    bytes = bytes.dup.force_encoding(Encoding::BINARY)
+    port = bytes.byteslice(2, 2).unpack("n")[0]
+    case bytes.unpack("S")[0]
+    when 2
+      ip = bytes.byteslice(4, 4).unpack("C4").join(".")
+    when 10, 23, 28, 30
+      return nil if bytes.bytesize < 24
+      ip = __ir_unpack_ipv6(bytes.byteslice(8, 16))
+    else
+      return nil
+    end
+    protocol = socktype == SOCK_DGRAM ? IPPROTO_UDP : IPPROTO_TCP
+    Addrinfo.new([nil, port, ip, ip], nil, socktype, protocol)
+  end
+
   def self.accept_loop(*sockets) # :yield: socket, client_addrinfo
     sockets.flatten!
+    raise ArgumentError, "no sockets" if sockets.empty?
+    # CRuby waits in IO.select and then accepts without blocking. IronRuby's
+    # IO.select reports every socket as readable straight away (its read wait
+    # handle is a zero-byte overlapped receive, which completes at once), so that
+    # would busy-spin; block in accept instead, which is interruptible. With the
+    # single socket tcp_server_sockets creates this is equivalent.
     loop do
-      readable = IO.select(sockets)[0]
-      readable.each do |server|
-        begin
-          sock = server.accept_nonblock
-        rescue IO::WaitReadable, Errno::EINTR, Errno::ECONNABORTED, Errno::EPROTO
-          next
+      sockets.each do |server|
+        accepted = server.accept
+        if accepted.kind_of?(Array)
+          sock = accepted[0]
+          yield sock, __ir_addrinfo_from_packed(sock.getpeername)
+        else
+          yield accepted, accepted.remote_address
         end
-        yield sock
       end
     end
   end

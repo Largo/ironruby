@@ -63,7 +63,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             IAsyncResult result = Interlocked.Exchange(ref _acceptResult, null);
 
             if (result == null) {
-                return RubyBasicSocket.Blocking(Socket, SelectMode.SelectRead, () => Socket.Accept());
+                return RubyBasicSocket.BlockingAccept(Socket, () => Socket.Accept());
             }
 
             // wait until accept finishes:

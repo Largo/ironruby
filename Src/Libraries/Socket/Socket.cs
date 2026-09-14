@@ -262,7 +262,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("accept")]
         public static RubyArray/*!*/ Accept(RubyContext/*!*/ context, RubySocket/*!*/ self) {
             RubyArray result = new RubyArray(2);
-            RubySocket s = new RubySocket(context, Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.Accept()));
+            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, () => self.Socket.Accept()));
             result.Add(s);
             SocketAddress addr = s.Socket.RemoteEndPoint.Serialize();
             result.Add(MutableString.CreateAscii(addr.ToString()));
@@ -337,7 +337,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyArray result = new RubyArray(2);
             // TODO: Do we need some kind of strong reference to the socket
             // here to stop the RubySocket from being garbage collected?
-            RubySocket s = new RubySocket(context, Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.Accept()));
+            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, () => self.Socket.Accept()));
             result.Add(s.GetFileDescriptor());
             SocketAddress addr = s.Socket.RemoteEndPoint.Serialize();
             result.Add(MutableString.CreateAscii(addr.ToString()));

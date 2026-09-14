@@ -204,7 +204,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         // TCPServer#accept always has. Without this the ruby/spec idiom
         // "Thread.pass while t.status != 'sleep'" livelocks.
         internal static TResult Blocking<TResult>(Func<TResult>/*!*/ operation) {
-            return Blocking(null, SelectMode.SelectRead, operation);
+            return BlockingCore(null, SelectMode.SelectRead, operation);
         }
 
         // A thread sitting inside a native socket call is not in WaitSleepJoin, so Thread.Interrupt
@@ -214,7 +214,25 @@ namespace IronRuby.StandardLibrary.Sockets {
         // matcher does exactly "wait for status == sleep, then kill and join".
         private const int PollSliceMicroseconds = 50 * 1000;
 
+        /// <summary>
+        /// A read that waits for data. A *stream* socket that is not connected does not wait at all --
+        /// recv(2) on it fails with ENOTCONN, and polling it would wait forever for readiness that can
+        /// never come (TCPServer#gets is the case that matters). Datagram sockets do wait, connected
+        /// or not.
+        /// </summary>
         internal static TResult Blocking<TResult>(Socket socket, SelectMode mode, Func<TResult>/*!*/ operation) {
+            bool waitable = socket != null && (socket.Connected || socket.SocketType != SocketType.Stream);
+            return BlockingCore(waitable ? socket : null, mode, operation);
+        }
+
+        /// <summary>
+        /// accept(2): a listening socket is never "connected", so it needs the wait unconditionally.
+        /// </summary>
+        internal static TResult BlockingAccept<TResult>(Socket/*!*/ socket, Func<TResult>/*!*/ operation) {
+            return BlockingCore(socket, SelectMode.SelectRead, operation);
+        }
+
+        private static TResult BlockingCore<TResult>(Socket socket, SelectMode mode, Func<TResult>/*!*/ operation) {
             ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
             bool wasBlocked = info.Blocked;
             info.Blocked = true;
