@@ -4965,10 +4965,11 @@ namespace IronRuby.Builtins {
             
             #if FEATURE_FILESYSTEM
             DefineLibraryMethod(module, "test", 0x52, 
-                0x00000004U, 0x00020000U, 0x000c0018U, 
+                0x00000004U, 0x00020000U, 0x00000004U, 0x00020000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Test), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Int32, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Test), 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.Test)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Test), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Int32, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Test)
             );
             
             #endif
@@ -5306,10 +5307,11 @@ namespace IronRuby.Builtins {
             
             #if FEATURE_FILESYSTEM
             DefineLibraryMethod(module, "test", 0x61, 
-                0x00000004U, 0x00020000U, 0x000c0018U, 
+                0x00000004U, 0x00020000U, 0x00000004U, 0x00020000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Test), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Int32, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Test), 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.KernelOps.Test)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Test), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Int32, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Test)
             );
             
             #endif

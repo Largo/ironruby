@@ -1699,73 +1699,95 @@ namespace IronRuby.Builtins {
             MutableString pathStr = Protocols.CastToPath(toPath, path);
             cmd &= 0xFF;
             switch (cmd) {
-                case 'A':
-                    return RubyFileOps.RubyStatOps.AccessTime(RubyFileOps.RubyStatOps.Create(context, pathStr));
+                // The type and permission questions all answer false for a path that cannot be
+                // stat'd, the way FileTest's predicates do; only the three time queries raise.
+                case 'b': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsBlockDevice);
+                case 'c': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsCharDevice);
+                case 'd': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsDirectory);
+                case 'e': return Stat(context, pathStr, true, (fsi) => true);
+                case 'f': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsFile);
+                case 'g': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsSetGid);
+                case 'G': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsGroupOwned);
+                case 'k': return Stat(context, pathStr, true, (fsi) => RubyFileOps.RubyStatOps.IsSticky(fsi) as bool? ?? false);
+                // ?l asks about the link itself, so it is the one query that must not follow it.
+                case 'l': return Stat(context, pathStr, false, RubyFileOps.RubyStatOps.IsSymLink);
+                case 'o': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsUserOwned);
+                case 'O': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsUserOwnedReal);
+                case 'p': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsPipe);
+                case 'r': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsReadable);
+                case 'R': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsReadableReal);
+                case 'S': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsSocket);
+                case 'u': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsSetUid);
+                case 'w': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsWritable);
+                case 'W': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsWritableReal);
+                case 'x': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsExecutable);
+                case 'X': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsExecutableReal);
+                case 'z': return Stat(context, pathStr, true, RubyFileOps.RubyStatOps.IsZeroLength);
 
-                case 'b':
-                    return RubyFileOps.RubyStatOps.IsBlockDevice(RubyFileOps.RubyStatOps.Create(context, pathStr));
+                // ?s is the size, or nil for an empty file - and nil, not an error, for one that
+                // is not there.
+                case 's': {
+                    FileSystemInfo fsi = TryStat(context, pathStr, true);
+                    return fsi != null ? RubyFileOps.RubyStatOps.NullableSize(fsi) : null;
+                }
 
-                case 'C':
-                    return RubyFileOps.RubyStatOps.CreateTime(RubyFileOps.RubyStatOps.Create(context, pathStr));
+                case 'A': return RubyFileOps.RubyStatOps.AccessTime(RubyFileOps.RubyStatOps.Create(context, pathStr));
+                case 'C': return RubyFileOps.RubyStatOps.CreateTime(RubyFileOps.RubyStatOps.Create(context, pathStr));
+                case 'M': return RubyFileOps.RubyStatOps.ModifiedTime(RubyFileOps.RubyStatOps.Create(context, pathStr));
 
-                case 'c':
-                    return RubyFileOps.RubyStatOps.IsCharDevice(RubyFileOps.RubyStatOps.Create(context, pathStr));
-
-                case 'd':
-                    return RubyFileOps.DirectoryExists(context, pathStr);
-
-                case 'e':
-                case 'f':
-                    return RubyFileOps.FileExists(context, pathStr);
-
-                case 'g':
-                    return RubyFileOps.RubyStatOps.IsSetGid(RubyFileOps.RubyStatOps.Create(context, pathStr));
-
-                case 'G':
-                    return RubyFileOps.RubyStatOps.IsGroupOwned(RubyFileOps.RubyStatOps.Create(context, pathStr));
-
-                case 'k':
-                    return RubyFileOps.RubyStatOps.IsSticky(RubyFileOps.RubyStatOps.Create(context, pathStr));
-
-                case 'l':
-                    return RubyFileOps.RubyStatOps.IsSymLink(RubyFileOps.RubyStatOps.Create(context, pathStr));
-
-                case 'M': throw new NotImplementedException();
-                case 'O': throw new NotImplementedException();
-                case 'o': throw new NotImplementedException();
-                case 'p': throw new NotImplementedException();
-                case 'r': throw new NotImplementedException();
-                case 'R': throw new NotImplementedException();
-                case 's': throw new NotImplementedException();
-                case 'S': throw new NotImplementedException();
-                case 'u': throw new NotImplementedException();
-                case 'w': throw new NotImplementedException();
-                case 'W': throw new NotImplementedException();
-                case 'x': throw new NotImplementedException();
-                case 'X': throw new NotImplementedException();
-                case 'z': throw new NotImplementedException();
                 default:
-                    throw RubyExceptions.CreateArgumentError("unknown command ?{0}", (char)cmd);
+                    throw RubyExceptions.CreateArgumentError("unknown command '{0}'", (char)cmd);
             }
         }
 
-        [RubyMethod("test", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("test", RubyMethodAttributes.PublicSingleton)]
-        public static object Test(
-            RubyContext/*!*/ context,
-            object self,
-            int cmd,
-            [DefaultProtocol, NotNull]MutableString/*!*/ file1,
-            [DefaultProtocol, NotNull]MutableString/*!*/ file2) {
-            cmd &= 0xFF;
-            switch (cmd) {
-                case '-': throw new NotImplementedException();
-                case '=': throw new NotImplementedException();
-                case '<': throw new NotImplementedException();
-                case '>': throw new NotImplementedException();
-                default:
-                    throw RubyExceptions.CreateArgumentError("unknown command ?{0}", (char)cmd);
+        [RubyMethod("test", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("test", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static object Test(ConversionStorage<MutableString>/*!*/ toPath, object self, [NotNull]MutableString/*!*/ cmd,
+            object path1, object path2) {
+
+            if (cmd.IsEmpty) {
+                throw RubyExceptions.CreateTypeConversionError("String", "Integer");
             }
+            return Test(toPath, self, cmd.GetChar(0), path1, path2);
+        }
+
+        [RubyMethod("test", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_FILESYSTEM")]
+        [RubyMethod("test", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
+        public static object Test(ConversionStorage<MutableString>/*!*/ toPath, object self, [DefaultProtocol]int cmd,
+            object path1, object path2) {
+
+            RubyContext context = toPath.Context;
+            cmd &= 0xFF;
+            if (cmd != '-' && cmd != '=' && cmd != '<' && cmd != '>') {
+                throw RubyExceptions.CreateArgumentError("unknown command '{0}'", (char)cmd);
+            }
+
+            FileSystemInfo first = TryStat(context, Protocols.CastToPath(toPath, path1), true);
+            FileSystemInfo second = TryStat(context, Protocols.CastToPath(toPath, path2), true);
+            if (first == null || second == null) {
+                return false;
+            }
+
+            if (cmd == '-') {
+                // "is a hard link to": the same device and inode, which is what File.identical?
+                // answers as well.
+                return RubyFileOps.RubyStatOps.AreIdentical(context, first, second);
+            }
+
+            int comparison = RubyFileOps.RubyStatOps.ModifiedTime(first).CompareTo(RubyFileOps.RubyStatOps.ModifiedTime(second));
+            return cmd == '=' ? comparison == 0 : (cmd == '<' ? comparison < 0 : comparison > 0);
+        }
+
+        /// <summary>The file's stat, or null if it cannot be taken - a missing path, most often.</summary>
+        private static FileSystemInfo TryStat(RubyContext/*!*/ context, MutableString/*!*/ path, bool followLinks) {
+            FileSystemInfo fsi;
+            int errno;
+            return RubyFileOps.RubyStatOps.TryCreate(context, context.DecodePath(path), followLinks, out fsi, out errno) ? fsi : null;
+        }
+
+        private static bool Stat(RubyContext/*!*/ context, MutableString/*!*/ path, bool followLinks, Func<FileSystemInfo, bool>/*!*/ predicate) {
+            FileSystemInfo fsi = TryStat(context, path, followLinks);
+            return fsi != null && predicate(fsi);
         }
 #endif
         #endregion

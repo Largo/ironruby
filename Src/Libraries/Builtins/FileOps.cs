@@ -1758,6 +1758,12 @@ namespace IronRuby.Builtins {
                 return d != null ? d.Uid == Posix.GetEUid() : true;
             }
 
+            /// <summary>Owned by the real uid rather than the effective one - what `test ?O` asks.</summary>
+            public static bool IsUserOwnedReal(FileSystemInfo/*!*/ self) {
+                var d = D(self);
+                return d != null ? d.Uid == Posix.GetUid() : true;
+            }
+
             [RubyMethod("grpowned?")]
             public static bool IsGroupOwned(FileSystemInfo/*!*/ self) {
                 var d = D(self);
