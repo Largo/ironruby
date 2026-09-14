@@ -16,6 +16,8 @@
 using System;
 using Microsoft.Scripting;
 
+using IronRuby.Builtins;
+
 namespace IronRuby.Runtime {
     public abstract class GlobalVariable {
         protected GlobalVariable() {
@@ -42,9 +44,21 @@ namespace IronRuby.Runtime {
 
         internal T RequireType<T>(object value, string/*!*/ variableName, string/*!*/ typeName) {
             if (!(value is T)) {
-                throw RubyExceptions.CreateTypeError(String.Format("Value of ${0} must be {1}", variableName, typeName));
+                throw RubyExceptions.CreateTypeError(String.Format("value of ${0} must be {1}", variableName, typeName));
             }
             return (T)value;
+        }
+
+        /// <summary>
+        /// A separator global ($/, $,, $-0, ...) keeps a frozen copy of the string assigned to it,
+        /// so that later changes to the caller's string do not change the separator.
+        /// </summary>
+        internal MutableString RequireSeparator(object value, string/*!*/ variableName) {
+            if (value == null) {
+                return null;
+            }
+            var str = RequireType<MutableString>(value, variableName, "String");
+            return str.IsFrozen ? str : str.Clone().Freeze();
         }
     }
 }

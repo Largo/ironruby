@@ -136,7 +136,11 @@ namespace IronRuby.Runtime {
                         throw ReadOnlyError(name);
                     }
 
-                    scope.GetInnerMostClosureScope().CurrentMatch = (value != null) ? RequireType<MatchData>(value, name, "MatchData") : null;
+                    if (value != null && !(value is MatchData)) {
+                        throw RubyExceptions.CreateTypeError(String.Format("wrong argument type {0} (expected MatchData)",
+                            context.GetClassDisplayName(value)));
+                    }
+                    scope.GetInnerMostClosureScope().CurrentMatch = (MatchData)value;
                     return;
 
                 case GlobalVariableId.MatchLastGroup:
@@ -148,8 +152,8 @@ namespace IronRuby.Runtime {
                 
                 // exceptions:
                 case GlobalVariableId.CurrentException:
-                    context.SetCurrentException(value);
-                    return;
+                    // read-only since Ruby 4.0; the interpreter still sets it internally
+                    throw ReadOnlyError(name);
 
                 case GlobalVariableId.CurrentExceptionBacktrace:
                     context.SetCurrentExceptionBacktrace(value);
@@ -190,20 +194,22 @@ namespace IronRuby.Runtime {
                     throw ReadOnlyError(name);
 
                 case GlobalVariableId.InputSeparator:
-                    context.InputSeparator = (value != null) ? RequireType<MutableString>(value, name, "String") : null;
+                    context.InputSeparator = RequireSeparator(value, name);
                     return;
 
                 case GlobalVariableId.OutputSeparator:
-                    context.OutputSeparator = (value != null) ? RequireType<MutableString>(value, name, "String") : null;
+                    context.OutputSeparator = RequireSeparator(value, name);
                     return;
 
                 case GlobalVariableId.StringSeparator:
-                    // type not enforced:
+                    if (value != null && !(value is MutableString) && !(value is RubyRegex)) {
+                        throw RubyExceptions.CreateTypeError(String.Format("value of ${0} must be String or Regexp", name));
+                    }
                     context.StringSeparator = value;
                     return;
 
                 case GlobalVariableId.ItemSeparator:
-                    context.ItemSeparator = (value != null) ? RequireType<MutableString>(value, name, "String") : null;
+                    context.ItemSeparator = RequireSeparator(value, name);
                     return;
 
 

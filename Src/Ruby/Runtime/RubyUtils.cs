@@ -928,6 +928,14 @@ namespace IronRuby.Runtime {
 
         // MRI checks for a subtype of RubyArray of subtypes of MutableString.
         internal static RubyArray AsArrayOfStrings(object value) {
+            // a single String is a one-line backtrace
+            var single = value as MutableString;
+            if (single != null) {
+                var wrapped = new RubyArray(1);
+                wrapped.Add(single);
+                return wrapped;
+            }
+
             RubyArray array = value as RubyArray;
             if (array != null) {
                 foreach (object obj in array) {

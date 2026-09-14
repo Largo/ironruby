@@ -31,15 +31,20 @@ namespace IronRuby.Tests {
         }
 
         public void Scenario_RubyExceptions2A() {
+            // a bare `raise` re-raises $!
             AssertExceptionThrown<NotImplementedError>(delegate() {
                 CompilerTest(@"
-$! = NotImplementedError.new
-raise");
+begin
+  raise NotImplementedError.new
+rescue Exception
+  raise
+end");
             });
         }
 
         public void Scenario_RubyExceptions2B() {
-            AssertExceptionThrown<InvalidOperationException>(delegate() {
+            // $! is read-only (Ruby 4.0): NameError, whatever is assigned
+            AssertExceptionThrown<MemberAccessException>(delegate() {
                 CompilerTest("$! = NotImplementedError");
             });
         }
@@ -465,11 +470,14 @@ p foo
 p $!
 p $@
 
-$! = Exception.new
-p $@ = nil
-p $@ = ['foo']
-p $@ = class A < Array; new; end
-p $@ = [class S < String; new; end]
+begin
+  raise Exception.new
+rescue Exception
+  p $@ = nil
+  p $@ = ['foo']
+  p $@ = class A < Array; new; end
+  p $@ = [class S < String; new; end]
+end
 ");
             }, @"
 nil
@@ -482,39 +490,37 @@ nil
 
             // $! must be non-null when assigning to $@
             AssertExceptionThrown<ArgumentException>(delegate() {
-                CompilerTest(@"$! = nil; $@ = ['foo']");
+                CompilerTest(@"$@ = ['foo']");
             });
 
             // $! non-nullity checked before type of backtracce:
             AssertExceptionThrown<ArgumentException>(delegate() {
-                CompilerTest(@"$! = nil; $@ = 1");
+                CompilerTest(@"$@ = 1");
             });
 
             // backtrace needs to be an array
             AssertExceptionThrown<InvalidOperationException>(delegate() {
-                CompilerTest(@"$! = Exception.new; $@ = 1");
+                CompilerTest(@"begin; raise Exception.new; rescue Exception; $@ = 1; end");
             });
 
             // backtrace needs to be an array of strings
             AssertExceptionThrown<InvalidOperationException>(delegate() {
-                CompilerTest(@"$! = Exception.new; $@ = ['foo', 1]");
+                CompilerTest(@"begin; raise Exception.new; rescue Exception; $@ = ['foo', 1]; end");
             });
 
             // backtrace needs to be an array, no conversion take place:
             AssertExceptionThrown<InvalidOperationException>(delegate() {
                 CompilerTest(@"
-$! = Exception.new
 class B; def to_ary; []; end; end
-$@ = B.new
+begin; raise Exception.new; rescue Exception; $@ = B.new; end
 ");
             });
 
             // backtrace needs to be an array of strings, no item conversion take place:
             AssertExceptionThrown<InvalidOperationException>(delegate() {
                 CompilerTest(@"
-$! = Exception.new
 class T; def to_str; ''; end; end
-$@ = [T.new]
+begin; raise Exception.new; rescue Exception; $@ = [T.new]; end
 ");
             });
         }
