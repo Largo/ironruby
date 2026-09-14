@@ -219,6 +219,16 @@ namespace IronRuby.Builtins {
         }
 
         internal static object Trap(int signal, object command, Action<int> invoke) {
+            return Trap(signal, command, invoke, null);
+        }
+
+        /// <summary>
+        /// <paramref name="defaultInvoke"/>, when given, is what "DEFAULT" means for this signal
+        /// in Ruby rather than at the OS level -- SIGINT's default disposition in MRI is to raise
+        /// Interrupt on the main thread, not to kill the process. "SYSTEM_DEFAULT" always means
+        /// the OS disposition and never uses it.
+        /// </summary>
+        internal static object Trap(int signal, object command, Action<int> invoke, Action<int> defaultInvoke) {
             CheckTrappable(signal);
             command = NormalizeCommand(command);
 
@@ -236,9 +246,13 @@ namespace IronRuby.Builtins {
                 }
 
                 var installed = new Handler { Command = command };
-                if (!IsDefault(command) && !IsSystemDefault(command)) {
-                    // DEFAULT and SYSTEM_DEFAULT are recorded so the next #trap reports them,
-                    // but nothing is registered: the platform disposition is what should run.
+                if (IsDefault(command)) {
+                    // Recorded so the next #trap reports "DEFAULT"; nothing is registered unless
+                    // Ruby's own default disposition differs from the platform's.
+                    if (defaultInvoke != null) {
+                        installed.Registration = TryRegister(signal, defaultInvoke);
+                    }
+                } else if (!IsSystemDefault(command)) {
                     installed.Registration = TryRegister(signal, IsIgnore(command) ? null : invoke);
                 }
                 _handlers[signal] = installed;

@@ -72,6 +72,14 @@ namespace IronRuby.Builtins {
             // dynamically rather than insisting on a Proc.
             var site = callStorage.GetCallSite("call", 1);
             var mainThread = context.MainThread;
+
+            // MRI's default SIGINT disposition raises Interrupt on the main thread. Leaving it to
+            // the platform instead makes `Signal.trap(:INT, :SIG_DFL); Process.kill :INT; sleep`
+            // hang, because .NET's own SIGINT handling swallows it.
+            Action<int> defaultInvoke = (number == SignalInterrupt && mainThread != null)
+                ? new Action<int>(_ => RubyUtils.RaiseAsyncException(mainThread, new Interrupt()))
+                : null;
+
             return PosixSignals.Trap(number, command, signalNumber => {
                 try {
                     site.Target(site, command, ScriptingRuntimeHelpers.Int32ToObject(signalNumber));
@@ -84,7 +92,7 @@ namespace IronRuby.Builtins {
                         RubyUtils.RaiseAsyncException(mainThread, e);
                     }
                 }
-            });
+            }, defaultInvoke);
         }
 
         [RubyMethod("trap", RubyMethodAttributes.PublicSingleton)]
