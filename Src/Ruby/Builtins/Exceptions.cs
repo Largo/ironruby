@@ -253,6 +253,38 @@ namespace IronRuby.Builtins {
     /// is in the core. The *registration* is the usual one-liner in
     /// Src/Libraries/Builtins/Exceptions.cs, following EBADF/EEXIST/RuntimeError.
     /// </summary>
+    /// <summary>
+    /// UncaughtThrowError (Ruby 2.2), raised by Kernel#throw when no Kernel#catch is waiting for
+    /// the tag. It derives from ArgumentError, which is what `rescue ArgumentError` around a
+    /// stray throw has always relied on, and carries the tag and value MRI exposes.
+    ///
+    /// Like FrozenError the type lives here rather than in Src/Libraries, because
+    /// KernelOps.Throw's counterpart in the core needs it; the registration is the usual
+    /// one-liner in Src/Libraries/Builtins/Exceptions.cs.
+    /// </summary>
+    [Serializable]
+    public class UncaughtThrowError : ArgumentException {
+        private readonly object _tag;
+        private readonly object _value;
+
+        public UncaughtThrowError() : this(null, null) { }
+        public UncaughtThrowError(string message) : this(message, null) { }
+        public UncaughtThrowError(string message, Exception inner) : base(message, inner) { }
+
+        public UncaughtThrowError(string message, object tag, object value) : base(message) {
+            _tag = tag;
+            _value = value;
+        }
+
+        public object Tag {
+            get { return _tag; }
+        }
+
+        public object Value {
+            get { return _value; }
+        }
+    }
+
     [Serializable]
     public class FrozenError : RuntimeError {
         private object _receiver;

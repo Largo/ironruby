@@ -1194,8 +1194,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         public void SetConstantVisibility(string/*!*/ name, bool isPrivate) {
             using (Context.ClassHierarchyLocker()) {
+                // MRI's rb_const_lookup looks in the module's own table only: a constant
+                // inherited from a superclass cannot have its visibility changed from here.
                 ConstantStorage storage;
-                if (!TryResolveConstantNoLock(null, name, out storage)) {
+                if (!TryGetConstantNoAutoloadCheck(name, out storage)) {
                     throw RubyExceptions.CreateNameError(String.Format("constant {0}::{1} not defined",
                         Context.GetModuleDisplayName(this), name));
                 }

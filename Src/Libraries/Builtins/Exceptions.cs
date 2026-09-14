@@ -305,6 +305,19 @@ namespace IronRuby.Builtins {
     public static class RuntimeErrorOps {
     }
 
+    [RubyException("UncaughtThrowError", Extends = typeof(UncaughtThrowError), Inherits = typeof(ArgumentException))]
+    public static class UncaughtThrowErrorOps {
+        [RubyMethod("tag")]
+        public static object Tag(UncaughtThrowError/*!*/ self) {
+            return self.Tag;
+        }
+
+        [RubyMethod("value")]
+        public static object Value(UncaughtThrowError/*!*/ self) {
+            return self.Value;
+        }
+    }
+
     [RubyException("FrozenError", Extends = typeof(FrozenError), Inherits = typeof(RuntimeError))]
     public static class FrozenErrorOps {
         /// <summary>

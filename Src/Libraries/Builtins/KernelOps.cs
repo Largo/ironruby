@@ -466,6 +466,13 @@ namespace IronRuby.Builtins {
         [ThreadStatic]
         private static Stack<object> _catchSymbols;
 
+        // Since Ruby 1.9 the tag may be omitted, in which case catch invents one and yields it.
+        [RubyMethod("catch", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("catch", RubyMethodAttributes.PublicSingleton)]
+        public static object Catch(RubyContext/*!*/ context, BlockParam/*!*/ block, object self) {
+            return Catch(block, self, new RubyObject(context.ObjectClass));
+        }
+
         [RubyMethod("catch", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("catch", RubyMethodAttributes.PublicSingleton)]
         public static object Catch(BlockParam/*!*/ block, object self, object label) {
@@ -499,7 +506,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("throw", RubyMethodAttributes.PublicSingleton)]
         public static void Throw(RubyContext/*!*/ context, object self, object label, [DefaultParameterValue(null)]object returnValue) {
             if (_catchSymbols == null || !_catchSymbols.Contains(label, ReferenceEqualityComparer<object>.Instance)) {
-                throw RubyExceptions.CreateNameError("uncaught throw `{0}'", context.Inspect(label).ToAsciiString());
+                // UncaughtThrowError (2.2), not NameError; it carries the tag and the value.
+                throw new UncaughtThrowError(
+                    String.Format("uncaught throw {0}", context.Inspect(label).ToAsciiString()), label, returnValue);
             }
 
             throw new ThrowCatchUnwinder(label, returnValue);
@@ -866,7 +875,10 @@ namespace IronRuby.Builtins {
 
             object result;
             if (!RubyUtils.TryDuplicateObject(initializeCopyStorage, allocateStorage, self, isClone, out result)) {
-                throw RubyExceptions.CreateTypeError("can't {0} {1}", isClone ? "clone" : "dup", context.GetClassDisplayName(self));
+                // Ruby 2.4 stopped raising here: #dup and #clone of one of MRI's "special objects"
+                // (nil, true, false, Integer, Float, Symbol - and Rational/Complex, which handle
+                // themselves in ruby4.rb) answer the receiver rather than TypeError("can't dup NilClass").
+                return self;
             }
             return context.TaintObjectBy(result, self);
         }
@@ -1047,8 +1059,29 @@ namespace IronRuby.Builtins {
             return context.StringifyIdentifiers(context.GetInstanceVariableNames(self));
         }
 
+        /// <summary>
+        /// MRI takes a Symbol or a String here and raises TypeError for anything else; the
+        /// [DefaultProtocol]string binding used to put an Integer through the legacy
+        /// "Fixnum as Symbol" path and produce a NameError about an unrelated name.
+        /// </summary>
+        private static string/*!*/ ToVariableName(ConversionStorage<MutableString>/*!*/ stringCast, object name) {
+            return Protocols.CastToString(stringCast, name).ToString();
+        }
+
+        /// <summary>Internal overload for callers that already have the name as a string.</summary>
+        public static object InstanceVariableGet(RubyContext/*!*/ context, object self, string/*!*/ name) {
+            object value;
+            if (!context.TryGetInstanceVariable(self, name, out value)) {
+                RubyUtils.CheckInstanceVariableName(context, self, name);
+                return null;
+            }
+            return value;
+        }
+
         [RubyMethod("instance_variable_get")]
-        public static object InstanceVariableGet(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ name) {
+        public static object InstanceVariableGet(ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyContext/*!*/ context, object self, object nameArg) {
+            string name = ToVariableName(stringCast, nameArg);
             object value;
             if (!context.TryGetInstanceVariable(self, name, out value)) {
                 // We didn't find it, check if the name is valid
@@ -1059,14 +1092,18 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("instance_variable_set")]
-        public static object InstanceVariableSet(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ name, object value) {
-            RubyUtils.CheckInstanceVariableName(name);
+        public static object InstanceVariableSet(ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyContext/*!*/ context, object self, object nameArg, object value) {
+            string name = ToVariableName(stringCast, nameArg);
+            RubyUtils.CheckInstanceVariableName(context, self, name);
             context.SetInstanceVariable(self, name, value);
             return value;
         }
 
         [RubyMethod("instance_variable_defined?")]
-        public static bool InstanceVariableDefined(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ name) {
+        public static bool InstanceVariableDefined(ConversionStorage<MutableString>/*!*/ stringCast,
+            RubyContext/*!*/ context, object self, object nameArg) {
+            string name = ToVariableName(stringCast, nameArg);
             object value;
             if (!context.TryGetInstanceVariable(self, name, out value)) {
                 // We didn't find it, check if the name is valid

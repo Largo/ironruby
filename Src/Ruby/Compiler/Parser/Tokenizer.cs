@@ -4200,6 +4200,8 @@ namespace IronRuby.Compiler {
         public static bool IsInstanceVariableName(string name) {
             return name != null && name.Length >= 2
                 && name[0] == '@'
+                // the character after the sigil is an identifier *start*, so "@0" is not a name
+                && !IsDecimalDigit(name[1])
                 && IsVariableName(name, 1, 0, AllowMultiByteIdentifier);
         }
 
@@ -4207,6 +4209,7 @@ namespace IronRuby.Compiler {
             return name != null && name.Length >= 3
                 && name[0] == '@'
                 && name[1] == '@'
+                && !IsDecimalDigit(name[2])
                 && IsVariableName(name, 2, 0, AllowMultiByteIdentifier);
         }
 
