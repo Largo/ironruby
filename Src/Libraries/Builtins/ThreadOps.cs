@@ -666,15 +666,18 @@ namespace IronRuby.Builtins {
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
             RubyContext/*!*/ context, Thread/*!*/ self, params object[]/*!*/ args) {
 
-            if (self == Thread.CurrentThread) {
-                KernelOps.RaiseException(respondToStorage, storage0, storage1, setBackTraceStorage, context, self, args);
-                return;
+#if FEATURE_EXCEPTION_STATE
+            // A bare Thread#raise is a plain RuntimeError even on the current thread: unlike
+            // Kernel#raise it does not re-raise $!, and on another thread MRI cannot see that
+            // thread's $! anyway.
+            Exception e = KernelOps.CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args, false);
+
+            // Inside a fiber the current Ruby thread is the fiber's owner; raising on it means
+            // raising here, not nudging the thread the fiber was started from.
+            if (self == RubyUtils.CurrentRubyThread) {
+                throw e;
             }
 
-#if FEATURE_EXCEPTION_STATE
-            // A bare `thread.raise` on *another* thread is a plain RuntimeError; it does not
-            // re-raise the caller's $! (MRI can't see the target thread's $! either).
-            Exception e = KernelOps.CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args, false);
             RaiseAsyncException(self, e);
 #else
             throw new NotImplementedError("Thread#raise not supported on this platform");
@@ -864,12 +867,29 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("start", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("fork", RubyMethodAttributes.PublicSingleton)]
         public static Thread/*!*/ CreateThread(RubyContext/*!*/ context, BlockParam startRoutine, object self, params object[]/*!*/ args) {
             if (startRoutine == null) {
                 throw new ThreadError("must be called with a block");
             }
+            return StartThread(context, startRoutine, args);
+        }
+
+        // Thread.start and Thread.fork bypass #initialize; without a block they fail the way
+        // building a Proc without one does, not the way Thread.new does.
+        [RubyMethod("start", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("fork", RubyMethodAttributes.PublicSingleton)]
+        public static Thread/*!*/ StartThread(RubyContext/*!*/ context, BlockParam startRoutine, object self, params object[]/*!*/ args) {
+            if (startRoutine == null) {
+                throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
+            }
+            return StartThread(context, startRoutine, args);
+        }
+
+        /// <summary>
+        /// A Ruby subclass of Thread cannot have instances: System.Threading.Thread is sealed, so
+        /// there is no CLR type to allocate for one. Every thread created here is a plain Thread.
+        /// </summary>
+        private static Thread/*!*/ StartThread(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
             RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
             ThreadGroup group = creator.Group;
             Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, startRoutine, args, group)));
@@ -1181,6 +1201,15 @@ namespace IronRuby.Builtins {
         [RubyMethod("exit", RubyMethodAttributes.PublicSingleton)]
         public static Thread/*!*/ ExitCurrentThread(object self) {
             return Kill(Thread.CurrentThread);
+        }
+
+        /// <summary>
+        /// Thread.new starts the thread itself, so anything that reaches #initialize is a second
+        /// initialization of a thread that is already running - which MRI refuses.
+        /// </summary>
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static Thread/*!*/ Reinitialize(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, params object[]/*!*/ args) {
+            throw new ThreadError("already initialized thread");
         }
 
         #region handle_interrupt, pending_interrupt?

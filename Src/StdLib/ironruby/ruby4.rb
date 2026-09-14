@@ -11382,9 +11382,11 @@ class Thread
         @label = label
       end
 
+      # MRI resolves symlinks here, and answers nil when there is no real file behind the
+      # frame - code eval'd under a made-up file name, or a <internal:...> frame.
       def absolute_path
-        return nil if @path.nil? || @path.start_with?("(")
-        File.expand_path(@path) rescue @path
+        return nil if @path.nil? || @path.start_with?("(") || @path.start_with?("<")
+        File.realpath(@path) rescue nil
       end
 
       # MRI's base_label is the bare method name: without the "block in" /

@@ -107,7 +107,9 @@ namespace IronRuby.StandardLibrary.Threading {
                         self._waiters.Remove(node);
                     }
                 }
-                RubyMutex.Lock(mutex);
+                // Uninterruptibly: MRI promises the mutex is held again when #wait returns, even
+                // if the thread was killed while it was waiting to get it back.
+                RubyMutex.DoLock(mutex, false);
             }
             return self;
         }

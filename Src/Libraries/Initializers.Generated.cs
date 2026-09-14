@@ -9378,6 +9378,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Threading.Thread, IronRuby.Builtins.ThreadGroup>(IronRuby.Builtins.ThreadOps.Group)
             );
             
+            DefineLibraryMethod(module, "initialize", 0x52, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Threading.Thread, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.Reinitialize)
+            );
+            
             DefineLibraryMethod(module, "inspect", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Threading.Thread, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ThreadOps.Inspect)
@@ -9549,7 +9554,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "fork", 0x61, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.CreateThread)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.StartThread)
             );
             
             DefineLibraryMethod(module, "handle_interrupt", 0x61, 
@@ -9609,7 +9614,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "start", 0x61, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.CreateThread)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.StartThread)
             );
             
             DefineLibraryMethod(module, "stop", 0x61, 
