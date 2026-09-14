@@ -9143,6 +9143,29 @@ class IO
   end unless method_defined?(:wait_writable)
 end
 
+class Thread
+  # Validates the mask and runs the block, but does NOT defer anything: masking an
+  # asynchronous interrupt and delivering it later needs Thread.Abort, which .NET Core
+  # does not have. Code that only uses handle_interrupt to scope a section behaves
+  # correctly; code that depends on a Thread#raise actually being held back does not.
+  #
+  # It has to exist even so. Without it the method call raises NoMethodError inside a
+  # worker thread, and anything waiting on that thread to reach a queue - which is how
+  # the thread specs synchronise - blocks forever. One missing method deadlocked the
+  # whole of spec/core/thread.
+  def self.handle_interrupt(mask)
+    raise ArgumentError, "block is needed." unless block_given?
+
+    mask.each_value do |timing|
+      unless [:immediate, :on_blocking, :never].include?(timing)
+        raise ArgumentError, "unknown mask signature"
+      end
+    end
+
+    yield
+  end unless respond_to?(:handle_interrupt)
+end
+
 # caller_locations (2.0) and the Location objects it yields. The runtime only
 # offers caller strings, so parse those: "path:lineno:in `label'".
 class Thread
