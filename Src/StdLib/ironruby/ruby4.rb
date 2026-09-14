@@ -4234,17 +4234,68 @@ class << Dir
     entries(path, *args) - %w[. ..]
   end unless respond_to?(:children)
 
+  # MRI's Dir.each_child / Dir.foreach enumerators do not know their size.
   def each_child(path, *args, &block)
-    return children(path, *args).each unless block
+    return to_enum(:each_child, path, *args) { nil } unless block
     children(path, *args).each(&block)
     nil
-  end unless respond_to?(:each_child)
+  end
+
+  unless respond_to?(:__clr_foreach__, true)
+    alias_method :__clr_foreach__, :foreach
+    private :__clr_foreach__
+
+    def foreach(path, *args, &block)
+      return to_enum(:foreach, path, *args) { nil } unless block
+      __clr_foreach__(path, *args, &block)
+      nil
+    end
+  end
 
   def empty?(path)
     # File.stat rather than File.directory? so that a missing path is an ENOENT
     return false unless File.stat(path).directory?
     entries(path).size <= 2
   end unless respond_to?(:empty?)
+end
+
+# The instance side of Dir is a subset of the singleton side; MRI gives it #children,
+# #each_child and #chdir, and an Enumerator from #each when no block is given.
+class Dir
+  unless method_defined?(:__clr_each__)
+    alias_method :__clr_each__, :each
+    private :__clr_each__
+
+    def each(&block)
+      return to_enum(:each) { nil } unless block
+      __clr_each__(&block)
+      self
+    end
+  end
+
+  def children
+    entries - %w[. ..]
+  end unless method_defined?(:children)
+
+  def each_child(&block)
+    return to_enum(:each_child) { nil } unless block
+    children.each(&block)
+    self
+  end unless method_defined?(:each_child)
+
+  def entries
+    result = []
+    rewind
+    while (entry = read)
+      result << entry
+    end
+    rewind
+    result
+  end unless method_defined?(:entries)
+
+  def chdir(&block)
+    Dir.chdir(path, &block)
+  end unless method_defined?(:chdir)
 end
 
 module Errno

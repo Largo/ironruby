@@ -46,12 +46,18 @@ namespace IronRuby.Builtins {
         }
 
         [RubyConstructor]
-        public static RubyDir/*!*/ Create(RubyClass/*!*/ self, [NotNull]MutableString/*!*/ dirname) {
-            return new RubyDir(self, dirname);
+        public static RubyDir/*!*/ Create(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
+            [Optional]IDictionary<object, object> options) {
+            return new RubyDir(self, Protocols.CastToPath(toPath, dirname));
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static RubyDir/*!*/ Reinitialize(RubyDir/*!*/ self, [NotNull]MutableString/*!*/ dirname) {
+        public static RubyDir/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ toPath, RubyDir/*!*/ self, object dirname,
+            [Optional]IDictionary<object, object> options) {
+            return Reinitialize(self, Protocols.CastToPath(toPath, dirname));
+        }
+
+        private static RubyDir/*!*/ Reinitialize(RubyDir/*!*/ self, MutableString/*!*/ dirname) {
             self.Close();
 
             string strName = self.ImmediateClass.Context.DecodePath(dirname);
@@ -151,7 +157,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
-        public static object ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname) {
+        public static object ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
+            [Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname)).EnumerateEntries(self.Context, block, null);
         }
 
@@ -353,7 +360,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
-        public static object Open(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname) {
+        public static object Open(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
+            [Optional]IDictionary<object, object> options) {
             RubyDir rd = new RubyDir(self, Protocols.CastToPath(toPath, dirname));
 
             try {
@@ -366,7 +374,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
-        public static RubyDir/*!*/ Open(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname) {
+        public static RubyDir/*!*/ Open(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
+            [Optional]IDictionary<object, object> options) {
             return new RubyDir(self, Protocols.CastToPath(toPath, dirname));
         }
 
@@ -376,7 +385,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("close")]
         public static void Close(RubyDir/*!*/ self) {
-            self.ThrowIfClosed();
+            // MRI 3.x: closing a closed Dir is a no-op, not an IOError.
             self.Close();
         }
 
@@ -388,13 +397,21 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_path")]
         [RubyMethod("path")]
         public static MutableString GetPath(RubyContext/*!*/ context, RubyDir/*!*/ self) {
-            if (context.RubyOptions.Compatibility < RubyCompatibility.Ruby19) {
-                self.ThrowIfClosed();
-            } else if (self.Closed) {
-                return null;
-            }
+            return (self._dirName != null) ? self._dirName.Clone() : null;
+        }
 
-            return self._dirName.Clone();
+        [RubyMethod("inspect")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, RubyDir/*!*/ self) {
+            // MRI: #<Dir:/the/path>
+            var result = MutableString.CreateMutable(context.GetIdentifierEncoding());
+            result.Append("#<");
+            result.Append(context.GetClassDisplayName(self));
+            result.Append(':');
+            if (self._dirName != null) {
+                result.Append(self._dirName);
+            }
+            result.Append('>');
+            return result;
         }
 
         [RubyMethod("pos")]
@@ -466,12 +483,13 @@ namespace IronRuby.Builtins {
             get { return ImmediateClass.Context.Platform; }
         }
 
+        // MRI keeps answering #path after #close, so closed-ness is tracked by the
+        // entry list rather than by dropping the name.
         private bool Closed {
-            get { return _dirName == null; } 
+            get { return _rawEntries == null; } 
         }
 
         private void Close() {
-            _dirName = null;
             _rawEntries = null;
         }
 
@@ -531,6 +549,11 @@ namespace IronRuby.Builtins {
 
             switch (op) {
                 case DirectoryOperation.ChangeDir:
+                    // .NET reports a missing directory as DirectoryNotFoundException, which
+                    // IronRuby's Errno table maps to ENOTDIR; MRI's chdir says ENOENT.
+                    if (ex is DirectoryNotFoundException || ex is FileNotFoundException) {
+                        return RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
+                    }
                     return RubyExceptions.CreateEINVAL(path);
 
                 case DirectoryOperation.Open:
@@ -540,8 +563,17 @@ namespace IronRuby.Builtins {
                     if (ex is ArgumentException) {
                         return RubyExceptions.CreateEINVAL(path);
                     }
+                    // DirectoryNotFoundException derives from IOException, so every rmdir
+                    // failure used to collapse into EACCES. rmdir(2) distinguishes them and
+                    // so does MRI; the filesystem is the only thing that can tell them apart.
                     if (ex is IOException) {
-                        return Errno.CreateEACCES(path);
+                        if (File.Exists(path)) {
+                            return new DirectoryNotFoundException("Not a directory - " + path);
+                        }
+                        if (!Directory.Exists(path)) {
+                            return RubyExceptions.CreateENOENT("No such file or directory - {0}", path);
+                        }
+                        return new Errno.DirectoryNotEmptyError(path);
                     }
                     break;
 
