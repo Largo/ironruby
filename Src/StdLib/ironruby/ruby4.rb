@@ -5752,7 +5752,8 @@ class Enumerator
     end
 
     def with_index(offset = 0, &block)
-      offset = __to_int__(offset)
+      # nil means "no offset", same as Enumerator#with_index.
+      offset = offset.nil? ? 0 : __to_int__(offset)
       source = self
       if block
         __chain__(size) do |y|
@@ -5982,12 +5983,19 @@ class Enumerator
   class Chain < Enumerator
     def initialize(*enums)
       @__enums__ = enums
+      @__iterated__ = 0
       self
     end
 
     def each(&block)
       return to_enum(:each) { size } unless block
-      @__enums__.each { |enum| enum.each { |*values| block.call(*values) } }
+      # #rewind only rewinds what was actually iterated, so how far the last
+      # iteration got is recorded as it goes.
+      @__iterated__ = 0
+      @__enums__.each do |enum|
+        @__iterated__ += 1
+        enum.each { |*values| block.call(*values) }
+      end
       self
     end
 
@@ -6003,11 +6011,13 @@ class Enumerator
     end
 
     def rewind
-      @__enums__.reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
+      iterated = @__iterated__ || 0
+      @__enums__.first(iterated).reverse_each { |enum| enum.rewind if enum.respond_to?(:rewind) }
       self
     end
 
     def inspect
+      return "#<Enumerator::Chain: uninitialized>" if @__enums__.nil?
       "#<Enumerator::Chain: #{@__enums__.inspect}>"
     end
     alias_method :to_s, :inspect
@@ -6119,7 +6129,10 @@ class Enumerator
     Chain.new(self, other)
   end unless method_defined?(:+)
 
-  def self.product(*enums, &block)
+  def self.product(*enums, **options, &block)
+    unless options.empty?
+      ::Kernel.raise(::ArgumentError, "unknown keywords: #{options.keys.map { |k| k.inspect }.join(', ')}")
+    end
     product = Product.new(*enums)
     return product unless block
     product.each(&block)
@@ -6128,14 +6141,19 @@ class Enumerator
 
   # Enumerator.produce(initial = nil) { |previous| ... } - an endless sequence
   # built by feeding each value back into the block. StopIteration ends it.
-  def self.produce(*args, &block)
+  def self.produce(*args, **options, &block)
     ::Kernel.raise(::ArgumentError, "no block given") unless block
     if args.size > 1
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
     end
+    unknown = options.keys - [:size]
+    unless unknown.empty?
+      ::Kernel.raise(::ArgumentError, "unknown keywords: #{unknown.map { |k| k.inspect }.join(', ')}")
+    end
     has_initial = !args.empty?
     initial = args[0]
-    Enumerator.new(::Float::INFINITY) do |y|
+    size = options.key?(:size) ? options[:size] : ::Float::INFINITY
+    Enumerator.new(size) do |y|
       value = has_initial ? initial : block.call(nil)
       loop do
         y << value
