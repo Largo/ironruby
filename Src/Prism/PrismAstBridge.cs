@@ -1254,7 +1254,9 @@ namespace IronRuby.Prism {
                     return null;
                 case Pm.BlockParametersNode blockParams: {
                     foreach (var blockLocal in blockParams.Locals) {
-                        CurrentScope.ResolveOrAddVariable(((Pm.BlockLocalVariableNode)blockLocal).Name, Span(blockLocal));
+                        // `|y; x|` shadows: x is a fresh variable in the block, even when the
+                        // enclosing scope already has one. Resolving would write through to it.
+                        CurrentScope.AddVariable(((Pm.BlockLocalVariableNode)blockLocal).Name, Span(blockLocal));
                     }
                     return blockParams.Parameters != null
                         ? BuildParameters((Pm.ParametersNode)blockParams.Parameters, autoSplat, out prologue)
