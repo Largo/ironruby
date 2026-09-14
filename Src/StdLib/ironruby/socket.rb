@@ -1474,18 +1474,19 @@ class TCPSocket
 
     def new(remote_host, remote_port, local_host = nil, local_port = nil,
             connect_timeout: nil, open_timeout: nil, resolv_timeout: nil)
-      # .NET's Socket.Connect takes no timeout and IronRuby has no non-blocking
-      # connect, so the timeout cannot be enforced.  Connect anyway -- which is
-      # what a large enough timeout would do -- and report a connection that did
-      # not happen the way CRuby does, with IO::TimeoutError.
+      # .NET's Socket.Connect takes no timeout, so a deadline has to come from a
+      # non-blocking connect on a probe socket; the real connect that follows is
+      # then known to complete at once.  Two handshakes is the price of the
+      # missing timeout argument, and only when one is asked for.
       timeout = connect_timeout || open_timeout
+      Socket.__ir_check_reachable(remote_host, remote_port, timeout) if timeout
       begin
         if local_host.nil? && local_port.nil?
           __ir_raw_new(remote_host, remote_port)
         else
           __ir_raw_new(remote_host, remote_port, local_host, local_port || 0)
         end
-      rescue Errno::ETIMEDOUT, Errno::EHOSTUNREACH, Errno::ENETUNREACH => e
+      rescue Errno::ETIMEDOUT => e
         raise IO::TimeoutError, "Connection timed out" if timeout
         raise
       end
@@ -2371,5 +2372,27 @@ class TCPServer
   def listen(backlog)
     __ir_void_listen(backlog)
     0
+  end
+end
+
+class Socket
+  # Connect a throwaway socket without blocking and wait at most `timeout` for it
+  # to become writable, which is how connect(2) reports completion.  Anything the
+  # kernel refuses outright (ECONNREFUSED and friends) is raised as-is, so
+  # TCPSocket.new's own error reporting still applies.
+  def self.__ir_check_reachable(host, port, timeout) # :nodoc:
+    remote = Addrinfo.tcp(host.nil? ? "127.0.0.1" : host, port)
+    probe = Socket.new(remote.afamily, SOCK_STREAM, 0)
+    begin
+      case probe.connect_nonblock(remote.to_sockaddr, exception: false)
+      when :wait_writable
+        unless IO.select(nil, [probe], nil, timeout)
+          raise IO::TimeoutError, "Connection timed out"
+        end
+      end
+    ensure
+      probe.close unless probe.closed?
+    end
+    nil
   end
 end
