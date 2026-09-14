@@ -65,7 +65,7 @@ namespace IronRuby.Compiler {
         public static readonly ErrorInfo ForLoopVariableIsGlobalVariable   = new ErrorInfo(Tokenizer + 20, "For loop variable cannot be a global variable");
         public static readonly ErrorInfo ForLoopVariableIsClassVariable    = new ErrorInfo(Tokenizer + 21, "For loop variable cannot be a class variable");
         
-        public static readonly ErrorInfo MatchGroupReferenceOverflow = new ErrorInfo(Tokenizer + 30, "Match group reference ${0} doesn't fit into Fixnum");
+        public static readonly ErrorInfo MatchGroupReferenceOverflow = new ErrorInfo(Tokenizer + 30, "Match group reference ${0} doesn't fit into Integer");
         public static readonly ErrorInfo MatchGroupReferenceReadOnly = new ErrorInfo(Tokenizer + 31, "Can't set variable ${0}");
         public static readonly ErrorInfo CannotAliasGroupMatchVariable = new ErrorInfo(Tokenizer + 32, "Can't make alias for number variable");
         public static readonly ErrorInfo DuplicateParameterName = new ErrorInfo(Tokenizer + 33, "duplicate parameter name");

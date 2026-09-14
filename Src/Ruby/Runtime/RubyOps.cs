@@ -2439,7 +2439,7 @@ namespace IronRuby.Runtime {
 
         [Emitted] // ProtocolConversionAction
         public static string/*!*/ ConvertRubySymbolToClrString(RubyContext/*!*/ context, int value) {
-            context.ReportWarning("do not use Fixnums as Symbols");
+            context.ReportWarning("do not use Integers as Symbols");
 
             RubySymbol result = context.FindSymbol(value);
             if (result != null) {
@@ -2559,7 +2559,7 @@ namespace IronRuby.Runtime {
 
         [Emitted] // ProtocolConversionAction
         public static int ToFixnumValidator(string/*!*/ className, object obj) {
-            return ToIntValidator(className, "Fixnum", obj);
+            return ToIntValidator(className, "Integer", obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -2927,7 +2927,7 @@ namespace IronRuby.Runtime {
             if (bignum.AsInt32(out fixnum)) {
                 return fixnum;
             }
-            throw RubyExceptions.CreateRangeError("bignum too big to convert into Fixnum");
+            throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
         }
 
         [Emitted] // ConvertDoubleToFixnum
@@ -2935,7 +2935,7 @@ namespace IronRuby.Runtime {
             try {
                 return checked((int)value);
             } catch (OverflowException) {
-                throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of Fixnum", value));
+                throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", value));
             }
         }
 

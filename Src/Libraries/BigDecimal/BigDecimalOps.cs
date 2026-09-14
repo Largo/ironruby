@@ -149,7 +149,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                     GetConfig(context).RoundingMode = (BigDecimal.RoundingModes)value;
                     return (int)value;
                 } else {
-                    throw RubyExceptions.CreateUnexpectedTypeError(context, value, "Fixnum");
+                    throw RubyExceptions.CreateUnexpectedTypeError(context, value, "Integer");
                 }
             } else {
                 if (value is bool) {
@@ -183,7 +183,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         [RubyMethod("limit", RubyMethodAttributes.PublicSingleton)]
         public static int Limit(RubyContext/*!*/ context, RubyClass/*!*/ self, [Optional]object n) {
             if (!(n is Missing)) {
-                throw RubyExceptions.CreateUnexpectedTypeError(context, n, "Fixnum");
+                throw RubyExceptions.CreateUnexpectedTypeError(context, n, "Integer");
             }
             return GetConfig(context).Limit;
         }
@@ -695,7 +695,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyMethod("sqrt")]
         public static object SquareRoot(RubyContext/*!*/ context, BigDecimal/*!*/ self, object n) {
-            throw RubyExceptions.CreateUnexpectedTypeError(context, n, "Fixnum");
+            throw RubyExceptions.CreateUnexpectedTypeError(context, n, "Integer");
         }
 
         #endregion

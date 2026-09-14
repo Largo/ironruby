@@ -499,7 +499,7 @@ namespace IronRuby.Builtins {
                 var site = comparisonStorage.GetCallSite("<=>");
                 object result = Integer.TryUnaryMinus(site.Target(site, other, self));
                 if (result == null) {
-                    throw RubyExceptions.CreateTypeError("{0} can't be coerced into Fixnum",
+                    throw RubyExceptions.CreateTypeError("{0} can't be coerced into Integer",
                         comparisonStorage.Context.GetClassDisplayName(result));
                 }
 
