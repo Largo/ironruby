@@ -2876,17 +2876,23 @@ if defined?(Rational) && Rational.instance_method(:round).arity == 0
       "(#{to_s})"
     end
 
-    alias_method :__ir_round__, :round
+    # rational18.rb's rounding methods take no precision at all. MRI's rule is the
+    # same for all four: 0 and negative precisions answer an Integer, a positive
+    # precision answers a Rational scaled back down.
+    [:round, :ceil, :floor, :truncate].each do |name|
+      alias_method :"__ir_#{name}__", name
 
-    def round(ndigits = 0)
-      n = ndigits.to_int
-      return __ir_round__ if n == 0
-      if n > 0
-        s = 10**n
-        Rational((self * s).__ir_round__, s)
-      else
-        s = 10**(-n)
-        (self / s).__ir_round__ * s
+      define_method(name) do |ndigits = 0|
+        n = ndigits.to_int
+        bare = :"__ir_#{name}__"
+        next __send__(bare) if n == 0
+        if n > 0
+          s = 10**n
+          Rational((self * s).__send__(bare), s)
+        else
+          s = 10**(-n)
+          (self / s).__send__(bare) * s
+        end
       end
     end
   end
@@ -8170,14 +8176,60 @@ unless defined?(Random)
     def rand(limit = nil)
       case limit
       when nil then @native.next_double
-      when Range
-        span = limit.end - limit.begin
-        span = span.to_i + (limit.exclude_end? ? 0 : 1)
-        limit.begin + @native.next(span)
-      when Float then @native.next_double * limit
-      else @native.next(limit.to_i)
+      when ::Range then __rand_in_range__(limit)
+      when ::Float
+        unless limit > 0
+          ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
+        end
+        @native.next_double * limit
+      else
+        n = limit.to_int
+        unless n > 0
+          ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
+        end
+        __rand_below__(n)
       end
     end
+
+    # An Integer uniformly in 0...n. System::Random.next only covers Int32, so a
+    # wider bound is filled from random bytes and rejection-sampled.
+    def __rand_below__(n)
+      return @native.next(n) if n <= 2147483647
+
+      bits = n.bit_length
+      bytes = (bits + 7) / 8
+      buffer = System::Array[System::Byte].new(bytes)
+      loop do
+        @native.next_bytes(buffer)
+        value = 0
+        buffer.to_a.each { |b| value = (value << 8) | b }
+        value >>= (bytes * 8 - bits)
+        return value if value < n
+      end
+    end
+    private :__rand_below__
+
+    # MRI drives this entirely off `end - begin`, which is what makes it work for
+    # Time and for any object that answers #-, #+ and #to_int or #to_f. nil comes
+    # back for a range that cannot produce a value.
+    def __rand_in_range__(range)
+      first = range.begin
+      last = range.end
+      return nil if first.nil? || last.nil?
+
+      span = last - first
+      if !span.is_a?(::Float) && span.respond_to?(:to_int)
+        n = span.to_int
+        n += 1 unless range.exclude_end?
+        return nil if n <= 0
+        first + __rand_below__(n)
+      else
+        width = span.to_f
+        return nil if width < 0 || (width == 0 && range.exclude_end?)
+        first + @native.next_double * width
+      end
+    end
+    private :__rand_in_range__
 
     def bytes(count)
       buffer = System::Array[System::Byte].new(count)
@@ -8212,6 +8264,29 @@ class Random
   def self.urandom(count)
     File.open("/dev/urandom", "rb") { |f| f.read(count) }
   end unless respond_to?(:urandom)
+end
+
+module Kernel
+  # Kernel#rand is more forgiving than Random#rand: it takes a Range (1.9.3), it
+  # ignores the sign of a numeric limit, and a limit that truncates to 0 -- which
+  # includes every Float below 1 -- means "give me a Float" rather than an error.
+  # The builtin only ever understood a positive Integer.
+  unless private_method_defined?(:__ir_rand__)
+    alias_method :__ir_rand__, :rand
+    private :__ir_rand__
+
+    def rand(limit = nil)
+      return __ir_rand__ if limit.nil?
+      return ::Random.rand(limit) if limit.is_a?(::Range)
+
+      unless limit.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{limit.class} into Integer")
+      end
+      n = limit.to_int.abs
+      n == 0 ? __ir_rand__ : __ir_rand__(n)
+    end
+    module_function :rand
+  end
 end
 
 module ObjectSpace
