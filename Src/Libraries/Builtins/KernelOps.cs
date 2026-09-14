@@ -357,12 +357,78 @@ namespace IronRuby.Builtins {
         [RubyMethod("caller", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("caller", RubyMethodAttributes.PublicSingleton)]
         [RubyStackTraceHidden]
-        public static RubyArray/*!*/ GetStackTrace(RubyContext/*!*/ context, object self, [DefaultParameterValue(1)]int skipFrames) {
-            if (skipFrames < 0) {
-                return new RubyArray();
+        public static RubyArray GetStackTrace(RubyContext/*!*/ context, object self,
+            [DefaultProtocol, DefaultParameterValue(1)]int skipFrames) {
+            return GetStackTrace(context, skipFrames, -1);
+        }
+
+        [RubyMethod("caller", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("caller", RubyMethodAttributes.PublicSingleton)]
+        [RubyStackTraceHidden]
+        public static RubyArray GetStackTrace(RubyContext/*!*/ context, object self,
+            [DefaultProtocol]int skipFrames, [DefaultProtocol]int length) {
+            if (length < 0) {
+                throw RubyExceptions.CreateArgumentError("negative size ({0})", length);
+            }
+            return GetStackTrace(context, skipFrames, length);
+        }
+
+        // caller(n, nil) is caller(n): an explicit nil means "no limit", not "no frames".
+        [RubyMethod("caller", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("caller", RubyMethodAttributes.PublicSingleton)]
+        [RubyStackTraceHidden]
+        public static RubyArray GetStackTrace(RubyContext/*!*/ context, object self,
+            [DefaultProtocol]int skipFrames, DynamicNull length) {
+            return GetStackTrace(context, skipFrames, -1);
+        }
+
+        // caller(first..last) is caller(first, last - first + 1); an omitted end means
+        // "to the bottom of the stack" and an omitted beginning means "from the top".
+        [RubyMethod("caller", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("caller", RubyMethodAttributes.PublicSingleton)]
+        [RubyStackTraceHidden]
+        public static RubyArray GetStackTrace(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, object self,
+            [NotNull]Range/*!*/ range) {
+
+            int begin = (range.Begin != null) ? Protocols.CastToFixnum(fixnumCast, range.Begin) : 0;
+            var frames = GetStackTrace(context, begin, -1);
+            if (frames == null || range.End == null) {
+                return frames;
             }
 
-            return RubyExceptionData.CreateBacktrace(context, skipFrames);
+            // a negative end counts back from the bottom of the stack, as in Array#[]
+            int end = Protocols.CastToFixnum(fixnumCast, range.End);
+            if (end < 0) {
+                end += begin + frames.Count;
+            }
+
+            int length = Math.Max(end - begin + (range.ExcludeEnd ? 0 : 1), 0);
+            if (length < frames.Count) {
+                frames.RemoveRange(length, frames.Count - length);
+            }
+            return frames;
+        }
+
+        /// <summary>
+        /// The frames below <paramref name="skipFrames"/>, at most <paramref name="length"/> of
+        /// them (-1 for all). MRI answers nil rather than an empty array when the starting frame
+        /// is past the bottom of the stack, which is how a caller tells "no such frame" apart
+        /// from "no frames left".
+        /// </summary>
+        private static RubyArray GetStackTrace(RubyContext/*!*/ context, int skipFrames, int length) {
+            if (skipFrames < 0) {
+                throw RubyExceptions.CreateArgumentError("negative level ({0})", skipFrames);
+            }
+
+            var frames = RubyExceptionData.CreateBacktrace(context, skipFrames);
+            if (frames.Count == 0 && skipFrames > 0 && skipFrames > RubyExceptionData.CreateBacktrace(context, 0).Count) {
+                return null;
+            }
+
+            if (length >= 0 && length < frames.Count) {
+                frames.RemoveRange(length, frames.Count - length);
+            }
+            return frames;
         }
 
         //callcc

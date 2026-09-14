@@ -9243,10 +9243,28 @@ end
 module Kernel
   private
 
+  # Takes everything Kernel#caller takes, shifted by one frame so that the count starts
+  # at the caller rather than here. A negative range end is left alone: caller resolves
+  # it against the real stack depth, which this frame is not part of.
   def caller_locations(start = 1, length = nil)
-    entries = caller(start + 1)
+    if start.is_a?(Range)
+      first = start.begin ? start.begin.to_int : 0
+      last = start.end&.to_int
+      raise ArgumentError, "negative level (#{first})" if first < 0
+      entries = caller(Range.new(first + 1, (last && last >= 0) ? last + 1 : last, start.exclude_end?))
+    else
+      first = start.to_int
+      raise ArgumentError, "negative level (#{first})" if first < 0
+      if length.nil?
+        entries = caller(first + 1)
+      else
+        length = length.to_int
+        raise ArgumentError, "negative size (#{length})" if length < 0
+        entries = caller(first + 1, length)
+      end
+    end
+
     return nil if entries.nil?
-    entries = entries.first(length) if length
     entries.map { |entry| Thread::Backtrace::Location.__parse__(entry) }
   end unless private_method_defined?(:caller_locations)
 end

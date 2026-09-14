@@ -4650,8 +4650,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "caller", 0x52, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace)
+                0x00020000U, 0x00060000U, 0x00020000U, 0x00000008U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.Range, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace)
             );
             
             DefineLibraryMethod(module, "catch", 0x52, 
@@ -5198,8 +5201,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "caller", 0x61, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace)
+                0x00020000U, 0x00060000U, 0x00020000U, 0x00000008U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace), 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.Range, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetStackTrace)
             );
             
             DefineLibraryMethod(module, "catch", 0x61, 
