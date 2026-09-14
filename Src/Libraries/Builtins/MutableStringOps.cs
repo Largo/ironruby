@@ -2866,16 +2866,64 @@ namespace IronRuby.Builtins {
             return site.Target(site, scope, obj, self);
         }
 
-        [RubyMethod("match")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
             var site = storage.GetCallSite("match", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope));
             return site.Target(site, scope, regex, self);
         }
 
-        [RubyMethod("match")]
         public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pattern) {
             var site = storage.GetCallSite("match", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope));
             return site.Target(site, scope, new RubyRegex(pattern, RubyRegexOptions.NONE), self);
+        }
+
+        // Ruby 1.9 gave #match a block that receives the MatchData, and an optional start
+        // offset. Without an offset the call still goes through Regexp#match dynamically, so
+        // a Regexp subclass that overrides it is honoured; with one it goes straight to the
+        // implementation, which already knows about offsets. The pattern must be a Regexp or
+        // a String - unlike most String arguments a Symbol is not accepted.
+        [RubyMethod("match")]
+        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
+            return YieldMatch(block, Match(storage, scope, self, regex));
+        }
+
+        [RubyMethod("match")]
+        public static object Match(BinaryOpStorageWithScope/*!*/ storage, RubyScope/*!*/ scope, [Optional]BlockParam block,
+            MutableString/*!*/ self, [NotNull]MutableString/*!*/ pattern) {
+            return YieldMatch(block, Match(storage, scope, self, pattern));
+        }
+
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, MutableString/*!*/ self,
+            [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int start) {
+            return RegexpOps.Match(scope, block, regex, self, start);
+        }
+
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, MutableString/*!*/ self,
+            [NotNull]MutableString/*!*/ pattern, [DefaultProtocol]int start) {
+            return RegexpOps.Match(scope, block, new RubyRegex(pattern, RubyRegexOptions.NONE), self, start);
+        }
+
+        [RubyMethod("match")]
+        public static object Match(ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope,
+            [Optional]BlockParam block, MutableString/*!*/ self, object pattern, [DefaultProtocol, Optional]int start) {
+            // A Symbol converts to a String elsewhere in IronRuby, but MRI's #match takes only
+            // a Regexp or a String.
+            MutableString converted = (pattern is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, pattern);
+            if (converted == null) {
+                throw RubyExceptions.CreateUnexpectedTypeError(scope.RubyContext, pattern, "Regexp");
+            }
+            return RegexpOps.Match(scope, block, new RubyRegex(converted, RubyRegexOptions.NONE), self, start);
+        }
+
+        private static object YieldMatch(BlockParam block, object match) {
+            if (block == null || match == null) {
+                return match;
+            }
+            object blockResult;
+            block.Yield(match, out blockResult);
+            return blockResult;
         }
        
         #endregion

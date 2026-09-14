@@ -1262,12 +1262,27 @@ class Hash
 end
 
 class String
+  # Both take a String or something with #to_str, and both answer a copy when
+  # there is nothing to remove - including for an empty affix, where
+  # "self[0...-0]" would otherwise answer "".
+  def __affix__(affix)
+    return affix if affix.is_a?(::String)
+    converted = affix.respond_to?(:to_str) ? affix.to_str : nil
+    unless converted.is_a?(::String)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(affix)} into String")
+    end
+    converted
+  end
+  private :__affix__
+
   def delete_prefix(prefix)
-    start_with?(prefix) ? self[prefix.length..-1] : dup
+    prefix = __affix__(prefix)
+    (!prefix.empty? && start_with?(prefix)) ? self[prefix.length..-1] : dup
   end unless method_defined?(:delete_prefix)
 
   def delete_suffix(suffix)
-    end_with?(suffix) ? self[0...-suffix.length] : dup
+    suffix = __affix__(suffix)
+    (!suffix.empty? && end_with?(suffix)) ? self[0...-suffix.length] : dup
   end unless method_defined?(:delete_suffix)
 
   alias_method :+@, :dup unless method_defined?(:+@)
@@ -3270,15 +3285,27 @@ class String
     c.nil? ? nil : c == 0
   end unless method_defined?(:casecmp?)
 
+  # The frozen check happens before the affix is even looked at: MRI raises
+  # FrozenError even when nothing would have been removed.
   def delete_prefix!(prefix)
+    prefix = __affix__(prefix)
+    __ir_require_unfrozen__
     result = delete_prefix(prefix)
     result == self ? nil : replace(result)
   end unless method_defined?(:delete_prefix!)
 
   def delete_suffix!(suffix)
+    suffix = __affix__(suffix)
+    __ir_require_unfrozen__
     result = delete_suffix(suffix)
     result == self ? nil : replace(result)
   end unless method_defined?(:delete_suffix!)
+
+  def __ir_require_unfrozen__
+    return unless frozen?
+    ::Kernel.raise(::FrozenError.new("can't modify frozen String: #{inspect}", receiver: self))
+  end
+  private :__ir_require_unfrozen__
 
   # 3.4's name for -@. Spelled out rather than aliased: String#-@ is itself
   # defined further down this file.
@@ -3659,23 +3686,43 @@ class String
     to_clr_string.IsNormalized(__normalization_form__(form))
   end unless method_defined?(:unicode_normalized?)
 
-  def each_grapheme_cluster
-    return ::Enumerator.new(grapheme_clusters.size) { |y| grapheme_clusters.each { |g| y << g } } unless block_given?
-    grapheme_clusters.each { |g| yield g }
+  def each_grapheme_cluster(&block)
+    clusters = __ir_grapheme_clusters__
+    return ::Enumerator.new(clusters.size) { |y| clusters.each { |g| y << g } } unless block
+    clusters.each { |g| block.call(g) }
     self
   end unless method_defined?(:each_grapheme_cluster)
 
-  def grapheme_clusters
-    return chars unless valid_encoding?
+  # MRI still yields when a block is passed, answering self rather than the array.
+  def grapheme_clusters(&block)
+    return __ir_grapheme_clusters__ unless block
+    __ir_grapheme_clusters__.each { |g| block.call(g) }
+    self
+  end unless method_defined?(:grapheme_clusters)
+
+  UNICODE_ENCODINGS__ = [
+    ::Encoding::UTF_8, ::Encoding::US_ASCII, ::Encoding::UTF_16LE, ::Encoding::UTF_16BE,
+    ::Encoding::UTF_32LE, ::Encoding::UTF_32BE
+  ]
+
+  # Segmentation is the CLR's, which speaks UTF-16. Anything that is not a
+  # Unicode encoding - BINARY, the dummy encodings, the legacy code pages -
+  # has no clusters to find, so MRI's answer there is one element per
+  # character.
+  def __ir_grapheme_clusters__
+    return chars unless valid_encoding? && UNICODE_ENCODINGS__.include?(encoding)
+    source = (encoding == ::Encoding::UTF_8 || encoding == ::Encoding::US_ASCII) ? self : encode(::Encoding::UTF_8)
     result = []
-    e = ::System::Globalization::StringInfo.GetTextElementEnumerator(to_clr_string)
+    e = ::System::Globalization::StringInfo.GetTextElementEnumerator(source.to_clr_string)
     while e.MoveNext
       piece = e.GetTextElement.to_s
-      piece.force_encoding(encoding) if piece.respond_to?(:force_encoding)
+      piece.force_encoding(::Encoding::UTF_8) if piece.respond_to?(:force_encoding)
+      piece = piece.encode(encoding) unless source.equal?(self)
       result << piece
     end
     result
-  end unless method_defined?(:grapheme_clusters)
+  end
+  private :__ir_grapheme_clusters__
 
   # `str =~ x` is `x =~ str` for a Regexp and a TypeError for anything that is
   # not, which is how MRI stops the common `"a" =~ "b"` mistake.
@@ -9087,7 +9134,12 @@ end
 # Class.try_convert (1.9): the conversion protocol, returning nil instead of raising.
 class String
   def self.try_convert(obj)
-    obj.respond_to?(:to_str) ? obj.to_str : nil
+    return obj if obj.is_a?(::String)
+    return nil unless obj.respond_to?(:to_str)
+    converted = obj.to_str
+    return converted if converted.nil? || converted.is_a?(::String)
+    ::Kernel.raise(::TypeError,
+      "can't convert #{obj.class} to String (#{obj.class}#to_str gives #{converted.class})")
   end unless respond_to?(:try_convert)
 end
 
