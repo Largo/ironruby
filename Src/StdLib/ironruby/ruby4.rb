@@ -1752,10 +1752,28 @@ class << IO
     end
 
     command = args.shift
+    # A trailing Hash inside the command array is exec options, not an argument.
+    if command.is_a?(Array) && command.size > 1 && command.last.is_a?(Hash)
+      command = command.dup
+      options = command.pop.to_hash.merge(options)
+    end
     mode = args.shift
     mode = "r" if mode.nil?
     mode = mode.to_str if !mode.is_a?(String) && mode.respond_to?(:to_str)
+    mode_encodings = mode.to_s[/:(.*)\z/, 1]
     mode = mode.to_s.sub(/:.*\z/, "")
+
+    # The encoding options belong to the IO this hands back, not to the child; spawn
+    # rejects anything it does not know.
+    external = options.delete(:external_encoding) || options.delete(:encoding)
+    internal = options.delete(:internal_encoding)
+    if mode_encodings
+      external ||= mode_encodings.split(":", 2)[0]
+      internal ||= mode_encodings.split(":", 2)[1]
+    end
+    if external.is_a?(String) && external.include?(":")
+      external, internal = external.split(":", 2)
+    end
 
     if command == "-" || (command.is_a?(Array) && command.first == "-")
       raise NotImplementedError, "fork() function is unimplemented on this machine"
@@ -1796,6 +1814,11 @@ class << IO
          else
            readable ? parent_read : parent_write
          end
+
+    if external || internal
+      # An internal encoding on its own still transcodes, from the default external one.
+      io.set_encoding(external || Encoding.default_external, internal)
+    end
 
     io.instance_variable_set(:@__popen_pid__, pid)
     io.extend(IO::PopenChild)
@@ -9347,15 +9370,16 @@ class IO
       other.is_a?(::IO::Buffer) && get_string == other.get_string
     end
 
-    # The copying operators also want a Buffer, and also work over the bytes
-    # the two have in common - the result is the size of the receiver.
+    # The copying operators also want a Buffer. The result is the size of the
+    # receiver: a shorter mask repeats over it, and a longer one is cut off.
     def __binary_op__(other, op)
       __require_buffer__(other)
       a = get_string
       b = other.get_string
-      n = [a.bytesize, b.bytesize].min
       bytes = a.bytes
-      n.times { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i)) & 0xff }
+      unless b.empty?
+        bytes.each_index { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i % b.bytesize)) & 0xff }
+      end
       result = ::IO::Buffer.new(bytes.size)
       result.set_string(bytes.pack("C*"))
       result
@@ -9379,9 +9403,10 @@ class IO
       __require_buffer__(other)
       a = get_string
       b = other.get_string
-      n = [a.bytesize, b.bytesize].min
       bytes = a.bytes
-      n.times { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i)) & 0xff }
+      unless b.empty?
+        bytes.each_index { |i| bytes[i] = bytes[i].__send__(op, b.getbyte(i % b.bytesize)) & 0xff }
+      end
       set_string(bytes.pack("C*"))
       self
     end
@@ -9780,11 +9805,14 @@ class IO
     maxlen = ::Kernel.Integer(maxlen)
     ::Kernel.raise(::ArgumentError, "negative length #{maxlen} given") if maxlen < 0
     if maxlen == 0
+      # Even a zero-length readpartial looks at the stream, so a closed one is an error.
+      ::Kernel.raise(::IOError, "closed stream") if closed?
       result = "".b
       return outbuf ? outbuf.replace(result) : result
     end
-    data = __ir_read__(maxlen)
+    data = __read_available__(maxlen)
     if data.nil? || data.empty?
+      outbuf.replace("".b) if outbuf
       ::Kernel.raise(::EOFError, "end of file reached")
     end
     data.force_encoding(::Encoding::BINARY) if data.respond_to?(:force_encoding)
@@ -9903,12 +9931,44 @@ class IO
     b
   end unless method_defined?(:readbyte)
 
+  # ungetc takes a String as well as a codepoint, and a codepoint is a character
+  # in the stream's external encoding rather than a single byte. The built-in only
+  # ever pushed one byte back.
+  alias_method :__ir_ungetc__, :ungetc
+  private :__ir_ungetc__
+
+  def ungetc(value)
+    if value.is_a?(::Integer)
+      enc = (external_encoding rescue nil) || ::Encoding.default_external
+      text = (value.chr(enc) rescue value.chr)
+    else
+      unless value.is_a?(::String)
+        unless value.respond_to?(:to_str)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{value.nil? ? "nil" : value.class} into String")
+        end
+        value = value.to_str
+      end
+      text = value
+    end
+    text.bytes.reverse_each { |b| __ir_ungetc__(b) }
+    nil
+  end
+
+  # ungetbyte pushes bytes, never characters, so it goes straight to the built-in
+  # rather than through #ungetc - and an Integer is taken modulo 256 rather than
+  # being out of range.
   def ungetbyte(byte)
     return nil if byte.nil?
     if byte.is_a?(::Integer)
-      ungetc(byte & 0xff)
+      __ir_ungetc__(byte & 0xff)
     else
-      ::Kernel.String(byte).bytes.reverse_each { |b| ungetc(b) }
+      unless byte.is_a?(::String)
+        unless byte.respond_to?(:to_str)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{byte.class} into String")
+        end
+        byte = byte.to_str
+      end
+      byte.bytes.reverse_each { |b| __ir_ungetc__(b) }
     end
     nil
   end unless method_defined?(:ungetbyte)

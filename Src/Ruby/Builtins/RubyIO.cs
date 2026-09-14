@@ -757,6 +757,18 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// One IO#readpartial worth of bytes: what is buffered, or a single read when nothing is.
+        /// </summary>
+        public int AppendAvailableBytes(MutableString/*!*/ buffer, int count) {
+            var stream = GetReadableStream();
+            try {
+                return stream.AppendAvailableBytes(buffer, count);
+            } catch (ObjectDisposedException) {
+                throw RubyExceptions.CreateEBADF();
+            }
+        }
+
         public MutableString ReadLineOrParagraph(MutableString separator, int limit) {
             if (limit == 0) {
                 // A zero limit reads an empty string forever, so IO#each_line(0) never returned.

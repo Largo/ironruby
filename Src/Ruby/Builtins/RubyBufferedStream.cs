@@ -329,6 +329,33 @@ namespace IronRuby.Builtins {
             return buffer.GetByteCount() - initialBufferSize;
         }
 
+        /// <summary>
+        /// The bytes that are here already, up to count of them, and only when there are none
+        /// a single read of at most count - which is what IO#readpartial is: it blocks only
+        /// when there is nothing at all to hand back.
+        /// </summary>
+        public int AppendAvailableBytes(MutableString/*!*/ buffer, int count) {
+            ContractUtils.RequiresNotNull(buffer, "buffer");
+            if (count <= 0) {
+                return 0;
+            }
+
+            buffer.SwitchToBytes();
+            if (_bufferCount > 0) {
+                int buffered = Math.Min(_bufferCount, count);
+                buffer.Append(_buffer, _bufferStart, buffered);
+                ConsumeBuffered(buffered);
+                return buffered;
+            }
+
+            var bytes = new byte[count];
+            int read = _stream.Read(bytes, 0, count);
+            if (read > 0) {
+                buffer.Append(bytes, 0, read);
+            }
+            return read;
+        }
+
         private void AppendRawBytes(MutableString/*!*/ buffer, int count) {
             Debug.Assert(count > 0);
 

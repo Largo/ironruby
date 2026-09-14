@@ -1265,6 +1265,24 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// The primitive under IO#readpartial: at most the requested number of bytes, and only
+        /// as many as are here - it waits only when nothing is here at all. Answers nil at end
+        /// of file, which the Ruby side turns into EOFError.
+        /// </summary>
+        [RubyMethod("__read_available__", RubyMethodAttributes.PrivateInstance)]
+        public static MutableString ReadAvailable(RubyIO/*!*/ self, [DefaultProtocol]int bytes) {
+            self.RequireReadable();
+            if (bytes < 0) {
+                throw RubyExceptions.CreateArgumentError("negative length " + bytes + " given");
+            }
+            var buffer = MutableString.CreateBinary();
+            if (bytes == 0) {
+                return buffer;
+            }
+            return self.AppendAvailableBytes(buffer, bytes) == 0 ? null : buffer;
+        }
+
         [RubyMethod("read_nonblock")]
         public static MutableString ReadNoBlock(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
             self.RequireReadable();
@@ -1515,6 +1533,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("ungetc")]
         public static void SetPreviousByte(RubyIO/*!*/ self, [DefaultProtocol]int b) {
+            self.RequireReadable();
             self.PushBack(unchecked((byte)b));
         }
 

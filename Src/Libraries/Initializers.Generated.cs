@@ -3280,6 +3280,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyIO, System.Object>(IronRuby.Builtins.RubyIOOps.GetConversionOptions)
             );
             
+            DefineLibraryMethod(module, "__read_available__", 0x52, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyIO, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyIOOps.ReadAvailable)
+            );
+            
             DefineLibraryMethod(module, "binmode", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyIO, IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.Binmode)
