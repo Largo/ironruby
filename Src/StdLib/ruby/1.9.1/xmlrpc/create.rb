@@ -178,18 +178,11 @@ module XMLRPC
     def conv2value(param)
 
         val = case param
-        when Fixnum
-          @writer.tag("i4", param.to_s)
-
-        when Bignum
-          if Config::ENABLE_BIGINT
+        when Integer
+          if Config::ENABLE_BIGINT or (param >= -(2**31) and param <= (2**31-1))
             @writer.tag("i4", param.to_s)
           else
-            if param >= -(2**31) and param <= (2**31-1)
-              @writer.tag("i4", param.to_s)
-            else
-              raise "Bignum is too big! Must be signed 32-bit integer!"
-            end
+            raise "Integer is too big! Must be signed 32-bit integer!"
           end
         when TrueClass, FalseClass
           @writer.tag("boolean", param ? "1" : "0")

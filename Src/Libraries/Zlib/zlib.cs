@@ -1168,7 +1168,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             [RubyMethod("flush")]
             public static GzipWriter Flush(UnaryOpStorage/*!*/ flushStorage, RubyContext/*!*/ context, GzipWriter/*!*/ self, object flush) {
                 if (flush != null) {
-                    throw RubyExceptions.CreateUnexpectedTypeError(context, flush, "Fixnum");
+                    throw RubyExceptions.CreateUnexpectedTypeError(context, flush, "Integer");
                 }
 
                 return Flush(flushStorage, context, self, SYNC_FLUSH);
@@ -1230,10 +1230,10 @@ namespace IronRuby.StandardLibrary.Zlib {
                 object strategy) {
 
                 if (level != null) {
-                    throw RubyExceptions.CreateUnexpectedTypeError(self.Context, level, "Fixnum");
+                    throw RubyExceptions.CreateUnexpectedTypeError(self.Context, level, "Integer");
                 }
                 if (strategy != null) {
-                    throw RubyExceptions.CreateUnexpectedTypeError(self.Context, strategy, "Fixnum");
+                    throw RubyExceptions.CreateUnexpectedTypeError(self.Context, strategy, "Integer");
                 }
 
                 return Open(respondToStorage, closeStorage, block, self, filename, 0, 0);

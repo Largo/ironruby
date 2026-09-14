@@ -230,7 +230,7 @@ namespace IronRuby.Runtime {
 
                 // misc:
                 case GlobalVariableId.SafeLevel:
-                    context.SetSafeLevel(RequireType<int>(value, name, "Fixnum"));
+                    context.SetSafeLevel(RequireType<int>(value, name, "Integer"));
                     return;
 
                 case GlobalVariableId.Verbose:

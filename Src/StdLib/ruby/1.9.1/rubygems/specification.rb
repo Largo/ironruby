@@ -854,9 +854,9 @@ class Gem::Specification
             "[#{non_files.join ", "}] are not files"
     end
 
-    unless specification_version.is_a?(Fixnum)
+    unless specification_version.is_a?(Integer)
       raise Gem::InvalidSpecificationException,
-            'specification_version must be a Fixnum (did you mean version?)'
+            'specification_version must be an Integer (did you mean version?)'
     end
 
     case platform

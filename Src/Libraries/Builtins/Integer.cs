@@ -27,8 +27,17 @@ using Microsoft.Scripting.Utils;
 
 namespace IronRuby.Builtins {
 
-    [RubyClass("Integer"), Includes(typeof(Precision))]
-    public class Integer : Numeric {
+    // Ruby 2.4 unified Fixnum and Bignum into a single Integer and 3.2 removed both
+    // constants, so this one class backs both CLR representations of an integer: it extends
+    // System.Int32, and RubyContext additionally maps System.Numerics.BigInteger onto the
+    // very same RubyClass.  The int-self and BigInteger-self operations are therefore
+    // overloads of one Ruby method, which is why ClrInteger is a single trait type.
+    [RubyClass("Integer", Extends = typeof(int), Inherits = typeof(Numeric))]
+    // Precision is a Ruby 1.8 module that MRI removed in 1.9; Integer.ancestors matches
+    // CRuby exactly without it.  Float still includes it, so the module itself stays.
+    [Includes(typeof(ClrInteger), Copy = true)]
+    [UndefineMethod("new", IsStatic = true)]
+    public partial class Integer : Numeric {
         public Integer(RubyClass/*!*/ cls) 
             : base(cls) { 
         }
@@ -735,7 +744,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("gcd")]
         public static object/*!*/ Gcd(BigInteger/*!*/ self, BigInteger/*!*/ other) {
-            return ClrBigInteger.Abs(SignedGcd(self, other));
+            return ClrInteger.Abs(SignedGcd(self, other));
         }
 
         [RubyMethod("gcd")]
@@ -767,7 +776,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("gcdlcm")]
         public static RubyArray/*!*/ GcdLcm(BigInteger/*!*/ self, BigInteger/*!*/ other) {
             BigInteger gcd = SignedGcd(self, other);
-            return new RubyArray { ClrBigInteger.Abs(gcd), Lcm(self, other, gcd) };
+            return new RubyArray { ClrInteger.Abs(gcd), Lcm(self, other, gcd) };
         }
 
         [RubyMethod("gcdlcm")]

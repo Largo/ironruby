@@ -18,9 +18,9 @@ using IronRuby.Runtime;
 using Microsoft.Scripting;
 
 namespace IronRuby.Builtins {
-    [RubyClass("Fixnum", Extends = typeof(int), Inherits = typeof(Integer)), Includes(typeof(ClrInteger), Copy = true)]
-    [UndefineMethod("new", IsStatic = true)]
-    public static partial class Int32Ops {
+    // Was the Fixnum class.  Fixnum and Bignum were unified into Integer in Ruby 2.4 and
+    // removed in 3.2, so these are int-typed overloads on Integer itself now.
+    public partial class Integer {
         #region to_sym
 
         /// <summary>
@@ -62,19 +62,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("size")]
         public static int Size(int self) {
             return sizeof(int);
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static int InducedFrom(RubyClass/*!*/ self, [DefaultProtocol]int value) {
-            return value;
-        }
-
-        [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
-        public static int InducedFrom(RubyClass/*!*/ self, double value) {
-            if (value >= Int32.MinValue && value <= Int32.MaxValue) {
-                return (Int32)value;
-            }
-            throw RubyExceptions.CreateRangeError("Float {0} out of range of {1}", value, self.Name);
         }
     }
 }

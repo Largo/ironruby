@@ -124,7 +124,7 @@ module Exception2MessageMapper
   #	define exception named ``c'' with message m.
   #
   def E2MM.def_exception(k, n, m, s = StandardError)
-    n = n.id2name if n.kind_of?(Fixnum)
+    n = n.id2name if n.kind_of?(Integer)
     e = Class.new(s)
     E2MM.instance_eval{@MessageMap[[k, e]] = m}
     k.const_set(n, e)

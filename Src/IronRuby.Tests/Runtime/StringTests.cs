@@ -65,7 +65,7 @@ foo3baz
         public void Strings3() {
             TestOutput(@"
 class String; def to_s; 'S'; end; end
-class Fixnum; def to_s; 'N'; end; end
+class Integer; def to_s; 'N'; end; end
 
 p """"
 puts ""#{1}""
@@ -116,7 +116,7 @@ p ""-#{nil}+#{nil}-""
             AssertOutput(delegate() {
                 CompilerTest(@"
 class String; def to_s; 'S'; end; end
-class Fixnum; def to_s; 'N'; end; end
+class Integer; def to_s; 'N'; end; end
 
 puts :""#{1}""
 puts :""#{1}-""

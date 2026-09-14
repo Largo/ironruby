@@ -269,6 +269,10 @@ namespace IronRuby.StandardLibrary.Yaml {
         }
     }
 
+    // Both of these extend the one Integer class now, so they answer the one int tag.  The
+    // ":Fixnum" and ":Bignum" tag suffixes are gone: they named classes that no longer exist,
+    // and no constructor was ever registered for them, so a document that carried
+    // "tag:yaml.org,2002:int:Bignum" explicitly could not be read back.
     [RubyModule(Extends = typeof(int))]
     public static class YamlFixnumOps {
         [RubyMethod("to_yaml_node", RubyMethodAttributes.PrivateInstance)]
@@ -278,7 +282,7 @@ namespace IronRuby.StandardLibrary.Yaml {
 
         [RubyMethod("taguri")]
         public static MutableString/*!*/ TagUri(int self) {
-            return MutableString.CreateAscii(Tags.Fixnum);
+            return MutableString.CreateAscii(Tags.Int);
         }
     }
 
@@ -286,12 +290,12 @@ namespace IronRuby.StandardLibrary.Yaml {
     public static class YamlBigIntegerOps {
         [RubyMethod("to_yaml_node", RubyMethodAttributes.PrivateInstance)]
         public static Node/*!*/ ToYaml([NotNull]BigInteger self, [NotNull]RubyRepresenter/*!*/ rep) {
-            return rep.Scalar(Tags.Bignum, self.ToString(CultureInfo.InvariantCulture), ScalarQuotingStyle.None);
+            return rep.Scalar(Tags.Int, self.ToString(CultureInfo.InvariantCulture), ScalarQuotingStyle.None);
         } 
 
         [RubyMethod("taguri")]
         public static MutableString/*!*/ TagUri([NotNull]BigInteger self) {
-            return MutableString.CreateAscii(Tags.Bignum);            
+            return MutableString.CreateAscii(Tags.Int);
         }
     }
 

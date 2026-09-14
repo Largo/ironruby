@@ -681,11 +681,11 @@ p a.foo(b)
 ");
         }
 
-        // Fixnum doesn't have identity in Ruby
+        // an Integer doesn't have identity in Ruby
         public void InstanceVariables10() {
             AssertOutput(delegate() {
                 CompilerTest(@"
-class Fixnum
+class Integer
   def foo= a
     @x = a
   end

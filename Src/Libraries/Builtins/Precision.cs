@@ -52,7 +52,7 @@ namespace IronRuby.Builtins {
              object self) {
 
             var prec = precStorage.GetCallSite("prec", 1);
-            return prec.Target(prec, self, precStorage.Context.GetClass(typeof(Integer)));
+            return prec.Target(prec, self, precStorage.Context.GetClass(typeof(int)));
         }
 
         /// <summary>

@@ -407,9 +407,9 @@ class Rational < Numeric
   private :initialize
 end
 
-class Fixnum
+class Integer
   undef quo
-  # If Rational is defined, returns a Rational number instead of a Fixnum.
+  # If Rational is defined, returns a Rational number instead of an Integer.
   def quo(other)
     Rational.new!(self,1) / other
   end
@@ -417,6 +417,11 @@ class Fixnum
 
   # Returns a Rational number if the result is in fact rational (i.e. +other+ < 0).
   def rpower (other)
+    # `other >= 0` on something that is not a number at all reports the comparison
+    # failing rather than the coercion failing: 2 ** "x" said "comparison of String
+    # with 0 failed" where CRuby says "String can't be coerced into Integer".  Let the
+    # builtin ** answer for anything non-numeric, which is where that message lives.
+    return power!(other) unless other.is_a?(Numeric)
     if other >= 0
       self.power!(other)
     else
@@ -430,28 +435,3 @@ class Fixnum
   end
 end
 
-class Bignum
-  unless defined? Complex
-    alias power! **
-  end
-
-  undef quo
-  # If Rational is defined, returns a Rational number instead of a Bignum.
-  def quo(other)
-    Rational.new!(self,1) / other
-  end
-  alias rdiv quo
-
-  # Returns a Rational number if the result is in fact rational (i.e. +other+ < 0).
-  def rpower (other)
-    if other >= 0
-      self.power!(other)
-    else
-      Rational.new!(self, 1)**other
-    end
-  end
-
-  unless defined? Complex
-    alias ** rpower
-  end
-end

@@ -442,14 +442,14 @@ foo
                 CompilerTest(@"
 engine = IronRuby.create_engine
 puts engine.execute('1+1')
-puts engine.execute('Fixnum')
-engine.execute('class Fixnum; def + other; 123; end; end')
+puts engine.execute('Integer')
+engine.execute('class Integer; def + other; 123; end; end')
 puts 1+1
 puts engine.execute('1+1')
 ");
             }, @"
 2
-Fixnum@*
+Integer@*
 2
 123
 ", OutputFlags.Match);

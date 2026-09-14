@@ -316,7 +316,7 @@ b.bar(7) rescue p $!
 
 B.StaticM rescue p $!
 puts C.StaticM
-puts C.method(:StaticGenericM).of(Fixnum)[123]
+puts C.method(:StaticGenericM).of(Integer)[123]
 ");
             }, @"
 Foo(I): 1
@@ -335,8 +335,8 @@ StaticGenericM: 123
 class C < B; end
 c = C.new
 
-puts c.method(:PG).of(Fixnum).call(1)
-puts c.method(:PG).of(Fixnum).call(1,2)
+puts c.method(:PG).of(Integer).call(1)
+puts c.method(:PG).of(Integer).call(1,2)
 ", @"
 PG<T>(T)
 PG<T>(T,int)
@@ -568,7 +568,7 @@ m = GM.method(:M1)
 puts m.call
 puts m.of().call
 puts m.of(String).call
-puts m.of(String, Fixnum).call
+puts m.of(String, Integer).call
 puts m.call(1) rescue p $!
 puts m.of(String, String, String) rescue p $!
 ", @"
@@ -585,9 +585,9 @@ M1<MutableString, Int32>()
 m = GM.method(:M2)
 puts m.call(1)
 
-puts GM.method(:field).of(Fixnum) rescue p $!
-puts GM.method(:property).of(Fixnum) rescue p $!
-puts GM.method(:event).of(Fixnum) rescue p $!
+puts GM.method(:field).of(Integer) rescue p $!
+puts GM.method(:property).of(Integer) rescue p $!
+puts GM.method(:event).of(Integer) rescue p $!
 ", @"
 M2(Fixnum)
 #<ArgumentError: wrong number of generic arguments for `field'>
@@ -673,7 +673,7 @@ puts GM3.foo(123)
             Context.ObjectClass.SetConstant("E", Context.GetClass(typeof(InteropTests.Generics1.Extensions)));
      
             TestOutput(@"
-p I.Array(System::Array[Fixnum].new(3))
+p I.Array(System::Array[Integer].new(3))
 p I.Multiple([1,2,3], F.new { |x| x.to_s })
 E.Select([1,2], F.new { |x| x.to_s + '!' }).each { |a| puts a }
 E.Select([1,2], lambda { |x| x + 1 }).each { |a| puts a }
@@ -698,8 +698,8 @@ p I.ByRef(sb), sb.Value
 
             TestOutput(@"
 include System::Collections::Generic
-p I.DeepShape(Dictionary[List[Fixnum], Dictionary[Fixnum, Fixnum]].new) rescue p $!
-p I.DeepShape(Dictionary[Dictionary[Fixnum, System::String], Dictionary[Fixnum, Fixnum]].new)
+p I.DeepShape(Dictionary[List[Integer], Dictionary[Integer, Integer]].new) rescue p $!
+p I.DeepShape(Dictionary[Dictionary[Integer, System::String], Dictionary[Integer, Integer]].new)
 ", @"
 #<ArgumentError: generic arguments could not be infered for method 'DeepShape'>
 3
@@ -729,7 +729,7 @@ ambiguous
 ");
              // TODO:
 //             XTestOutput(@"
-//a = System::Array[Fixnum].new(1)
+//a = System::Array[Integer].new(1)
 //p I.Apply(a, lambda { |x| })
 //", @"
 //5
@@ -818,9 +818,9 @@ p I.Mixed(1)
 load_assembly SystemCoreAssembly
 using_clr_extensions System::Linq
 
-a = System::Array[Fixnum].new([1,2,3])
+a = System::Array[Integer].new([1,2,3])
 p a.first_or_default
-#TODO: p a.method(:of_type).of(Fixnum).call.to_a #=> [1, 2, 3]
+#TODO: p a.method(:of_type).of(Integer).call.to_a #=> [1, 2, 3]
 ", @"
 1
 ");
@@ -838,7 +838,7 @@ load_assembly DummyLinqAssembly
 using_clr_extensions System::Linq
 load_assembly SystemCoreAssembly
 
-p System::Array[Fixnum].new([1,2,3]).first_or_default
+p System::Array[Integer].new([1,2,3]).first_or_default
 ", @"
 1
 ");
@@ -855,7 +855,7 @@ p System::Array[Fixnum].new([1,2,3]).first_or_default
 load_assembly DummyLinqAssembly
 load_assembly SystemCoreAssembly
 
-a = System::Array[Fixnum].new([1,2,3])
+a = System::Array[Integer].new([1,2,3])
 a.first_or_default rescue p $!
 
 using_clr_extensions System::Linq
@@ -902,9 +902,9 @@ puts A.new.f5
 puts B.new.f5                           # f5 is an extension on all types (TODO)
 
 puts System::Array[A].new(1).f6
-System::Array[Fixnum].new(1).f6 rescue puts '!f6'
+System::Array[Integer].new(1).f6 rescue puts '!f6'
 puts L[System::Array[D[B, L[A]]]].new.f6
-L[System::Array[D[B, L[Fixnum]]]].new.f6 rescue puts '!f6'
+L[System::Array[D[B, L[Integer]]]].new.f6 rescue puts '!f6'
 ", @"
 f1
 !f1
@@ -1441,11 +1441,11 @@ m = OM.method(:M1)
 puts m.overload.call
 puts m.overload(String).call('')
 puts m.overload(Float).call(1.0)
-puts m.overload(Fixnum, String).call(1, '')
+puts m.overload(Integer, String).call(1, '')
 puts m.overload(String, String).call('', '')
-puts m.overload(Fixnum, System::Array.of(Object)).call(1, 2, 3)
-puts m.overload(Fixnum, Object).call(1, 2)
-puts m.overload(Fixnum).call(1)
+puts m.overload(Integer, System::Array.of(Object)).call(1, 2, 3)
+puts m.overload(Integer, Object).call(1, 2)
+puts m.overload(Integer).call(1)
 "), @"
 M1()
 M1(String)
@@ -1480,7 +1480,7 @@ puts m.overload(Object).of(Object).clr_members.size
 m = OM.method(:M2)
 puts m.call(1)
 puts m.of(Float).call('')
-puts m.of(Float).overload(Fixnum).call(1)
+puts m.of(Float).overload(Integer).call(1)
 puts m.overload(Object).of(String).call(1)
 "), @"
 M2(Fixnum)
@@ -1576,7 +1576,7 @@ end
             // static methods:
             TestOutput(@"
 m = B.method(:foo)
-puts m.overload(Fixnum).clr_members.size          # RubyScope and BlockParam are hidden
+puts m.overload(Integer).clr_members.size          # RubyScope and BlockParam are hidden
 puts m.overload(System::String) rescue p $!       # RubyClass is not hidden here
 ", @"
 1
@@ -1887,16 +1887,16 @@ include InteropTests::Generics1
 p C.new.arity
 p C[String].new.arity
 p D[String].new.arity
-p C[Fixnum, Fixnum].new.arity
+p C[Integer, Integer].new.arity
 p D[String]
-p C[Fixnum, Fixnum]
+p C[Integer, Integer]
 ", @"
 0
 1
 11
 2
 InteropTests::Generics1::D[String]
-InteropTests::Generics1::C[Fixnum, Fixnum]
+InteropTests::Generics1::C[Integer, Integer]
 ");
 
             TestOutput(@"
@@ -1905,21 +1905,21 @@ p C[0]
 p C[1]
 p C[2]
 C[30] rescue p $!
-p C[1][Fixnum]
-p C[Fixnum][]
-p C[Fixnum][0]
-C[Fixnum][Fixnum] rescue p $!
-C[Fixnum][1] rescue p $!
+p C[1][Integer]
+p C[Integer][]
+p C[Integer][0]
+C[Integer][Integer] rescue p $!
+C[Integer][1] rescue p $!
 ", @"
 InteropTests::Generics1::C
 InteropTests::Generics1::C[T]
 InteropTests::Generics1::C[T, S]
 #<ArgumentError: Type group `C' does not contain a type of generic arity 30>
-InteropTests::Generics1::C[Fixnum]
-InteropTests::Generics1::C[Fixnum]
-InteropTests::Generics1::C[Fixnum]
-#<ArgumentError: `InteropTests::Generics1::C[Fixnum]' is not a generic type definition>
-#<ArgumentError: `InteropTests::Generics1::C[Fixnum]' is not a generic type definition>
+InteropTests::Generics1::C[Integer]
+InteropTests::Generics1::C[Integer]
+InteropTests::Generics1::C[Integer]
+#<ArgumentError: `InteropTests::Generics1::C[Integer]' is not a generic type definition>
+#<ArgumentError: `InteropTests::Generics1::C[Integer]' is not a generic type definition>
 ");
             
             // C<> is a mixin for all its instantiations:
@@ -1931,11 +1931,11 @@ C[1].class_eval do
   end
 end
 
-C[Fixnum].new.foo
+C[Integer].new.foo
 C[String].new.foo
 p C[Float].ancestors[0..2]
 ", @"
-InteropTests::Generics1::C[Fixnum]
+InteropTests::Generics1::C[Integer]
 InteropTests::Generics1::C[String]
 [InteropTests::Generics1::C[Float], InteropTests::Generics1::C[T], Object]
 ");
@@ -1953,25 +1953,25 @@ class ClassA
 end
 
 class ClassB
-  include C[Fixnum] rescue p $!
-  include I[Fixnum]
+  include C[Integer] rescue p $!
+  include I[Integer]
   p ancestors
   new
 end
 ", @"
 [ClassA, InteropTests::Generics1::I[T], InteropTests::Generics1::C[T], Object, InteropTests::Generics1, Kernel, BasicObject]
 #<TypeError: wrong argument type Class (expected Module)>
-[ClassB, InteropTests::Generics1::I[Fixnum], InteropTests::Generics1::I[T], Object, InteropTests::Generics1, Kernel, BasicObject]
+[ClassB, InteropTests::Generics1::I[Integer], InteropTests::Generics1::I[T], Object, InteropTests::Generics1, Kernel, BasicObject]
 ");
 
             // generic type definitions cannot be instantiated and don't expose their methods:
             TestOutput(@"
 include InteropTests::Generics1
-p C[Fixnum].new.method(:Arity)
+p C[Integer].new.method(:Arity)
 C[1].new rescue p $!
 C[1].instance_method(:Arity) rescue p $!
 ", @"
-#<Method: InteropTests::Generics1::C[Fixnum]#Arity>
+#<Method: InteropTests::Generics1::C[Integer]#Arity>
 #<NoMethodError: undefined method `new' for module InteropTests::Generics1::C[T]>
 #<NameError: undefined method `Arity' for module `InteropTests::Generics1::C[T]'>
 ");
@@ -1992,8 +1992,8 @@ C[1].instance_method(:Arity) rescue p $!
             // CLR methods with generic arguments defined on a generic type don't get duplicated:
             // (C<T> inherits from C<> but the generic type definition should be ignored when looking for CLR method overloads):
             TestOutput(@"
-p T::GenericClass1[Fixnum].new.foo(1)
-p T::GenericSubclass1[Fixnum].new.foo(1)
+p T::GenericClass1[Integer].new.foo(1)
+p T::GenericSubclass1[Integer].new.foo(1)
 ", @"
 1
 1
@@ -2062,13 +2062,13 @@ $d = D.new { |foo, bar| $foo = foo; $bar = bar; 777 }
         public void ClrDelegates2() {
             Runtime.LoadAssembly(typeof(Func<>).Assembly);
 
-            var f = Engine.Execute<Func<int, int>>(FuncFullName + @".of(Fixnum, Fixnum).new { |a| a + 1 }");
+            var f = Engine.Execute<Func<int, int>>(FuncFullName + @".of(Integer, Integer).new { |a| a + 1 }");
             Assert(f(1) == 2);
 
             Engine.Execute<Action>(ActionFullName + @".new { $x = 1 }")();
             Assert((int)Context.GetGlobalVariable("x") == 1);
 
-            Engine.Execute<Action<int, int>>(ActionFullName + @"[Fixnum, Fixnum].new { |x,y| $x = x + y }")(10, 1);
+            Engine.Execute<Action<int, int>>(ActionFullName + @"[Integer, Integer].new { |x,y| $x = x + y }")(10, 1);
             Assert((int)Context.GetGlobalVariable("x") == 11);
 
             AssertExceptionThrown<LocalJumpError>(() => Engine.Execute(ActionFullName + @".new(&nil)"));
@@ -2688,8 +2688,8 @@ end
             Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(EmptyClass1)));
 
             AssertOutput(() => CompilerTest(@"
-class D; include System::Collections::Generic::IList[Fixnum]; end
-class E < C; include System::Collections::Generic::IList[Fixnum]; end
+class D; include System::Collections::Generic::IList[Integer]; end
+class E < C; include System::Collections::Generic::IList[Integer]; end
 class F; end
 
 p D.new, E.new, F.new
@@ -3000,40 +3000,40 @@ init
 end
 ",
 @"
-[System::Byte, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::Byte, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Byte
 1
-Fixnum
+Integer
 1
-[System::SByte, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::SByte, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::SByte
 2
-Fixnum
+Integer
 1
-[System::UInt16, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::UInt16, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::UInt16
 3
-Fixnum
+Integer
 2
-[System::Int16, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::Int16, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Int16
 4
-Fixnum
+Integer
 2
-[System::UInt32, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::UInt32, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::UInt32
 5
-Fixnum
+Integer
 4
-[System::Int64, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::Int64, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Int64
 6
-Fixnum
+Integer
 8
-[System::UInt64, Integer, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
+[System::UInt64, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::UInt64
 7
-Fixnum
+Integer
 8
 [System::Single, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Single
@@ -3052,10 +3052,10 @@ a2[0,1] = 123
 p a2[0,1]
 
 # vectors:                                                     
-p System::Array[Fixnum].new(10) { |i| i + 1 }
-p System::Array[Fixnum].new(3)
-p System::Array[Fixnum].new([1,2,3])
-p System::Array[Fixnum].new(3, 12)
+p System::Array[Integer].new(10) { |i| i + 1 }
+p System::Array[Integer].new(3)
+p System::Array[Integer].new([1,2,3])
+p System::Array[Integer].new(3, 12)
 ", @"
 123
 [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -3249,7 +3249,7 @@ false
         public void ClrOperators2() {
             TestOutput(@"
 p :b == true                
-p String == Fixnum          # Only instance operator calls are allowed (MutableString::op_Equality shound be ignored)
+p String == Integer          # Only instance operator calls are allowed (MutableString::op_Equality shound be ignored)
 
 class C < Numeric
   def to_f
@@ -3266,12 +3266,17 @@ false
         }
 
         /// <summary>
-        /// Operator mapping is not performed for builtin classes. 
-        /// CLR BigInteger defines op_LessThan but we want less-than operator to call comparison method &lt;=&gt;.
+        /// Operator mapping is not performed for builtin classes: System.Numerics.BigInteger
+        /// defines op_LessThan, but a large integer must not compare with it.
+        ///
+        /// Integer#&lt; answers two integers itself rather than going through Comparable, so
+        /// redefining &lt;=&gt; does not change it -- CRuby 4.0.6 prints "true" here too.  Before
+        /// Fixnum and Bignum were unified this printed "&lt;=&gt;" and "false", because the Bignum
+        /// class hid &lt;, &lt;=, &gt; and &gt;= and so fell through to Comparable.
         /// </summary>
         public void ClrOperators3() {
             TestOutput(@"
-class Bignum
+class Integer
   def <=>(other)
     puts '<=>'
     1
@@ -3279,8 +3284,7 @@ class Bignum
 end
 p 0x1000_0000_0 < 0x1000_0000_1
 ", @"
-<=>
-false
+true
 ");
         }
 

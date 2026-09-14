@@ -27,13 +27,13 @@ namespace IronRuby.Builtins {
     /// For the purposes of the bitwise operations and [], a Bignum is treated as if it were an infinite-length bitstring with 2s complement representation. 
     /// While Fixnum values are immediate, Bignum objects are notassignment and parameter passing work with references to objects, not the objects themselves. 
     /// </summary>
-    [RubyClass("Bignum", Extends = typeof(BigInteger), Inherits = typeof(Integer)), Includes(typeof(ClrBigInteger), Copy = true)]
-    [HideMethod(">")]
-    [HideMethod(">=")]
-    [HideMethod("<")]
-    [HideMethod("<=")]
-    [UndefineMethod("new", IsStatic = true)]
-    public static partial class BignumOps {
+    // Was the Bignum class.  Fixnum and Bignum were unified into Integer in Ruby 2.4 and
+    // removed in 3.2, so this is a BigInteger-typed overload on Integer itself now.  The four
+    // HideMethod entries went with the class: they hid System.Numerics.BigInteger's own CLR
+    // comparison operators so that Comparable answered <, <=, > and >=.  Integer's underlying
+    // type is System.Int32, whose operators were never exposed, and ClrInteger now carries
+    // real BigInteger overloads of all four.
+    public partial class Integer {
         /// <summary>
         /// Returns the number of bytes in the machine representation of self. 
         /// </summary>

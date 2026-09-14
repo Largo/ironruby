@@ -151,7 +151,7 @@ namespace IronRuby.Builtins {
 
             int? desc = toIntSite.Target(toIntSite, descriptor);
             if (!desc.HasValue) {
-                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(descriptor), "Fixnum");
+                throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(descriptor), "Integer");
             }
             Reinitialize(self, desc.Value, info);
             self.ConversionOptions = options;

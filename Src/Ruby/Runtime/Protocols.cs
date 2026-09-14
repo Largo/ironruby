@@ -105,7 +105,7 @@ namespace IronRuby.Runtime {
             if (bignum.TryToFloat64(out result)) {
                 return result;
             }
-            context.ReportWarning("Bignum out of Float range");
+            context.ReportWarning("Integer out of Float range");
             return bignum.Sign > 0 ? Double.PositiveInfinity : Double.NegativeInfinity;
         }
 

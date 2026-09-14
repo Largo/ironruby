@@ -779,7 +779,7 @@ namespace IronRuby.Runtime.Conversions {
     }
 
     public class TryConvertToFixnumAction : ProtocolConversionAction<TryConvertToFixnumAction> {
-        protected override string/*!*/ TargetTypeName { get { return "Fixnum"; } }
+        protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
         protected override string/*!*/ ToMethodName { get { return Symbols.ToInt; } }
         public override Type/*!*/ ReturnType { get { return typeof(int?); } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToFixnumValidator; } }
@@ -801,7 +801,7 @@ namespace IronRuby.Runtime.Conversions {
     }
 
     public sealed class ConvertToFixnumAction : ConvertToIntegerAction<ConvertToFixnumAction> {
-        protected override string/*!*/ TargetTypeName { get { return "Fixnum"; } }
+        protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToFixnumValidator; } }
     }
 
@@ -841,7 +841,7 @@ namespace IronRuby.Runtime.Conversions {
     }
 
     public sealed class ConvertToBignumAction : ConvertToIntegerAction<ConvertToBignumAction> {
-        protected override string/*!*/ TargetTypeName { get { return "Bignum"; } }
+        protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToBignumValidator; } }
     }
 

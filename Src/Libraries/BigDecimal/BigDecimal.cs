@@ -384,7 +384,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 if (IsNegative(x)) {
                     d = BigInteger.Negate(d);
                 }
-                return ClrBigInteger.Multiply(d, new BigInteger(10).Power(i.Exponent - digits.Length));
+                return ClrInteger.Multiply(d, new BigInteger(10).Power(i.Exponent - digits.Length));
             } else {
                 return null;
             }

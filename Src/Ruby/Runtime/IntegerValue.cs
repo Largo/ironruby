@@ -98,7 +98,7 @@ namespace IronRuby.Runtime {
             if (IsFixnum) {
                 result = _fixnum;
             } else if (!_bignum.Value.AsInt32(out result)) {
-                throw RubyExceptions.CreateRangeError("Bignum too big to convert into 32-bit signed integer");
+                throw RubyExceptions.CreateRangeError("Integer too big to convert into 32-bit signed integer");
             }
             return result;
         }
@@ -108,7 +108,7 @@ namespace IronRuby.Runtime {
             if (IsFixnum) {
                 result = _fixnum;
             } else if (!_bignum.Value.AsInt64(out result)) {
-                throw RubyExceptions.CreateRangeError("Bignum too big to convert into 64-bit signed integer");
+                throw RubyExceptions.CreateRangeError("Integer too big to convert into 64-bit signed integer");
             }
             return result;
         }

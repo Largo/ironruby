@@ -6,7 +6,7 @@
 #  Copyright (C) 2009 by Park Heesob phasis@gmail.com
 #
 
-class Fixnum
+class Integer
    def ord; self; end
 end
 

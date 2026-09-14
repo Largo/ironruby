@@ -181,7 +181,7 @@ include System
 end
 "), @"
 [1, 1, 1, 1]
-#<RangeError: float * out of range of Fixnum>
+#<RangeError: float * out of range of integer>
 []
 [1]
 [2, 2]
