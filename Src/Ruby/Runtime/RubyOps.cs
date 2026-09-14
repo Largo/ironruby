@@ -705,7 +705,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static RubyClass/*!*/ DefineSingletonClass(RubyScope/*!*/ scope, object obj) {
             if (!RubyUtils.HasSingletonClass(obj)) {
-                throw RubyExceptions.CreateTypeError(String.Format("no virtual class for {0}", scope.RubyContext.GetClassOf(obj).Name));
+                throw RubyExceptions.CreateTypeError("can't define singleton");
             }
             return scope.RubyContext.GetOrCreateSingletonClass(obj);
         }
@@ -743,7 +743,7 @@ namespace IronRuby.Runtime {
 
                 RubyClass cls = existing.Value as RubyClass;
                 if (cls == null || !cls.IsClass) {
-                    throw RubyExceptions.CreateTypeError("{0} is not a class", name);
+                    throw RubyExceptions.CreateTypeError(DescribePreviousDefinition(owner, name, "{0} is not a class"));
                 }
 
                 if (superClassObject != null && !ReferenceEquals(cls.SuperClass, superClass)) {
@@ -757,15 +757,31 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// MRI points at the existing definition when a class/module name is already taken:
+        ///   Foo is not a class
+        ///   foo.rb:2: previous definition of Foo was here
+        /// </summary>
+        private static string/*!*/ DescribePreviousDefinition(RubyModule/*!*/ owner, string/*!*/ name, string/*!*/ format) {
+            var message = String.Format(format, name);
+            string path;
+            int line;
+            if (owner.TryGetConstantLocation(name, out path, out line)) {
+                message += String.Format("\n{0}:{1}: previous definition of {2} was here", path, line, name);
+            }
+            return message;
+        }
+
         private static RubyClass/*!*/ ToSuperClass(RubyContext/*!*/ ec, object superClassObject) {
             if (superClassObject != null) {
                 RubyClass superClass = superClassObject as RubyClass;
                 if (superClass == null) {
-                    throw RubyExceptions.CreateTypeError("superclass must be a Class ({0} given)", ec.GetClassOf(superClassObject).Name);
+                    throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
+                        ec.GetClassDisplayName(superClassObject));
                 }
 
                 if (superClass.IsSingletonClass) {
-                    throw RubyExceptions.CreateTypeError("can't make subclass of virtual class");
+                    throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
                 }
 
                 return superClass;

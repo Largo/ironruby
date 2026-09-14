@@ -813,7 +813,8 @@ namespace IronRuby.Runtime {
         }
 
         internal static Exception/*!*/ CreateNotModuleException(RubyScope/*!*/ scope, object obj) {
-            return RubyExceptions.CreateTypeError(String.Format("{0} is not a class/module", scope.RubyContext.GetClassOf(obj)));
+            // MRI shows the value, not its class: "123 is not a class/module"
+            return RubyExceptions.CreateTypeError(String.Format("{0} is not a class/module", scope.RubyContext.Inspect(obj)));
         }
 
         public static void RequireMixins(RubyModule/*!*/ target, params RubyModule[]/*!*/ modules) {
