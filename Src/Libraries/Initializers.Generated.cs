@@ -3252,6 +3252,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyIO, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyIOOps.ReadAvailable)
             );
             
+            DefineLibraryMethod(module, "__writable__?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyIO, System.Boolean>(IronRuby.Builtins.RubyIOOps.IsWritable)
+            );
+            
             DefineLibraryMethod(module, "binmode", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyIO, IronRuby.Builtins.RubyIO>(IronRuby.Builtins.RubyIOOps.Binmode)
@@ -7341,6 +7346,16 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadString_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__locktmp__", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.LockTemporarily)
+            );
+            
+            DefineLibraryMethod(module, "__unlocktmp__", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.UnlockTemporarily)
+            );
+            
             DefineLibraryMethod(module, "[]", 0x51, 
                 new[] { 0x00010000U, 0x00030000U, 0x00000004U, 0x00000002U, 0x00000004U, 0x00040004U, 0x0000000cU, 0x0000000cU}, 
                 new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.GetChar), 

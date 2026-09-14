@@ -56,6 +56,14 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// rb_str_locktmp lends a string's bytes out - to IO::Buffer.for, for instance - and
+        /// MRI reports a mutation attempt while it is lent as a plain RuntimeError.
+        /// </summary>
+        public static Exception/*!*/ CreateTemporarilyLockedError() {
+            return new RuntimeError("can't modify string; temporarily locked");
+        }
+
+        /// <summary>
         /// MRI: "can't modify frozen String" - used where the class is statically known but no
         /// RubyContext is in hand to produce the inspect suffix.
         /// </summary>

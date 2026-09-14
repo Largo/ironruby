@@ -10079,46 +10079,161 @@ class IO
     class LockedError < ::RuntimeError; end
     class MaskError < ::ArgumentError; end
 
+    # MRI names nil/true/false by value rather than by class in the TypeErrors
+    # rb_builtin_class_name produces.
+    def self.__class_name__(value)
+      case value
+      when nil then "nil"
+      when true then "true"
+      when false then "false"
+      else value.class.to_s
+      end
+    end
+
+    # Sizes and flags go through NUM2SIZET, which refuses anything that is not
+    # already an Integer rather than asking it for #to_int.
+    def self.__integer_arg__(value)
+      ::Kernel.raise(::TypeError, "not an Integer") unless value.is_a?(::Integer)
+      if value > 0xffffffffffffffff || value < -0x8000000000000000
+        ::Kernel.raise(::RangeError, "bignum too big to convert into 'unsigned long long'")
+      end
+      value
+    end
+
+    # Offsets, on the other hand, are ordinary implicit conversions.
+    def self.__offset_arg__(value)
+      return value if value.is_a?(::Integer)
+      unless value.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__class_name__(value)} into Integer")
+      end
+      value.to_int
+    end
+
+    # Under a page malloc is cheaper than mmap, which is the only reason a
+    # buffer comes out INTERNAL rather than MAPPED when the flags are left out.
+    def self.__flags_for_size__(size)
+      size >= PAGE_SIZE ? MAPPED : INTERNAL
+    end
+
     def self.for(string)
-      buffer = allocate
-      flags = EXTERNAL | (string.frozen? ? READONLY : 0)
-      buffer.__take_over__(string, 0, string.bytesize, flags)
+      unless string.is_a?(::String)
+        unless string.respond_to?(:to_str)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{__class_name__(string)} into String")
+        end
+        string = string.to_str
+      end
+
       if block_given?
+        # The buffer is a window onto the string itself, so the string is locked
+        # against modification for as long as the window is open.
+        buffer = allocate
+        buffer.__take_over__(string, 0, string.bytesize,
+                             EXTERNAL | (string.frozen? ? READONLY : 0), string)
+        buffer.__lock_source__
         begin
           return yield(buffer)
         ensure
           buffer.free
         end
       end
+
+      # Without a block nothing bounds the window's lifetime, so MRI takes a
+      # frozen copy and the buffer over it is read-only.
+      backing = string.frozen? ? string : string.dup.freeze
+      buffer = allocate
+      buffer.__take_over__(backing, 0, backing.bytesize, EXTERNAL | READONLY, backing)
       buffer
     end
 
     # Yields a buffer of the given size and answers what was written into it.
     def self.string(length)
-      buffer = new(length)
-      yield buffer
-      buffer.get_string
+      ::Kernel.raise(::LocalJumpError, "no block given") unless block_given?
+      # The size goes to rb_str_new, whose parameter is a long rather than the
+      # size_t the rest of the buffer API takes.
+      unless length.is_a?(::Integer)
+        ::Kernel.raise(::TypeError, "not an Integer")
+      end
+      if length > 0x7fffffffffffffff || length < -0x8000000000000000
+        ::Kernel.raise(::RangeError, "bignum too big to convert into 'long'")
+      end
+      if length < 0
+        ::Kernel.raise(::ArgumentError, "negative string size (or size too big)")
+      end
+      string = "\0".b * length
+      buffer = allocate
+      buffer.__take_over__(string, 0, length, EXTERNAL, string)
+      begin
+        yield buffer
+      ensure
+        buffer.free
+      end
+      string
     end
 
     def self.map(file, size = nil, offset = 0, flags = 0)
-      data = file.pread(size || (file.size - offset), offset)
+      offset = __offset_arg__(offset)
+      ::Kernel.raise(::ArgumentError, "Offset can't be negative!") if offset < 0
+      unless size.nil?
+        size = __integer_arg__(size)
+        ::Kernel.raise(::ArgumentError, "Size can't be negative!") if size < 0
+      end
+      flags = __integer_arg__(flags)
+
+      file_size = file.size
+      if file_size <= 0
+        ::Kernel.raise(::ArgumentError, "Invalid negative or zero file size!")
+      end
+      size = file_size - offset if size.nil?
+      ::Kernel.raise(::ArgumentError, "Size can't be zero!") if size == 0
+      if size > file_size
+        ::Kernel.raise(::ArgumentError, "Size can't be larger than file size!")
+      end
+      if offset + size > file_size
+        ::Kernel.raise(::ArgumentError, "Offset too large!")
+      end
+
+      # A shared mapping asks mmap for PROT_WRITE, which the kernel refuses on a
+      # descriptor that was not opened for writing; MAP_PRIVATE and a read-only
+      # mapping do not need it.
+      if (flags & (PRIVATE | READONLY)) == 0 && !file.__writable__?
+        ::Kernel.raise(::Errno::EACCES, "io_buffer_map_file:mmap")
+      end
+
+      data = file.pread(size, offset)
+      flags |= MAPPED
+      flags |= EXTERNAL | SHARED if (flags & PRIVATE) == 0
       buffer = allocate
-      buffer.__take_over__(data.dup, 0, data.bytesize, MAPPED | flags)
+      buffer.__take_over__(data, 0, data.bytesize, flags, nil)
       buffer
     end
 
-    def initialize(size = DEFAULT_SIZE, flags = INTERNAL)
-      size = ::Kernel.Integer(size)
+    def initialize(size = DEFAULT_SIZE, *flags)
+      size = self.class.__integer_arg__(size)
       ::Kernel.raise(::ArgumentError, "Size can't be negative!") if size < 0
-      @flags = flags | ((flags & (EXTERNAL | MAPPED)) != 0 ? 0 : INTERNAL)
-      @data = "\0".b * size
-      @offset = 0
-      @size = size
-      @freed = false
-    end
 
-    def __set_parent__(parent)
-      @parent = parent
+      if flags.empty?
+        flags = self.class.__flags_for_size__(size)
+      else
+        flags = self.class.__integer_arg__(flags[0])
+        ::Kernel.raise(::ArgumentError, "Flags can't be negative!") if flags < 0
+      end
+
+      @offset = 0
+      @source = nil
+      @locked_source = false
+      if size == 0
+        # Nothing was allocated, so there is no memory for the flags to describe.
+        @data = nil
+        @size = 0
+        @flags = 0
+      else
+        if (flags & (INTERNAL | MAPPED)) == 0
+          ::Kernel.raise(AllocationError, "Could not allocate buffer!")
+        end
+        @data = "\0".b * size
+        @size = size
+        @flags = flags
+      end
     end
 
     # The "address" a buffer shows in #to_s. There is no real one here, so the object
@@ -10131,48 +10246,111 @@ class IO
       @address = value
     end
 
-    def __take_over__(data, offset, size, flags)
+    # The allocation a buffer looks into: a String standing in for the memory,
+    # plus where in it this buffer's window starts. Slices share the String of
+    # the buffer they came from, which is what makes a write through a slice
+    # visible through the buffer.
+    def __take_over__(data, offset, size, flags, source = nil)
       @data = data
       @offset = offset
       @size = size
       @flags = flags
-      @freed = false
+      @source = source
+      @locked_source = false
+      self
     end
 
-    def __check__
+    def __data__
+      @data
     end
-    private :__check__
+
+    def __offset__
+      @offset
+    end
+
+    def __size__
+      @size
+    end
+    protected :__data__, :__offset__, :__size__
+
+    def __lock_source__
+      if @data && !@data.frozen?
+        @data.__locktmp__
+        @locked_source = true
+      end
+      self
+    end
+
+    def __adopt_lock__(locked)
+      @locked_source = locked
+      self
+    end
+
+    def __unlock_source__
+      if @locked_source
+        @locked_source = false
+        @data.__unlocktmp__ if @data && !@data.frozen?
+      end
+    end
+    private :__unlock_source__
+
+    # Writes from the buffer go through the lock the buffer itself installed.
+    def __unlocked__
+      return yield unless @locked_source
+      @data.__unlocktmp__
+      begin
+        yield
+      ensure
+        @data.__locktmp__
+      end
+    end
+    private :__unlocked__
 
     def size
-      @freed ? 0 : @size
+      @size
     end
 
     def empty?
-      size == 0
+      @size == 0
     end
 
-    # Freeing a buffer leaves it valid-but-null; what makes a buffer invalid is
-    # the storage underneath going away, which is what a slice of a transferred
-    # or freed buffer is looking at.
-    def valid?
-      @parent.nil? || !@parent.__storage_dead__
-    end
-
-    def __storage_dead__
-      defined?(@storage_dead) ? @storage_dead : false
-    end
-    protected :__storage_dead__
-
+    # What makes a buffer null is a NULL base pointer, which is what a buffer
+    # that never allocated - or that has been freed, resized to nothing or
+    # transferred away - has. A zero-length window onto live memory is not null.
     def null?
-      @freed || @size == 0
+      @data.nil?
     end
+
+    # A slice stops being usable when the allocation underneath goes away or
+    # shrinks out from under it. A buffer that owns its memory is always valid,
+    # and so is a freed one: #free drops the association rather than dangling.
+    def valid?
+      source = @source
+      return true if source.nil?
+      return false if @data.nil?
+      if source.is_a?(::String)
+        @data.equal?(source) && (@offset + @size) <= source.bytesize
+      else
+        other = source.__data__
+        !other.nil? && @data.equal?(other) &&
+          @offset >= source.__offset__ &&
+          (@offset + @size) <= (source.__offset__ + source.__size__)
+      end
+    end
+
+    def __check__
+      unless valid?
+        ::Kernel.raise(InvalidatedError, "Buffer has been invalidated!")
+      end
+    end
+    private :__check__
 
     def external?
       (@flags & EXTERNAL) != 0
     end
 
     def internal?
-      !null? && (@flags & INTERNAL) != 0
+      (@flags & INTERNAL) != 0
     end
 
     def mapped?
@@ -10195,10 +10373,11 @@ class IO
       (@flags & LOCKED) != 0
     end
 
+    # A lock stops the buffer itself from moving; reads and writes through it
+    # carry on.
     def __check_writable__
       __check__
       ::Kernel.raise(AccessError, "Buffer is not writable!") if readonly?
-      ::Kernel.raise(LockedError, "Buffer already locked!") if locked?
     end
     private :__check_writable__
 
@@ -10214,11 +10393,13 @@ class IO
     end
 
     def free
-      @freed = true
-      @storage_dead = true
-      @data = "".b
+      ::Kernel.raise(LockedError, "Buffer is locked!") if locked?
+      __unlock_source__
+      @data = nil
+      @source = nil
       @offset = 0
       @size = 0
+      @flags = 0
       self
     end
 
@@ -10228,78 +10409,117 @@ class IO
         ::Kernel.raise(LockedError, "Cannot transfer ownership of locked buffer!")
       end
       other = self.class.allocate
-      other.__take_over__(@data, @offset, @size, @flags)
+      other.__take_over__(@data, @offset, @size, @flags, @source)
       # The address names the memory, and transfer moves the memory rather than
       # copying it, so it goes across with the rest.
       other.__set_address__(__address__)
-      @freed = true
-      @storage_dead = true
-      @data = "".b
+      other.__adopt_lock__(@locked_source)
+      @locked_source = false
+      @data = nil
+      @source = nil
       @offset = 0
       @size = 0
+      @flags = 0
       other
     end
 
     def resize(new_size)
-      __check_writable__
-      if external? || mapped?
+      ::Kernel.raise(LockedError, "Cannot resize locked buffer!") if locked?
+      __check__
+      new_size = self.class.__integer_arg__(new_size)
+      ::Kernel.raise(::ArgumentError, "Size can't be negative!") if new_size < 0
+
+      if @data.nil?
+        # There is no allocation to keep, so a null buffer allocates afresh the
+        # way IO::Buffer.new would have.
+        if new_size > 0
+          @flags = self.class.__flags_for_size__(new_size)
+          @data = "\0".b * new_size
+          @offset = 0
+          @size = new_size
+          @source = nil
+        end
+        return self
+      end
+
+      if external?
         ::Kernel.raise(AccessError, "Cannot resize external buffer!")
       end
-      new_size = ::Kernel.Integer(new_size)
-      ::Kernel.raise(::ArgumentError, "Size can't be negative!") if new_size < 0
+      ::Kernel.raise(AccessError, "Buffer is not writable!") if readonly?
+
+      if new_size == 0
+        __unlock_source__
+        @data = nil
+        @source = nil
+        @offset = 0
+        @size = 0
+        @flags = 0
+        return self
+      end
+
       current = get_string
       grown = current.byteslice(0, new_size).to_s
       grown = grown + ("\0".b * (new_size - grown.bytesize)) if grown.bytesize < new_size
       @data = grown
       @offset = 0
       @size = new_size
+      @source = nil
       self
     end
 
     def slice(offset = 0, length = nil)
       __check__
-      offset = ::Kernel.Integer(offset)
+      offset = self.class.__offset_arg__(offset)
       ::Kernel.raise(::ArgumentError, "Offset can't be negative!") if offset < 0
       length = @size - offset if length.nil?
-      length = ::Kernel.Integer(length)
+      length = self.class.__offset_arg__(length)
       ::Kernel.raise(::ArgumentError, "Length can't be negative!") if length < 0
       if offset + length > @size
         ::Kernel.raise(::ArgumentError, "Specified offset+length is bigger than the buffer size!")
       end
       other = self.class.allocate
-      other.__take_over__(@data, @offset + offset, length, @flags)
-      other.__set_parent__(self)
+      # A slice is a window, not an allocation: it is neither internal nor
+      # mapped nor shared, and the only flag it inherits is read-only-ness. Its
+      # source is the buffer the memory really belongs to, so that slicing a
+      # slice still points back at the root.
+      other.__take_over__(@data, @offset + offset, length, @flags & READONLY, @source || self)
       other
     end
 
     def get_string(offset = 0, length = nil, encoding = ::Encoding::BINARY)
       __check__
-      offset = ::Kernel.Integer(offset)
+      offset = self.class.__offset_arg__(offset)
       length = @size - offset if length.nil?
-      length = ::Kernel.Integer(length)
+      length = self.class.__offset_arg__(length)
       if offset < 0 || length < 0 || offset + length > @size
         ::Kernel.raise(::ArgumentError, "Specified offset+length is bigger than the buffer size!")
       end
-      result = @data.byteslice(@offset + offset, length).to_s
+      if @data.nil?
+        result = "".dup
+      else
+        result = @data.byteslice(@offset + offset, length).to_s
+        result = result.dup if result.frozen?
+      end
       result.force_encoding(encoding) if result.respond_to?(:force_encoding)
       result
     end
     alias_method :to_str, :get_string
 
+    # The write goes into the allocation in place, so a String-backed buffer and
+    # every slice sharing the allocation see it.
     def set_string(string, offset = 0, length = nil, source_offset = 0)
       __check_writable__
-      offset = ::Kernel.Integer(offset)
+      offset = self.class.__offset_arg__(offset)
       source = string.byteslice(source_offset, length || (string.bytesize - source_offset)).to_s
       if offset + source.bytesize > @size
         ::Kernel.raise(::ArgumentError, "Specified offset+length is bigger than the buffer size!")
       end
-      binary = @data.dup
-      binary.force_encoding(::Encoding::BINARY) if binary.respond_to?(:force_encoding)
-      piece = source.dup
-      piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
-      at = @offset + offset
-      @data = binary.byteslice(0, at).to_s + piece +
-              binary.byteslice(at + piece.bytesize, binary.bytesize).to_s
+      unless source.empty?
+        piece = source.dup
+        piece.force_encoding(::Encoding::BINARY) if piece.respond_to?(:force_encoding)
+        at = @offset + offset
+        __unlocked__ { @data.bytesplice(at, piece.bytesize, piece) }
+      end
       source.bytesize
     end
 
@@ -10392,7 +10612,7 @@ class IO
     def to_s
       parts = []
       parts << "EXTERNAL" if external?
-      parts << "INTERNAL" if internal? && !null?
+      parts << "INTERNAL" if internal?
       parts << "MAPPED" if mapped?
       parts << "SHARED" if shared?
       parts << "LOCKED" if locked?
@@ -10444,7 +10664,8 @@ class IO
     # refusing a mismatch.
     def __require_buffer__(other)
       unless other.is_a?(::IO::Buffer)
-        ::Kernel.raise(::TypeError, "wrong argument type #{other.class} (expected IO::Buffer)")
+        ::Kernel.raise(::TypeError,
+                       "wrong argument type #{::IO::Buffer.__class_name__(other)} (expected IO::Buffer)")
       end
       other
     end

@@ -1704,6 +1704,22 @@ namespace IronRuby.Builtins {
             return self.GetByteCount();
         }
 
+        /// <summary>
+        /// rb_str_locktmp / rb_str_unlocktmp. IO::Buffer.for hands a window onto a string's
+        /// bytes to Ruby code for the duration of a block and locks the string meanwhile, so
+        /// that nothing can move the bytes the window points at. MRI has no public name for
+        /// this, hence the internal one.
+        /// </summary>
+        [RubyMethod("__locktmp__")]
+        public static MutableString/*!*/ LockTemporarily(MutableString/*!*/ self) {
+            return self.LockTemporarily();
+        }
+
+        [RubyMethod("__unlocktmp__")]
+        public static MutableString/*!*/ UnlockTemporarily(MutableString/*!*/ self) {
+            return self.UnlockTemporarily();
+        }
+
         // encoding aware
         [RubyMethod("ascii_only?")]
         public static bool IsAscii(MutableString/*!*/ self) {

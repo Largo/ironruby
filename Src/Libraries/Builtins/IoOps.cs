@@ -1086,6 +1086,16 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region write, syswrite, write_nonblock
+        /// <summary>
+        /// Whether the descriptor was opened for writing. IO::Buffer.map needs to know,
+        /// because a shared mapping asks mmap for PROT_WRITE and the kernel refuses that on
+        /// a read-only descriptor; there is no public Ruby way to ask.
+        /// </summary>
+        [RubyMethod("__writable__?")]
+        public static bool IsWritable(RubyIO/*!*/ self) {
+            return self.Mode.CanWrite();
+        }
+
 
         [RubyMethod("write")]
         public static int Write(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
