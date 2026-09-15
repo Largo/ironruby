@@ -1716,20 +1716,6 @@ class Hash
   end
 end
 
-class Module
-  # No deprecation warning is emitted yet - that needs a hook in constant
-  # lookup - but the name check and the return value are MRI's, and a
-  # no-op here is what stops #private_constant's callers from breaking.
-  def deprecate_constant(*names)
-    names.each do |name|
-      unless const_defined?(name, false)
-        ::Kernel.raise(::NameError, "constant #{self}::#{name} not defined")
-      end
-    end
-    self
-  end unless method_defined?(:deprecate_constant)
-end
-
 class Object
   def singleton_class
     class << self

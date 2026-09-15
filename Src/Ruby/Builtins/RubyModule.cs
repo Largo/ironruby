@@ -279,6 +279,10 @@ namespace IronRuby.Builtins {
         // (guarded by the class hierarchy lock, like _constants)
         private HashSet<string> _privateConstants;
 
+        // names this module declared deprecated with Module#deprecate_constant; null until
+        // one is (guarded by the class hierarchy lock, like _constants)
+        private HashSet<string> _deprecatedConstants;
+
         // { constant-name -> (source path, source line) }; lazily allocated, only holds constants
         // whose definition site is known (Module#const_source_location).
         private Dictionary<string, KeyValuePair<string, int>> _constantLocations;
@@ -1254,6 +1258,45 @@ namespace IronRuby.Builtins {
         /// <summary>True if this module itself declared the constant private.</summary>
         public bool IsPrivateConstant(string/*!*/ name) {
             return _privateConstants != null && _privateConstants.Contains(name);
+        }
+
+        /// <summary>
+        /// Module#deprecate_constant. Like #private_constant this looks in the module's own table
+        /// only: a constant inherited from an ancestor cannot be deprecated from here.
+        /// </summary>
+        public void SetConstantDeprecated(string/*!*/ name) {
+            using (Context.ClassHierarchyLocker()) {
+                ConstantStorage storage;
+                if (!TryGetConstantNoAutoloadCheck(name, out storage)) {
+                    throw RubyExceptions.CreateNameError(String.Format("constant {0}::{1} not defined",
+                        Context.GetModuleDisplayName(this), name));
+                }
+
+                if (_deprecatedConstants == null) {
+                    _deprecatedConstants = new HashSet<string>();
+                }
+                _deprecatedConstants.Add(name);
+                _context.NoteDeprecatedConstant();
+                _context.ConstantAccessVersion++;
+            }
+        }
+
+        /// <summary>True if this module itself declared the constant deprecated.</summary>
+        public bool IsDeprecatedConstant(string/*!*/ name) {
+            return _deprecatedConstants != null && _deprecatedConstants.Contains(name);
+        }
+
+        /// <summary>
+        /// The module that declares <paramref name="name"/> if that module declared it deprecated,
+        /// otherwise null. MRI's warning names the owner rather than the module the reference went
+        /// through: with C owned by Base, `Sub::C` says "constant Base::C is deprecated".
+        /// </summary>
+        internal RubyModule GetDeprecatedConstantOwnerNoLock(string/*!*/ name) {
+            if (!_context.HasDeprecatedConstants) {
+                return null;
+            }
+            var owner = GetConstantOwnerNoLock(name);
+            return (owner != null && owner.IsDeprecatedConstant(name)) ? owner : null;
         }
 
         /// <summary>

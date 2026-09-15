@@ -625,7 +625,19 @@ namespace IronRuby.Runtime {
         // thread-safe:
         // Returns null on success, the lexically inner-most module on failure.
         internal RubyModule TryResolveConstantNoLock(RubyGlobalScope autoloadScope, string/*!*/ name, out ConstantStorage result) {
+            RubyModule owner;
+            return TryResolveConstantNoLock(autoloadScope, name, out result, out owner);
+        }
+
+        // thread-safe:
+        // As above, and on success also reports the module the constant was found in - null unless
+        // the runtime has seen Module#deprecate_constant, since finding it can cost an extra
+        // ancestor walk and only the deprecation warning needs it.
+        internal RubyModule TryResolveConstantNoLock(RubyGlobalScope autoloadScope, string/*!*/ name, out ConstantStorage result,
+            out RubyModule owner) {
+
             var context = RubyContext;
+            owner = null;
             context.RequiresClassHierarchyLock();
             
             RubyScope scope = this;
@@ -639,6 +651,7 @@ namespace IronRuby.Runtime {
 	                Debug.Assert(module.Context == context);
 
                     if (module.TryGetConstantNoLock(autoloadScope, name, out result)) {
+                        owner = module;
                         return null;
                     }
 
@@ -654,6 +667,9 @@ namespace IronRuby.Runtime {
             // check the inner most module and it's base classes/mixins:
             if (innerMostModule != null) {
                 if (innerMostModule.TryResolveConstantNoLock(autoloadScope, name, out result)) {
+                    if (context.HasDeprecatedConstants) {
+                        owner = innerMostModule.GetConstantOwnerNoLock(name);
+                    }
                     return null;
                 }
             } else {
@@ -661,6 +677,9 @@ namespace IronRuby.Runtime {
             }
 
             if (context.ObjectClass.TryResolveConstantNoLock(autoloadScope, name, out result)) {
+                if (context.HasDeprecatedConstants) {
+                    owner = context.ObjectClass.GetConstantOwnerNoLock(name);
+                }
                 return null;
             }
 

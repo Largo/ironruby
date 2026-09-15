@@ -6169,6 +6169,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Runtime.ClrName, IronRuby.Builtins.Proc, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.ModuleOps.DefineMethod)
             );
             
+            DefineLibraryMethod(module, "deprecate_constant", 0x51, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.DeprecateConstant)
+            );
+            
             DefineLibraryMethod(module, "extend_object", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ModuleOps.ExtendObject)

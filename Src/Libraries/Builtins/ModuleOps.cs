@@ -1127,7 +1127,11 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < parts.Length; i++) {
                 if (inherit) {
                     value = RubyUtils.GetConstant(scope.GlobalScope, owner, parts[i], lookupObject);
-                } else if (!owner.TryGetConstant(scope.GlobalScope, parts[i], out value)) {
+                } else if (owner.TryGetConstant(scope.GlobalScope, parts[i], out value)) {
+                    if (owner.IsDeprecatedConstant(parts[i])) {
+                        context.ReportConstantDeprecation(owner, parts[i]);
+                    }
+                } else {
                     value = ConstantMissing(owner, parts[i]);
                 }
                 lookupObject = false;
@@ -1159,10 +1163,16 @@ namespace IronRuby.Builtins {
         // thread-safe:
         [RubyMethod("remove_const", RubyMethodAttributes.PrivateInstance)]
         public static object RemoveConstant(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
+            bool deprecated = self.IsDeprecatedConstant(constantName);
+
             object value;
             if (!self.TryRemoveConstant(constantName, out value)) {
                 RubyUtils.CheckConstantName(constantName);
                 throw RubyExceptions.CreateNameError("constant {0}::{1} not defined", self.Name, constantName);
+            }
+
+            if (deprecated) {
+                self.Context.ReportConstantDeprecation(self, constantName);
             }
             return value;
         }
@@ -1180,6 +1190,19 @@ namespace IronRuby.Builtins {
         public static RubyModule/*!*/ PublicConstant(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self,
             [NotNull]params object[]/*!*/ constantNames) {
             SetConstantVisibility(stringCast, self, constantNames, false);
+            return self;
+        }
+
+        // public since Ruby 3.0
+        [RubyMethod("deprecate_constant")]
+        public static RubyModule/*!*/ DeprecateConstant(ConversionStorage<MutableString>/*!*/ stringCast, RubyModule/*!*/ self,
+            [NotNull]params object[]/*!*/ constantNames) {
+
+            foreach (var constantName in constantNames) {
+                var name = Protocols.CastToString(stringCast, constantName).ToString();
+                RubyUtils.CheckConstantName(name);
+                self.SetConstantDeprecated(name);
+            }
             return self;
         }
 

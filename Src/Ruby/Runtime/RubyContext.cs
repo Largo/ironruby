@@ -2714,6 +2714,28 @@ namespace IronRuby.Runtime {
             ReportCategoryWarning("deprecated", message);
         }
 
+        // Set by Module#deprecate_constant and never cleared. Constant lookup is hot and almost no
+        // program deprecates a constant, so every read hook is behind this one field read.
+        private bool _hasDeprecatedConstants;
+
+        public bool HasDeprecatedConstants {
+            get { return _hasDeprecatedConstants; }
+        }
+
+        internal void NoteDeprecatedConstant() {
+            _hasDeprecatedConstants = true;
+        }
+
+        /// <summary>
+        /// The warning Module#deprecate_constant asks for, emitted on reference, on #const_get and
+        /// on #remove_const - but not on #defined?, #const_defined? or #const_source_location,
+        /// which MRI keeps silent.
+        /// </summary>
+        public void ReportConstantDeprecation(RubyModule/*!*/ owner, string/*!*/ name) {
+            ReportDeprecationWarning(String.Format("constant {0}::{1} is deprecated",
+                GetModuleDisplayName(owner), name));
+        }
+
         public void ReportCategoryWarning(string/*!*/ category, string/*!*/ message) {
             if (Verbose == null || !IsWarningEnabled(category)) {
                 return;

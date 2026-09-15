@@ -551,16 +551,33 @@ namespace IronRuby.Runtime {
         public static object GetConstant(RubyGlobalScope/*!*/ globalScope, RubyModule/*!*/ owner, string/*!*/ name, bool lookupObject) {
             Assert.NotNull(globalScope, owner, name);
 
-            using (owner.Context.ClassHierarchyLocker()) {
+            RubyContext context = owner.Context;
+            object value = null;
+            bool found = false;
+            RubyModule deprecatedOwner = null;
+
+            using (context.ClassHierarchyLocker()) {
                 ConstantStorage storage;
                 if (owner.TryResolveConstantNoLock(globalScope, name, out storage)) {
-                    return storage.Value;
+                    value = storage.Value;
+                    found = true;
+                    deprecatedOwner = owner.GetDeprecatedConstantOwnerNoLock(name);
+                } else {
+                    RubyClass objectClass = context.ObjectClass;
+                    if (owner != objectClass && lookupObject && objectClass.TryResolveConstantNoLock(globalScope, name, out storage)) {
+                        value = storage.Value;
+                        found = true;
+                        deprecatedOwner = objectClass.GetDeprecatedConstantOwnerNoLock(name);
+                    }
                 }
+            }
 
-                RubyClass objectClass = owner.Context.ObjectClass;
-                if (owner != objectClass && lookupObject && objectClass.TryResolveConstantNoLock(globalScope, name, out storage)) {
-                    return storage.Value;
+            if (found) {
+                // outside the lock: Warning.warn can be overridden in Ruby
+                if (deprecatedOwner != null) {
+                    context.ReportConstantDeprecation(deprecatedOwner, name);
                 }
+                return value;
             }
 
             RubyUtils.CheckConstantName(name);

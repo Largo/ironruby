@@ -859,15 +859,18 @@ namespace IronRuby.Runtime {
                 int newVersion = context.ConstantAccessVersion;
 
                 ConstantStorage storage;
+                RubyModule owner = null;
                 if (!isGlobal) {
-                    missingConstantOwner = scope.TryResolveConstantNoLock(scope.GlobalScope, name, out storage);
+                    missingConstantOwner = scope.TryResolveConstantNoLock(scope.GlobalScope, name, out storage, out owner);
                 } else if (context.ObjectClass.TryResolveConstantNoLock(scope.GlobalScope, name, out storage)) {
                     missingConstantOwner = null;
+                    owner = context.ObjectClass;
                 } else {
                     missingConstantOwner = context.ObjectClass;
                 }
 
                 object newCacheValue;
+                bool deprecated = false;
                 if (missingConstantOwner == null) {
                     if (storage.WeakValue != null) {
                         result = storage.Value;
@@ -875,11 +878,12 @@ namespace IronRuby.Runtime {
                     } else {
                         result = newCacheValue = storage.Value;
                     }
+                    deprecated = ReportConstantDeprecation(context, owner, name);
                 } else {
                     newCacheValue = ConstantSiteCache.WeakMissingConstant;
                 }
 
-                if (!context.IsAutoloadInProgress) {
+                if (!context.IsAutoloadInProgress && !deprecated) {
                     cache.Update(newCacheValue, newVersion);
                 }
             }
@@ -1098,12 +1102,14 @@ namespace IronRuby.Runtime {
             int nameCount = (isGet) ? qualifiedName.Length : qualifiedName.Length - 1;
 
             string name = qualifiedName[0];
+            RubyModule firstOwner = null;
             if (topModule == null) {
                 // the first name of `A::B` is an ordinary lexical lookup, where a private
                 // constant of an enclosing module is perfectly visible
-                missingConstantOwner = scope.TryResolveConstantNoLock(globalScope, name, out storage);
+                missingConstantOwner = scope.TryResolveConstantNoLock(globalScope, name, out storage, out firstOwner);
             } else if (TryResolveVisibleConstant(topModule, context, globalScope, name, out storage)) {
                 missingConstantOwner = null;
+                firstOwner = topModule;
             } else {
                 missingConstantOwner = topModule;
             }
@@ -1111,7 +1117,7 @@ namespace IronRuby.Runtime {
             object result;
             if (missingConstantOwner == null) {
                 result = storage.Value;
-                anyMissing = false;
+                anyMissing = ReportConstantDeprecation(context, firstOwner, name);
             } else {
                 anyMissing = true;
                 using (context.ClassHierarchyUnlocker()) {
@@ -1130,7 +1136,11 @@ namespace IronRuby.Runtime {
                     if (owner.Context != context) {
                         anyMissing = true;
                     }
-                    
+
+                    if (ReportConstantDeprecation(context, owner, name)) {
+                        anyMissing = true;
+                    }
+
                     result = storage.Value;
                 } else {
                     anyMissing = true;
@@ -1141,6 +1151,30 @@ namespace IronRuby.Runtime {
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Emits the warning Module#deprecate_constant asks for, if the constant that just
+        /// resolved is deprecated, and reports whether it did - the caller uses that to leave the
+        /// call site uncached, so the warning is not swallowed by the second reference onwards.
+        ///
+        /// Warning.warn can be overridden in Ruby, so the class hierarchy lock is dropped around
+        /// the call exactly as the #const_missing dispatches here do.
+        /// </summary>
+        private static bool ReportConstantDeprecation(RubyContext/*!*/ context, RubyModule owner, string/*!*/ name) {
+            if (!context.HasDeprecatedConstants || owner == null || owner.Context != context) {
+                return false;
+            }
+
+            RubyModule deprecatedOwner = owner.GetDeprecatedConstantOwnerNoLock(name);
+            if (deprecatedOwner == null) {
+                return false;
+            }
+
+            using (context.ClassHierarchyUnlocker()) {
+                context.ReportConstantDeprecation(deprecatedOwner, name);
+            }
+            return true;
         }
 
         /// <summary>
