@@ -22,6 +22,11 @@ namespace IronRuby.Prism {
         private readonly string/*!*/ _source;
         private readonly string _path;
         private readonly List<int>/*!*/ _lineStarts;
+
+        // The line the first line of this source is reported as. 1 for a file; whatever
+        // eval/module_eval/Binding#eval was told for a string, which is what makes __LINE__
+        // and backtraces inside the eval line up with the code it came from.
+        private int _startLine = 1;
         private readonly RubyEncoding/*!*/ _encoding;
         private readonly Stack<LexicalScope>/*!*/ _scopes = new Stack<LexicalScope>();
         private int _tempCounter;
@@ -42,7 +47,11 @@ namespace IronRuby.Prism {
         }
 
         public static SourceUnitTree Parse(SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options, ErrorSink/*!*/ errorSink) {
-            return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink);
+            // eval("...", binding, file, line) reports __LINE__ and backtraces from `line`, which is
+            // what RubyCompilerOptions.InitialLocation carries. Only the old parser ever read it, so
+            // every eval under prism started at line 1 no matter what it was given.
+            return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
+                options.InitialLocation.Line);
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path) {
@@ -51,15 +60,21 @@ namespace IronRuby.Prism {
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
             SourceUnit sourceUnit, ErrorSink errorSink) {
+            return ParseText(code, path, outerLocalNames, sourceUnit, errorSink, 1);
+        }
+
+        public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
+            SourceUnit sourceUnit, ErrorSink errorSink, int startLine) {
 
             // --enable/--disable=frozen-string-literal only sets the default; the magic comment
             // in a file still wins, and prism applies that rule itself.
             var context = sourceUnit != null ? sourceUnit.LanguageContext as RubyContext : null;
             int frozenStringLiteral = context != null ? context.RubyOptions.FrozenStringLiteral : 0;
 
-            PrismParseResult result = PrismParser.Parse(code, path, 1, outerLocalNames, frozenStringLiteral);
+            PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames, frozenStringLiteral);
 
             var bridge = new PrismAstBridge(code, path, ResolveEncoding(result.EncodingName, sourceUnit));
+            bridge._startLine = startLine <= 0 ? 1 : startLine;
             bridge._sourceUnit = sourceUnit;
             bridge._errorSink = errorSink;
 
@@ -134,7 +149,7 @@ namespace IronRuby.Prism {
             int line = _lineStarts.BinarySearch(index);
             if (line < 0) line = ~line - 1;
             if (index > _source.Length) index = _source.Length;
-            return new SourceLocation(index, line + 1, index - _lineStarts[line] + 1);
+            return new SourceLocation(index, line + _startLine, index - _lineStarts[line] + 1);
         }
 
         private Exception Unsupported(Pm.PmNode node) {
