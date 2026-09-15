@@ -245,6 +245,27 @@ namespace IronRuby.Runtime {
         [Emitted]
         public int ConstantAccessVersion = 1;
 
+        // Number of autoloads running anywhere in this runtime. While one is in flight the
+        // answer a constant site gets depends on which thread is asking -- the thread running
+        // the file sees the constant as undefined and every other thread does not -- so the
+        // per-site caches, which are keyed only on ConstantAccessVersion, must not be filled.
+        private int _autoloadsInProgress;
+
+        public bool IsAutoloadInProgress {
+            get { return System.Threading.Volatile.Read(ref _autoloadsInProgress) != 0; }
+        }
+
+        public void EnterAutoload() {
+            System.Threading.Interlocked.Increment(ref _autoloadsInProgress);
+            ConstantAccessVersion++;
+        }
+
+        public void LeaveAutoload() {
+            System.Threading.Interlocked.Decrement(ref _autoloadsInProgress);
+            ConstantAccessVersion++;
+        }
+
+
         #region Refinements
 
         // Bumped by every successful `using'.  RubyScope memoizes its effective RefinementActivation and

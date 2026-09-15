@@ -879,7 +879,9 @@ namespace IronRuby.Runtime {
                     newCacheValue = ConstantSiteCache.WeakMissingConstant;
                 }
 
-                cache.Update(newCacheValue, newVersion);
+                if (!context.IsAutoloadInProgress) {
+                    cache.Update(newCacheValue, newVersion);
+                }
             }
 
             if (missingConstantOwner != null) {
@@ -907,7 +909,7 @@ namespace IronRuby.Runtime {
                 object result = ResolveQualifiedConstant(scope, qualifiedName, topModule, true, out storage, out anyMissing);
 
                 // cache result only if no constant was missing:
-                if (!anyMissing) {
+                if (!anyMissing && !context.IsAutoloadInProgress) {
                     Debug.Assert(result == storage.Value);
                     cache.Update(storage.WeakValue ?? result, newVersion);
                 }
@@ -948,7 +950,7 @@ namespace IronRuby.Runtime {
                 object result = ResolveQualifiedConstant(scope, qualifiedName, module, true, out storage, out anyMissing);
 
                 // cache result only if no constant was missing:
-                if (!anyMissing) {
+                if (!anyMissing && !context.IsAutoloadInProgress) {
                     Debug.Assert(result == storage.Value);
                     cache.Update(storage.WeakValue ?? result, newVersion, module);
                 }
@@ -968,7 +970,9 @@ namespace IronRuby.Runtime {
                 
                 ConstantStorage storage;
                 bool exists = scope.TryResolveConstantNoLock(null, name, out storage) == null;
-                cache.Update(exists, newVersion);
+                if (!context.IsAutoloadInProgress) {
+                    cache.Update(exists, newVersion);
+                }
                 return exists;
             }
         }
@@ -984,7 +988,9 @@ namespace IronRuby.Runtime {
 
                 ConstantStorage storage;
                 bool exists = context.ObjectClass.TryResolveConstantNoLock(null, name, out storage);
-                cache.Update(exists, newVersion);
+                if (!context.IsAutoloadInProgress) {
+                    cache.Update(exists, newVersion);
+                }
                 return exists;
             }
         }
@@ -1017,7 +1023,7 @@ namespace IronRuby.Runtime {
                 bool exists = IsVisibleConstantDefined(owner, context, qualifiedName[qualifiedName.Length - 1], out storage);
                 
                 // cache result only if no constant was missing:
-                if (!anyMissing) {
+                if (!anyMissing && !context.IsAutoloadInProgress) {
                     cache.Update(exists, newVersion);
                 }
 
@@ -1073,7 +1079,9 @@ namespace IronRuby.Runtime {
                     } 
                 }
 
-                cache.Update(exists, newVersion, module);
+                if (!context.IsAutoloadInProgress) {
+                    cache.Update(exists, newVersion, module);
+                }
                 return exists;
             }
         }

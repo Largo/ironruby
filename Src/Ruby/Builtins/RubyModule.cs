@@ -1141,6 +1141,12 @@ namespace IronRuby.Builtins {
             private readonly MutableString/*!*/ _path;
             private bool _loaded;
 
+            // The thread running the file, or null. MRI hides an autoload in progress from the very
+            // thread performing it -- so that the file's own assignment is what defines the constant,
+            // and #defined?, #const_defined? and #autoload? answer as if it were not there -- while
+            // every other thread still sees the pending autoload and waits for it.
+            private Thread _loadingThread;
+
             // File already loaded? An auto-loaded constant can be referenced by mutliple classes (via duplication).
             // After the constant is accessed in one of them and the file is loaded access to the other duplicates doesn't trigger file load.
             public bool Loaded { get { return _loaded; } }
@@ -1150,6 +1156,37 @@ namespace IronRuby.Builtins {
                 Assert.NotNull(path);
                 Debug.Assert(path.IsFrozen);
                 _path = path;
+            }
+
+            public bool IsLoading {
+                get { lock (this) { return _loadingThread != null; } }
+            }
+
+            public bool IsLoadingOnCurrentThread {
+                get { lock (this) { return _loadingThread == Thread.CurrentThread; } }
+            }
+
+            public void BeginLoad() {
+                lock (this) { _loadingThread = Thread.CurrentThread; }
+            }
+
+            public void EndLoad() {
+                lock (this) {
+                    _loadingThread = null;
+                    Monitor.PulseAll(this);
+                }
+            }
+
+            /// <summary>
+            /// Waits for another thread's load to finish. The class hierarchy lock must be released
+            /// first, or the loading thread could never make progress.
+            /// </summary>
+            public void WaitForLoad() {
+                lock (this) {
+                    while (_loadingThread != null && _loadingThread != Thread.CurrentThread) {
+                        Monitor.Wait(this);
+                    }
+                }
             }
 
             public bool Load(RubyGlobalScope/*!*/ autoloadScope) {
@@ -1367,7 +1404,13 @@ namespace IronRuby.Builtins {
                     ConstantStorage storage;
                     AutoloadedConstant autoloaded;
                     if (module.TryGetConstantNoAutoloadCheck(name, out storage)) {
-                        if ((autoloaded = storage.Value as AutoloadedConstant) != null && !autoloaded.Loaded) {
+                        // The thread running the file sees no pending autoload of its own, so
+                        // #autoload? answers nil there while other threads still get the path.
+                        // Load() marks itself loaded before running the file, so "not loaded yet"
+                        // alone would hide the pending autoload from every thread for its duration.
+                        if ((autoloaded = storage.Value as AutoloadedConstant) != null
+                            && (!autoloaded.Loaded || autoloaded.IsLoading)
+                            && !autoloaded.IsLoadingOnCurrentThread) {
                             result = autoloaded.Path;
                         }
                         // a constant found in this module ends the search whether it is an autoload or not
@@ -1471,6 +1514,11 @@ namespace IronRuby.Builtins {
                     return ConstantLookupResult.Found;
                 }
 
+                // The thread running the file does not see its own pending autoload at all.
+                if (autoloaded.IsLoadingOnCurrentThread) {
+                    return ConstantLookupResult.NotFound;
+                }
+
                 if (autoloadScope == null) {
                     return ConstantLookupResult.FoundAutoload;
                 }
@@ -1479,16 +1527,30 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError(String.Format("Cannot autoload constants to a foreign runtime #{0}", autoloadScope.Context.RuntimeId));
                 }
 
-                // autoloaded constants are removed before the associated file is loaded:
+                // Another thread is already running the file. MRI makes this one wait for it rather
+                // than load the file twice or answer with a half-built constant. Only a real
+                // dereference waits: #const_defined? and #autoload? pass no autoload scope and have
+                // already answered above.
+                if (autoloaded.IsLoading) {
+                    using (Context.ClassHierarchyUnlocker()) {
+                        autoloaded.WaitForLoad();
+                    }
+                    continue;
+                }
+
                 string autoloadPath;
                 int autoloadLine;
                 bool hadLocation = owner.TryGetConstantLocation(name, out autoloadPath, out autoloadLine);
 
-                object _;
-                owner.TryRemoveConstantNoLock(name, out _);
-
-                // load file and try lookup again (releases the class hierarchy lock when loading the file):
+                // The autoloaded constant stays in place while the file loads. Removing it up front,
+                // which is what this used to do, dropped it out of Module#constants and made every
+                // other thread see it as undefined for the duration.
+                // Beginning and ending a load changes what this thread can see without changing any
+                // constant, and #defined? caches its answer per constant version -- so the version
+                // has to move or the cached answer from before the load is reused inside it.
                 bool loaded;
+                autoloaded.BeginLoad();
+                _context.EnterAutoload();
                 try {
                     loaded = autoloaded.Load(autoloadScope);
                 } catch (Exception) {
@@ -1500,6 +1562,17 @@ namespace IronRuby.Builtins {
                         owner.SetConstantLocationNoLock(name, autoloadPath, autoloadLine);
                     }
                     throw;
+                } finally {
+                    autoloaded.EndLoad();
+                    _context.LeaveAutoload();
+                }
+
+                // The file is expected to have assigned the constant. If it did not, the pending
+                // autoload goes away and the constant is simply undefined.
+                ConstantStorage current;
+                if (owner.TryGetConstantNoAutoloadCheck(name, out current) && ReferenceEquals(current.Value, autoloaded)) {
+                    object removed;
+                    owner.TryRemoveConstantNoLock(name, out removed);
                 }
 
                 if (!loaded) {
