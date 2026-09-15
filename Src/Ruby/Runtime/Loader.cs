@@ -506,7 +506,7 @@ namespace IronRuby.Runtime {
             Utils.Log(String.Format("Resolving assembly: '{0}'", fullName), "RESOLVE_ASSEMBLY");
             
             AssemblyName assemblyName = new AssemblyName(fullName);
-            ResolvedFile file = FindFile(assemblyName.Name, true, ArrayUtils.EmptyStrings).FirstOrDefault();
+            ResolvedFile file = FindFile(assemblyName.Name, true, ArrayUtils.EmptyStrings, false).FirstOrDefault();
             if (file == null || file.SourceUnit != null) {
                 return null;
             }
@@ -572,7 +572,9 @@ namespace IronRuby.Runtime {
                 sourceFileExtensions = DomainManager.Configuration.GetFileExtensions(_context);
             }
 
-            IList<ResolvedFile> files = FindFile(path, (flags & LoadFlags.AppendExtensions) != 0, sourceFileExtensions);
+            // #require never looks in the current directory; #load does.
+            IList<ResolvedFile> files = FindFile(path, (flags & LoadFlags.AppendExtensions) != 0, sourceFileExtensions,
+                (flags & LoadFlags.LoadOnce) == 0);
 
             if (files.Count == 0) {
                 // MRI: doesn't throw an exception if the path is in $" (performs resolution first though):
@@ -596,25 +598,39 @@ namespace IronRuby.Runtime {
             // that thread rather than answer false while the file's definitions do not exist yet.
             // The wait is also what makes the waiting thread observable - it is sleeping inside
             // require, which is what a spec watching it expects to see.
-            bool claimed;
-            lock (_unfinishedFiles) {
-                Thread owner;
-                while (_unfinishedFiles.TryGetValue(file.Path, out owner) && owner != Thread.CurrentThread) {
-                    try {
-                        Monitor.Wait(_unfinishedFiles);
-                    } catch (ThreadInterruptedException) {
-                        // Thread#kill and Thread#raise deliver by parking an exception and interrupting the
-                        // target's wait, so an interrupt here is either that exception - in which case this
-                        // throws it, holding no claim on the file - or somebody else's, in which case the
-                        // wait simply resumes.
-                        RubyUtils.TranslateThreadInterrupt();
-                    }
-                }
+            // Only #require has anything to claim. #load runs the file every time it is called,
+            // including from inside itself, and taking the claim here made a file that loads itself
+            // execute once instead of twice.
+            bool tracked = (flags & LoadFlags.LoadOnce) != 0;
 
-                claimed = !_unfinishedFiles.ContainsKey(file.Path) && !AlreadyLoaded(path, files, flags);
-                if (claimed) {
-                    // save path as is, no canonicalization nor combination with an extension or directory:
-                    _unfinishedFiles.Add(file.Path, Thread.CurrentThread);
+            bool claimed;
+            if (!tracked) {
+                claimed = true;
+            } else {
+                lock (_unfinishedFiles) {
+                    Thread owner;
+                    while (_unfinishedFiles.TryGetValue(file.Path, out owner) && owner != Thread.CurrentThread) {
+                        try {
+                            Monitor.Wait(_unfinishedFiles);
+                        } catch (ThreadInterruptedException) {
+                            // Thread#kill and Thread#raise deliver by parking an exception and interrupting the
+                            // target's wait, so an interrupt here is either that exception - in which case this
+                            // throws it, holding no claim on the file - or somebody else's, in which case the
+                            // wait simply resumes.
+                            RubyUtils.TranslateThreadInterrupt();
+                        }
+                    }
+
+                    bool circular = _unfinishedFiles.ContainsKey(file.Path);
+                    claimed = !circular && !AlreadyLoaded(path, files, flags);
+                    if (claimed) {
+                        // save path as is, no canonicalization nor combination with an extension or directory:
+                        _unfinishedFiles.Add(file.Path, Thread.CurrentThread);
+                    } else if (circular) {
+                        // MRI warns about this under -w; the require itself still answers false.
+                        _context.ReportWarning(
+                            String.Format("loading in progress, circular require considered harmful - {0}", file.Path), true);
+                    }
                 }
             }
 
@@ -659,9 +675,13 @@ namespace IronRuby.Runtime {
 
                 FileLoaded(MutableString.Create(file.Path, pathEncoding), flags);
             } finally {
-                lock (_unfinishedFiles) {
-                    _unfinishedFiles.Remove(file.Path);
-                    Monitor.PulseAll(_unfinishedFiles);
+                // Only release what was claimed: an untracked #load must not drop the claim a
+                // concurrent #require of the same file is holding.
+                if (tracked) {
+                    lock (_unfinishedFiles) {
+                        _unfinishedFiles.Remove(file.Path);
+                        Monitor.PulseAll(_unfinishedFiles);
+                    }
                 }
             }
 
@@ -717,7 +737,7 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Searches file in load directories and then appends extensions.
         /// </summary>
-        private IList<ResolvedFile> FindFile(string/*!*/ path, bool appendExtensions, string[] sourceFileExtensions) {
+        private IList<ResolvedFile> FindFile(string/*!*/ path, bool appendExtensions, string[] sourceFileExtensions, bool searchCurrentDirectory) {
             Assert.NotNull(path);
             bool isAbsolutePath;
 
@@ -743,7 +763,7 @@ namespace IronRuby.Runtime {
             string[] loadPaths = GetLoadPathStrings();
 
             if (loadPaths.Length == 0) {
-                return new ResolvedFile[0];
+                return CurrentDirectoryFallback(path, extension, appendExtensions, sourceFileExtensions, searchCurrentDirectory);
             }
 
             // If load paths are non-empty and the path starts with .\ or ..\ then MRI also ignores the load paths.
@@ -764,7 +784,26 @@ namespace IronRuby.Runtime {
                 }
             }
 
+            if (result.Count == 0) {
+                return CurrentDirectoryFallback(path, extension, appendExtensions, sourceFileExtensions, searchCurrentDirectory);
+            }
+
             return result;
+        }
+
+        /// <summary>
+        /// #load, unlike #require, falls back to the current working directory when $LOAD_PATH does
+        /// not hold the file -- load("load_fixture.rb") from inside the directory works in MRI and
+        /// was a LoadError here.
+        /// </summary>
+        private ResolvedFile[]/*!*/ CurrentDirectoryFallback(string/*!*/ path, string/*!*/ extension, bool appendExtensions,
+            string[] sourceFileExtensions, bool searchCurrentDirectory) {
+
+            if (!searchCurrentDirectory) {
+                return new ResolvedFile[0];
+            }
+            ResolvedFile file = ResolveFile(path, extension, appendExtensions, sourceFileExtensions);
+            return file != null ? new[] { file } : new ResolvedFile[0];
         }
 
         internal string[]/*!*/ GetLoadPathStrings() {

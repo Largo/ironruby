@@ -53,6 +53,11 @@ module Kernel
     caller_path = caller.first.split(/:\d/, 2).first
     require File.expand_path(path, File.dirname(caller_path))
   end unless private_method_defined?(:require_relative)
+
+  # Like #require, this is both a private instance method and a public singleton
+  # method on Kernel -- Kernel.require_relative(path) is a documented call.
+  module_function :require_relative
+  private :require_relative
 end
 
 module Enumerable

@@ -1225,10 +1225,28 @@ var closureScope = scope as RubyClosureScope;
             return scope;
         }
 
+        [ThreadStatic]
+        private static RubyModule _pendingWrapModule;
+
+        /// <summary>
+        /// The module Kernel#load was handed as its `wrap` argument (Ruby 3.1 lets it be a Module
+        /// rather than only true). Kernel#load sets it around the call into the loader and the
+        /// factory below takes it; it is per-thread and read once because #load is re-entrant and
+        /// the value only applies to the one file about to run.
+        /// </summary>
+        public static RubyModule PendingWrapModule {
+            get { return _pendingWrapModule; }
+            set { _pendingWrapModule = value; }
+        }
+
         internal static RubyTopLevelScope/*!*/ CreateWrappedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context) {
             RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false, false);
-            
-            RubyModule module = context.CreateModule(null, null, null, null, null, null, null, ModuleRestrictions.None);
+
+            // load(path, true) wraps the file in a fresh anonymous module; load(path, mod) wraps it
+            // in that very module, so its constants and methods are reachable through it afterwards.
+            RubyModule module = _pendingWrapModule;
+            _pendingWrapModule = null;
+            module = module ?? context.CreateModule(null, null, null, null, null, null, null, ModuleRestrictions.None);
             RubyObject mainObject = new RubyObject(context.ObjectClass);
             context.GetOrCreateMainSingleton(mainObject, new[] { module });
 

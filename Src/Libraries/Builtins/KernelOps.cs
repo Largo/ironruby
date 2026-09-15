@@ -1892,13 +1892,33 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("load", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
-        public static bool Load(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, object self, object libraryName, [Optional]bool wrap) {
-            return scope.RubyContext.Loader.LoadFile(
-                scope.GlobalScope.Scope, 
-                self, 
-                Protocols.CastToPath(toPath, libraryName), 
-                wrap ? LoadFlags.LoadIsolated : LoadFlags.None
-            );
+        public static bool Load(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, object self, object libraryName) {
+            return Load(toPath, scope, self, libraryName, null);
+        }
+
+        /// <summary>
+        /// `wrap` is true/false in every Ruby up to 3.0 and may be a Module from 3.1, which then
+        /// becomes the enclosing scope instead of a fresh anonymous one. A separate arity rather
+        /// than an optional parameter: an omitted [Optional]object arrives as Missing.Value, not
+        /// as nil, and would read as truthy.
+        /// </summary>
+        [RubyMethod("load", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
+        public static bool Load(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, object self, object libraryName, object wrap) {
+            RubyModule wrapModule = wrap as RubyModule;
+            bool isolated = wrapModule != null || (wrap != null && !(wrap is bool && !(bool)wrap));
+
+            RubyTopLevelScope.PendingWrapModule = wrapModule;
+            try {
+                return scope.RubyContext.Loader.LoadFile(
+                    scope.GlobalScope.Scope,
+                    self,
+                    Protocols.CastToPath(toPath, libraryName),
+                    isolated ? LoadFlags.LoadIsolated : LoadFlags.None
+                );
+            } finally {
+                RubyTopLevelScope.PendingWrapModule = null;
+            }
         }
 
         [RubyMethod("require", RubyMethodAttributes.PrivateInstance)]

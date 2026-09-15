@@ -4769,8 +4769,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "load", 0x52, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Boolean, System.Boolean>(IronRuby.Builtins.KernelOps.Load)
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.Load), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.Load)
             );
             
             DefineLibraryMethod(module, "load_assembly", 0x52, 
@@ -5202,8 +5203,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "load", 0x61, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Boolean, System.Boolean>(IronRuby.Builtins.KernelOps.Load)
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.Load), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.Load)
             );
             
             DefineLibraryMethod(module, "load_assembly", 0x61, 
