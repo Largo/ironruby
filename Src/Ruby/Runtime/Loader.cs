@@ -551,6 +551,17 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// MRI 1.9 changed the wording to "cannot load such file", and 2.0 started recording the
+        /// path on the exception -- LoadError#path (see Src/StdLib/ironruby/ruby4.rb) reads @path,
+        /// and answered nil for every load error because nothing ever set it.
+        /// </summary>
+        private Exception/*!*/ MissingFileError(string/*!*/ path) {
+            Exception error = RubyExceptions.CreateLoadError(String.Format("cannot load such file -- {0}", path));
+            _context.SetInstanceVariable(error, "@path", _context.EncodePath(path));
+            return error;
+        }
+
         private bool LoadFromPath(Scope globalScope, object self, string/*!*/ path, RubyEncoding/*!*/ pathEncoding, LoadFlags flags, out object loaded) {
             Assert.NotNull(pathEncoding, path);
 
@@ -569,7 +580,7 @@ namespace IronRuby.Runtime {
                     loaded = null;
                     return false;
                 }
-                throw RubyExceptions.CreateLoadError(String.Format("no such file to load -- {0}", path));
+                throw MissingFileError(path);
             }
 
             ResolvedFile file = files.First();
@@ -612,7 +623,7 @@ namespace IronRuby.Runtime {
                     if (file.SourceUnit != null) {
                         Scope loadedScope;
                         if (!LoadedScripts.TryGetValue(file.Path, out loadedScope)) {
-                            throw RubyExceptions.CreateLoadError(String.Format("no such file to load -- {0}", file.Path));
+                            throw MissingFileError(file.Path);
                         }
                         loaded = loadedScope;
                     } else {

@@ -229,6 +229,9 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "symlink", SetLastError = true)]
         private static extern int sys_symlink(byte[] target, byte[] linkpath);
 
+        [DllImport("libc", EntryPoint = "unlink", SetLastError = true)]
+        private static extern int sys_unlink(byte[] pathname);
+
         [DllImport("libc", EntryPoint = "link", SetLastError = true)]
         private static extern int sys_link(byte[] oldpath, byte[] newpath);
 
@@ -295,6 +298,15 @@ namespace IronRuby.Builtins {
 
         internal static int Symlink(string target, string linkPath, out int errno) {
             return Run(() => sys_symlink(ToPath(target), ToPath(linkPath)), out errno);
+        }
+
+        /// <summary>
+        /// unlink(2). System.IO.File.Delete cannot do this job: it refuses a symbolic link that
+        /// points at a directory, because it sees a directory, whereas unlink(2) removes the link
+        /// itself. File.unlink on such a link reported ENOENT instead of removing it.
+        /// </summary>
+        internal static int Unlink(string path, out int errno) {
+            return Run(() => sys_unlink(ToPath(path)), out errno);
         }
 
         internal static int Link(string oldPath, string newPath, out int errno) {

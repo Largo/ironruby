@@ -422,11 +422,24 @@ namespace IronRuby.Builtins {
         [RubyMethod("unlink", RubyMethodAttributes.PublicSingleton)]
         public static int Delete(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
-            if (!self.Context.Platform.FileExists(strPath)) {
-                throw RubyExceptions.CreateENOENT("No such file or directory - {0}", strPath);
+
+            if (Posix.IsAvailable) {
+                // unlink(2) rather than System.IO: the FileExists guard below answers false for a
+                // symbolic link that points at a directory -- System.IO sees a directory -- so
+                // removing such a link reported ENOENT rather than doing it. Letting the kernel
+                // decide also gets EISDIR, EPERM and EACCES right without guessing.
+                int errno;
+                if (Posix.Unlink(strPath, out errno) != 0) {
+                    throw Posix.Error(errno, strPath);
+                }
+                return 1;
             }
 
-            Delete(self.Context, strPath);     
+            if (!self.Context.Platform.FileExists(strPath)) {
+                throw RubyExceptions.CreateENOENT("{0}", strPath);
+            }
+
+            Delete(self.Context, strPath);
             return 1;
         }
 
