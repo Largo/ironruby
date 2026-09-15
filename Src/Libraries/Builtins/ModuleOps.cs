@@ -86,6 +86,10 @@ namespace IronRuby.Builtins {
             CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ includedStorage,
             RubyModule/*!*/ self, [NotNullItems]params RubyModule/*!*/[]/*!*/ modules) {
 
+            if (modules.Length == 0) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
+            }
+
             RubyUtils.RequireMixins(self, modules);
 
             var appendFeatures = appendFeaturesStorage.GetCallSite("append_features", 1);
@@ -948,25 +952,37 @@ namespace IronRuby.Builtins {
 
         #region (module|class)_(eval|exec)
 
+        /// <summary>
+        /// Module#module_eval / #class_eval. MRI takes either a block or a string with an optional
+        /// filename and line, never both, and its arity errors name whichever of the two shapes
+        /// was being used. The arguments are taken as a list and checked here for that reason:
+        /// overload resolution can only report the union of the two, "expected 0..3".
+        /// </summary>
         [RubyMethod("module_eval")]
         [RubyMethod("class_eval")]
-        public static object Evaluate(RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ code,
-            [Optional, NotNull]MutableString file, [DefaultParameterValue(1)]int line) {
+        public static object Evaluate(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
 
             if (block != null) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments");
-            } 
-            
-            return RubyUtils.Evaluate(code, scope, self, self, file, line);
-        }
+                if (args.Length != 0) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0)", args.Length);
+                }
 
-        [RubyMethod("module_eval")]
-        [RubyMethod("class_eval")]
-        public static object Evaluate([NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self) {
-            // The module is passed to the block as its single argument, so
-            // `Struct.new(:a) { |c| ... }` and `String.class_eval { |m| ... }` see it rather
-            // than nil. module_exec/class_exec pass the caller's arguments instead.
-            return RubyUtils.EvaluateInModule(self, block, new object[] { self });
+                // The module is passed to the block as its single argument, so
+                // `Struct.new(:a) { |c| ... }` and `String.class_eval { |m| ... }` see it rather
+                // than nil. module_exec/class_exec pass the caller's arguments instead.
+                return RubyUtils.EvaluateInModule(self, block, new object[] { self });
+            }
+
+            if (args.Length == 0 || args.Length > 3) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 1..3)", args.Length);
+            }
+
+            var code = Protocols.CastToString(toStr, args[0]);
+            var file = (args.Length > 1) ? Protocols.CastToString(toStr, args[1]) : null;
+            var line = (args.Length > 2) ? Protocols.CastToFixnum(toInt, args[2]) : 1;
+
+            return RubyUtils.Evaluate(code, scope, self, self, file, line);
         }
 
         // This method is not available in 1.8 so far, but since the usual workaround is very inefficient it is useful to have it in 1.8 as well.
@@ -1592,8 +1608,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("name")]
-        public static MutableString/*!*/ GetName(RubyContext/*!*/ context, RubyModule/*!*/ self) {
-            return self.GetDisplayName(context, true);
+        public static MutableString GetName(RubyContext/*!*/ context, RubyModule/*!*/ self) {
+            return self.GetNameString(context);
         }
 
         [RubyMethod("freeze")]

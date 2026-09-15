@@ -178,9 +178,12 @@ namespace IronRuby.Runtime {
         }
 
         public static MutableString/*!*/ ObjectToMutableString(IRubyObject/*!*/ self) {
+            var context = self.ImmediateClass.Context;
             return RubyUtils.FormatObject(
-                self.ImmediateClass.Context, 
-                self.ImmediateClass.GetNonSingletonClass().Name, 
+                context,
+                // an anonymous class has no Name to print, and MRI does not leave a blank there:
+                // it uses how the class describes itself, "#<#<Class:0x...>:0x...>"
+                self.ImmediateClass.GetNonSingletonClass().GetNonNullName(context),
                 self.GetInstanceData().ObjectId, 
                 self.IsTainted,
                 self.IsUntrusted

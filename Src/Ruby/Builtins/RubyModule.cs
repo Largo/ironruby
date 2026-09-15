@@ -283,6 +283,9 @@ namespace IronRuby.Builtins {
         // one is (guarded by the class hierarchy lock, like _constants)
         private HashSet<string> _deprecatedConstants;
 
+        // what Module#name hands out; see GetNameString. Cleared whenever the name changes.
+        private MutableString _nameString;
+
         // { constant-name -> (source path, source line) }; lazily allocated, only holds constants
         // whose definition site is known (Module#const_source_location).
         private Dictionary<string, KeyValuePair<string, int>> _constantLocations;
@@ -492,7 +495,7 @@ namespace IronRuby.Builtins {
 
         public string Name {
             get { return _name; }
-            internal set { _name = value; }
+            internal set { _name = value; _nameString = null; }
         }
 
         /// <summary>
@@ -518,6 +521,7 @@ namespace IronRuby.Builtins {
 
         private void SetName(string name, bool permanent, Dictionary<object, bool> visited) {
             _name = name;
+            _nameString = null;
             _isTemporaryName = name != null && !permanent;
             Version.SetName(name);
 
@@ -2879,6 +2883,28 @@ namespace IronRuby.Builtins {
             return context == _context ? _name : _name + "@" + _context.RuntimeId;
         }
 
+        /// <summary>
+        /// What Module#name answers: nil for an anonymous module and for any singleton class, and
+        /// otherwise a frozen String that is the *same* object on every call until the name
+        /// changes - both of which MRI guarantees.
+        /// </summary>
+        public MutableString GetNameString(RubyContext/*!*/ context) {
+            if (IsSingletonClass || _name == null) {
+                return null;
+            }
+
+            // another runtime sees the name decorated with the runtime id; not worth caching
+            if (context != _context) {
+                return MutableString.CreateMutable(GetName(context), context.GetIdentifierEncoding()).Freeze();
+            }
+
+            var result = _nameString;
+            if (result == null) {
+                _nameString = result = MutableString.CreateMutable(_name, context.GetIdentifierEncoding()).Freeze();
+            }
+            return result;
+        }
+
         public MutableString GetDisplayName(RubyContext/*!*/ context, bool showEmptyName) {
             if (IsSingletonClass) {
                 RubyClass c = (RubyClass)this;
@@ -2905,7 +2931,14 @@ namespace IronRuby.Builtins {
                     if (module == null) {
                         nestings++;
                         result.Append("#<");
-                        result.Append(c.SuperClass.GetName(context));
+                        // the object's class, which if anonymous has no name to print here - MRI
+                        // falls back to how that class describes itself, "#<Class:0x...>"
+                        RubyClass objectClass = c.SuperClass;
+                        if (objectClass.Name != null) {
+                            result.Append(objectClass.GetName(context));
+                        } else {
+                            result.Append(objectClass.GetDisplayName(context, false));
+                        }
                         result.Append(':');
                         RubyUtils.AppendFormatHexObjectId(result, RubyUtils.GetObjectId(_context, singletonOf));
                         break;

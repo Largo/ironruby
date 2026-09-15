@@ -6088,9 +6088,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "class_eval", 0x51, 
-                0x00040018U, 0x00000001U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.ModuleOps.Evaluate), 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object>(IronRuby.Builtins.ModuleOps.Evaluate)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.Evaluate)
             );
             
             DefineLibraryMethod(module, "class_exec", 0x51, 
@@ -6251,9 +6250,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "module_eval", 0x51, 
-                0x00040018U, 0x00000001U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.ModuleOps.Evaluate), 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object>(IronRuby.Builtins.ModuleOps.Evaluate)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.Evaluate)
             );
             
             DefineLibraryMethod(module, "module_exec", 0x51, 
