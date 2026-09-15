@@ -1342,6 +1342,16 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// True when bytes are sitting in this IO's own buffer. IO#wait_readable asks, because a
+        /// descriptor that select(2) calls quiet is still readable when the buffer holds something.
+        /// </summary>
+        [RubyMethod("__data_buffered__", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsDataBuffered(RubyIO/*!*/ self) {
+            self.RequireReadable();
+            return self.GetReadableStream().DataBuffered;
+        }
+
+        /// <summary>
         /// One read(2) that does not wait for data, which is what #read_nonblock is. Buffered
         /// bytes are served first - they are already here, so the read cannot block - and a
         /// stream with no descriptor behind it reads as it would blocking.
@@ -1352,23 +1362,49 @@ namespace IronRuby.Builtins {
             }
 
             var stream = io.GetReadableStream();
-            var pipe = stream.BaseStream as DescriptorStream;
-            if (pipe == null || stream.DataBuffered) {
-                return Read(io, count, buffer);
-            }
-
             buffer = PrepareReadBuffer(io, buffer);
             if (count == 0) {
                 return buffer;
             }
 
+            // Bytes already in this IO's buffer come first and cannot block - after #ungetc or a
+            // buffering read such as #eof? there may be some - and the descriptor is then asked
+            // for the rest.
+            int buffered = 0;
+            if (stream.DataBuffered) {
+                buffered = io.AppendAvailableBytes(buffer, count);
+                count -= buffered;
+                if (count == 0) {
+                    return buffer;
+                }
+            }
+
+            var pipe = stream.BaseStream as DescriptorStream;
+            if (pipe == null) {
+                // No non-blocking read primitive for this stream - a socket, or something with no
+                // descriptor at all.  With bytes already in hand, poll(2) decides whether to ask
+                // for more: an ordinary read that would block raises EAGAIN out of here, and the
+                // bytes taken out of the buffer would go with it and not be in the descriptor to
+                // be read again.
+                if (buffered > 0 && !DescriptorStream.IsReadableNow(RubyIO.DescriptorOf(stream.BaseStream))) {
+                    return buffer;
+                }
+                int more = io.AppendBytes(buffer, count);
+                return (more == 0 && buffered == 0) ? null : buffer;
+            }
+
             var bytes = new byte[count];
             int read = pipe.ReadNonBlocking(bytes, 0, count);
             if (read < 0) {
+                // EWOULDBLOCK. Whatever came out of the buffer is the answer: raising here would
+                // throw those bytes away, and they are not in the descriptor to be read again.
+                if (buffered > 0) {
+                    return buffer;
+                }
                 throw NonBlockingError(io.Context, new Errno.ResourceTemporarilyUnavailableError(), true);
             }
             if (read == 0) {
-                return null;
+                return (buffered > 0) ? buffer : null;
             }
             buffer.Append(bytes, 0, read);
             return buffer;

@@ -221,6 +221,20 @@ namespace IronRuby.Builtins {
         /// One read(2) that does not wait: the number of bytes read, 0 at end of file, or -1
         /// when the read would have blocked.
         /// </summary>
+        /// <summary>
+        /// True when read(2) on the descriptor would not block. Asked where a read has already
+        /// produced bytes and must not risk an EWOULDBLOCK that would take them with it.
+        /// </summary>
+        public static bool IsReadableNow(int descriptor) {
+            if (descriptor < 0) {
+                return false;
+            }
+            var fds = new PollFd[1];
+            fds[0].fd = descriptor;
+            fds[0].events = POLLIN;
+            return sys_poll(fds, 1, 0) > 0;
+        }
+
         public int ReadNonBlocking(byte[]/*!*/ buffer, int offset, int count) {
             if (_closed) {
                 throw RubyExceptions.CreateIOError("stream closed in another thread");

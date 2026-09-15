@@ -11456,16 +11456,27 @@ class IO
     end
   end unless method_defined?(:pwrite)
 
-  # Nothing here blocks on a descriptor the way a real event loop would, so a
-  # readable stream is one that is not at end of file.
+  # select(2) on the descriptor, which is what makes the timeout mean anything: the
+  # previous answer here was "not at end of file", which blocks until data arrives and so
+  # never times out at all.  Bytes already in this IO's own buffer make it readable
+  # straight away - select cannot see those.  An IO with no descriptor behind it (an
+  # in-memory stream) falls back to the end-of-file answer, which is the best available.
   def wait_readable(timeout = nil)
-    eof? ? nil : self
+    return self if __data_buffered__
+    ::IO.select([self], nil, nil, timeout) ? self : nil
   rescue ::IOError
     nil
+  rescue ::NotImplementedError, ::Errno::EBADF, ::ArgumentError, ::TypeError
+    eof? ? nil : self
   end unless method_defined?(:wait_readable)
 
   def wait_writable(timeout = nil)
-    closed? ? nil : self
+    return nil if closed?
+    ::IO.select(nil, [self], nil, timeout) ? self : nil
+  rescue ::IOError
+    nil
+  rescue ::NotImplementedError, ::Errno::EBADF, ::ArgumentError, ::TypeError
+    self
   end unless method_defined?(:wait_writable)
 end
 
@@ -11478,7 +11489,15 @@ class Thread
   # from outside - which .NET Core does not allow.  A thread that has not
   # started, has finished, or has never run Ruby code still answers nil.
   def backtrace(*args)
-    frames = (self == ::Thread.current) ? ::Kernel.send(:caller, 1) : __native_backtrace__
+    if self == ::Thread.current
+      frames = ::Kernel.send(:caller, 1)
+    else
+      frames = __native_backtrace__
+      # nil is MRI's answer for a thread that has finished.  A thread that is alive but has
+      # not reached any Ruby code yet has an empty stack, not no stack - and which of the two
+      # a just-created thread is in depends on how quickly it gets scheduled.
+      frames = [] if frames.nil? && status
+    end
     return nil if frames.nil?
     __slice_stack__(frames, args)
   end unless method_defined?(:backtrace)
