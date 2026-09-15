@@ -1058,17 +1058,27 @@ namespace IronRuby.Runtime {
             }
             Debug.Assert(lambda != null);
 
-            // module-eval:
+            var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context);
+            var blockParameter = (methodScope != null) ? methodScope.BlockParameter : null;
+
+            // module-eval: gets a scope of its own, which starts out public
             if (module != null) {
                 targetScope = CreateModuleEvalScope(targetScope, self, module);
+                return compiled(targetScope, self, module, blockParameter);
             }
 
-            return ((EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context))(
-                targetScope,
-                self,
-                module,
-                (methodScope != null) ? methodScope.BlockParameter : null
-            );
+            // A plain string eval runs in the scope it was called from, so it has nowhere of its
+            // own to keep `private' or `module_function'.  MRI confines a visibility modifier used
+            // inside the string to the string: `eval "module_function"' does not reach a `def'
+            // written after it.  The state is inherited on the way in - a `def' inside the string
+            // does see a modifier set outside it - so saving and restoring it is the whole rule.
+            var attributesScope = targetScope.GetMethodAttributesDefinitionScope();
+            var attributes = attributesScope.MethodAttributes;
+            try {
+                return compiled(targetScope, self, module, blockParameter);
+            } finally {
+                attributesScope.MethodAttributes = attributes;
+            }
         }
 
         private static RubyScope/*!*/ CreateModuleEvalScope(RubyScope/*!*/ parent, object self, RubyModule/*!*/ module) {

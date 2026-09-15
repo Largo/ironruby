@@ -456,7 +456,8 @@ namespace IronRuby.Builtins {
         private static void DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, string/*!*/ methodName, RubyMemberInfo/*!*/ info,
             RubyModule/*!*/ targetConstraint, string sourceName = null) {
 
-            var visibility = GetDefinedMethodVisibility(scope, self, methodName);
+            bool isModuleFunction;
+            var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
             using (self.Context.ClassHierarchyLocker()) {
                 // MRI 1.8 does the check when the method is called, 1.9 checks it upfront as we do.
                 // Since Ruby 3.0 (Feature #15608) a method whose owner is a module rather than a class may be
@@ -478,9 +479,17 @@ namespace IronRuby.Builtins {
                 }
 
                 self.SetDefinedMethodNoEventNoLock(self.Context, methodName, info, visibility, sourceName);
+
+                if (isModuleFunction) {
+                    self.SetModuleFunctionNoEventNoLock(self.Context, methodName, info);
+                }
             }
 
             self.MethodAdded(methodName);
+
+            if (isModuleFunction) {
+                self.GetOrCreateSingletonClass().MethodAdded(methodName);
+            }
         }
 
         // thread-safe:
@@ -509,9 +518,18 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self, 
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
-            var visibility = GetDefinedMethodVisibility(scope, self, methodName);
+            bool isModuleFunction;
+            var visibility = GetDefinedMethodVisibility(scope, self, methodName, out isModuleFunction);
             var info = Proc.ToLambdaMethodInfo(block, methodName, visibility, self);
             self.AddMethod(scope.RubyContext, methodName, info);
+
+            if (isModuleFunction) {
+                using (self.Context.ClassHierarchyLocker()) {
+                    self.SetModuleFunctionNoEventNoLock(scope.RubyContext, methodName, info);
+                }
+                self.GetOrCreateSingletonClass().MethodAdded(methodName);
+            }
+
             return scope.RubyContext.CreateSymbol(methodName, RubyEncoding.UTF8);
         }
 
@@ -527,20 +545,31 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        private static RubyMethodVisibility GetDefinedMethodVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ methodName) {
-            // MRI: Special names are private.
-            // MRI: Doesn't create a singleton method if module_function is used in the scope, however the private visibility is applied (bug?)
-            // MRI 1.8: uses the current scope's visibility only if the target module is the same as the scope's module (bug?)
-            // MFI 1.9: always uses public visibility (bug?)
+        /// <summary>
+        /// The visibility #define_method gives the method it defines, and whether #module_function
+        /// is in effect for it.
+        ///
+        /// The enclosing visibility modifier counts only when #define_method is defining on the
+        /// scope's own module: `other.define_method(...)` inside a `private` or `module_function`
+        /// body still defines a plain public method on `other`.  Special names (#initialize and
+        /// friends) are private whatever the modifier says - and so is the instance half of a
+        /// module function, whose singleton half is the public one.
+        /// </summary>
+        private static RubyMethodVisibility GetDefinedMethodVisibility(RubyScope/*!*/ scope, RubyModule/*!*/ module, string/*!*/ methodName,
+            out bool isModuleFunction) {
+
+            isModuleFunction = false;
+
             RubyMethodVisibility visibility;
-            if (scope.RubyContext.RubyOptions.Compatibility < RubyCompatibility.Ruby19) {
-                var attributesScope = scope.GetMethodAttributesDefinitionScope();
-                if (attributesScope.GetInnerMostModuleForMethodLookup() == module) {
-                    bool isModuleFunction = (attributesScope.MethodAttributes & RubyMethodAttributes.ModuleFunction) == RubyMethodAttributes.ModuleFunction;
-                    visibility = (isModuleFunction) ? RubyMethodVisibility.Private : attributesScope.Visibility;
-                } else {
-                    visibility = RubyMethodVisibility.Public;
-                }
+            var attributesScope = scope.GetMethodAttributesDefinitionScope();
+            // the same module `def` in this scope would define into - GetInnerMostModuleForMethodLookup
+            // is not it: inside a `Module.new { }` block it walks past the block to Object
+            if (attributesScope.GetMethodDefinitionOwner() == module) {
+                // module_function cannot be toggled on in a class body - Module#module_function
+                // raises there - but a module function is still meaningless on one, so guard it.
+                isModuleFunction = !module.IsClass
+                    && (attributesScope.MethodAttributes & RubyMethodAttributes.ModuleFunction) == RubyMethodAttributes.ModuleFunction;
+                visibility = isModuleFunction ? RubyMethodVisibility.Private : attributesScope.Visibility;
             } else {
                 visibility = RubyMethodVisibility.Public;
             }

@@ -921,7 +921,8 @@ end
         }
 
         /// <summary>
-        /// define_method copies given method and sets its visibility according to the the current scope flags.
+        /// define_method copies the given method and gives the copy the visibility the enclosing
+        /// scope is in - so a `private' above it makes the copy private, as MRI does.
         /// </summary>
         public void DefineMethodVisibility1() {
             TestOutput(@"
@@ -944,7 +945,7 @@ end
 
 B.new.send :foo
 ", @"
-foo
+#<NoMethodError: private method `foo' called for an instance of B>
 foo
 ");
         }
@@ -982,9 +983,11 @@ end
 
 p M.public_instance_methods(false).sort
 p M.private_instance_methods(false).sort
+p M.singleton_methods.sort
 ", @"
-[:a, :b, :c, :d]
-[]
+[:c, :d]
+[:a, :b]
+[:a]
 ");
         }
 

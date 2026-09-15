@@ -577,7 +577,7 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal RubyModule/*!*/ GetMethodDefinitionOwner() {
+        public RubyModule/*!*/ GetMethodDefinitionOwner() {
             // MRI 1.9: 
             // - define_method doesn't influence the definition owner (unlike MRI 1.8)
             // - skips module_eval blocks above method scope 
