@@ -621,16 +621,18 @@ namespace IronRuby.Runtime {
                         }
                     }
 
-                    bool circular = _unfinishedFiles.ContainsKey(file.Path);
-                    claimed = !circular && !AlreadyLoaded(path, files, flags);
+                    claimed = !_unfinishedFiles.ContainsKey(file.Path) && !AlreadyLoaded(path, files, flags);
                     if (claimed) {
                         // save path as is, no canonicalization nor combination with an extension or directory:
                         _unfinishedFiles.Add(file.Path, Thread.CurrentThread);
-                    } else if (circular) {
-                        // MRI warns about this under -w; the require itself still answers false.
-                        _context.ReportWarning(
-                            String.Format("loading in progress, circular require considered harmful - {0}", file.Path), true);
                     }
+
+                    // MRI warns "loading in progress, circular require considered harmful" here under
+                    // -w. Not emitted: Kernel#Complex and #Rational are autoloaded constants pointing
+                    // at complex18.rb and rational18.rb, and those files reopen the very class whose
+                    // autoload is running, so the warning fired twice on every `ir -w` startup for a
+                    // circularity the user did not write. It belongs here once those two builtins stop
+                    // being bootstrapped through autoload.
                 }
             }
 
