@@ -34,8 +34,17 @@ namespace IronRuby.StandardLibrary.StringIO {
         private IOMode _mode;
         private int _lineNumber;
 
+        // What #set_encoding was told, when it was told anything. Normally the encoding is the
+        // string's own, but the string may be frozen - and MRI still remembers the answer then
+        // rather than refusing, so it cannot live only on the string.
+        private RubyEncoding _externalEncoding;
+
         public StringIO()
-            : this(MutableString.CreateBinary(), IOMode.ReadWrite) {
+            : this(MutableString.CreateEmpty(), IOMode.ReadWrite) {
+        }
+
+        public StringIO(RubyContext/*!*/ context)
+            : this(MutableString.CreateEmpty(context.DefaultExternalEncoding), IOMode.ReadWrite) {
         }
 
         public StringIO(MutableString/*!*/ content, IOMode mode) {
@@ -55,6 +64,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             _content = content;
             _position = 0;
             _lineNumber = 0;
+            _externalEncoding = null;
         }
 
         private MutableString/*!*/ GetContent() {
@@ -97,7 +107,7 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyConstructor]
         public static StringIO/*!*/ Create(RubyClass/*!*/ self) {
-            return new StringIO();
+            return new StringIO(self.Context);
         }
 
         [RubyConstructor]
@@ -115,8 +125,8 @@ namespace IronRuby.StandardLibrary.StringIO {
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static StringIO/*!*/ Reinitialize(StringIO/*!*/ self) {
-            self.SetContent(MutableString.CreateBinary());
+        public static StringIO/*!*/ Reinitialize(RubyContext/*!*/ context, StringIO/*!*/ self) {
+            self.SetContent(MutableString.CreateEmpty(context.DefaultExternalEncoding));
             self._mode = IOMode.ReadWrite;
             return self;
         }
@@ -771,20 +781,131 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         #endregion
         
-        #region TODO: chars, bytes, lines (1.9)
+        #region ungetc, ungetbyte primitive
+
+        /// <summary>
+        /// What #ungetc and #ungetbyte are built on. Both write backwards over the string - the
+        /// position moves back by as much as is pushed and those bytes replace what was there -
+        /// which is MRI's behaviour rather than a pushback buffer of its own. Pushing back past
+        /// the start moves the rest of the string along instead of dropping what does not fit.
+        /// </summary>
+        [RubyMethod("__ir_unget_bytes__", RubyMethodAttributes.PrivateInstance)]
+        public static void UngetBytes(StringIO/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ pushed) {
+            // MRI asks for a readable stream even though this writes to the string:
+            MutableString content = self.GetReadableContent();
+            int count = pushed.GetByteCount();
+            if (count == 0) {
+                return;
+            }
+
+            try {
+                int position = self._position;
+                int length = content.GetByteCount();
+                if (position < count) {
+                    MutableString tail = content.GetSlice(position, length - position);
+                    content.SetByteCount(0);
+                    content.WriteBytes(0, pushed, 0, count);
+                    if (tail != null && tail.GetByteCount() > 0) {
+                        content.WriteBytes(count, tail, 0, tail.GetByteCount());
+                    }
+                    self._position = 0;
+                } else {
+                    if (position > length) {
+                        content.Append(0, position - length);
+                    }
+                    content.WriteBytes(position - count, pushed, 0, count);
+                    self._position = position - count;
+                }
+            } catch (InvalidOperationException) {
+                throw RubyExceptions.CreateIOError("not modifiable string");
+            }
+        }
 
         #endregion
 
-        #region TODO: external_encoding, internal_encoding, set_encoding (1.9)
+        #region external_encoding, internal_encoding, set_encoding (1.9)
+
+        /// <summary>
+        /// A StringIO's external encoding is its string's - there is no descriptor to carry one
+        /// of its own - and it never transcodes, so the internal encoding is always nil.
+        /// </summary>
+        [RubyMethod("external_encoding")]
+        public static RubyEncoding/*!*/ GetExternalEncoding(StringIO/*!*/ self) {
+            return self._externalEncoding ?? self.GetContent().Encoding;
+        }
+
+        [RubyMethod("internal_encoding")]
+        public static RubyEncoding GetInternalEncoding(StringIO/*!*/ self) {
+            return null;
+        }
+
+        // Separate arities rather than [Optional]: an omitted [Optional]object arrives as
+        // Missing.Value, which is neither nil nor null and has caught this codebase out before.
+        [RubyMethod("set_encoding")]
+        public static StringIO/*!*/ SetEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self, object external) {
+            return SetExternalEncoding(toStr, self, external);
+        }
+
+        [RubyMethod("set_encoding")]
+        public static StringIO/*!*/ SetEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self,
+            object external, object @internal) {
+            return SetExternalEncoding(toStr, self, external);
+        }
+
+        [RubyMethod("set_encoding")]
+        public static StringIO/*!*/ SetEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self,
+            object external, object @internal, object options) {
+            return SetExternalEncoding(toStr, self, external);
+        }
+
+        /// <summary>
+        /// The encoding belongs to the string, so this is String#force_encoding on it. There is
+        /// nothing here to transcode between, which is why the internal encoding and the
+        /// conversion options are accepted and then ignored, as MRI's stringio does.
+        /// </summary>
+        private static StringIO/*!*/ SetExternalEncoding(ConversionStorage<MutableString>/*!*/ toStr, StringIO/*!*/ self, object external) {
+            MutableString content = self.GetContent();
+            if (external == null) {
+                return self;
+            }
+
+            RubyEncoding encoding = Protocols.ConvertToEncoding(toStr, external);
+            self._externalEncoding = encoding;
+            // The encoding belongs to the string, so tell the string too - unless it is frozen,
+            // which MRI does not treat as a failure: the StringIO keeps the answer either way.
+            if (!content.IsFrozen) {
+                content.ForceEncoding(encoding);
+            }
+            return self;
+        }
 
         #endregion
 
         #region Stubs: binmode, fcntl, fileno, pid, fsync, sync, sync=, isatty, tty?, flush
 
+        /// <summary>
+        /// MRI's StringIO#binmode declares the string to be bytes - it sets the encoding to
+        /// BINARY - rather than doing nothing at all, and #set_encoding_by_bom will not read a
+        /// mark until that is true.
+        /// </summary>
         [RubyMethod("binmode")]
         public static StringIO/*!*/ SetBinaryMode(StringIO/*!*/ self) {
-            // nop
+            MutableString content = self.GetContent();
+            self._externalEncoding = RubyEncoding.Binary;
+            if (!content.IsFrozen) {
+                content.ForceEncoding(RubyEncoding.Binary);
+            }
             return self;
+        }
+
+        [RubyMethod("binmode?")]
+        public static bool IsBinmode(StringIO/*!*/ self) {
+            return ReferenceEquals(GetExternalEncoding(self), RubyEncoding.Binary);
+        }
+
+        [RubyMethod("__readable_stream__?", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsReadableStream(StringIO/*!*/ self) {
+            return self._mode.CanRead();
         }
 
         [RubyMethod("fcntl")]

@@ -12153,6 +12153,16 @@ namespace IronRuby.StandardLibrary.StringIO {
         }
         
         private static void LoadStringIO_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_unget_bytes__", 0x12, 
+                0x00010002U, 
+                new Action<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.UngetBytes)
+            );
+            
+            DefineLibraryMethod(module, "__readable_stream__?", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Boolean>(IronRuby.StandardLibrary.StringIO.StringIO.IsReadableStream)
+            );
+            
             DefineLibraryMethod(module, "<<", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.Output)
@@ -12161,6 +12171,11 @@ namespace IronRuby.StandardLibrary.StringIO {
             DefineLibraryMethod(module, "binmode", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.SetBinaryMode)
+            );
+            
+            DefineLibraryMethod(module, "binmode?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Boolean>(IronRuby.StandardLibrary.StringIO.StringIO.IsBinmode)
             );
             
             DefineLibraryMethod(module, "close", 0x11, 
@@ -12224,6 +12239,11 @@ namespace IronRuby.StandardLibrary.StringIO {
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Boolean>(IronRuby.StandardLibrary.StringIO.StringIO.Eof)
             );
             
+            DefineLibraryMethod(module, "external_encoding", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.RubyEncoding>(IronRuby.StandardLibrary.StringIO.StringIO.GetExternalEncoding)
+            );
+            
             DefineLibraryMethod(module, "fcntl", 0x11, 
                 0x00000000U, 
                 new Action<IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.FileControl)
@@ -12259,7 +12279,7 @@ namespace IronRuby.StandardLibrary.StringIO {
             
             DefineLibraryMethod(module, "initialize", 0x12, 
                 0x00000000U, 0x00030006U, 0x00010002U, 
-                new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reinitialize), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reinitialize), 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reinitialize), 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, System.Int32, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reinitialize)
             );
@@ -12268,6 +12288,11 @@ namespace IronRuby.StandardLibrary.StringIO {
                 0x00000008U, 0x00000006U, 
                 new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reopen), 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reopen)
+            );
+            
+            DefineLibraryMethod(module, "internal_encoding", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.RubyEncoding>(IronRuby.StandardLibrary.StringIO.StringIO.GetInternalEncoding)
             );
             
             DefineLibraryMethod(module, "isatty", 0x11, 
@@ -12377,6 +12402,13 @@ namespace IronRuby.StandardLibrary.StringIO {
             DefineLibraryMethod(module, "seek", 0x11, 
                 0x00030000U, 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Int32, System.Int32, System.Int32>(IronRuby.StandardLibrary.StringIO.StringIO.Seek)
+            );
+            
+            DefineLibraryMethod(module, "set_encoding", 0x11, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.SetEncoding), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.SetEncoding), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object, System.Object, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.SetEncoding)
             );
             
             DefineLibraryMethod(module, "size", 0x11, 

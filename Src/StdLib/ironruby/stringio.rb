@@ -14,3 +14,151 @@
 # ****************************************************************************
 
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.StringIO'
+
+# The byte and character side of StringIO, which the C# class does not carry: the same
+# shapes IO has in ruby4.rb, written against StringIO's own primitives.  #getc there still
+# answers a byte as an Integer, which was the 1.8 meaning.
+class StringIO
+  if instance_method(:getc).arity == 0
+    alias_method :__ir_getbyte__, :getc
+    private :__ir_getbyte__
+
+    # A character is as many bytes as its encoding needs, so read bytes until they make one.
+    def getc
+      first = __ir_getbyte__
+      return nil if first.nil?
+      return first if first.is_a?(::String)
+      enc = external_encoding || ::Encoding.default_external
+      bytes = [first]
+      char = nil
+      4.times do
+        char = bytes.pack("C*")
+        char.force_encoding(enc)
+        break if char.valid_encoding?
+        nxt = __ir_getbyte__
+        break if nxt.nil?
+        bytes << nxt
+      end
+      char
+    end
+  end
+
+  def readchar
+    c = getc
+    ::Kernel.raise(::EOFError, "end of file reached") if c.nil?
+    c
+  end
+
+  def getbyte
+    s = read(1)
+    return nil if s.nil? || s.empty?
+    s.getbyte(0)
+  end unless method_defined?(:getbyte)
+
+  def readbyte
+    b = getbyte
+    ::Kernel.raise(::EOFError, "end of file reached") if b.nil?
+    b
+  end unless method_defined?(:readbyte)
+
+  # ungetc takes a String as well as a codepoint, and a codepoint is a character in the
+  # string's encoding rather than a single byte.
+  def ungetc(value)
+    return nil if value.nil?
+    if value.is_a?(::Integer)
+      enc = external_encoding || ::Encoding.default_external
+      text = (value.chr(enc) rescue value.chr)
+    else
+      unless value.is_a?(::String)
+        unless value.respond_to?(:to_str)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into String")
+        end
+        value = value.to_str
+      end
+      text = value
+    end
+    __ir_unget_bytes__(text)
+    nil
+  end
+
+  # ungetbyte pushes bytes, never characters, and an Integer is taken modulo 256 rather than
+  # being out of range.
+  def ungetbyte(byte)
+    return nil if byte.nil?
+    if byte.is_a?(::Integer)
+      __ir_unget_bytes__((byte & 0xff).chr)
+    else
+      unless byte.is_a?(::String)
+        unless byte.respond_to?(:to_str)
+          ::Kernel.raise(::TypeError, "no implicit conversion of #{byte.class} into String")
+        end
+        byte = byte.to_str
+      end
+      __ir_unget_bytes__(byte)
+    end
+    nil
+  end
+
+  def each_char
+    return ::Enumerator.new { |y| each_char { |c| y << c } } unless block_given?
+    while (c = getc)
+      yield c
+    end
+    self
+  end unless method_defined?(:each_char)
+
+  def each_codepoint
+    return ::Enumerator.new { |y| each_codepoint { |c| y << c } } unless block_given?
+    each_char { |c| yield c.ord }
+    self
+  end unless method_defined?(:each_codepoint)
+
+  alias_method :codepoints, :each_codepoint unless method_defined?(:codepoints)
+
+  # A byte-order mark names the encoding, so there must be nothing named already; the stream
+  # is left positioned after the mark, and answers nil when there is none to read.
+  BOMS__ = [
+    ["\xEF\xBB\xBF".b, "UTF-8"],
+    ["\x00\x00\xFE\xFF".b, "UTF-32BE"],
+    ["\xFF\xFE\x00\x00".b, "UTF-32LE"],
+    ["\xFE\xFF".b, "UTF-16BE"],
+    ["\xFF\xFE".b, "UTF-16LE"],
+  ]
+
+  # Unlike IO#set_encoding_by_bom there is no binmode requirement and no complaint about an
+  # encoding already being set: MRI's stringio reads the mark whatever the string's encoding
+  # is, and only a stream that cannot be read from answers nil without looking.
+  def set_encoding_by_bom
+    return nil unless __readable_stream__?
+    start = pos
+    head = read(4).to_s
+    head.force_encoding(::Encoding::BINARY)
+    match = BOMS__.find { |bytes, _| head.start_with?(bytes) }
+    unless match
+      seek(start)
+      return nil
+    end
+    seek(start + match[0].bytesize)
+    enc = ::Encoding.find(match[1])
+    set_encoding(enc)
+    enc
+  end unless method_defined?(:set_encoding_by_bom)
+
+  # A string is always ready, so these are #sysread and #syswrite - with the end of file
+  # reported as nil rather than raised when asked not to raise.
+  def read_nonblock(maxlen, buf = nil, exception: true)
+    if maxlen == 0
+      return buf ? buf.replace("") : ""
+    end
+    begin
+      buf ? sysread(maxlen, buf) : sysread(maxlen)
+    rescue ::EOFError
+      ::Kernel.raise if exception
+      nil
+    end
+  end unless method_defined?(:read_nonblock)
+
+  def write_nonblock(string, exception: true)
+    syswrite(string)
+  end unless method_defined?(:write_nonblock)
+end
