@@ -2577,5 +2577,114 @@ class Socket
   end
 end
 
+# BasicSocket#sendmsg / #recvmsg and their non-blocking twins.  The C# layer
+# answers the raw sendmsg(2)/recvmsg(2) results; the shaping into Addrinfo and
+# Socket::AncillaryData belongs here, where both classes live.
+class Addrinfo
+  # The sender of a message read from a *connected* socket: the kernel reports no
+  # source address at all, and CRuby answers an Addrinfo with no family.
+  def self.__ir_unspec(socktype) # :nodoc:
+    info = allocate
+    info.__ir_init_unspec(socktype)
+    info
+  end
+
+  def __ir_init_unspec(socktype) # :nodoc:
+    @canonname = nil
+    @unix_path = nil
+    @ip_address = nil
+    @ip_port = nil
+    @ir_host = nil
+    @afamily = Socket::AF_UNSPEC
+    @pfamily = Socket::PF_UNSPEC
+    @socktype = socktype.nil? ? 0 : socktype
+    @protocol = 0
+  end
+end
+
+class BasicSocket
+  # recvmsg with no length reads whatever is there; CRuby sizes the buffer with a
+  # MSG_PEEK pass, which costs a syscall per message. A datagram larger than this
+  # is truncated either way.
+  IR_DEFAULT_MESSAGE_LENGTH__ = 65536 # :nodoc:
+  IR_DEFAULT_CONTROL_LENGTH__ = 4096  # :nodoc:
+
+  def sendmsg(mesg, flags = 0, dest_sockaddr = nil, *controls)
+    __ir_sendmsg(mesg, flags, dest_sockaddr, controls, false, true)
+  end
+
+  def sendmsg_nonblock(mesg, flags = 0, dest_sockaddr = nil, *controls, exception: true)
+    __ir_sendmsg(mesg, flags, dest_sockaddr, controls, true, exception)
+  end
+
+  def recvmsg(maxmesglen = nil, flags = 0, maxcontrollen = nil, opts = nil)
+    __ir_recvmsg(maxmesglen, flags, maxcontrollen, false, true)
+  end
+
+  def recvmsg_nonblock(maxmesglen = nil, flags = 0, maxcontrollen = nil, opts = nil, exception: true)
+    __ir_recvmsg(maxmesglen, flags, maxcontrollen, true, exception)
+  end
+
+  def __ir_sendmsg(mesg, flags, dest_sockaddr, controls, nonblocking, exception) # :nodoc:
+    mesg = String.try_convert(mesg) || (raise TypeError, "no implicit conversion of #{mesg.class} into String")
+    dest_sockaddr = dest_sockaddr.to_sockaddr if dest_sockaddr.kind_of?(Addrinfo)
+
+    errno, sent = __ir_raw_sendmsg(mesg, flags.nil? ? 0 : flags, dest_sockaddr,
+                                   controls.map { |c| Socket.__ir_control_triple(c) }, nonblocking)
+    return sent if errno == 0
+
+    if nonblocking && (errno == Errno::EAGAIN::Errno || errno == Errno::EWOULDBLOCK::Errno)
+      raise IO::EWOULDBLOCKWaitWritable, "Resource temporarily unavailable" if exception
+      return :wait_writable
+    end
+    raise SystemCallError.new("sendmsg(2)", errno)
+  end
+  private :__ir_sendmsg
+
+  def __ir_recvmsg(maxmesglen, flags, maxcontrollen, nonblocking, exception) # :nodoc:
+    maxmesglen = IR_DEFAULT_MESSAGE_LENGTH__ if maxmesglen.nil?
+    maxcontrollen = IR_DEFAULT_CONTROL_LENGTH__ if maxcontrollen.nil?
+
+    errno, data, sender, rflags, controls =
+      __ir_raw_recvmsg(maxmesglen, flags.nil? ? 0 : flags, maxcontrollen, nonblocking)
+
+    if errno != 0
+      if nonblocking && (errno == Errno::EAGAIN::Errno || errno == Errno::EWOULDBLOCK::Errno)
+        raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+        return :wait_readable
+      end
+      raise SystemCallError.new("recvmsg(2)", errno)
+    end
+
+    socktype = __ir_socktype
+    # A stream socket whose peer shut down reads zero bytes for ever; CRuby reports
+    # that end-of-file as nil. An empty *datagram* is a real message.
+    return nil if data.empty? && socktype == Socket::SOCK_STREAM
+
+    address = sender.nil? ? Addrinfo.__ir_unspec(socktype)
+                          : Addrinfo.__ir_from_sockaddr(sender, socktype)
+    [data, address, rflags] +
+      controls.map { |level, type, bytes| Socket::AncillaryData.new(__ir_msg_family, level, type, bytes) }
+  end
+  private :__ir_recvmsg
+
+  # AncillaryData wants a family, and the socket's own is the only sensible one.
+  def __ir_msg_family # :nodoc:
+    Addrinfo.__ir_from_sockaddr(getsockname, 0).afamily
+  rescue StandardError
+    Socket::AF_UNSPEC
+  end
+  private :__ir_msg_family
+end
+
+class Socket
+  def self.__ir_control_triple(control) # :nodoc:
+    unless control.kind_of?(Socket::AncillaryData)
+      raise TypeError, "no implicit conversion of #{control.class} into Socket::AncillaryData"
+    end
+    [control.level, control.type, control.data]
+  end
+end
+
 IronRubySocketErrors__.wrap(UNIXSocket, :recvfrom)
 IronRubySocketErrors__.wrap(UNIXServer, :accept, :sysaccept, :listen)

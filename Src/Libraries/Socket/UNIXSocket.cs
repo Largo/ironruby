@@ -191,13 +191,25 @@ namespace IronRuby.StandardLibrary.Sockets {
                 throw RubyExceptions.CreateIOError("cannot send an IO that has no file descriptor");
             }
             io.Flush();
-            UnixDescriptorPassing.Send((int)self.Socket.Handle, descriptor);
+            int errno;
+            if (PosixMessages.SendDescriptor((int)self.Socket.Handle, descriptor, out errno) < 0) {
+                throw Posix.Error(errno, null);
+            }
         }
 
         [RubyMethod("__ir_raw_recv_io")]
         public static int ReceiveDescriptor(RubyContext/*!*/ context, UNIXSocket/*!*/ self) {
             Socket socket = self.Socket;
-            int descriptor = Blocking(socket, SelectMode.SelectRead, () => UnixDescriptorPassing.Receive((int)socket.Handle));
+            int errno = 0;
+            int descriptor = Blocking(socket, SelectMode.SelectRead,
+                () => PosixMessages.ReceiveDescriptor((int)socket.Handle, out errno));
+            if (errno != 0) {
+                throw Posix.Error(errno, null);
+            }
+            if (descriptor < 0) {
+                // The peer sent data but no descriptor, which is what CRuby reports this way.
+                throw RubyExceptions.CreateIOError("file descriptor was not passed");
+            }
 
             IOMode mode;
             if (!RubyIO.TryGetDescriptorMode(descriptor, out mode)) {
@@ -278,141 +290,6 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
     }
 
-    /// <summary>
-    /// The two AF_UNIX primitives with no managed equivalent.  Both are Linux/glibc shaped; the
-    /// struct layouts below are the x86-64 and aarch64 ones, which are identical.
-    /// </summary>
-    internal static class UnixDescriptorPassing {
-
-        [DllImport("libc", EntryPoint = "socketpair", SetLastError = true)]
-        internal static extern int socketpair(int domain, int type, int protocol, int[] sv);
-
-        [DllImport("libc", EntryPoint = "sendmsg", SetLastError = true)]
-        private static extern IntPtr sys_sendmsg(int fd, ref MsgHdr message, int flags);
-
-        [DllImport("libc", EntryPoint = "recvmsg", SetLastError = true)]
-        private static extern IntPtr sys_recvmsg(int fd, ref MsgHdr message, int flags);
-
-        [StructLayout(LayoutKind.Sequential)]
-        private struct IOVec {
-            public IntPtr Base;
-            public IntPtr Length;
-        }
-
-        // struct msghdr. The two padding fields are explicit rather than implied because the
-        // marshaller lays the struct out exactly as declared.
-        [StructLayout(LayoutKind.Sequential)]
-        private struct MsgHdr {
-            public IntPtr Name;
-            public int NameLength;
-            public int NamePadding;
-            public IntPtr IOV;
-            public IntPtr IOVLength;
-            public IntPtr Control;
-            public IntPtr ControlLength;
-            public int Flags;
-            public int FlagsPadding;
-        }
-
-        private const int SOL_SOCKET = 1;
-        private const int SCM_RIGHTS = 1;
-
-        // struct cmsghdr is { size_t cmsg_len; int cmsg_level; int cmsg_type; }, so the payload
-        // starts at 16 and CMSG_SPACE(sizeof(int)) rounds 20 up to the next multiple of 8.
-        private const int CmsgHeaderSize = 16;
-        private const int CmsgDataOffset = CmsgHeaderSize;
-        private const int CmsgLength = CmsgHeaderSize + 4;
-        private const int CmsgSpace = 24;
-
-        internal static void Send(int socketDescriptor, int descriptor) {
-            Require();
-            IntPtr payload = Marshal.AllocHGlobal(1);
-            IntPtr iov = Marshal.AllocHGlobal(Marshal.SizeOf<IOVec>());
-            IntPtr control = Marshal.AllocHGlobal(CmsgSpace);
-            try {
-                // sendmsg(2) on a stream socket refuses to carry ancillary data on its own, so the
-                // descriptor rides along with one throwaway byte.
-                Marshal.WriteByte(payload, 0, 0);
-                Marshal.StructureToPtr(new IOVec { Base = payload, Length = (IntPtr)1 }, iov, false);
-
-                WriteCmsgHeader(control, CmsgLength);
-                Marshal.WriteInt32(control, CmsgDataOffset, descriptor);
-                Marshal.WriteInt32(control, CmsgDataOffset + 4, 0);
-
-                MsgHdr message = new MsgHdr {
-                    Name = IntPtr.Zero,
-                    NameLength = 0,
-                    IOV = iov,
-                    IOVLength = (IntPtr)1,
-                    Control = control,
-                    ControlLength = (IntPtr)CmsgSpace,
-                };
-
-                if ((long)sys_sendmsg(socketDescriptor, ref message, 0) < 0) {
-                    throw Posix.Error(Marshal.GetLastWin32Error(), null);
-                }
-            } finally {
-                Marshal.FreeHGlobal(control);
-                Marshal.FreeHGlobal(iov);
-                Marshal.FreeHGlobal(payload);
-            }
-        }
-
-        internal static int Receive(int socketDescriptor) {
-            Require();
-            IntPtr payload = Marshal.AllocHGlobal(1);
-            IntPtr iov = Marshal.AllocHGlobal(Marshal.SizeOf<IOVec>());
-            IntPtr control = Marshal.AllocHGlobal(CmsgSpace);
-            try {
-                Marshal.StructureToPtr(new IOVec { Base = payload, Length = (IntPtr)1 }, iov, false);
-                WriteCmsgHeader(control, 0);
-
-                MsgHdr message = new MsgHdr {
-                    Name = IntPtr.Zero,
-                    NameLength = 0,
-                    IOV = iov,
-                    IOVLength = (IntPtr)1,
-                    Control = control,
-                    ControlLength = (IntPtr)CmsgSpace,
-                };
-
-                long received = (long)sys_recvmsg(socketDescriptor, ref message, 0);
-                if (received < 0) {
-                    throw Posix.Error(Marshal.GetLastWin32Error(), null);
-                }
-
-                long length = (long)Marshal.ReadIntPtr(control, 0);
-                int level = Marshal.ReadInt32(control, 8);
-                int type = Marshal.ReadInt32(control, 12);
-                if ((long)message.ControlLength < CmsgLength || length < CmsgLength ||
-                    level != SOL_SOCKET || type != SCM_RIGHTS) {
-                    // The peer sent data but no descriptor. CRuby reports this as "file descriptor
-                    // was not passed".
-                    throw RubyExceptions.CreateIOError("file descriptor was not passed");
-                }
-                return Marshal.ReadInt32(control, CmsgDataOffset);
-            } finally {
-                Marshal.FreeHGlobal(control);
-                Marshal.FreeHGlobal(iov);
-                Marshal.FreeHGlobal(payload);
-            }
-        }
-
-        private static void WriteCmsgHeader(IntPtr control, long length) {
-            for (int i = 0; i < CmsgSpace; i++) {
-                Marshal.WriteByte(control, i, 0);
-            }
-            Marshal.WriteIntPtr(control, 0, (IntPtr)length);
-            Marshal.WriteInt32(control, 8, SOL_SOCKET);
-            Marshal.WriteInt32(control, 12, SCM_RIGHTS);
-        }
-
-        private static void Require() {
-            if (!Posix.IsAvailable) {
-                throw new NotImplementedError("descriptor passing is not supported on this platform");
-            }
-        }
-    }
 }
 
 #endif

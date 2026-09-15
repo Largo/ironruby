@@ -220,7 +220,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("__ir_raw_socketpair", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ CreateSocketPair(RubyClass/*!*/ self, [DefaultProtocol]int type, [DefaultProtocol]int protocol) {
             int[] descriptors = new int[2];
-            if (UnixDescriptorPassing.socketpair(UnixAddressFamilyNumber, type, protocol, descriptors) != 0) {
+            if (PosixMessages.socketpair(UnixAddressFamilyNumber, type, protocol, descriptors) != 0) {
                 throw Posix.Error(Marshal.GetLastWin32Error(), null);
             }
             RubyArray result = new RubyArray(2);
@@ -590,6 +590,165 @@ namespace IronRuby.StandardLibrary.Sockets {
         ///      IO.select([s])
         ///      p s.recv_nonblock(10) #=> "aaa"
         /// </example>
+        #region sendmsg, recvmsg
+
+        /// <summary>
+        /// sendmsg(2). Answers [errno, bytes-sent] rather than raising, because the Errno classes
+        /// are reachable by number from Ruby (SystemCallError.new(message, errno)) and not from
+        /// here -- Posix.Error only knows the file-system errnos, and this path can report
+        /// EDESTADDRREQ, EMSGSIZE and EAGAIN, none of which it has.
+        ///
+        /// `controls` is an array of [level, type, data] triples, which is what
+        /// Socket::AncillaryData carries.
+        /// </summary>
+        [RubyMethod("__ir_raw_sendmsg")]
+        public static RubyArray/*!*/ SendMessage(RubyBasicSocket/*!*/ self, [NotNull]MutableString/*!*/ message,
+            [DefaultProtocol]int flags, MutableString address, RubyArray controls, bool nonBlocking) {
+
+            byte[] data = message.ConvertToBytes();
+            byte[] name = (address != null) ? address.ConvertToBytes() : null;
+            List<ControlMessage> ancillary = ToControlMessages(controls);
+            int descriptor = (int)self.Socket.Handle;
+
+            int errno = 0;
+            long sent;
+            if (nonBlocking) {
+                sent = WithoutBlocking(self.Socket, () => PosixMessages.Send(descriptor, data, flags, name, ancillary, out errno));
+            } else {
+                sent = SendWaiting(self.Socket, descriptor, data, flags, name, ancillary, ref errno);
+            }
+            return RubyOps.MakeArray2(errno, (int)sent);
+        }
+
+        /// <summary>
+        /// recvmsg(2). Answers [errno, data, sender-sockaddr, flags, controls]; `data` is nil when
+        /// the call failed, and `sender-sockaddr` is nil when the kernel reported no source address
+        /// at all, which is what a connected stream socket does.
+        /// </summary>
+        [RubyMethod("__ir_raw_recvmsg")]
+        public static RubyArray/*!*/ ReceiveMessage(RubyContext/*!*/ context, RubyBasicSocket/*!*/ self,
+            [DefaultProtocol]int maxMessageLength, [DefaultProtocol]int flags, [DefaultProtocol]int maxControlLength,
+            bool nonBlocking) {
+
+            Socket socket = self.Socket;
+            int descriptor = (int)socket.Handle;
+
+            int errno = 0;
+            ReceivedMessage received;
+            if (nonBlocking) {
+                received = WithoutBlocking(socket,
+                    () => PosixMessages.Receive(descriptor, maxMessageLength, flags, maxControlLength, out errno));
+            } else {
+                received = Blocking(socket, SelectMode.SelectRead,
+                    () => PosixMessages.Receive(descriptor, maxMessageLength, flags, maxControlLength, out errno));
+            }
+
+            RubyArray result = new RubyArray(5);
+            result.Add(errno);
+            if (received == null) {
+                result.Add(null);
+                result.Add(null);
+                result.Add(0);
+                result.Add(new RubyArray(0));
+                return result;
+            }
+
+            result.Add(MutableString.CreateBinary(received.Data));
+            result.Add(received.SenderAddress != null ? MutableString.CreateBinary(received.SenderAddress) : null);
+            result.Add(received.Flags);
+
+            RubyArray ancillary = new RubyArray(received.Controls.Count);
+            foreach (ControlMessage control in received.Controls) {
+                ancillary.Add(RubyOps.MakeArray3(control.Level, control.Type, MutableString.CreateBinary(control.Data)));
+            }
+            result.Add(ancillary);
+            return result;
+        }
+
+        private static List<ControlMessage> ToControlMessages(RubyArray controls) {
+            if (controls == null || controls.Count == 0) {
+                return null;
+            }
+            var result = new List<ControlMessage>(controls.Count);
+            foreach (object item in controls) {
+                RubyArray triple = item as RubyArray;
+                if (triple == null || triple.Count != 3) {
+                    throw RubyExceptions.CreateArgumentError("ancillary data must be [level, type, data]");
+                }
+                if (!(triple[0] is int) || !(triple[1] is int) || !(triple[2] is MutableString)) {
+                    throw RubyExceptions.CreateArgumentError("ancillary data must be [Integer, Integer, String]");
+                }
+                result.Add(new ControlMessage((int)triple[0], (int)triple[1], ((MutableString)triple[2]).ConvertToBytes()));
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// A blocking sendmsg(2) that a Ruby thread can still be killed out of.
+        ///
+        /// A thread parked inside the syscall is Running as far as the CLR is concerned, so
+        /// Thread#kill and Thread#raise -- which arrive as an Interrupt -- can never reach it, and
+        /// "10.times { sock.sendmsg(huge) }.should block_caller" hung the whole suite. The reading
+        /// side already solves this by waiting in poll slices; the writing side needs the same, and
+        /// additionally needs O_NONBLOCK so that the syscall itself returns rather than parking.
+        ///
+        /// O_NONBLOCK also turns a large write into a partial one, so what a blocking sendmsg would
+        /// have sent in one call is reassembled by sending the rest -- the ancillary data rides on
+        /// the first pass only, exactly as one sendmsg(2) would have carried it.
+        /// </summary>
+        private static long SendWaiting(Socket/*!*/ socket, int descriptor, byte[]/*!*/ data, int flags,
+            byte[] address, List<ControlMessage> controls, ref int errno) {
+
+            ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
+            bool wasBlocked = info.Blocked;
+            bool blocking = socket.Blocking;
+            info.Blocked = true;
+            try {
+                socket.Blocking = false;
+                int offset = 0;
+                while (true) {
+                    long sent = PosixMessages.Send(descriptor, data, offset, data.Length - offset, flags,
+                        address, offset == 0 ? controls : null, out errno);
+
+                    if (sent >= 0) {
+                        offset += (int)sent;
+                        if (sent == 0 || offset >= data.Length) {
+                            return offset;
+                        }
+                        continue;
+                    }
+                    if (errno != Posix.EWOULDBLOCK) {
+                        return (offset != 0) ? offset : -1;
+                    }
+                    errno = 0;
+                    while (!socket.Poll(PollSliceMicroseconds, SelectMode.SelectWrite)) {
+                        RubyUtils.CheckAsyncException();
+                    }
+                    RubyUtils.CheckAsyncException();
+                }
+            } finally {
+                socket.Blocking = blocking;
+                info.Blocked = wasBlocked;
+            }
+        }
+
+        /// <summary>
+        /// Runs a raw syscall with O_NONBLOCK set, which is how the *_nonblock family gets EAGAIN
+        /// out of the kernel instead of waiting. The poll-first wrapper is deliberately skipped:
+        /// the whole point is to not wait for readiness.
+        /// </summary>
+        private static TResult WithoutBlocking<TResult>(Socket/*!*/ socket, Func<TResult>/*!*/ operation) {
+            bool blocking = socket.Blocking;
+            try {
+                socket.Blocking = false;
+                return operation();
+            } finally {
+                socket.Blocking = blocking;
+            }
+        }
+
+        #endregion
+
         [RubyMethod("recv_nonblock")]
         public static MutableString/*!*/ ReceiveNonBlocking(ConversionStorage<int>/*!*/ fixnumCast, RubyBasicSocket/*!*/ self,
             [DefaultProtocol]int length, [DefaultParameterValue(null)]object flags) {
