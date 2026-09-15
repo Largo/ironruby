@@ -32,6 +32,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Win32API.Win32APILibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Json.JsonLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Date.DateLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Syslog.SyslogLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -14029,6 +14030,44 @@ namespace IronRuby.StandardLibrary.Date {
             DefineLibraryMethod(module, "ordinal", 0x21, 
                 0x00f00000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Double>, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Builtins.RubyClass, System.Int32, System.Int32, System.Int32, System.Int32, System.Object, System.Object, System.Object, IronRuby.StandardLibrary.Date.RubyDate>(IronRuby.StandardLibrary.Date.RubyDateTime.Ordinal)
+            );
+            
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Syslog {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class SyslogLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            
+            
+            DefineGlobalModule("Syslog", typeof(IronRuby.StandardLibrary.Syslog.SyslogOps), 0x00000008, null, LoadSyslog_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+        }
+        
+        private static void LoadSyslog_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__closelog__", 0x22, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule>(IronRuby.StandardLibrary.Syslog.SyslogOps.CloseLog)
+            );
+            
+            DefineLibraryMethod(module, "__openlog__", 0x22, 
+                0x00070002U, 
+                new Action<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Int32, System.Int32>(IronRuby.StandardLibrary.Syslog.SyslogOps.OpenLog)
+            );
+            
+            DefineLibraryMethod(module, "__setlogmask__", 0x22, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Int32>(IronRuby.StandardLibrary.Syslog.SyslogOps.SetLogMask)
+            );
+            
+            DefineLibraryMethod(module, "__syslog__", 0x22, 
+                0x00030004U, 
+                new Action<IronRuby.Builtins.RubyModule, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Syslog.SyslogOps.Log)
             );
             
         }
