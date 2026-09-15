@@ -50,6 +50,22 @@ namespace IronRuby.Compiler {
     }
     
     public static partial class Methods {
+        private static MethodInfo _CreateNotSymbolNorStringError, _CreateNotSymbolNorStringErrorFor;
+
+        public static MethodInfo/*!*/ CreateNotSymbolNorStringErrorFor {
+            get {
+                return _CreateNotSymbolNorStringErrorFor ?? (_CreateNotSymbolNorStringErrorFor = GetMethod(typeof(RubyOps),
+                    "CreateNotSymbolNorStringErrorFor", BindingFlags.Static, typeof(string)));
+            }
+        }
+
+        public static MethodInfo/*!*/ CreateNotSymbolNorStringError {
+            get {
+                return _CreateNotSymbolNorStringError ?? (_CreateNotSymbolNorStringError = GetMethod(typeof(RubyOps),
+                    "CreateNotSymbolNorStringError", BindingFlags.Static, typeof(RubyContext), typeof(object)));
+            }
+        }
+
         private static ConstructorInfo _RubyCallSignatureCtor;
         private static MethodInfo _WeakReference_get_Target, _IList_get_Item;
 

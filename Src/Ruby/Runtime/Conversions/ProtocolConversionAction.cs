@@ -566,6 +566,25 @@ namespace IronRuby.Runtime.Conversions {
         protected override string/*!*/ TargetTypeName { get { return "Symbol"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToSymbolValidator; } }
 
+        // MRI does not use the generic "no implicit conversion of X into Symbol" wording where a
+        // method name was expected; it names the offending value instead. The factory therefore
+        // needs the value, not just its class name, which is why both error paths are overridden
+        // rather than only ConversionErrorFactory.
+        private Expression/*!*/ MakeNotSymbolNorStringError(CallArguments/*!*/ args) {
+            return Methods.CreateNotSymbolNorStringError.OpCall(
+                AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)),
+                AstUtils.Box(args.TargetExpression)
+            );
+        }
+
+        protected override Expression/*!*/ MakeErrorExpression(CallArguments/*!*/ args, Expression/*!*/ targetClassNameConstant, Type/*!*/ resultType) {
+            return Ast.Throw(MakeNotSymbolNorStringError(args), resultType);
+        }
+
+        protected override void SetError(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, Expression/*!*/ targetClassNameConstant, Type/*!*/ resultType) {
+            metaBuilder.SetError(MakeNotSymbolNorStringError(args));
+        }
+
         internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             if (base.TryImplicitConversion(metaBuilder, args)) {
                 return true;
@@ -585,13 +604,8 @@ namespace IronRuby.Runtime.Conversions {
                 return true;
             }
 
-            if (target is int) {
-                metaBuilder.Result = Methods.ConvertRubySymbolToClrString.OpCall(
-                    AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)),
-                    AstUtils.Convert(targetExpression, typeof(int))
-                );
-                return true;
-            }
+            // Ruby 1.8 let an Integer stand for the Symbol with that id; 1.9 removed it, and MRI
+            // now reports one as "42 is not a symbol nor a string" like any other wrong type.
 
             return false;
         }

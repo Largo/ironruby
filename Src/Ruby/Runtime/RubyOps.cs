@@ -2926,6 +2926,25 @@ namespace IronRuby.Runtime {
             return RubyExceptions.CreateImplicitConversionError(fromType, toType);
         }
 
+        /// <summary>
+        /// A method name that is neither a Symbol nor a String gets its own wording in MRI, naming
+        /// the value rather than its class: "[] is not a symbol nor a string". Kernel#send,
+        /// #public_send, #respond_to? and Module#instance_method all report it that way.
+        /// </summary>
+        [Emitted]
+        public static Exception/*!*/ CreateNotSymbolNorStringError(RubyContext/*!*/ context, object obj) {
+            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", context.Inspect(obj).ToAsciiString());
+        }
+
+        /// <summary>
+        /// The same message where only the argument's class is known -- the overload resolver
+        /// rejects nil and friends without holding on to the value.
+        /// </summary>
+        [Emitted]
+        public static Exception/*!*/ CreateNotSymbolNorStringErrorFor(string/*!*/ description) {
+            return RubyExceptions.CreateTypeError("{0} is not a symbol nor a string", description);
+        }
+
         [Emitted] // ConvertToFixnumAction
         public static int ConvertBignumToFixnum(BigInteger/*!*/ bignum) {
             int fixnum;

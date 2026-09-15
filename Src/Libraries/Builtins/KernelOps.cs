@@ -1248,13 +1248,27 @@ namespace IronRuby.Builtins {
         public static bool RespondTo(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ respondToMissingStorage,
             RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ methodName, [Optional]bool includePrivate) {
 
-            if (context.ResolveMethod(self, methodName, includePrivate).Found) {
+            // Without include_private only *public* methods count. Resolving with the receiver's own
+            // class as the visibility context, which is what the bool overload does, also makes
+            // protected methods visible -- MRI has answered false for those since 2.0.
+            var visibility = includePrivate
+                ? VisibilityContext.AllVisible
+                : new VisibilityContext(RubyMethodAttributes.Public);
+
+            if (context.ResolveMethod(self, methodName, visibility).Found) {
                 return true;
             }
 
             // MRI asks respond_to_missing? before giving up, so that method_missing-backed methods can
             // advertise themselves. Note that the protocol-conversion binder has a fast path that bypasses
             // Kernel#respond_to? altogether, so a conversion method advertised this way is still not seen there.
+            //
+            // A BasicObject subclass that borrowed only #respond_to?, or a class that undefined
+            // #respond_to_missing?, has nothing to ask; MRI answers false rather than raising.
+            if (!context.ResolveMethod(self, "respond_to_missing?", VisibilityContext.AllVisible).Found) {
+                return false;
+            }
+
             var site = respondToMissingStorage.GetCallSite("respond_to_missing?", 2);
             return Protocols.IsTrue(site.Target(site, self, context.StringifyIdentifier(methodName),
                 ScriptingRuntimeHelpers.BooleanToObject(includePrivate)));

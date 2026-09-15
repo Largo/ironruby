@@ -837,6 +837,17 @@ namespace IronRuby.Runtime.Calls {
                                     return Methods.CreateArgumentsErrorForMissingBlock.OpCall();
                                 }
 
+                                // A CLR string parameter is how a Symbol is spelled in this tree, and
+                                // MRI reports a bad method name with its own wording rather than the
+                                // implicit-conversion one. nil reaches here rather than the conversion
+                                // action, which accepts it and leaves [NotNull] to do the rejecting.
+                                if (cr.To == typeof(string)) {
+                                    string argument = cr.GetArgumentTypeName(Binder);
+                                    return Methods.CreateNotSymbolNorStringErrorFor.OpCall(
+                                        AstUtils.Constant(argument == "NilClass" ? "nil" : argument)
+                                    );
+                                }
+
                                 string toType = GetConversionTargetName(cr.To);
 
                                 // An argument that failed to convert to a [DefaultProtocol] parameter type is
