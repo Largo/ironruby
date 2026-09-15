@@ -10707,6 +10707,11 @@ namespace IronRuby.StandardLibrary.Sockets {
             );
             #endif
             #if FEATURE_SYNC_SOCKETS
+            IronRuby.Builtins.RubyClass def6 = DefineGlobalClass("UNIXSocket", typeof(IronRuby.StandardLibrary.Sockets.UNIXSocket), 0x00000008, def3, LoadUNIXSocket_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Sockets.UNIXSocket>(IronRuby.StandardLibrary.Sockets.UNIXSocket.CreateUNIXSocket)
+            );
+            #endif
+            #if FEATURE_SYNC_SOCKETS
             IronRuby.Builtins.RubyClass def4 = DefineGlobalClass("TCPSocket", typeof(IronRuby.StandardLibrary.Sockets.TCPSocket), 0x00000008, def5, LoadTCPSocket_Instance, LoadTCPSocket_Class, null, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Object, System.Int32, IronRuby.StandardLibrary.Sockets.TCPSocket>(IronRuby.StandardLibrary.Sockets.TCPSocket.CreateTCPSocket), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Object, IronRuby.Builtins.MutableString, System.Object, IronRuby.StandardLibrary.Sockets.TCPSocket>(IronRuby.StandardLibrary.Sockets.TCPSocket.CreateTCPSocket)
@@ -10715,6 +10720,11 @@ namespace IronRuby.StandardLibrary.Sockets {
             #if FEATURE_SYNC_SOCKETS
             DefineGlobalClass("UDPSocket", typeof(IronRuby.StandardLibrary.Sockets.UDPSocket), 0x00000008, def5, LoadUDPSocket_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Sockets.UDPSocket>(IronRuby.StandardLibrary.Sockets.UDPSocket.CreateUDPSocket)
+            );
+            #endif
+            #if FEATURE_SYNC_SOCKETS
+            DefineGlobalClass("UNIXServer", typeof(IronRuby.StandardLibrary.Sockets.UNIXServer), 0x00000008, def6, LoadUNIXServer_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Sockets.UNIXServer>(IronRuby.StandardLibrary.Sockets.UNIXServer.CreateUNIXServer)
             );
             #endif
             #if FEATURE_SYNC_SOCKETS
@@ -10797,6 +10807,11 @@ namespace IronRuby.StandardLibrary.Sockets {
         
         #if FEATURE_SYNC_SOCKETS
         private static void LoadBasicSocket_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_raw_socketpair", 0x21, 
+                0x00030000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.CreateSocketPair)
+            );
+            
             DefineLibraryMethod(module, "do_not_reverse_lookup", 0x21, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyClass, System.Boolean>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.GetDoNotReverseLookup)
@@ -10938,19 +10953,9 @@ namespace IronRuby.StandardLibrary.Sockets {
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Sockets.RubySocket.PackInetSockAddr)
             );
             
-            DefineLibraryMethod(module, "pair", 0x21, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.RubySocket.CreateSocketPair)
-            );
-            
             DefineLibraryMethod(module, "sockaddr_in", 0x21, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Sockets.RubySocket.PackInetSockAddr)
-            );
-            
-            DefineLibraryMethod(module, "socketpair", 0x21, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.RubySocket.CreateSocketPair)
             );
             
             DefineLibraryMethod(module, "unpack_sockaddr_in", 0x21, 
@@ -11200,6 +11205,77 @@ namespace IronRuby.StandardLibrary.Sockets {
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.Sockets.RubyBasicSocket, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object, System.Int32>(IronRuby.StandardLibrary.Sockets.UDPSocket.Send), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Sockets.RubyBasicSocket, IronRuby.Builtins.MutableString, System.Object, System.Int32>(IronRuby.StandardLibrary.Sockets.UDPSocket.Send), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Sockets.RubyBasicSocket, IronRuby.Builtins.MutableString, System.Object, IronRuby.Builtins.MutableString, System.Int32>(IronRuby.StandardLibrary.Sockets.UDPSocket.Send)
+            );
+            
+        }
+        #endif
+        
+        #if FEATURE_SYNC_SOCKETS
+        private static void LoadUNIXServer_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "accept", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.UNIXServer, IronRuby.StandardLibrary.Sockets.UNIXSocket>(IronRuby.StandardLibrary.Sockets.UNIXServer.Accept)
+            );
+            
+            DefineLibraryMethod(module, "accept_nonblock", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.UNIXServer, IronRuby.StandardLibrary.Sockets.UNIXSocket>(IronRuby.StandardLibrary.Sockets.UNIXServer.AcceptNonBlocking)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.Sockets.UNIXServer, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Sockets.UNIXServer>(IronRuby.StandardLibrary.Sockets.UNIXServer.Reinitialize)
+            );
+            
+            DefineLibraryMethod(module, "listen", 0x11, 
+                0x00010000U, 
+                new Action<IronRuby.StandardLibrary.Sockets.UNIXServer, System.Int32>(IronRuby.StandardLibrary.Sockets.UNIXServer.Listen)
+            );
+            
+            DefineLibraryMethod(module, "sysaccept", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.UNIXServer, System.Int32>(IronRuby.StandardLibrary.Sockets.UNIXServer.SysAccept)
+            );
+            
+        }
+        #endif
+        
+        #if FEATURE_SYNC_SOCKETS
+        private static void LoadUNIXSocket_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_raw_recv_io", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.UNIXSocket, System.Int32>(IronRuby.StandardLibrary.Sockets.UNIXSocket.ReceiveDescriptor)
+            );
+            
+            DefineLibraryMethod(module, "__ir_raw_send_io", 0x11, 
+                0x00000002U, 
+                new Action<IronRuby.StandardLibrary.Sockets.UNIXSocket, IronRuby.Builtins.RubyIO>(IronRuby.StandardLibrary.Sockets.UNIXSocket.SendDescriptor)
+            );
+            
+            DefineLibraryMethod(module, "addr", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.UNIXSocket, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.UNIXSocket.GetLocalAddress)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.Sockets.UNIXSocket, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Sockets.UNIXSocket>(IronRuby.StandardLibrary.Sockets.UNIXSocket.Reinitialize)
+            );
+            
+            DefineLibraryMethod(module, "path", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.UNIXSocket, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Sockets.UNIXSocket.GetPath)
+            );
+            
+            DefineLibraryMethod(module, "peeraddr", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.UNIXSocket, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.UNIXSocket.GetPeerAddress)
+            );
+            
+            DefineLibraryMethod(module, "recvfrom", 0x11, 
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Sockets.UNIXSocket, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.UNIXSocket.ReceiveFrom), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Sockets.UNIXSocket, System.Int32, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.UNIXSocket.ReceiveFrom)
             );
             
         }

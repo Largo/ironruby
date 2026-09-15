@@ -473,10 +473,16 @@ class Addrinfo
   end
 
   # CRuby prints a bare IPv4 address as a dotted quad, an IPv6 one in brackets
-  # when it carries a port, and a relative UNIX path prefixed with "UNIX ".
+  # when it carries a port, and a relative UNIX path prefixed with "UNIX ".  The
+  # anonymous end of a connection or a socketpair has no path at all.
   def inspect_sockaddr
     if unix?
-      @unix_path.to_s.start_with?("/") ? @unix_path.dup : "UNIX #{@unix_path}"
+      path = @unix_path.to_s
+      if path.empty?
+        "empty-path-AF_UNIX-sockaddr"
+      else
+        path.start_with?("/") ? path.dup : "UNIX #{path}"
+      end
     elsif ipv6?
       @ip_port.to_i == 0 ? @ip_address.dup : "[#{@ip_address}]:#{@ip_port}"
     elsif ipv4?
@@ -713,7 +719,12 @@ class BasicSocket
     name = __ir_sockname_bytes
     raise SocketError, "unbound socket" if name.nil?
     addr = Addrinfo.__ir_from_sockaddr(name, __ir_socktype)
-    if addr.ipv4? && addr.ip_address == "0.0.0.0"
+    if addr.unix?
+      # An AF_UNIX socket that was never bound still has a two-byte sockaddr; what
+      # makes it unreachable is the empty path.
+      raise SocketError, "unbound Unix socket" if addr.unix_path.to_s.empty?
+      addr
+    elsif addr.ipv4? && addr.ip_address == "0.0.0.0"
       Addrinfo.__ir_new_ip("127.0.0.1", addr.ip_port, addr.socktype, addr.protocol, addr.pfamily)
     elsif addr.ipv6? && addr.ipv6_unspecified?
       Addrinfo.__ir_new_ip("::1", addr.ip_port, addr.socktype, addr.protocol, addr.pfamily)
@@ -809,7 +820,10 @@ class Socket
         accepted = server.accept
         if accepted.kind_of?(Array)
           sock = accepted[0]
-          yield sock, __ir_addrinfo_from_packed(sock.getpeername)
+          name = sock.getpeername
+          # __ir_addrinfo_from_packed only knows the IP families; a sockaddr_un is
+          # two bytes long and comes back nil from it.
+          yield sock, (__ir_addrinfo_from_packed(name) || Addrinfo.__ir_from_sockaddr(name, SOCK_STREAM))
         else
           yield accepted, accepted.remote_address
         end
@@ -2408,3 +2422,160 @@ class Socket
     nil
   end
 end
+
+# AF_UNIX sockets.  The C# layer answers the primitives -- connect, bind, accept,
+# socketpair(2) and SCM_RIGHTS descriptor passing -- and everything here is the
+# Ruby-shaped surface CRuby puts on top of them.
+class UNIXSocket
+  class << self
+    alias_method :__ir_raw_new, :new
+
+    # CRuby warns and ignores the block rather than raising; UNIXServer inherits
+    # this, which is why the message is built from the receiver.
+    def new(path, &block)
+      unless block.nil?
+        warn "warning: #{self}::new() does not take block; use #{self}::open() instead"
+      end
+      __ir_raw_new(path)
+    end
+
+    def open(path)
+      sock = __ir_raw_new(path)
+      return sock unless block_given?
+      begin
+        yield sock
+      ensure
+        sock.close unless sock.closed?
+      end
+    end
+
+    def socketpair(type = :STREAM, protocol = 0)
+      __ir_raw_socketpair(Socket.__ir_socktype_arg(type), Socket.__ir_protocol_arg(protocol))
+    end
+    alias_method :pair, :socketpair
+  end
+
+  # CRuby prints the path when the socket has one and the descriptor when it does
+  # not -- which is every client socket and both ends of a socketpair.
+  def inspect
+    name = path
+    name.empty? ? "#<#{self.class}:fd #{fileno}>" : "#<#{self.class}:#{name}>"
+  end
+
+  alias_method :__ir_raw_recvfrom, :recvfrom
+
+  # The third argument is an output buffer: CRuby fills it in place, answers that
+  # very object, and leaves its encoding alone.
+  def recvfrom(length, flags = nil, buffer = nil)
+    data, sender = flags.nil? ? __ir_raw_recvfrom(length) : __ir_raw_recvfrom(length, flags)
+    return [data, sender] if buffer.nil?
+    encoding = buffer.encoding
+    buffer.replace(data)
+    buffer.force_encoding(encoding)
+    [buffer, sender]
+  end
+
+  def send_io(io)
+    __ir_raw_send_io(io.respond_to?(:to_io) ? io.to_io : io)
+    nil
+  end
+
+  def recv_io(klass = IO, mode = nil)
+    fd = __ir_raw_recv_io
+    return fd if klass.nil?
+    mode.nil? ? klass.for_fd(fd) : klass.for_fd(fd, mode)
+  end
+end
+
+class UNIXServer
+  alias_method :__ir_void_listen, :listen
+
+  # CRuby's BasicSocket#listen returns 0.
+  def listen(backlog)
+    __ir_void_listen(backlog)
+    0
+  end
+
+  alias_method :__ir_raw_accept_nonblock, :accept_nonblock
+
+  def accept_nonblock(exception: true)
+    __ir_raw_accept_nonblock
+  rescue SocketError => e
+    case Socket.__ir_socket_error_code(e)
+    when "WouldBlock"
+      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      :wait_readable
+    else
+      raise
+    end
+  end
+end
+
+class Socket
+  class << self
+    # AF_UNIX is the only family socketpair(2) serves on Linux.
+    def socketpair(domain, type = nil, protocol = 0)
+      family = __ir_family_arg(domain)
+      unless family == Socket::AF_UNIX
+        raise ArgumentError, "unsupported address family: #{domain}"
+      end
+      __ir_raw_socketpair(__ir_socktype_arg(type.nil? ? :STREAM : type), __ir_protocol_arg(protocol))
+    end
+    alias_method :pair, :socketpair
+  end
+end
+
+class Socket
+  # Socket.unix and friends are Ruby-level in CRuby too, and answer Socket rather
+  # than UNIXSocket instances -- which is the whole reason they are written here
+  # against Socket#connect/#bind rather than delegating to UNIXSocket.
+  def self.unix(path) # :yield: socket
+    sock = Socket.new(AF_UNIX, SOCK_STREAM, 0)
+    begin
+      sock.connect(Socket.sockaddr_un(path))
+    rescue Exception
+      sock.close unless sock.closed?
+      raise
+    end
+    return sock unless block_given?
+    begin
+      yield sock
+    ensure
+      sock.close unless sock.closed?
+    end
+  end
+
+  def self.unix_server_socket(path) # :yield: socket
+    # A socket file left behind by a dead server would make bind(2) fail with
+    # EADDRINUSE for ever, so CRuby probes it and removes it if nothing answers.
+    if File.exist?(path)
+      begin
+        UNIXSocket.new(path).close
+      rescue Errno::ECONNREFUSED, Errno::ENOENT
+        File.unlink(path)
+      end
+    end
+
+    sock = Socket.new(AF_UNIX, SOCK_STREAM, 0)
+    begin
+      sock.bind(Socket.sockaddr_un(path))
+      sock.listen(SOMAXCONN)
+    rescue Exception
+      sock.close unless sock.closed?
+      raise
+    end
+    return sock unless block_given?
+    begin
+      yield sock
+    ensure
+      sock.close unless sock.closed?
+    end
+  end
+
+  def self.unix_server_loop(path, &block) # :yield: socket, client_addrinfo
+    unix_server_socket(path) { |server| accept_loop(server, &block) }
+  end
+end
+
+IronRubySocketErrors__.wrap(UNIXSocket, :recvfrom)
+IronRubySocketErrors__.wrap(UNIXServer, :accept, :sysaccept, :listen)

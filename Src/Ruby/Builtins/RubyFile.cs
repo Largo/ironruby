@@ -108,7 +108,17 @@ namespace IronRuby.Builtins {
             }
 
             if ((mode & IOMode.Truncate) != 0) {
-                stream.SetLength(0);
+                try {
+                    stream.SetLength(0);
+                } catch (IOException) {
+                    // O_TRUNC is defined to do nothing to anything that is not a regular file, but
+                    // ftruncate(2) on a character device reports EINVAL, which .NET raises -- so
+                    // File.open("/dev/null", "w") failed outright. A stream that already measures
+                    // zero has nothing to truncate either way; anything longer really did fail.
+                    if (stream.CanSeek && stream.Length != 0) {
+                        throw;
+                    }
+                }
             }
 
             return stream;

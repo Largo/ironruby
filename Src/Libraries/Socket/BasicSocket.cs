@@ -21,6 +21,7 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text;
 using System.Threading;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
@@ -209,7 +210,26 @@ namespace IronRuby.StandardLibrary.Sockets {
             return result;
         }
 
-        private static RubyBasicSocket/*!*/ CreateForClass(RubyClass/*!*/ self, Socket/*!*/ socket) {
+        /// <summary>
+        /// socketpair(2).  There is no .NET equivalent, and the usual emulation -- bind a listener
+        /// on a temporary path, connect, accept -- would give both ends a non-empty #path and leave
+        /// a file behind, neither of which matches CRuby.  Wrapping the raw descriptors instead
+        /// keeps them genuinely anonymous.  Defined on BasicSocket so that both Socket.pair and
+        /// UNIXSocket.pair, which answer instances of their own class, can reach it.
+        /// </summary>
+        [RubyMethod("__ir_raw_socketpair", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ CreateSocketPair(RubyClass/*!*/ self, [DefaultProtocol]int type, [DefaultProtocol]int protocol) {
+            int[] descriptors = new int[2];
+            if (UnixDescriptorPassing.socketpair(UnixAddressFamilyNumber, type, protocol, descriptors) != 0) {
+                throw Posix.Error(Marshal.GetLastWin32Error(), null);
+            }
+            RubyArray result = new RubyArray(2);
+            result.Add(CreateForClass(self, new Socket(new SafeSocketHandle((IntPtr)descriptors[0], true))));
+            result.Add(CreateForClass(self, new Socket(new SafeSocketHandle((IntPtr)descriptors[1], true))));
+            return result;
+        }
+
+        internal static RubyBasicSocket/*!*/ CreateForClass(RubyClass/*!*/ self, Socket/*!*/ socket) {
             Type type = self.GetUnderlyingSystemType();
             if (typeof(TCPServer).IsAssignableFrom(type)) {
                 return new TCPServer(self.Context, socket);
@@ -220,6 +240,12 @@ namespace IronRuby.StandardLibrary.Sockets {
             if (typeof(UDPSocket).IsAssignableFrom(type)) {
                 return new UDPSocket(self.Context, socket);
             }
+            if (typeof(UNIXServer).IsAssignableFrom(type)) {
+                return new UNIXServer(self.Context, socket);
+            }
+            if (typeof(UNIXSocket).IsAssignableFrom(type)) {
+                return new UNIXSocket(self.Context, socket);
+            }
             return new RubySocket(self.Context, socket);
         }
 
@@ -228,6 +254,9 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// an IPv4 endpoint to an IPv6 socket is an ArgumentError from .NET.
         /// </summary>
         internal static EndPoint/*!*/ AnyEndPoint(AddressFamily family) {
+            if (family == AddressFamily.Unix) {
+                return UNIXSocket.ToEndPoint("");
+            }
             return family == AddressFamily.InterNetworkV6
                 ? new IPEndPoint(IPAddress.IPv6Any, 0)
                 : new IPEndPoint(IPAddress.Any, 0);
@@ -240,6 +269,14 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// </summary>
         internal static EndPoint/*!*/ CreateEndPoint(MutableString/*!*/ sockaddr) {
             byte[] bytes = sockaddr.ConvertToBytes();
+            if (bytes.Length >= 2 && (bytes[0] | (bytes[1] << 8)) == UnixAddressFamilyNumber) {
+                // sockaddr_un: the path runs to the first NUL, or to the end if there is none.
+                int end = 2;
+                while (end < bytes.Length && bytes[end] != 0) {
+                    end++;
+                }
+                return UNIXSocket.ToEndPoint(Encoding.UTF8.GetString(bytes, 2, end - 2));
+            }
             if (bytes.Length < 8) {
                 throw RubyExceptions.CreateArgumentError("not a valid sockaddr");
             }
@@ -258,7 +295,13 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// The all-zero sockaddr CRuby's getsockname(2) reports for a socket that has never
         /// been bound.
         /// </summary>
+        /// <summary>AF_UNIX on Linux; unlike AF_INET6 this number is the same everywhere.</summary>
+        internal const int UnixAddressFamilyNumber = 1;
+
         private static MutableString/*!*/ EmptySocketAddress(AddressFamily family) {
+            if (family == AddressFamily.Unix) {
+                return MutableString.CreateBinary(new byte[] { UnixAddressFamilyNumber, 0 });
+            }
             bool v6 = family == AddressFamily.InterNetworkV6;
             byte[] bytes = new byte[v6 ? 28 : 16];
             int number = v6 ? 10 : 2;
@@ -652,8 +695,13 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         internal static RubyArray/*!*/ GetAddressArray(RubyContext/*!*/ context, EndPoint/*!*/ endPoint, bool doNotReverseLookup) {
+            if (endPoint.AddressFamily == AddressFamily.Unix) {
+                // A sockaddr_un has no port and no host, so the tuple is only two elements long.
+                return UNIXSocket.AddressArray(context, endPoint);
+            }
+
             RubyArray result = new RubyArray(4);
-            
+
             IPEndPoint ep = (IPEndPoint)endPoint;
             result.Add(MutableString.CreateAscii(AddressFamilyToString(ep.AddressFamily)));
             result.Add(ep.Port);

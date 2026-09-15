@@ -148,16 +148,6 @@ namespace IronRuby.StandardLibrary.Sockets {
             }
         }
 
-        /// <summary>
-        /// Returns a pair of connected sockets
-        /// [Not Implemented]
-        /// </summary>
-        [RubyMethod("socketpair", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("pair", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ CreateSocketPair(RubyClass/*!*/ self, object domain, object type, object protocol) {
-            throw new NotImplementedError();
-        }
-
         [RubyMethod("getnameinfo", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetNameInfo(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast, 
             RubyClass/*!*/ self, [NotNull]RubyArray/*!*/ hostInfo, [Optional]object flags) {
@@ -284,14 +274,15 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         [RubyMethod("bind")]
         public static int Bind(RubyContext/*!*/ context, RubySocket/*!*/ self, MutableString sockaddr) {
-            IPEndPoint ep = UnpackSockAddr(sockaddr);
-            self.Socket.Bind(ep);
+            // CreateEndPoint rather than UnpackSockAddr: the latter reads every sockaddr as an
+            // IPv4 one, so a sockaddr_un bound whatever four bytes happened to follow the family.
+            self.Socket.Bind(CreateEndPoint(sockaddr));
             return 0;
         }
 
         [RubyMethod("connect")]
         public static int Connect(RubyContext/*!*/ context, RubySocket/*!*/ self, MutableString sockaddr) {
-            IPEndPoint ep = UnpackSockAddr(sockaddr);
+            EndPoint ep = CreateEndPoint(sockaddr);
             Blocking(() => self.Socket.Connect(ep));
             return 0;
         }
