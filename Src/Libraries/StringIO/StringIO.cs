@@ -25,6 +25,8 @@ using System.IO;
 using System.Numerics;
 using System.Diagnostics;
 using System.Collections;
+using System.Collections.Generic;
+using System.Reflection;
 
 namespace IronRuby.StandardLibrary.StringIO {
     [RubyClass("StringIO", Inherits = typeof(object)), Includes(typeof(Enumerable))]
@@ -593,35 +595,107 @@ namespace IronRuby.StandardLibrary.StringIO {
             self._lineNumber = value;
         }
 
-        [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self) {
-            return Gets(scope, self, scope.RubyContext.InputSeparator, -1);
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self, DynamicNull separator) {
-            return Gets(scope, self, null, -1);
-        }
-
-        [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return Gets(scope, self, scope.RubyContext.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return Gets(scope, self, separatorOrLimit.String(), -1);
+        /// <summary>
+        /// A limit of zero would read an empty line for ever, so MRI refuses it where a reader
+        /// loops rather than looping - the same message IO#each_line gives.
+        /// </summary>
+        private static void CheckLineLimit(int limit) {
+            if (limit == 0) {
+                throw RubyExceptions.CreateArgumentError("invalid limit: 0");
             }
         }
 
+        /// <summary>
+        /// The argument shapes the four line readers share: (), (separator), (limit),
+        /// (separator, limit), with a chomp: keyword on any of them. A lone Integer is the limit
+        /// rather than the separator - the one shape that arity cannot tell apart - and a nil
+        /// separator means "read everything".
+        /// </summary>
+        private static void ParseLineArguments(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt, RubyContext/*!*/ context,
+            object first, object second, IDictionary<object, object> options,
+            out MutableString separator, out int limit, out bool chomp) {
+
+            Protocols.TryConvertToOptions(toHash, ref options, ref first, ref second);
+
+            separator = context.InputSeparator;
+            limit = -1;
+            chomp = false;
+
+            object value;
+            if (options != null && options.TryGetValue(context.CreateAsciiSymbol("chomp"), out value)) {
+                chomp = RubyOps.IsTrue(value);
+            }
+
+            if (second != Missing.Value) {
+                separator = (first == null) ? null : Protocols.CastToString(toStr, first);
+                limit = (second == null) ? -1 : Protocols.CastToFixnum(toInt, second);
+            } else if (first != Missing.Value) {
+                if (first == null) {
+                    separator = null;
+                } else if (first is int) {
+                    limit = (int)first;
+                } else if (first is MutableString) {
+                    separator = (MutableString)first;
+                } else {
+                    // to_str is tried before to_int, which is the order MRI tries them in
+                    MutableString asString = Protocols.TryCastToString(toStr, first);
+                    if (asString != null) {
+                        separator = asString;
+                    } else {
+                        limit = Protocols.CastToFixnum(toInt, first);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// chomp takes off the separator that was actually found: a nil separator read to the end
+        /// and has nothing to take off, and an empty one read a paragraph, whose separator is the
+        /// run of blank lines that ended it.
+        /// </summary>
+        private static MutableString Chomp(MutableString line, MutableString separator, bool chomp) {
+            if (!chomp || line == null || separator == null) {
+                return line;
+            }
+
+            int length = line.GetByteCount();
+            if (separator.IsEmpty) {
+                int end = length;
+                while (end > 0 && line.GetByte(end - 1) == '\n') {
+                    end--;
+                }
+                return (end == length) ? line : line.GetSlice(0, end);
+            }
+
+            int separatorLength = separator.GetByteCount();
+            if (separatorLength == 0 || length < separatorLength || !line.EndsWith(separator)) {
+                return line;
+            }
+            return line.GetSlice(0, length - separatorLength);
+        }
+
         [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, StringIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        public static MutableString Gets(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, StringIO/*!*/ self,
+            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
+            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
+
+            MutableString separator;
+            int limit;
+            bool chomp;
+            ParseLineArguments(toHash, toStr, toInt, scope.RubyContext, separatorOrLimit, limitOrOptions, options,
+                out separator, out limit, out chomp);
+
             var content = self.GetReadableContent();
 
-            // TODO: limit
-
             int position = self._position;
-            MutableString result = ReadLine(content, separator, ref position);
+            MutableString result = Chomp(ReadLine(content, separator, limit, ref position), separator, chomp);
             self._position = position;
 
+            // $_ is frame local, and the frame it belongs in is the caller's - which is why this
+            // is not wrapped in Ruby the way the chomp: option once was.
             scope.GetInnerMostClosureScope().LastInputLine = result;
             self._lineNumber++;
 
@@ -629,29 +703,14 @@ namespace IronRuby.StandardLibrary.StringIO {
         }
 
         [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, StringIO/*!*/ self) {
-            return ReadLine(scope, self, scope.RubyContext.InputSeparator, -1);
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, StringIO/*!*/ self, DynamicNull separator) {
-            return ReadLine(scope, self, null, -1);
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, StringIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return ReadLine(scope, self, scope.RubyContext.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return ReadLine(scope, self, separatorOrLimit.String(), -1);
-            }
-        }
-
-        [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, StringIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        public static MutableString/*!*/ ReadLine(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, StringIO/*!*/ self,
+            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
+            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
             // no dynamic call, modifies $_ scope variable:
-            MutableString result = Gets(scope, self, separator, limit);
+            MutableString result = Gets(toHash, toStr, toInt, scope, self, separatorOrLimit, limitOrOptions, options);
             if (result == null) {
                 throw new EOFError("end of file reached");
             }
@@ -660,36 +719,27 @@ namespace IronRuby.StandardLibrary.StringIO {
         }
 
         [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, StringIO/*!*/ self) {
-            return ReadLines(self, context.InputSeparator, -1);
-        }
+        public static RubyArray/*!*/ ReadLines(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyContext/*!*/ context, StringIO/*!*/ self,
+            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
+            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, StringIO/*!*/ self, DynamicNull separator) {
-            return ReadLines(self, null, -1);
-        }
+            MutableString separator;
+            int limit;
+            bool chomp;
+            ParseLineArguments(toHash, toStr, toInt, context, separatorOrLimit, limitOrOptions, options,
+                out separator, out limit, out chomp);
 
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, StringIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return ReadLines(self, context.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return ReadLines(self, separatorOrLimit.String(), -1);
-            }
-        }
-
-        [RubyMethod("readlines")]
-        public static RubyArray/*!*/ ReadLines(StringIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
             var content = self.GetReadableContent();
+            CheckLineLimit(limit);
             RubyArray result = new RubyArray();
-
-            // TODO: limit
 
             // no dynamic call, doesn't modify $_ scope variable:
             MutableString line;
             int position = self._position;
-            while ((line = ReadLine(content, separator, ref position)) != null) {
-                result.Add(line);
+            while ((line = ReadLine(content, separator, limit, ref position)) != null) {
+                result.Add(Chomp(line, separator, chomp));
                 self._lineNumber++;
             }
             self._position = position;
@@ -698,13 +748,24 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         private static readonly byte[] ParagraphSeparator = new byte[] { (byte)'\n', (byte)'\n' };
 
-        private static MutableString ReadLine(MutableString/*!*/ content, MutableString separator, ref int position) {
+        /// <summary>
+        /// One line: up to and including the separator, or <paramref name="limit"/> bytes,
+        /// whichever ends first - a negative limit means there is none. A nil separator reads to
+        /// the end of the string and an empty one reads a paragraph, skipping the blank lines in
+        /// front of it and ending at the blank line after it.
+        /// </summary>
+        private static MutableString ReadLine(MutableString/*!*/ content, MutableString separator, int limit, ref int position) {
             int length = content.GetByteCount();
             if (position >= length) {
                 return null;
             }
 
             int oldPosition = position;
+
+            if (limit == 0) {
+                // A limit of nothing answers an empty string and reads nothing, rather than nil.
+                return content.GetSlice(oldPosition, 0);
+            }
 
             if (separator == null) {
                 position = length;
@@ -714,11 +775,26 @@ namespace IronRuby.StandardLibrary.StringIO {
                     oldPosition++;
                 }
 
-                position = content.IndexOf(ParagraphSeparator, oldPosition);
-                position = (position != -1) ? position + 1 : length;
+                int terminator = content.IndexOf(ParagraphSeparator, oldPosition);
+                if (terminator == -1) {
+                    position = length;
+                } else {
+                    // A paragraph ends with the whole run of blank lines that closed it, not
+                    // with the first newline of that run: "a\n\n\nb" reads as "a\n\n\n".
+                    position = terminator + 1;
+                    while (position < length && content.GetByte(position) == '\n') {
+                        position++;
+                    }
+                }
             } else {
                 position = content.IndexOf(separator, oldPosition);
                 position = (position != -1) ? position + separator.Length : length;
+            }
+
+            // The limit counts bytes from where the line started and wins when it is the shorter
+            // of the two: gets(">", 2) answers "th", not "this>".
+            if (limit > 0 && position - oldPosition > limit) {
+                position = oldPosition + limit;
             }
 
             return content.GetSlice(oldPosition, position - oldPosition);
@@ -730,34 +806,36 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("each")]
         [RubyMethod("each_line")]
-        public static object EachLine(RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self) {
-            return EachLine(block, self, context.InputSeparator, -1);
-        }
+        public static object EachLine(ConversionStorage<IDictionary<object, object>>/*!*/ toHash,
+            ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self,
+            [Optional]object separatorOrLimit, [Optional]object limitOrOptions,
+            [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-        [RubyMethod("each")]
-        [RubyMethod("each_line")]
-        public static object EachLine(RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self, DynamicNull separator) {
-            return EachLine(block, self, null, -1);
-        }
+            MutableString separator;
+            int limit;
+            bool chomp;
+            ParseLineArguments(toHash, toStr, toInt, context, separatorOrLimit, limitOrOptions, options,
+                out separator, out limit, out chomp);
 
-        [RubyMethod("each")]
-        [RubyMethod("each_line")]
-        public static object EachLine(RubyContext/*!*/ context, BlockParam block, StringIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return EachLine(block, self, context.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return EachLine(block, self, separatorOrLimit.String(), -1);
-            }
-        }
-
-        [RubyMethod("each")]
-        [RubyMethod("each_line")]
-        public static object EachLine(BlockParam block, StringIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
-            // TODO: improve MSOps.EachLine
-            // TODO: limit
             var content = self.GetReadableContent();
-            var result = MutableStringOps.EachLine(block, content, separator, self._position);
-            return ReferenceEquals(result, content) ? self : result;
+            CheckLineLimit(limit);
+            if (block == null) {
+                throw RubyExceptions.NoBlockGiven();
+            }
+
+            // Reading through the stream rather than over the string, so that the position moves
+            // as the lines are yielded and the limit means the same thing it does to #gets.
+            MutableString line;
+            while ((line = ReadLine(content, separator, limit, ref self._position)) != null) {
+                self._lineNumber++;
+
+                object result;
+                if (block.Yield(Chomp(line, separator, chomp), out result)) {
+                    return result;
+                }
+            }
+            return self;
         }
 
         [RubyMethod("each_byte")]
@@ -776,7 +854,7 @@ namespace IronRuby.StandardLibrary.StringIO {
                     return result;
                 }
             }
-            return null;
+            return self;
         }
 
         #endregion

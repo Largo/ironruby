@@ -12209,11 +12209,8 @@ namespace IronRuby.StandardLibrary.StringIO {
             );
             
             DefineLibraryMethod(module, "each", 0x11, 
-                0x00000000U, 0x00000000U, 0x00040008U, 0x00060000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Runtime.Union<IronRuby.Builtins.MutableString, System.Int32>, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine), 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine)
+                0x00800000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine)
             );
             
             DefineLibraryMethod(module, "each_byte", 0x11, 
@@ -12222,11 +12219,8 @@ namespace IronRuby.StandardLibrary.StringIO {
             );
             
             DefineLibraryMethod(module, "each_line", 0x11, 
-                0x00000000U, 0x00000000U, 0x00040008U, 0x00060000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Runtime.Union<IronRuby.Builtins.MutableString, System.Int32>, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine), 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine)
+                0x00800000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object>(IronRuby.StandardLibrary.StringIO.StringIO.EachLine)
             );
             
             DefineLibraryMethod(module, "eof", 0x11, 
@@ -12270,11 +12264,8 @@ namespace IronRuby.StandardLibrary.StringIO {
             );
             
             DefineLibraryMethod(module, "gets", 0x11, 
-                0x00000000U, 0x00000000U, 0x00020004U, 0x00060000U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Gets), 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Gets), 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Runtime.Union<IronRuby.Builtins.MutableString, System.Int32>, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Gets), 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Gets)
+                0x00400000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Gets)
             );
             
             DefineLibraryMethod(module, "initialize", 0x12, 
@@ -12369,19 +12360,13 @@ namespace IronRuby.StandardLibrary.StringIO {
             );
             
             DefineLibraryMethod(module, "readline", 0x11, 
-                0x00000000U, 0x00000000U, 0x00020004U, 0x00060000U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLine), 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLine), 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Runtime.Union<IronRuby.Builtins.MutableString, System.Int32>, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLine), 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLine)
+                0x00400000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLine)
             );
             
             DefineLibraryMethod(module, "readlines", 0x11, 
-                0x00000000U, 0x00000000U, 0x00020004U, 0x00030000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLines), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLines), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Runtime.Union<IronRuby.Builtins.MutableString, System.Int32>, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLines), 
-                new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLines)
+                0x00400000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLines)
             );
             
             DefineLibraryMethod(module, "reopen", 0x11, 

@@ -113,8 +113,6 @@ class StringIO
     self
   end unless method_defined?(:each_codepoint)
 
-  alias_method :codepoints, :each_codepoint unless method_defined?(:codepoints)
-
   # A byte-order mark names the encoding, so there must be nothing named already; the stream
   # is left positioned after the mark, and answers nil when there is none to read.
   BOMS__ = [
@@ -161,4 +159,32 @@ class StringIO
   def write_nonblock(string, exception: true)
     syswrite(string)
   end unless method_defined?(:write_nonblock)
+end
+
+# The iterators raise without a block where MRI answers an Enumerator. Only that is wrapped
+# here: the separator, limit and chomp: arguments are the built-in's own, and #gets and
+# #readline are not wrapped at all because $_ belongs to the frame that called them and a
+# wrapper would set it in its own.
+class StringIO
+  # Each alias has to be taken before its redefinition, or it names the new method and the
+  # method calls itself until the stack runs out.
+  alias_method :__ir_each_byte__, :each_byte
+  private :__ir_each_byte__
+
+  def each_byte(&block)
+    return ::Enumerator.new { |y| each_byte { |b| y << b } } unless block
+    __ir_each_byte__(&block)
+  end
+
+  alias_method :__ir_each_line__, :each_line
+  private :__ir_each_line__
+
+  def each_line(*args, **opts, &block)
+    unless block
+      return ::Enumerator.new { |y| each_line(*args, **opts) { |l| y << l } }
+    end
+    __ir_each_line__(*args, **opts, &block)
+  end
+
+  alias_method :each, :each_line
 end
