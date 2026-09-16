@@ -265,6 +265,25 @@ namespace IronRuby.Builtins {
         [DllImport("libc", EntryPoint = "close", SetLastError = true)]
         private static extern int sys_close(int fd);
 
+        [DllImport("libcrypt.so.1", EntryPoint = "crypt", SetLastError = true)]
+        private static extern IntPtr sys_crypt(byte[] key, byte[] salt);
+
+        /// <summary>
+        /// crypt(3). Both arguments are C strings, so they are passed with the terminator the
+        /// caller is expected to have left room for. Null when the library is not there or the
+        /// salt is one it does not recognise - crypt sets errno and answers NULL for that.
+        /// </summary>
+        internal static string Crypt(byte[]/*!*/ key, byte[]/*!*/ salt) {
+            try {
+                IntPtr result = sys_crypt(key, salt);
+                return (result == IntPtr.Zero) ? null : Marshal.PtrToStringAnsi(result);
+            } catch (DllNotFoundException) {
+                return null;
+            } catch (EntryPointNotFoundException) {
+                return null;
+            }
+        }
+
         [DllImport("libc", EntryPoint = "fchdir", SetLastError = true)]
         private static extern int sys_fchdir(int fd);
 

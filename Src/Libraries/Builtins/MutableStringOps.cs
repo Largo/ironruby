@@ -4206,6 +4206,45 @@ namespace IronRuby.Builtins {
 
         #region sum
 
+        /// <summary>
+        /// The system's crypt(3). Both strings go to it as C strings, which is what settles the
+        /// two error cases: a NUL in the receiver would silently shorten the password, so MRI
+        /// refuses it, and a NUL in the salt merely ends the salt - leaving it too short, which
+        /// is the error that gets reported.
+        /// </summary>
+        [RubyMethod("crypt")]
+        public static MutableString/*!*/ Crypt(RubyContext/*!*/ context, MutableString/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ salt) {
+
+            byte[] key = self.ToByteArray();
+            if (Array.IndexOf(key, (byte)0) >= 0) {
+                throw RubyExceptions.CreateArgumentError("string contains null byte");
+            }
+
+            byte[] saltBytes = salt.ToByteArray();
+            int saltLength = Array.IndexOf(saltBytes, (byte)0);
+            if (saltLength < 0) {
+                saltLength = saltBytes.Length;
+            }
+            if (saltLength < 2) {
+                throw RubyExceptions.CreateArgumentError("salt too short (need >=2 bytes)");
+            }
+
+            var keyArg = new byte[key.Length + 1];
+            Buffer.BlockCopy(key, 0, keyArg, 0, key.Length);
+
+            var saltArg = new byte[saltLength + 1];
+            Buffer.BlockCopy(saltBytes, 0, saltArg, 0, saltLength);
+
+            string hashed = Posix.Crypt(keyArg, saltArg);
+            if (hashed == null) {
+                throw RubyExceptions.CreateEINVAL();
+            }
+            var result = MutableString.CreateAscii(hashed);
+            result.ForceEncoding(RubyEncoding.Binary);
+            return result;
+        }
+
         [RubyMethod("sum")]
         public static object GetChecksum(MutableString/*!*/ self, [DefaultProtocol, DefaultParameterValue(16)]int bitCount) {
             int length = self.GetByteCount();

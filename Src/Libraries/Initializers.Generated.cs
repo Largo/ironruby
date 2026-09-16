@@ -7488,6 +7488,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString[], System.Object>(IronRuby.Builtins.MutableStringOps.Count)
             );
             
+            DefineLibraryMethod(module, "crypt", 0x51, 
+                0x00020004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Crypt)
+            );
+            
             DefineLibraryMethod(module, "delete", 0x51, 
                 0x80010002U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Delete)
