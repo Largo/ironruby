@@ -108,7 +108,10 @@ namespace IronRuby.Runtime.Calls {
             // than nil-padding or dropping.  (A splatted call cannot be counted here, so it
             // keeps the old lenient behaviour.)
             if (!args.Signature.HasSplattedArgument) {
-                int actual = args.Signature.ArgumentCount;
+                // An assignment call carries its right-hand side in a slot of its own, which
+                // ArgumentCount does not count: o.x = 1 arrives here looking like no arguments
+                // at all, and o[1] = 2 like one.
+                int actual = args.Signature.ArgumentCount + (args.Signature.HasRhsArgument ? 1 : 0);
                 int arity = _lambda.Dispatcher.Arity;
                 int mandatory = arity >= 0 ? arity : -arity - 1;
                 int maximum = _lambda.Dispatcher.HasUnsplatParameter ? Int32.MaxValue : _lambda.Dispatcher.ParameterCount;
