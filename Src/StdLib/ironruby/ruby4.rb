@@ -2955,6 +2955,86 @@ class Integer
   end unless instance_method(:ceil).arity == -1
 end
 
+# Numeric's generic arithmetic is written in terms of the operators the subclass
+# supplies, and ruby/spec checks exactly which ones are called and in what order.
+# IronRuby's came from the 1.8 complex.rb or from the CLR numeric conversions,
+# so they went looking for a Float where MRI asks the object itself. Integer and
+# Float define their own, so what changes here is what a Numeric subclass
+# written in Ruby gets.
+class Numeric
+  def div(other)
+    ::Kernel.raise(::ZeroDivisionError, "divided by 0") if other == 0
+    (self / other).floor
+  end
+
+  def modulo(other)
+    self - other * div(other)
+  end
+  alias_method :%, :modulo
+
+  def divmod(other)
+    [div(other), modulo(other)]
+  end
+
+  # The modulo moved back across zero when the two point in opposite
+  # directions: remainder keeps the sign of the dividend where modulo keeps the
+  # sign of the divisor. The order the operands are asked about their sign is
+  # the order MRI asks in, which is what the specs watch.
+  def remainder(other)
+    x = self
+    unless other.is_a?(::Numeric)
+      x, other = other.coerce(self)
+    end
+
+    z = x % other
+    if z != 0 && ((x < 0 && other > 0) || (x > 0 && other < 0))
+      z - other
+    else
+      z
+    end
+  end
+
+  # Division that keeps everything it can: the receiver becomes a Rational and
+  # divides from there, so 5.quo(2) is (5/2) rather than 2.
+  def quo(other)
+    rational = to_r
+    unless rational.is_a?(::Rational)
+      ::Kernel.raise(::TypeError,
+        "can't convert #{self.class} to Rational (#{self.class}#to_r gives #{rational.class})")
+    end
+    rational / other
+  end
+
+  def arg
+    self < 0 ? ::Math::PI : 0
+  end
+  alias_method :angle, :arg
+  alias_method :phase, :arg
+
+  # A number is already what a copy of it would be.
+  def clone(freeze: nil)
+    unless freeze.nil? || freeze == true
+      ::Kernel.raise(::ArgumentError, "can't unfreeze #{self.class}")
+    end
+    self
+  end
+
+  def dup
+    self
+  end
+end
+
+class Float
+  # Float answers by the sign bit rather than by comparison, so -0.0 points the
+  # other way even though it is not less than zero, and a NaN points nowhere.
+  def arg
+    return self if nan?
+    (self < 0 || (zero? && (1.0 / self) < 0)) ? ::Math::PI : 0
+  end
+  alias_method :angle, :arg
+  alias_method :phase, :arg
+end
+
 if defined?(Rational) && Rational.instance_method(:round).arity == 0
   class Rational
     # Rational still comes from rational18.rb, which prints the 1.8 forms:
