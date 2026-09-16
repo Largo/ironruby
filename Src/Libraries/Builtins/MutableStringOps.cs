@@ -119,7 +119,9 @@ namespace IronRuby.Builtins {
                 return false;
             }
 
-            if (start + count > length) {
+            // In long arithmetic: a count near Int32.MaxValue would otherwise overflow past the
+            // clamp and ask for a string of that length.
+            if ((long)start + count > length) {
                 count = length - start;
             }
 
@@ -879,6 +881,42 @@ namespace IronRuby.Builtins {
             }
 
             return self.CreateDerived().Append(self, start, count).TaintBy(self);
+        }
+
+        /// <summary>
+        /// An index or a length too large for an Int32 still means something: MRI narrows it to a
+        /// C long, so a value out of range on the negative side simply misses the string and
+        /// answers nil, while one too large for a long is the RangeError it always was.
+        /// </summary>
+        private static int NarrowIndex(BigInteger value) {
+            if (value > Int64.MaxValue || value < Int64.MinValue) {
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into `long'");
+            }
+            if (value > Int32.MaxValue) {
+                return Int32.MaxValue;
+            }
+            if (value < Int32.MinValue) {
+                return Int32.MinValue;
+            }
+            return (int)value;
+        }
+
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static MutableString GetSubstring(MutableString/*!*/ self, [DefaultProtocol]int start, [NotNull]BigInteger/*!*/ count) {
+            return GetSubstring(self, start, NarrowIndex(count));
+        }
+
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static MutableString GetSubstring(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ start, [DefaultProtocol]int count) {
+            return GetSubstring(self, NarrowIndex(start), count);
+        }
+
+        [RubyMethod("[]")]
+        [RubyMethod("slice")]
+        public static MutableString GetSubstring(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ start, [NotNull]BigInteger/*!*/ count) {
+            return GetSubstring(self, NarrowIndex(start), NarrowIndex(count));
         }
 
         [RubyMethod("[]")]
