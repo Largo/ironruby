@@ -4013,6 +4013,14 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_sym")]
         [RubyMethod("intern")]
         public static RubySymbol/*!*/ ToSymbol(RubyContext/*!*/ context, MutableString/*!*/ self) {
+            // A symbol is read as characters, so bytes that are not valid in the string's own
+            // encoding cannot name one. Only where an ASCII byte means itself, though: a string
+            // of UTF-16 is not read that way and MRI takes it as it is.
+            if (self.Encoding.IsAsciiIdentity && self.ContainsInvalidCharacters()) {
+                throw new EncodingError(RubyExceptions.FormatMessage("invalid symbol in encoding {0} :{1}",
+                    self.Encoding.Name, Inspect(context, self).ToString()));
+            }
+
             return context.CreateSymbol(self);
         }
 
