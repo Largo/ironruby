@@ -486,6 +486,15 @@ namespace IronRuby.Builtins {
                 if (c >= 33 && c <= 60 || c >= 62 && c <= 126 || c == 9 || c == 32) {
                     stream.WriteByte(c);
                     lineLength++;
+
+                    // A tab or a space at the end of a line would not survive the journey - mail
+                    // transports are allowed to strip trailing whitespace - so a soft break goes
+                    // in behind it to make it no longer the last thing on the line.
+                    if ((c == 9 || c == 32) && i + 1 < length && str.GetByte(i + 1) == (byte)'\n') {
+                        stream.WriteByte((byte)'=');
+                        stream.WriteByte((byte)'\n');
+                        lineLength = 0;
+                    }
                 } else if (c == (byte)'\n') {
                     stream.WriteByte(c);
                     lineLength = 0;
