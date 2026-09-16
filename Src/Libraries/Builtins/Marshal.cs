@@ -465,6 +465,55 @@ namespace IronRuby.Builtins {
                 WriteStringValue(obj.Name, _context.GetIdentifierEncoding());
             }
 
+            /// <summary>
+            /// A Data instance, and the members its class was defined with. Data keeps its values
+            /// in instance variables named after the members, but it is dumped the way a Struct is
+            /// - an 'S' record of member-name/value pairs - so the names go out without the '@'
+            /// and the instance variables are not dumped again alongside them.
+            /// </summary>
+            private bool TryGetDataMembers(object obj, out RubyArray members) {
+                members = null;
+
+                object dataClass;
+                if (!_context.ObjectClass.TryGetConstant(null, "Data", out dataClass)) {
+                    return false;
+                }
+
+                var theClass = _context.GetClassOf(obj) as RubyClass;
+                var dataBase = dataClass as RubyClass;
+                if (theClass == null || dataBase == null || !theClass.IsSubclassOf(dataBase)) {
+                    return false;
+                }
+
+                for (RubyClass klass = theClass; klass != null; klass = klass.SuperClass) {
+                    object names;
+                    if (_context.TryGetInstanceVariable(klass, "@__data_members__", out names)) {
+                        members = names as RubyArray;
+                        return members != null;
+                    }
+                }
+                return false;
+            }
+
+            private void WriteData(object/*!*/ obj, RubyArray/*!*/ members) {
+                _writer.Write((byte)'S');
+                RubyClass theClass = _context.GetClassOf(obj);
+                TestForAnonymous(theClass);
+                WriteModuleName(theClass);
+                WriteInt32(members.Count);
+
+                var identifierEncoding = _context.GetIdentifierEncoding();
+                foreach (object member in members) {
+                    string name = member.ToString();
+                    object value;
+                    if (!_context.TryGetInstanceVariable(obj, "@" + name, out value)) {
+                        value = null;
+                    }
+                    WriteSymbol(name, identifierEncoding);
+                    WriteAnObject(value);
+                }
+            }
+
             private void WriteStruct(RubyStruct/*!*/ obj) {
                 WriteSubclassData(obj, typeof(RubyStruct));
                 _writer.Write((byte)'S');
@@ -598,12 +647,20 @@ namespace IronRuby.Builtins {
                             RubyEncoding encoding = GetMarshalEncoding(obj);
                             string[] instanceNames = _context.GetInstanceVariableNames(obj);
 
+                            RubyArray dataMembers;
+                            bool isData = TryGetDataMembers(obj, out dataMembers);
+                            if (isData) {
+                                // The members are the instance variables, and the 'S' record is
+                                // already carrying them.
+                                instanceNames = ArrayUtils.EmptyStrings;
+                            }
+
                             // An 'o' record (a plain object, or a Range) carries its instance data inline
                             // rather than behind an "I" wrapper.
                             bool isObjectRecord =
                                 !(obj is double || obj is float || obj is BigInteger || obj is MutableString ||
                                   obj is RubyArray || obj is Hash || obj is RubyRegex || obj is RubyModule ||
-                                  obj is RubyStruct);
+                                  obj is RubyStruct || isData);
 
                             bool writeInstanceData = !isObjectRecord &&
                                 (instanceNames.Length > 0 || NeedsEncodingIVar(encoding));
@@ -634,6 +691,8 @@ namespace IronRuby.Builtins {
                                 WriteClass((RubyClass)obj);
                             } else if (obj is RubyModule) {
                                 WriteModule((RubyModule)obj);
+                            } else if (isData) {
+                                WriteData(obj, dataMembers);
                             } else if (obj is RubyStruct) {
                                 WriteStruct((RubyStruct)obj);
                             } else if (obj is Range) {
@@ -1101,14 +1160,19 @@ namespace IronRuby.Builtins {
                 return result;
             }
 
-            private RubyStruct/*!*/ ReadStruct(int objectRef) {
-                RubyStruct obj = (UnmarshalNewObject() as RubyStruct);
-                if (obj == null) {
-                    throw RubyExceptions.CreateArgumentError("non-initialized struct");
-                }
+            private object/*!*/ ReadStruct(int objectRef) {
+                object instance = UnmarshalNewObject();
                 if (objectRef >= 0) {
-                    _objects[objectRef] = obj;
+                    _objects[objectRef] = instance;
                 }
+
+                // Data shares the Struct record, so which of the two this is can only be told from
+                // the class that was named in it.
+                if (!(instance is RubyStruct)) {
+                    return ReadData(instance);
+                }
+
+                RubyStruct obj = (RubyStruct)instance;
 
                 var names = obj.GetNames();
                 int count = ReadInt32();
@@ -1126,6 +1190,20 @@ namespace IronRuby.Builtins {
                 }
 
                 return obj;
+            }
+
+            /// <summary>
+            /// The members of an 'S' record whose class is a Data go back into the instance
+            /// variables named after them, and the result is frozen - every Data is.
+            /// </summary>
+            private object/*!*/ ReadData(object/*!*/ instance) {
+                int count = ReadInt32();
+                for (int i = 0; i < count; i++) {
+                    string name = ReadIdentifier();
+                    Context.SetInstanceVariable(instance, "@" + name, ReadAnObject(false));
+                }
+                Context.FreezeObject(instance);
+                return instance;
             }
 
             private object/*!*/ ReadInstanced(int objectRef) {
