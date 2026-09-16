@@ -148,8 +148,28 @@ namespace IronRuby.StandardLibrary.Sockets {
             }
         }
 
+        /// <summary>
+        /// getservbyport(3): the reverse of getservbyname, off the same built-in table.
+        /// </summary>
+        [RubyMethod("getservbyport", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ GetServiceByPort(RubyClass/*!*/ self, [DefaultProtocol]int port,
+            [DefaultProtocol, Optional]MutableString protocol) {
+
+            if (protocol == null) {
+                protocol = _DefaultProtocol;
+            }
+
+            ServiceName service = SearchForService(port, protocol);
+            if (service != null) {
+                return MutableString.Create(service.Name);
+            }
+
+            throw SocketErrorOps.Create(MutableString.CreateAscii(
+                String.Format("no such service for port {0}/{1}", port, protocol.ToString())));
+        }
+
         [RubyMethod("getnameinfo", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ GetNameInfo(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast, 
+        public static RubyArray/*!*/ GetNameInfo(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
             RubyClass/*!*/ self, [NotNull]RubyArray/*!*/ hostInfo, [Optional]object flags) {
             if (hostInfo.Count < 3 || hostInfo.Count > 4) {
                 throw RubyExceptions.CreateArgumentError("First parameter must be a 3 or 4 element array");

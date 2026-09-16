@@ -110,6 +110,12 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             Socket socket = new Socket(listeningInterface.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             try {
+                // CRuby's TCPServer sets SO_REUSEADDR before bind(2), but that cannot be done
+                // through .NET: SocketOptionName.ReuseAddress is translated to SO_REUSEPORT on
+                // Unix (Windows' SO_REUSEADDR means what Unix calls SO_REUSEPORT), and setting
+                // *that* lets a second TCPServer bind a port another one is already listening
+                // on -- so "raises Errno::EADDRINUSE when address is already in use" breaks.
+                // Doing it properly needs a libc setsockopt, see the note in BasicSocket.cs.
                 socket.Bind(new IPEndPoint(listeningInterface, ConvertToPortNum(stringCast, fixnumCast, port)));
                 socket.Listen(128);
             } catch (SocketException e) {

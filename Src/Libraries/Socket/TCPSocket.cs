@@ -15,6 +15,7 @@
 
 #if FEATURE_SYNC_SOCKETS
 
+using System;
 using System.Net.Sockets;
 using Microsoft.Scripting.Runtime;
 using IronRuby.Builtins;
@@ -98,22 +99,30 @@ namespace IronRuby.StandardLibrary.Sockets {
         private static Socket/*!*/ CreateSocket(MutableString remoteHost, int port, MutableString localHost, int localPort) {
             // Resolve first: the address family has to follow the address, not be pinned to
             // InterNetwork, or TCPSocket.new("::1", port) can never work and every IPv6-guarded
-            // spec in the tree silently skips.
-            IPAddress address = remoteHost != null ? GetHostAddress(remoteHost.ConvertToString()) : IPAddress.Loopback;
-            Socket socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-            try {
-                if (localHost != null || localPort != 0) {
-                    IPAddress localAddress = localHost != null
-                        ? GetHostAddress(localHost.ConvertToString(), address.AddressFamily)
-                        : (address.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any);
-                    socket.Bind(new IPEndPoint(localAddress, localPort));
+            // spec in the tree silently skips.  A host can resolve to several addresses -- and a
+            // nil host means the loopback of *either* family -- so connect(2) is tried against
+            // each in turn, the way CRuby walks the getaddrinfo list, rather than giving up on
+            // the first one.
+            IPAddress[] addresses = GetHostAddresses(remoteHost != null ? remoteHost.ConvertToString() : null);
+
+            Exception failure = null;
+            foreach (IPAddress address in addresses) {
+                Socket socket = new Socket(address.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+                try {
+                    if (localHost != null || localPort != 0) {
+                        IPAddress localAddress = localHost != null
+                            ? GetHostAddress(localHost.ConvertToString(), address.AddressFamily)
+                            : (address.AddressFamily == AddressFamily.InterNetworkV6 ? IPAddress.IPv6Any : IPAddress.Any);
+                        socket.Bind(new IPEndPoint(localAddress, localPort));
+                    }
+                    socket.Connect(address, port);
+                    return socket;
+                } catch (SocketException e) {
+                    socket.Close();
+                    failure = SocketErrorOps.ToRubyException(e);
                 }
-                socket.Connect(address, port);
-            } catch (SocketException e) {
-                socket.Close();
-                throw SocketErrorOps.ToRubyException(e);
             }
-            return socket;
+            throw failure;
         }
 
         [RubyMethod("gethostbyname", RubyMethodAttributes.PublicSingleton)]

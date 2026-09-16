@@ -74,8 +74,17 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static int Connect(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast, 
             UDPSocket/*!*/ self, object hostname, object port) {
 
-            string strHostname = ConvertToHostString(stringCast, hostname);
             int iPort = ConvertToPortNum(stringCast, fixnumCast, port);
+            if (hostname == null) {
+                // getaddrinfo(3) with a null node resolves to the loopback; ConvertToHostString
+                // turned nil into an empty name the resolver answers with EAI_NONAME.
+                IPAddress loopback = (self.Socket.AddressFamily == AddressFamily.InterNetworkV6)
+                    ? IPAddress.IPv6Loopback : IPAddress.Loopback;
+                EndPoint ep = new IPEndPoint(loopback, iPort);
+                Blocking(() => self.Socket.Connect(ep));
+                return 0;
+            }
+            string strHostname = ConvertToHostString(stringCast, hostname);
             Blocking(() => self.Socket.Connect(strHostname, iPort));
             return 0;
         }
