@@ -312,6 +312,12 @@ namespace IronRuby.Builtins {
                     return _pattern.Encoding;
                 }
 
+                // Regexp::FIXEDENCODING asks for the source's encoding to be kept, ASCII only
+                // or not: that is the whole of what it says.
+                if ((_options & RubyRegexOptions.FixedEncoding) != 0) {
+                    return _pattern.Encoding;
+                }
+
                 var encodingOptions = _options & RubyRegexOptions.EncodingMask;
                 if (encodingOptions == RubyRegexOptions.NONE && _pattern.IsAscii()) {
                     // é is six ASCII characters that compile to one UTF-8 character, so the

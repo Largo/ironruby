@@ -118,10 +118,11 @@ namespace IronRuby.Builtins {
 
             var regex = obj as RubyRegex;
             if (regex != null) {
-                var pattern = regex.Pattern;
-                if (!pattern.IsFrozen) {
-                    pattern.ForceEncoding(encoding);
-                }
+                // A regexp freezes the pattern it holds, so the encoding goes on a copy that
+                // replaces it rather than on the pattern itself.
+                var pattern = regex.Pattern.Clone();
+                pattern.ForceEncoding(encoding);
+                regex.Set(pattern, regex.Options);
             }
         }
 
@@ -265,10 +266,11 @@ namespace IronRuby.Builtins {
                 WriteSubclassData(value, typeof(RubyRegex));
                 _writer.Write((byte)'/');
                 WriteStringValue(value.Pattern);
-                // MRI only stores the three matching flags plus its "encoding is fixed" bit, which it
-                // sets whenever the source is not ASCII only.
+                // MRI only stores the three matching flags plus its "encoding is fixed" bit, which
+                // it sets for any regexp that can only match one encoding - whether that is because
+                // the source is not ASCII only or because Regexp::FIXEDENCODING said so.
                 int flags = (int)(value.Options & (RubyRegexOptions.IgnoreCase | RubyRegexOptions.Extended | RubyRegexOptions.Multiline));
-                if (!value.Pattern.IsAscii()) {
+                if (value.IsFixedEncoding) {
                     flags |= (int)RubyRegexOptions.FIXED;
                 }
                 _writer.Write((byte)flags);
@@ -976,8 +978,15 @@ namespace IronRuby.Builtins {
 
             private RubyRegex/*!*/ ReadRegex() {
                 MutableString pattern = ReadString();
-                int flags = _reader.ReadByte();
-                return new RubyRegex(pattern, (RubyRegexOptions)flags);
+                var flags = (RubyRegexOptions)_reader.ReadByte();
+
+                // The bit MRI writes at 0x10 means "this regexp's encoding is fixed", which is
+                // Regexp::FIXEDENCODING here; 0x10 on its own is /n, which says the opposite.
+                if ((flags & RubyRegexOptions.FIXED) != 0) {
+                    flags = (flags & ~RubyRegexOptions.FIXED) | RubyRegexOptions.FixedEncoding;
+                }
+
+                return new RubyRegex(pattern, flags);
             }
 
             private RubyArray/*!*/ ReadArray(RubyArray/*!*/ result) {
