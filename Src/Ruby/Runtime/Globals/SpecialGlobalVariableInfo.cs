@@ -28,6 +28,33 @@ namespace IronRuby.Runtime {
             _id = id;
         }
 
+        /// <summary>
+        /// $&lt; is ARGF, which the standard library defines in Ruby - later than the context is
+        /// built, so the constant is read when the variable is asked for rather than cached at
+        /// startup. The object the input provider was given stays as the answer for a context
+        /// that has no standard library loaded at all.
+        /// </summary>
+        private static object/*!*/ GetArgf(RubyContext/*!*/ context) {
+            object argf;
+            if (context.ObjectClass.TryGetConstant(null, "ARGF", out argf)) {
+                return argf;
+            }
+            return context.InputProvider.Singleton;
+        }
+
+        /// <summary>
+        /// $FILENAME is documented as ARGF.filename and has to be asked of it, since ARGF is what
+        /// knows which file is being read.
+        /// </summary>
+        private static object GetCurrentFileName(RubyContext/*!*/ context) {
+            object argf;
+            if (context.ObjectClass.TryGetConstant(null, "ARGF", out argf)) {
+                var site = context.ArgfFileNameSite;
+                return site.Target(site, argf);
+            }
+            return context.InputProvider.CurrentFileName;
+        }
+
         public override object GetValue(RubyContext/*!*/ context, RubyScope scope) {
             switch (_id) {
                 
@@ -58,10 +85,10 @@ namespace IronRuby.Runtime {
 
                 // input:
                 case GlobalVariableId.InputContent:
-                    return context.InputProvider.Singleton;
+                    return GetArgf(context);
 
                 case GlobalVariableId.InputFileName:
-                    return context.InputProvider.CurrentFileName;
+                    return GetCurrentFileName(context);
 
                 case GlobalVariableId.LastInputLine:
                     return (scope != null) ? scope.GetInnerMostClosureScope().LastInputLine : null;

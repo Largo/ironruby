@@ -48,7 +48,8 @@ namespace IronRuby.Builtins {
             }
 
             _commandLineArguments = args;
-            _lastInputLineNumber = 1;
+            // $. counts the lines read so far, and nothing has been read yet.
+            _lastInputLineNumber = 0;
             _currentFileIndex = -1;
             _singleton = new object();
             _defaultMode = IOMode.ReadOnly;

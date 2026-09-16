@@ -12962,3 +12962,5 @@ class Random
     limit.nil? ? rand : rand(limit)
   end unless respond_to?(:random_number)
 end
+
+require "argf"

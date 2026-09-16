@@ -274,9 +274,16 @@ namespace IronRuby.Hosting {
                 return;
             }
 
+            if (arg.StartsWith("-i", StringComparison.Ordinal)) {
+                // -i[extension] edits in place; an extension keeps the original as a backup and no
+                // extension throws it away. The empty string is a real answer here, so the option
+                // has to carry it rather than being absent.
+                LanguageSetup.Options["InplaceMode"] = arg.Substring(2);
+                return;
+            }
+
             if (arg.StartsWith("-C", StringComparison.Ordinal) ||
                 arg.StartsWith("-F", StringComparison.Ordinal) ||
-                arg.StartsWith("-i", StringComparison.Ordinal) ||
                 arg.StartsWith("-T", StringComparison.Ordinal) ||
                 arg.StartsWith("-x", StringComparison.Ordinal)) {
                 throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));

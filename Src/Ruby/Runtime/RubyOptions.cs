@@ -35,6 +35,7 @@ namespace IronRuby.Runtime {
         private readonly bool _autoSplit;
         private readonly bool _chopLines;
         private readonly string _inputRecordSeparator;
+        private readonly string _inplaceMode;
         private readonly int _frozenStringLiteral;
         private readonly bool _debugFrozenStringLiteral;
         private readonly int _backtraceLimit;
@@ -146,6 +147,14 @@ namespace IronRuby.Runtime {
             get { return _inputRecordSeparator; }
         }
 
+        /// <summary>
+        /// The backup extension given by -i, or null when the option was not used. The empty
+        /// string means in-place editing with no backup kept, which is not the same as null.
+        /// </summary>
+        public string InplaceMode {
+            get { return _inplaceMode; }
+        }
+
         public string MainFile {
             get { return _mainFile; }
         }
@@ -214,6 +223,7 @@ namespace IronRuby.Runtime {
             _autoSplit = GetOption(options, "AutoSplit", false);
             _chopLines = GetOption(options, "ChopLines", false);
             _inputRecordSeparator = GetOption<string>(options, "InputRecordSeparator", null);
+            _inplaceMode = GetOption<string>(options, "InplaceMode", null);
             _frozenStringLiteral = GetOption(options, "FrozenStringLiteral", 0);
             _debugFrozenStringLiteral = GetOption(options, "DebugFrozenStringLiteral", false);
             _backtraceLimit = GetOption(options, "BacktraceLimit", -1);

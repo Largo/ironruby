@@ -734,6 +734,13 @@ namespace IronRuby.Runtime {
 
                 obj.SetConstantNoMutateNoLock("ARGV", _inputProvider.CommandLineArguments);
 
+                if (_options.InplaceMode != null) {
+                    // CRuby reports -i's extension as $-i, which is where ARGF looks for it.
+                    _globalVariables["-i"] = new GlobalVariableInfo(
+                        MutableString.Create(_options.InplaceMode, GetPathEncoding()).Freeze()
+                    );
+                }
+
                 // Hash
                 // SCRIPT_LINES__
             }
@@ -1830,6 +1837,22 @@ namespace IronRuby.Runtime {
         /// falling back to #inspect for an anonymous one. Both are user-overridable, so they are
         /// called rather than read off the module.
         /// </summary>
+        /// <summary>
+        /// Asks ARGF which file it is reading; $FILENAME is defined as that answer.
+        /// </summary>
+        internal CallSite<Func<CallSite, object, object>>/*!*/ ArgfFileNameSite {
+            get {
+                if (_argfFileName == null) {
+                    Interlocked.CompareExchange(
+                        ref _argfFileName,
+                        CallSite<Func<CallSite, object, object>>.Create(RubyCallAction.Make(this, "filename", RubyCallSignature.WithImplicitSelf(0))),
+                        null
+                    );
+                }
+                return _argfFileName;
+            }
+        }
+
         internal string/*!*/ GetModuleDisplayName(RubyModule/*!*/ owner) {
             if (_moduleName == null) {
                 Interlocked.CompareExchange(
@@ -3693,6 +3716,7 @@ namespace IronRuby.Runtime {
 
         private CallSite<Func<CallSite, object, object, object>> _respondTo;
         private CallSite<Func<CallSite, object, object>> _moduleName;
+        private CallSite<Func<CallSite, object, object>> _argfFileName;
         private CallSite<Func<CallSite, object, object>> _toInt;
         private CallSite<Func<CallSite, object, object>> _toStr;
 
