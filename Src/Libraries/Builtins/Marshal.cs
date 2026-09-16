@@ -432,13 +432,13 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError("_dump() must return string");
                 }
 
-                // MRI prefers the instance variables of the string _dump returned (that is how Time
-                // carries its zone and offset); only if it has none does it fall back to the object's.
+                // What gets written are the instance variables of the string _dump returned, and
+                // never the object's own: a class that wants those kept copies them onto the string
+                // itself, which is what Time does with its zone, its offset and anything else it
+                // was carrying.
                 string[] resultIVars = _context.GetInstanceVariableNames(dumpResult);
                 RubyEncoding resultEncoding = GetMarshalEncoding(dumpResult);
-                bool hasResultIVars = resultIVars.Length > 0 || NeedsEncodingIVar(resultEncoding);
-                string[] objectIVars = hasResultIVars ? null : _context.GetInstanceVariableNames(obj);
-                bool hasIVars = hasResultIVars || objectIVars.Length > 0;
+                bool hasIVars = resultIVars.Length > 0 || NeedsEncodingIVar(resultEncoding);
 
                 if (hasIVars) {
                     _writer.Write((byte)'I');
@@ -448,10 +448,8 @@ namespace IronRuby.Builtins {
                 TestForAnonymous(theClass);
                 WriteModuleName(theClass);
                 WriteStringValue(dumpResult);
-                if (hasResultIVars) {
+                if (hasIVars) {
                     WriteIVars(dumpResult, resultIVars, resultEncoding);
-                } else if (hasIVars) {
-                    WriteIVars(obj, objectIVars, null);
                 }
             }
 
