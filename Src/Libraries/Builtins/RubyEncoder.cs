@@ -1270,6 +1270,7 @@ namespace IronRuby.Builtins {
             // With buffer: the result is appended to the string given, which is what comes
             // back, keeping its own encoding.  '@' then addresses the buffer from its start.
             MutableString basis = buffer ?? MutableString.CreateBinary();
+            RubyArray pointers = null;
             using (MutableStringStream stream = new MutableStringStream(basis)) {
                 stream.Position = basis.GetByteCount();
                 int i = 0;
@@ -1467,6 +1468,32 @@ namespace IronRuby.Builtins {
                             stream.Position -= len3;
                             break;
 
+                        case 'p':
+                        case 'P': {
+                            // MRI writes the address of the string and remembers the string
+                            // itself alongside the result, so that unpacking can find it again.
+                            // An address into a managed heap would mean nothing, so what goes
+                            // into the bytes is a one-based index into that list of strings.
+                            // The list travels as an instance variable, which is what makes it
+                            // survive #dup and not survive a round trip through a Symbol -
+                            // exactly the rule MRI's associated-object table follows.
+                            count = 1;
+                            object pointerArg = GetPackArg(self, i);
+                            long pointer = 0;
+                            if (pointerArg != null) {
+                                MutableString target = ToMutableString(stringCast, stream, pointerArg);
+                                if (target != null) {
+                                    if (pointers == null) {
+                                        pointers = new RubyArray();
+                                    }
+                                    pointers.Add(target);
+                                    pointer = pointers.Count;
+                                }
+                            }
+                            WritePointer(stream, pointer);
+                            break;
+                        }
+
                         case 'x':
                             count = 0;
                             int len4 = directive.Count.HasValue ? directive.Count.Value : 0;
@@ -1483,6 +1510,9 @@ namespace IronRuby.Builtins {
                 }
                 stream.SetLength(stream.Position);
                 MutableString result = stream.String.TaintBy(format);
+                if (pointers != null) {
+                    stringCast.Context.SetInstanceVariable(result, PackedPointersVariable, pointers);
+                }
                 if (buffer == null) {
                     if (encodingInfo == 1) {
                         result.ForceEncoding(RubyEncoding.Ascii);
@@ -1492,6 +1522,52 @@ namespace IronRuby.Builtins {
                 }
                 return result;
             }
+        }
+
+        /// <summary>Where a packed string keeps the strings its 'p' and 'P' pointers refer to.</summary>
+        private const string PackedPointersVariable = "@__packed_pointers__";
+
+        private static void WritePointer(Stream/*!*/ stream, long pointer) {
+            byte[] bytes = BitConverter.GetBytes(pointer);
+            stream.Write(bytes, 0, IntPtr.Size);
+        }
+
+        private static long ReadPointer(MutableString/*!*/ data, ref int index) {
+            long pointer = 0;
+            for (int i = 0; i < IntPtr.Size; i++) {
+                pointer |= (long)data.GetByte(index + i) << (8 * i);
+            }
+            index += IntPtr.Size;
+            return pointer;
+        }
+
+        /// <summary>
+        /// The string a packed pointer refers to. It can only be found through the list the
+        /// packing left on that same string, so bytes that merely look like a pointer - a copy
+        /// made through a Symbol, say - have nothing to point at and MRI says so.
+        /// </summary>
+        private static object Dereference(RubyContext/*!*/ context, MutableString/*!*/ self, long pointer, FormatDirective directive) {
+            if (pointer == 0) {
+                return null;
+            }
+
+            object stored;
+            RubyArray pointers;
+            if (!context.TryGetInstanceVariable(self, PackedPointersVariable, out stored) ||
+                (pointers = stored as RubyArray) == null ||
+                pointer < 1 || pointer > pointers.Count) {
+                throw RubyExceptions.CreateArgumentError("no associated pointer");
+            }
+
+            var target = (MutableString)pointers[(int)pointer - 1];
+            if (directive.Directive == 'p') {
+                return target.Clone();
+            }
+
+            // 'P' takes a length in characters, and never more than the string holds - MRI stops
+            // at the NUL that ends the C string it thinks it is reading.
+            int count = directive.Count ?? target.GetCharCount();
+            return target.GetSlice(0, Math.Min(count, target.GetCharCount()));
         }
 
         private static MutableString ToMutableString(ConversionStorage<MutableString>/*!*/ stringCast, MutableStringStream/*!*/ stream, object value) {
@@ -1538,11 +1614,11 @@ namespace IronRuby.Builtins {
 
         #region Unpack
 
-        public static RubyArray/*!*/ Unpack(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format) {
-            return Unpack(self, format, 0);
+        public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format) {
+            return Unpack(context, self, format, 0);
         }
 
-        public static RubyArray/*!*/ Unpack(MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset) {
+        public static RubyArray/*!*/ Unpack(RubyContext/*!*/ context, MutableString/*!*/ self, [NotNull]MutableString/*!*/ format, int offset) {
             RubyArray result = new RubyArray(1 + self.Length / 2);
 
             // TODO: encodings
@@ -1572,6 +1648,16 @@ namespace IronRuby.Builtins {
                     case 'B':
                     case 'b':
                         result.Add(ReadBits(self, directive.Count, ref position, directive.Directive == 'b'));
+                        break;
+
+                    case 'p':
+                    case 'P':
+                        if (length - position < IntPtr.Size) {
+                            result.Add(null);
+                            position = length;
+                            break;
+                        }
+                        result.Add(Dereference(context, self, ReadPointer(self, ref position), directive));
                         break;
 
                     case 'c':

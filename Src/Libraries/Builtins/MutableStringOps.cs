@@ -4159,7 +4159,7 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ format,
             [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            return RubyEncoder.Unpack(self, format, GetUnpackOffset(fixnumCast, context, self, options));
+            return RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options));
         }
 
         [RubyMethod("unpack1")]
@@ -4167,7 +4167,7 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ format,
             [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
-            var result = RubyEncoder.Unpack(self, format, GetUnpackOffset(fixnumCast, context, self, options));
+            var result = RubyEncoder.Unpack(context, self, format, GetUnpackOffset(fixnumCast, context, self, options));
             return result.Count > 0 ? result[0] : null;
         }
 
