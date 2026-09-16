@@ -65,7 +65,9 @@ namespace IronRuby.Builtins {
 
             if (shift < 0) {
                 if (shift == Int32.MinValue) {
-                    return 0;
+                    // Negating this one overflows, and the shift is further than any value
+                    // reaches anyway.
+                    return ShiftedOutOfRange(Math.Sign(self), false);
                 } else {
                     return RightShift(self, -shift);
                 }
@@ -93,7 +95,7 @@ namespace IronRuby.Builtins {
         public static object/*!*/ RightShift(int self, int shift) {
             if (shift < 0) {
                 if (shift == Int32.MinValue) {
-                    throw RubyExceptions.CreateRangeError("bignum too big to convert into long");
+                    return ShiftedOutOfRange(Math.Sign(self), true);
                 } else {
                     return LeftShift(self, -shift);
                 }
@@ -104,6 +106,41 @@ namespace IronRuby.Builtins {
             } else {
                 return self >> shift;
             }
+        }
+
+        /// <summary>
+        /// A shift wider than any machine word still has an answer. Shifting towards the least
+        /// significant end for ever leaves 0, or -1 for a negative value, since the sign bit keeps
+        /// arriving; zero stays zero whichever way it goes. Only a non-zero value shifted that far
+        /// the *other* way has nowhere to go, and MRI calls that a RangeError rather than trying
+        /// to allocate the result.
+        /// </summary>
+        internal static object/*!*/ ShiftedOutOfRange(int sign, bool towardsMoreSignificantBits) {
+            if (sign == 0) {
+                return Zero;
+            }
+            if (towardsMoreSignificantBits) {
+                throw RubyExceptions.CreateRangeError("shift width too big");
+            }
+            return sign < 0 ? MinusOne : Zero;
+        }
+
+        [RubyMethod("<<")]
+        public static object/*!*/ LeftShift(int self, [NotNull]BigInteger/*!*/ shift) {
+            int small;
+            if (shift.AsInt32(out small)) {
+                return LeftShift(self, small);
+            }
+            return ShiftedOutOfRange(Math.Sign(self), shift.Sign > 0);
+        }
+
+        [RubyMethod(">>")]
+        public static object/*!*/ RightShift(int self, [NotNull]BigInteger/*!*/ shift) {
+            int small;
+            if (shift.AsInt32(out small)) {
+                return RightShift(self, small);
+            }
+            return ShiftedOutOfRange(Math.Sign(self), shift.Sign < 0);
         }
 
         #endregion
@@ -228,6 +265,30 @@ namespace IronRuby.Builtins {
             } else {
                 return result;
             }
+        }
+
+
+        /// <summary>
+        /// Anything that is not already an Integer is coerced, not converted: MRI asks the operand
+        /// for #coerce and insists on getting Integers back, so a Float is a TypeError and #to_int
+        /// is never called - a Rational does not get quietly truncated into a bit pattern.
+        /// </summary>
+        [RubyMethod("&")]
+        public static object BitwiseAnd(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
+            object/*!*/ self, object other) {
+            return Protocols.CoerceAndApplyBitwise(coercionStorage, binaryOpSite, "&", self, other);
+        }
+
+        [RubyMethod("|")]
+        public static object BitwiseOr(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
+            object/*!*/ self, object other) {
+            return Protocols.CoerceAndApplyBitwise(coercionStorage, binaryOpSite, "|", self, other);
+        }
+
+        [RubyMethod("^")]
+        public static object Xor(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
+            object/*!*/ self, object other) {
+            return Protocols.CoerceAndApplyBitwise(coercionStorage, binaryOpSite, "^", self, other);
         }
 
         #endregion

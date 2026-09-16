@@ -223,9 +223,22 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ MakeCoercionError(RubyContext/*!*/ context, object self, object other) {
-            string selfClass = MessageTypeName(context.GetClassOf(self).Name);
-            string otherClass = MessageTypeName(context.GetClassOf(other).Name);
-            return CreateTypeError("{0} can't be coerced into {1}", selfClass, otherClass);
+            return CreateTypeError("{0} can't be coerced into {1}",
+                CoercionOperandName(context, self), MessageTypeName(context.GetClassOf(other).Name));
+        }
+
+        /// <summary>
+        /// What a failed coercion calls the operand. MRI's coerce_failed shows the value itself
+        /// for the things whose inspect *is* their identity - nil, true, false, a Symbol, an
+        /// Integer, a Float - and the class for everything else, so "3.0 can't be coerced into
+        /// Integer" but "String can't be coerced into Integer".
+        /// </summary>
+        private static string/*!*/ CoercionOperandName(RubyContext/*!*/ context, object value) {
+            if (value == null || value is bool || value is int || value is double ||
+                value is BigInteger || value is RubySymbol) {
+                return context.Inspect(value).ToString();
+            }
+            return MessageTypeName(context.GetClassOf(value).Name);
         }
 
         public static Exception/*!*/ CreateReturnTypeError(string/*!*/ className, string/*!*/ methodName, string/*!*/ returnTypeName) {

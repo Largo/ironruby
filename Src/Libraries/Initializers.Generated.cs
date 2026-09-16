@@ -3796,12 +3796,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "&", 0x51, 
-                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U}, 
+                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.And), 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.And), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.ClrInteger.And), 
                 new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.BitwiseAnd), 
-                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseAnd)
+                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseAnd), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseAnd)
             );
             
             DefineLibraryMethod(module, "%", 0x51, 
@@ -3814,12 +3815,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "^", 0x51, 
-                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U}, 
+                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Xor), 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Xor), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.ClrInteger.Xor), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseXor), 
-                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseXor)
+                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseXor), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Xor)
             );
             
             DefineLibraryMethod(module, "+", 0x51, 
@@ -3843,11 +3845,12 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "<<", 0x51, 
-                0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 
+                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U}, 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift), 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift), 
-                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift)
+                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift), 
+                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.LeftShift)
             );
             
             DefineLibraryMethod(module, "<=", 0x51, 
@@ -3897,20 +3900,22 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, ">>", 0x51, 
-                0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 
+                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U}, 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.RightShift), 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.RightShift), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.ClrInteger.RightShift), 
-                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.RightShift)
+                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.RightShift), 
+                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.RightShift)
             );
             
             DefineLibraryMethod(module, "|", 0x51, 
-                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U}, 
+                new[] { 0x00000000U, 0x00000002U, 0x00020000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseOr), 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseOr), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseOr), 
                 new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.BitwiseOr), 
-                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseOr)
+                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseOr), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.BitwiseOr)
             );
             
             DefineLibraryMethod(module, "~", 0x51, 

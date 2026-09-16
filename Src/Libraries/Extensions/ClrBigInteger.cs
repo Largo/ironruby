@@ -790,8 +790,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("<<")]
         public static object/*!*/ LeftShift(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            // Dodgy error message but matches MRI
-            throw RubyExceptions.CreateRangeError("bignum too big to convert into long");
+            int small;
+            if (other.AsInt32(out small)) {
+                return LeftShift(self, small);
+            }
+            return ClrInteger.ShiftedOutOfRange(self.Sign, other.Sign > 0);
         }
 
         /// <summary>
@@ -825,10 +828,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod(">>")]
         public static object/*!*/ RightShift(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            if (self.IsNegative()) {
-                return -1;
+            int small;
+            if (other.AsInt32(out small)) {
+                return RightShift(self, small);
             }
-            return 0;
+            return ClrInteger.ShiftedOutOfRange(self.Sign, other.Sign < 0);
         }
 
         /// <summary>

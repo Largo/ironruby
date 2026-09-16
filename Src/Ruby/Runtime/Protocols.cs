@@ -492,11 +492,49 @@ namespace IronRuby.Runtime {
             return null;
         }
 
+        /// <summary>
+        /// MRI's rb_num_coerce_bit: the bitwise operators coerce their operand the way the
+        /// arithmetic ones do, and then insist that both halves of the coerced pair are Integers.
+        /// A Float coerces perfectly well and is still not something to take the bits of, so what
+        /// is checked is the pair rather than the operand.
+        /// </summary>
+        public static object CoerceAndApplyBitwise(BinaryOpStorage/*!*/ coercionStorage,
+            BinaryOpStorage/*!*/ binaryOpStorage, string/*!*/ binaryOp, object self, object other) {
+
+            IList pair;
+            if (!TryCoerce(coercionStorage, self, other, out pair) || !IsIntegerValue(pair[0]) || !IsIntegerValue(pair[1])) {
+                throw RubyExceptions.MakeCoercionError(coercionStorage.Context, other, self);
+            }
+
+            var opSite = binaryOpStorage.GetCallSite(binaryOp);
+            return opSite.Target(opSite, pair[0], pair[1]);
+        }
+
+        private static bool IsIntegerValue(object value) {
+            return value is int || value is BigInteger;
+        }
+
         private static bool TryCoerceAndApply(
             BinaryOpStorage/*!*/ coercionStorage,
             BinaryOpStorage/*!*/ binaryOpStorage, string/*!*/ binaryOp,
             object self, object other, out object result) {
 
+            IList coercedValues;
+            if (!TryCoerce(coercionStorage, self, other, out coercedValues)) {
+                result = null;
+                return false;
+            }
+
+            var opSite = binaryOpStorage.GetCallSite(binaryOp);
+            result = opSite.Target(opSite, coercedValues[0], coercedValues[1]);
+            return true;
+        }
+
+        /// <summary>
+        /// The pair <paramref name="other"/> answers when asked to coerce itself with
+        /// <paramref name="self"/>, or false when it has no #coerce at all.
+        /// </summary>
+        private static bool TryCoerce(BinaryOpStorage/*!*/ coercionStorage, object self, object other, out IList pair) {
             var coerce = coercionStorage.GetCallSite("coerce", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
 
             IList coercedValues;
@@ -510,7 +548,7 @@ namespace IronRuby.Runtime {
                 // user-written #coerce propagates to the caller unchanged. IronRuby used to
                 // `catch (SystemException)` here, which is the 1.8 behaviour and silently turned
                 // every bug in a #coerce into a TypeError.
-                result = null;
+                pair = null;
                 return false;
             }
 
@@ -520,8 +558,7 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.CreateTypeError("coerce must return [x, y]");
             }
 
-            var opSite = binaryOpStorage.GetCallSite(binaryOp);
-            result = opSite.Target(opSite, coercedValues[0], coercedValues[1]);
+            pair = coercedValues;
             return true;
         }
 
