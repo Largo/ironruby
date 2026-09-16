@@ -14,3 +14,15 @@
 # ****************************************************************************
 
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.BigDecimal'
+
+class BigDecimal
+  NAN = BigDecimal("NaN")
+  INFINITY = BigDecimal("Infinity")
+
+  # A BigDecimal is immutable, so there is nothing for #dup to copy. MRI defines the two as
+  # one method, which is what the spec checks with instance_method(:clone) == instance_method(:dup).
+  def dup
+    self
+  end
+  alias_method :clone, :dup
+end

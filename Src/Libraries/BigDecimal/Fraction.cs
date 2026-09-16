@@ -413,7 +413,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
             if (digits <= 0) {
                 uint digit = (uint)(fraction.IsZero ? 0 : 1);
-                if (RoundDigit(sign, digit, 0, mode) > 0) {
+                if (RoundDigit(sign, digit, 0, false, mode) > 0) {
                     offset = 1-digits;
                     return One;
                 } else {
@@ -457,7 +457,23 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             } else {
                 lastDigit = 0;
             }
-            int round = RoundDigit(sign, lastDigit, secondLastDigit, mode);
+            // Whether anything non-zero survives past the first discarded digit. Half-way
+            // rounding needs it to tell 1.5 from 1.51, and the directed modes need it to tell
+            // 1.0 from 1.001 - without it both of those looked like an exact tie or an exact
+            // stop, and rounded the wrong way.
+            bool hasRemainder = false;
+            if (lastWordIndex < fraction.MaxPrecision && (fraction._words[lastWordIndex] % lastFactor) != 0) {
+                hasRemainder = true;
+            } else {
+                for (int i = lastWordIndex + 1; i < fraction.MaxPrecision; i++) {
+                    if (fraction._words[i] != 0) {
+                        hasRemainder = true;
+                        break;
+                    }
+                }
+            }
+
+            int round = RoundDigit(sign, lastDigit, secondLastDigit, hasRemainder, mode);
 
             // Create a temporary fraction used to cause the rounding in the original
             result = new Fraction(lastWordIndex+1);
@@ -479,11 +495,17 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         #endregion
 
         #region Private Helpers
-        private static int RoundDigit(int sign, uint lastDigit, uint secondLastDigit, BigDecimal.RoundingModes roundingMode) {
+        /// <param name="lastDigit">the first digit being discarded</param>
+        /// <param name="secondLastDigit">the last digit being kept</param>
+        /// <param name="hasRemainder">whether any non-zero digit follows lastDigit</param>
+        private static int RoundDigit(int sign, uint lastDigit, uint secondLastDigit, bool hasRemainder,
+            BigDecimal.RoundingModes roundingMode) {
+
+            bool discardsSomething = lastDigit != 0 || hasRemainder;
             int result = -1;
             switch (roundingMode) {
                 case BigDecimal.RoundingModes.Up:
-                    if (lastDigit != 0) {
+                    if (discardsSomething) {
                         result = 1;
                     }
                     break;
@@ -493,24 +515,23 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                     }
                     break;
                 case BigDecimal.RoundingModes.HalfDown:
-                    if (lastDigit > 5) {
+                    // A tie goes towards zero; anything past the tie does not.
+                    if (lastDigit > 5 || (lastDigit == 5 && hasRemainder)) {
                         result = 1;
                     }
                     break;
                 case BigDecimal.RoundingModes.HalfEven:
-                    if (lastDigit > 5) {
-                        result = 1;
-                    } else if ((lastDigit == 5) && (secondLastDigit % 2 != 0)) {
+                    if (lastDigit > 5 || (lastDigit == 5 && (hasRemainder || secondLastDigit % 2 != 0))) {
                         result = 1;
                     }
                     break;
                 case BigDecimal.RoundingModes.Ceiling:
-                    if (sign == 1 && lastDigit != 0) {
+                    if (sign == 1 && discardsSomething) {
                         result = 1;
                     }
                     break;
                 case BigDecimal.RoundingModes.Floor:
-                    if (sign == -1 && lastDigit != 0) {
+                    if (sign == -1 && discardsSomething) {
                         result = 1;
                     }
                     break;

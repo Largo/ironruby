@@ -116,7 +116,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             Infinity = 1,
             Underflow = 4,
             Overflow = 1,
-            ZeroDivide = 1,
+            ZeroDivide = 16,
             All = 255
         }
 
@@ -2475,7 +2475,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         private void AppendEngineeringStyle(StringBuilder/*!*/ sb, int separateAt) {
             sb.Append("0.");
             AppendDigits(sb, _fraction.ToString(), 0, Digits, separateAt);
-            sb.Append("E");
+            sb.Append("e");
             sb.AppendFormat("{0}", this._exponent);
         }
 

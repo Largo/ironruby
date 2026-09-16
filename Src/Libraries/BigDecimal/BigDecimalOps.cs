@@ -140,17 +140,14 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         [RubyMethod("mode", RubyMethodAttributes.PublicSingleton)]
-        public static int Mode(RubyContext/*!*/ context, RubyClass/*!*/ self, int mode, object value) {
+        public static int Mode(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, RubyClass/*!*/ self, int mode, object value) {
             if (value == null) {
                 return Mode(context, self, mode);
             }
             if (mode == ROUND_MODE) {
-                if (value is int) {
-                    GetConfig(context).RoundingMode = (BigDecimal.RoundingModes)value;
-                    return (int)value;
-                } else {
-                    throw RubyExceptions.CreateUnexpectedTypeError(context, value, "Integer");
-                }
+                var rounding = ToRoundingMode(fixnumCast, context, value);
+                GetConfig(context).RoundingMode = rounding;
+                return (int)rounding;
             } else {
                 if (value is bool) {
                     BigDecimal.Config config = GetConfig(context);
@@ -291,17 +288,13 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #endregion
 
+        /// <summary>
+        /// Since the bigdecimal gem's 3.0, #inspect is just #to_s - the old
+        /// #&lt;BigDecimal:0x...,'0.1E1',9(9)&gt; form is gone.
+        /// </summary>
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, BigDecimal/*!*/ self) {
-            MutableString str = MutableString.CreateMutable(context.GetIdentifierEncoding());
-            str.AppendFormat("#<{0}:", context.GetClassOf(self).Name);
-            RubyUtils.AppendFormatHexObjectId(str, RubyUtils.GetObjectId(context, self));
-            str.AppendFormat(",'{0}',{1}({2})>", 
-                self.ToString(10),
-                self.PrecisionDigits,
-                self.MaxPrecisionDigits
-            );
-            return str;
+            return ToString(self);
         }
 
         #region coerce
@@ -313,7 +306,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyMethod("coerce")]
         public static RubyArray/*!*/ Coerce(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            return RubyOps.MakeArray2(other, ToFloat(context, self));
+            return RubyOps.MakeArray2(BigDecimal.Create(GetConfig(context), other), self);
         }
 
         [RubyMethod("coerce")]
@@ -350,6 +343,9 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         [RubyMethod("to_i")]
         [RubyMethod("to_int")]
         public static object ToI(RubyContext/*!*/ context, BigDecimal/*!*/ self) {
+            if (!BigDecimal.IsFinite(self)) {
+                throw CreateSpecialValueError(self);
+            }
             return BigDecimal.ToInteger(GetConfig(context), self);
         }
 
@@ -734,7 +730,9 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         #region >
 
         private static object GreaterThenResult(int? comparisonResult) {
-            return (comparisonResult.HasValue) ? ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.Value > 0) : null;
+            // NaN makes the comparison unordered; <=> answers nil for that but the relational
+            // operators are all simply false.
+            return ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.HasValue && comparisonResult.Value > 0);
         }
 
         [RubyMethod(">")]
@@ -760,7 +758,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyMethod(">")]
         public static object GreaterThan(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, BigDecimal/*!*/ self, object other) {
-            return Protocols.TryCoerceAndApply(coercionStorage, comparisonStorage, ">", self, other); 
+            return Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, ">", self, other); 
         }
 
         #endregion
@@ -768,7 +766,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         #region >=
 
         private static object GreaterThanOrEqualResult(int? comparisonResult) {
-            return (comparisonResult.HasValue) ? ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.Value >= 0) : null;
+            return ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.HasValue && comparisonResult.Value >= 0);
         }
 
         [RubyMethod(">=")]
@@ -794,7 +792,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         [RubyMethod(">=")]
         public static object GreaterThanOrEqual(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, 
             BigDecimal/*!*/ self, object other) {
-            return Protocols.TryCoerceAndApply(coercionStorage, comparisonStorage, ">=", self, other);
+            return Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, ">=", self, other);
         }
 
         #endregion
@@ -802,7 +800,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         #region <
 
         private static object LessThenResult(int? comparisonResult) {
-            return (comparisonResult.HasValue) ? ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.Value < 0) : null;
+            return ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.HasValue && comparisonResult.Value < 0);
         }
 
         [RubyMethod("<")]
@@ -828,7 +826,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         [RubyMethod("<")]
         public static object LessThan(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, 
             BigDecimal/*!*/ self, object other) {
-            return Protocols.TryCoerceAndApply(coercionStorage, comparisonStorage, "<", self, other);
+            return Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, "<", self, other);
         }
 
         #endregion
@@ -836,7 +834,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         #region <=
 
         private static object LessThanOrEqualResult(int? comparisonResult) {
-            return (comparisonResult.HasValue) ? ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.Value <= 0) : null;
+            return ScriptingRuntimeHelpers.BooleanToObject(comparisonResult.HasValue && comparisonResult.Value <= 0);
         }
         
         [RubyMethod("<=")]
@@ -862,7 +860,7 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         [RubyMethod("<=")]
         public static object LessThanOrEqual(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ comparisonStorage, 
             BigDecimal/*!*/ self, object other) {
-            return Protocols.TryCoerceAndApply(coercionStorage, comparisonStorage, "<=", self, other);
+            return Protocols.CoerceAndRelate(coercionStorage, comparisonStorage, "<=", self, other);
         }
 
         #endregion
@@ -873,9 +871,9 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         [RubyMethod("==")]
         [RubyMethod("===")]
         public static object Equal(BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            // This is a hack since normal numeric values return false not nil for NaN comparison
+            // NaN is not equal to anything, including itself - and answers false, not nil.
             if (BigDecimal.IsNaN(self) || BigDecimal.IsNaN(other)) {
-                return null;
+                return ScriptingRuntimeHelpers.False;
             }
             return self.Equals(other);
         }
@@ -905,9 +903,8 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         [RubyMethod("==")]
         [RubyMethod("===")]
         public static object Equal(BinaryOpStorage/*!*/ equals, BigDecimal/*!*/ self, object other) {
-            // This is a hack since normal numeric values do not return nil for nil (they return false)
             if (other == null) {
-                return null;
+                return ScriptingRuntimeHelpers.False;
             }
             return Protocols.IsEqual(equals, other, self);
         }
@@ -918,29 +915,106 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #region Rounding Operations
 
+        /// <summary>
+        /// A rounding mode is one of the ROUND_* constants or the Symbol that names it. MRI
+        /// takes both, and reports anything else as "invalid rounding mode (x)" whichever it was.
+        /// </summary>
+        internal static BigDecimal.RoundingModes ToRoundingMode(ConversionStorage<int>/*!*/ fixnumCast,
+            RubyContext/*!*/ context, object mode) {
+
+            if (mode == null || mode is Missing) {
+                return GetConfig(context).RoundingMode;
+            }
+
+            var symbol = mode as RubySymbol;
+            string name = (symbol != null) ? symbol.ToString() : null;
+            if (name == null) {
+                var str = mode as MutableString;
+                if (str != null) {
+                    name = str.ToString();
+                }
+            }
+
+            if (name != null) {
+                switch (name) {
+                    case "up": return BigDecimal.RoundingModes.Up;
+                    case "down": case "truncate": return BigDecimal.RoundingModes.Down;
+                    case "half_up": case "default": return BigDecimal.RoundingModes.HalfUp;
+                    case "half_down": return BigDecimal.RoundingModes.HalfDown;
+                    case "half_even": case "banker": return BigDecimal.RoundingModes.HalfEven;
+                    case "ceiling": case "ceil": return BigDecimal.RoundingModes.Ceiling;
+                    case "floor": return BigDecimal.RoundingModes.Floor;
+                }
+                throw RubyExceptions.CreateArgumentError("invalid rounding mode ({0})", name);
+            }
+
+            int value = Protocols.CastToFixnum(fixnumCast, mode);
+            if (value == (int)BigDecimal.RoundingModes.None || !Enum.IsDefined(typeof(BigDecimal.RoundingModes), value)) {
+                throw RubyExceptions.CreateArgumentError("invalid rounding mode ({0})", value);
+            }
+            return (BigDecimal.RoundingModes)value;
+        }
+
+        /// <summary>
+        /// These four answer an Integer when the result keeps no decimal places, and a BigDecimal
+        /// otherwise - and where the answer would be an Integer, a special value raises, because
+        /// there is no Integer for it to be.
+        ///
+        /// They disagree about where that line is, and MRI is the authority on it: #round answers
+        /// an Integer for any precision &lt;= 0, so BigDecimal("123.456").round(0) is 123, while
+        /// #truncate, #ceil and #floor only do so when no precision is given at all - .truncate(0)
+        /// is 0.123e3.  <paramref name="integerAtZeroPrecision"/> is which of the two it is.
+        /// </summary>
+        private static object LimitPrecision(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context,
+            BigDecimal/*!*/ self, object n, BigDecimal.RoundingModes mode, bool integerAtZeroPrecision) {
+
+            bool digitsGiven = !(n == null || n is Missing);
+            int digits = digitsGiven ? Protocols.CastToFixnum(fixnumCast, n) : 0;
+            bool answersInteger = !digitsGiven || (integerAtZeroPrecision && digits <= 0);
+
+            if (!answersInteger) {
+                return BigDecimal.LimitPrecision(GetConfig(context), self, digits, mode);
+            }
+
+            if (!BigDecimal.IsFinite(self)) {
+                throw CreateSpecialValueError(self);
+            }
+            return BigDecimal.ToInteger(GetConfig(context), BigDecimal.LimitPrecision(GetConfig(context), self, digits, mode));
+        }
+
+        internal static Exception/*!*/ CreateSpecialValueError(BigDecimal/*!*/ self) {
+            string description = BigDecimal.IsNaN(self)
+                ? "'NaN' (Not a Number)"
+                : (self.Sign > 0 ? "'Infinity'" : "'-Infinity'");
+            return new FloatDomainError(String.Format("Computation results in {0}", description));
+        }
+
         [RubyMethod("ceil")]
-        public static BigDecimal/*!*/ Ceil(RubyContext/*!*/ context, BigDecimal/*!*/ self, [Optional]int n) {
-            return BigDecimal.LimitPrecision(GetConfig(context), self, n, BigDecimal.RoundingModes.Ceiling);
+        public static object Ceil(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, BigDecimal/*!*/ self,
+            [Optional]object n) {
+
+            return LimitPrecision(fixnumCast, context, self, n, BigDecimal.RoundingModes.Ceiling, false);
         }
 
         [RubyMethod("floor")]
-        public static BigDecimal/*!*/ Floor(RubyContext/*!*/ context, BigDecimal/*!*/ self, [Optional]int n) {
-            return BigDecimal.LimitPrecision(GetConfig(context), self, n, BigDecimal.RoundingModes.Floor);
+        public static object Floor(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, BigDecimal/*!*/ self,
+            [Optional]object n) {
+
+            return LimitPrecision(fixnumCast, context, self, n, BigDecimal.RoundingModes.Floor, false);
         }
 
         [RubyMethod("round")]
-        public static BigDecimal/*!*/ Round(RubyContext/*!*/ context, BigDecimal/*!*/ self, [Optional]int n) {
-            return BigDecimal.LimitPrecision(GetConfig(context), self, n, GetConfig(context).RoundingMode);
-        }
+        public static object Round(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, BigDecimal/*!*/ self,
+            [Optional]object n, [Optional]object mode) {
 
-        [RubyMethod("round")]
-        public static BigDecimal/*!*/ Round(RubyContext/*!*/ context, BigDecimal/*!*/ self, int n, int mode) {
-            return BigDecimal.LimitPrecision(GetConfig(context), self, n, (BigDecimal.RoundingModes)mode);
+            return LimitPrecision(fixnumCast, context, self, n, ToRoundingMode(fixnumCast, context, mode), true);
         }
 
         [RubyMethod("truncate")]
-        public static BigDecimal/*!*/ Truncate(RubyContext/*!*/ context, BigDecimal/*!*/ self, [Optional]int n) {
-            return BigDecimal.LimitPrecision(GetConfig(context), self, n, BigDecimal.RoundingModes.Down);
+        public static object Truncate(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, BigDecimal/*!*/ self,
+            [Optional]object n) {
+
+            return LimitPrecision(fixnumCast, context, self, n, BigDecimal.RoundingModes.Down, false);
         }
 
         #endregion
