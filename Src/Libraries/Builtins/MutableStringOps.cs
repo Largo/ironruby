@@ -2167,7 +2167,10 @@ namespace IronRuby.Builtins {
                 text = NormalizeNewlines(text, settings.Newline);
             }
 
-            var result = MutableString.CreateMutable(to);
+            // A dummy encoding keeps whatever bytes it is given, so a string tagged with one
+            // cannot hold the characters while they are being collected. Gather them as UTF-8
+            // and let the real encoder spell them out at the end.
+            var result = MutableString.CreateMutable(to.IsDummy ? RubyEncoding.UTF8 : to);
             // ASCII-8BIT as a *target* takes only ASCII: MRI has no converter from a character
             // encoding to a byte string, so "\u00e9".encode("BINARY") is an undefined conversion
             // even though the code point would fit in one byte.
@@ -2225,6 +2228,10 @@ namespace IronRuby.Builtins {
                 }
 
                 result.Append(settings.GetReplacement(to).ConvertToString());
+            }
+
+            if (to.IsDummy) {
+                return MutableString.CreateBinary(to.StrictEncoding.GetBytes(result.ConvertToString()), to);
             }
 
             return result;
@@ -2290,6 +2297,24 @@ namespace IronRuby.Builtins {
             }
 
             string replacement = settings.ReplaceInvalid ? settings.GetReplacement(to).ConvertToString() : null;
+
+            // A dummy encoding is stateful or BOM-led: an escape sequence or a byte order mark
+            // decides how the bytes after it are read, and .NET's stock decoder loses that when it
+            // is handed one byte at a time the way the loop below does. Read the whole string in
+            // one go, and only fall back on the loop when something has to be replaced.
+            if (from.IsDummy) {
+                try {
+                    return strict.GetString(bytes);
+                } catch (DecoderFallbackException e) {
+                    if (replacement == null) {
+                        byte[] errorBytes = (e.BytesUnknown != null && e.BytesUnknown.Length > 0)
+                            ? e.BytesUnknown
+                            : new byte[] { bytes[Math.Min(Math.Max(e.Index, 0), bytes.Length - 1)] };
+                        throw RubyExceptions.CreateInvalidByteSequenceError(from, to, errorBytes, null, false);
+                    }
+                }
+            }
+
             var result = new StringBuilder(bytes.Length);
             var decoder = strict.GetDecoder();
             var chars = new char[8];

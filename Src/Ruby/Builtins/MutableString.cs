@@ -812,7 +812,8 @@ namespace IronRuby.Builtins {
         }
 
         public bool ContainsInvalidCharacters() {
-            return _content.ContainsInvalidCharacters();
+            // Nothing is invalid in a dummy encoding, which says nothing about its bytes.
+            return !_encoding.IsDummy && _content.ContainsInvalidCharacters();
         }
 
         public bool IsTainted {

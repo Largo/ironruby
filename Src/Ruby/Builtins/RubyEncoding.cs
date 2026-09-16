@@ -223,7 +223,15 @@ namespace IronRuby.Builtins {
         /// EscapingEncoding for how the bytes survive the round trip.
         /// </summary>
         public Encoding/*!*/ EscapingEncoding {
-            get { return _escapingEncoding ?? (_escapingEncoding = new EscapingEncoding(_strictEncoding)); }
+            get {
+                // A dummy encoding has no characters to speak of: Ruby keeps a string tagged with
+                // one as the bytes it was given, so the two representations are the same bytes.
+                if (IsDummy) {
+                    return BinaryEncoding.Instance;
+                }
+
+                return _escapingEncoding ?? (_escapingEncoding = new EscapingEncoding(_strictEncoding));
+            }
         }
 #else
         public Encoding/*!*/ EscapingEncoding {
@@ -628,7 +636,10 @@ namespace IronRuby.Builtins {
         public bool IsSingleByteCharacterSet {
             get {
                 if (!_isSingleByteCharacterSet.HasValue) {
-                    _isSingleByteCharacterSet = IsSBCS(CodePage);
+                    // A dummy encoding says nothing about characters - Ruby treats a string
+                    // tagged with one as a string of bytes - so it counts as single byte here
+                    // even where the underlying .NET encoding would gladly decode something.
+                    _isSingleByteCharacterSet = IsSBCS(CodePage) || IsDummy;
                 }
 
                 return _isSingleByteCharacterSet.Value;
