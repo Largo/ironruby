@@ -585,12 +585,7 @@ namespace IronRuby.Builtins {
             return self.Concat(other).TaintBy(self).TaintBy(other);
         }
 
-        // encoding aware
-        [RubyMethod("+")]
-        public static MutableString/*!*/ Concatenate(MutableString/*!*/ self, [NotNull]RubySymbol/*!*/ other) {
-            // doesn't create a subclass:
-            return self.Concat(other.String).TaintBy(self).TaintBy(other);
-        }
+        // No Symbol overload: `"a" + :b` is a TypeError in Ruby 1.9 and later, not "ab".
 
         #endregion
 

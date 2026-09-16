@@ -386,6 +386,13 @@ namespace IronRuby.Builtins {
             return match;
         }
 
+        [RubyMethod("match")]
+        public static object Match(RubyScope/*!*/ scope, [Optional]BlockParam block, RubyRegex/*!*/ self,
+            [NotNull]RubySymbol/*!*/ symbol, [DefaultProtocol, DefaultParameterValue(0)]int start) {
+
+            return Match(scope, block, self, symbol.String, start);
+        }
+
         [RubyMethod("hash")]
         public static int GetHash(RubyRegex/*!*/ self) {
             return self.GetHashCode();
@@ -407,11 +414,28 @@ namespace IronRuby.Builtins {
             return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.Index) : null;
         }
 
+        [RubyMethod("=~")]
+        public static object MatchIndex(RubyScope/*!*/ scope, RubyRegex/*!*/ self, [NotNull]RubySymbol/*!*/ symbol) {
+            return MatchIndex(scope, self, symbol.String);
+        }
+
         [RubyMethod("===")]
         public static bool CaseCompare(ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope, RubyRegex/*!*/ self, object obj) {
-            // TODO: should try-cast to string implicitly convert symbols?
-            MutableString str = Protocols.TryCastToString(stringTryCast, obj);
+            MutableString str = RegexpOperand(stringTryCast, obj);
             return str != null && Match(scope, self, str) != null;
+        }
+
+        /// <summary>
+        /// MRI's reg_operand: what a Regexp matches against is a String, or a Symbol standing
+        /// for its own name. That is a special case of Regexp's own, not of the implicit String
+        /// conversion - `"a" + :b` is still a TypeError. Answers null if it is neither.
+        /// </summary>
+        private static MutableString RegexpOperand(ConversionStorage<MutableString>/*!*/ stringTryCast, object obj) {
+            var symbol = obj as RubySymbol;
+            if (symbol != null) {
+                return symbol.String;
+            }
+            return Protocols.TryCastToString(stringTryCast, obj);
         }
 
         [RubyMethod("~")]
@@ -426,6 +450,12 @@ namespace IronRuby.Builtins {
             var result = self.Pattern.Clone();
             result.ForceEncoding(self.Encoding);
             return result;
+        }
+
+        [RubyMethod("escape", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("quote", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ Escape(RubyClass/*!*/ self, [NotNull]RubySymbol/*!*/ symbol) {
+            return Escape(self, symbol.String);
         }
 
         [RubyMethod("escape", RubyMethodAttributes.PublicSingleton)]
@@ -559,7 +589,13 @@ namespace IronRuby.Builtins {
                 if (regex == null) {
                     regex = TryConvert(respondToStorage, toRegexpStorage, null, obj);
                 }
-                parts.Add((object)regex ?? Protocols.CastToString(stringCast, obj));
+                if (regex != null) {
+                    parts.Add(regex);
+                } else if (objs.Count == 1 && obj is RubySymbol) {
+                    parts.Add(((RubySymbol)obj).String);
+                } else {
+                    parts.Add(Protocols.CastToString(stringCast, obj));
+                }
             }
 
             if (parts.Count == 1) {

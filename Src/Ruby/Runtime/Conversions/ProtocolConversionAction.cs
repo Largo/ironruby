@@ -497,18 +497,10 @@ namespace IronRuby.Runtime.Conversions {
         protected override string/*!*/ TargetTypeName { get { return "String"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToStringValidator; } }
 
-        protected internal override bool TryImplicitConversion(MetaObjectBuilder metaBuilder, CallArguments args) {
-            if (base.TryImplicitConversion(metaBuilder, args)) {
-                return true;
-            }
-
-            if (args.Target is RubySymbol) {
-                metaBuilder.Result = Methods.ConvertSymbolToMutableString.OpCall(AstUtils.Convert(args.TargetExpression, typeof(RubySymbol)));
-                return true;
-            }
-
-            return false;
-        }
+        // Ruby 1.8 let a Symbol stand in wherever a String was implicitly wanted; 1.9 removed
+        // that, and Symbol has had no #to_str since.  `"a" + :b` is a TypeError, not "ab".
+        // There is no special case here for that reason - a Symbol reaches the generic error
+        // path and is reported as "no implicit conversion of Symbol into String".
 
         protected override DynamicMetaObjectBinder/*!*/ GetInteropBinder(RubyContext/*!*/ context, IList<DynamicMetaObject/*!*/>/*!*/ args, 
             out MethodInfo postConverter) {
@@ -538,18 +530,8 @@ namespace IronRuby.Runtime.Conversions {
         protected override string/*!*/ TargetTypeName { get { return "String"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.TryToStringValidator; } }
 
-        protected internal override bool TryImplicitConversion(MetaObjectBuilder metaBuilder, CallArguments args) {
-            if (base.TryImplicitConversion(metaBuilder, args)) {
-                return true;
-            }
-
-            var convertedTarget = args.Target as RubySymbol;
-            if (convertedTarget != null) {
-                metaBuilder.Result = Methods.ConvertSymbolToMutableString.OpCall(AstUtils.Convert(args.TargetExpression, typeof(RubySymbol)));
-                return true;
-            }
-            return false;
-        }
+        // No Symbol case, for the same reason as ConvertToStrAction: String.try_convert(:a)
+        // is nil, not "a".
     }
 
     // TODO: escaping vs. non-escaping?

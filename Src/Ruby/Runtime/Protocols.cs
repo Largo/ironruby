@@ -275,6 +275,21 @@ namespace IronRuby.Runtime {
             return site.Target(site, value);
         }
 
+        /// <summary>
+        /// The conversion a method name goes through: a Symbol or a String is taken as it is,
+        /// anything else is reported as "X is not a symbol nor a string". Not the same as
+        /// CastToString - Symbol has no #to_str.
+        /// </summary>
+        public static string/*!*/ CastToSymbol(ConversionStorage<string>/*!*/ stringCast, object value) {
+            // nil reaches the conversion as a plain null reference and comes back as one; MRI
+            // reports it like any other wrong type rather than looking a method named null up.
+            if (value == null) {
+                throw RubyOps.CreateNotSymbolNorStringError(stringCast.Context, null);
+            }
+            var site = stringCast.GetSite(ConvertToSymbolAction.Make(stringCast.Context));
+            return site.Target(site, value);
+        }
+
         public static double CastToFloat(ConversionStorage<double>/*!*/ floatConversion, object value) {
             var site = floatConversion.GetSite(ConvertToFAction.Make(floatConversion.Context));
             return site.Target(site, value);

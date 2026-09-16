@@ -1064,8 +1064,8 @@ namespace IronRuby.Builtins {
         /// [DefaultProtocol]string binding used to put an Integer through the legacy
         /// "Fixnum as Symbol" path and produce a NameError about an unrelated name.
         /// </summary>
-        private static string/*!*/ ToVariableName(ConversionStorage<MutableString>/*!*/ stringCast, object name) {
-            return Protocols.CastToString(stringCast, name).ToString();
+        private static string/*!*/ ToVariableName(ConversionStorage<string>/*!*/ stringCast, object name) {
+            return Protocols.CastToSymbol(stringCast, name);
         }
 
         /// <summary>Internal overload for callers that already have the name as a string.</summary>
@@ -1079,7 +1079,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("instance_variable_get")]
-        public static object InstanceVariableGet(ConversionStorage<MutableString>/*!*/ stringCast,
+        public static object InstanceVariableGet(ConversionStorage<string>/*!*/ stringCast,
             RubyContext/*!*/ context, object self, object nameArg) {
             string name = ToVariableName(stringCast, nameArg);
             object value;
@@ -1092,7 +1092,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("instance_variable_set")]
-        public static object InstanceVariableSet(ConversionStorage<MutableString>/*!*/ stringCast,
+        public static object InstanceVariableSet(ConversionStorage<string>/*!*/ stringCast,
             RubyContext/*!*/ context, object self, object nameArg, object value) {
             string name = ToVariableName(stringCast, nameArg);
             RubyUtils.CheckInstanceVariableName(context, self, name);
@@ -1101,7 +1101,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("instance_variable_defined?")]
-        public static bool InstanceVariableDefined(ConversionStorage<MutableString>/*!*/ stringCast,
+        public static bool InstanceVariableDefined(ConversionStorage<string>/*!*/ stringCast,
             RubyContext/*!*/ context, object self, object nameArg) {
             string name = ToVariableName(stringCast, nameArg);
             object value;

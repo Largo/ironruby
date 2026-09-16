@@ -447,7 +447,9 @@ System::Reflection::Emit::DynamicMethod.new(""foo"", 1.GetType(), System::Array[
             TestOutput(@"
 class System::Decimal
   instance_methods(false).each do |name|
-    mangled = '__' + name
+    # instance_methods answers Symbols, and a Symbol has no #to_str - this used to
+    # work only because the runtime's implicit String conversion accepted one.
+    mangled = '__' + name.to_s
     
     alias_method(mangled, name)
     private mangled
