@@ -2972,22 +2972,130 @@ if defined?(Rational) && Rational.instance_method(:round).arity == 0
     # rational18.rb's rounding methods take no precision at all. MRI's rule is the
     # same for all four: 0 and negative precisions answer an Integer, a positive
     # precision answers a Rational scaled back down.
-    [:round, :ceil, :floor, :truncate].each do |name|
+    [:ceil, :floor, :truncate].each do |name|
       alias_method :"__ir_#{name}__", name
 
       define_method(name) do |ndigits = 0|
-        n = ndigits.to_int
-        bare = :"__ir_#{name}__"
-        next __send__(bare) if n == 0
-        if n > 0
-          s = 10**n
-          Rational((self * s).__send__(bare), s)
-        else
-          s = 10**(-n)
-          (self / s).__send__(bare) * s
-        end
+        __ir_scale__(:"__ir_#{name}__", ndigits)
       end
     end
+
+    # MRI insists on a real Integer for the precision, and says so in its own
+    # words; it does not ask the argument for #to_int, which is what the specs
+    # watch for.
+    def __ir_check_precision__(ndigits)
+      unless ndigits.is_a?(::Integer)
+        ::Kernel.raise(::TypeError, "not an integer")
+      end
+      ndigits
+    end
+    private :__ir_check_precision__
+
+    # A rational is already exact at any precision its denominator divides, and
+    # a denominator divides a power of ten only if it is made of twos and fives.
+    # Worth knowing before scaling: 3/2 rounded to two million places is still
+    # 3/2, and 10**2000000 is not a number to go looking for.
+    def __ir_exact_at__(ndigits)
+      d = denominator
+      twos = 0
+      while d.even?
+        d /= 2
+        twos += 1
+      end
+      fives = 0
+      while (d % 5).zero?
+        d /= 5
+        fives += 1
+      end
+      d == 1 && ndigits >= (twos > fives ? twos : fives)
+    end
+    private :__ir_exact_at__
+
+    def __ir_scale__(bare, ndigits)
+      n = __ir_check_precision__(ndigits)
+      return __send__(bare) if n == 0
+      if n > 0
+        return self if __ir_exact_at__(n)
+        s = 10**n
+        Rational((self * s).__send__(bare), s)
+      else
+        s = 10**(-n)
+        (self / s).__send__(bare) * s
+      end
+    end
+    private :__ir_scale__
+
+    # What to do with an exact half. :up is away from zero, :down is towards it,
+    # :even is to whichever of the two neighbours is even - so -5/2 is -3, -2 and
+    # -2 respectively.
+    def __ir_round_to_integer__(value, mode)
+      low = value.floor
+      fraction = value - low
+      half = Rational(1, 2)
+      return low if fraction < half
+      return low + 1 if fraction > half
+
+      case mode
+      when :up then value < 0 ? low : low + 1
+      when :down then value < 0 ? low + 1 : low
+      when :even then low.even? ? low : low + 1
+      end
+    end
+    private :__ir_round_to_integer__
+
+    def round(ndigits = 0, half: :up)
+      mode = half.nil? ? :up : half
+      mode = mode.to_sym if mode.respond_to?(:to_sym)
+      unless [:up, :down, :even].include?(mode)
+        ::Kernel.raise(::ArgumentError, "invalid rounding mode: #{half}")
+      end
+
+      n = __ir_check_precision__(ndigits)
+      return __ir_round_to_integer__(self, mode) if n == 0
+      if n > 0
+        return self if __ir_exact_at__(n)
+        s = 10**n
+        Rational(__ir_round_to_integer__(self * s, mode), s)
+      else
+        s = 10**(-n)
+        __ir_round_to_integer__(Rational(self, s), mode) * s
+      end
+    end
+
+    # The simplest rational within eps of self. MRI's algorithm is a continued
+    # fraction walked until the interval contains an integer, which is then the
+    # simplest thing in it; the sign is taken off first because the walk assumes
+    # a positive interval.
+    def rationalize(eps = nil)
+      return self if eps.nil?
+      return -((-self).rationalize(eps)) if self < 0
+
+      e = eps.abs
+      e = e.to_r unless e.is_a?(::Rational)
+      a = self - e
+      b = self + e
+      return self if a == b
+
+      numer, denom = __ir_simplest_between__(a, b)
+      Rational(numer, denom)
+    end
+
+    def __ir_simplest_between__(a, b)
+      p0, p1 = 0, 1
+      q0, q1 = 1, 0
+      c = a.ceil
+
+      while c >= b
+        k = c - 1
+        p0, p1 = p1, k * p1 + p0
+        q0, q1 = q1, k * q1 + q0
+        a, b = Rational(1, b - k), Rational(1, a - k)
+        c = a.ceil
+      end
+
+      [c * p1 + p0, c * q1 + q0]
+    end
+    private :__ir_simplest_between__
   end
 end
 
