@@ -212,6 +212,14 @@ class Pathname
   #
   def initialize(path)
     path = path.__send__(TO_PATH) if path.respond_to? TO_PATH
+    # A path is a String or something that can produce one; anything else is a TypeError
+    # rather than a path whose #dup happens to answer something.
+    unless String === path
+      path = path.to_str if path.respond_to?(:to_str)
+    end
+    unless String === path
+      raise TypeError, "Pathname.new requires a String, #to_path or #to_str"
+    end
     @path = path.dup
 
     if /\0/ =~ @path
@@ -585,6 +593,7 @@ class Pathname
     other = Pathname.new(other) unless Pathname === other
     Pathname.new(plus(@path, other.to_s))
   end
+  alias / +
 
   def plus(path1, path2) # -> path
     prefix2 = path2
@@ -724,6 +733,7 @@ class Pathname
   # This method has existed since 1.8.1.
   #
   def relative_path_from(base_directory)
+    base_directory = Pathname.new(base_directory) unless Pathname === base_directory
     dest_directory = self.cleanpath.to_s
     base_directory = base_directory.cleanpath.to_s
     dest_prefix = dest_directory
@@ -941,6 +951,16 @@ class Pathname    # * FileTest *
 
   # See <tt>FileTest.zero?</tt>.
   def zero?() FileTest.zero?(@path) end
+
+  # Whether there is nothing here: for a directory that means no entries, for anything
+  # else it means no bytes.
+  def empty?
+    if directory?
+      Dir.empty?(@path)
+    else
+      FileTest.empty?(@path)
+    end
+  end
 end
 
 
@@ -951,6 +971,19 @@ class Pathname    # * Dir *
       Dir.glob(*args) {|f| yield self.new(f) }
     else
       Dir.glob(*args).map {|f| self.new(f) }
+    end
+  end
+
+  # See <tt>Dir.glob</tt>.  Returns or yields Pathname objects, relative to this one:
+  # the pattern is matched with this pathname as the base and each answer is joined back
+  # onto it, so the results are usable paths rather than bare names.  With a block it
+  # yields and answers nil.
+  def glob(*args) # :yield: pathname
+    if block_given?
+      Dir.glob(*args, base: @path) {|f| yield self + f }
+      nil
+    else
+      Dir.glob(*args, base: @path).map {|f| self + f }
     end
   end
 
@@ -1047,7 +1080,11 @@ module Kernel
   #
   # This method is available since 1.8.5.
   def Pathname(path) # :doc:
+    return path if Pathname === path
     Pathname.new(path)
   end
+  # rb_define_global_function, which is what the C pathname uses, makes both a private
+  # instance method and a public singleton one - module_function is the Ruby spelling.
+  module_function :Pathname
   private :Pathname
 end
