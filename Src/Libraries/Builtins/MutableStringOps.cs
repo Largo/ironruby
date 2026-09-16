@@ -2161,6 +2161,15 @@ namespace IronRuby.Builtins {
             bool binarySource = from == RubyEncoding.Binary && to != RubyEncoding.Binary;
             bool binaryTarget = to == RubyEncoding.Binary && from != RubyEncoding.Binary;
 
+            // Some encodings have no converter at all. A string that is all ASCII still crosses,
+            // as long as both sides read an ASCII byte as itself; anything else is not a
+            // conversion MRI can name, which it reports as the converter being missing.
+            if (from != to && (from.HasNoTranscoder || to.HasNoTranscoder) &&
+                !(self.IsAscii() && from.IsAsciiIdentity && to.IsAsciiIdentity)) {
+                throw new ConverterNotFoundError(RubyExceptions.FormatMessage(
+                    "code converter not found ({0} to {1})", from.Name, to.Name));
+            }
+
             string text = DecodeForTranscoding(self, from, to, settings);
 
             if (settings.Newline != 0) {

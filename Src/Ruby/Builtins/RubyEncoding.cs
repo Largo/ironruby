@@ -64,6 +64,7 @@ namespace IronRuby.Builtins {
         public const int CodePageUTF32 = 1000032;
         public const int CodePageCESU8 = 1000008;
         public const int CodePageTIS620 = 1000620;
+        public const int CodePageEmacsMule = 1000230;
 
         // TODO: how does MRI sort encodings?
 
@@ -263,6 +264,7 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageUTF32: return "UTF-32";
                 case RubyEncoding.CodePageCESU8: return "CESU-8";
                 case RubyEncoding.CodePageTIS620: return "TIS-620";
+                case RubyEncoding.CodePageEmacsMule: return "Emacs-Mule";
                 case RubyEncoding.CodePageSJIS: return "Shift_JIS";
                 case RubyEncoding.CodePageAscii: return "US-ASCII";
 
@@ -607,6 +609,24 @@ namespace IronRuby.Builtins {
 
         public bool IsDummy {
             get { return IsDummyEncoding(CodePage); }
+        }
+
+        /// <summary>
+        /// Ruby ships some encodings without a converter to or from anything else: a string in
+        /// one of them can only be transcoded while it holds nothing but ASCII, and asking for
+        /// more is an Encoding::ConverterNotFoundError rather than an undefined conversion.
+        /// </summary>
+        public bool HasNoTranscoder {
+            get {
+                switch (CodePage) {
+                    case CodePageEmacsMule:
+                    case CodePageUTF7:
+                        return true;
+
+                    default:
+                        return false;
+                }
+            }
         }
 
         private static bool IsAsciiIdentityFallback(Encoding/*!*/ encoding) {

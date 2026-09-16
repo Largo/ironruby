@@ -3588,6 +3588,7 @@ namespace IronRuby.Runtime {
                 case "UTF-32": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF32).StrictEncoding;
                 case "CESU-8": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8).StrictEncoding;
                 case "TIS-620": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageTIS620).StrictEncoding;
+                case "EMACS-MULE": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEmacsMule).StrictEncoding;
 
                 default:
                     string alias;

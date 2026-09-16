@@ -226,7 +226,7 @@ namespace IronRuby.Builtins {
             }
 
             internal static RubyEncoding/*!*/[]/*!*/ SearchPath(RubyEncoding/*!*/ source, RubyEncoding/*!*/ destination) {
-                if (source == destination) {
+                if (source == destination || source.HasNoTranscoder || destination.HasNoTranscoder) {
                     throw ConverterNotFound(source.Name, destination.Name, 0);
                 }
 
@@ -246,6 +246,10 @@ namespace IronRuby.Builtins {
                 RubyEncoding to = FindEncoding(toStr.Context, destination, destinationName);
 
                 if (from == null || to == null || from == to) {
+                    throw ConverterNotFound(sourceName, destinationName, flags);
+                }
+                if (from.HasNoTranscoder || to.HasNoTranscoder) {
+                    // Ruby ships no converter for these, so there is no path to walk either.
                     throw ConverterNotFound(sourceName, destinationName, flags);
                 }
                 if (flags != 0 && (from == to)) {

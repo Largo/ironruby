@@ -40,6 +40,7 @@ namespace IronRuby.Runtime {
                 case RubyEncoding.CodePageUTF32: return new BomEncoding(codepage, 4, throwOnError);
                 case RubyEncoding.CodePageCESU8: return new CesuEncoding(throwOnError);
                 case RubyEncoding.CodePageTIS620: return new Tis620Encoding(throwOnError);
+                case RubyEncoding.CodePageEmacsMule: return new EmacsMuleEncoding(throwOnError);
                 default: throw new ArgumentOutOfRangeException("codepage");
             }
         }
@@ -50,6 +51,7 @@ namespace IronRuby.Runtime {
                 case RubyEncoding.CodePageUTF32:
                 case RubyEncoding.CodePageCESU8:
                 case RubyEncoding.CodePageTIS620:
+                case RubyEncoding.CodePageEmacsMule:
                     return true;
 
                 default:
@@ -160,6 +162,130 @@ namespace IronRuby.Runtime {
 
         public override string/*!*/ WebName {
             get { return _name; }
+        }
+    }
+
+    /// <summary>
+    /// Emacs-Mule: ASCII plus multibyte sequences introduced by a byte in 0x81-0x99 and continued
+    /// by bytes of 0xA0 and above. Ruby has it; .NET does not, and Ruby ships no converter to or
+    /// from it, so nothing here has to name the characters those sequences stand for - a byte is
+    /// carried across as itself, and what this encoding decides is which byte runs are well formed
+    /// in the first place, for #valid_encoding? and the like.
+    /// </summary>
+    internal sealed class EmacsMuleEncoding : Encoding {
+        private readonly bool _throwOnError;
+
+        internal EmacsMuleEncoding(bool throwOnError)
+            : base(RubyEncoding.CodePageEmacsMule) {
+            _throwOnError = throwOnError;
+        }
+
+        /// <summary>The length of the sequence a byte introduces, or 0 if it introduces none.</summary>
+        private static int SequenceLength(byte lead) {
+            if (lead < 0x80) {
+                return 1;
+            }
+            if (lead >= 0x81 && lead <= 0x8f) {
+                return 2;
+            }
+            if (lead >= 0x90 && lead <= 0x99) {
+                return 3;
+            }
+            return 0;
+        }
+
+        /// <summary>The index of the first byte that is not part of a well formed sequence, or -1.</summary>
+        private static int FindInvalid(byte[]/*!*/ bytes, int index, int count) {
+            int end = index + count;
+            int i = index;
+            while (i < end) {
+                int length = SequenceLength(bytes[i]);
+                if (length == 0 || end - i < length) {
+                    return i;
+                }
+                for (int j = 1; j < length; j++) {
+                    // A continuation byte is 0xa0 or above; anything else cuts the sequence short.
+                    if (bytes[i + j] < 0xa0) {
+                        return i;
+                    }
+                }
+                i += length;
+            }
+            return -1;
+        }
+
+        /// <summary>See CesuEncoding.Undecodable - BytesUnknown must not be left null.</summary>
+        private static DecoderFallbackException/*!*/ Undecodable(byte[]/*!*/ bytes, int index) {
+            return new DecoderFallbackException(null, new[] { bytes[index] }, index);
+        }
+
+        public override int GetByteCount(char[]/*!*/ chars, int index, int count) {
+            if (_throwOnError) {
+                for (int i = 0; i < count; i++) {
+                    if (chars[index + i] > 0xff) {
+                        throw new EncoderFallbackException();
+                    }
+                }
+            }
+            return count;
+        }
+
+        public override int GetBytes(char[]/*!*/ chars, int charIndex, int charCount, byte[]/*!*/ bytes, int byteIndex) {
+            for (int i = 0; i < charCount; i++) {
+                char c = chars[charIndex + i];
+                if (c > 0xff) {
+                    if (_throwOnError) {
+                        throw new EncoderFallbackException();
+                    }
+                    c = '?';
+                }
+                bytes[byteIndex + i] = (byte)c;
+            }
+            return charCount;
+        }
+
+        public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
+            if (_throwOnError) {
+                int invalid = FindInvalid(bytes, index, count);
+                if (invalid >= 0) {
+                    throw Undecodable(bytes, invalid);
+                }
+            }
+            return count;
+        }
+
+        public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
+            if (_throwOnError) {
+                int invalid = FindInvalid(bytes, byteIndex, byteCount);
+                if (invalid >= 0) {
+                    throw Undecodable(bytes, invalid);
+                }
+            }
+            for (int i = 0; i < byteCount; i++) {
+                // BinaryDecoderFallback's convention: the byte passes through as U+00mn.
+                chars[charIndex + i] = (char)bytes[byteIndex + i];
+            }
+            return byteCount;
+        }
+
+        public override int GetMaxByteCount(int charCount) {
+            return charCount;
+        }
+
+        public override int GetMaxCharCount(int byteCount) {
+            return byteCount;
+        }
+
+        public override bool IsSingleByte {
+            get { return false; }
+        }
+
+        public override string/*!*/ EncodingName {
+            get { return "Emacs-Mule"; }
+        }
+
+        public override string/*!*/ WebName {
+            get { return "Emacs-Mule"; }
         }
     }
 

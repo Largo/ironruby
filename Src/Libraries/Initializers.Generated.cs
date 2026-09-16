@@ -890,6 +890,8 @@ namespace IronRuby.Builtins {
             SetBuiltinConstant(module, "CESU_8", IronRuby.Builtins.RubyEncodingOps.CESU_8);
             SetBuiltinConstant(module, "CP50221", IronRuby.Builtins.RubyEncodingOps.CP50221);
             SetBuiltinConstant(module, "CP874", IronRuby.Builtins.RubyEncodingOps.Windows_874);
+            SetBuiltinConstant(module, "Emacs_Mule", IronRuby.Builtins.RubyEncodingOps.Emacs_Mule);
+            SetBuiltinConstant(module, "EMACS_MULE", IronRuby.Builtins.RubyEncodingOps.Emacs_Mule);
             SetBuiltinConstant(module, "EUC_JP", IronRuby.Builtins.RubyEncodingOps.EUC_JP);
             SetBuiltinConstant(module, "ISO_2022_JP", IronRuby.Builtins.RubyEncodingOps.ISO_2022_JP);
             SetBuiltinConstant(module, "ISO_8859_15", IronRuby.Builtins.RubyEncodingOps.ISO_8859_15);

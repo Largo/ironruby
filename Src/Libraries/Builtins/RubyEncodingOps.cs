@@ -151,6 +151,12 @@ namespace IronRuby.Builtins {
         [RubyConstant]
         public static readonly RubyEncoding CESU_8 = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8);
 
+        // Emacs-Mule: Ruby has it, .NET does not, and Ruby ships no converter for it either - only
+        // a string that is all ASCII can be transcoded to or from it.
+        [RubyConstant("Emacs_Mule")]
+        [RubyConstant("EMACS_MULE")]
+        public static readonly RubyEncoding Emacs_Mule = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEmacsMule);
+
         [RubyConstant("ISO8859_9")]
         [RubyConstant("ISO_8859_9")]
         public static readonly RubyEncoding ISO_8859_9 = RubyEncoding.GetRubyEncoding(28599);
@@ -305,7 +311,7 @@ namespace IronRuby.Builtins {
 
             foreach (var encoding in new[] {
                 RubyEncoding.Binary, RubyEncoding.UTF8, RubyEncoding.Ascii, RubyEncoding.SJIS, RubyEncoding.EUCJP,
-                UTF_16, UTF_32, UTF_16BE, UTF_16LE, UTF_32BE, UTF_32LE, CESU_8, TIS_620,
+                UTF_16, UTF_32, UTF_16BE, UTF_16LE, UTF_32BE, UTF_32LE, CESU_8, TIS_620, Emacs_Mule,
             }) {
                 AddEncoding(seen, result, encoding);
             }
