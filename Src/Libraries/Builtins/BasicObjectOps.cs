@@ -176,22 +176,44 @@ namespace IronRuby.Builtins {
 
         #region instance_eval, instance_exec
 
+        /// <summary>
+        /// instance_eval takes either a block and nothing else, or a string and up to two more
+        /// arguments saying where it came from - and it has to count them itself, because the two
+        /// shapes report different arities. The string, the file name and the line are each
+        /// converted the way MRI converts them, so an object answering #to_str is a perfectly
+        /// good file name.
+        /// </summary>
         [RubyMethod("instance_eval")]
-        public static object Evaluate(RubyScope/*!*/ scope, object self, [NotNull]MutableString/*!*/ code,
-            [Optional, NotNull]MutableString file, [DefaultParameterValue(1)]int line) {
+        public static object Evaluate(ConversionStorage<MutableString>/*!*/ toStr, ConversionStorage<int>/*!*/ toInt,
+            RubyScope/*!*/ scope, BlockParam block, object self, [NotNull]params object[]/*!*/ args) {
+
+            if (block != null) {
+                if (args.Length != 0) {
+                    throw RubyExceptions.CreateArgumentError(
+                        "wrong number of arguments (given {0}, expected 0)", args.Length);
+                }
+                // The receiver is passed to the block: `obj.instance_eval { |o| o }` is obj.
+                return RubyUtils.EvaluateInSingleton(self, block, new object[] { self });
+            }
+
+            if (args.Length < 1 || args.Length > 3) {
+                throw RubyExceptions.CreateArgumentError(
+                    "wrong number of arguments (given {0}, expected 1..3)", args.Length);
+            }
+
+            MutableString code = Protocols.CastToString(toStr, args[0]);
+            MutableString file = (args.Length > 1 && args[1] != null) ? Protocols.CastToString(toStr, args[1]) : null;
+            int line = (args.Length > 2) ? Protocols.CastToFixnum(toInt, args[2]) : 1;
 
             RubyClass singleton = scope.RubyContext.GetOrCreateSingletonClass(self);
             return RubyUtils.Evaluate(code, scope, self, singleton, file, line);
         }
 
-        [RubyMethod("instance_eval")]
-        public static object InstanceEval([NotNull]BlockParam/*!*/ block, object self) {
-            // The receiver is passed to the block: `obj.instance_eval { |o| o }` is obj.
-            return RubyUtils.EvaluateInSingleton(self, block, new object[] { self });
-        }
-
         [RubyMethod("instance_exec")]
-        public static object InstanceExec([NotNull]BlockParam/*!*/ block, object self, params object[]/*!*/ args) {
+        public static object InstanceExec(BlockParam block, object self, [NotNull]params object[]/*!*/ args) {
+            if (block == null) {
+                throw RubyExceptions.CreateLocalJumpError("no block given");
+            }
             return RubyUtils.EvaluateInSingleton(self, block, args);
         }
 

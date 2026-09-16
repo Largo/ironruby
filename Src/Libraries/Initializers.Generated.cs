@@ -563,13 +563,12 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "instance_eval", 0x51, 
-                0x0000000cU, 0x00000001U, 
-                new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.BasicObjectOps.Evaluate), 
-                new Func<IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.BasicObjectOps.InstanceEval)
+                0x80000020U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Object>(IronRuby.Builtins.BasicObjectOps.Evaluate)
             );
             
             DefineLibraryMethod(module, "instance_exec", 0x51, 
-                0x80000001U, 
+                0x80000004U, 
                 new Func<IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Object>(IronRuby.Builtins.BasicObjectOps.InstanceExec)
             );
             
