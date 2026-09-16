@@ -71,6 +71,12 @@ namespace IronRuby.Builtins {
         public static object CreateArray(ConversionStorage<Union<IList, int>>/*!*/ toAryToInt,
             BlockParam block, RubyClass/*!*/ self, [NotNull]object/*!*/ arrayOrSize) {
 
+            if (arrayOrSize is BigInteger) {
+                // A size too large for an Int32 is a size no array can have, and MRI says so as a
+                // size error rather than as a number that will not fit in a machine word.
+                return new RubyArray().AddMultiple(CheckArraySize((BigInteger)arrayOrSize), null);
+            }
+
             var site = toAryToInt.GetSite(CompositeConversionAction.Make(toAryToInt.Context, CompositeConversion.ToAryToInt));
             var union = site.Target(site, arrayOrSize);
 
@@ -91,6 +97,10 @@ namespace IronRuby.Builtins {
             BlockParam block, RubyArray/*!*/ self, [NotNull]object/*!*/ arrayOrSize) {
 
             var context = toAryToInt.Context;
+
+            if (arrayOrSize is BigInteger) {
+                return ReinitializeByRepeatedValue(context, self, (BigInteger)arrayOrSize, null);
+            }
 
             var site = toAryToInt.GetSite(CompositeConversionAction.Make(context, CompositeConversion.ToAryToInt));
             var union = site.Target(site, arrayOrSize);
@@ -168,6 +178,37 @@ namespace IronRuby.Builtins {
             if (size > Int32.MaxValue / 8) {
                 throw RubyExceptions.CreateArgumentError("array size too big");
             }
+        }
+
+        /// <summary>
+        /// A size too large for an Int32 is still a size, and one no array can have: MRI answers
+        /// the same ArgumentError it gives for one merely too large to allocate, rather than
+        /// complaining that the number will not fit in a machine word.
+        /// </summary>
+        private static int CheckArraySize(BigInteger size) {
+            if (size.Sign < 0) {
+                throw RubyExceptions.CreateArgumentError("negative array size");
+            }
+            if (size > Int32.MaxValue / 8) {
+                throw RubyExceptions.CreateArgumentError("array size too big");
+            }
+            return (int)size;
+        }
+
+        [RubyConstructor]
+        public static RubyArray/*!*/ CreateArray(RubyClass/*!*/ self, [NotNull]BigInteger/*!*/ size, object value) {
+            return new RubyArray().AddMultiple(CheckArraySize(size), value);
+        }
+
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ReinitializeByRepeatedValue(RubyContext/*!*/ context, RubyArray/*!*/ self,
+            [NotNull]BigInteger/*!*/ size, object value) {
+
+            int count = CheckArraySize(size);
+            self.Clear();
+            self.AddMultiple(count, value);
+
+            return self;
         }
 
         [RubyMethod("[]", RubyMethodAttributes.PublicSingleton)]
