@@ -84,12 +84,34 @@ namespace IronRuby.Builtins {
         public static class WaitWritable {
         }
 
-        public static Exception/*!*/ NonBlockingError(RubyContext/*!*/ context, Exception/*!*/ exception, bool isRead) {
-            RubyModule waitReadable;
-            if (context.TryGetModule(isRead ? typeof(WaitReadable) : typeof(WaitWritable), out waitReadable)) {
-                ModuleOps.ExtendObject(waitReadable, exception);
+        /// <summary>
+        /// The EAGAIN a non-blocking operation raises when it would have had to wait. CRuby names
+        /// a class for it - IO::EAGAINWaitReadable and its three siblings - so that a rescue can
+        /// tell "nothing to read yet" from a real error carrying the same errno; the
+        /// WaitReadable/WaitWritable modules they include are what generic code rescues. The
+        /// classes are defined in Ruby, so they are asked for by name and built by calling #new.
+        /// </summary>
+        public static Exception/*!*/ NonBlockingError(RubyContext/*!*/ context, bool isRead, string/*!*/ operation) {
+            object ioClass;
+            if (context.ObjectClass.TryGetConstant(null, "IO", out ioClass)) {
+                var io = ioClass as RubyModule;
+                if (io != null) {
+                    var error = context.CreateLibraryException(
+                        io, isRead ? "EAGAINWaitReadable" : "EAGAINWaitWritable", operation
+                    );
+                    if (error != null) {
+                        return error;
+                    }
+                }
             }
-            return exception;
+
+            // Nothing but the runtime loaded: the modules are all there is to say it with.
+            var fallback = new Errno.ResourceTemporarilyUnavailableError();
+            RubyModule waitModule;
+            if (context.TryGetModule(isRead ? typeof(WaitReadable) : typeof(WaitWritable), out waitModule)) {
+                ModuleOps.ExtendObject(waitModule, fallback);
+            }
+            return fallback;
         }
 
         #endregion
@@ -1342,7 +1364,7 @@ namespace IronRuby.Builtins {
                     throw TranslateStreamError(e);
                 }
                 if (written < 0) {
-                    throw NonBlockingError(self.Context, new Errno.ResourceTemporarilyUnavailableError(), false);
+                    throw NonBlockingError(self.Context, false, "write would block");
                 }
                 return written;
             }
@@ -1381,7 +1403,7 @@ namespace IronRuby.Builtins {
                 }
                 int put = queue.WriteWithoutWaiting(val.ToByteArray(), 0, room);
                 if (put == 0) {
-                    throw NonBlockingError(io.Context, new Errno.ResourceTemporarilyUnavailableError(), false);
+                    throw NonBlockingError(io.Context, false, "write would block");
                 }
                 return put;
             }
@@ -1407,7 +1429,7 @@ namespace IronRuby.Builtins {
                 throw TranslateStreamError(e);
             }
             if (written < 0) {
-                throw NonBlockingError(io.Context, new Errno.ResourceTemporarilyUnavailableError(), false);
+                throw NonBlockingError(io.Context, false, "write would block");
             }
             return written;
         }
@@ -1562,6 +1584,21 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            var queue = stream.BaseStream as RubyPipe;
+            if (queue != null) {
+                // An in-process pipe has no descriptor to poll, but it knows its own state, and
+                // asking it is the only thing between #read_nonblock and a wait that would never
+                // end.
+                if (!queue.CanReadWithoutBlocking) {
+                    if (buffered > 0) {
+                        return buffer;
+                    }
+                    throw NonBlockingError(io.Context, true, "read would block");
+                }
+                int queued = io.AppendAvailableBytes(buffer, count);
+                return (queued == 0 && buffered == 0) ? null : buffer;
+            }
+
             var pipe = stream.BaseStream as DescriptorStream;
             if (pipe == null) {
                 // No non-blocking read primitive for this stream - a socket, or something with no
@@ -1584,7 +1621,7 @@ namespace IronRuby.Builtins {
                 if (buffered > 0) {
                     return buffer;
                 }
-                throw NonBlockingError(io.Context, new Errno.ResourceTemporarilyUnavailableError(), true);
+                throw NonBlockingError(io.Context, true, "read would block");
             }
             if (read == 0) {
                 return (buffered > 0) ? buffer : null;

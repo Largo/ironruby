@@ -5240,12 +5240,25 @@ end
 # and the message is "<strerror> @ <location> - <message>", with each part dropped
 # when absent.
 class SystemCallError
+  # Both of these walk up to the Errno class the subclass came from and stop at
+  # SystemCallError, which has neither constant.  const_defined? with inherit
+  # left on would not do: on a class it also searches Object, where it would
+  # find the Errno *module* and answer that.  A subclass of an Errno class is a
+  # real thing - IO::EAGAINWaitReadable is one - and it describes itself the way
+  # its parent does rather than as an unknown error.
   def self.__errno_of__(klass)
-    klass.const_defined?(:Errno, false) ? klass.const_get(:Errno) : nil
+    while klass && klass < ::SystemCallError
+      return klass.const_get(:Errno) if klass.const_defined?(:Errno, false)
+      klass = klass.superclass
+    end
+    nil
   end
 
   def self.__default_message__(klass, errno)
-    return klass.const_get(:Message) if klass.const_defined?(:Message, false)
+    while klass && klass < ::SystemCallError
+      return klass.const_get(:Message) if klass.const_defined?(:Message, false)
+      klass = klass.superclass
+    end
     errno.nil? ? "unknown error" : "Unknown error #{errno}"
   end
 
@@ -12961,6 +12974,43 @@ class Random
   def self.random_number(limit = nil)
     limit.nil? ? rand : rand(limit)
   end unless respond_to?(:random_number)
+end
+
+# CRuby raises a class named for the errno whenever a non-blocking operation
+# would have had to wait, so that a rescue can tell "nothing yet" from a real
+# error of the same errno; the WaitReadable/WaitWritable modules they include
+# are what code rescues when it does not care which. On Linux EWOULDBLOCK and
+# EAGAIN are one errno, and these are correspondingly one class under two
+# names - which is exactly what ruby/spec checks.
+class IO
+  class EAGAINWaitReadable < Errno::EAGAIN
+    include IO::WaitReadable
+  end
+
+  class EAGAINWaitWritable < Errno::EAGAIN
+    include IO::WaitWritable
+  end
+
+  if Errno::EAGAIN.equal?(Errno::EWOULDBLOCK)
+    EWOULDBLOCKWaitReadable = EAGAINWaitReadable
+    EWOULDBLOCKWaitWritable = EAGAINWaitWritable
+  else
+    class EWOULDBLOCKWaitReadable < Errno::EWOULDBLOCK
+      include IO::WaitReadable
+    end
+
+    class EWOULDBLOCKWaitWritable < Errno::EWOULDBLOCK
+      include IO::WaitWritable
+    end
+  end
+
+  class EINPROGRESSWaitReadable < Errno::EINPROGRESS
+    include IO::WaitReadable
+  end
+
+  class EINPROGRESSWaitWritable < Errno::EINPROGRESS
+    include IO::WaitWritable
+  end
 end
 
 require "argf"

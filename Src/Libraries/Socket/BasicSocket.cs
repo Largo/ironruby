@@ -96,7 +96,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 operation();
             } catch (SocketException e) {
                 if (e.SocketErrorCode == SocketError.WouldBlock) {
-                    throw RubyIOOps.NonBlockingError(Context, new Errno.ResourceTemporarilyUnavailableError(), isRead);
+                    throw RubyIOOps.NonBlockingError(Context, isRead, isRead ? "read would block" : "write would block");
                 }
                 throw;
             } finally {

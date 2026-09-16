@@ -1838,6 +1838,28 @@ namespace IronRuby.Runtime {
         /// called rather than read off the module.
         /// </summary>
         /// <summary>
+        /// An instance of an exception class that the standard library defines in Ruby rather
+        /// than the runtime in C# - looked up by name under <paramref name="owner"/> and built by
+        /// calling #new on it. Null when there is no such constant, or when what is there is not
+        /// an exception class.
+        /// </summary>
+        public Exception CreateLibraryException(RubyModule/*!*/ owner, string/*!*/ className, string/*!*/ message) {
+            object exceptionClass;
+            if (!owner.TryGetConstant(null, className, out exceptionClass)) {
+                return null;
+            }
+
+            if (_exceptionFactory == null) {
+                Interlocked.CompareExchange(
+                    ref _exceptionFactory,
+                    CallSite<Func<CallSite, object, object, object>>.Create(RubyCallAction.Make(this, "new", RubyCallSignature.Simple(1))),
+                    null
+                );
+            }
+            return _exceptionFactory.Target(_exceptionFactory, exceptionClass, MutableString.Create(message, RubyEncoding.UTF8)) as Exception;
+        }
+
+        /// <summary>
         /// Asks ARGF which file it is reading; $FILENAME is defined as that answer.
         /// </summary>
         internal CallSite<Func<CallSite, object, object>>/*!*/ ArgfFileNameSite {
@@ -3717,6 +3739,7 @@ namespace IronRuby.Runtime {
         private CallSite<Func<CallSite, object, object, object>> _respondTo;
         private CallSite<Func<CallSite, object, object>> _moduleName;
         private CallSite<Func<CallSite, object, object>> _argfFileName;
+        private CallSite<Func<CallSite, object, object, object>> _exceptionFactory;
         private CallSite<Func<CallSite, object, object>> _toInt;
         private CallSite<Func<CallSite, object, object>> _toStr;
 
