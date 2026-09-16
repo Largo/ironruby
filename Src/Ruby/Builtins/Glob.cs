@@ -653,7 +653,11 @@ namespace IronRuby.Builtins {
                     // "a/b/c". MRI ignores base: for an absolute pattern, which is why this
                     // only runs when the pattern gave us no base of its own.
                     baseDirectory = String.IsNullOrEmpty(_base) ? "." : _base;
-                    _stripPrefix = baseDirectory.Length + 1;
+                    // The entry name is appended to the base with a separator between,
+                    // unless the base already ends in one - "a/" and "a" both produce
+                    // "a/b", so a trailing separator leaves nothing extra to strip.
+                    _stripPrefix = baseDirectory.Length +
+                        (baseDirectory[baseDirectory.Length - 1] == '/' ? 0 : 1);
                 }
 
                 DoGlob(baseDirectory, pos, false, true);
