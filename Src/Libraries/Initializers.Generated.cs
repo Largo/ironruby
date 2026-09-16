@@ -12499,17 +12499,21 @@ namespace IronRuby.StandardLibrary.StringScanner {
     public sealed class StringScannerLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
         protected override void LoadModules() {
             IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
+            IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(System.SystemException));
             
             
-            DefineGlobalClass("StringScanner", typeof(IronRuby.StandardLibrary.StringScanner.StringScanner), 0x00000008, classRef0, LoadStringScanner_Instance, LoadStringScanner_Class, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            IronRuby.Builtins.RubyClass def1 = DefineGlobalClass("StringScanner", typeof(IronRuby.StandardLibrary.StringScanner.StringScanner), 0x00000008, classRef0, LoadStringScanner_Instance, LoadStringScanner_Class, null, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Object, IronRuby.StandardLibrary.StringScanner.StringScanner>(IronRuby.StandardLibrary.StringScanner.StringScanner.Create)
             );
+            IronRuby.Builtins.RubyClass def2 = DefineClass("StringScanner::Error", typeof(IronRuby.StandardLibrary.StringScanner.StringScanner.Error), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(StringScannerLibraryInitializer.ExceptionFactory__StringScanner__Error));
+            SetConstant(def1, "Error", def2);
         }
         
         private static void LoadStringScanner_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "[]", 0x11, 
                 0x00000000U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.GetMatchSubgroup)
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.GetMatchSubgroup)
             );
             
             DefineLibraryMethod(module, "<<", 0x11, 
@@ -12527,14 +12531,24 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Boolean>(IronRuby.StandardLibrary.StringScanner.StringScanner.BeginningOfLine)
             );
             
+            DefineLibraryMethod(module, "captures", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.StringScanner.StringScanner.Captures)
+            );
+            
+            DefineLibraryMethod(module, "charpos", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Int32>(IronRuby.StandardLibrary.StringScanner.StringScanner.GetCharPosition)
+            );
+            
             DefineLibraryMethod(module, "check", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.Check)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.Check)
             );
             
             DefineLibraryMethod(module, "check_until", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.CheckUntil)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.CheckUntil)
             );
             
             DefineLibraryMethod(module, "clear", 0x11, 
@@ -12558,8 +12572,13 @@ namespace IronRuby.StandardLibrary.StringScanner {
             );
             
             DefineLibraryMethod(module, "exist?", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.Exist)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.Exist)
+            );
+            
+            DefineLibraryMethod(module, "fixed_anchor?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Boolean>(IronRuby.StandardLibrary.StringScanner.StringScanner.IsFixedAnchor)
             );
             
             DefineLibraryMethod(module, "get_byte", 0x11, 
@@ -12593,8 +12612,8 @@ namespace IronRuby.StandardLibrary.StringScanner {
             );
             
             DefineLibraryMethod(module, "match?", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.Match)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.Match)
             );
             
             DefineLibraryMethod(module, "matched", 0x11, 
@@ -12617,13 +12636,23 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.MatchedSize)
             );
             
-            DefineLibraryMethod(module, "peek", 0x11, 
+            DefineLibraryMethod(module, "named_captures", 0x11, 
                 0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.StringScanner.StringScanner.NamedCaptures)
+            );
+            
+            DefineLibraryMethod(module, "peek", 0x11, 
+                0x00010000U, 
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.Peek)
             );
             
-            DefineLibraryMethod(module, "peep", 0x11, 
+            DefineLibraryMethod(module, "peek_byte", 0x11, 
                 0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.PeekByte)
+            );
+            
+            DefineLibraryMethod(module, "peep", 0x11, 
+                0x00010000U, 
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.Peek)
             );
             
@@ -12633,7 +12662,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
             );
             
             DefineLibraryMethod(module, "pointer=", 0x11, 
-                0x00000000U, 
+                0x00010000U, 
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Int32, System.Int32>(IronRuby.StandardLibrary.StringScanner.StringScanner.SetCurrentPosition)
             );
             
@@ -12643,7 +12672,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
             );
             
             DefineLibraryMethod(module, "pos=", 0x11, 
-                0x00000000U, 
+                0x00010000U, 
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Int32, System.Int32>(IronRuby.StandardLibrary.StringScanner.StringScanner.SetCurrentPosition)
             );
             
@@ -12683,33 +12712,48 @@ namespace IronRuby.StandardLibrary.StringScanner {
             );
             
             DefineLibraryMethod(module, "scan", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.Scan)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.Scan)
+            );
+            
+            DefineLibraryMethod(module, "scan_byte", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.ScanByte)
             );
             
             DefineLibraryMethod(module, "scan_full", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, System.Boolean, System.Boolean, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.ScanFull)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, System.Boolean, System.Boolean, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.ScanFull)
+            );
+            
+            DefineLibraryMethod(module, "scan_integer", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.ScanInteger)
             );
             
             DefineLibraryMethod(module, "scan_until", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.ScanUntil)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.ScanUntil)
             );
             
             DefineLibraryMethod(module, "search_full", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, System.Boolean, System.Boolean, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.SearchFull)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, System.Boolean, System.Boolean, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.SearchFull)
+            );
+            
+            DefineLibraryMethod(module, "size", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.Size)
             );
             
             DefineLibraryMethod(module, "skip", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.Skip)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.Skip)
             );
             
             DefineLibraryMethod(module, "skip_until", 0x11, 
-                0x00000002U, 
-                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.RubyRegex, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.SkipUntil)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object, System.Nullable<System.Int32>>(IronRuby.StandardLibrary.StringScanner.StringScanner.SkipUntil)
             );
             
             DefineLibraryMethod(module, "string", 0x11, 
@@ -12718,8 +12762,8 @@ namespace IronRuby.StandardLibrary.StringScanner {
             );
             
             DefineLibraryMethod(module, "string=", 0x11, 
-                0x00000004U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.SetString)
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringScanner.StringScanner.SetString)
             );
             
             DefineLibraryMethod(module, "terminate", 0x11, 
@@ -12737,6 +12781,11 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 new Func<IronRuby.StandardLibrary.StringScanner.StringScanner, IronRuby.StandardLibrary.StringScanner.StringScanner>(IronRuby.StandardLibrary.StringScanner.StringScanner.Unscan)
             );
             
+            DefineLibraryMethod(module, "values_at", 0x11, 
+                0x80000004U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.StringScanner.StringScanner, System.Object[], IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.StringScanner.StringScanner.ValuesAt)
+            );
+            
         }
         
         private static void LoadStringScanner_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -12745,6 +12794,10 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 new Func<System.Object, System.Object>(IronRuby.StandardLibrary.StringScanner.StringScanner.MustCVersion)
             );
             
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__StringScanner__Error(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.StringScanner.StringScanner.Error(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
     }
