@@ -1162,16 +1162,20 @@ namespace IronRuby.Builtins {
         }
 
         private void TrackEncoding(MutableString/*!*/ str) {
-            if (str.IsAscii()) {
+            RubyEncoding encoding = str.Encoding;
+
+            // A string of nothing but ASCII goes into any result - but only where an ASCII byte
+            // means itself. "world" in UTF-16LE is ASCII in name only: its bytes are not the
+            // characters they look like, and MRI will not let them into a UTF-8 result.
+            if (str.IsAscii() && (encoding == null || encoding.IsAsciiIdentity)) {
                 return;
             }
 
-            RubyEncoding encoding = str.Encoding;
             if (encoding == null || encoding == _resultEncoding) {
                 return;
             }
 
-            if (_formatIsAscii && (_argEncoding == null || _argEncoding == encoding)) {
+            if (_formatIsAscii && encoding.IsAsciiIdentity && (_argEncoding == null || _argEncoding == encoding)) {
                 _argEncoding = encoding;
                 _resultEncoding = encoding;
                 return;
