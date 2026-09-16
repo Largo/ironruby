@@ -516,7 +516,11 @@ namespace IronRuby.Builtins {
             while (i < length) {
                 byte c = data.GetByte(i++);
                 if (c == '=') {
+                    // An "=" that does not begin a complete escape is not an error and does not
+                    // end the string: it was never an escape, so it and whatever followed it
+                    // stay exactly as they were found.
                     if (i >= length) {
+                        result.Append((byte)'=');
                         break;
                     }
 
@@ -532,17 +536,22 @@ namespace IronRuby.Builtins {
 
                     int hi = Tokenizer.ToDigit(c);
                     if (hi >= 16) {
-                        break;
+                        result.Append((byte)'=');
+                        continue;
                     }
                     i++;
 
                     if (i >= length) {
+                        result.Append((byte)'=');
+                        result.Append(c);
                         break;
                     }
 
                     int lo = Tokenizer.ToDigit(data.GetByte(i));
                     if (lo >= 16) {
-                        break;
+                        result.Append((byte)'=');
+                        result.Append(c);
+                        continue;
                     }
 
                     i++;
@@ -1304,7 +1313,10 @@ namespace IronRuby.Builtins {
                     switch (directive.Directive) {
                         case '@':
                             count = 0;
-                            // "@*" means "seek to 0", "@" with no count means "seek to 1".
+                            // "@*" means "seek to 0". "@" with no count should mean "seek to 1",
+                            // but the shared format parser turns that into a count of 0 before it
+                            // gets here, and unpack's "@" reads the same field - so the two cannot
+                            // be told apart without splitting the parse.
                             stream.SetLength(stream.Position = directive.Count ?? 0);
                             break;
 
@@ -1354,10 +1366,14 @@ namespace IronRuby.Builtins {
 
                         case 'h':
                         case 'H':
-                            // MRI skips null, unlike in "m" directive:
-                            if (GetPackArg(self, i) != null) {
-                                str = ToMutableString(stringCast, stream, GetPackArg(self, i));
+                            // nil is not skipped: it is a string with no digits in it, and the
+                            // count still asks for that many nibbles, so the padding goes out.
+                            object hexArg = GetPackArg(self, i);
+                            if (hexArg != null) {
+                                str = ToMutableString(stringCast, stream, hexArg);
                                 FromHex(stream, str, directive.Count ?? str.GetByteCount(), directive.Directive == 'h');
+                            } else {
+                                FromHex(stream, MutableString.FrozenEmpty, directive.Count ?? 1, directive.Directive == 'h');
                             }
                             count = 1;
                             break;
@@ -1642,7 +1658,11 @@ namespace IronRuby.Builtins {
                     case 'A':
                     case 'a':
                     case 'Z':
-                        result.Add(ReadString(self, directive.Directive, directive.Count, ref position));
+                        // Unpacking takes bytes out of a string rather than characters, so what
+                        // comes back is binary whatever the string it came from was tagged as.
+                        MutableString unpacked = ReadString(self, directive.Directive, directive.Count, ref position);
+                        unpacked.ForceEncoding(RubyEncoding.Binary);
+                        result.Add(unpacked);
                         break;
 
                     case 'B':
