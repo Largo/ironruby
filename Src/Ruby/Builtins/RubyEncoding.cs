@@ -175,6 +175,36 @@ namespace IronRuby.Builtins {
             get { return _maxBytesPerChar; }
         }
 
+        /// <summary>
+        /// The smallest number of bytes a character of this encoding occupies. It is 1 for
+        /// everything but UTF-16 and UTF-32, whose code units are 2 and 4 bytes wide; a run of
+        /// bytes that decodes to nothing still counts as one character per unit there, which is
+        /// how MRI measures a string whose bytes are not valid in its own encoding. The
+        /// BOM-sniffing "UTF-16" and "UTF-32" are dummy encodings measured in bytes, so they
+        /// are not included.
+        /// </summary>
+        public int MinBytesPerChar {
+            get {
+                switch (CodePage) {
+                    case CodePageUTF16LE:
+                    case CodePageUTF16BE:
+                        return 2;
+
+                    case CodePageUTF32LE:
+                    case CodePageUTF32BE:
+                        return 4;
+
+                    default:
+                        return 1;
+                }
+            }
+        }
+
+        /// <summary>True for the big endian forms of UTF-16 and UTF-32.</summary>
+        public bool IsBigEndianUnicode {
+            get { return CodePage == CodePageUTF16BE || CodePage == CodePageUTF32BE; }
+        }
+
         public Encoding/*!*/ Encoding {
             get { return _encoding; }
         }

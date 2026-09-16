@@ -156,11 +156,58 @@ namespace IronRuby.Builtins {
                     return _count;
                 }
 
+                // In UTF-16 and UTF-32 a character is measured in code units, so bytes that
+                // decode to nothing count one per unit rather than one per byte: a lone
+                // surrogate is one character, not two.
+                int unit = _owner._encoding.MinBytesPerChar;
+                if (unit > 1) {
+                    return CountUnicodeUnits(unit, _owner._encoding.IsBigEndianUnicode);
+                }
+
                 // This used to decode by hand so that a *run* of undecodable bytes could be counted
                 // as one character. MRI counts each such byte separately - "a\xE3\x81c" is four
                 // characters in UTF-8, not three - and the escaping decoder produces exactly one
                 // character per undecodable byte, so the ordinary path is both simpler and right.
                 return SwitchToChars().GetCharacterCount();
+            }
+
+            /// <summary>
+            /// Counts the characters of a UTF-16 or UTF-32 string by walking its code units. A
+            /// well formed surrogate pair is one character of two units; anything else - a lone
+            /// surrogate, a code point out of range, a unit cut short at the end of the string -
+            /// is one character of a single unit, which is how MRI counts them.
+            /// </summary>
+            private int CountUnicodeUnits(int unit, bool bigEndian) {
+                int count = 0;
+                int i = 0;
+                while (i < _count) {
+                    if (_count - i < unit) {
+                        // A trailing fragment too short to be a unit still counts as a character.
+                        count++;
+                        break;
+                    }
+
+                    if (unit == 2 && IsHighSurrogate(ReadUnit16(i, bigEndian)) &&
+                        _count - i >= 4 && IsLowSurrogate(ReadUnit16(i + 2, bigEndian))) {
+                        i += 4;
+                    } else {
+                        i += unit;
+                    }
+                    count++;
+                }
+                return count;
+            }
+
+            private int ReadUnit16(int i, bool bigEndian) {
+                return bigEndian ? (_data[i] << 8) | _data[i + 1] : (_data[i + 1] << 8) | _data[i];
+            }
+
+            private static bool IsHighSurrogate(int unit) {
+                return unit >= 0xD800 && unit <= 0xDBFF;
+            }
+
+            private static bool IsLowSurrogate(int unit) {
+                return unit >= 0xDC00 && unit <= 0xDFFF;
             }
 
             public override int GetByteCount() {
