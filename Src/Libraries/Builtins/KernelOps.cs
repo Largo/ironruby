@@ -108,10 +108,19 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// A Float given to Float() comes back as the very same object. Taking it as a double and
+        /// handing it back boxes it afresh, and #equal? on a boxed double compares the boxes - so
+        /// Float(f).equal?(f) was false, including for the NaN and the Infinity that have no
+        /// other way of being told apart from any other NaN or Infinity.
+        /// </summary>
         [RubyMethod("Float", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("Float", RubyMethodAttributes.PublicSingleton)]
-        public static double ToFloat(object self, [DefaultProtocol]double value) {
-            return value;
+        public static object ToFloat(ConversionStorage<double>/*!*/ floatConversion, object self, object value) {
+            if (value is double) {
+                return value;
+            }
+            return Protocols.CastToFloat(floatConversion, value);
         }
 
         [RubyMethod("Integer", RubyMethodAttributes.PrivateInstance)]

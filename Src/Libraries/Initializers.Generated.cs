@@ -4509,8 +4509,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Float", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.KernelOps.ToFloat)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Double>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
             );
             
             DefineLibraryMethod(module, "fork", 0x52, 
@@ -5020,8 +5020,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "Float", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.KernelOps.ToFloat)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Double>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToFloat)
             );
             
             DefineLibraryMethod(module, "fork", 0x61, 
