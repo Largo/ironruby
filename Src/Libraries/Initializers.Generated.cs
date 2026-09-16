@@ -10972,6 +10972,11 @@ namespace IronRuby.StandardLibrary.Sockets {
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Int32>(IronRuby.StandardLibrary.Sockets.RubySocket.GetServiceByName)
             );
             
+            DefineLibraryMethod(module, "getservbyport", 0x21, 
+                0x00030000U, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Sockets.RubySocket.GetServiceByPort)
+            );
+            
             DefineLibraryMethod(module, "pack_sockaddr_in", 0x21, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Sockets.RubySocket.PackInetSockAddr)

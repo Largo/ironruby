@@ -52,7 +52,13 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         [RubyMethod("peeraddr")]
         public static object/*!*/ GetPeerAddress(RubyContext/*!*/ context, IPSocket/*!*/ self) {
-            return self.GetAddressArray(self.Socket.RemoteEndPoint);
+            EndPoint remote = self.Socket.RemoteEndPoint;
+            if (remote == null) {
+                // getpeername(2) on a socket that was never connected is ENOTCONN; .NET just
+                // hands back a null endpoint, which turned into a NullReferenceException.
+                throw new Errno.NotConnectedError();
+            }
+            return self.GetAddressArray(remote);
         }
 
         [RubyMethod("recvfrom")]

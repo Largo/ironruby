@@ -43,6 +43,14 @@ namespace IronRuby.StandardLibrary.Sockets {
         private Socket _socket;
         private bool _doNotReverseLookup;
 
+        // CRuby has opened every socket with O_NONBLOCK since 3.0 and emulates the blocking
+        // calls on top of it, so IO#nonblock? is true on a freshly created socket.  Here the
+        // waiting is done by Socket.Poll in BlockingCore instead, and Socket.Blocking doubles
+        // as the "this one call must not wait" switch the *_nonblock family flips.  Keep the
+        // user-visible O_NONBLOCK bit separate from it so fcntl(2) reports what CRuby reports;
+        // an explicit fcntl/nonblock= still moves Socket.Blocking as well.
+        private bool _nonBlocking = true;
+
         [MultiRuntimeAware]
         private static readonly object BasicSocketClassKey = new object();
 
@@ -131,7 +139,8 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         // returns 0 on success, -1 on failure
         private int SetFileControlFlags(int flags) {
-            Socket.Blocking = (flags & (RubyFileOps.Constants.NONBLOCK | LinuxNonBlock)) == 0;
+            _nonBlocking = (flags & (RubyFileOps.Constants.NONBLOCK | LinuxNonBlock)) != 0;
+            Socket.Blocking = !_nonBlocking;
             return 0;
         }
 
@@ -141,9 +150,9 @@ namespace IronRuby.StandardLibrary.Sockets {
                 case LinuxSetFileFlags:
                     return SetFileControlFlags(arg);
                 case LinuxGetFileFlags:
-                    // .NET owns the blocking flag; report it the way fcntl(2) would, which is
-                    // what io/nonblock's #nonblock? and #nonblock= read back.
-                    return Socket.Blocking ? 0 : LinuxNonBlock;
+                    // Report the O_NONBLOCK bit io/nonblock's #nonblock? and #nonblock= read
+                    // back.  Not Socket.Blocking: that is the internal wait-or-not switch.
+                    return _nonBlocking ? LinuxNonBlock : 0;
             }
             throw new NotSupportedException();
         }
@@ -503,8 +512,19 @@ namespace IronRuby.StandardLibrary.Sockets {
         ///   optval =  sock.getsockopt(Socket::SOL_SOCKET, Socket::SO_LINGER)
         ///   onoff, linger = optval.unpack "ii"
         /// </example>
+        // TODO: socket options should go through libc getsockopt/setsockopt rather than .NET.
+        // Three things follow from routing them through Socket.GetSocketOption instead:
+        //  * the Socket constants in this file carry winsock's numbers (SOL_SOCKET 65535,
+        //    SO_REUSEADDR 4, ...) because that is what SocketOptionName wants, so they do not
+        //    match Ruby-on-Linux's;
+        //  * .NET only knows the options in its own enums, so anything else -- UDP_CORK, an
+        //    option on an AF_UNIX socket -- is refused with SocketError.OperationNotSupported
+        //    where the kernel would have answered, or would have said ENOPROTOOPT;
+        //  * SocketOptionName.ReuseAddress is *translated* to SO_REUSEPORT on Unix, so Ruby's
+        //    SO_REUSEADDR cannot be set at all (see TCPServer.cs).
+        // A libc layer needs the platform constants, which is a bigger change than it looks.
         [RubyMethod("getsockopt")]
-        public static MutableString GetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context, 
+        public static MutableString GetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context,
             RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname) {
             Protocols.CheckSafeLevel(context, 2, "getsockopt");
             // struct linger is two ints; everything else the specs ask about is one.
@@ -517,6 +537,13 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static MutableString GetSocketName(RubyBasicSocket/*!*/ self) {
             EndPoint local = self.Socket.LocalEndPoint;
             if (local == null) {
+                // .NET remembers only the endpoint it set itself, so listen(2) on an unbound
+                // socket -- which the kernel auto-binds to an ephemeral port -- leaves
+                // LocalEndPoint null.  Ask the kernel before giving up.
+                byte[] name = PosixMessages.GetSocketName((int)self.Socket.Handle);
+                if (name != null && name.Length >= 2) {
+                    return MutableString.CreateBinary(name);
+                }
                 return EmptySocketAddress(self.Socket.AddressFamily);
             }
             SocketAddress addr = local.Serialize();
@@ -815,6 +842,34 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         /// <summary>
+        /// Every address a name resolves to, IPv4 first, the way GetHostAddress picks.  A nil
+        /// host is getaddrinfo(3) with a null node and no AI_PASSIVE: the loopback of either
+        /// family, IPv6 first, which is the order CRuby's connect loop tries them in.
+        /// </summary>
+        internal static IPAddress[]/*!*/ GetHostAddresses(string hostNameOrAddress) {
+            if (hostNameOrAddress == null) {
+                return new[] { IPAddress.IPv6Loopback, IPAddress.Loopback };
+            }
+            IPAddress address;
+            if (IPAddress.TryParse(hostNameOrAddress, out address)) {
+                return new[] { address };
+            }
+            IPAddress[] addresses = Dns.GetHostAddresses(hostNameOrAddress);
+            var ordered = new List<IPAddress>(addresses.Length);
+            foreach (var hostAddress in addresses) {
+                if (hostAddress.AddressFamily == AddressFamily.InterNetwork) {
+                    ordered.Add(hostAddress);
+                }
+            }
+            foreach (var hostAddress in addresses) {
+                if (hostAddress.AddressFamily != AddressFamily.InterNetwork) {
+                    ordered.Add(hostAddress);
+                }
+            }
+            return ordered.ToArray();
+        }
+
+        /// <summary>
         /// Resolve preferring a particular address family -- needed when a socket already
         /// exists and its local address has to match it.
         /// </summary>
@@ -1053,6 +1108,15 @@ namespace IronRuby.StandardLibrary.Sockets {
         internal static ServiceName SearchForService(int port) {
             foreach (ServiceName name in ServiceNames) {
                 if (name.Port == port) {
+                    return name;
+                }
+            }
+            return null;
+        }
+
+        internal static ServiceName SearchForService(int port, MutableString/*!*/ protocol) {
+            foreach (ServiceName name in ServiceNames) {
+                if (name.Port == port && name.Protocol.Equals(protocol)) {
                     return name;
                 }
             }

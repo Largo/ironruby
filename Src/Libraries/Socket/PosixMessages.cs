@@ -47,6 +47,9 @@ namespace IronRuby.StandardLibrary.Sockets {
         [DllImport("libc", EntryPoint = "socketpair", SetLastError = true)]
         internal static extern int socketpair(int domain, int type, int protocol, int[] sv);
 
+        [DllImport("libc", EntryPoint = "getsockname", SetLastError = true)]
+        private static extern int sys_getsockname(int fd, byte[] address, ref int length);
+
         [DllImport("libc", EntryPoint = "sendmsg", SetLastError = true)]
         private static extern IntPtr sys_sendmsg(int fd, ref MsgHdr message, int flags);
 
@@ -87,6 +90,34 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         /// <summary>The largest sockaddr the kernel can hand back (sockaddr_storage).</summary>
         private const int MaxSocketAddressSize = 128;
+
+        #region getsockname
+
+        /// <summary>
+        /// getsockname(2), or null if the kernel refused.  .NET only remembers an endpoint it
+        /// set itself, so a socket the kernel auto-bound -- listen(2) on an unbound socket --
+        /// has a null Socket.LocalEndPoint even though it very much has a name.
+        /// </summary>
+        internal static byte[] GetSocketName(int descriptor) {
+            byte[] buffer = new byte[MaxSocketAddressSize];
+            int length = buffer.Length;
+            try {
+                if (sys_getsockname(descriptor, buffer, ref length) != 0) {
+                    return null;
+                }
+            } catch (Exception) {
+                // No libc getsockname: nothing is lost, the caller falls back.
+                return null;
+            }
+            if (length <= 0 || length > buffer.Length) {
+                return null;
+            }
+            byte[] result = new byte[length];
+            Array.Copy(buffer, result, length);
+            return result;
+        }
+
+        #endregion
 
         #region sendmsg
 

@@ -554,7 +554,10 @@ class Addrinfo
     @afamily = Addrinfo.__af(afamily)
     @pfamily = Addrinfo.__af(pfamily)
     @socktype = socktype == 0 ? 0 : Socket.__ir_socktype_arg(socktype)
-    @protocol = protocol == 0 ? 0 : Socket.__ir_protocol_arg(protocol)
+    # marshal_dump writes the protocol as its constant *name*, so this is the one
+    # place a name has to be accepted; Socket.new's protocol argument does not
+    # take one -- see __ir_protocol_arg.
+    @protocol = protocol == 0 ? 0 : Socket.__ir_protocol_name_arg(protocol)
     @canonname = canonname
     @ir_host = nil
     @unix_path = nil
@@ -724,9 +727,15 @@ class BasicSocket
       # makes it unreachable is the empty path.
       raise SocketError, "unbound Unix socket" if addr.unix_path.to_s.empty?
       addr
-    elsif addr.ipv4? && addr.ip_address == "0.0.0.0"
+    elsif addr.ipv4?
+      # bind(2) always assigns a port, so port 0 means the socket was never
+      # bound -- getsockname hands back the all-zero sockaddr either way.
+      raise SocketError, "unbound IPv4 socket" if addr.ip_port == 0
+      return addr unless addr.ip_address == "0.0.0.0"
       Addrinfo.__ir_new_ip("127.0.0.1", addr.ip_port, addr.socktype, addr.protocol, addr.pfamily)
-    elsif addr.ipv6? && addr.ipv6_unspecified?
+    elsif addr.ipv6?
+      raise SocketError, "unbound IPv6 socket" if addr.ip_port == 0
+      return addr unless addr.ipv6_unspecified?
       Addrinfo.__ir_new_ip("::1", addr.ip_port, addr.socktype, addr.protocol, addr.pfamily)
     else
       addr
@@ -1305,6 +1314,21 @@ class Socket
     nul = path.index("\0")
     nul ? path.byteslice(0, nul) : path
   end
+
+  class << self
+    alias_method :__ir_raw_unpack_sockaddr_in, :unpack_sockaddr_in
+
+    # CRuby's unpack_sockaddr_in takes an Addrinfo as readily as a packed
+    # sockaddr, and a non-IP one is an ArgumentError rather than the TypeError
+    # #to_str would raise.
+    def unpack_sockaddr_in(sockaddr)
+      if Addrinfo === sockaddr
+        raise ArgumentError, "not an AF_INET/AF_INET6 sockaddr" unless sockaddr.ip?
+        sockaddr = sockaddr.to_sockaddr
+      end
+      __ir_raw_unpack_sockaddr_in(sockaddr)
+    end
+  end
 end
 
 
@@ -1339,7 +1363,18 @@ class Socket
       found
     end
 
+    # Unlike the domain and the socket type, a protocol has no Symbol form in
+    # CRuby: Socket.new(:INET, :STREAM, :TCP) is a TypeError, not IPPROTO_TCP.
     def __ir_protocol_arg(value) # :nodoc:
+      return 0 if value.nil?
+      return value if value.kind_of?(Integer)
+      unless value.respond_to?(:to_int)
+        raise TypeError, "no implicit conversion of #{value.class} into Integer"
+      end
+      value.to_int
+    end
+
+    def __ir_protocol_name_arg(value) # :nodoc:
       return 0 if value.nil?
       return value if value.kind_of?(Integer)
       name = __ir_name(value, "Integer")
@@ -1395,11 +1430,21 @@ class BasicSocket
 
   def setsockopt(level, optname = nil, value = nil)
     if level.kind_of?(Socket::Option)
+      # A Socket::Option already carries level, optname and data, so it is the
+      # *only* argument; CRuby checks the arity before it looks at the type,
+      # hence ArgumentError for two and TypeError for three.
+      raise ArgumentError, "wrong number of arguments (given 2, expected 1)" if !optname.nil? && value.nil?
+      unless optname.nil? && value.nil?
+        raise TypeError, "no implicit conversion of Socket::Option into Integer"
+      end
       option = level
       lvl, opt, value = option.level, option.optname, option.data
     else
       lvl = Socket.__ir_level_arg(__ir_afamily, level)
       opt = Socket.__ir_optname_arg(lvl, optname)
+      # .NET's SetSocketOption(int) silently accepts a null and does nothing;
+      # setsockopt(2) has no way to express "no value".
+      raise TypeError, "no implicit conversion from nil to integer" if value.nil?
     end
     value = [value ? 1 : 0].pack("i") if value == true || value == false
     __ir_raw_setsockopt(lvl, opt, value)
@@ -1454,7 +1499,10 @@ class Socket
       raise IO::EINPROGRESSWaitWritable, "Operation now in progress" if exception
       :wait_writable
     when "IsConnected"
-      raise Errno::EISCONN
+      # CRuby reports an already-connected socket as a successful connect in
+      # exceptionless mode, not :wait_writable.
+      raise Errno::EISCONN if exception
+      0
     else
       raise
     end
@@ -1533,8 +1581,31 @@ end
 class UDPSocket
   alias_method :__ir_raw_recvfrom_nonblock, :recvfrom_nonblock
 
-  def recvfrom_nonblock(length, flags = nil, exception: true)
-    flags.nil? ? __ir_raw_recvfrom_nonblock(length) : __ir_raw_recvfrom_nonblock(length, flags)
+  # A datagram socket that was never bound has no port for anything to arrive
+  # on, so recvfrom(2) on it can only ever block.  .NET refuses the call outright
+  # ("You must call the Bind method before performing this operation"), which
+  # surfaced as TypeError instead of the EAGAIN the kernel gives.
+  def __ir_bound? # :nodoc:
+    Addrinfo.__ir_from_sockaddr(getsockname, Socket::SOCK_DGRAM).ip_port != 0
+  rescue StandardError
+    true
+  end
+  private :__ir_bound?
+
+  def recvfrom_nonblock(length, flags = nil, buffer = nil, exception: true)
+    unless __ir_bound?
+      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      return :wait_readable
+    end
+    data, sender = flags.nil? ? __ir_raw_recvfrom_nonblock(length)
+                              : __ir_raw_recvfrom_nonblock(length, flags)
+    unless buffer.nil?
+      encoding = buffer.encoding
+      buffer.replace(data)
+      buffer.force_encoding(encoding)
+      data = buffer
+    end
+    [data, sender]
   rescue SocketError => e
     case Socket.__ir_socket_error_code(e)
     when "WouldBlock"
@@ -1582,6 +1653,13 @@ class Socket
     end
   end
 
+  # recvfrom reports the sender as an Addrinfo on Socket but as the
+  # ["AF_INET", port, host, ip] Array on UDPSocket, and udp_server_* is handed
+  # whichever the caller happened to open.
+  def self.__ir_udp_sender(sender) # :nodoc:
+    Addrinfo === sender ? sender : Addrinfo.new(sender, nil, Socket::SOCK_DGRAM, 0)
+  end
+
   def self.udp_server_recv(sockets) # :yield: message, udpsource
     sockets.each do |sock|
       begin
@@ -1589,7 +1667,7 @@ class Socket
       rescue IO::WaitReadable
         next
       end
-      remote = Addrinfo.new(sender, nil, Socket::SOCK_DGRAM, 0)
+      remote = __ir_udp_sender(sender)
       local = sock.local_address
       yield message, UDPSource.new(remote, local) { |reply|
         sock.send(reply, 0, remote.ip_address, remote.ip_port)
@@ -1606,7 +1684,7 @@ class Socket
     loop do
       sockets.each do |sock|
         message, sender = sock.recvfrom(65536)
-        remote = Addrinfo.new(sender, nil, Socket::SOCK_DGRAM, 0)
+        remote = __ir_udp_sender(sender)
         local = sock.local_address
         block.call(message, UDPSource.new(remote, local) { |reply|
           sock.send(reply, 0, remote.ip_address, remote.ip_port)
@@ -1764,7 +1842,10 @@ class Socket
       raise IO::EINPROGRESSWaitWritable, "Operation now in progress" if exception
       :wait_writable
     when "IsConnected"
-      raise Errno::EISCONN
+      # CRuby reports an already-connected socket as a successful connect in
+      # exceptionless mode, not :wait_writable.
+      raise Errno::EISCONN if exception
+      0
     else
       raise
     end
@@ -1778,7 +1859,10 @@ class Socket
       raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
       return :wait_readable
     end
-    data, sender = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
+    result = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
+    # recvfrom already reports end-of-file on a stream socket as nil.
+    return nil if result.nil?
+    data, sender = result
     unless buffer.nil?
       encoding = buffer.encoding
       buffer.replace(data)
@@ -2000,6 +2084,7 @@ module IronRubySocketErrors__ # :nodoc: all
     "ConnectionRefused"           => :ECONNREFUSED,
     "ConnectionReset"             => :ECONNRESET,
     "DestinationAddressRequired"  => :EDESTADDRREQ,
+    "Fault"                       => :EFAULT,
     "HostDown"                    => :EHOSTDOWN,
     "HostUnreachable"             => :EHOSTUNREACH,
     "Interrupted"                 => :EINTR,
@@ -2045,7 +2130,14 @@ module IronRubySocketErrors__ # :nodoc: all
     names.each do |name|
       next unless klass.method_defined?(name) || klass.private_method_defined?(name)
       raw = :"__ir_errmap_#{name}"
-      next if klass.method_defined?(raw) || klass.private_method_defined?(raw)
+      # The guard against double-wrapping has to ask whether *this* class was
+      # wrapped: a subclass that redefines the method -- UDPSocket#send, say --
+      # inherits the base class's alias and would otherwise be skipped, leaving
+      # its own definition unmapped.
+      owner = begin
+        (klass.instance_method(raw).owner rescue nil)
+      end
+      next if owner.equal?(klass)
       klass.__send__(:alias_method, raw, name)
       klass.__send__(:define_method, name) do |*args, &block|
         begin
@@ -2206,44 +2298,89 @@ class Socket
     alias_method :__ir_raw_getnameinfo, :getnameinfo
     alias_method :__ir_raw_gethostbyaddr, :gethostbyaddr
 
-    # The C# getnameinfo builds an IPv4 endpoint out of the Array form, so an
-    # AF_INET6 tuple never reached the resolver.  Pack it instead.
-    def getnameinfo(sockaddr, flags = 0)
-      if sockaddr.kind_of?(Array)
-        port = sockaddr[1].to_i
-        address = (sockaddr[3] || sockaddr[2]).to_s
-        host, service = __ir_raw_getnameinfo(sockaddr_in(port, address), flags)
-      else
-        sockaddr = sockaddr.to_sockaddr if Addrinfo === sockaddr
-        host, service = __ir_raw_getnameinfo(sockaddr, flags)
-        port = sockaddr.to_str.byteslice(2, 2).unpack("n")[0]
-        address = nil
+    # Resolves the node of an Array-form sockaddr to a numeric address of the
+    # requested family.  getaddrinfo(3) may know a host under both families --
+    # asking for the wrong one is how ["AF_INET", 21, "localhost"] used to come
+    # back as an IPv6 endpoint.
+    def __ir_getnameinfo_address(family, node) # :nodoc:
+      text = node.to_s
+      return family == AF_INET6 ? "::" : "0.0.0.0" if text.empty?
+      begin
+        entries = __ir_raw_getaddrinfo(text, nil, family, 0, 0, 0)
+        entry = entries.find { |e| e[4] == family }
+        entry ? entry[3] : text
+      rescue StandardError
+        text
       end
-      if (flags.to_i & NI_NUMERICSERV) != 0
-        service = port.to_s
-      end
-      if (flags.to_i & NI_NUMERICHOST) != 0 && address
-        host = address
-      end
-      [host, service]
     end
 
-    def __ir_hostent(name, aliases, addresses) # :nodoc:
-      addresses = addresses.uniq
+    # The C# getnameinfo builds an IPv4 endpoint out of the Array form, so an
+    # AF_INET6 tuple never reached the resolver.  Pack it instead.  It also
+    # ignores its flags, so NI_NUMERICHOST/NI_NUMERICSERV are applied here off
+    # the sockaddr that was actually looked up rather than off the input, which
+    # is the only way a *hostname* in the Array form renders numerically.
+    def getnameinfo(sockaddr, flags = 0)
+      flags = flags.to_i
+      if sockaddr.kind_of?(Array)
+        unless sockaddr.size == 3 || sockaddr.size == 4
+          raise ArgumentError, "array size should be 3 or 4, #{sockaddr.size} given"
+        end
+        family = __ir_family_arg(sockaddr[0])
+        unless family == AF_INET || family == AF_INET6
+          raise __ir_resolution_error("getaddrinfo: ai_family not supported", EAI_FAMILY)
+        end
+        port = __ir_port_arg(sockaddr[1])
+        node = sockaddr.size > 3 && sockaddr[3] ? sockaddr[3] : sockaddr[2]
+        packed = sockaddr_in(port, __ir_getnameinfo_address(family, node))
+      else
+        packed = Addrinfo === sockaddr ? sockaddr.to_sockaddr : sockaddr
+        unless packed.kind_of?(String)
+          raise TypeError, "no implicit conversion of #{packed.class} into String"
+        end
+      end
+
+      # A sockaddr whose family byte is not AF_INET/AF_INET6 -- the literal
+      # "cats" the specs pass, say -- is a resolver failure, not a CLR
+      # ArgumentError from deep inside IPEndPoint.Create.
+      info = begin
+        Addrinfo.new(packed)
+      rescue StandardError
+        raise __ir_resolution_error("getnameinfo: ai_family not supported", EAI_FAMILY)
+      end
+      unless info.ip?
+        raise __ir_resolution_error("getnameinfo: ai_family not supported", EAI_FAMILY)
+      end
+
+      host, service = __ir_raw_getnameinfo(packed, flags)
+      service = info.ip_port.to_s if (flags & NI_NUMERICSERV) != 0
+      host = info.ip_address if (flags & NI_NUMERICHOST) != 0
+      [host.to_s, service.to_s]
+    end
+
+    # Socket.gethostbyname reports the addresses packed; TCPSocket.gethostbyname
+    # reports the very same hostent with them in presentation form.  That is not
+    # a guess -- CRuby's rsock_make_hostent packs, and tcp_s_gethostbyname does
+    # not -- and it is the whole difference between the two.
+    def __ir_hostent(name, aliases, addresses, packed = true) # :nodoc:
+      addresses = addresses.map { |a| a.to_s }.uniq
       family = addresses.first.to_s.include?(":") ? AF_INET6 : AF_INET
-      packed = addresses.map do |address|
+      aliases = aliases.reject { |a| a == name || addresses.include?(a) }
+      unless packed
+        return [name, aliases, family, *addresses]
+      end
+      bytes = addresses.map do |address|
         address.include?(":") ? __ir_pack_ipv6(address) : address.split(".").map { |o| o.to_i }.pack("C4")
       end
-      [name, aliases, family, *packed]
+      [name, aliases, family, *bytes]
     end
 
     # The C# gethostbyname/gethostbyaddr stop at [name, aliases] for IPv6 and
     # never report the family or the packed address.
-    def gethostbyname(host)
+    def __ir_gethostbyname(host, packed) # :nodoc:
       text = host.to_s
       case text
-      when "<broadcast>" then return ["255.255.255.255", [], AF_INET, [255, 255, 255, 255].pack("C4")]
-      when "<any>" then return ["0.0.0.0", [], AF_INET, [0, 0, 0, 0].pack("C4")]
+      when "<broadcast>" then return __ir_hostent("255.255.255.255", [], ["255.255.255.255"], packed)
+      when "<any>" then return __ir_hostent("0.0.0.0", [], ["0.0.0.0"], packed)
       end
       raw = __ir_raw_gethostbyname(host)
       addresses = begin
@@ -2253,30 +2390,85 @@ class Socket
       end
       addresses = [text] if addresses.empty?
       numeric = text.include?(":") || text =~ /\A\d{1,3}(\.\d{1,3}){3}\z/
-      __ir_hostent(numeric ? text : raw[0], raw[1] || [], addresses)
+      __ir_hostent(numeric ? text : raw[0], raw[1] || [], addresses, packed)
     end
 
+    def gethostbyname(host)
+      __ir_gethostbyname(host, true)
+    end
+
+    # gethostbyaddr(3) takes the *packed* address, so its length is what decides
+    # the family; an explicit family that disagrees is simply a lookup that
+    # cannot succeed.  .NET's Dns has no equivalent check and happily answered
+    # for the wrong one.
     def gethostbyaddr(address, family = nil)
-      raw = family.nil? ? __ir_raw_gethostbyaddr(address) : __ir_raw_gethostbyaddr(address, __ir_family_arg(family))
-      bytes = address.kind_of?(String) ? address : address.to_str
-      text = if bytes.bytesize == 16
-        __ir_unpack_ipv6(bytes)
-      else
-        bytes.unpack("C4").join(".")
+      bytes = (address.kind_of?(String) ? address : address.to_str).dup
+      bytes.force_encoding(Encoding::BINARY)
+      actual = case bytes.bytesize
+               when 4 then AF_INET
+               when 16 then AF_INET6
+               else raise SocketError, "host not found"
+               end
+      unless family.nil? || __ir_family_arg(family) == actual
+        raise SocketError, "host not found"
       end
-      __ir_hostent(raw[0], raw[1] || [], [text])
+      text = actual == AF_INET6 ? __ir_unpack_ipv6(bytes) : bytes.unpack("C4").join(".")
+
+      # GetHostEntry short-circuits the loopback and wildcard addresses to avoid
+      # a DNS round trip, which leaves gethostbyaddr("\x7f\0\0\1") answering
+      # "127.0.0.1" where the resolver would say "localhost.localdomain".
+      name = begin
+        getnameinfo(sockaddr_in(0, text))[0]
+      rescue StandardError
+        text
+      end
+      aliases = begin
+        __ir_raw_gethostbyaddr(bytes)[1] || []
+      rescue StandardError
+        []
+      end
+      __ir_hostent(name, aliases, [text])
     end
   end
 
   # CRuby's Socket.tcp / .tcp_server_sockets / .udp_server_sockets return Socket
   # instances, not TCPSocket/TCPServer/UDPSocket.
-  def self.tcp(host, port, local_host = nil, local_port = nil,
-               connect_timeout: nil, resolv_timeout: nil) # :yield: socket
+  # CRuby 4.0's open_timeout bounds name resolution plus connect(2) together and
+  # reports a miss as Errno::ETIMEDOUT (connect_timeout, which predates it, is an
+  # IO::TimeoutError).  connect(2) is the part that can actually hang, so it is
+  # issued non-blocking and waited for with select(2).
+  def self.__ir_tcp_open_timeout(host, port, local_host, local_port, timeout) # :nodoc:
     remote = Addrinfo.tcp(host, port)
-    sock = if local_host || local_port
-      remote.connect_from(local_host || (remote.ipv6? ? "::" : "0.0.0.0"), local_port.to_i)
+    sock = Socket.new(remote.afamily, SOCK_STREAM, 0)
+    begin
+      if local_host || local_port
+        sock.bind(Socket.sockaddr_in(local_port.to_i,
+                                     local_host || (remote.ipv6? ? "::" : "0.0.0.0")))
+      end
+      if sock.connect_nonblock(remote.to_sockaddr, exception: false) == :wait_writable
+        raise Errno::ETIMEDOUT unless IO.select(nil, [sock], nil, timeout)
+        # select(2) only says the handshake finished; a refused connection also
+        # makes the socket writable, so ask connect(2) again for the verdict.
+        sock.connect_nonblock(remote.to_sockaddr, exception: false)
+      end
+    rescue Exception
+      sock.close unless sock.closed?
+      raise
+    end
+    sock
+  end
+
+  def self.tcp(host, port, local_host = nil, local_port = nil,
+               connect_timeout: nil, resolv_timeout: nil, open_timeout: nil) # :yield: socket
+    sock = if open_timeout
+      __ir_tcp_open_timeout(host, port, local_host, local_port, open_timeout)
     else
-      remote.connect
+      remote = Addrinfo.tcp(host, port)
+      if local_host || local_port
+        remote.connect_from(local_host || (remote.ipv6? ? "::" : "0.0.0.0"), local_port.to_i)
+      else
+        remote.connect
+      end
     end
     return sock unless block_given?
     begin
@@ -2314,7 +2506,7 @@ end
 class TCPSocket
   class << self
     def gethostbyname(host)
-      Socket.gethostbyname(host)
+      Socket.__ir_gethostbyname(host, false)
     end
   end
 end
@@ -2369,7 +2561,10 @@ class Socket
       raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
       return :wait_readable
     end
-    data, sender = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
+    result = flags.nil? ? recvfrom(length) : recvfrom(length, flags)
+    # recvfrom already reports end-of-file on a stream socket as nil.
+    return nil if result.nil?
+    data, sender = result
     unless buffer.nil?
       encoding = buffer.encoding
       buffer.replace(data)
@@ -2688,3 +2883,120 @@ end
 
 IronRubySocketErrors__.wrap(UNIXSocket, :recvfrom)
 IronRubySocketErrors__.wrap(UNIXServer, :accept, :sysaccept, :listen)
+
+# The constructors go through .NET's Socket(..) ctor, which reports an
+# unsupported domain/type/protocol as a SocketException -- SocketError in Ruby.
+# CRuby gets it from socket(2) as an errno.
+IronRubySocketErrors__.wrap(Socket.singleton_class, :new)
+IronRubySocketErrors__.wrap(UDPSocket.singleton_class, :new)
+
+# recv_nonblock and recvfrom_nonblock only translate "would block"; every other
+# socket failure -- ENOTCONN on an unconnected stream socket, say -- has to go
+# through the same errno mapping as the blocking calls.
+IronRubySocketErrors__.wrap(BasicSocket, :recv_nonblock)
+IronRubySocketErrors__.wrap(Socket, :recvfrom_nonblock, :recvfrom)
+IronRubySocketErrors__.wrap(UDPSocket, :recvfrom_nonblock)
+
+# ---------------------------------------------------------------------------
+# End of file on a stream socket.
+#
+# recvfrom(2) returning 0 bytes means the peer performed an orderly shutdown,
+# and CRuby reports that as nil from the whole recv family -- even for recv(0),
+# and even when an output buffer was given (the buffer is emptied, the *return*
+# is nil).  An empty datagram, on the other hand, is a real message, so this
+# only applies to SOCK_STREAM.  .NET's Receive just returns 0 bytes and the
+# empty String came straight back.
+module IronRubySocketEOF__ # :nodoc: all
+  def self.wrap(klass, *names)
+    names.each do |name|
+      next unless klass.method_defined?(name)
+      raw = :"__ir_eof_#{name}"
+      next if (klass.instance_method(raw).owner rescue nil).equal?(klass)
+      klass.__send__(:alias_method, raw, name)
+      klass.__send__(:define_method, name) do |*args, &block|
+        result = __send__(raw, *args, &block)
+        payload = result.kind_of?(Array) ? result[0] : result
+        if payload.kind_of?(String) && payload.empty? &&
+           __ir_socktype == Socket::SOCK_STREAM
+          nil
+        else
+          result
+        end
+      end
+    end
+  end
+end
+
+IronRubySocketEOF__.wrap(BasicSocket, :recv, :recv_nonblock)
+IronRubySocketEOF__.wrap(IPSocket, :recvfrom)
+IronRubySocketEOF__.wrap(Socket, :recvfrom, :recvfrom_nonblock)
+IronRubySocketEOF__.wrap(TCPSocket, :recvfrom)
+IronRubySocketEOF__.wrap(UNIXSocket, :recvfrom)
+
+# ---------------------------------------------------------------------------
+# Operations on a closed socket.
+#
+# CRuby checks the fd before it reaches the syscall and raises IOError; .NET
+# only finds out when it touches the disposed Socket object, and what came back
+# was an ObjectDisposedException (or, for accept(2), the EINVAL that an unbound
+# socket earns) rather than an IOError.
+module IronRubySocketClosed__ # :nodoc: all
+  def self.wrap(klass, *names)
+    names.each do |name|
+      next unless klass.method_defined?(name)
+      raw = :"__ir_closed_#{name}"
+      next if (klass.instance_method(raw).owner rescue nil).equal?(klass)
+      klass.__send__(:alias_method, raw, name)
+      klass.__send__(:define_method, name) do |*args, &block|
+        raise IOError, "closed stream" if closed?
+        __send__(raw, *args, &block)
+      end
+    end
+  end
+end
+
+IronRubySocketClosed__.wrap(Socket, :accept, :accept_nonblock, :sysaccept, :listen)
+IronRubySocketClosed__.wrap(TCPServer, :accept, :accept_nonblock, :sysaccept, :listen)
+IronRubySocketClosed__.wrap(UNIXServer, :accept, :accept_nonblock, :sysaccept, :listen)
+
+class Socket
+  # setsockopt(IPPROTO_IPV6, IPV6_V6ONLY, 1).  .NET's SocketOptionName.IPv6Only
+  # is 27 -- the winsock number, like every other constant in this table (see
+  # Socket.cs); it translates to the platform's own on the way to the kernel.
+  IPV6_V6ONLY = 27 unless const_defined?(:IPV6_V6ONLY, false)
+  module Constants
+    IPV6_V6ONLY = 27 unless const_defined?(:IPV6_V6ONLY, false)
+  end
+
+  def ipv6only!
+    setsockopt(IPPROTO_IPV6, IPV6_V6ONLY, 1)
+    nil
+  end
+end
+
+# CRuby warns rather than yielding: the block form belongs to ::open.
+class TCPSocket
+  class << self
+    alias_method :__ir_noblock_new, :new
+
+    def new(*args, **opts, &block)
+      if block
+        warn "warning: TCPSocket::new() does not take block; use TCPSocket::open() instead"
+      end
+      opts.empty? ? __ir_noblock_new(*args) : __ir_noblock_new(*args, **opts)
+    end
+  end
+end
+
+class UDPSocket
+  class << self
+    alias_method :__ir_noblock_new, :new
+
+    def new(*args, &block)
+      if block
+        warn "warning: UDPSocket::new() does not take block; use UDPSocket::open() instead"
+      end
+      __ir_noblock_new(*args)
+    end
+  end
+end
