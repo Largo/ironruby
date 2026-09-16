@@ -7610,9 +7610,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "include?", 0x51, 
-                0x00010002U, 0x00000000U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.MutableStringOps.Include), 
-                new Func<IronRuby.Builtins.MutableString, System.Int32, System.Boolean>(IronRuby.Builtins.MutableStringOps.Include)
+                0x00010002U, 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.MutableStringOps.Include)
             );
             
             DefineLibraryMethod(module, "index", 0x51, 

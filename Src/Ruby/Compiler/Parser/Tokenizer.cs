@@ -3984,8 +3984,13 @@ namespace IronRuby.Compiler {
                 sign = +1;
             }
 
+            // A leading zero is a digit of its own, so an underscore may follow it: "0_1" is 1.
+            // After a base prefix there is no digit yet, and "0x_1" is nothing at all.
+            bool afterDigit = false;
+
             if (c == '0') {
                 c = NextChar(str, ref i);
+                afterDigit = true;
                 int newBase = 0;
                 switch (c) {
                     case 'x':
@@ -4004,6 +4009,7 @@ namespace IronRuby.Compiler {
                     if (@base == 0 || newBase == @base) {
                         @base = newBase;
                         c = NextChar(str, ref i);
+                        afterDigit = false;
                     }
                 } else if (@base == 0) {
                     @base = 8;
@@ -4012,7 +4018,7 @@ namespace IronRuby.Compiler {
                 @base = 10;
             }
 
-            bool underAllowed = false;
+            bool underAllowed = afterDigit;
             long value = 0;
             int digitCount = 0;
             int start = i - 1;

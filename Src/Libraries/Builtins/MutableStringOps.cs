@@ -3182,10 +3182,9 @@ namespace IronRuby.Builtins {
             return str.IndexOf(subString) != -1;
         }
 
-        [RubyMethod("include?")]
-        public static bool Include(MutableString/*!*/ str, int c) {
-            return str.IndexOf((byte)(c % 256)) != -1;
-        }
+        // Ruby 1.9 dropped String#include? of a code point: an Integer is no longer something a
+        // string can be asked about, so it goes the way of any other object that is not a string
+        // and raises TypeError.
 
         #endregion
 
@@ -4285,7 +4284,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("sum")]
         public static object GetChecksum(MutableString/*!*/ self, [DefaultProtocol, DefaultParameterValue(16)]int bitCount) {
             int length = self.GetByteCount();
-            uint mask = (bitCount > 31) ? 0xffffffff : (1U << bitCount) - 1;
+            // An n of zero or less asks for no mask at all rather than for a mask of no bits, so
+            // "xyz".sum(0) is the plain total of the bytes.
+            uint mask = (bitCount <= 0 || bitCount > 31) ? 0xffffffff : (1U << bitCount) - 1;
             uint sum = 0;
             for (int i = 0; i < length; i++) {
                 byte b = self.GetByte(i);
@@ -4300,9 +4301,16 @@ namespace IronRuby.Builtins {
         }
 
         private static BigInteger GetBigChecksum(MutableString/*!*/ self, int start, BigInteger/*!*/ sum, int bitCount) {
+            int length = self.GetByteCount();
+            if (bitCount <= 0) {
+                for (int i = start; i < length; i++) {
+                    sum += self.GetByte(i);
+                }
+                return sum;
+            }
+
             BigInteger mask = (((BigInteger)1) << bitCount) - 1;
 
-            int length = self.GetByteCount();
             for (int i = start; i < length; i++) {
                 sum = (sum + self.GetByte(i)) & mask;
             }
