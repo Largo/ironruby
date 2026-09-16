@@ -4843,7 +4843,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "tap", 0x51, 
-                0x00000002U, 
+                0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Tap)
             );
             

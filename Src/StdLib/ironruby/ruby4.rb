@@ -6,12 +6,17 @@ class NoMatchingPatternError < StandardError; end
 class NoMatchingPatternKeyError < NoMatchingPatternError; end
 class FrozenError < RuntimeError; end unless defined?(FrozenError)
 
-class Object
-  def then(&block)
-    return to_enum(:then) { 1 } unless block
+module Kernel
+  # 3.4 made #then an alias of #yield_self rather than a method of its own, so
+  # the two are one entry and Kernel.instance_method finds the same one twice.
+  def yield_self(&block)
+    return to_enum(:yield_self) { 1 } unless block
     yield self
-  end unless method_defined?(:then)
-  alias_method :yield_self, :then unless method_defined?(:yield_self)
+  end unless method_defined?(:yield_self)
+  alias_method :then, :yield_self unless method_defined?(:then)
+end
+
+class Object
 
   def itself
     self

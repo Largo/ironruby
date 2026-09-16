@@ -978,6 +978,10 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        // Ruby 3.2 removed these six, and ruby/spec asks that an object no longer answer any of
+        // them - but the 1.9 era standard library bundled here still calls #taint and #untaint
+        // from rubygems, pathname, set and two dozen other files, so taking them away stops the
+        // interpreter before it reaches a spec. They go once that library does.
         [RubyMethod("tainted?")]
         public static bool Tainted(RubyContext/*!*/ context, object self) {
             if (!RubyUtils.HasObjectState(self)) {
@@ -1434,7 +1438,12 @@ namespace IronRuby.Builtins {
         // 1.9: public_send
 
         [RubyMethod("tap")]
-        public static object Tap(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block, object/*!*/ self) {
+        public static object Tap(RubyScope/*!*/ scope, BlockParam block, object/*!*/ self) {
+            if (block == null) {
+                // #tap yields, so without a block it is a jump with nowhere to go, not a missing
+                // argument: MRI raises LocalJumpError rather than complaining about the Proc.
+                throw RubyExceptions.NoBlockGiven();
+            }
 
             object blockResult;
             if (block.Yield(self, out blockResult)) {

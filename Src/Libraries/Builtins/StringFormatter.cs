@@ -1142,7 +1142,7 @@ namespace IronRuby.Builtins {
 
         private void AppendInspect() {
             MutableString result = _context.Inspect(_opts.Value);
-            if (KernelOps.Tainted(_context, result)) {
+            if (_context.IsObjectTainted(result)) {
                 _tainted = true;
             }
 
@@ -1154,7 +1154,7 @@ namespace IronRuby.Builtins {
                 ? MutableString.CreateEmpty()
                 : _siteStorage.ConvertToString(_opts.Value);
 
-            if (KernelOps.Tainted(_context, str)) {
+            if (_context.IsObjectTainted(str)) {
                 _tainted = true;
             }
 
