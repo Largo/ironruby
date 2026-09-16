@@ -710,16 +710,6 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateIOError("closed stream");
             }
 
-            // The mode settles the two ends of a pipe: they share a queue, so only the mode says
-            // which of them a read would ever come from. MRI gets the same answer from the kernel,
-            // which knows each end by its own descriptor.
-            if (kind == Readiness.Read && !io.Mode.CanRead()) {
-                return false;
-            }
-            if (kind == Readiness.Write && !io.Mode.CanWrite()) {
-                return false;
-            }
-
             var stream = io.GetStream();
             if (kind == Readiness.Read && stream.DataBuffered) {
                 return true;
@@ -727,21 +717,34 @@ namespace IronRuby.Builtins {
 
             var pipe = stream.BaseStream as RubyPipe;
             if (pipe != null) {
+                // The mode settles the two ends of an in-process pipe: they share one queue, so
+                // only the mode says which end a read would ever come from. MRI gets the same
+                // answer from the kernel, which knows each end by its own descriptor.
                 switch (kind) {
-                    case Readiness.Read: return pipe.CanReadWithoutBlocking;
-                    // The queue is unbounded, so a write never blocks, and there is no out-of-band
-                    // data on an in-process pipe for the error set to report.
-                    case Readiness.Write: return true;
+                    case Readiness.Read: return io.Mode.CanRead() && pipe.CanReadWithoutBlocking;
+                    case Readiness.Write: return io.Mode.CanWrite() && pipe.CanWriteWithoutBlocking;
+                    // There is no out-of-band data on an in-process pipe for the error set to report.
                     default: return false;
                 }
             }
 
             int descriptor = io.NativeDescriptor;
             if (descriptor < 0) {
-                // No descriptor and no pipe - a StringIO-like stream. MRI says a regular file is
-                // always ready, and this is as close as we get.
+                // No descriptor and no pipe - a StringIO-like stream, where the mode is all there
+                // is to go on. MRI says a regular file is always ready, and this is as close as
+                // we get.
+                if (kind == Readiness.Read && !io.Mode.CanRead()) {
+                    return false;
+                }
+                if (kind == Readiness.Write && !io.Mode.CanWrite()) {
+                    return false;
+                }
                 return kind != Readiness.Error;
             }
+
+            // Where there is a descriptor the kernel is asked, and the mode is not consulted at
+            // all: poll(2) reports a regular file opened read-only as writable, so CRuby puts one
+            // in IO.select's write set and answers IO::WRITABLE for it.
 
             short events;
             switch (kind) {
@@ -767,6 +770,172 @@ namespace IronRuby.Builtins {
 
         // Out-of-band data; only sockets ever report it, but the error set means nothing else.
         private const short POLLPRI = 0x002;
+
+        #endregion
+
+        #region wait, wait_readable, wait_writable, wait_priority
+
+        // poll(2)'s own bits, which is where MRI takes these from: POLLIN, POLLPRI, POLLOUT. Worth
+        // stating, because the obvious guess - 1, 2 and 4 in the order the documentation lists the
+        // events - puts WRITABLE and PRIORITY the wrong way round.
+        [RubyConstant("READABLE")]
+        public const int Readable = 0x001;
+
+        [RubyConstant("PRIORITY")]
+        public const int Priority = 0x002;
+
+        [RubyConstant("WRITABLE")]
+        public const int Writable = 0x004;
+
+        /// <summary>
+        /// IO#wait. Two shapes share the name: wait(events, timeout) answers the subset of the
+        /// events that came ready, and the older wait(timeout, *modes) answers the IO itself.
+        /// Either answers nil when the timeout runs out first.
+        /// </summary>
+        [RubyMethod("wait")]
+        public static object Wait(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context, RubyIO/*!*/ self,
+            [NotNull]params object[]/*!*/ args) {
+
+            int events;
+            object timeout;
+            bool answerSelf;
+            ParseWaitArguments(fixnumCast, context, args, out events, out timeout, out answerSelf);
+
+            object ready = WaitForEvents(context, self, events, timeout);
+            if (ready == null) {
+                return null;
+            }
+            return answerSelf ? (object)self : ready;
+        }
+
+        /// <summary>
+        /// MRI documents IO#wait(events, timeout) but implements wait(*args): exactly two arguments
+        /// with no Symbol among them are the documented form, and anything else is the older
+        /// wait(timeout, *modes), which is why the two can be told apart at all.
+        /// </summary>
+        private static void ParseWaitArguments(ConversionStorage<int>/*!*/ fixnumCast, RubyContext/*!*/ context,
+            object[]/*!*/ args, out int events, out object timeout, out bool answerSelf) {
+
+            if (args.Length == 2 && !(args[0] is RubySymbol) && !(args[1] is RubySymbol)) {
+                events = Protocols.CastToFixnum(fixnumCast, args[0]);
+                if (events <= 0) {
+                    throw RubyExceptions.CreateArgumentError("Events must be positive integer!");
+                }
+                timeout = args[1];
+                answerSelf = false;
+                return;
+            }
+
+            events = 0;
+            timeout = Missing.Value;
+            answerSelf = true;
+            foreach (object arg in args) {
+                var mode = arg as RubySymbol;
+                if (mode != null) {
+                    events |= ToWaitEvents(mode);
+                } else if (timeout is Missing) {
+                    // Converted here rather than at the end so that a bad interval is reported in
+                    // the order the arguments were written, the way MRI's rb_time_interval is.
+                    ToTimeInterval(context, arg);
+                    timeout = arg;
+                } else {
+                    throw RubyExceptions.CreateArgumentError("timeout given more than once");
+                }
+            }
+
+            if (events == 0) {
+                events = Readable;
+            }
+        }
+
+        private static int ToWaitEvents(RubySymbol/*!*/ mode) {
+            switch (mode.ToString()) {
+                case "r": case "read": case "readable":
+                    return Readable;
+                case "w": case "write": case "writable":
+                    return Writable;
+                case "rw": case "read_write": case "readable_writable":
+                    return Readable | Writable;
+                default:
+                    throw RubyExceptions.CreateArgumentError("unsupported mode: {0}", mode.ToString());
+            }
+        }
+
+        /// <summary>
+        /// The events among <paramref name="events"/> that are ready, or null if the timeout passed
+        /// with none of them ready. Waits the same way IO.select does - a poll loop that stays
+        /// interruptible by Thread#kill and reports the thread as sleeping while it runs.
+        /// </summary>
+        private static object WaitForEvents(RubyContext/*!*/ context, RubyIO/*!*/ io, int events, object timeout) {
+            int milliseconds = ToTimeInterval(context, timeout);
+            long deadline = (milliseconds == Timeout.Infinite)
+                ? Int64.MaxValue
+                : Environment.TickCount64 + milliseconds;
+
+            var info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
+            bool wasBlocked = info.Blocked;
+            try {
+                info.Blocked = true;
+
+                while (true) {
+                    int ready = ReadyEvents(io, events);
+                    if (ready != 0) {
+                        return ScriptingRuntimeHelpers.Int32ToObject(ready);
+                    }
+
+                    long remaining = deadline - Environment.TickCount64;
+                    if (remaining <= 0) {
+                        return null;
+                    }
+
+                    RubyUtils.CheckAsyncException();
+                    Thread.Sleep((int)Math.Min(remaining, SelectPollIntervalMilliseconds));
+                }
+            } finally {
+                info.Blocked = wasBlocked;
+            }
+        }
+
+        private static int ReadyEvents(RubyIO/*!*/ io, int events) {
+            int ready = 0;
+            if ((events & Readable) != 0 && IsReady(io, Readiness.Read)) {
+                ready |= Readable;
+            }
+            if ((events & Writable) != 0 && IsReady(io, Readiness.Write)) {
+                ready |= Writable;
+            }
+            if ((events & Priority) != 0 && IsReady(io, Readiness.Error)) {
+                ready |= Priority;
+            }
+            // Nothing asked of the IO leaves the closed check undone, and a closed IO has to be an
+            // IOError however the events were spelled.
+            if (events == 0 && io.Closed) {
+                throw RubyExceptions.CreateIOError("closed stream");
+            }
+            return ready;
+        }
+
+        /// <summary>
+        /// The three single-event waits answer the IO or nil, and unlike #wait they first insist
+        /// that the IO is open the way the event asks for - MRI's rb_io_check_readable/writable.
+        /// </summary>
+        [RubyMethod("wait_readable")]
+        public static object WaitUntilReadable(RubyContext/*!*/ context, RubyIO/*!*/ self, [Optional]object timeout) {
+            self.RequireReadable();
+            return WaitForEvents(context, self, Readable, timeout) == null ? null : (object)self;
+        }
+
+        [RubyMethod("wait_writable")]
+        public static object WaitUntilWritable(RubyContext/*!*/ context, RubyIO/*!*/ self, [Optional]object timeout) {
+            self.RequireWritable();
+            return WaitForEvents(context, self, Writable, timeout) == null ? null : (object)self;
+        }
+
+        [RubyMethod("wait_priority")]
+        public static object WaitUntilPriority(RubyContext/*!*/ context, RubyIO/*!*/ self, [Optional]object timeout) {
+            self.RequireReadable();
+            return WaitForEvents(context, self, Priority, timeout) == null ? null : (object)self;
+        }
 
         #endregion
 
@@ -1203,6 +1372,20 @@ namespace IronRuby.Builtins {
         /// takes the whole string, which is MRI's behaviour too.
         /// </summary>
         private static int WriteOnceWithoutWaiting(RubyIO/*!*/ io, MutableString/*!*/ val) {
+            var queue = io.GetStream().BaseStream as RubyPipe;
+            if (queue != null) {
+                io.Flush();
+                int room = val.GetByteCount();
+                if (room == 0) {
+                    return 0;
+                }
+                int put = queue.WriteWithoutWaiting(val.ToByteArray(), 0, room);
+                if (put == 0) {
+                    throw NonBlockingError(io.Context, new Errno.ResourceTemporarilyUnavailableError(), false);
+                }
+                return put;
+            }
+
             var pipe = io.GetStream().BaseStream as DescriptorStream;
             if (pipe == null) {
                 // MRI's write_nonblock is a bare write(2): nothing of it stays in a buffer.

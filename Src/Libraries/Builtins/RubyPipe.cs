@@ -27,16 +27,27 @@ namespace IronRuby.Builtins {
     /// </summary>
     internal class RubyPipe : Stream {
         private readonly EventWaitHandle _dataAvailableEvent;
+        private readonly EventWaitHandle _spaceAvailableEvent;
         private readonly EventWaitHandle _writerClosedEvent;
         private readonly EventWaitHandle _readerClosedEvent;
         private readonly WaitHandle[] _eventArray;
+        private readonly WaitHandle[] _writeEventArray;
         private readonly Queue<byte> _queue;
 
         private const int WriterClosedEventIndex = 1;
         private const int ReaderClosedEventIndex = 2;
 
+        /// <summary>
+        /// How much the pipe holds before a write has to wait for the reader, which is the 64 KB
+        /// Linux gives a pipe. The queue used to be unbounded, which is comfortable but means a
+        /// write can never fail for want of room - so #write_nonblock had nothing to report
+        /// EAGAIN about, and the loop ruby/spec uses to fill a pipe never ended.
+        /// </summary>
+        internal const int Capacity = 65536;
+
         private RubyPipe() {
             _dataAvailableEvent = new AutoResetEvent(false);
+            _spaceAvailableEvent = new AutoResetEvent(false);
             _writerClosedEvent = new ManualResetEvent(false);
             _readerClosedEvent = new ManualResetEvent(false);
             _eventArray = new WaitHandle[3];
@@ -47,13 +58,19 @@ namespace IronRuby.Builtins {
             _eventArray[2] = _readerClosedEvent;
             Debug.Assert(_eventArray[WriterClosedEventIndex] == _writerClosedEvent);
             Debug.Assert(_eventArray[ReaderClosedEventIndex] == _readerClosedEvent);
+
+            // A writer waiting for room wakes on the reader taking bytes out, and on the reader
+            // going away - at which point the write is an EPIPE rather than a longer wait.
+            _writeEventArray = new WaitHandle[] { _spaceAvailableEvent, _readerClosedEvent };
         }
 
         private RubyPipe(RubyPipe pipe) {
             _dataAvailableEvent = pipe._dataAvailableEvent;
+            _spaceAvailableEvent = pipe._spaceAvailableEvent;
             _writerClosedEvent = pipe._writerClosedEvent;
             _readerClosedEvent = pipe._readerClosedEvent;
             _eventArray = pipe._eventArray;
+            _writeEventArray = pipe._writeEventArray;
             _queue = pipe._queue;
         }
 
@@ -71,6 +88,41 @@ namespace IronRuby.Builtins {
                 lock (((ICollection)_queue).SyncRoot) {
                     return _queue.Count > 0 || _writerClosedEvent.WaitOne(0) || _readerClosedEvent.WaitOne(0);
                 }
+            }
+        }
+
+        /// <summary>
+        /// Whether a Write would return rather than wait: there is room in the queue, or the
+        /// reader is gone and the write fails at once. The counterpart to CanReadWithoutBlocking,
+        /// and what IO.select and IO#wait ask of a pipe's write end.
+        /// </summary>
+        internal bool CanWriteWithoutBlocking {
+            get {
+                lock (((ICollection)_queue).SyncRoot) {
+                    return _queue.Count < Capacity || _readerClosedEvent.WaitOne(0);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Writes as much as there is room for and returns how much that was - zero when the pipe
+        /// is full. This is the shape of a write(2) on a non-blocking descriptor, and
+        /// #write_nonblock turns the zero into EAGAIN.
+        /// </summary>
+        internal int WriteWithoutWaiting(byte[]/*!*/ buffer, int offset, int count) {
+            if (_readerClosedEvent.WaitOne(0)) {
+                throw new Errno.PipeError();
+            }
+
+            lock (((ICollection)_queue).SyncRoot) {
+                int written = Math.Min(count, Capacity - _queue.Count);
+                for (int i = 0; i < written; i++) {
+                    _queue.Enqueue(buffer[offset + i]);
+                }
+                if (written > 0) {
+                    _dataAvailableEvent.Set();
+                }
+                return written;
             }
         }
 
@@ -146,6 +198,8 @@ namespace IronRuby.Builtins {
                             // _dataAvailableEvent is an AutoResetEvent, so re-arm it for the bytes we left behind.
                             _dataAvailableEvent.Set();
                         }
+                        // Room has just appeared, so a writer parked on a full pipe can carry on.
+                        _spaceAvailableEvent.Set();
                         return read;
                     }
 
@@ -179,11 +233,14 @@ namespace IronRuby.Builtins {
                 throw new Errno.PipeError();
             }
 
-            lock (((ICollection)_queue).SyncRoot) {
-                for (int idx = 0; idx < count; idx++) {
-                    _queue.Enqueue(buffer[offset + idx]);
+            // More than the pipe holds goes in instalments, waiting for the reader in between,
+            // which is what a write(2) larger than the kernel's pipe buffer does.
+            int remaining = count;
+            while (remaining > 0) {
+                remaining -= WriteWithoutWaiting(buffer, offset + count - remaining, remaining);
+                if (remaining > 0) {
+                    WaitHandle.WaitAny(_writeEventArray);
                 }
-                _dataAvailableEvent.Set();
             }
         }
 

@@ -3250,9 +3250,12 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadIO_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetBuiltinConstant(module, "PRIORITY", IronRuby.Builtins.RubyIOOps.Priority);
+            SetBuiltinConstant(module, "READABLE", IronRuby.Builtins.RubyIOOps.Readable);
             SetBuiltinConstant(module, "SEEK_CUR", IronRuby.Builtins.RubyIOOps.SEEK_CUR);
             SetBuiltinConstant(module, "SEEK_END", IronRuby.Builtins.RubyIOOps.SEEK_END);
             SetBuiltinConstant(module, "SEEK_SET", IronRuby.Builtins.RubyIOOps.SEEK_SET);
+            SetBuiltinConstant(module, "WRITABLE", IronRuby.Builtins.RubyIOOps.Writable);
             
         }
         
@@ -3546,6 +3549,26 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "ungetc", 0x51, 
                 0x00010000U, 
                 new Action<IronRuby.Builtins.RubyIO, System.Int32>(IronRuby.Builtins.RubyIOOps.SetPreviousByte)
+            );
+            
+            DefineLibraryMethod(module, "wait", 0x51, 
+                0x80000008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyIO, System.Object[], System.Object>(IronRuby.Builtins.RubyIOOps.Wait)
+            );
+            
+            DefineLibraryMethod(module, "wait_priority", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyIO, System.Object, System.Object>(IronRuby.Builtins.RubyIOOps.WaitUntilPriority)
+            );
+            
+            DefineLibraryMethod(module, "wait_readable", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyIO, System.Object, System.Object>(IronRuby.Builtins.RubyIOOps.WaitUntilReadable)
+            );
+            
+            DefineLibraryMethod(module, "wait_writable", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyIO, System.Object, System.Object>(IronRuby.Builtins.RubyIOOps.WaitUntilWritable)
             );
             
             DefineLibraryMethod(module, "write", 0x51, 
