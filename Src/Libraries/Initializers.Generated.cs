@@ -12169,14 +12169,22 @@ namespace IronRuby.StandardLibrary.StringIO {
             IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.Object));
             
             
-            DefineGlobalClass("StringIO", typeof(IronRuby.StandardLibrary.StringIO.StringIO), 0x00000008, classRef0, LoadStringIO_Instance, LoadStringIO_Class, null, new IronRuby.Builtins.RubyModule[] {moduleRef0}, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Create), 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Create), 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Int32, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Create)
+            DefineGlobalClass("StringIO", typeof(IronRuby.StandardLibrary.StringIO.StringIO), 0x00000008, classRef0, LoadStringIO_Instance, LoadStringIO_Class, LoadStringIO_Constants, new IronRuby.Builtins.RubyModule[] {moduleRef0}, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<System.Nullable<System.Int32>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Create)
             );
         }
         
+        private static void LoadStringIO_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetConstant(module, "VERSION", IronRuby.StandardLibrary.StringIO.StringIO.Version);
+            
+        }
+        
         private static void LoadStringIO_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_finalize__", 0x12, 
+                0x00000000U, 
+                new Action<IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Finalize)
+            );
+            
             DefineLibraryMethod(module, "__ir_unget_bytes__", 0x12, 
                 0x00010002U, 
                 new Action<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.UngetBytes)
@@ -12293,16 +12301,19 @@ namespace IronRuby.StandardLibrary.StringIO {
             );
             
             DefineLibraryMethod(module, "initialize", 0x12, 
-                0x00000000U, 0x00030006U, 0x00010002U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reinitialize), 
-                new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reinitialize), 
-                new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString, System.Int32, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reinitialize)
+                0x00400000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<System.Nullable<System.Int32>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reinitialize)
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x12, 
                 0x00000008U, 0x00000006U, 
                 new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reopen), 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reopen)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Inspect)
             );
             
             DefineLibraryMethod(module, "internal_encoding", 0x11, 
@@ -12393,6 +12404,11 @@ namespace IronRuby.StandardLibrary.StringIO {
                 new Func<IronRuby.Runtime.ConversionStorage<System.Collections.Generic.IDictionary<System.Object, System.Object>>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.StringIO.StringIO, System.Object, System.Object, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.StringIO.StringIO.ReadLines)
             );
             
+            DefineLibraryMethod(module, "readpartial", 0x11, 
+                0x00030004U, 
+                new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.SystemRead)
+            );
+            
             DefineLibraryMethod(module, "reopen", 0x11, 
                 new[] { 0x00000000U, 0x00000008U, 0x00000006U, 0x00000002U, 0x00030006U, 0x00010002U}, 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.StandardLibrary.StringIO.StringIO>(IronRuby.StandardLibrary.StringIO.StringIO.Reopen), 
@@ -12461,6 +12477,11 @@ namespace IronRuby.StandardLibrary.StringIO {
             DefineLibraryMethod(module, "tell", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Int32>(IronRuby.StandardLibrary.StringIO.StringIO.GetPosition)
+            );
+            
+            DefineLibraryMethod(module, "to_s", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.StringIO.StringIO, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Inspect)
             );
             
             DefineLibraryMethod(module, "truncate", 0x11, 

@@ -127,6 +127,9 @@ class StringIO
   # encoding already being set: MRI's stringio reads the mark whatever the string's encoding
   # is, and only a stream that cannot be read from answers nil without looking.
   def set_encoding_by_bom
+    if frozen?
+      ::Kernel.raise(::FrozenError, "can't modify frozen StringIO: #{inspect}")
+    end
     return nil unless __readable_stream__?
     start = pos
     head = read(4).to_s
@@ -187,4 +190,19 @@ class StringIO
   end
 
   alias_method :each, :each_line
+end
+
+# StringIO.open closes the stream when its block is done and lets the string go with it, so
+# #string answers nil afterwards.  The block is not handed to ::new, which would warn about
+# being given one.
+class << StringIO
+  def open(*args, **options)
+    io = new(*args, **options)
+    return io unless block_given?
+    begin
+      yield io
+    ensure
+      io.__send__(:__ir_finalize__)
+    end
+  end
 end
