@@ -71,7 +71,12 @@ namespace IronRuby.Prism {
             var context = sourceUnit != null ? sourceUnit.LanguageContext as RubyContext : null;
             int frozenStringLiteral = context != null ? context.RubyOptions.FrozenStringLiteral : 0;
 
-            PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames, frozenStringLiteral);
+            // The magic comment has to be read before prism is called rather than taken from
+            // what it reports, because it decides which bytes prism is given in the first place.
+            RubyEncoding sourceEncoding = ResolveEncoding(DeclaredEncodingName(code), sourceUnit);
+
+            PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames,
+                frozenStringLiteral, sourceEncoding.Encoding);
 
             var bridge = new PrismAstBridge(code, path, ResolveEncoding(result.EncodingName, sourceUnit));
             bridge._startLine = startLine <= 0 ? 1 : startLine;
@@ -109,6 +114,43 @@ namespace IronRuby.Prism {
         /// returns, which is what made almost all of spec/library/digest fail: the
         /// bytes matched, the encodings did not.
         /// </summary>
+        /// <summary>
+        /// The encoding a `# coding:` comment asks for, which sits on the first line or on the
+        /// second when a shebang takes the first. Null when there is none - the usual case, and
+        /// the one that means UTF-8.
+        /// </summary>
+        private static string DeclaredEncodingName(string/*!*/ code) {
+            int start = 0;
+            for (int line = 0; line < 2 && start < code.Length; line++) {
+                int end = code.IndexOf('\n', start);
+                if (end < 0) {
+                    end = code.Length;
+                }
+
+                string text = code.Substring(start, end - start);
+                if (!text.StartsWith("#", StringComparison.Ordinal)) {
+                    return null;
+                }
+
+                var match = _magicComment.Match(text);
+                if (match.Success) {
+                    return match.Groups[1].Value;
+                }
+
+                // Only a shebang lets the comment slip to the second line.
+                if (line == 0 && !text.StartsWith("#!", StringComparison.Ordinal)) {
+                    return null;
+                }
+                start = end + 1;
+            }
+            return null;
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex _magicComment =
+            new System.Text.RegularExpressions.Regex(
+                @"coding\s*[:=]\s*([A-Za-z0-9_\-]+)",
+                System.Text.RegularExpressions.RegexOptions.Compiled);
+
         private static RubyEncoding/*!*/ ResolveEncoding(string name, SourceUnit sourceUnit) {
             if (String.IsNullOrEmpty(name)) {
                 return RubyEncoding.UTF8;

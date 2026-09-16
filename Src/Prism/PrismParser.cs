@@ -17,8 +17,21 @@ namespace IronRuby.Prism {
 
         public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
             int frozenStringLiteral) {
+            return Parse(source, path, startLine, outerLocals, frozenStringLiteral, Encoding.UTF8);
+        }
 
-            byte[] sourceBytes = Encoding.UTF8.GetBytes(source);
+        /// <summary>
+        /// prism works on the bytes of the file, so it has to be given the bytes the file
+        /// actually held. The source arrives here already decoded - with the encoding its magic
+        /// comment asked for - and encoding it back with that same encoding reproduces them.
+        /// Encoding it as UTF-8 instead would hand prism a doubled copy of every byte above
+        /// 0x7F, which is a different file: "\xE3" in a binary source would reach it as
+        /// "\xC3\xA3".
+        /// </summary>
+        public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
+            int frozenStringLiteral, Encoding/*!*/ sourceEncoding) {
+
+            byte[] sourceBytes = sourceEncoding.GetBytes(source);
             PrismParseResult result = PrismLoader.LoadParse(
                 ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral)));
             result.DataOffset = ComputeDataOffset(result.DataLocation, sourceBytes);
