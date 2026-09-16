@@ -887,7 +887,94 @@ namespace IronRuby.Builtins {
             MemoryStream buf = new MemoryStream(8);
             RubyEncoder.Write(buf, dword1, !BitConverter.IsLittleEndian);
             RubyEncoder.Write(buf, dword2, !BitConverter.IsLittleEndian);
-            return MutableString.CreateBinary(buf.ToArray());
+            var result = MutableString.CreateBinary(buf.ToArray());
+
+            // The time's own instance variables travel on the string as well: Marshal writes the
+            // string's, not the object's, once the string has any at all.
+            foreach (string name in context.GetInstanceVariableNames(self)) {
+                object ivarValue;
+                if (context.TryGetInstanceVariable(self, name, out ivarValue)) {
+                    context.SetInstanceVariable(result, name, ivarValue);
+                }
+            }
+
+            // The eight bytes above hold the wall clock reading and nothing about where it was
+            // read. MRI hangs the rest on the string it returns - Marshal writes the instance
+            // variables of _dump's result - and reads them back in _load; without them a time
+            // comes back in whatever zone the loader happens to be in.
+            if (self.IsUtc) {
+                context.SetInstanceVariable(result, "zone", MutableString.CreateAscii("UTC").Freeze());
+            } else {
+                ExactNum offset = self.UtcOffsetExact;
+                if (offset.IsInteger) {
+                    context.SetInstanceVariable(result, "offset", Protocols.Normalize(offset.Numerator));
+                }
+
+                // A time made with a numeric offset has no zone to name, and MRI writes nil.
+                string zoneName = self.HasFixedOffset ? null : self.GetZoneName();
+                context.SetInstanceVariable(result, "zone",
+                    zoneName != null ? MutableString.CreateAscii(zoneName).Freeze() : null);
+            }
+
+            // Anything finer than a microsecond does not fit in the eight bytes either. MRI
+            // carries the remainder as a Rational number of nanoseconds.
+            ExactNum nano = (self.Subsec * ExactNum.FromInteger(1000000) - ExactNum.FromInteger(self.Microseconds))
+                * ExactNum.FromInteger(1000);
+            if (!nano.IsZero) {
+                context.SetInstanceVariable(result, "nano_num", Protocols.Normalize(nano.Numerator));
+                context.SetInstanceVariable(result, "nano_den", Protocols.Normalize(nano.Denominator));
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// A time loaded from a dump that named an offset is pinned to that offset, and keeps the
+        /// zone's name if the dump had one - MRI answers "AST" from a time loaded in another zone.
+        /// </summary>
+        private static RubyTime/*!*/ WithLoadedZone(RubyTime/*!*/ time, bool hasOffset, BigInteger offsetSeconds, MutableString zoneName) {
+            if (!hasOffset) {
+                // Nothing said where it was read, so it is shown here.
+                return time.WithZone(RubyTimeZoneKind.Local, ExactNum.Zero, null);
+            }
+
+            return time.WithZone(RubyTimeZoneKind.FixedOffset, ExactNum.FromInteger(offsetSeconds),
+                zoneName != null ? zoneName.Clone().Freeze() : null);
+        }
+
+        /// <summary>The instance variables a dumped Time carries that are not the time itself.</summary>
+        private static readonly string[] TimeMarshalIVars = { "offset", "zone", "nano_num", "nano_den", "submicro" };
+
+        /// <summary>
+        /// Anything the dumped string carries beyond the time's own fields belongs to the object:
+        /// Marshal writes an object's instance variables onto the string _dump returned when the
+        /// string has none of its own, and MRI hands them back the same way.
+        /// </summary>
+        private static RubyTime/*!*/ CopyExtraIVars(RubyContext/*!*/ context, MutableString/*!*/ dumped, RubyTime/*!*/ result) {
+            foreach (string name in context.GetInstanceVariableNames(dumped)) {
+                if (Array.IndexOf(TimeMarshalIVars, name) >= 0) {
+                    continue;
+                }
+
+                object value;
+                if (context.TryGetInstanceVariable(dumped, name, out value)) {
+                    context.SetInstanceVariable(result, name, value);
+                }
+            }
+            return result;
+        }
+
+        private static bool TryToBigInteger(object value, out BigInteger result) {
+            if (value is int) {
+                result = (int)value;
+                return true;
+            }
+            if (value is BigInteger) {
+                result = (BigInteger)value;
+                return true;
+            }
+            result = BigInteger.Zero;
+            return false;
         }
 
         private static uint GetUint(byte[] data, int start) {
@@ -905,12 +992,33 @@ namespace IronRuby.Builtins {
             uint dword1 = GetUint(data, 0);
             uint dword2 = GetUint(data, 4);
 
+            // What the eight bytes leave out travels as instance variables of this very string -
+            // see _dump: where the reading was taken, and anything finer than a microsecond.
+            object offsetValue, zoneValue, nanoNum, nanoDen;
+            BigInteger offsetSeconds = BigInteger.Zero;
+            bool hasOffset = context.TryGetInstanceVariable(time, "offset", out offsetValue)
+                && TryToBigInteger(offsetValue, out offsetSeconds);
+            context.TryGetInstanceVariable(time, "zone", out zoneValue);
+            var zoneName = zoneValue as MutableString;
+            ExactNum extraSubsec = ExactNum.Zero;
+            if (context.TryGetInstanceVariable(time, "nano_num", out nanoNum)
+                && context.TryGetInstanceVariable(time, "nano_den", out nanoDen)) {
+
+                BigInteger num, den;
+                if (TryToBigInteger(nanoNum, out num) && TryToBigInteger(nanoDen, out den) && !den.IsZero) {
+                    // The remainder is in nanoseconds; the time itself counts seconds.
+                    extraSubsec = ExactNum.Make(num, den * 1000000000);
+                }
+            }
+
             if ((data[3] & 0x80) == 0) {
                 int secondsSinceEpoch = (int)dword1;
                 uint microseconds = dword2;
-                return new RubyTime(secondsSinceEpoch,
-                    (microseconds == 0) ? ExactNum.Zero : ExactNum.Make(microseconds, RubyTime.MicrosecondsPerSecond),
-                    RubyTimeZoneKind.Local, ExactNum.Zero);
+                var subsec = ((microseconds == 0) ? ExactNum.Zero : ExactNum.Make(microseconds, RubyTime.MicrosecondsPerSecond))
+                    + extraSubsec;
+                return CopyExtraIVars(context, time,
+                    WithLoadedZone(new RubyTime(secondsSinceEpoch, subsec, RubyTimeZoneKind.Local, ExactNum.Zero),
+                        hasOffset, offsetSeconds, zoneName));
             } else {
                 bool isUtc = (data[3] & 0x40) != 0;
                 int year = 1900 + (int)((dword1 >> 14) & 0xffff);
@@ -923,9 +1031,17 @@ namespace IronRuby.Builtins {
                 int usec = (int)(dword2 & 0xfffff);
 
                 try {
-                    return AssembleTime(context, year, month, day, hour, minute,
-                        ExactNum.FromInteger(second) + ExactNum.Make(usec, RubyTime.MicrosecondsPerSecond),
-                        isUtc ? RubyTimeZoneKind.Utc : RubyTimeZoneKind.Local, ExactNum.Zero, null, false);
+                    ExactNum seconds = ExactNum.FromInteger(second)
+                        + ExactNum.Make(usec, RubyTime.MicrosecondsPerSecond) + extraSubsec;
+
+                    // The components are the reading in UTC whether or not the time was a UTC
+                    // one - the flag and the offset only say how it is to be shown again. Read
+                    // as local they would name a different instant, an hour or nine out.
+                    var instant = AssembleTime(context, year, month, day, hour, minute, seconds,
+                        RubyTimeZoneKind.Utc, ExactNum.Zero, null, false);
+
+                    return CopyExtraIVars(context, time,
+                        isUtc ? instant : WithLoadedZone(instant, hasOffset, offsetSeconds, zoneName));
                 } catch (Exception e) when (!(e is RubyTime)) {
                     throw RubyExceptions.CreateTypeError("marshaled time format differ");
                 }

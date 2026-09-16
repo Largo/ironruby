@@ -1221,6 +1221,27 @@ namespace IronRuby.Builtins {
                     return ReadEncodedSymbol(true).GetSymbol(Context);
                 }
 
+                if (typeFlag == 'u') {
+                    // The instance variables written with a _dump string belong to that string,
+                    // and _load is handed them along with it - that is how Time gets its zone and
+                    // its offset back.
+                    RubyClass theClass = ReadType();
+                    MutableString data = ReadString();
+
+                    // The object itself is entered in the link table only once those instance
+                    // variables have been read, so they take the earlier ids: in a dump of one
+                    // Time twice, the second is a link to id 2, not to id 1.
+                    if (objectRef >= 0 && _objects.Count == objectRef + 1) {
+                        _objects.Remove(objectRef);
+                    }
+
+                    ReadIVars(data);
+                    object loaded = _sites.Load.Target(_sites.Load, theClass, data);
+                    _objects[_objects.Count] = loaded;
+                    _selfLinked = true;
+                    return loaded;
+                }
+
                 object obj = ReadAnObject(typeFlag, objectRef);
                 ReadIVars(obj);
                 return obj;
@@ -1318,6 +1339,10 @@ namespace IronRuby.Builtins {
             // value >= 0 is a slot an enclosing record ("I", "e", "C") already reserved for this object.
             private const int NewRef = -1;
             private const int NoRef = -2;
+
+            // Set by a record that entered its object in the link table itself, at a later id than
+            // the slot reserved for it - see ReadInstanced's "u" case.
+            private bool _selfLinked;
 
             private object ReadAnObject(bool noCache) {
                 return ReadAnObject(_reader.ReadByte(), noCache ? NoRef : NewRef);
@@ -1437,9 +1462,10 @@ namespace IronRuby.Builtins {
                                 throw RubyExceptions.CreateArgumentError("dump format error({0})",
                                     "0x" + ((int)typeFlag).ToString("x", CultureInfo.InvariantCulture));
                         }
-                        if (objectRef >= 0) {
+                        if (objectRef >= 0 && !_selfLinked) {
                             _objects[objectRef] = obj;
                         }
+                        _selfLinked = false;
                         break;
                 }
                 if (_freeze && freezable && outermost && obj != null) {
