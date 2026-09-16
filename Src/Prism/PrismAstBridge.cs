@@ -291,7 +291,7 @@ namespace IronRuby.Prism {
                     return new StringLiteral(LiteralValue(str.Unescaped, LiteralEncoding(str)), LiteralEncoding(str),
                         StringMutability(str), span);
                 case Pm.SymbolNode symbol:
-                    return new SymbolLiteral(LiteralText(symbol.Unescaped), SymbolEncoding(symbol), span);
+                    return new SymbolLiteral(LiteralText(symbol.Unescaped, SymbolEncoding(symbol)), SymbolEncoding(symbol), span);
                 case Pm.TrueNode _: return Literal.True(span);
                 case Pm.FalseNode _: return Literal.False(span);
                 case Pm.NilNode _: return Literal.Nil(span);
@@ -696,6 +696,20 @@ namespace IronRuby.Prism {
                 return _strictUtf8.GetString(bytes);
             } catch (System.Text.DecoderFallbackException) {
                 return bytes;
+            }
+        }
+
+        /// <summary>
+        /// A symbol's characters have to be read back through its own encoding. The bytes
+        /// \xC3\xA9 are one character in a UTF-8 file and two in a binary one, and reading them
+        /// as UTF-8 either way loses that - the symbol would come out a byte shorter than the
+        /// source asked for.
+        /// </summary>
+        private string/*!*/ LiteralText(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding) {
+            try {
+                return encoding.StrictEncoding.GetString(bytes);
+            } catch (System.Text.DecoderFallbackException) {
+                return LiteralText(bytes);
             }
         }
 
