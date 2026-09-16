@@ -312,25 +312,30 @@ namespace IronRuby.Builtins {
             var result = MutableString.CreateBinary();
 
             while (true) {
-                // The following should exactly match MRI handling of incomplete input:
+                // Two characters are the least that encodes anything. Beyond that, running out
+                // of input is not a reason to discard what has already been read: MRI decodes
+                // "U2VuZCByZWluZm9yY2VtZW50cw" without its padding, and takes the "3d" out of
+                // "3d}}", so a missing third or fourth character just ends the string early.
                 int a = DecodeBase64Byte(data, length, true, ref offset);
                 int b = DecodeBase64Byte(data, length, true, ref offset);
-                int c = DecodeBase64Byte(data, length, false, ref offset);
-                int d = (c != -2) ? DecodeBase64Byte(data, length, false, ref offset) : -2;
-                if (a == -1 || b == -1 || c == -1 || d == -1) {
+                if (a < 0 || b < 0) {
                     break;
                 }
+
+                int c = DecodeBase64Byte(data, length, false, ref offset);
+                int d = (c >= 0) ? DecodeBase64Byte(data, length, false, ref offset) : -2;
 
                 int buffer = (a << 18) | (b << 12);
                 result.Append((byte)((buffer >> 16) & 0xff));
 
-                if (c == -2) {
+                // -1 is the end of the input and -2 is a '='; either one ends the string.
+                if (c < 0) {
                     break;
                 }
                 buffer |= (c << 6);
                 result.Append((byte)((buffer >> 8) & 0xff));
 
-                if (d == -2) {
+                if (d < 0) {
                     break;
                 }
                 buffer |= d;
@@ -338,6 +343,97 @@ namespace IronRuby.Builtins {
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// The "m0" directive. Where "m" ignores anything that is not base64, this accepts only
+        /// canonical input - the alphabet, a length that is a multiple of four, and padding that
+        /// is both correct and last. A newline is enough to fail it, which is the whole point of
+        /// Base64.strict_decode64.
+        /// </summary>
+        private static MutableString/*!*/ ReadStrictBase64(MutableString/*!*/ data, ref int offset) {
+            int length = data.GetByteCount();
+            var result = MutableString.CreateBinary();
+
+            int buffer = 0;
+            int bits = 0;
+            int padding = 0;
+            int consumed = 0;
+
+            while (offset < length) {
+                int c = data.GetByte(offset++);
+                consumed++;
+
+                if (c == '=') {
+                    padding++;
+                    continue;
+                }
+
+                int value = Base64Value(c);
+                if (value < 0 || padding > 0) {
+                    throw RubyExceptions.CreateArgumentError("invalid base64");
+                }
+
+                buffer = (buffer << 6) | value;
+                bits += 6;
+                if (bits == 24) {
+                    result.Append((byte)((buffer >> 16) & 0xff));
+                    result.Append((byte)((buffer >> 8) & 0xff));
+                    result.Append((byte)(buffer & 0xff));
+                    buffer = 0;
+                    bits = 0;
+                }
+            }
+
+            if (consumed % 4 != 0) {
+                throw RubyExceptions.CreateArgumentError("invalid base64");
+            }
+
+            switch (bits) {
+                case 0:
+                    if (padding != 0) {
+                        throw RubyExceptions.CreateArgumentError("invalid base64");
+                    }
+                    break;
+
+                case 12:
+                    if (padding != 2) {
+                        throw RubyExceptions.CreateArgumentError("invalid base64");
+                    }
+                    result.Append((byte)((buffer >> 4) & 0xff));
+                    break;
+
+                case 18:
+                    if (padding != 1) {
+                        throw RubyExceptions.CreateArgumentError("invalid base64");
+                    }
+                    result.Append((byte)((buffer >> 10) & 0xff));
+                    result.Append((byte)((buffer >> 2) & 0xff));
+                    break;
+
+                default:
+                    throw RubyExceptions.CreateArgumentError("invalid base64");
+            }
+
+            return result;
+        }
+
+        /// <summary>The character's place in the base64 alphabet, or -1 if it has none.</summary>
+        private static int Base64Value(int c) {
+            if (unchecked((uint)c - 'A' <= (uint)'Z' - 'A')) {
+                return c - 'A';
+            }
+            if (unchecked((uint)c - 'a' <= (uint)'z' - 'a')) {
+                return c - 'a' + 'Z' - 'A' + 1;
+            }
+            if (unchecked((uint)c - '0' <= (uint)'9' - '0')) {
+                return c - '0' + 2 * ('Z' - 'A' + 1);
+            }
+            switch (c) {
+                case '+': return 62;
+                case '/': return 63;
+            }
+            return -1;
         }
 
         private static int DecodeBase64Byte(MutableString/*!*/ data, int length, bool skipEquals, ref int offset) {
@@ -1595,7 +1691,9 @@ namespace IronRuby.Builtins {
                         break;
 
                     case 'm': // Base64
-                        result.Add(ReadBase64(self, ref position));
+                        result.Add(directive.Count == 0
+                            ? ReadStrictBase64(self, ref position)
+                            : ReadBase64(self, ref position));
                         break;
 
                     case 'M': // quoted-printable, MIME encoding

@@ -370,3 +370,76 @@ module Random::Formatter
     choose(chars, n)
   end
 end
+
+# MRI defines Random::Formatter#random_number and #rand in C, in random.c, so they are absent
+# from this file upstream and have to be supplied here. Both are built on #random_bytes, which
+# is the module's own primitive, so they stay correct for whatever mixes Formatter in - a Random
+# instance drawing from its PRNG or SecureRandom drawing from the system's CSPRNG.
+module Random::Formatter
+  # With no argument, or with a non-positive one, a Float in [0, 1).
+  # With a positive Integer, an Integer in [0, n). With a positive Float, a Float in [0, n).
+  # With a Range, a value within it, of the endpoints' own type.
+  def random_number(n = 0)
+    case n
+    when nil
+      __random_float__
+    when ::Range
+      __random_in_range__(n)
+    when ::Integer
+      n > 0 ? __random_below__(n) : __random_float__
+    when ::Numeric
+      n > 0 ? __random_float__ * n : __random_float__
+    else
+      raise ::ArgumentError, "invalid argument - #{n}"
+    end
+  end
+
+  # MRI has these as one method, which is what SecureRandom.method(:rand) ==
+  # SecureRandom.method(:random_number) checks.
+  alias rand random_number
+
+  private
+
+  # 53 bits is what a double's mantissa holds, so this is every Float in [0, 1) that can be
+  # told apart, each equally likely.
+  def __random_float__
+    (__random_integer__(8) >> 11) / (1 << 53).to_f
+  end
+
+  def __random_integer__(bytes)
+    random_bytes(bytes).bytes.inject(0) { |value, byte| (value << 8) | byte }
+  end
+
+  # Rejection sampling: taking the remainder instead would make the low values of an n that is
+  # not a power of two that little bit likelier.
+  def __random_below__(n)
+    bits = n.bit_length
+    bytes = (bits + 7) / 8
+    mask = (1 << bits) - 1
+    loop do
+      value = __random_integer__(bytes) & mask
+      return value if value < n
+    end
+  end
+
+  def __random_in_range__(range)
+    low = range.begin
+    high = range.end
+    return __random_float__ if low.nil? || high.nil?
+
+    unless low.is_a?(::Numeric) && high.is_a?(::Numeric)
+      raise ::ArgumentError, "invalid argument - #{range}"
+    end
+
+    if low.is_a?(::Integer) && high.is_a?(::Integer)
+      count = high - low + (range.exclude_end? ? 0 : 1)
+      # An empty or backwards range has nothing to answer with, and MRI falls back to [0, 1).
+      return __random_float__ if count <= 0
+      low + __random_below__(count)
+    else
+      span = high - low
+      return __random_float__ if span <= 0
+      low + __random_float__ * span
+    end
+  end
+end

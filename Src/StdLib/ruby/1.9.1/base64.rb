@@ -77,15 +77,29 @@ module Base64
   # This method complies with ``Base 64 Encoding with URL and Filename Safe
   # Alphabet'' in RFC 4648.
   # The alphabet uses '-' instead of '+' and '_' instead of '/'.
-  def urlsafe_encode64(bin)
-    strict_encode64(bin).tr("+/", "-_")
+  # Padding is optional: RFC 4648 requires it, but unpadded output is common enough
+  # that MRI lets the caller drop it.
+  def urlsafe_encode64(bin, padding: true)
+    str = strict_encode64(bin)
+    str.chomp!("==") or str.chomp!("=") unless padding
+    str.tr!("+/", "-_")
+    str
   end
 
   # Returns the Base64-decoded version of +str+.
   # This method complies with ``Base 64 Encoding with URL and Filename Safe
   # Alphabet'' in RFC 4648.
   # The alphabet uses '-' instead of '+' and '_' instead of '/'.
+  # RFC 4648 says nothing about unpadded input but does say the excess pad characters may
+  # be ignored, so MRI restores the padding rather than rejecting it. Input that already
+  # ends in '=' is left alone, so that wrong padding is still an error.
   def urlsafe_decode64(str)
-    strict_decode64(str.tr("-_", "+/"))
+    if !str.end_with?("=") && str.length % 4 != 0
+      str = str.ljust((str.length + 3) & ~3, "=")
+      str.tr!("-_", "+/")
+    else
+      str = str.tr("-_", "+/")
+    end
+    strict_decode64(str)
   end
 end
