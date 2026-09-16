@@ -46,7 +46,11 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyConstructor]
         public static BigDecimal/*!*/ CreateBigDecimal(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ value, [Optional]int n) {
-            return BigDecimal.Create(GetConfig(context), value.ConvertToString(), n);
+            string str = value.ConvertToString();
+            if (!BigDecimal.IsValidNumericString(str)) {
+                throw RubyExceptions.CreateArgumentError("invalid value for BigDecimal(): \"{0}\"", str);
+            }
+            return BigDecimal.Create(GetConfig(context), str, n);
         }
 
         #endregion
@@ -190,6 +194,15 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return MutableString.CreateAscii("1.0.1");
         }
 
+        /// <summary>
+        /// Parses as much of the string as looks like a number and answers zero when none of
+        /// it does, where Kernel#BigDecimal would raise. This is what String#to_d uses.
+        /// </summary>
+        [RubyMethod("interpret_loosely", RubyMethodAttributes.PublicSingleton)]
+        public static BigDecimal/*!*/ InterpretLoosely(RubyContext/*!*/ context, RubyClass/*!*/ self, [DefaultProtocol]MutableString/*!*/ value) {
+            return BigDecimal.Create(GetConfig(context), value.ConvertToString(), 0);
+        }
+
         #region induced_from
 
         [RubyMethod("induced_from", RubyMethodAttributes.PublicSingleton)]
@@ -230,8 +243,26 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return self.Exponent;
         }
 
+        /// <summary>
+        /// The number of decimal digits it takes to write self out in positional notation -
+        /// which is not the same as the count of significant digits: BigDecimal("1E2") has
+        /// one significant digit but a precision of 3, and BigDecimal("0.001") has a
+        /// precision of 3 for the leading zeros it needs. Zero and the special values are 0.
+        /// (Without this, `precision` resolves to the CLR Precision property, which counts
+        /// nine-digit words.)
+        /// </summary>
+        [RubyMethod("precision")]
+        public static int Precision(BigDecimal/*!*/ self) {
+            if (!BigDecimal.IsFinite(self) || BigDecimal.IsZero(self)) {
+                return 0;
+            }
+            return self.Exponent > 0
+                ? Math.Max(self.Digits, self.Exponent)
+                : self.Digits - self.Exponent;
+        }
+
         [RubyMethod("precs")]
-        public static RubyArray/*!*/ Precision(BigDecimal/*!*/ self) {
+        public static RubyArray/*!*/ Precs(BigDecimal/*!*/ self) {
             return RubyOps.MakeArray2(self.Precision * BigDecimal.BASE_FIG, self.MaxPrecision * BigDecimal.BASE_FIG);
         }
 
@@ -553,36 +584,138 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "quo", self, other);
         }
 
-        [RubyMethod("div")]
-        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigDecimal/*!*/ other) {
-            if (BigDecimal.IsFinite(other)) {
-                BigDecimal.Config config = GetConfig(context);
-                BigDecimal remainder;
-                BigDecimal result = BigDecimal.Divide(config, self, other, 0, out remainder);
-                if (BigDecimal.IsFinite(result)) {
-                    return BigDecimal.IntegerPart(config, result);
-                }
+        #region div
+
+        /// <summary>
+        /// The special-value rules MRI applies to the integer-division family (#div with no
+        /// precision, #divmod). They are not the same as the ones #/ uses: a NaN operand, an
+        /// infinite *dividend* and a zero divisor are all errors here, because none of them
+        /// has an integer quotient. Note the order - NaN is checked before the zero divisor
+        /// (BigDecimal("NaN").div(0) is a FloatDomainError, not a ZeroDivisionError) but the
+        /// zero divisor is checked before an infinite dividend.
+        /// An infinite *divisor* is not an error: the quotient is 0 when the signs agree and
+        /// -1 when they do not, so that div * other + mod still reconstructs self.
+        /// </summary>
+        private static void IntegerDivMod(BigDecimal.Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y,
+            out BigDecimal/*!*/ div, out BigDecimal/*!*/ mod) {
+
+            if (BigDecimal.IsNaN(x) || BigDecimal.IsNaN(y)) {
+                throw CreateSpecialValueError(BigDecimal.NaN);
             }
-            return BigDecimal.NaN;
+            if (BigDecimal.IsZero(y)) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            if (BigDecimal.IsInfinite(x)) {
+                if (BigDecimal.IsInfinite(y)) {
+                    throw CreateSpecialValueError(BigDecimal.NaN);
+                }
+                throw CreateSpecialValueError(x.Sign * y.Sign > 0
+                    ? BigDecimal.PositiveInfinity
+                    : BigDecimal.NegativeInfinity);
+            }
+            if (BigDecimal.IsInfinite(y)) {
+                if (BigDecimal.IsZero(x) || x.Sign == y.Sign) {
+                    div = BigDecimal.Create(config, "0");
+                    mod = x;
+                } else {
+                    div = BigDecimal.Create(config, "-1");
+                    mod = y;
+                }
+                return;
+            }
+            BigDecimal.DivMod(config, x, y, out div, out mod);
         }
 
         [RubyMethod("div")]
-        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, BigDecimal/*!*/ other, int n) {
+        public static object Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
+            BigDecimal.Config config = GetConfig(context);
+            BigDecimal div, mod;
+            IntegerDivMod(config, self, other, out div, out mod);
+            // Since bigdecimal 4.0 the precision-less #div answers an Integer, not a BigDecimal.
+            return BigDecimal.ToInteger(config, div);
+        }
+
+        [RubyMethod("div")]
+        public static object Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
+            return Div(context, self, BigDecimal.Create(GetConfig(context), other));
+        }
+
+        [RubyMethod("div")]
+        public static object Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
+            return Div(context, self, BigDecimal.Create(GetConfig(context), other));
+        }
+
+        [RubyMethod("div")]
+        public static object Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
+            return Div(context, self, BigDecimal.Create(GetConfig(context), other));
+        }
+
+        [RubyMethod("div")]
+        public static object Div(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
+            BigDecimal/*!*/ self, object other) {
+            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "div", self, other);
+        }
+
+        [RubyMethod("div")]
+        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other, [DefaultProtocol]int n) {
             if (n < 0) {
-                throw RubyExceptions.CreateArgumentError("argument must be positive");
+                throw RubyExceptions.CreateArgumentError("negative precision");
             }
             BigDecimal remainder;
             return BigDecimal.Divide(GetConfig(context), self, other, n, out remainder);
         }
 
+        [RubyMethod("div")]
+        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other, [DefaultProtocol]int n) {
+            return Div(context, self, BigDecimal.Create(GetConfig(context), other), n);
+        }
+
+        [RubyMethod("div")]
+        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other, [DefaultProtocol]int n) {
+            return Div(context, self, BigDecimal.Create(GetConfig(context), other), n);
+        }
+
+        [RubyMethod("div")]
+        public static BigDecimal/*!*/ Div(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other, [DefaultProtocol]int n) {
+            return Div(context, self, BigDecimal.Create(GetConfig(context), other), n);
+        }
+
+        #endregion
+
         #region %, modulo
+
+        /// <summary>
+        /// MRI's #%: a NaN operand poisons the result, a zero divisor raises (even for a NaN
+        /// divisor's sake we check NaN first), an infinite dividend has no remainder, and an
+        /// infinite divisor leaves self alone when the signs agree - when they differ the
+        /// floored-division convention forces the answer to be the divisor itself.
+        /// </summary>
+        private static BigDecimal/*!*/ ModuloCore(BigDecimal.Config/*!*/ config, BigDecimal/*!*/ x, BigDecimal/*!*/ y) {
+            if (BigDecimal.IsNaN(x) || BigDecimal.IsNaN(y)) {
+                return BigDecimal.NaN;
+            }
+            if (BigDecimal.IsZero(y)) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            if (BigDecimal.IsInfinite(x)) {
+                return BigDecimal.NaN;
+            }
+            if (BigDecimal.IsInfinite(y)) {
+                return (BigDecimal.IsZero(x) || x.Sign == y.Sign) ? x : y;
+            }
+            BigDecimal div, mod;
+            BigDecimal.DivMod(config, x, y, out div, out mod);
+            return mod;
+        }
+
+        // #modulo is not a second implementation of #% but the very same method, which is
+        // what BigDecimal.instance_method(:modulo) == BigDecimal.instance_method(:%) asserts:
+        // every overload below has to carry both names for the two method groups to be equal.
 
         [RubyMethod("%")]
         [RubyMethod("modulo")]
         public static BigDecimal/*!*/ Modulo(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            BigDecimal div, mod;
-            BigDecimal.DivMod(GetConfig(context), self, other, out div, out mod);
-            return mod;
+            return ModuloCore(GetConfig(context), self, other);
         }
 
         [RubyMethod("%")]
@@ -597,22 +730,18 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return Modulo(context, self, BigDecimal.Create(GetConfig(context), other));
         }
 
+        [RubyMethod("%")]
         [RubyMethod("modulo")]
-        public static object Modulo(BinaryOpStorage/*!*/ moduloStorage, RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
-            var modulo = moduloStorage.GetCallSite("modulo");
-            return modulo.Target(modulo, BigDecimal.ToFloat(GetConfig(context), self), other);
+        public static BigDecimal/*!*/ Modulo(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
+            // A Float operand does not drag the result down to a Float: MRI keeps it a BigDecimal.
+            return Modulo(context, self, BigDecimal.Create(GetConfig(context), other));
         }
 
         [RubyMethod("%")]
-        public static object ModuloOp(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
+        [RubyMethod("modulo")]
+        public static object Modulo(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite,
             RubyContext/*!*/ context, BigDecimal/*!*/ self, object other) {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "%", self, other);
-        }
-
-        [RubyMethod("modulo")]
-        public static object Modulo(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, 
-            RubyContext/*!*/ context, BigDecimal/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "modulo", self, other);
         }
 
         #endregion
@@ -642,9 +771,16 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         [RubyMethod("divmod")]
         public static RubyArray/*!*/ DivMod(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
+            BigDecimal.Config config = GetConfig(context);
             BigDecimal div, mod;
-            BigDecimal.DivMod(GetConfig(context), self, other, out div, out mod);
-            return RubyOps.MakeArray2(div, mod);
+            IntegerDivMod(config, self, other, out div, out mod);
+            // Since bigdecimal 4.0 the quotient is an Integer, as it is for Integer#divmod.
+            return RubyOps.MakeArray2(BigDecimal.ToInteger(config, div), mod);
+        }
+
+        [RubyMethod("divmod")]
+        public static RubyArray/*!*/ DivMod(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
+            return DivMod(context, self, BigDecimal.Create(GetConfig(context), other));
         }
 
         [RubyMethod("divmod")]
@@ -667,14 +803,48 @@ namespace IronRuby.StandardLibrary.BigDecimal {
 
         #region remainder
 
+        /// <summary>
+        /// #remainder truncates where #% floors, so it differs from #% only when the signs
+        /// disagree - and then only when the remainder is non-zero: BigDecimal("4").remainder(-2)
+        /// is 0, not 2.
+        /// An infinite divisor leaves self untouched here (no sign-dependent special case),
+        /// but a zero divisor still raises, and NaN still wins over the zero check.
+        /// </summary>
         [RubyMethod("remainder")]
         public static BigDecimal/*!*/ Remainder(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigDecimal/*!*/ other) {
-            BigDecimal mod = Modulo(context, self, other);
-            if (self.Sign == other.Sign) {
-                return mod;
-            } else {
-                return BigDecimal.Subtract(GetConfig(context), mod, other);
+            BigDecimal.Config config = GetConfig(context);
+            if (BigDecimal.IsNaN(self) || BigDecimal.IsNaN(other)) {
+                return BigDecimal.NaN;
             }
+            if (BigDecimal.IsZero(other)) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            if (BigDecimal.IsInfinite(self)) {
+                return BigDecimal.NaN;
+            }
+            if (BigDecimal.IsInfinite(other)) {
+                return self;
+            }
+            BigDecimal mod = ModuloCore(config, self, other);
+            if (BigDecimal.IsZero(mod) || self.Sign == other.Sign) {
+                return mod;
+            }
+            return BigDecimal.Subtract(config, mod, other);
+        }
+
+        [RubyMethod("remainder")]
+        public static BigDecimal/*!*/ Remainder(RubyContext/*!*/ context, BigDecimal/*!*/ self, int other) {
+            return Remainder(context, self, BigDecimal.Create(GetConfig(context), other));
+        }
+
+        [RubyMethod("remainder")]
+        public static BigDecimal/*!*/ Remainder(RubyContext/*!*/ context, BigDecimal/*!*/ self, [NotNull]BigInteger/*!*/ other) {
+            return Remainder(context, self, BigDecimal.Create(GetConfig(context), other));
+        }
+
+        [RubyMethod("remainder")]
+        public static BigDecimal/*!*/ Remainder(RubyContext/*!*/ context, BigDecimal/*!*/ self, double other) {
+            return Remainder(context, self, BigDecimal.Create(GetConfig(context), other));
         }
 
         [RubyMethod("remainder")]

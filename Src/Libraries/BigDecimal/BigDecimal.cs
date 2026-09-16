@@ -276,6 +276,37 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             return CheckOverflowExceptions(config, result);
         }
 
+        // A run of digits, which may be broken up by single underscores but may not start or
+        // end with one: 1_2_3 is fine, 1__2 and _123 are not.
+        private const string DigitRun = @"\d+(_\d+)*";
+
+        private static readonly Regex/*!*/ _strictNumber = new Regex(
+            @"^[-+]?(" + DigitRun + @"(\.(" + DigitRun + @")?)?|\.(" + DigitRun + @"))([eEdD][-+]?" + DigitRun + @")?$",
+            RegexOptions.ExplicitCapture);
+
+        // MRI tolerates one trailing underscore, but only on a bare integer and only at the
+        // very end of the string: "123_" and "1_2_" parse, while "123_.45", "1.23_" and
+        // "1E1_" are all rejected. Measured, not deduced - the general rule would have
+        // accepted all four.
+        private static readonly Regex/*!*/ _strictTrailingUnderscore = new Regex(
+            @"^[-+]?" + DigitRun + "_$", RegexOptions.ExplicitCapture);
+
+        /// <summary>
+        /// Whether Kernel#BigDecimal would accept this string. The parser itself is
+        /// deliberately forgiving (String#to_d wants a value out of "45.67 degrees"), so the
+        /// strictness lives here rather than in Create.
+        /// </summary>
+        public static bool IsValidNumericString(string value) {
+            if (value == null) {
+                return false;
+            }
+            value = value.Trim();
+            if (value == "NaN" || value == "Infinity" || value == "+Infinity" || value == "-Infinity") {
+                return true;
+            }
+            return _strictNumber.IsMatch(value) || _strictTrailingUnderscore.IsMatch(value);
+        }
+
         private static BigDecimal CheckSpecialCases(string value) {
             BigDecimal result = null;
             if (value == null) {
@@ -443,11 +474,16 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             }
 
             int sign = y._sign * x._sign;
+            // #mult's limit counts significant digits, but LimitPrecision's counts decimal
+            // places, so the multiply-by-one short cut has to convert between the two -
+            // otherwise BigDecimal("1.234").mult(1, 2) keeps three digits instead of two.
             if (IsOne(x)) {
-                return LimitPrecision(config, new BigDecimal(sign, y._fraction, y._exponent), limit, config.RoundingMode);
+                BigDecimal scaled = new BigDecimal(sign, y._fraction, y._exponent);
+                return LimitPrecision(config, scaled, limit - scaled.Exponent, config.RoundingMode);
             }
             if (IsOne(y)) {
-                return LimitPrecision(config, new BigDecimal(sign, x._fraction, x._exponent), limit, config.RoundingMode);
+                BigDecimal scaled = new BigDecimal(sign, x._fraction, x._exponent);
+                return LimitPrecision(config, scaled, limit - scaled.Exponent, config.RoundingMode);
             }
 
             int exponent;
@@ -532,17 +568,27 @@ namespace IronRuby.StandardLibrary.BigDecimal {
         }
 
         public static BigDecimal/*!*/ Power(Config/*!*/ config, BigDecimal/*!*/ x, int power) {
-            if (!IsFinite(x)) {
+            if (IsNaN(x)) {
                 return CheckOverflowExceptions(config, NaN);
             }
 
             if (power == 0) {
+                // Even Infinity ** 0 is 1.
                 return One;
             }
 
             // power is odd  => sign = x.Sign
             // power is even => sign = 1
             int sign = (power % 2 != 0) ? x.Sign : 1;
+
+            if (IsInfinite(x)) {
+                // Infinity to a positive power stays infinite; to a negative power it
+                // collapses onto a (signed) zero, exactly as 0 ** -n blows up to Infinity.
+                if (power < 0) {
+                    return new BigDecimal(sign, PositiveZero);
+                }
+                return CheckOverflowExceptions(config, sign < 0 ? NegativeInfinity : PositiveInfinity);
+            }
 
             if (IsOne(x)) {
                 return new BigDecimal(sign, One);
@@ -767,13 +813,15 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 if ((config.OverflowMode & OverflowExceptionModes.Overflow) == OverflowExceptionModes.Overflow) {
                     throw new FloatDomainError("Exponent overflow");
                 }
-            } else {
-                if ((config.OverflowMode & OverflowExceptionModes.Underflow) == OverflowExceptionModes.Underflow) {
-                    throw new FloatDomainError("Exponent underflow");
-                }
+                // Our exponent is an Int32 where MRI's is a 64-bit value, so we run out of
+                // room sooner - but the answer at the end of the road is the same one MRI
+                // gives when its own exponent overflows: Infinity, not zero.
+                return sign < 0 ? NegativeInfinity : PositiveInfinity;
             }
-            // Always returns Zero on exponent overflow.
-            // It would seem more appropriate to return +/-Infinity or Zero depending on exponent and sign.
+            if ((config.OverflowMode & OverflowExceptionModes.Underflow) == OverflowExceptionModes.Underflow) {
+                throw new FloatDomainError("Exponent underflow");
+            }
+            // Underflow flushes to zero.
             return PositiveZero;
         }
 
@@ -2462,10 +2510,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             } else {
                 int expLenDiff = _exponent - Digits;
                 if (expLenDiff >= 0) {
-                    AppendDigits(sb, _fraction.ToString() + new string('0', expLenDiff), 0, _exponent, separateAt);
+                    AppendIntegerDigits(sb, _fraction.ToString() + new string('0', expLenDiff), 0, _exponent, separateAt);
                     sb.Append(".0");
                 } else {
-                    AppendDigits(sb, _fraction.ToString(), 0, _exponent, separateAt);
+                    AppendIntegerDigits(sb, _fraction.ToString(), 0, _exponent, separateAt);
                     sb.Append(".");
                     AppendDigits(sb, _fraction.ToString(), _exponent, Digits - _exponent, separateAt);
                 }
@@ -2479,6 +2527,10 @@ namespace IronRuby.StandardLibrary.BigDecimal {
             sb.AppendFormat("{0}", this._exponent);
         }
 
+        /// <summary>
+        /// Groups the fractional digits, which run left to right: the short group, if any,
+        /// is the last one ("0.123 456 78").
+        /// </summary>
         private void AppendDigits(StringBuilder/*!*/ sb, string digits, int start, int length, int separateAt) {
             int current = start;
             if (separateAt > 0) {
@@ -2489,6 +2541,32 @@ namespace IronRuby.StandardLibrary.BigDecimal {
                 }
             }
             sb.Append(digits.Substring(current, length - (current - start)));
+        }
+
+        /// <summary>
+        /// Groups the digits of the integer part, which are counted from the decimal point
+        /// backwards, so the short group is the *first* one: 1000010 with a width of 5 is
+        /// "10 00010", not "10000 10".
+        /// </summary>
+        private void AppendIntegerDigits(StringBuilder/*!*/ sb, string digits, int start, int length, int separateAt) {
+            if (separateAt <= 0 || length <= separateAt) {
+                sb.Append(digits.Substring(start, length));
+                return;
+            }
+            int firstGroup = length % separateAt;
+            int current = start;
+            if (firstGroup != 0) {
+                sb.Append(digits.Substring(current, firstGroup));
+                sb.Append(" ");
+                current += firstGroup;
+            }
+            while (current < start + length) {
+                sb.Append(digits.Substring(current, separateAt));
+                current += separateAt;
+                if (current < start + length) {
+                    sb.Append(" ");
+                }
+            }
         }
         #endregion
 
