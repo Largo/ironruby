@@ -6197,6 +6197,9 @@ class Enumerator
     case op
     when :same
       __source_count__(source)
+    when :bytesize
+      # each_byte counts bytes, which is not what the string's own #size answers.
+      source.bytesize
     when :self
       source
     when :slice

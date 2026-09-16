@@ -1663,7 +1663,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("bytes")]
         [RubyMethod("each_byte")]
         public static Enumerator/*!*/ EachByte(MutableString/*!*/ self) {
-            return new Enumerator(self, "each_byte");
+            // It counts bytes, so its #size is the byte count. Without saying so the enumerator
+            // falls back on the string's own #size, which is characters - the same number only
+            // while the string is ASCII.
+            return new Enumerator(self, "each_byte") { SizeSource = self, SizeOp = "bytesize" };
         }
 
         [RubyMethod("bytes")]
