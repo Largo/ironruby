@@ -1444,25 +1444,30 @@ namespace IronRuby.Builtins {
                 return self;
             }
 
+            int left = (length - selfLength) / 2;
+            int right = length - selfLength - left;
+
+            // Built by appending strings rather than characters, so that padding of another
+            // encoding decides the result's along with the receiver's: "abc" in IBM437 centred
+            // with a UTF-8 pad comes back UTF-8, the way #ljust already did it.
+            MutableString result = self.CreateDerived().TaintBy(self).TaintBy(padding);
+            AppendPadding(result, padding, left);
+            result.Append(self);
+            AppendPadding(result, padding, right);
+            return result;
+        }
+
+        /// <summary>Appends the padding, repeated and then cut short, until count characters are added.</summary>
+        private static void AppendPadding(MutableString/*!*/ result, MutableString/*!*/ padding, int count) {
             int paddingLength = padding.GetCharCount();
-
-            char[] charArray = new char[length];
-            int n = (length - selfLength) / 2;
-
-            for (int i = 0; i < n; i++) {
-                charArray[i] = padding.GetChar(i % paddingLength);
+            for (int i = 0; i < count / paddingLength; i++) {
+                result.Append(padding);
             }
 
-            for (int i = 0; i < selfLength; i++) {
-                charArray[n + i] = self.GetChar(i);
+            int remainder = count % paddingLength;
+            if (remainder > 0) {
+                result.Append(padding.GetSlice(0, remainder));
             }
-
-            int m = length - selfLength - n;
-            for (int i = 0; i < m; i++) {
-                charArray[n + selfLength + i] = padding.GetChar(i % paddingLength);
-            }
-
-            return self.CreateDerived().Append(charArray).TaintBy(self).TaintBy(padding); 
         }
 
         #endregion
