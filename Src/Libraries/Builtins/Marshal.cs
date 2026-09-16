@@ -397,10 +397,11 @@ namespace IronRuby.Builtins {
             /// IronRuby, but MRI writes them as the "mesg" and "bt" instance variables.
             /// </summary>
             private void WriteException(Exception/*!*/ exception, string[]/*!*/ instanceNames) {
-                WriteObject(exception);
-                WriteInt32(2 + instanceNames.Length);
-
                 var data = RubyExceptionData.GetInstance(exception);
+                Exception cause = data.HasCause ? data.Cause : null;
+
+                WriteObject(exception);
+                WriteInt32(2 + (cause != null ? 1 : 0) + instanceNames.Length);
                 WriteSymbol("mesg", RubyEncoding.Binary);
                 object message = data.Message;
                 var messageString = message as MutableString;
@@ -414,6 +415,13 @@ namespace IronRuby.Builtins {
 
                 WriteSymbol("bt", RubyEncoding.Binary);
                 WriteAnObject(data.Backtrace);
+
+                // MRI writes the cause as another pseudo instance variable, and only when the
+                // exception has one - an exception that was never raised inside a rescue has not.
+                if (cause != null) {
+                    WriteSymbol("cause", RubyEncoding.Binary);
+                    WriteAnObject(cause);
+                }
 
                 WriteIVarPairs(exception, instanceNames);
             }
@@ -845,6 +853,12 @@ namespace IronRuby.Builtins {
             private readonly Dictionary<int, Symbol>/*!*/ _symbols;
             private readonly Dictionary<int, object>/*!*/ _objects;
 
+            // Whether the dump is being read from a stream, and whether any record has begun:
+            // together they tell "the file is at its end" from "the dump is cut short".
+            private bool _started;
+
+            internal bool FromStream { get; set; }
+
             private RubyContext/*!*/ Context {
                 get { return _globalScope.Context; }
             }
@@ -1126,6 +1140,13 @@ namespace IronRuby.Builtins {
                             data.Backtrace = pair.Value as RubyArray;
                             break;
 
+                        case "cause":
+                            var cause = pair.Value as Exception;
+                            if (cause != null) {
+                                data.TrySetCause(cause);
+                            }
+                            break;
+
                         default:
                             Context.SetInstanceVariable(exception, pair.Key, pair.Value);
                             break;
@@ -1306,6 +1327,11 @@ namespace IronRuby.Builtins {
                     case '}':
                         Hash hsc = (obj as Hash);
                         if (hsc != null) {
+                            // A "C" record naming Hash itself says nothing about the class, so it
+                            // says the other thing MRI writes it for: the hash compares by identity.
+                            if (Context.GetClassOf(hsc) == Context.GetClass(typeof(Hash))) {
+                                hsc.CompareByIdentity();
+                            }
                             ReadHash(typeFlag, hsc);
                             loaded = true;
                         }
@@ -1349,6 +1375,7 @@ namespace IronRuby.Builtins {
             }
 
             private object ReadAnObject(int typeFlag, int reservedRef) {
+                _started = true;
                 object obj = null;
                 bool outermost = (reservedRef == NewRef);
                 bool runProc = (outermost && _proc != null);
@@ -1492,6 +1519,11 @@ namespace IronRuby.Builtins {
                     CheckPreamble();
                     return ReadAnObject(false);
                 } catch (EndOfStreamException e) {
+                    // A stream that ended before a single record began is at its end, which MRI
+                    // reports as such; a record that started and ran out is a short dump.
+                    if (FromStream && !_started) {
+                        throw new EOFError("end of file reached");
+                    }
                     throw RubyExceptions.CreateArgumentError("marshal data too short", e);
                 } catch (IOException e) {
                     throw RubyExceptions.CreateArgumentError("marshal data too short", e);
@@ -1601,7 +1633,7 @@ namespace IronRuby.Builtins {
             Proc block;
             bool freeze = ParseLoadOptions(self.Context, proc, options, out block);
             BinaryReader reader = source.GetBinaryReader();
-            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze);
+            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze) { FromStream = true };
             return loader.Load();
         }
 
@@ -1621,7 +1653,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateTypeError("instance of IO needed");
             }
             BinaryReader reader = new BinaryReader(stream);
-            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze);
+            MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze) { FromStream = true };
             return loader.Load();
         }
 
