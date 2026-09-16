@@ -220,22 +220,39 @@ class Rational < Numeric
   #   r ** Rational(1,2)   # -> 0.866025403784439
   #
   def ** (other)
-    if other.kind_of?(Rational)
-      Float(self) ** other
-    elsif other.kind_of?(Integer)
+    # A whole number spelled as a Rational is still a whole number, and the answer
+    # stays exact: Rational(2,3) ** Rational(2,1) is (4/9), not 0.444...
+    other = other.numerator if other.kind_of?(Rational) && other.denominator == 1
+
+    if other.kind_of?(Integer)
       if other > 0
 	num = @numerator ** other
 	den = @denominator ** other
       elsif other < 0
+	# Turning the fraction over needs a numerator to divide by.
+	raise ZeroDivisionError, "divided by 0" if @numerator == 0
 	num = @denominator ** -other
 	den = @numerator ** -other
-      elsif other == 0
+	num, den = -num, -den if den < 0
+      else
 	num = 1
 	den = 1
       end
       Rational.new!(num, den)
-    elsif other.kind_of?(Float)
-      Float(self) ** other
+    elsif other.kind_of?(Rational) || other.kind_of?(Float)
+      if @numerator == 0 && other.kind_of?(Rational)
+	# Zero to a negative power is one divided by zero, and says so - but only when
+	# the power was asked for exactly. A Float one answers Infinity, as Float
+	# arithmetic does everywhere else.
+	raise ZeroDivisionError, "divided by 0" if other < 0
+	# Zero to a fraction of a power is still exactly zero.
+	Rational.new!(0, 1)
+      elsif self < 0 && Rational.__complex_power?(other)
+	# A negative number raised to a power that is not whole leaves the real line.
+	Rational.__negative_power__(self, other)
+      else
+	Float(self) ** other
+      end
     else
       x, y = other.coerce(self)
       x ** y
@@ -407,6 +424,65 @@ class Rational < Numeric
   private :initialize
 end
 
+class Rational
+  # Whether a negative number raised to this power leaves the real line. An infinite
+  # power does not - it runs off to zero or to infinity along the reals - and a NaN
+  # one does, carrying the NaN into both parts.
+  def self.__complex_power?(x)
+    return false if x.is_a?(Float) && x.infinite?
+    !__whole__(x)
+  end
+
+  # Whether an exponent names a whole number, however it is spelled.
+  def self.__whole__(x)
+    case x
+    when Integer  then true
+    when Rational then x.denominator == 1
+    when Float    then x.finite? && x == x.floor
+    else false
+    end
+  end
+
+  # A negative real sits at angle pi, so base ** w is |base| ** w turned through pi*w:
+  # cos and sin of that are exact at the whole and half turns, which is why MRI answers
+  # (-8) ** 0.5 with a real part of exactly 0.0 rather than 1.7e-16.
+  def self.__negative_power__(base, other)
+    w = other.to_f
+    r = (-base).to_f ** w
+    Complex.__raw__(r * __cospi__(w), r * __sinpi__(w))
+  end
+
+  def self.__cospi__(w)
+    return w if w.nan?
+    return (w.to_i.even? ? 1.0 : -1.0) if w == w.floor
+    return 0.0 if (w * 2) == (w * 2).floor
+    Math.cos(w * Math::PI)
+  end
+
+  def self.__sinpi__(w)
+    return w if w.nan?
+    return 0.0 if w == w.floor
+    return ((w - 0.5).to_i.even? ? 1.0 : -1.0) if (w * 2) == (w * 2).floor
+    Math.sin(w * Math::PI)
+  end
+end
+
+class Float
+  # Guarded the way Integer#** is below: aliasing a second time would make power!
+  # the method that calls power!.
+  unless method_defined?(:power!)
+    alias power! **
+
+    def ** (other)
+      if self < 0 && other.is_a?(Numeric) && Rational.__complex_power?(other)
+        # A negative number raised to a power that is not whole leaves the real line.
+        return Rational.__negative_power__(self, other)
+      end
+      power!(other)
+    end
+  end
+end
+
 class Integer
   undef quo
   # If Rational is defined, returns a Rational number instead of an Integer.
@@ -422,11 +498,32 @@ class Integer
     # with 0 failed" where CRuby says "String can't be coerced into Integer".  Let the
     # builtin ** answer for anything non-numeric, which is where that message lives.
     return power!(other) unless other.is_a?(Numeric)
-    if other >= 0
-      self.power!(other)
-    else
-      Rational.new!(self,1)**other
+
+    # A whole number spelled as a Rational answers as a Rational: 2 ** Rational(2,1)
+    # is (4/1), where 2 ** 2 is 4.
+    if other.is_a?(Rational) && other.denominator == 1
+      return Rational.new!(self, 1) ** other.numerator
     end
+
+    if other.is_a?(Integer)
+      return self.power!(other) if other >= 0
+      # 0 ** -1 asks for one divided by zero, and says so.
+      raise ZeroDivisionError, "divided by 0" if self == 0
+      return Rational.new!(self, 1) ** other
+    end
+
+    # Anything else is a fraction of a power: a Float, or a Rational that is not whole.
+    if self == 0
+      raise ZeroDivisionError, "divided by 0" if other.is_a?(Rational) && other < 0
+      # Zero to a fraction of a power is exactly zero - and stays a Rational if that
+      # is how the power was asked for.
+      return Rational.new!(0, 1) if other.is_a?(Rational) && other > 0
+    elsif self < 0 && Rational.__complex_power?(other)
+      # A negative number raised to a power that is not whole leaves the real line.
+      return Rational.__negative_power__(self, other)
+    end
+
+    self.power!(other)
   end
 
   unless defined? 1.power!

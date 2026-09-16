@@ -1107,7 +1107,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("finite?")]
         public static bool IsFinite(double self) {
-            return !double.IsInfinity(self);
+            // NaN is not a finite number either, whatever its exponent looks like.
+            return double.IsFinite(self);
         }
 
         #endregion
