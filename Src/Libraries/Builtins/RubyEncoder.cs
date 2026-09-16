@@ -1252,19 +1252,14 @@ namespace IronRuby.Builtins {
                         }
                         count = Int32.Parse(format.Substring(pos1, (i - pos1)));
                         i--;
-                    } else if (c == '@' && c2 == '-') {
-                        int pos1 = i;
-                        i += 2;
-                        while (i < format.Length && Tokenizer.IsDecimalDigit(format[i])) {
-                            i++;
-                        }
-                        count = Int32.Parse(format.Substring(pos1, (i - pos1)));
-                        i--;
                     } else if (c2 == '*') {
                         count = null;
                     } else {
                         i--;
-                        if (c == '@') {
+                        if (c == '@' && !packing) {
+                            // "@" with no count is the one place the two directions part company:
+                            // pack seeks to 1, like every other directive's default count, while
+                            // unpack seeks to the start.
                             count = 0;
                         }
                     }
@@ -1322,10 +1317,8 @@ namespace IronRuby.Builtins {
                     switch (directive.Directive) {
                         case '@':
                             count = 0;
-                            // "@*" means "seek to 0". "@" with no count should mean "seek to 1",
-                            // but the shared format parser turns that into a count of 0 before it
-                            // gets here, and unpack's "@" reads the same field - so the two cannot
-                            // be told apart without splitting the parse.
+                            // "@N" seeks to N and "@*" to the start; a bare "@" carries the
+                            // ordinary default count of 1.
                             stream.SetLength(stream.Position = directive.Count ?? 0);
                             break;
 
@@ -1660,7 +1653,10 @@ namespace IronRuby.Builtins {
                             }
                             position = directive.Count.Value > 0 ? directive.Count.Value : 0;
                         } else {
-                            position = length;
+                            // "*" stands for what is left of the string, and "@" then seeks to
+                            // that offset - counted from the start, so "C@*C" lands on the last
+                            // byte rather than past the end.
+                            position = length - position;
                         }
                         break;
 
