@@ -1778,7 +1778,9 @@ namespace IronRuby.Builtins {
                 }
                 // MRI starts the result off as US-ASCII and takes the encoding of the first
                 // element's inspection, so an empty array inspects as US-ASCII rather than as
-                // binary, and ["\u3042"] keeps the element's encoding.
+                // binary, and ["\u3042"] keeps the element's encoding. US-ASCII gives way to any
+                // other encoding, ASCII only content or not, which is how an array of strings
+                // inspects in the encoding the answer is going to be read in.
                 MutableString str = MutableString.CreateMutable(RubyEncoding.Ascii);
                 str.Append('[');
                 bool first = true;
@@ -1789,7 +1791,7 @@ namespace IronRuby.Builtins {
                         str.Append(", ");
                     }
                     var item = context.Inspect(obj);
-                    if (str.Encoding == RubyEncoding.Ascii && !item.IsAscii()) {
+                    if (str.Encoding == RubyEncoding.Ascii && item.Encoding != RubyEncoding.Ascii) {
                         str.ForceEncoding(item.Encoding);
                     }
                     str.Append(item);

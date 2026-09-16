@@ -1619,16 +1619,23 @@ namespace IronRuby.Builtins {
         // encoding aware
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, MutableString/*!*/ self) {
-            // TODO: RubyEncoding encoding = context.DefaultInternalEncoding ?? context.DefaultExternalEncoding;
+            // The result is written in the default external encoding - or in US-ASCII, when that
+            // one does not read an ASCII byte as itself - and a character it cannot write is
+            // escaped rather than emitted. So the same string inspects differently depending on
+            // where the answer is going: "\u3042" where the terminal is EUC-JP, the character
+            // itself where it is UTF-8.
+            RubyEncoding resultEncoding = context.DefaultExternalEncoding;
+            if (resultEncoding == null || !resultEncoding.IsAsciiIdentity) {
+                resultEncoding = RubyEncoding.Ascii;
+            }
 
-            RubyEncoding encoding = self.Encoding;
-            if (!self.IsAscii() && encoding != RubyEncoding.Binary && encoding != RubyEncoding.UTF8) {
-                return InspectForeignEncoding(self).TaintBy(self);
+            if (!self.IsAscii() && self.Encoding != resultEncoding) {
+                return InspectForeignEncoding(self, resultEncoding).TaintBy(self);
             }
 
             // Note that "self" could be a subclass of MutableString, but the return value should
             // always be just a MutableString
-            return MutableString.Create(GetQuotedStringRepresentation(self, false, '"'), encoding).TaintBy(self);
+            return MutableString.Create(GetQuotedStringRepresentation(self, false, '"'), resultEncoding).TaintBy(self);
         }
 
         /// <summary>
@@ -1642,7 +1649,7 @@ namespace IronRuby.Builtins {
         ///   "abcd".dup.force_encoding("UTF-16").inspect == "\"\\x61\\x62\\x63\\x64\""
         ///     - a dummy encoding has no characters at all, so every byte on its own.
         /// </summary>
-        private static MutableString/*!*/ InspectForeignEncoding(MutableString/*!*/ self) {
+        private static MutableString/*!*/ InspectForeignEncoding(MutableString/*!*/ self, RubyEncoding/*!*/ resultEncoding) {
             var result = new StringBuilder();
             result.Append('"');
 
@@ -1691,7 +1698,7 @@ namespace IronRuby.Builtins {
             }
 
             result.Append('"');
-            return MutableString.CreateAscii(result.ToString());
+            return MutableString.Create(result.ToString(), resultEncoding);
         }
 
         private static void AppendByteEscape(StringBuilder/*!*/ result, byte b) {
