@@ -5919,7 +5919,12 @@ class Hash
     result = {}
     each { |k, v| pair = __to_h_pair__(block.call(k, v)); result[pair[0]] = pair[1] }
     result
-  end unless method_defined?(:to_h)
+    # instance_methods(false) rather than method_defined?: Hash includes Enumerable,
+    # whose #to_h is already defined by this point, so method_defined? is true and Hash
+    # would keep a #to_h that builds a new plain Hash from pairs - losing self-identity,
+    # the default, the default proc and compare_by_identity, and handing the block one
+    # pair array instead of a key and a value.
+  end unless instance_methods(false).include?(:to_h)
 
   def keep_if
     delete_if { |k, v| !yield(k, v) }
