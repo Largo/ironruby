@@ -95,6 +95,50 @@ namespace IronRuby.Runtime {
             return !(obj is int || obj is RubySymbol);
         }
         
+        private static CallSite<Func<CallSite, object, object>> _InstanceVariablesToInspectSite;
+
+        /// <summary>
+        /// Ruby 4.0 lets an object name the instance variables its #inspect shows, by answering an
+        /// array of names from a private #instance_variables_to_inspect. A name that the object
+        /// does not have is simply not shown; nil means "all of them", and anything else is an
+        /// error. Objects that do not define the method at all - which is nearly all of them -
+        /// pay one method lookup.
+        /// </summary>
+        private static IEnumerable<KeyValuePair<string, object>>/*!*/ SelectInspectedVariables(
+            RubyContext/*!*/ context, object obj, IEnumerable<KeyValuePair<string, object>>/*!*/ vars) {
+
+            if (!context.ResolveMethod(obj, "instance_variables_to_inspect", VisibilityContext.AllVisible).Found) {
+                return vars;
+            }
+
+            var site = GetCallSite(ref _InstanceVariablesToInspectSite, context, "instance_variables_to_inspect", 0);
+            object names = site.Target(site, obj);
+            if (names == null) {
+                return vars;
+            }
+
+            var list = names as IList<object>;
+            if (list == null) {
+                throw RubyExceptions.CreateTypeError(String.Format(
+                    "Expected #instance_variables_to_inspect to return an Array or nil, but it returned {0}",
+                    context.GetClassDisplayName(names)
+                ));
+            }
+
+            var wanted = new List<string>(list.Count);
+            foreach (object name in list) {
+                wanted.Add(name.ToString());
+            }
+
+            var result = new List<KeyValuePair<string, object>>();
+            foreach (KeyValuePair<string, object> var in vars) {
+                if (wanted.Contains(var.Key)) {
+                    result.Add(var);
+                }
+            }
+            return result;
+        }
+
         public static MutableString/*!*/ InspectObject(UnaryOpStorage/*!*/ inspectStorage, ConversionStorage<MutableString>/*!*/ tosConversion, 
             object obj) {
 
@@ -114,7 +158,7 @@ namespace IronRuby.Runtime {
 
                 RubyInstanceData data = context.TryGetInstanceData(obj);
                 if (data != null) {
-                    var vars = data.GetInstanceVariablePairs();
+                    var vars = SelectInspectedVariables(context, obj, data.GetInstanceVariablePairs());
                     bool first = true;
                     foreach (KeyValuePair<string, object> var in vars) {
                         if (first) {

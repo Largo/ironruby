@@ -817,13 +817,12 @@ namespace IronRuby.Builtins {
 
             RubyClass cls;
             var context = tosConversion.Context;
-            // TODO: Ruby 1.8 fell back to #to_s when the object had no instance variables and 1.9
-            // dropped that, so a stateless object with a custom #to_s should still inspect as
-            // "#<Foo:0x...>" - visible through "%p" and Kernel#p. Removing the HasInstanceVariables
-            // test here fixes that but also rewrites the receiver in NoMethodError messages
-            // ("for main:Object") and changes ObjectOperations.Format, so it needs to land together
-            // with the exception-message work rather than on its own.
-            if (context.HasInstanceVariables(self) && ((cls = context.GetClassOf(self)).IsRubyClass || cls.IsObjectClass)) {
+            // Ruby 1.8 fell back to #to_s when the object had no instance variables; 1.9 dropped
+            // that, so a stateless object with a custom #to_s still inspects as "#<Foo:0x...>",
+            // and so does a BasicObject, which has no #to_s to fall back to at all.
+            // BasicObject is a library class rather than one defined in Ruby, so it needs naming
+            // alongside Object: it is the one class whose instances have no #to_s to fall back to.
+            if ((cls = context.GetClassOf(self)).IsRubyClass || cls.IsObjectClass || cls == context.BasicObjectClass) {
                 return RubyUtils.InspectObject(inspectStorage, tosConversion, self);
             } else {
                 var site = tosConversion.GetSite(ConvertToSAction.Make(context));
