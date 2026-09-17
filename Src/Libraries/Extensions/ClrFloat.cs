@@ -1165,12 +1165,34 @@ namespace IronRuby.Builtins {
 
         #region Helpers
 
+        // MRI's flodivmod. Computing the modulus as self - floor(self/other)*other loses three
+        // cases that the specs check: a zero divisor is a ZeroDivisionError rather than NaN, an
+        // infinite divisor leaves a finite dividend alone (0 * Infinity is NaN, not 0), and a
+        // dividend of zero keeps its own sign, so -0.0 % 42 is -0.0 and not 0.0.
         private static RubyArray InternalDivMod(double self, double other) {
-            double div = System.Math.Floor(self / other);
-            double mod = self - (div * other);
-            if (other * mod < 0) {
-                mod += other;
-                div -= 1.0;
+            double div, mod;
+            if (Double.IsNaN(other)) {
+                div = mod = other;
+            } else if (other == 0.0) {
+                throw new DivideByZeroException("divided by 0");
+            } else {
+                if (self == 0.0 || (Double.IsInfinity(other) && !Double.IsInfinity(self))) {
+                    mod = self;
+                } else {
+                    // C#'s % on doubles is C's fmod: the remainder takes the dividend's sign.
+                    mod = self % other;
+                }
+
+                if (Double.IsInfinity(self) && !Double.IsInfinity(other)) {
+                    div = self / other;
+                } else {
+                    div = Math.Round((self - mod) / other, MidpointRounding.AwayFromZero);
+                }
+
+                if (other * mod < 0) {
+                    mod += other;
+                    div -= 1.0;
+                }
             }
             object intDiv = div;
             if (!Double.IsInfinity(div) && !Double.IsNaN(div)) {
