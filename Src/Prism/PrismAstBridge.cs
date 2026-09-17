@@ -551,12 +551,11 @@ namespace IronRuby.Prism {
                 }
 
                 case Pm.CallOperatorWriteNode callOp:
-                    return new MemberAssignmentExpression(Expr(callOp.Receiver), callOp.ReadName, callOp.BinaryOperator,
-                        Expr(callOp.Value), span);
+                    return MemberOpAssign(callOp, callOp.Receiver, callOp.ReadName, callOp.BinaryOperator, callOp.Value, span);
                 case Pm.CallOrWriteNode callOr:
-                    return new MemberAssignmentExpression(Expr(callOr.Receiver), callOr.ReadName, "||", Expr(callOr.Value), span);
+                    return MemberOpAssign(callOr, callOr.Receiver, callOr.ReadName, "||", callOr.Value, span);
                 case Pm.CallAndWriteNode callAnd:
-                    return new MemberAssignmentExpression(Expr(callAnd.Receiver), callAnd.ReadName, "&&", Expr(callAnd.Value), span);
+                    return MemberOpAssign(callAnd, callAnd.Receiver, callAnd.ReadName, "&&", callAnd.Value, span);
 
                 case Pm.IndexOperatorWriteNode indexOp:
                     return IndexOperatorAssignment(Expr(indexOp.Receiver), indexOp.Arguments,
@@ -1039,18 +1038,7 @@ namespace IronRuby.Prism {
             }
 
             if (HasFlag(node, Pm.CallNodeFlags.AttributeWrite)) {
-                var writeArgs = ((Pm.ArgumentsNode)node.Arguments).Arguments;
-                var rhs = Expr(writeArgs[writeArgs.Length - 1]);
-                var target = Expr(node.Receiver);
-                LeftValue lhs;
-                if (name == "[]=") {
-                    var indexArgs = new List<Expression>();
-                    for (int i = 0; i < writeArgs.Length - 1; i++) indexArgs.Add(Argument(writeArgs[i]));
-                    lhs = new ArrayItemAccess(target, new Arguments(indexArgs.ToArray()), null, span);
-                } else {
-                    lhs = new AttributeAccess(target, name.TrimEnd('='), span);
-                }
-                return new SimpleAssignmentExpression(lhs, rhs, null, span);
+                return AttributeWrite(node, Expr(node.Receiver), name, span);
             }
 
             Expression receiver = node.Receiver != null ? Expr(node.Receiver) : null;
@@ -1059,14 +1047,57 @@ namespace IronRuby.Prism {
             return new MethodCall(receiver, name, args, block, span);
         }
 
+        /// <summary>
+        /// `target.x = v` and `target[i] = v` are assignments rather than plain calls to x= and
+        /// []=: what they answer is v, whatever the method itself returns.
+        /// </summary>
+        private Expression/*!*/ AttributeWrite(Pm.CallNode/*!*/ node, Expression/*!*/ target, string/*!*/ name, SourceSpan span) {
+            var writeArgs = ((Pm.ArgumentsNode)node.Arguments).Arguments;
+            var rhs = Expr(writeArgs[writeArgs.Length - 1]);
+            LeftValue lhs;
+            if (name == "[]=") {
+                var indexArgs = new List<Expression>();
+                for (int i = 0; i < writeArgs.Length - 1; i++) indexArgs.Add(Argument(writeArgs[i]));
+                lhs = new ArrayItemAccess(target, new Arguments(indexArgs.ToArray()), null, span);
+            } else {
+                lhs = new AttributeAccess(target, name.TrimEnd('='), span);
+            }
+            return new SimpleAssignmentExpression(lhs, rhs, null, span);
+        }
+
+        /// <summary>
+        /// `recv.m op= v`, and its safe form `recv&.m op= v`, which does nothing at all when the
+        /// receiver is nil rather than reading m from it.
+        /// </summary>
+        private Expression/*!*/ MemberOpAssign(Pm.PmNode/*!*/ node, Pm.PmNode/*!*/ receiver, string/*!*/ name,
+            string/*!*/ op, Pm.PmNode/*!*/ value, SourceSpan span) {
+
+            if (HasFlag(node, Pm.CallNodeFlags.SafeNavigation)) {
+                return SafeGuard(receiver, temp => new MemberAssignmentExpression(temp, name, op, Expr(value), span), span);
+            }
+
+            return new MemberAssignmentExpression(Expr(receiver), name, op, Expr(value), span);
+        }
+
         private Expression/*!*/ SafeNavigation(Pm.CallNode/*!*/ node, SourceSpan span) {
             // recv&.m(args)  =>  (?safeN? = recv).nil? ? nil : ?safeN?.m(args)
+            return SafeGuard(node.Receiver, temp =>
+                HasFlag(node, Pm.CallNodeFlags.AttributeWrite)
+                    ? AttributeWrite(node, temp, node.Name, span)
+                    : new MethodCall(temp, node.Name,
+                        node.Arguments != null ? BuildArguments(node.Arguments) : null, OptionalBlock(node.Block), span),
+                span);
+        }
+
+        /// <summary>
+        /// The guard every form of `&.` shares: the receiver is read once, and nothing at all
+        /// happens when it is nil - not the call, and for `recv&.m op= v` not even the read.
+        /// </summary>
+        private Expression/*!*/ SafeGuard(Pm.PmNode/*!*/ receiver, Func<Expression/*!*/, Expression/*!*/>/*!*/ body, SourceSpan span) {
             var temp = CurrentScope.ResolveOrAddVariable("?safe" + _tempCounter++ + "?", span);
-            var assign = new SimpleAssignmentExpression(temp, Expr(node.Receiver), null, span);
+            var assign = new SimpleAssignmentExpression(temp, Expr(receiver), null, span);
             var test = new MethodCall(assign, "nil?", null, span);
-            var invoke = new MethodCall(temp, node.Name,
-                node.Arguments != null ? BuildArguments(node.Arguments) : null, OptionalBlock(node.Block), span);
-            return new ConditionalExpression(test, Literal.Nil(span), invoke, span);
+            return new ConditionalExpression(test, Literal.Nil(span), body(temp), span);
         }
 
         private Block OptionalBlock(Pm.PmNode block) {
