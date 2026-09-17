@@ -369,6 +369,7 @@ namespace IronRuby.Builtins {
 
             foreach (string methodName in methodNames) {
                 RubyMemberInfo method;
+                bool copiedIntoModule;
 
                 // we need to define new methods one by one since the method_added events can define a new method that might be used here:
                 using (context.ClassHierarchyLocker()) {
@@ -377,12 +378,17 @@ namespace IronRuby.Builtins {
                         options |= MethodLookup.ReturnForwarder;
                     }
 
-                    method = module.ResolveMethodNoLock(methodName, VisibilityContext.AllVisible, options).Info;
+                    var resolved = module.ResolveMethodNoLock(methodName, VisibilityContext.AllVisible, options);
+                    method = resolved.Info;
                     if (method == null) {
                         throw RubyExceptions.CreateUndefinedMethodError(module, methodName);
                     }
 
                     // MRI only adds method to the target module if visibility differs:
+                    // The module it was found in, rather than the module the method reports - a
+                    // method copied here by an earlier visibility change resolves as a forwarder
+                    // that still names the module it came from.
+                    copiedIntoModule = method.Visibility != instanceVisibility && resolved.Owner != module;
                     if (method.Visibility != instanceVisibility) {
                         module.SetVisibilityNoEventNoLock(context, methodName, method, instanceVisibility);
                     }
@@ -392,7 +398,12 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                if (method.Visibility != instanceVisibility) {
+                // #method_added is about a method appearing in this module, not about its
+                // visibility: `private :foo' on a method the module already has does not call it,
+                // and on an inherited one it calls it once - for the copy that lands here - and
+                // not again when the visibility is changed back. module_function copies the
+                // method onto the singleton, and that is a #singleton_method_added.
+                if (copiedIntoModule && !isModuleFunction) {
                     module.MethodAdded(methodName);
                 }
 
