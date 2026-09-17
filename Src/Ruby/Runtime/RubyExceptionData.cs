@@ -264,10 +264,19 @@ namespace IronRuby.Runtime {
             if (_hasCause) {
                 return false;
             }
+            SetCause(cause);
+            return true;
+        }
+
+        /// <summary>
+        /// Assigns the cause whether or not one has been assigned before. Only `raise ..., cause: c'
+        /// does this: MRI's exc_setup_cause writes the ivar unconditionally when a cause was named,
+        /// and otherwise leaves an exception that has one alone.
+        /// </summary>
+        public void SetCause(Exception cause) {
             _hasCause = true;
             // an exception is never its own cause (MRI: `raise e, cause: e` leaves cause nil)
             _cause = (cause == _exception || cause == _visibleException) ? null : cause;
-            return true;
         }
 
         public static string/*!*/ GetClrMessage(RubyContext/*!*/ context, object message) {

@@ -718,6 +718,11 @@ namespace IronRuby.Builtins {
             Exception causeException;
             if (hasCause) {
                 if (cause == null) {
+                    // `cause: nil` says "do not attach whatever is being handled", not "forget the
+                    // cause you have": an exception that already has one keeps it.
+                    if (RubyExceptionData.GetInstance(exception).HasCause) {
+                        return;
+                    }
                     causeException = null;
                 } else {
                     causeException = cause as Exception;
@@ -726,6 +731,14 @@ namespace IronRuby.Builtins {
                     }
                 }
             } else {
+                // An exception that already has a cause keeps it: re-raising a rescued exception
+                // keeps the chain it was first raised with, and does not pick up the exception
+                // currently being handled - which is very often the one it caused, and would then
+                // look circular. MRI leaves it alone without even looking.
+                if (RubyExceptionData.GetInstance(exception).HasCause) {
+                    return;
+                }
+
                 // no explicit cause: chain to whatever is currently being handled ($!)
                 causeException = context.CurrentException;
             }
@@ -739,7 +752,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            RubyExceptionData.GetInstance(exception).TrySetCause(causeException);
+            // A named cause replaces whatever was there; an implicit one only fills in a blank,
+            // and by here there is one to fill.
+            RubyExceptionData.GetInstance(exception).SetCause(causeException);
         }
 
         #endregion
