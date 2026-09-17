@@ -2,6 +2,24 @@
 # Pure Ruby, loaded from gem_prelude. Pattern-matching support classes plus
 # widely-used core methods added between Ruby 2.0 and 4.0.
 
+module Kernel
+  # A structure that contains itself hashes to one fixed value, whether it is an
+  # Array or a Hash: the two nest in each other, and #hash unwinds all the way out
+  # when it meets something it is already inside - see Hash#hash and Array#hash.
+  private def __ir_recursive_hash_value__
+    0x48415348
+  end
+
+  # 32-bit avalanche, so that combining the per-element hashes cannot cancel equal
+  # values out.
+  private def __ir_mix32__(value)
+    value &= 0xFFFFFFFF
+    value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
+    value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
+    value ^ (value >> 16)
+  end
+end
+
 class NoMatchingPatternError < StandardError; end
 class NoMatchingPatternKeyError < NoMatchingPatternError; end
 class FrozenError < RuntimeError; end unless defined?(FrozenError)
@@ -12072,18 +12090,14 @@ class Hash
 
   # Order-independent #hash. Like CRuby, a hash that (directly or indirectly)
   # contains itself hashes to one fixed value, which is what keeps
-  # `h.hash == {x: h}.hash` true for `h = {}; h[:x] = h`.
+  # `h.hash == {x: h}.hash` true for `h = {}; h[:x] = h`. Arrays share the value
+  # and the mixer - and the stack below - because the two nest in each other.
   private def __recursive_hash_value__
-    0x48415348
+    __ir_recursive_hash_value__
   end
 
-  # 32-bit avalanche, so that XOR-ing the per-pair hashes together (which is what
-  # makes #hash order-independent) cannot cancel out equal values.
   private def __mix32__(value)
-    value &= 0xFFFFFFFF
-    value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
-    value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
-    value ^ (value >> 16)
+    __ir_mix32__(value)
   end
 
   private def __hash_digest__
@@ -12108,6 +12122,49 @@ class Hash
       begin
         boxed = catch(stack) { [__hash_digest__] }
         boxed.is_a?(Array) ? boxed[0] : __recursive_hash_value__
+      ensure
+        Thread.current[:__hash_hash_stack__] = nil
+      end
+    end
+  end
+end
+
+class Array
+  # Order matters here, unlike in a Hash, so the elements are folded one after
+  # another rather than XOR-ed together: [1, [1, []]] and [2, [2, []]] differ, and
+  # an empty array does not hash to nothing.
+  private def __hash_digest__
+    result = __ir_mix32__(size + 0x41525259)
+    each do |item|
+      value = item.hash
+      # MRI reads what #hash answers as an integer, so an object that answers
+      # something with #to_int is asked for it.
+      value = value.to_int unless value.is_a?(::Integer)
+      result = __ir_mix32__(result ^ __ir_mix32__(value))
+    end
+    result
+  end
+
+  # An array met again while it is being hashed abandons the whole computation,
+  # which then answers the one recursive value - so an array that contains itself
+  # and an array that merely contains that one, which are #eql?, hash alike. The
+  # stack is the one Hash#hash uses, because the two nest in each other.
+  def hash
+    stack = Thread.current[:__hash_hash_stack__]
+    if stack
+      throw stack if stack.any? { |o| o.equal?(self) }
+      stack.push(self)
+      begin
+        __hash_digest__
+      ensure
+        stack.pop
+      end
+    else
+      stack = [self]
+      Thread.current[:__hash_hash_stack__] = stack
+      begin
+        boxed = catch(stack) { [__hash_digest__] }
+        boxed.is_a?(::Array) ? boxed[0] : __ir_recursive_hash_value__
       ensure
         Thread.current[:__hash_hash_stack__] = nil
       end
