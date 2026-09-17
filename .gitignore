@@ -64,3 +64,5 @@ Util/References
 
 # Agent worktrees and local session state
 /.claude/
+# scratch copies of ir.sh pointing at an out-of-tree build
+/ir[0-9].sh
