@@ -785,20 +785,117 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ AppendTo(MutableString/*!*/ result) {
             Assert.NotNull(result);
 
+            // MRI hoists the options of a group that spans the whole pattern into the (?...) it
+            // writes around it, and keeps doing so: /(?i:.)/ is "(?i-mx:.)", not "(?-mix:(?i:.))".
+            MutableString pattern = _pattern;
+            RubyRegexOptions options = Options;
+            while (TryHoistWholePatternGroup(ref pattern, ref options)) {
+            }
+
             result.Append("(?");
-            if (AppendOptionString(result, true) < 3) {
+            if (AppendOptionString(result, options, true) < 3) {
                 result.Append('-');
             }
-            AppendOptionString(result, false);
+            AppendOptionString(result, options, false);
             result.Append(':');
-            AppendEscapeForwardSlash(result, _pattern);
+            AppendEscapeForwardSlash(result, pattern);
             result.Append(')');
             return result;
         }
 
+        /// <summary>
+        /// A pattern that is exactly one "(?opts:...)" group is the same regexp as its body under
+        /// those options, and MRI writes it that way. The group has to span the whole pattern -
+        /// "(?ix:foo)bar" and "(?ix:foo)(?m:bar)" both end in ')' without being one group - and it
+        /// has to be an option group rather than a lookahead or a named one.
+        /// </summary>
+        private static bool TryHoistWholePatternGroup(ref MutableString/*!*/ pattern, ref RubyRegexOptions options) {
+            int length = pattern.GetCharCount();
+            if (length < 4 || pattern.GetChar(0) != '(' || pattern.GetChar(1) != '?') {
+                return false;
+            }
+            if (FindGroupEnd(pattern, length) != length - 1) {
+                return false;
+            }
+
+            RubyRegexOptions hoisted = options;
+            int i = 2;
+            while (i < length) {
+                char c = pattern.GetChar(i);
+                if (c == 'm') {
+                    hoisted |= RubyRegexOptions.Multiline;
+                } else if (c == 'i') {
+                    hoisted |= RubyRegexOptions.IgnoreCase;
+                } else if (c == 'x') {
+                    hoisted |= RubyRegexOptions.Extended;
+                } else {
+                    break;
+                }
+                i++;
+            }
+
+            if (i < length && pattern.GetChar(i) == '-') {
+                i++;
+                while (i < length) {
+                    char c = pattern.GetChar(i);
+                    if (c == 'm') {
+                        hoisted &= ~RubyRegexOptions.Multiline;
+                    } else if (c == 'i') {
+                        hoisted &= ~RubyRegexOptions.IgnoreCase;
+                    } else if (c == 'x') {
+                        hoisted &= ~RubyRegexOptions.Extended;
+                    } else {
+                        break;
+                    }
+                    i++;
+                }
+            }
+
+            if (i >= length - 1 || pattern.GetChar(i) != ':') {
+                return false;
+            }
+
+            options = hoisted;
+            pattern = pattern.GetSlice(i + 1, length - i - 2);
+            return true;
+        }
+
+        /// <summary>
+        /// The index of the ')' closing the group the pattern opens with, or -1. A '\' escapes
+        /// whatever follows it and parentheses inside a character class are literal.
+        /// </summary>
+        private static int FindGroupEnd(MutableString/*!*/ pattern, int length) {
+            int depth = 0;
+            bool inCharacterClass = false;
+
+            for (int i = 0; i < length; i++) {
+                char c = pattern.GetChar(i);
+                if (c == '\\') {
+                    i++;
+                } else if (inCharacterClass) {
+                    if (c == ']') {
+                        inCharacterClass = false;
+                    }
+                } else if (c == '[') {
+                    inCharacterClass = true;
+                } else if (c == '(') {
+                    depth++;
+                } else if (c == ')') {
+                    if (--depth == 0) {
+                        return i;
+                    }
+                }
+            }
+
+            return -1;
+        }
+
         private int AppendOptionString(MutableString/*!*/ result, bool enabled) {
+            return AppendOptionString(result, Options, enabled);
+        }
+
+        private static int AppendOptionString(MutableString/*!*/ result, RubyRegexOptions options, bool enabled) {
             int count = 0;
-            var options = Options;
 
             if (((options & RubyRegexOptions.Multiline) != 0) == enabled) {
                 result.Append('m');
