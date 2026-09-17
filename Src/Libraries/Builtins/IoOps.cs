@@ -1944,7 +1944,7 @@ namespace IronRuby.Builtins {
             if (block == null) {
                 // Without a block this is an enumerator over the bytes still to come. It has no
                 // size: a stream does not say how much of it is left.
-                return new Enumerator(self, "each_byte");
+                return new Enumerator(self, "each_byte") { SizeOp = "none" };
             }
 
             object aByte;

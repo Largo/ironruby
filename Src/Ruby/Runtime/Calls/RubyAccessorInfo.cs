@@ -40,6 +40,29 @@ namespace IronRuby.Runtime.Calls {
             get { return true; }
         }
 
+        /// <summary>
+        /// `alias` copies the info, so an aliased attribute accessor is a different object
+        /// reading or writing the same instance variable - and Method#== has to see the two
+        /// as the one method, which is what `Complex.instance_method(:imag) ==
+        /// Complex.instance_method(:imaginary)` asks. Accessors of two different modules stay
+        /// apart, as they do in MRI.
+        /// </summary>
+        public override bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
+            if (ReferenceEquals(this, other)) {
+                return true;
+            }
+
+            var accessor = other as RubyAttributeAccessorInfo;
+            return accessor != null
+                && accessor.GetType() == GetType()
+                && accessor._instanceVariableName == _instanceVariableName
+                && ReferenceEquals(accessor.DeclaringModule, DeclaringModule);
+        }
+
+        public override int GetEquivalenceHashCode() {
+            return _instanceVariableName.GetHashCode() ^ GetType().GetHashCode();
+        }
+
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
             return Utils.EmptyMemberInfos;
         }

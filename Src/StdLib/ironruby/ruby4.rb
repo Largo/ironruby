@@ -4120,6 +4120,18 @@ class Numeric
   end unless method_defined?(:fdiv)
 
   alias_method :magnitude, :abs unless method_defined?(:magnitude)
+
+  # #imag and #imaginary are one method in MRI, and so are Float#quo and Float#fdiv.
+  alias_method :imaginary, :imag if method_defined?(:imag)
+end
+
+class Float
+  alias_method :quo, :fdiv
+end
+
+class Rational
+  alias_method :magnitude, :abs
+  alias_method :quo, :/
 end
 
 class Float
@@ -4295,9 +4307,10 @@ class Complex
     "(#{__format__(true)})"
   end
 
-  def imaginary
-    imag
-  end unless instance_methods(false).include?(:imaginary)
+  # One method under two names, which is what `Complex.instance_method(:imag) ==
+  # Complex.instance_method(:imaginary)` compares - a second method that called the
+  # first answered the same number but was not the same method.
+  alias_method :imaginary, :imag
 
   def finite?
     real.finite? && imag.finite?
@@ -6271,6 +6284,10 @@ class Enumerator
     when :bytesize
       # each_byte counts bytes, which is not what the string's own #size answers.
       source.bytesize
+    when :none
+      # Knowably unknown: a stream does not say how much of it is left, and MRI's
+      # answer for such an enumerator is nil rather than a guess from the source.
+      nil
     when :self
       source
     when :slice
@@ -10109,7 +10126,7 @@ module ObjectSpace
     def delete(key); entry = @table.delete(key.object_id); entry && entry[1]; end
     def each_key; @table.each_value { |(k, _)| yield k }; self; end
     def each_value; @table.each_value { |(_, v)| yield v }; self; end
-    def each_pair(&block); each(&block); end
+    alias_method :each_pair, :each
   end unless const_defined?(:WeakMap)
 
   # 3.2's map with weakly-held keys compared by equality rather than identity.
@@ -11325,11 +11342,11 @@ class IO
     end
   end
 
+  # #each is #each_line under another name, so it is aliased rather than defined to
+  # call it: the two are one method in MRI and a spec compares them.
   if method_defined?(:each)
     alias_method :__ir_each__, :each
-    def each(*args, **opts, &block)
-      each_line(*args, **opts, &block)
-    end
+    alias_method :each, :each_line
   end
 
   class << self
@@ -11453,7 +11470,8 @@ class IO
     # Nothing to read a mark out of on a write-only stream.
     return nil unless __readable_stream__?
     start = pos
-    head = __ir_read__(4).to_s
+    # +"" rather than "": nil.to_s is a frozen string, and this one is re-tagged below.
+    head = +(__ir_read__(4).to_s)
     head.force_encoding(::Encoding::BINARY) if head.respond_to?(:force_encoding)
     match = BOMS__.find { |bytes, _| head.start_with?(bytes) }
     unless match
