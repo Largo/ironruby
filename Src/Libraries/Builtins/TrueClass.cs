@@ -24,6 +24,7 @@ namespace IronRuby.Builtins {
         #region Public Instance Methods
 
         [RubyMethodAttribute("to_s")]
+        [RubyMethodAttribute("inspect")]
         public static MutableString/*!*/ ToString(bool self) {
             Debug.Assert(self == true);
             return MutableString.CreateAscii("true"); 

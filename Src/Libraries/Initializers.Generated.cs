@@ -10072,6 +10072,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Boolean, System.Object, System.Boolean>(IronRuby.Builtins.TrueClass.Or)
             );
             
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<System.Boolean, IronRuby.Builtins.MutableString>(IronRuby.Builtins.TrueClass.ToString)
+            );
+            
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
                 new Func<System.Boolean, IronRuby.Builtins.MutableString>(IronRuby.Builtins.TrueClass.ToString)
