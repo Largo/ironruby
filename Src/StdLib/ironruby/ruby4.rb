@@ -9971,15 +9971,66 @@ module Kernel
 end
 
 class SignalException
-  # The CLR-backed class carries only the message, but MRI names the signal both
-  # ways round: #signm is "SIGTERM" and #signo is 15.
+  # MRI's #initialize names a signal, by number or by name, rather than taking a
+  # message: a number may be given a message alongside it, a name may not, and
+  # anything that is neither is an ArgumentError. The CLR-backed class carries only
+  # the message, so the number and the name it was built from are kept here.
+  def initialize(signal = (missing = true), message = (no_message = true))
+    if missing
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 0, expected 1)")
+    end
+
+    case signal
+    when ::Integer
+      name = ::Signal.list.key(signal)
+      unless name
+        ::Kernel.raise(::ArgumentError, "invalid signal number (#{signal})")
+      end
+      @signo = signal
+      @signm = no_message ? "SIG#{name}" : message.to_s
+    when ::String, ::Symbol
+      unless no_message
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given 2, expected 1)")
+      end
+      name = signal.to_s.sub(/\ASIG/, "")
+      number = ::Signal.list[name]
+      unless number
+        ::Kernel.raise(::ArgumentError, "unsupported signal 'SIG#{name}'")
+      end
+      @signo = number
+      @signm = "SIG#{name}"
+    else
+      ::Kernel.raise(::ArgumentError, "bad signal type #{signal.class}")
+    end
+
+    super(@signm)
+  end
+
+  # MRI names the signal both ways round: #signm is "SIGTERM" and #signo is 15.
+  # A SignalException the runtime raises itself is built from its message alone,
+  # so both still answer from the message when #initialize did not run.
   def signm
-    message
-  end unless method_defined?(:signm)
+    defined?(@signm) ? @signm : message
+  end
 
   def signo
+    return @signo if defined?(@signo)
     ::Signal.list[message.to_s.sub(/\ASIG/, "")]
-  end unless method_defined?(:signo)
+  end
+end
+
+class Interrupt
+  # Interrupt is always SIGINT, and unlike its superclass it takes a plain
+  # optional message.
+  def initialize(message = nil)
+    @signo = ::Signal.list["INT"]
+    @signm = message.nil? ? "Interrupt" : message.to_s
+    __signal_exception_super__(@signm)
+  end
+
+  private def __signal_exception_super__(message)
+    ::Exception.instance_method(:initialize).bind(self).call(message)
+  end
 end
 
 # Random (1.9.2) — the runtime only exposes Kernel#rand/srand.
