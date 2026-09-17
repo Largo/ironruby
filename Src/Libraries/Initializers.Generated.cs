@@ -4402,6 +4402,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetObjectId)
             );
             
+            DefineLibraryMethod(module, "__ir_clone_with_freeze__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.KernelOps.CloneWithFreeze)
+            );
+            
             DefineLibraryMethod(module, "__method__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)

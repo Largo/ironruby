@@ -279,6 +279,48 @@ namespace IronRuby.Runtime {
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// #clone with an explicit freeze: value. MRI hands that value on to #initialize_clone as
+        /// a keyword argument, so a class overriding the hook can see which kind of copy is being
+        /// made - and a hook that takes only the original is an ArgumentError, as it is in MRI.
+        /// Keyword arguments have no slot of their own in this calling convention: they travel as
+        /// a trailing Hash that says it came from keyword syntax.
+        /// </summary>
+        public static bool TryDuplicateObject(
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ initializeCopyStorage,
+            CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
+            object obj, bool freeze, out object copy) {
+
+            // Ruby value types can't be cloned
+            if (!RubyUtils.CanClone(obj)) {
+                copy = null;
+                return false;
+            }
+
+            var context = allocateStorage.Context;
+
+            IDuplicable clonable = obj as IDuplicable;
+            if (clonable != null) {
+                copy = clonable.Duplicate(context, true);
+            } else {
+                var allocateSite = allocateStorage.GetCallSite("allocate", 0);
+                copy = allocateSite.Target(allocateSite, context.GetClassOf(obj));
+                context.CopyInstanceData(obj, copy, true);
+            }
+
+            var keywords = new Hash(context.EqualityComparer) { IsKeywordArguments = true };
+            keywords[context.CreateAsciiSymbol("freeze")] = ScriptingRuntimeHelpers.BooleanToObject(freeze);
+
+            var initializeCopySite = initializeCopyStorage.GetCallSite("initialize_clone", 2);
+            initializeCopySite.Target(initializeCopySite, copy, obj, keywords);
+
+            if (freeze) {
+                context.FreezeObject(copy);
+            }
+
+            return true;
         }        
 
         public static long GetFixnumId(int number) {

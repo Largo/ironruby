@@ -2272,15 +2272,9 @@ class Object
         raise TypeError, "no implicit conversion of #{opts.class} into Hash"
       end
 
-      if freeze_opt == false && frozen?
-        dup
-      elsif freeze_opt == true
-        copy = clone_without_options
-        copy.freeze
-        copy
-      else
-        clone_without_options
-      end
+      # A freeze: value that was actually given is handed on to #initialize_clone, and
+      # decides whether the copy is frozen; without one the copy follows the original.
+      freeze_opt.nil? ? clone_without_options : __ir_clone_with_freeze__(freeze_opt)
     end
   end
 end

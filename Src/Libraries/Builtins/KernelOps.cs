@@ -865,6 +865,26 @@ namespace IronRuby.Builtins {
             return Clone(initializeCopyStorage, allocateStorage, true, self);
         }
 
+        /// <summary>
+        /// What Object#clone(freeze:) in the prelude calls once it knows a freeze: value was
+        /// given. MRI passes that value on to #initialize_clone, and freezes the copy - or leaves
+        /// it alone - according to it rather than according to the original.
+        /// </summary>
+        [RubyMethod("__ir_clone_with_freeze__", RubyMethodAttributes.PrivateInstance)]
+        public static object/*!*/ CloneWithFreeze(
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ initializeCopyStorage,
+            CallSiteStorage<Func<CallSite, RubyClass, object>>/*!*/ allocateStorage,
+            object self, bool freeze) {
+
+            var context = allocateStorage.Context;
+
+            object result;
+            if (!RubyUtils.TryDuplicateObject(initializeCopyStorage, allocateStorage, self, freeze, out result)) {
+                return self;
+            }
+            return context.TaintObjectBy(result, self);
+        }
+
         [RubyMethod("dup")]
         public static object/*!*/ Duplicate(
             CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ initializeCopyStorage,
