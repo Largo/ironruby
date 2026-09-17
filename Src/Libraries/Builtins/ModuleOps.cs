@@ -70,6 +70,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("extend_object", RubyMethodAttributes.PrivateInstance)]
         public static object ExtendObject(RubyModule/*!*/ self, object extendedObject) {
             // include self into extendedObject's singleton
+            RubyUtils.RequireDefinableSingleton(extendedObject);
             self.Context.GetOrCreateSingletonClass(extendedObject).IncludeModules(self);
             return extendedObject;
         }

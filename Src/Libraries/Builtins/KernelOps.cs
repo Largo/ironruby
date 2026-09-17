@@ -1564,7 +1564,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
-            // TODO:
+            RubyUtils.RequireDefinableSingleton(self);
             return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, method);
         }
 
@@ -1574,7 +1574,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
 
-            // TODO:
+            RubyUtils.RequireDefinableSingleton(self);
             return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, method);
         }
 
@@ -1583,7 +1583,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
-            // TODO:
+            RubyUtils.RequireDefinableSingleton(self);
             return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, method);
         }
 
@@ -1593,7 +1593,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
 
-            // TODO:
+            RubyUtils.RequireDefinableSingleton(self);
             return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, method);
         }
 
@@ -1602,7 +1602,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
             object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
 
-            // TODO:
+            RubyUtils.RequireDefinableSingleton(self);
             return ModuleOps.DefineMethod(scope, block, scope.RubyContext.GetOrCreateSingletonClass(self), methodName);
         }
 
@@ -1612,7 +1612,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block,
             object self, [NotNull]ClrName/*!*/ methodName) {
 
-            // TODO:
+            RubyUtils.RequireDefinableSingleton(self);
             return ModuleOps.DefineMethod(scope, block, scope.RubyContext.GetOrCreateSingletonClass(self), methodName);
         }
 
@@ -1621,7 +1621,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
-            // TODO:
+            RubyUtils.RequireDefinableSingleton(self);
             return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, block);
         }
 
@@ -1630,7 +1630,7 @@ namespace IronRuby.Builtins {
         public static RubySymbol/*!*/ DefineSingletonMethod(RubyScope/*!*/ scope, object self,
             [NotNull]ClrName/*!*/ methodName, [NotNull]Proc/*!*/ block) {
 
-            // TODO:
+            RubyUtils.RequireDefinableSingleton(self);
             return ModuleOps.DefineMethod(scope, scope.RubyContext.GetOrCreateSingletonClass(self), methodName, block);
         }
 

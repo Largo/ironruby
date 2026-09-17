@@ -577,7 +577,7 @@ namespace IronRuby.Runtime {
 
             if (body.HasTarget) {
                 if (!RubyUtils.CanDefineSingletonMethod(target)) {
-                    throw RubyExceptions.CreateTypeError("can't define singleton method for literals");
+                    throw RubyExceptions.CreateTypeError("can't define singleton");
                 }
 
                 instanceOwner = null;
@@ -610,6 +610,15 @@ namespace IronRuby.Runtime {
                     moduleFunction = true;
                 } else {
                     instanceOwner = scope.GetMethodDefinitionOwner();
+
+                    // A `def' inside `1.5.instance_eval { }' lands on the singleton class of the
+                    // number, which is as far as MRI lets it get: running the block is fine,
+                    // defining a method in it is not.
+                    var singleton = instanceOwner as RubyClass;
+                    if (singleton != null && singleton.IsSingletonClass) {
+                        RubyUtils.RequireDefinableSingleton(singleton.SingletonClassOf);
+                    }
+
                     instanceFlags = (RubyMemberFlags)RubyUtils.GetSpecialMethodVisibility(attributesScope.Visibility, body.Name);
                     singletonOwner = null;
                     singletonFlags = RubyMemberFlags.Invalid;
@@ -738,9 +747,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static RubyClass/*!*/ DefineSingletonClass(RubyScope/*!*/ scope, object obj) {
-            if (!RubyUtils.HasSingletonClass(obj)) {
-                throw RubyExceptions.CreateTypeError("can't define singleton");
-            }
+            RubyUtils.RequireDefinableSingleton(obj);
             return scope.RubyContext.GetOrCreateSingletonClass(obj);
         }
 

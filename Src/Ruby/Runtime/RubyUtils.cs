@@ -84,8 +84,29 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Is it allowed to define a sigleton method for the object?
         /// </summary>
+        /// <summary>
+        /// Can user code attach singleton methods to this object? nil, true and false answer
+        /// their own class and take methods on it; the rest of the immediates - an Integer of any
+        /// size, a Float, a Symbol - hold no state to hang one on. Nor does a frozen String: MRI
+        /// may have deduplicated it, so a singleton would be shared with every equal literal.
+        ///
+        /// Not the same question as <see cref="HasSingletonClass"/>: #instance_eval and
+        /// #instance_exec run in a throwaway singleton of whatever they are handed, and MRI lets
+        /// them do that for every one of these.
+        /// </summary>
         public static bool CanDefineSingletonMethod(object obj) {
-            return !(obj is ValueType || obj is RubySymbol || obj is BigInteger) || obj is bool;
+            if ((obj is ValueType || obj is RubySymbol || obj is BigInteger) && !(obj is bool)) {
+                return false;
+            }
+
+            var str = obj as MutableString;
+            return str == null || !str.IsFrozen;
+        }
+
+        public static void RequireDefinableSingleton(object obj) {
+            if (!CanDefineSingletonMethod(obj)) {
+                throw RubyExceptions.CreateTypeError("can't define singleton");
+            }
         }
 
         /// <summary>
@@ -94,6 +115,7 @@ namespace IronRuby.Runtime {
         public static bool HasSingletonClass(object obj) {
             return !(obj is int || obj is RubySymbol);
         }
+
         
         private static CallSite<Func<CallSite, object, object>> _InstanceVariablesToInspectSite;
 
@@ -1220,10 +1242,13 @@ namespace IronRuby.Runtime {
         }
 
         public static object EvaluateInSingleton(object self, BlockParam/*!*/ block, object[] args) {
-            // TODO: this is checked in method definition, if no method is defined it is ok.
-            // => singleton is created in method definition also.
-            if (!RubyUtils.CanDefineSingletonMethod(self)) {
-                throw RubyExceptions.CreateTypeError("can't define singleton method for literals");
+            // MRI runs the block against anything and only refuses a `def' inside it, so the
+            // question here is what the runtime can make a singleton of at all - not what user
+            // code is allowed to hang methods on. A Float, a Bignum and a frozen String are all
+            // perfectly good receivers for #instance_eval.
+            // TODO: an Integer and a Symbol are not, and in MRI they are.
+            if (!RubyUtils.HasSingletonClass(self)) {
+                throw RubyExceptions.CreateTypeError("can't define singleton");
             }
 
             object result;
