@@ -270,7 +270,9 @@ class Rational < Numeric
   #   r % 0.26             # -> 0.19
   #
   def % (other)
-    value = (self / other).to_i
+    # As in #divmod below: the quotient floors rather than truncating, so the remainder
+    # takes the sign of the divisor.
+    value = (self / other).floor
     return self - other * value
   end
 
@@ -282,7 +284,9 @@ class Rational < Numeric
   #   r.divmod Rational(1,2)   # -> [3, Rational(1,4)]
   #
   def divmod(other)
-    value = (self / other).to_i
+    # The quotient floors, which is not what #to_i does - it truncates, so this answered
+    # [-3, -1/2] for (-7/2).divmod(1) where MRI answers [-4, 1/2].
+    value = (self / other).floor
     return value, self - other * value
   end
 
@@ -377,7 +381,9 @@ class Rational < Numeric
   # Converts the rational to a Float.
   #
   def to_f
-    @numerator.to_f/@denominator.to_f
+    # Rounding each side to a Float first loses the answer for anything past Float::MAX -
+    # 10**400 over 10**399 is Infinity over Infinity - and costs a bit even when it does not.
+    @numerator.fdiv(@denominator)
   end
 
   #

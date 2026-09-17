@@ -101,12 +101,50 @@ namespace IronRuby.Runtime {
         }
 
         public static double ConvertToDouble(RubyContext/*!*/ context, BigInteger/*!*/ bignum) {
-            double result;
-            if (bignum.TryToFloat64(out result)) {
-                return result;
+            double result = ToDouble(bignum);
+            if (Double.IsInfinity(result)) {
+                context.ReportWarning("Integer out of Float range");
             }
-            context.ReportWarning("Integer out of Float range");
-            return bignum.Sign > 0 ? Double.PositiveInfinity : Double.NegativeInfinity;
+            return result;
+        }
+
+        /// <summary>
+        /// The double nearest to an integer, and a signed infinity for one too big to hold.
+        /// Casting a BigInteger to a double truncates towards zero rather than rounding to
+        /// nearest, which is off by an ulp for roughly half of all values wider than the 53 bits
+        /// a double keeps.
+        /// </summary>
+        public static double ToDouble(BigInteger/*!*/ bignum) {
+            return (bignum.Sign < 0) ? -ScaleToDouble(BigInteger.Abs(bignum), 0) : ScaleToDouble(bignum, 0);
+        }
+
+        /// <summary>
+        /// <paramref name="magnitude"/> times two to the <paramref name="exponent"/>, as the
+        /// nearest double, with a tie going to the even neighbour - the rounding the hardware
+        /// would do. <paramref name="magnitude"/> must not be negative.
+        /// </summary>
+        public static double ScaleToDouble(BigInteger magnitude, int exponent) {
+            Debug.Assert(magnitude.Sign >= 0);
+
+            if (magnitude.IsZero()) {
+                return 0.0;
+            }
+
+            long bits = (long)magnitude.GetBitLength();
+            if (bits > 53) {
+                int dropped = (int)(bits - 53);
+                BigInteger low = magnitude & ((BigInteger.One << dropped) - BigInteger.One);
+                magnitude >>= dropped;
+                exponent += dropped;
+
+                int comparedToHalf = low.CompareTo(BigInteger.One << (dropped - 1));
+                if (comparedToHalf > 0 || (comparedToHalf == 0 && !magnitude.IsEven)) {
+                    magnitude += BigInteger.One;
+                }
+            }
+
+            // At most 54 bits by here, which a double holds exactly.
+            return Math.ScaleB((double)magnitude, exponent);
         }
 
         #endregion

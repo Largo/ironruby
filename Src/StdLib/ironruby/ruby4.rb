@@ -3120,9 +3120,31 @@ if defined?(Rational) && Rational.instance_method(:round).arity == 0
     # rational18.rb's rounding methods take no precision at all. MRI's rule is the
     # same for all four: 0 and negative precisions answer an Integer, a positive
     # precision answers a Rational scaled back down.
-    [:ceil, :floor, :truncate].each do |name|
-      alias_method :"__ir_#{name}__", name
+    # The precision-free forms, worked out on the numerator and denominator. What they
+    # replace went through #to_f, which cannot tell (2**64+88)/4 from 2**62 - and #round
+    # below is built on #floor, so every one of them was wrong for a big enough rational.
+    def __ir_floor__
+      numerator.div(denominator)
+    end
+    private :__ir_floor__
 
+    def __ir_ceil__
+      -((-numerator).div(denominator))
+    end
+    private :__ir_ceil__
+
+    def __ir_truncate__
+      n = numerator
+      n < 0 ? -((-n).div(denominator)) : n.div(denominator)
+    end
+    private :__ir_truncate__
+
+    # rational18's #to_i floors, so (-7/2).to_i was -4; #to_i truncates.
+    def to_i
+      __ir_truncate__
+    end
+
+    [:ceil, :floor, :truncate].each do |name|
       define_method(name) do |ndigits = 0|
         __ir_scale__(:"__ir_#{name}__", ndigits)
       end

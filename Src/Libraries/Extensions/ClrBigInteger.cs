@@ -253,9 +253,55 @@ namespace IronRuby.Builtins {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "div", self, other);
         }
 
+        /// <summary>
+        /// Converting each side to a double first overflows to Infinity for anything past
+        /// Float::MAX, and Infinity/Infinity is NaN - so a division whose answer is an ordinary
+        /// number, like (10**344).fdiv(9 * 10**342), came back NaN. Shift the numerator instead so
+        /// that the quotient lands in double's range with bits to spare, and put the shift back
+        /// afterwards.
+        /// </summary>
         [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
         public static double FDiv(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
-            return ((double)self) / ((double)other);
+            if (other.IsZero()) {
+                // Dividing by zero answers what a Float would: a signed infinity, or NaN for 0/0.
+                return self.Sign / 0.0;
+            }
+            if (self.IsZero()) {
+                return (other.Sign > 0) ? 0.0 : -0.0;
+            }
+
+            long magnitude = (long)self.GetBitLength() - (long)other.GetBitLength();
+            if (magnitude > 1100) {
+                return (self.Sign == other.Sign) ? Double.PositiveInfinity : Double.NegativeInfinity;
+            }
+            if (magnitude < -1100) {
+                return (self.Sign == other.Sign) ? 0.0 : -0.0;
+            }
+
+            // 128 bits of quotient is far more than the 53 a double keeps. Worked out on the
+            // magnitudes, with the sign put back at the end, so that the truncation the integer
+            // division does is always towards zero on both sides of it.
+
+            BigInteger numerator = BigInteger.Abs(self);
+            BigInteger denominator = BigInteger.Abs(other);
+
+            int shift = (int)(128 - magnitude);
+            if (shift >= 0) {
+                numerator <<= shift;
+            } else {
+                denominator <<= -shift;
+            }
+
+            BigInteger remainder;
+            BigInteger quotient = BigInteger.DivRem(numerator, denominator, out remainder);
+            if (!remainder.IsZero()) {
+                // The sticky bit: the quotient was cut short, so it must not be left sitting
+                // exactly on a halfway point that the rounding below would then resolve wrongly.
+                quotient |= BigInteger.One;
+            }
+
+            double result = Protocols.ScaleToDouble(quotient, -shift);
+            return (self.Sign == other.Sign) ? result : -result;
         }
 
         #endregion
@@ -503,8 +549,11 @@ namespace IronRuby.Builtins {
         /// <remarks>Normalizes div to Fixnum as necessary</remarks>
         [RubyMethod("divmod")]
         public static RubyArray DivMod(BigInteger/*!*/ self, double other) {
-            if (other == 0.0) {
+            if (Double.IsNaN(other)) {
                 throw new FloatDomainError("NaN");
+            }
+            if (other == 0.0) {
+                throw new DivideByZeroException("divided by 0");
             }
 
             double selfFloat = self.ToFloat64();
@@ -575,6 +624,9 @@ namespace IronRuby.Builtins {
         /// <returns>Float</returns>
         [RubyMethod("remainder")]
         public static double Remainder(BigInteger/*!*/ self, double other) {
+            if (other == 0.0) {
+                throw new DivideByZeroException("divided by 0");
+            }
             return self.ToFloat64() % other;
         }
 
