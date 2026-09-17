@@ -39,6 +39,12 @@ module Kernel
     singleton.method_defined?(:respond_to?) && obj.respond_to?(method)
   end
 
+  # The class of an object that may not answer #class: a BasicObject has none, and MRI's
+  # conversion messages name its class all the same.
+  private def __ir_class_of__(obj)
+    ::Kernel.instance_method(:class).bind(obj).call
+  end
+
   # 32-bit avalanche, so that combining the per-element hashes cannot cancel equal
   # values out.
   private def __ir_mix32__(value)
@@ -4140,11 +4146,15 @@ class Numeric
     ::Complex.__raw__(self, 0)
   end
 
+  # An infinity and a NaN have no rational form, so #to_r raises for them - but MRI still
+  # answers these two, treating the value as itself over one.
   def numerator
+    return self if respond_to?(:finite?) && !finite?
     to_r.numerator
   end unless method_defined?(:numerator)
 
   def denominator
+    return 1 if respond_to?(:finite?) && !finite?
     to_r.denominator
   end unless method_defined?(:denominator)
 
@@ -5199,47 +5209,50 @@ class Rational
     num
   end
 
+  # Every test here has to survive a BasicObject, which answers neither #nil?, #class nor
+  # #respond_to? - and which MRI converts perfectly well when it has a #to_r.
   def self.__to_rational__(value)
-    unless value.respond_to?(:to_r)
-      ::Kernel.raise(::TypeError, "can't convert #{value.nil? ? 'nil' : value.class} into Rational")
+    name = nil.equal?(value) ? 'nil' : __ir_class_of__(value)
+    unless __ir_responds_to__(value, :to_r)
+      ::Kernel.raise(::TypeError, "can't convert #{name} into Rational")
     end
     result = value.to_r
-    unless result.is_a?(::Rational)
+    unless ::Rational === result
       ::Kernel.raise(::TypeError,
-        "can't convert #{value.class} into Rational (#{value.class}#to_r gives #{__ir_conversion_result_name__(result)})")
+        "can't convert #{name} into Rational (#{name}#to_r gives #{__ir_conversion_result_name__(result)})")
     end
     result
   end
 
   # rb_check_convert_type_with_id: a missing #to_r is not an error here.
   def self.__check_to_rational__(value)
-    return value unless value.respond_to?(:to_r)
+    return value unless __ir_responds_to__(value, :to_r)
     __to_rational__(value)
   end
 
   # nurat_convert.
   def self.__convert__(a1, a2, given2, raise_)
-    if a1.nil? || (given2 && a2.nil?)
+    if nil.equal?(a1) || (given2 && nil.equal?(a2))
       return nil unless raise_
       ::Kernel.raise(::TypeError, "can't convert nil into Rational")
     end
 
-    a1 = a1.real if a1.is_a?(::Complex) && ::Complex.__exact_zero__(a1.imaginary)
-    a2 = a2.real if given2 && a2.is_a?(::Complex) && ::Complex.__exact_zero__(a2.imaginary)
+    a1 = a1.real if ::Complex === a1 && ::Complex.__exact_zero__(a1.imaginary)
+    a2 = a2.real if given2 && ::Complex === a2 && ::Complex.__exact_zero__(a2.imaginary)
 
     a1 = __normalize_arg__(a1, raise_)
-    return nil if a1.nil?
+    return nil if nil.equal?(a1)
     if given2
       a2 = __normalize_arg__(a2, raise_)
-      return nil if a2.nil?
+      return nil if nil.equal?(a2)
     end
 
-    if a1.is_a?(::Rational)
-      return a1 if !given2 || (!a2.is_a?(::Float) && a2.is_a?(::Numeric) && a2 == 1)
+    if ::Rational === a1
+      return a1 if !given2 || (!(::Float === a2) && ::Numeric === a2 && a2 == 1)
     end
 
     if !given2
-      unless a1.is_a?(::Integer)
+      unless ::Integer === a1
         return __to_rational__(a1) if raise_
         begin
           return __to_rational__(a1)
@@ -5248,7 +5261,7 @@ class Rational
         end
       end
     else
-      unless a1.is_a?(::Numeric)
+      unless ::Numeric === a1
         if raise_
           a1 = __check_to_rational__(a1)
         else
@@ -5259,7 +5272,7 @@ class Rational
           end
         end
       end
-      unless a2.is_a?(::Numeric)
+      unless ::Numeric === a2
         if raise_
           a2 = __check_to_rational__(a2)
         else
@@ -5270,7 +5283,7 @@ class Rational
           end
         end
       end
-      if a1.is_a?(::Numeric) && a2.is_a?(::Numeric) && (!a1.integer? || !a2.integer?)
+      if ::Numeric === a1 && ::Numeric === a2 && (!a1.integer? || !a2.integer?)
         a1 = (__to_rational__(a1) rescue a1)
         return a1 / a2
       end
@@ -5279,7 +5292,7 @@ class Rational
     a1 = __int_value__(a1)
     if !given2
       a2 = 1
-    elsif !a2.is_a?(::Integer) && !raise_
+    elsif !(::Integer === a2) && !raise_
       return nil
     else
       a2 = __int_value__(a2)
@@ -5297,16 +5310,16 @@ class Rational
   # The a1/a2 pre-pass shared by both positions: Float becomes exact, String is
   # parsed strictly, and an object with no #to_r is offered #to_int.
   def self.__normalize_arg__(value, raise_)
-    return value if value.is_a?(::Integer) || value.is_a?(::Rational)
-    return value.to_r if value.is_a?(::Float)
-    if value.is_a?(::String)
+    return value if ::Integer === value || ::Rational === value
+    return value.to_r if ::Float === value
+    if ::String === value
       parsed = __parse_string__(value, true, raise_)
       return nil if parsed.nil?
       return parsed
     end
-    unless value.respond_to?(:to_r)
+    unless __ir_responds_to__(value, :to_r)
       converted = (value.to_int rescue nil)
-      return converted unless converted.nil?
+      return converted unless nil.equal?(converted)
     end
     value
   end
