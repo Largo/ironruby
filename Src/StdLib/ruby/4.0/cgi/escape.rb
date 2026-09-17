@@ -48,11 +48,25 @@ module CGI::Escape
     str.valid_encoding? ? str : str.force_encoding(string.encoding)
   end
 
+  # CRuby implements the two URI-component methods below in C, where they begin with
+  # StringValue() - so an object answering #to_str is accepted and anything else is a
+  # TypeError. This file stands in for that extension and has to do the same.
+  def __string_value__(string) # :nodoc:
+    return string if String === string
+    converted = String.try_convert(string)
+    unless converted
+      raise TypeError, "no implicit conversion of #{string.nil? ? 'nil' : string.class} into String"
+    end
+    converted
+  end
+  private :__string_value__
+
   # URL-encode a string following RFC 3986
   # Space characters (<tt>" "</tt>) are encoded with (<tt>"%20"</tt>)
   #   url_encoded_string = CGI.escapeURIComponent("'Stop!' said Fred")
   #      # => "%27Stop%21%27%20said%20Fred"
   def escapeURIComponent(string)
+    string = __string_value__(string)
     encoding = string.encoding
     buffer = string.b
     buffer.gsub!(/([^a-zA-Z0-9_.\-~]+)/) do |m|
@@ -66,6 +80,7 @@ module CGI::Escape
   #   string = CGI.unescapeURIComponent("%27Stop%21%27+said%20Fred")
   #      # => "'Stop!'+said Fred"
   def unescapeURIComponent(string, encoding = @@accept_charset)
+    string = __string_value__(string)
     str = string.b
     str.gsub!(/((?:%[0-9a-fA-F]{2})+)/) do |m|
       [m.delete('%')].pack('H*')

@@ -6915,12 +6915,34 @@ class Enumerator
       end
     end
 
+    # The version of a method that Lazy overrides, from whichever ancestor defines it -
+    # what `super' would reach. nil when Lazy does not override it at all.
+    def __eager_method__(name)
+      ancestors = ::Enumerator::Lazy.ancestors
+      return nil unless ::Enumerator::Lazy.instance_methods(false).include?(name)
+      ancestors[1..-1].each do |mod|
+        return mod.instance_method(name) if mod.instance_methods(false).include?(name)
+      end
+      nil
+    end
+    private :__eager_method__
+
     # Staying lazy across to_enum is what keeps `lazy.to_enum(:each)` usable on
     # an infinite source.
+    #
+    # The method is the *eager* one where Lazy has overridden it, which is MRI's
+    # lazy_use_super_method table: `lazy.to_enum(:with_index, 10)` has to enumerate pairs,
+    # and Lazy#with_index given a block answers a lazy chain that yields the original
+    # values and never runs on its own, so nothing would come out of it.
     def to_enum(method = :each, *args, &size_block)
       source = self
+      eager = __eager_method__(method)
       Lazy.__raw__(size_block) do |y|
-        source.send(method, *args) { |*values| y.yield(*values) }
+        if eager
+          eager.bind(source).call(*args) { |*values| y.yield(*values) }
+        else
+          source.send(method, *args) { |*values| y.yield(*values) }
+        end
       end
     end
     alias_method :enum_for, :to_enum
