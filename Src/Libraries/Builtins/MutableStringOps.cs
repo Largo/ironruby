@@ -3656,6 +3656,12 @@ namespace IronRuby.Builtins {
 
             if (separator == null) {
                 object defaultSeparator = stringCast.Context.StringSeparator;
+                if (defaultSeparator != null) {
+                    // Splitting on $; is deprecated, and MRI says so where the value is used
+                    // rather than only where it was set.
+                    stringCast.Context.ReportWarning("$; is set to non-nil value");
+                }
+
                 RubyRegex regexSeparator = defaultSeparator as RubyRegex;
                 if (regexSeparator != null) {
                     return Split(stringCast, self, regexSeparator, limit);
