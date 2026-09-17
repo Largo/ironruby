@@ -3696,25 +3696,85 @@ namespace IronRuby.Builtins {
                 return new RubyArray();
             }
 
-            if (limit == 0) {
-                // suppress trailing empty fields
-                RubyArray array = MakeRubyArray(self, regexp.Split(self));
-                while (array.Count != 0 && ((MutableString)array[array.Count - 1]).Length == 0) {
-                    array.RemoveAt(array.Count - 1);
-                }
-                return array;
-            } else if (limit == 1) {
+            if (limit == 1) {
                 // one field: the whole string, but as a fresh String
                 RubyArray result = new RubyArray(1);
                 result.Add(self.CreateDerived().Append(self).TaintBy(self));
                 return result;
-            } else if (limit < 0) {
-                // does not suppress trailing fields when negative 
-                return MakeRubyArray(self, regexp.Split(self));
-            } else {
-                // limit > 1 limits to N fields
-                return MakeRubyArray(self, regexp.Split(self, limit));
             }
+
+            RubyArray fields = RegexSplit(self, regexp, limit);
+            if (limit == 0) {
+                // suppress trailing empty fields
+                while (fields.Count != 0 && ((MutableString)fields[fields.Count - 1]).Length == 0) {
+                    fields.RemoveAt(fields.Count - 1);
+                }
+            }
+            return fields;
+        }
+
+        /// <summary>
+        /// MRI's rb_str_split_m for a Regexp separator, which .NET's Regex.Split does not agree
+        /// with about an empty match: .NET cuts at every one of them, so "hi mom".split(/\s*/)
+        /// came out as ["", "h", "i", "", "m", "o", "m"]. Ruby steps over an empty match that sits
+        /// where the field starts and only cuts at the next one, giving ["h", "i", "m", "o", "m"].
+        /// The captures of each match go into the result after the field it ended.
+        /// </summary>
+        private static RubyArray/*!*/ RegexSplit(MutableString/*!*/ self, RubyRegex/*!*/ regexp, int limit) {
+            RubyArray result = new RubyArray();
+            int length = self.GetCharCount();
+            int searchFrom = 0;
+            int fieldStart = 0;
+            bool steppedOverEmptyMatch = false;
+            int fieldCount = 1;
+
+            while (searchFrom <= length) {
+                MatchData match = regexp.Match(self, searchFrom, false);
+                if (match == null) {
+                    break;
+                }
+
+                int matchStart = match.GetGroupStart(0);
+                int matchEnd = match.GetGroupEnd(0);
+
+                if (matchStart == searchFrom && matchStart == matchEnd) {
+                    if (length == 0) {
+                        result.Add(self.CreateDerived().TaintBy(self));
+                        break;
+                    }
+                    if (!steppedOverEmptyMatch) {
+                        // Nothing to cut here: move on a character and see whether the pattern
+                        // still matches emptily there.
+                        searchFrom++;
+                        steppedOverEmptyMatch = true;
+                        continue;
+                    }
+                    result.Add(self.GetSlice(fieldStart, 1).TaintBy(self));
+                    fieldStart = searchFrom;
+                } else {
+                    result.Add(self.GetSlice(fieldStart, matchStart - fieldStart).TaintBy(self));
+                    fieldStart = searchFrom = matchEnd;
+                }
+                steppedOverEmptyMatch = false;
+
+                // A group that matched nothing still contributes an empty field; one that never
+                // took part in the match - the other side of an alternation - contributes nothing.
+                for (int i = 1; i < match.GroupCount; i++) {
+                    if (match.GroupSuccess(i)) {
+                        result.Add(match.GetGroupValue(i).TaintBy(self));
+                    }
+                }
+
+                if (limit > 0 && limit <= ++fieldCount) {
+                    break;
+                }
+            }
+
+            if (length > 0 && (limit != 0 || length > fieldStart)) {
+                result.Add(self.GetSlice(fieldStart, length - fieldStart).TaintBy(self));
+            }
+
+            return result;
         }
 
         // Ruby 2.6: #split yields each field to a block and answers self instead of
