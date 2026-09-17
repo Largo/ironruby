@@ -3705,7 +3705,7 @@ namespace IronRuby.Builtins {
                 new Func<System.Double, System.Int32, System.Double>(IronRuby.Builtins.ClrFloat.Modulo), 
                 new Func<IronRuby.Runtime.RubyContext, System.Double, System.Numerics.BigInteger, System.Double>(IronRuby.Builtins.ClrFloat.Modulo), 
                 new Func<System.Double, System.Double, System.Double>(IronRuby.Builtins.ClrFloat.Modulo), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Double, System.Object, System.Object>(IronRuby.Builtins.ClrFloat.Modulo)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Double, System.Object, System.Object>(IronRuby.Builtins.ClrFloat.ModuloOp)
             );
             
             DefineLibraryMethod(module, "nan?", 0x51, 
@@ -4017,7 +4017,7 @@ namespace IronRuby.Builtins {
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ModuloOp), 
                 new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Modulo)
             );
             

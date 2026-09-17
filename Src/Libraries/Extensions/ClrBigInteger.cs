@@ -451,19 +451,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>self % other, as Fixnum or Bignum</returns>
         /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes %</remarks>
-        [RubyMethod("%")]
+        // #modulo is #% under another name in MRI, so both coerce and then ask for "%".
+        [RubyMethod("%"), RubyMethod("modulo")]
         public static object ModuloOp(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "%", self, other);
-        }
-
-        /// <summary>
-        /// Returns self modulo other, where other is not Fixnum or Bignum.
-        /// </summary>
-        /// <returns>self modulo other, as Fixnum or Bignum</returns>
-        /// <remarks>Coerces self and other using other.coerce(self) then dynamically invokes modulo</remarks>
-        [RubyMethod("modulo")]
-        public static object Modulo(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, object/*!*/ self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "modulo", self, other);
         }
 
         #endregion

@@ -269,18 +269,11 @@ namespace IronRuby.Builtins {
         /// Return the modulo after division of <code>self</code> by <code>other</code>, where <code>other</code> is not Fixnum, Bignum or Float.
         /// </summary>
         /// <returns></returns>
-        [RubyMethod("%")]
+        // #modulo is #% under another name in MRI, so both coerce and then ask for "%":
+        // two entries that forwarded to different names were not the same method.
+        [RubyMethod("%"), RubyMethod("modulo")]
         public static object ModuloOp(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, double self, object other) {
             return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "%", self, other);
-        }
-
-        /// <summary>
-        /// Return the modulo after division of <code>self</code> by <code>other</code>, where <code>other</code> is not Fixnum, Bignum or Float.
-        /// </summary>
-        /// <returns></returns>
-        [RubyMethod("modulo")]
-        public static object Modulo(BinaryOpStorage/*!*/ coercionStorage, BinaryOpStorage/*!*/ binaryOpSite, double self, object other) {
-            return Protocols.CoerceAndApply(coercionStorage, binaryOpSite, "modulo", self, other);
         }
 
         #endregion
