@@ -23,11 +23,14 @@ namespace IronRuby.Builtins {
     public static class TrueClass : Object {
         #region Public Instance Methods
 
+        /// <summary>One frozen string, answered again every time - as in MRI.</summary>
+        private static readonly MutableString/*!*/ _TrueString = MutableString.CreateAscii("true").Freeze();
+
         [RubyMethodAttribute("to_s")]
         [RubyMethodAttribute("inspect")]
         public static MutableString/*!*/ ToString(bool self) {
             Debug.Assert(self == true);
-            return MutableString.CreateAscii("true"); 
+            return _TrueString;
         }
 
         [RubyMethodAttribute("&")]
