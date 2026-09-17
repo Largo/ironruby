@@ -850,12 +850,6 @@ namespace IronRuby.Runtime.Conversions {
 
         protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
 
-        // Kernel#Integer(x) and "%d" % x go through this (to_int then to_i); MRI words those
-        // "can't convert nil into Integer", not "no implicit conversion ...".
-        protected override MethodInfo/*!*/ ConversionErrorFactory {
-            get { return Methods.CreateTypeConversionError; }
-        }
-
         internal protected override bool TryImplicitConversion(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             if (args.Target == null) {
                 metaBuilder.SetError(ConversionErrorFactory.OpCall(AstUtils.Constant("nil"), AstUtils.Constant(TargetTypeName)));
@@ -876,6 +870,9 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ConvertToIntAction : ConvertToIntegerValueAction<ConvertToIntAction> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToInt; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToIntegerValidator; } }
+        // #to_int is the implicit protocol - what an Integer parameter asks for - and MRI words
+        // its failure "no implicit conversion of X into Integer". The explicit wording belongs to
+        // #to_i below, which is the step Kernel#Integer(x) and "%d" % x fail at.
     }
 
     /// <summary>
@@ -884,6 +881,12 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ConvertToIAction : ConvertToIntegerValueAction<ConvertToIAction> {
         protected override string/*!*/ ToMethodName { get { return Symbols.ToI; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToIntegerValidator; } }
+
+        // Kernel#Integer(x) and "%d" % x end here; MRI words those "can't convert nil into
+        // Integer", not "no implicit conversion ...".
+        protected override MethodInfo/*!*/ ConversionErrorFactory {
+            get { return Methods.CreateTypeConversionError; }
+        }
     }
 
     #endregion
