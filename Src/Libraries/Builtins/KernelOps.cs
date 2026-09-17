@@ -1039,7 +1039,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("eval", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("eval", RubyMethodAttributes.PublicSingleton)]
-        public static object Evaluate(RubyScope/*!*/ scope, object self, [NotNull]MutableString/*!*/ code,
+        public static object Evaluate(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]MutableString/*!*/ code,
             [Optional]Binding binding, [Optional, NotNull]MutableString file, [DefaultParameterValue(1)]int line) {
 
             RubyScope targetScope;
@@ -1054,12 +1054,16 @@ namespace IronRuby.Builtins {
             return RubyUtils.Evaluate(code, targetScope, targetSelf, null, file, line);
         }
 
+        /// <summary>
+        /// A Proc used to be accepted in place of a Binding; Ruby stopped accepting one in 1.9 and
+        /// reports it as the wrong type rather than evaluating in the block's scope.
+        /// </summary>
         [RubyMethod("eval", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("eval", RubyMethodAttributes.PublicSingleton)]
-        public static object Evaluate(RubyScope/*!*/ scope, object self, [NotNull]MutableString/*!*/ code,
+        public static object Evaluate(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]MutableString/*!*/ code,
             [NotNull]Proc/*!*/ procBinding, [Optional, NotNull]MutableString file, [DefaultParameterValue(1)]int line) {
 
-            return RubyUtils.Evaluate(code, procBinding.LocalScope, procBinding.LocalScope.SelfObject, null, file, line);
+            throw RubyExceptions.CreateTypeError("wrong argument type Proc (expected binding)");
         }
 
         #endregion

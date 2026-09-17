@@ -1101,6 +1101,19 @@ namespace IronRuby.Runtime {
                 Utils.Log(new String('-', 50), "EVAL_ERROR");
                 Utils.Log(source.GetCode(), "EVAL_ERROR");
                 Utils.Log(new String('-', 50), "EVAL_ERROR");
+
+                // MRI names the file and the line the error is on in front of the message, so
+                // that code which evaluated a string knows which string and where in it.
+                if (e.HasLineInfo && e.File != null) {
+                    // A SourceLocation cannot start before line 1, so a zero or negative starting
+                    // line was compiled from 1 and is put back here: eval with a line of -100
+                    // reports its first line as -100, which is what MRI does.
+                    int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
+                    throw new SyntaxError(
+                        String.Format("{0}:{1}: {2}", e.File, reportedLine, e.Message),
+                        e.File, reportedLine, e.Column, e.LineSourceCode
+                    );
+                }
                 throw;
             }
             Debug.Assert(lambda != null);
