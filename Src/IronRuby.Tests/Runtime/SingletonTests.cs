@@ -312,8 +312,11 @@ puts 'ok'
 
         public void AllowedSingletons2() {
             TestOutput(@"
-ok = ['x', true, false, nil, //, 1 << 70, 1.0]
-error = [1, :foo]
+# The same list as AllowedSingletons1 above, because the two questions are the same one:
+# a Bignum and a Float hold no state to hang a singleton class on, whatever is being asked
+# of it. CRuby 4.0.6 raises TypeError for all four.
+ok = ['x', true, false, nil, //]
+error = [1 << 70, 1.0, 1, :foo]
 
 ok.each do |x| 
   class << x; end
