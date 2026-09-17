@@ -595,14 +595,21 @@ namespace IronRuby.Runtime {
         private static CallSite<Func<CallSite, object, object>> _NameSite;
 
         /// <summary>
-        /// What the module answers to #name, which is what MRI builds this message out of - not
-        /// the name the module was defined under. A class can define its own #name, and MRI shows
-        /// that one. Anything but a String - an anonymous module answers nil - means "no name",
-        /// and the caller falls back to how the module inspects.
+        /// What the module answers to #name, which is what MRI builds this message out of - a
+        /// class can define its own #name and MRI shows that one. The built-in #name is not
+        /// asked, because IronRuby's disambiguates a module belonging to another runtime by
+        /// appending "@&lt;runtime id&gt;" and that has no place in this message; the name the module
+        /// was defined under is used directly instead. nil - what an anonymous module answers -
+        /// means "no name", and the caller falls back to how the module inspects.
         /// </summary>
         private static string RubyName(RubyContext/*!*/ context, RubyModule/*!*/ module) {
             // Already inside a message being built: asking again could recurse for ever.
             if (_disableMethodMissingMessageFormatting) {
+                return module.Name;
+            }
+
+            var resolved = context.ResolveMethod(module, "name", VisibilityContext.AllVisible);
+            if (!resolved.Found || resolved.Info.DeclaringModule == context.ModuleClass) {
                 return module.Name;
             }
 
