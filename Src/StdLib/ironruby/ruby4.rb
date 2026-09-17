@@ -10,6 +10,29 @@ module Kernel
     0x48415348
   end
 
+  # X.try_convert asks for a conversion and then insists on the result: nil when the
+  # object has no such method or answers nil, the result when it is of the right kind,
+  # and a TypeError naming both classes otherwise. The wording is the one ruby/spec
+  # asks of an implementation other than CRuby's - "into", where CRuby still says "to".
+  private def __ir_try_convert__(obj, method, klass, name)
+    return obj if klass === obj
+    return nil unless __ir_responds_to__(obj, method)
+    converted = obj.__send__(method)
+    return nil if converted.nil?
+    return converted if klass === converted
+    ::Kernel.raise(::TypeError,
+      "can't convert #{obj.class} into #{name} (#{obj.class}##{method} gives #{converted.class})")
+  end
+
+  # A BasicObject has none of Kernel's methods to ask with - not even #respond_to? -
+  # so its own singleton class is asked instead, which answers for anything it or its
+  # ancestors define.
+  private def __ir_responds_to__(obj, method)
+    singleton = (class << obj; self; end)
+    return true if singleton.method_defined?(method) || singleton.private_method_defined?(method)
+    singleton.method_defined?(:respond_to?) && obj.respond_to?(method)
+  end
+
   # 32-bit avalanche, so that combining the per-element hashes cannot cancel equal
   # values out.
   private def __ir_mix32__(value)
@@ -10139,30 +10162,25 @@ end
 # Class.try_convert (1.9): the conversion protocol, returning nil instead of raising.
 class String
   def self.try_convert(obj)
-    return obj if obj.is_a?(::String)
-    return nil unless obj.respond_to?(:to_str)
-    converted = obj.to_str
-    return converted if converted.nil? || converted.is_a?(::String)
-    ::Kernel.raise(::TypeError,
-      "can't convert #{obj.class} to String (#{obj.class}#to_str gives #{converted.class})")
+    __ir_try_convert__(obj, :to_str, ::String, "String")
   end unless respond_to?(:try_convert)
 end
 
 class Array
   def self.try_convert(obj)
-    obj.respond_to?(:to_ary) ? obj.to_ary : nil
+    __ir_try_convert__(obj, :to_ary, ::Array, "Array")
   end unless respond_to?(:try_convert)
 end
 
 class Hash
   def self.try_convert(obj)
-    obj.respond_to?(:to_hash) ? obj.to_hash : nil
+    __ir_try_convert__(obj, :to_hash, ::Hash, "Hash")
   end unless respond_to?(:try_convert)
 end
 
 class Integer
   def self.try_convert(obj)
-    obj.respond_to?(:to_int) ? obj.to_int : nil
+    __ir_try_convert__(obj, :to_int, ::Integer, "Integer")
   end unless respond_to?(:try_convert)
 end
 
@@ -10221,7 +10239,7 @@ end
 
 class IO
   def self.try_convert(obj)
-    obj.respond_to?(:to_io) ? obj.to_io : nil
+    __ir_try_convert__(obj, :to_io, ::IO, "IO")
   end unless respond_to?(:try_convert)
 
   # 3.1's IO::Buffer, backed by a String rather than by mapped memory: there is
@@ -12193,14 +12211,7 @@ class << Hash
   # the core's try_convert reports a different error and does not accept a nil
   # result from #to_hash
   def try_convert(object)
-    return object if object.is_a?(Hash)
-    return nil unless object.respond_to?(:to_hash)
-    converted = object.to_hash
-    return nil if converted.nil?
-    unless converted.is_a?(Hash)
-      raise TypeError, "can't convert #{object.class} into Hash (#{object.class}#to_hash gives #{converted.class})"
-    end
-    converted
+    __ir_try_convert__(object, :to_hash, ::Hash, "Hash")
   end
 
   def ruby2_keywords_hash?(hash)
