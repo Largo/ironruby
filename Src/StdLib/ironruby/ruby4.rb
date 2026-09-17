@@ -128,6 +128,25 @@ module Enumerable
         next
       end
       x = x.to_f
+
+      # Nothing infinite can be compensated: (1.0 - Infinity) + Infinity is NaN, which is
+      # how a single Infinity in the list used to take the whole sum with it. A NaN stays,
+      # an infinity swallows the sum unless the sum is the other infinity, and a finite
+      # number adds nothing to an infinite sum.
+      if acc.nan?
+        next
+      elsif x.nan?
+        acc = x
+        compensation = 0.0
+        next
+      elsif x.infinite?
+        acc = (acc.infinite? == -x.infinite?) ? (0.0 / 0.0) : x
+        compensation = 0.0
+        next
+      elsif acc.infinite?
+        next
+      end
+
       t = acc + x
       compensation += acc.abs >= x.abs ? (acc - t) + x : (x - t) + acc
       acc = t
