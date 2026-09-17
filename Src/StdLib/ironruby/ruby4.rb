@@ -21,7 +21,7 @@ module Kernel
     return nil if converted.nil?
     return converted if klass === converted
     ::Kernel.raise(::TypeError,
-      "can't convert #{obj.class} into #{name} (#{obj.class}##{method} gives #{converted.class})")
+      "can't convert #{obj.class} into #{name} (#{obj.class}##{method} gives #{__ir_conversion_result_name__(converted)})")
   end
 
   # A BasicObject has none of Kernel's methods to ask with - not even #respond_to? -
@@ -99,6 +99,20 @@ module Kernel
     (name == "Fixnum" || name == "Bignum") ? "Integer" : name
   end
   private :__ir_message_type_name__
+
+  # What a failed conversion calls the thing the converter answered. MRI's
+  # rb_builtin_class_name names the three singleton values by themselves rather than by
+  # their class here - "gives nil", not "gives NilClass" - which is not what it does in
+  # messages that name the argument's type.
+  def __ir_conversion_result_name__(value)
+    case value
+    when ::NilClass then "nil"
+    when ::TrueClass then "true"
+    when ::FalseClass then "false"
+    else __ir_message_type_name__(value)
+    end
+  end
+  private :__ir_conversion_result_name__
 end
 
 module Kernel
@@ -446,7 +460,7 @@ module Enumerable
                 # means "not one after all", anything else is a broken promise.
                 unless converted.nil? || converted.is_a?(Array)
                   raise TypeError, "can't convert #{mapped.class} to Array " \
-                                   "(#{mapped.class}#to_ary gives #{converted.class})"
+                                   "(#{mapped.class}#to_ary gives #{__ir_conversion_result_name__(converted)})"
                 end
                 converted
               end
@@ -846,7 +860,7 @@ class Range
       end
       converted = n.to_int
       unless converted.is_a?(::Integer)
-        raise TypeError, "can't convert #{n.class} to Integer (#{n.class}#to_int gives #{converted.class})"
+        raise TypeError, "can't convert #{n.class} into Integer (#{n.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
       end
       converted
     end
@@ -1187,7 +1201,7 @@ class Array
     end
     converted = value.to_int
     unless converted.is_a?(Integer)
-      raise TypeError, "can't convert #{value.class} to Integer (#{value.class}#to_int gives #{converted.class})"
+      raise TypeError, "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})"
     end
     converted
   end
@@ -2001,7 +2015,7 @@ class Array
         end
         count = count.to_int
         unless count.is_a?(Integer)
-          raise TypeError, "can't convert #{args[0].class} to Integer (#{args[0].class}#to_int gives #{count.class})"
+          raise TypeError, "can't convert #{args[0].class} into Integer (#{args[0].class}#to_int gives #{__ir_conversion_result_name__(count)})"
         end
       end
       raise ArgumentError, "negative array size" if count < 0
@@ -2834,8 +2848,8 @@ module Kernel
         value = arg.to_i
         unless value.is_a?(::Integer)
           raise ::TypeError,
-                "can't convert #{__conversion_class_name__(arg)} to Integer " \
-                "(#{arg.class}#to_i gives #{value.class})"
+                "can't convert #{__conversion_class_name__(arg)} into Integer " \
+                "(#{arg.class}#to_i gives #{__ir_conversion_result_name__(value)})"
         end
         value
       end
@@ -3068,7 +3082,7 @@ class Numeric
     rational = to_r
     unless rational.is_a?(::Rational)
       ::Kernel.raise(::TypeError,
-        "can't convert #{self.class} to Rational (#{self.class}#to_r gives #{rational.class})")
+        "can't convert #{self.class} into Rational (#{self.class}#to_r gives #{__ir_conversion_result_name__(rational)})")
     end
     rational / other
   end
@@ -4954,7 +4968,7 @@ class Complex
     result = value.to_c
     unless result.is_a?(::Complex)
       ::Kernel.raise(::TypeError,
-        "can't convert #{value.class} to Complex (#{value.class}#to_c gives #{result.class})")
+        "can't convert #{value.class} into Complex (#{value.class}#to_c gives #{__ir_conversion_result_name__(result)})")
     end
     result
   end
@@ -5192,7 +5206,7 @@ class Rational
     result = value.to_r
     unless result.is_a?(::Rational)
       ::Kernel.raise(::TypeError,
-        "can't convert #{value.class} to Rational (#{value.class}#to_r gives #{result.class})")
+        "can't convert #{value.class} into Rational (#{value.class}#to_r gives #{__ir_conversion_result_name__(result)})")
     end
     result
   end
@@ -8172,7 +8186,7 @@ class Data
     converted = key.to_str
     unless ::String === converted
       ::Kernel.raise(::TypeError,
-        "can't convert #{key.class} into String (#{key.class}#to_str gives #{converted.class})")
+        "can't convert #{key.class} into String (#{key.class}#to_str gives #{__ir_conversion_result_name__(converted)})")
     end
     converted
   end
@@ -9193,7 +9207,7 @@ module Process
     end
     result = value.to_int
     unless result.is_a?(Integer)
-      raise TypeError, "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{result.class})"
+      raise TypeError, "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(result)})"
     end
     result
   end
@@ -12469,7 +12483,7 @@ class Struct
       end
       i = name.to_int
       unless i.is_a?(Integer)
-        raise TypeError, "can't convert #{name.class} into Integer (#{name.class}#to_int gives #{i.class})"
+        raise TypeError, "can't convert #{name.class} into Integer (#{name.class}#to_int gives #{__ir_conversion_result_name__(i)})"
       end
       i += size if i < 0
       (i >= 0 && i < size) ? i : nil
@@ -13367,7 +13381,7 @@ module Kernel
     converted = object.to_s
     unless converted.is_a?(::String)
       ::Kernel.raise(::TypeError,
-        "can't convert #{object.class} to String (#{object.class}#to_s gives #{converted.class})")
+        "can't convert #{object.class} into String (#{object.class}#to_s gives #{__ir_conversion_result_name__(converted)})")
     end
     converted
   end
@@ -13403,7 +13417,7 @@ module Kernel
     end
     converted = object.to_hash
     unless converted.is_a?(::Hash)
-      ::Kernel.raise(::TypeError, "can't convert #{object.class} into Hash (#{object.class}#to_hash gives #{converted.class})")
+      ::Kernel.raise(::TypeError, "can't convert #{object.class} into Hash (#{object.class}#to_hash gives #{__ir_conversion_result_name__(converted)})")
     end
     converted
   end

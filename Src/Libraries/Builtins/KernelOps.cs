@@ -1165,13 +1165,18 @@ namespace IronRuby.Builtins {
             return true;
         }
 
-        [RubyMethod("remove_instance_variable", RubyMethodAttributes.PrivateInstance)]
+        /// <summary>
+        /// Public since 1.9, and the two ways it can fail are ordered: a name that is not an
+        /// instance variable name at all is a NameError whatever the object, a frozen object
+        /// refuses before it is asked whether it has the variable, and only then does a variable
+        /// that is not there become a NameError.
+        /// </summary>
+        [RubyMethod("remove_instance_variable")]
         public static object RemoveInstanceVariable(RubyContext/*!*/ context, object/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            RubyUtils.CheckInstanceVariableName(context, self, name);
+
             object value;
             if (!context.TryRemoveInstanceVariable(self, name, out value)) {
-                // We didn't find it, check if the name is valid
-                RubyUtils.CheckInstanceVariableName(name);
-
                 throw RubyExceptions.CreateNameError("instance variable `{0}' not defined", name);
             }
 

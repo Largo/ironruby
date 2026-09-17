@@ -4810,7 +4810,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToRational)
             );
             
-            DefineLibraryMethod(module, "remove_instance_variable", 0x52, 
+            DefineLibraryMethod(module, "remove_instance_variable", 0x51, 
                 0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.RemoveInstanceVariable)
             );

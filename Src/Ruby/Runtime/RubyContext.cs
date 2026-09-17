@@ -2072,6 +2072,16 @@ namespace IronRuby.Runtime {
         }
 
         private bool IsObjectFrozen(object obj, out RubyInstanceData data) {
+            // An immediate - Integer, Float, Symbol, nil, true, false - holds no state at all,
+            // which is what Kernel#frozen? reports about it. Saying otherwise here let
+            // #instance_variable_set and #remove_instance_variable get as far as looking for an
+            // instance variable table on something that can never have one. A Symbol carries a
+            // frozen flag of its own, so this has to come first for it.
+            if (!RubyUtils.HasObjectState(obj) || obj is double || obj is float) {
+                data = null;
+                return true;
+            }
+
             var state = obj as IRubyObjectState;
             if (state != null) {
                 data = null;
