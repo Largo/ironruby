@@ -57,6 +57,7 @@ namespace IronRuby.Builtins {
         /// <returns>self if self >= 0; -self if self &lt; 0</returns>
         /// <remarks>Normalizes to a Fixnum if necessary</remarks>
         [RubyMethod("abs")]
+        [RubyMethod("magnitude")]
         public static object Abs(BigInteger/*!*/ self) {
             return Protocols.Normalize(self.Abs());
         }
@@ -736,6 +737,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>true or false</returns>
         [RubyMethod("==")]
+        [RubyMethod("===")]
         public static bool Equal(BigInteger/*!*/ self, [NotNull]BigInteger/*!*/ other) {
             return self == other;
         }
@@ -746,6 +748,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>true or false</returns>
         [RubyMethod("==")]
+        [RubyMethod("===")]
         public static bool Equal(BigInteger/*!*/ self, int other) {
             return self == other;
         }
@@ -757,6 +760,7 @@ namespace IronRuby.Builtins {
         /// <returns>true or false</returns>
         /// <remarks>Returns false if other is NaN.</remarks>
         [RubyMethod("==")]
+        [RubyMethod("===")]
         public static bool Equal(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
             return !Double.IsNaN(other) && Protocols.ConvertToDouble(context, self) == other;
         }
@@ -1004,6 +1008,7 @@ namespace IronRuby.Builtins {
         /// Returns a string containing the representation of self base 10.
         /// </summary>
         [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
         public static MutableString/*!*/ ToString(BigInteger/*!*/ self) {
             return MutableString.CreateAscii(self.ToString());
         }
@@ -1013,6 +1018,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <param name="radix">An integer between 2 and 36 inclusive</param>
         [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
         public static MutableString/*!*/ ToString(BigInteger/*!*/ self, int radix) {
             if (radix < 2 || radix > 36) {
                 throw RubyExceptions.CreateArgumentError("invalid radix {0}", radix);

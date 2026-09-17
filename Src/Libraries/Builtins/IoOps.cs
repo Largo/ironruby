@@ -1940,6 +1940,13 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_byte")]
         public static object EachByte(BlockParam block, RubyIO/*!*/ self) {
             self.RequireReadable();
+
+            if (block == null) {
+                // Without a block this is an enumerator over the bytes still to come. It has no
+                // size: a stream does not say how much of it is left.
+                return new Enumerator(self, "each_byte");
+            }
+
             object aByte;
             while ((aByte = Getc(self)) != null) {
                 if (block == null) {

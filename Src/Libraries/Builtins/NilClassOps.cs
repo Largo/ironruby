@@ -50,25 +50,17 @@ namespace IronRuby.Builtins {
             return false;
         }
 
-        [RubyMethodAttribute("^")]
-        public static bool Xor(object self, object obj) {
-            Debug.Assert(self == null);
-            return obj != null;
-        }
-
-        [RubyMethodAttribute("^")]
-        public static bool Xor(object self, bool obj) {
-            Debug.Assert(self == null);
-            return obj;
-        }
-
+        // nil ^ x and nil | x are the one method in MRI - both answer whether x is true -
+        // and two names for one method is what the specs compare.
         [RubyMethodAttribute("|")]
+        [RubyMethodAttribute("^")]
         public static bool Or(object self, object obj) {
             Debug.Assert(self == null);
             return obj != null;
         }
 
         [RubyMethodAttribute("|")]
+        [RubyMethodAttribute("^")]
         public static bool Or(object self, bool obj) {
             Debug.Assert(self == null);
             return obj;

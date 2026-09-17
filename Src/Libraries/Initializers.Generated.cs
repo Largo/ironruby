@@ -1702,14 +1702,19 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "^", 0x51, 
                 0x00000000U, 0x00000000U, 
-                new Func<System.Boolean, System.Object, System.Boolean>(IronRuby.Builtins.FalseClass.Xor), 
-                new Func<System.Boolean, System.Boolean, System.Boolean>(IronRuby.Builtins.FalseClass.Xor)
+                new Func<System.Boolean, System.Object, System.Boolean>(IronRuby.Builtins.FalseClass.Or), 
+                new Func<System.Boolean, System.Boolean, System.Boolean>(IronRuby.Builtins.FalseClass.Or)
             );
             
             DefineLibraryMethod(module, "|", 0x51, 
                 0x00000000U, 0x00000000U, 
                 new Func<System.Boolean, System.Object, System.Boolean>(IronRuby.Builtins.FalseClass.Or), 
                 new Func<System.Boolean, System.Boolean, System.Boolean>(IronRuby.Builtins.FalseClass.Or)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<System.Boolean, IronRuby.Builtins.MutableString>(IronRuby.Builtins.FalseClass.ToString)
             );
             
             DefineLibraryMethod(module, "to_s", 0x51, 
@@ -3618,6 +3623,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Double, System.Object, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal)
             );
             
+            DefineLibraryMethod(module, "===", 0x51, 
+                0x00000000U, 0x00000000U, 
+                new Func<System.Double, System.Double, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Double, System.Object, System.Boolean>(IronRuby.Builtins.ClrFloat.Equal)
+            );
+            
             DefineLibraryMethod(module, ">", 0x51, 
                 0x00000000U, 0x00000000U, 0x00000004U, 0x00000000U, 
                 new Func<System.Double, System.Double, System.Boolean>(IronRuby.Builtins.ClrFloat.GreaterThan), 
@@ -3677,6 +3688,16 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "infinite?", 0x51, 
                 0x00000000U, 
                 new Func<System.Double, System.Object>(IronRuby.Builtins.ClrFloat.IsInfinite)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Double, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrFloat.ToS)
+            );
+            
+            DefineLibraryMethod(module, "magnitude", 0x51, 
+                0x00000000U, 
+                new Func<System.Double, System.Double>(IronRuby.Builtins.ClrFloat.Abs)
             );
             
             DefineLibraryMethod(module, "modulo", 0x51, 
@@ -3884,6 +3905,15 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal)
             );
             
+            DefineLibraryMethod(module, "===", 0x51, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<System.Numerics.BigInteger, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<System.Int32, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal)
+            );
+            
             DefineLibraryMethod(module, ">", 0x51, 
                 new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan), 
@@ -3967,6 +3997,19 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "hash", 0x51, 
                 0x00000000U, 
                 new Func<System.Numerics.BigInteger, System.Int32>(IronRuby.Builtins.ClrInteger.Hash)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
+                new Func<System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
+                new Func<System.Numerics.BigInteger, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ClrInteger.ToString), 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ToString)
+            );
+            
+            DefineLibraryMethod(module, "magnitude", 0x51, 
+                0x00000000U, 0x00000000U, 
+                new Func<System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Abs), 
+                new Func<System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Abs)
             );
             
             DefineLibraryMethod(module, "modulo", 0x51, 
@@ -6083,6 +6126,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.InitializeCopy)
             );
             
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString>(IronRuby.Builtins.ModuleOps.ToS)
+            );
+            
             DefineLibraryMethod(module, "instance_method", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.UnboundMethod>(IronRuby.Builtins.ModuleOps.GetInstanceMethod)
@@ -6339,8 +6387,8 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "^", 0x51, 
                 0x00000000U, 0x00000000U, 
-                new Func<System.Object, System.Object, System.Boolean>(IronRuby.Builtins.NilClassOps.Xor), 
-                new Func<System.Object, System.Boolean, System.Boolean>(IronRuby.Builtins.NilClassOps.Xor)
+                new Func<System.Object, System.Object, System.Boolean>(IronRuby.Builtins.NilClassOps.Or), 
+                new Func<System.Object, System.Boolean, System.Boolean>(IronRuby.Builtins.NilClassOps.Or)
             );
             
             DefineLibraryMethod(module, "|", 0x51, 

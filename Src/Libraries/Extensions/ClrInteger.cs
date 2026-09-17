@@ -537,6 +537,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         /// <returns>Fixnum</returns>
         [RubyMethod("abs")]
+        [RubyMethod("magnitude")]
         public static object/*!*/ Abs(int self) {
             return self >= 0 ? self : self != Int32.MinValue ? -self : MinusMinValue();
         }
@@ -684,6 +685,7 @@ namespace IronRuby.Builtins {
         /// Since other is Fixnum here, we just test for direct equality.
         /// </remarks>
         [RubyMethod("==")]
+        [RubyMethod("===")]
         public static bool Equal(int self, int other) {
             return self == other;
         }
@@ -697,6 +699,7 @@ namespace IronRuby.Builtins {
         /// i.e. call other == self
         /// </remarks>
         [RubyMethod("==")]
+        [RubyMethod("===")]
         public static bool Equal(BinaryOpStorage/*!*/ equals, object/*!*/ self, object other) {
             // If self == other doesn't work then try other == self
             return Protocols.IsEqual(equals, other, self);
@@ -780,6 +783,7 @@ namespace IronRuby.Builtins {
         /// <returns>MutableString</returns>
         /// <example>12345.to_s => "12345"</example>
         [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
         public static object ToString(object/*!*/ self) {
             return MutableString.CreateAscii(self.ToString());
         }

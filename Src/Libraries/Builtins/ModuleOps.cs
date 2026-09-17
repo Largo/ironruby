@@ -1603,6 +1603,7 @@ namespace IronRuby.Builtins {
         #region to_s, name, freeze
 
         [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
         public static MutableString/*!*/ ToS(RubyContext/*!*/ context, RubyModule/*!*/ self) {
             return self.GetDisplayName(context, false);
         }

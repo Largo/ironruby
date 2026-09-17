@@ -409,6 +409,7 @@ namespace IronRuby.Builtins {
         ///  -34.56.abs     #=> 34.56
         /// </example>
         [RubyMethod("abs")]
+        [RubyMethod("magnitude")]
         public static double Abs(double self) {
             return Math.Abs(self);
         }
@@ -698,6 +699,7 @@ namespace IronRuby.Builtins {
         /// "<code>NaN</code>", "<code>Infinity</code>", and "<code>-Infinity</code>".
         /// </remarks>
         [RubyMethod("to_s")]
+        [RubyMethod("inspect")]
         public static MutableString ToS(RubyContext/*!*/ context, double self) {
             return MutableString.CreateAscii(ToShortestString(self));
         }
@@ -813,6 +815,7 @@ namespace IronRuby.Builtins {
         /// Contrast this with <code>Float#eql?</code>, which requires <i>other</i> to be a <code>Float</code>.
         /// </remarks>
         [RubyMethod("==")]
+        [RubyMethod("===")]
         public static bool Equal(double self, double other) {
             return self == other;
         }
@@ -826,6 +829,7 @@ namespace IronRuby.Builtins {
         /// Dynamically invokes other == self (i.e. swaps operands around).
         /// </remarks>
         [RubyMethod("==")]
+        [RubyMethod("===")]
         public static bool Equal(BinaryOpStorage/*!*/ equals, double self, object other) {
             // Call == on the right operand like Float#== does
             return Protocols.IsEqual(equals, other, self);

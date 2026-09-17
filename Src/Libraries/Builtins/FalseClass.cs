@@ -24,6 +24,7 @@ namespace IronRuby.Builtins {
         #region Public Instance Methods
 
         [RubyMethodAttribute("to_s")]
+        [RubyMethodAttribute("inspect")]
         public static MutableString/*!*/ ToString(bool self) {
             Debug.Assert(self == false);
             return MutableString.CreateAscii("false"); 
@@ -35,25 +36,16 @@ namespace IronRuby.Builtins {
             return false;
         }
 
-        [RubyMethodAttribute("^")]
-        public static bool Xor(bool self, object obj) {
-            Debug.Assert(self == false);
-            return obj != null;
-        }
-
-        [RubyMethodAttribute("^")]
-        public static bool Xor(bool self, bool obj) {
-            Debug.Assert(self == false);
-            return obj;
-        }
-
+        // false ^ x and false | x are the one method in MRI - both answer whether x is true.
         [RubyMethodAttribute("|")]
+        [RubyMethodAttribute("^")]
         public static bool Or(bool self, object obj) {
             Debug.Assert(self == false);
             return obj != null;
         }
 
         [RubyMethodAttribute("|")]
+        [RubyMethodAttribute("^")]
         public static bool Or(bool self, bool obj) {
             Debug.Assert(self == false);
             return obj;
