@@ -12470,11 +12470,12 @@ end
 # missing \e[m below is deliberate.
 
 class Exception
-  # The runtime keeps a backtrace as strings, so an exception has no captured
-  # Location objects of its own and #backtrace_locations is nil - MRI's answer for
-  # an exception that was never raised. The one case where there are real Locations
-  # is `raise Klass, message, caller_locations`: set_backtrace was handed them, so
-  # keep them and hand them back.
+  # The runtime keeps a backtrace as strings, so the Locations an exception answers
+  # are read back out of those - one per frame, parsed the way Kernel#caller_locations
+  # parses its own. An exception that was never raised has no backtrace and so no
+  # locations either, which is MRI's answer as well. The one case where there are real
+  # Locations to begin with is `raise Klass, message, caller_locations`: set_backtrace
+  # was handed them, so they are kept as they are.
   alias_method :__core_set_backtrace__, :set_backtrace
 
   def set_backtrace(value)
@@ -12483,13 +12484,23 @@ class Exception
       @__backtrace_locations = value
       __core_set_backtrace__(value.map(&:to_s))
     else
-      @__backtrace_locations = nil
+      # The locations belong to the raise and not to these strings: an exception that
+      # was raised keeps the ones it was raised with, and one that never was gets none,
+      # however many strings it is given.
+      @__backtrace_locations = backtrace_locations
+      @__backtrace_from_strings = true
       __core_set_backtrace__(value)
     end
   end
 
   def backtrace_locations
-    @__backtrace_locations
+    return @__backtrace_locations if @__backtrace_locations
+    return nil if defined?(@__backtrace_from_strings)
+    entries = backtrace
+    return nil unless entries
+    # The array is answered again as it is, rather than parsed afresh: MRI hands back
+    # the one array, and a spec pushes onto it and looks again.
+    @__backtrace_locations = entries.map { |entry| ::Thread::Backtrace::Location.__parse__(entry) }
   end unless method_defined?(:backtrace_locations)
 
   # Whether an uncaught exception would be printed to a terminal. Decides the
