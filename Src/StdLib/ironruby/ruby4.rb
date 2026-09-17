@@ -10183,6 +10183,12 @@ class NilClass
   end unless method_defined?(:to_h)
 end
 
+# MRI keeps the BasicObject constant on BasicObject itself, where Object inherits it from;
+# IronRuby's runtime defines it on Object, so BasicObject.constants comes up empty.
+unless ::BasicObject.const_defined?(:BasicObject, false)
+  ::BasicObject.const_set(:BasicObject, ::BasicObject)
+end
+
 # There is one nil, one true and one false, and no way to ask for another.
 [::NilClass, ::TrueClass, ::FalseClass].each do |klass|
   klass.singleton_class.send(:undef_method, :new) if klass.respond_to?(:new)

@@ -672,6 +672,14 @@ namespace IronRuby.Runtime {
                     }
                     return null;
                 }
+
+                // MRI falls back to Object's constants only from a module. A class reaches Object
+                // through its own ancestors, which have just been searched - unless it descends
+                // from BasicObject rather than Object, and such a class is not meant to see
+                // Object's constants at all: `class C < BasicObject; Kernel; end' is a NameError.
+                if (innerMostModule.IsClass) {
+                    return innerMostModule;
+                }
             } else {
                 innerMostModule = context.ObjectClass;
             }

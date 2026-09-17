@@ -1115,8 +1115,11 @@ namespace IronRuby.Builtins {
             var context = self.Context;
             RubyModule owner = isTopLevel ? context.ObjectClass : self;
 
-            // MRI searches Object for the first segment only (rb_const_defined vs rb_const_defined_from).
-            bool lookupObject = inherit && !isTopLevel;
+            // MRI searches Object for the first segment only (rb_const_defined vs
+            // rb_const_defined_from), and only for a module: a class already has Object among its
+            // ancestors, unless it is BasicObject - which is exactly the class MRI does not want
+            // answering for Object's constants.
+            bool lookupObject = inherit && !isTopLevel && !owner.IsClass;
 
             for (int i = 0; i < parts.Length; i++) {
                 object value;

@@ -846,7 +846,7 @@ namespace IronRuby.Builtins {
             return GetObjectId(context, self);
         }
 
-        [RubyMethod("__id__")]
+        // #__id__ is defined on BasicObject, where MRI keeps it, not here.
         [RubyMethod("object_id")]
         public static object GetObjectId(RubyContext/*!*/ context, object self) {
             return ClrInteger.Narrow(RubyUtils.GetObjectId(context, self));

@@ -528,6 +528,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadBasicObject_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__id__", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.BasicObjectOps.GetObjectId)
+            );
+            
             DefineLibraryMethod(module, "__send__", 0x51, 
                 new[] { 0x00000000U, 0x00020004U, 0x00040008U, 0x00020004U, 0x00040008U, 0x00020004U, 0x00040008U, 0x00020004U, 0x00040008U, 0x80020004U, 0x80040008U}, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.BasicObjectOps.SendMessage), 
@@ -4395,11 +4400,6 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__callee__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
-            );
-            
-            DefineLibraryMethod(module, "__id__", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetObjectId)
             );
             
             DefineLibraryMethod(module, "__ir_clone_with_freeze__", 0x52, 

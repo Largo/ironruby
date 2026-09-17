@@ -157,6 +157,15 @@ namespace IronRuby.Builtins {
             return RubyOps.IsFalse(site.Target(site, self, other));
         }
         
+        /// <summary>
+        /// #__id__ belongs to BasicObject, not to Kernel: it is one of the handful of methods a
+        /// BasicObject has, and code that hides #object_id still expects it.
+        /// </summary>
+        [RubyMethod("__id__")]
+        public static object GetObjectId(RubyContext/*!*/ context, object self) {
+            return ClrInteger.Narrow(RubyUtils.GetObjectId(context, self));
+        }
+
         [RubyMethod("equal?")]
         public static bool IsEqual(object self, object other) {
             // Comparing object IDs is (potentially) expensive because it forces us
