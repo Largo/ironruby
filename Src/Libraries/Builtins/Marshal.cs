@@ -47,6 +47,12 @@ namespace IronRuby.Builtins {
             public CallSite<Func<CallSite, object, int, object>>/*!*/ Dump {
                 get { return RubyUtils.GetCallSite(ref _dump, Context, "_dump", 1); }
             }
+
+            private CallSite<Func<CallSite, object, object>> _binmode;
+
+            public CallSite<Func<CallSite, object, object>>/*!*/ Binmode {
+                get { return RubyUtils.GetCallSite(ref _binmode, Context, "binmode", 0); }
+            }
         }
 
         public sealed class ReaderSites : RubyCallSiteStorage {
@@ -66,6 +72,12 @@ namespace IronRuby.Builtins {
 
             public CallSite<Func<CallSite, Proc, object, object>>/*!*/ ProcCall {
                 get { return RubyUtils.GetCallSite(ref _procCall, Context, "call", 1); }
+            }
+
+            private CallSite<Func<CallSite, object, object>> _binmode;
+
+            public CallSite<Func<CallSite, object, object>>/*!*/ Binmode {
+                get { return RubyUtils.GetCallSite(ref _binmode, Context, "binmode", 0); }
             }
         }
 
@@ -397,6 +409,12 @@ namespace IronRuby.Builtins {
             /// IronRuby, but MRI writes them as the "mesg" and "bt" instance variables.
             /// </summary>
             private void WriteException(Exception/*!*/ exception, string[]/*!*/ instanceNames) {
+                // Exception#set_backtrace and #backtrace_locations are written in the prelude and
+                // keep what they were given in instance variables of their own. Those are how
+                // IronRuby stores the backtrace, not something the exception was given, so they go
+                // out as "bt" below and not as instance variables in their own right.
+                instanceNames = Array.FindAll(instanceNames, name => !name.StartsWith("@__backtrace", StringComparison.Ordinal));
+
                 var data = RubyExceptionData.GetInstance(exception);
                 Exception cause = data.HasCause ? data.Cause : null;
 
@@ -462,15 +480,35 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteClass(RubyClass/*!*/ obj) {
-                _writer.Write((byte)'c');
-                TestForAnonymous(obj);
-                WriteStringValue(obj.Name, _context.GetIdentifierEncoding());
+                WriteModuleDefinition((byte)'c', obj);
             }
 
             private void WriteModule(RubyModule/*!*/ obj) {
-                _writer.Write((byte)'m');
+                WriteModuleDefinition((byte)'m', obj);
+            }
+
+            /// <summary>
+            /// A 'c' or 'm' record is the module's name written as a string, so a name that is not
+            /// ASCII only carries its encoding the same way a String does: the record is wrapped in
+            /// an 'I' and followed by the one 'E' flag.
+            /// </summary>
+            private void WriteModuleDefinition(byte tag, RubyModule/*!*/ obj) {
                 TestForAnonymous(obj);
-                WriteStringValue(obj.Name, _context.GetIdentifierEncoding());
+
+                RubyEncoding encoding = _context.GetIdentifierEncoding();
+                byte[] data = encoding.StrictEncoding.GetBytes(obj.Name);
+                bool writeEncoding = NeedsEncodingIVar(encoding) && !IsAscii(data);
+
+                if (writeEncoding) {
+                    _writer.Write((byte)'I');
+                }
+                _writer.Write(tag);
+                WriteInt32(data.Length);
+                _writer.Write(data);
+                if (writeEncoding) {
+                    WriteInt32(1);
+                    WriteEncodingIVar(encoding);
+                }
             }
 
             /// <summary>
@@ -596,6 +634,13 @@ namespace IronRuby.Builtins {
                 if (theClass.IsSingletonClass) {
                     foreach (var mixin in theClass.GetMixins()) {
                         _writer.Write((byte)'e');
+                        // MRI reaches an extended module through its iclass and reports an
+                        // anonymous one as a class, not as a module.
+                        if (mixin.Name == null) {
+                            throw RubyExceptions.CreateTypeError("can't dump anonymous class {0}",
+                                mixin.GetDisplayName(_context, false)
+                            );
+                        }
                         WriteModuleName(mixin);
                     }
                 }
@@ -1168,8 +1213,12 @@ namespace IronRuby.Builtins {
             }
 
             private object/*!*/ ReadClassOrModule(int typeFlag) {
-                string name = ReadString().ToString();
-                return ReadClassOrModule(typeFlag, name);
+                // The name is written as raw bytes, and a name that is not ASCII only arrives
+                // wrapped in an 'I' record whose encoding flag is only read once the class has
+                // been resolved - too late to decode by. MRI reads the bytes as the identifier
+                // encoding either way.
+                byte[] name = ReadString().ToByteArray();
+                return ReadClassOrModule(typeFlag, Context.GetIdentifierEncoding().Encoding.GetString(name, 0, name.Length));
             }
 
             private object/*!*/ ReadClassOrModule(int typeFlag, string/*!*/ name) {
@@ -1534,6 +1583,18 @@ namespace IronRuby.Builtins {
         #region Public Instance Methods
 
         // TODO: Use DefaultValue attribute when it works with the binder
+        /// <summary>
+        /// A marshalled stream is bytes, so MRI puts the IO it was handed into binary mode first -
+        /// for anything that has a #binmode to put into it, which a StringIO does.
+        /// </summary>
+        private static void SetBinaryMode(CallSite<Func<CallSite, object, object>>/*!*/ binmode,
+            RespondToStorage/*!*/ respondToStorage, object io) {
+
+            if (io != null && Protocols.RespondTo(respondToStorage, io, "binmode")) {
+                binmode.Target(binmode, io);
+            }
+        }
+
         [RubyMethod("dump", RubyMethodAttributes.PublicSingleton)]
         public static MutableString Dump(WriterSites/*!*/ sites, RubyModule/*!*/ self, object obj) {
             return Dump(sites, self, obj, -1);
@@ -1569,6 +1630,8 @@ namespace IronRuby.Builtins {
             if (stream == null || !stream.CanWrite) {
                 throw RubyExceptions.CreateTypeError("instance of IO needed");
             }
+
+            SetBinaryMode(sites.Binmode, respondToStorage, io);
 
             BinaryWriter writer = new BinaryWriter(stream);
             MarshalWriter dumper = new MarshalWriter(sites, writer, self.Context, limit);
@@ -1650,6 +1713,9 @@ namespace IronRuby.Builtins {
             if (stream == null || !stream.CanRead) {
                 throw RubyExceptions.CreateTypeError("instance of IO needed");
             }
+
+            SetBinaryMode(sites.Binmode, respondToStorage, source);
+
             BinaryReader reader = new BinaryReader(stream);
             MarshalReader loader = new MarshalReader(sites, reader, scope.GlobalScope, block, freeze) { FromStream = true };
             return loader.Load();
