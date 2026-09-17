@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Runtime.CompilerServices;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -571,7 +572,8 @@ namespace IronRuby.Runtime {
             var module = obj as RubyModule;
             if (module != null) {
                 string kind = module.IsClass ? "class " : "module ";
-                return kind + (String.IsNullOrEmpty(module.Name) ? SafeInspect(context, obj) : module.Name);
+                string moduleName = RubyName(context, module);
+                return kind + (String.IsNullOrEmpty(moduleName) ? SafeInspect(context, obj) : moduleName);
             }
 
             // An object that carries a singleton class is spelled by inspect (that is how MRI keeps
@@ -583,7 +585,38 @@ namespace IronRuby.Runtime {
 
             // GetClassDisplayName is empty for an anonymous class; MRI prints "#<Class:0x...>".
             var cls = context.GetClassOf(obj);
-            return "an instance of " + MessageTypeName(RubyExceptionData.GetDefaultMessage(cls).ToString());
+            string className = RubyName(context, cls);
+            if (String.IsNullOrEmpty(className)) {
+                className = RubyExceptionData.GetDefaultMessage(cls).ToString();
+            }
+            return "an instance of " + MessageTypeName(className);
+        }
+
+        private static CallSite<Func<CallSite, object, object>> _NameSite;
+
+        /// <summary>
+        /// What the module answers to #name, which is what MRI builds this message out of - not
+        /// the name the module was defined under. A class can define its own #name, and MRI shows
+        /// that one. Anything but a String - an anonymous module answers nil - means "no name",
+        /// and the caller falls back to how the module inspects.
+        /// </summary>
+        private static string RubyName(RubyContext/*!*/ context, RubyModule/*!*/ module) {
+            // Already inside a message being built: asking again could recurse for ever.
+            if (_disableMethodMissingMessageFormatting) {
+                return module.Name;
+            }
+
+            _disableMethodMissingMessageFormatting = true;
+            try {
+                var site = RubyUtils.GetCallSite(ref _NameSite, context, "name", 0);
+                var name = site.Target(site, module) as MutableString;
+                return (name != null) ? name.ConvertToString() : null;
+            } catch (Exception) {
+                // MRI swallows whatever a user-written #name does here.
+                return module.Name;
+            } finally {
+                _disableMethodMissingMessageFormatting = false;
+            }
         }
 
         private static string/*!*/ SafeInspect(RubyContext/*!*/ context, object obj) {

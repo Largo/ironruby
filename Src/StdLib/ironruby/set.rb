@@ -687,10 +687,8 @@ class Set
     @hash.hash
   end
 
-  def eql?(o)   # :nodoc:
-    return false unless o.is_a?(Set)
-    @hash.eql?(o.instance_variable_get(:@hash))
-  end
+  # Ruby 4.0 made #eql? the same method as #==, not merely one that agrees with it.
+  alias eql? ==
 
   # Resets the internal state after modification to existing elements
   # and returns self.
