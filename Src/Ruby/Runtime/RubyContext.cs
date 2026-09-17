@@ -1989,9 +1989,46 @@ namespace IronRuby.Runtime {
             return data != null && data.HasInstanceVariables;
         }
 
+        /// <summary>
+        /// The object's instance variables. The runtime keeps a slot or two of its own in the
+        /// same table - the finalizer ObjectSpace.define_finalizer attaches is one - spelled with
+        /// angle brackets so that they cannot collide with anything Ruby can name, and Ruby must
+        /// not see those: they are not the object's state. #instance_variables was listing the
+        /// finalizer and Marshal was trying to dump it.
+        ///
+        /// Names without a leading '@' but otherwise ordinary are left alone: Marshal writes a
+        /// Time's zone and offset as exactly those, which is what MRI's stream carries.
+        /// </summary>
         public string[]/*!*/ GetInstanceVariableNames(object obj) {
             RubyInstanceData data = TryGetInstanceData(obj);
-            return (data != null) ? data.GetInstanceVariableNames() : ArrayUtils.EmptyStrings;
+            if (data == null) {
+                return ArrayUtils.EmptyStrings;
+            }
+
+            string[] names = data.GetInstanceVariableNames();
+            int visible = 0;
+            foreach (string name in names) {
+                if (IsVisibleInstanceVariableName(name)) {
+                    visible++;
+                }
+            }
+
+            if (visible == names.Length) {
+                return names;
+            }
+
+            var result = new string[visible];
+            int i = 0;
+            foreach (string name in names) {
+                if (IsVisibleInstanceVariableName(name)) {
+                    result[i++] = name;
+                }
+            }
+            return result;
+        }
+
+        private static bool IsVisibleInstanceVariableName(string name) {
+            return name.Length == 0 || name[0] != '<';
         }
 
         public bool TryGetInstanceVariable(object obj, string/*!*/ name, out object value) {

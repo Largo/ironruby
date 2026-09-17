@@ -129,6 +129,17 @@ namespace IronRuby.Runtime {
         private static IEnumerable<KeyValuePair<string, object>>/*!*/ SelectInspectedVariables(
             RubyContext/*!*/ context, object obj, IEnumerable<KeyValuePair<string, object>>/*!*/ vars) {
 
+            // The runtime's own slots in the instance variable table - the finalizer that
+            // ObjectSpace.define_finalizer attaches is one, spelled with angle brackets so that
+            // it cannot collide with a Ruby name - have no business in an #inspect.
+            var visible = new List<KeyValuePair<string, object>>();
+            foreach (KeyValuePair<string, object> var in vars) {
+                if (var.Key.Length == 0 || var.Key[0] != '<') {
+                    visible.Add(var);
+                }
+            }
+            vars = visible;
+
             if (!context.ResolveMethod(obj, "instance_variables_to_inspect", VisibilityContext.AllVisible).Found) {
                 return vars;
             }
