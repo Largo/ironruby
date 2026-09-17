@@ -132,8 +132,7 @@ class StringIO
     end
     return nil unless __readable_stream__?
     start = pos
-    head = read(4).to_s
-    head.force_encoding(::Encoding::BINARY)
+    head = (+read(4).to_s).force_encoding(::Encoding::BINARY)
     match = BOMS__.find { |bytes, _| head.start_with?(bytes) }
     unless match
       seek(start)
