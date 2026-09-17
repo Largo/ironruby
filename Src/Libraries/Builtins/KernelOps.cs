@@ -1063,7 +1063,7 @@ namespace IronRuby.Builtins {
         public static object Evaluate(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]MutableString/*!*/ code,
             [NotNull]Proc/*!*/ procBinding, [Optional, NotNull]MutableString file, [DefaultParameterValue(1)]int line) {
 
-            throw RubyExceptions.CreateTypeError("wrong argument type Proc (expected binding)");
+            throw RubyExceptions.CreateTypeError("wrong argument type proc (expected binding)");
         }
 
         #endregion

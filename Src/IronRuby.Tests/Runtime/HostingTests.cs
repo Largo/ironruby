@@ -410,10 +410,12 @@ a = 'ba'.gsub /b/, '1'
             string s;
             Assert((s = Engine.Operations.Format(new RubyArray(new[] { 1,2,3 }))) == "[1, 2, 3]");
             
+            // Format asks for #inspect, which no longer falls back to #to_s: an object that
+            // defines only #to_s formats the way MRI shows it, by class and id.
             var obj = Engine.Execute(@"class C; def to_s; 'hello'; end; new; end");
-            Assert((s = Engine.Operations.Format(obj)) == "hello");
+            Assert((s = Engine.Operations.Format(obj)).StartsWith("#<C:0x"));
 
-            obj = Engine.Execute(@"class C; def to_s; 'bye'; end; new; end");
+            obj = Engine.Execute(@"class C; def inspect; 'bye'; end; new; end");
             Assert((s = Engine.Operations.Format(obj)) == "bye");
             
             obj = Engine.Execute(@"class C; def inspect; [7,8,9]; end; new; end");

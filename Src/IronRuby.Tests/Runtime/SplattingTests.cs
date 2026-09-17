@@ -299,6 +299,11 @@ class C
     false
   end
   
+  # #inspect, which is what Kernel#p asks for, no longer falls back to #to_s
+  def inspect
+    'c'
+  end
+
   def to_s
     'c'
   end

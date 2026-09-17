@@ -41,13 +41,13 @@ puts t = /yy#{s}yy/.to_s
 
         public void Regex2() {
             TestOutput(@"
-puts(/#{/a/}/)                     # MRI: (?-mix:a)
-puts(/#{nil}#{/a/}#{nil}/)         # MRI: (?-mix:a)
+puts(/#{/a/}/)
+puts(/#{nil}#{/a/}#{nil}/)
 puts(/#{/a/}b/)
 puts(/b#{/a/}/)
 ", @"
-(?-mix:(?-mix:a))
-(?-mix:(?-mix:a))
+(?-mix:a)
+(?-mix:a)
 (?-mix:(?-mix:a)b)
 (?-mix:b(?-mix:a))
 ");

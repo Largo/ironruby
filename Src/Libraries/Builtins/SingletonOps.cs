@@ -39,7 +39,11 @@ namespace IronRuby.Builtins {
 
         #region Public Instance Methods
 
+        // The top-level object answers "main" to both, as MRI's does: Kernel#inspect no longer
+        // falls back to #to_s, so without its own #inspect main would report itself as
+        // "#<Object:0x...>" in NoMethodError messages and under Kernel#p.
         [RubyMethod("to_s", RubyMethodAttributes.PublicInstance)]
+        [RubyMethod("inspect", RubyMethodAttributes.PublicInstance)]
         public static MutableString/*!*/ ToS(object/*!*/ self) {
             return MutableString.CreateAscii("main");
         }

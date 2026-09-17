@@ -313,6 +313,10 @@ b = 1
 nil");
         }
 
+        /// <summary>
+        /// A Proc used to be accepted in place of a Binding, and the block's locals were visible
+        /// to the evaluated string. Ruby stopped accepting one in 1.9.
+        /// </summary>
         public void EvalWithProcBinding1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
@@ -328,9 +332,9 @@ def z
   1
 end
 
-p eval('x+y+z', goo)
+p eval('x+y+z', goo) rescue p $!
 ");
-            }, @"4");
+            }, @"#<TypeError: wrong argument type proc (expected binding)>");
         }
 
         public void ModuleEvalProc1() {

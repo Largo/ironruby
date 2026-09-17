@@ -433,6 +433,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Object>(IronRuby.Builtins.MainSingletonOps.Initialize)
             );
             
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MainSingletonOps.ToS)
+            );
+            
             DefineLibraryMethod(module, "private", 0x51, 
                 0x80020004U, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.SetPrivateVisibility)
@@ -4526,7 +4531,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "eval", 0x52, 
-                0x00000014U, 0x0000001cU, 
+                0x00020014U, 0x0002001cU, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Binding, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.Evaluate), 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Proc, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.Evaluate)
             );
@@ -5042,7 +5047,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "eval", 0x61, 
-                0x00000014U, 0x0000001cU, 
+                0x00020014U, 0x0002001cU, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Binding, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.Evaluate), 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Proc, IronRuby.Builtins.MutableString, System.Int32, System.Object>(IronRuby.Builtins.KernelOps.Evaluate)
             );
