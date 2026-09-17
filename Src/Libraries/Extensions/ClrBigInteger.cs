@@ -696,12 +696,31 @@ namespace IronRuby.Builtins {
         /// Returns -1, 0, or +1 depending on whether self is less than, equal to, or greater than other.
         /// </returns>
         /// <remarks>
-        /// Converts self to Float and then directly invokes &lt;=&gt;.
-        /// Correctly copes if self is too big to fit into a Float, i.e. assumes self is +/-Infinity.
+        /// MRI's rb_integer_float_cmp: compared exactly, not by rounding self to a double first.
+        /// A Bignum past Float::MAX rounds to Infinity, and Infinity &lt;=&gt; Infinity is 0, so
+        /// comparing that way made every large Bignum equal to Infinity and equal to every other
+        /// Bignum that rounds to the same double.
         /// </remarks>
         [RubyMethod("<=>")]
         public static object Compare(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
-            return ClrFloat.Compare(ToFloat(context, self), other);
+            if (Double.IsNaN(other)) {
+                return null;
+            }
+            if (Double.IsPositiveInfinity(other)) {
+                return -1;
+            }
+            if (Double.IsNegativeInfinity(other)) {
+                return 1;
+            }
+
+            // The whole part of other is exactly representable as a BigInteger; whatever is left
+            // over is a fraction in [0, 1), so it only decides a tie between the whole parts.
+            double whole = Math.Floor(other);
+            int result = BigInteger.Compare(self, (BigInteger)whole);
+            if (result != 0) {
+                return result;
+            }
+            return other > whole ? -1 : 0;
         }
 
         /// <summary>

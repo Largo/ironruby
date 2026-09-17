@@ -431,7 +431,9 @@ namespace IronRuby.Runtime {
             object self, object other) {
 
             object result;
-            return TryCoerceAndApply(coercionStorage, comparisonStorage, "<=>", self, other, out result) ? result : null;
+            // MRI's rb_num_coerce_cmp coerces with err=FALSE: a #coerce that answers nil makes
+            // <=> answer nil, where the arithmetic operators raise a coercion TypeError.
+            return TryCoerceAndApply(coercionStorage, comparisonStorage, "<=>", self, other, out result, true) ? result : null;
         }
 
         /// <summary>
@@ -444,7 +446,9 @@ namespace IronRuby.Runtime {
             string/*!*/ relationalOp, object self, object other) {
 
             object result;
-            if (TryCoerceAndApply(coercionStorage, comparisonStorage, relationalOp, self, other, out result)) {
+            // rb_num_coerce_relop also coerces with err=FALSE, and reports a nil from #coerce
+            // as the comparison having failed rather than as a coercion TypeError.
+            if (TryCoerceAndApply(coercionStorage, comparisonStorage, relationalOp, self, other, out result, true)) {
                 return RubyOps.IsTrue(result);
             }
 
@@ -519,8 +523,16 @@ namespace IronRuby.Runtime {
             BinaryOpStorage/*!*/ binaryOpStorage, string/*!*/ binaryOp,
             object self, object other, out object result) {
 
+            return TryCoerceAndApply(coercionStorage, binaryOpStorage, binaryOp, self, other, out result, false);
+        }
+
+        private static bool TryCoerceAndApply(
+            BinaryOpStorage/*!*/ coercionStorage,
+            BinaryOpStorage/*!*/ binaryOpStorage, string/*!*/ binaryOp,
+            object self, object other, out object result, bool nilMeansNotCoercible) {
+
             IList coercedValues;
-            if (!TryCoerce(coercionStorage, self, other, out coercedValues)) {
+            if (!TryCoerce(coercionStorage, self, other, out coercedValues, nilMeansNotCoercible)) {
                 result = null;
                 return false;
             }
@@ -535,13 +547,17 @@ namespace IronRuby.Runtime {
         /// <paramref name="self"/>, or false when it has no #coerce at all.
         /// </summary>
         private static bool TryCoerce(BinaryOpStorage/*!*/ coercionStorage, object self, object other, out IList pair) {
+            return TryCoerce(coercionStorage, self, other, out pair, false);
+        }
+
+        private static bool TryCoerce(BinaryOpStorage/*!*/ coercionStorage, object self, object other, out IList pair, bool nilMeansNotCoercible) {
             var coerce = coercionStorage.GetCallSite("coerce", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
 
-            IList coercedValues;
+            object coerced;
 
             try {
                 // Swap self and other around to do the coercion.
-                coercedValues = coerce.Target(coerce, other, self) as IList;
+                coerced = coerce.Target(coerce, other, self);
             } catch (MissingMethodException e) when (IsUndefinedCoerce(coercionStorage.Context, e, other)) {
                 // MRI only falls back to "X can't be coerced into Y" / "comparison of X with Y
                 // failed" when #coerce is not defined at all. An exception raised *inside* a
@@ -552,6 +568,15 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            // MRI's do_coerce with err=FALSE - the comparison operators - treats a nil from
+            // #coerce as "not coercible", so <=> answers nil and < reports a failed comparison.
+            // Anything else that is not a pair is a TypeError for every caller, including those.
+            if (coerced == null && nilMeansNotCoercible) {
+                pair = null;
+                return false;
+            }
+
+            var coercedValues = coerced as IList;
             if (coercedValues == null || coercedValues.Count != 2) {
                 // #coerce exists but answered something that is not a pair. MRI reports that
                 // as its own error rather than pretending the operand was not coercible.

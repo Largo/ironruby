@@ -886,10 +886,10 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("<=>")]
         public static object Compare(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            if (Double.IsNaN(self)) {
-                return null;
-            }
-            return self.CompareTo(Protocols.ConvertToDouble(context, other));
+            // Exactly, rather than by rounding other to a double: a Bignum past Float::MAX rounds
+            // to Infinity, which would make Infinity equal to it.
+            object result = ClrInteger.Compare(context, other, self);
+            return result is int ? -(int)result : result;
         }
 
         /// <summary>
