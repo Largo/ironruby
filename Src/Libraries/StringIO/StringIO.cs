@@ -762,9 +762,9 @@ namespace IronRuby.StandardLibrary.StringIO {
         /// A limit of zero would read an empty line for ever, so MRI refuses it where a reader
         /// loops rather than looping - the same message IO#each_line gives.
         /// </summary>
-        private static void CheckLineLimit(int limit) {
+        private static void CheckLineLimit(int limit, string/*!*/ methodName) {
             if (limit == 0) {
-                throw RubyExceptions.CreateArgumentError("invalid limit: 0");
+                throw RubyExceptions.CreateArgumentError("invalid limit: 0 for {0}", methodName);
             }
         }
 
@@ -902,7 +902,7 @@ namespace IronRuby.StandardLibrary.StringIO {
                 out separator, out limit, out chomp);
 
             var content = self.GetReadableContent();
-            CheckLineLimit(limit);
+            CheckLineLimit(limit, "readlines");
             RubyArray result = new RubyArray();
 
             // no dynamic call, doesn't modify $_ scope variable:
@@ -926,16 +926,18 @@ namespace IronRuby.StandardLibrary.StringIO {
         /// </summary>
         private static MutableString ReadLine(MutableString/*!*/ content, MutableString separator, int limit, ref int position) {
             int length = content.GetByteCount();
+
+            if (limit == 0) {
+                // A limit of nothing answers an empty string and reads nothing, rather than nil -
+                // at the end of the string as anywhere else.
+                return content.GetSlice(0, 0);
+            }
+
             if (position >= length) {
                 return null;
             }
 
             int oldPosition = position;
-
-            if (limit == 0) {
-                // A limit of nothing answers an empty string and reads nothing, rather than nil.
-                return content.GetSlice(oldPosition, 0);
-            }
 
             if (separator == null) {
                 position = length;
@@ -989,7 +991,7 @@ namespace IronRuby.StandardLibrary.StringIO {
                 out separator, out limit, out chomp);
 
             var content = self.GetReadableContent();
-            CheckLineLimit(limit);
+            CheckLineLimit(limit, "each_line");
             if (block == null) {
                 throw RubyExceptions.NoBlockGiven();
             }

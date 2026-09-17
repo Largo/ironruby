@@ -10969,7 +10969,13 @@ class IO
 
       result = ::File.open(name, mode) do |io|
         io.set_encoding(enc) if enc
-        io.set_encoding_by_bom if bom
+        # "BOM|enc" means the mark names the encoding if there is one and enc does
+        # otherwise, so the mark is read past either way - which is not what
+        # #set_encoding_by_bom is for: that one refuses once an encoding is set.
+        if bom
+          from_bom = io.__ir_skip_bom__
+          io.set_encoding(from_bom) if from_bom
+        end
         io.seek(offset) if offset && offset > 0
         length ? io.read(length) : io.read
       end
@@ -11410,6 +11416,16 @@ class IO
     if external && external != ::Encoding::BINARY
       ::Kernel.raise(::ArgumentError, "encoding is set to #{external} already")
     end
+    enc = __ir_skip_bom__
+    set_encoding(enc) if enc
+    enc
+  end unless method_defined?(:set_encoding_by_bom)
+
+  # Reads past a byte-order mark if the stream starts with one and answers the encoding
+  # it names, leaving the stream where it was when there is none. Unlike
+  # #set_encoding_by_bom this asks nothing about the encoding already in force: a "BOM|"
+  # mode names one for the case where there is no mark, so there always is one.
+  def __ir_skip_bom__
     # Nothing to read a mark out of on a write-only stream.
     return nil unless __readable_stream__?
     start = pos
@@ -11421,10 +11437,8 @@ class IO
       return nil
     end
     seek(start + match[0].bytesize)
-    enc = ::Encoding.find(match[1])
-    set_encoding(enc)
-    enc
-  end unless method_defined?(:set_encoding_by_bom)
+    ::Encoding.find(match[1])
+  end
 
   # ---- the byte and character side of IO ---------------------------------
 

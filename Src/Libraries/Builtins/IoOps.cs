@@ -1741,8 +1741,19 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// A limit of no bytes would read an empty line for ever, so a reader that loops refuses
+        /// it - naming itself in the message, as MRI does.
+        /// </summary>
+        private static void CheckLineLimit(int limit, string/*!*/ methodName) {
+            if (limit == 0) {
+                throw RubyExceptions.CreateArgumentError("invalid limit: 0 for {0}", methodName);
+            }
+        }
+
         [RubyMethod("readlines")]
         public static RubyArray/*!*/ ReadLines(RubyContext/*!*/ context, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            CheckLineLimit(limit, "readlines");
             RubyArray result = new RubyArray();
 
             // no dynamic call, doesn't modify $_ scope variable:
@@ -1906,6 +1917,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_line")]
         public static object Each(RubyContext/*!*/ context, BlockParam block, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
             self.RequireReadable();
+            CheckLineLimit(limit, "each_line");
 
             MutableString line;
             while ((line = self.ReadLineOrParagraph(separator, limit)) != null) {
