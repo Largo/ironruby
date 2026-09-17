@@ -681,7 +681,9 @@ p a.foo(b)
 ");
         }
 
-        // an Integer doesn't have identity in Ruby
+        // An Integer holds no state at all, so it is frozen and an instance variable
+        // cannot be set on it - IronRuby used to let one through, shared by every Integer
+        // of the same value.
         public void InstanceVariables10() {
             AssertOutput(delegate() {
                 CompilerTest(@"
@@ -694,23 +696,21 @@ class Integer
   end
 end
 
-a = 1
-b = 1
-c = 2
-
-a.foo = 1
-b.foo = 2
-c.foo = 3
-puts a.foo, b.foo, c.foo
+begin
+  1.foo = 1
+rescue => e
+  puts e.class, e.message
+end
+puts 1.foo.inspect
 ");
             },
             @"
-2
-2
-3");
+FrozenError
+can't modify frozen Integer: 1
+nil");
         }
 
-        // Float has an identity in Ruby
+        // Nor does a Float, for the same reason.
         public void InstanceVariables20() {
             TestOutput(@"
 class Float
@@ -722,15 +722,16 @@ class Float
   end
 end
 
-a = 1.0
-b = 1.0
-
-a.foo = 1
-b.foo = 2
-puts a.foo, b.foo
+begin
+  1.0.foo = 1
+rescue => e
+  puts e.class, e.message
+end
+puts 1.0.foo.inspect
 ", @"
-1
-2
+FrozenError
+can't modify frozen Float: 1.0
+nil
 ");
         }
     }
