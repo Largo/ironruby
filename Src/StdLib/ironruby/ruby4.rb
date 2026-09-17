@@ -77,7 +77,10 @@ class Object
       ::Kernel.raise(::TypeError, "#{name.inspect} is not a symbol nor a string")
     end
     klass = (singleton_class rescue nil)
-    defined = klass &&
+    # nil, true and false answer their own class here rather than a singleton class of
+    # their own, so `def (nil).foo' defines an ordinary NilClass method and there is no
+    # singleton method to hand back.
+    defined = klass && klass.singleton_class? &&
       (klass.instance_methods(false).include?(name) ||
        klass.private_instance_methods(false).include?(name) ||
        klass.protected_instance_methods(false).include?(name))
@@ -10037,21 +10040,48 @@ end
 unless defined?(Random)
   class Random
     def initialize(seed = Random.new_seed)
-      @seed = seed
-      @native = System::Random.new(seed.hash & 0x7fffffff)
+      # A seed is an Integer however it was given: Random.new(42.5) and Random.new(42)
+      # are the same generator, and #seed answers 42 for both.
+      unless seed.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{seed.class} into Integer")
+      end
+      @seed = seed.to_int
+      @draws = 0
+      @native = System::Random.new(@seed.hash & 0x7fffffff)
     end
 
     attr_reader :seed
 
+    # Everything this generator will produce follows from the seed it was built with and
+    # how far it has been advanced, so that pair is its state. MRI's is the Mersenne
+    # Twister's vector, which is a different generator and not reproducible here; what
+    # matters to a caller is that two generators with equal state agree from here on.
+    def state
+      [@seed, @draws]
+    end
+    private :state
+
+    def ==(other)
+      other.is_a?(::Random) && state == other.send(:state)
+    end
+
+    def eql?(other)
+      self == other
+    end
+
+    def hash
+      state.hash
+    end
+
     def rand(limit = nil)
       case limit
-      when nil then @native.next_double
+      when nil then __draw__ { @native.next_double }
       when ::Range then __rand_in_range__(limit)
       when ::Float
         unless limit > 0
           ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
         end
-        @native.next_double * limit
+        __draw__ { @native.next_double } * limit
       else
         n = limit.to_int
         unless n > 0
@@ -10064,13 +10094,13 @@ unless defined?(Random)
     # An Integer uniformly in 0...n. System::Random.next only covers Int32, so a
     # wider bound is filled from random bytes and rejection-sampled.
     def __rand_below__(n)
-      return @native.next(n) if n <= 2147483647
+      return __draw__ { @native.next(n) } if n <= 2147483647
 
       bits = n.bit_length
       bytes = (bits + 7) / 8
       buffer = System::Array[System::Byte].new(bytes)
       loop do
-        @native.next_bytes(buffer)
+        __draw__ { @native.next_bytes(buffer) }
         value = 0
         buffer.to_a.each { |b| value = (value << 8) | b }
         value >>= (bytes * 8 - bits)
@@ -10096,16 +10126,23 @@ unless defined?(Random)
       else
         width = span.to_f
         return nil if width < 0 || (width == 0 && range.exclude_end?)
-        first + @native.next_double * width
+        first + __draw__ { @native.next_double } * width
       end
     end
     private :__rand_in_range__
 
     def bytes(count)
       buffer = System::Array[System::Byte].new(count)
-      @native.next_bytes(buffer)
+      __draw__ { @native.next_bytes(buffer) }
       buffer.to_a.pack("C*")
     end
+
+    # Taking a value out of the underlying generator moves it on, and #state has to say so.
+    def __draw__
+      @draws += 1
+      yield
+    end
+    private :__draw__
 
     def self.new_seed
       Time.now.to_f.hash ^ object_id
@@ -10126,6 +10163,35 @@ unless defined?(Random)
       previous || 0
     end
   end
+end
+
+# nil converts to the zero of every numeric kind and to the empty Hash.
+class NilClass
+  def to_r
+    ::Kernel.Rational(0, 1)
+  end unless method_defined?(:to_r)
+
+  # The argument is the precision to approximate to, and there is nothing to
+  # approximate; MRI still insists there is at most one of them.
+  def rationalize(*args)
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    ::Kernel.Rational(0, 1)
+  end unless method_defined?(:rationalize)
+
+  def to_c
+    ::Kernel.Complex(0, 0)
+  end unless method_defined?(:to_c)
+
+  def to_h
+    {}
+  end unless method_defined?(:to_h)
+end
+
+# There is one nil, one true and one false, and no way to ask for another.
+[::NilClass, ::TrueClass, ::FalseClass].each do |klass|
+  klass.singleton_class.send(:undef_method, :new) if klass.respond_to?(:new)
 end
 
 class Random
