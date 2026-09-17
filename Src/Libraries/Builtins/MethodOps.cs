@@ -28,7 +28,7 @@ namespace IronRuby.Builtins {
         public static bool Equal(RubyMethod/*!*/ self, [NotNull]RubyMethod/*!*/ other) {
             // two method_missing-backed methods share one info, so only the name tells them apart
             return ReferenceEquals(self.Target, other.Target) && self.Info.IsEquivalentTo(other.Info)
-                && (!(self is RubyMethod.Curried) || self.Name == other.Name);
+                && (!self.IsMethodMissing || self.Name == other.Name);
         }
 
         // both names need both overloads, or `eql?' is not the same method as `==' and comparing
@@ -52,7 +52,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("arity")]
         public static int GetArity(RubyMethod/*!*/ self) {
             // nothing is known about a method only method_missing implements
-            return (self is RubyMethod.Curried) ? -1 : self.Info.GetArity();
+            return self.IsMethodMissing ? -1 : self.Info.GetArity();
         }
 
         [RubyMethod("name")]
@@ -98,7 +98,7 @@ namespace IronRuby.Builtins {
             var module = self.Target as RubyModule;
             return UnboundMethod.ToS(context, self.Name, self.Info,
                 module != null ? module.GetOrCreateSingletonClass() : self.GetTargetClass(), "Method",
-                (self is RubyMethod.Curried));
+                self.IsMethodMissing);
         }
 
         [RubyMethod("to_proc")]
@@ -114,7 +114,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("super_method")]
         public static RubyMethod GetSuperMethod(RubyContext/*!*/ context, RubyMethod/*!*/ self) {
             RubyModule owner = self.Info.DeclaringModule;
-            if (owner == null || self is RubyMethod.Curried) {
+            if (owner == null || self.IsMethodMissing) {
                 return null;
             }
 
@@ -174,12 +174,12 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source_location")]
         public static RubyArray GetSourceLocation(RubyMethod/*!*/ self) {
-            return (self is RubyMethod.Curried) ? null : UnboundMethod.GetSourceLocation(self.Info);
+            return self.IsMethodMissing ? null : UnboundMethod.GetSourceLocation(self.Info);
         }
 
         [RubyMethod("parameters")]
         public static RubyArray/*!*/ GetParameters(RubyContext/*!*/ context, RubyMethod/*!*/ self) {
-            if ((self is RubyMethod.Curried)) {
+            if (self.IsMethodMissing) {
                 return new RubyArray(1) { new RubyArray(1) { context.CreateAsciiSymbol("rest") } };
             }
             return self.Info.GetRubyParameterArray();

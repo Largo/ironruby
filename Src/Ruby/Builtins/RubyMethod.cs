@@ -43,6 +43,19 @@ namespace IronRuby.Builtins {
         private readonly RubyMemberInfo/*!*/ _info;
         private BlockDispatcherUnsplatN _procDispatcher;
 
+        /// <summary>
+        /// Set for a method that stands in for one the object only answers through
+        /// #method_missing: it reports the name that was asked for, and calls #method_missing
+        /// with that name pushed in front of the arguments. This used to be a subclass, which
+        /// gave it a Ruby class of its own - MRI hands back a plain Method, and ruby/spec checks
+        /// it with #instance_of?.
+        /// </summary>
+        private readonly string _methodMissingName;
+
+        public bool IsMethodMissing {
+            get { return _methodMissingName != null; }
+        }
+
         public object Target {
             get { return _target; }
         }
@@ -64,8 +77,20 @@ namespace IronRuby.Builtins {
             _name = name;
         }
 
+        private RubyMethod(object target, RubyMemberInfo/*!*/ info, string/*!*/ name, string methodMissingName)
+            : this(target, info, name) {
+            _methodMissingName = methodMissingName;
+        }
+
+        /// <summary>
+        /// A Method standing in for a name the object only answers through #method_missing.
+        /// </summary>
+        public static RubyMethod/*!*/ CreateMethodMissing(object target, RubyMemberInfo/*!*/ info, string/*!*/ name) {
+            return new RubyMethod(target, info, name, name);
+        }
+
         object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
-            var result = new RubyMethod(_target, _info, _name);
+            var result = new RubyMethod(_target, _info, _name, _methodMissingName);
             context.CopyInstanceData(this, result, copySingletonMembers);
             return result;
         }
@@ -131,7 +156,7 @@ namespace IronRuby.Builtins {
 
         #region Dynamic Operations
 
-        internal virtual void BuildInvoke(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
+        internal void BuildInvoke(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
             Assert.NotNull(metaBuilder, args);
             Debug.Assert(args.Target == this);
 
@@ -141,47 +166,11 @@ namespace IronRuby.Builtins {
             // set the target (becomes self in the called method):
             args.SetTarget(AstUtils.Constant(_target, CompilerHelpers.GetVisibleType(_target)), _target);
 
-            _info.BuildCall(metaBuilder, args, _name);
-        }
-
-        #endregion
-
-        #region Curried
-
-        // TODO: currently used only to curry a method name for method_missing, but could be easily extended to support general argument currying
-        [DebuggerDisplay("{GetCurriedDebugView(), nq}")]
-        public sealed class Curried : RubyMethod {
-            private readonly string/*!*/ _methodNameArg;
-
-            /// <summary>
-            /// The method answers to the name that was asked for - that is what Method#name and
-            /// Method#to_s have to report - while the body it actually calls is method_missing,
-            /// with the name pushed in front of the arguments.
-            /// </summary>
-            public Curried(object target, RubyMemberInfo/*!*/ info, string/*!*/ methodNameArg)
-                : base(target, info, methodNameArg) {
-                _methodNameArg = methodNameArg;
-            }
-
-            internal override void BuildInvoke(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args) {
-                Assert.NotNull(metaBuilder, args);
-                Debug.Assert(args.Target == this);
-
-                metaBuilder.AddRestriction(Ast.Equal(args.TargetExpression, AstUtils.Constant(this)));
-                args.SetTarget(AstUtils.Constant(Target, CompilerHelpers.GetVisibleType(Target)), Target);
-                args.InsertMethodName(_methodNameArg);
-                Info.BuildCall(metaBuilder, args, Symbols.MethodMissing);
-            }
-
-            private string/*!*/ GetCurriedDebugView() {
-                var result = new StringBuilder();
-                result.Append("missing ");
-                result.Append(GetTargetClass().Name);
-                result.Append('#');
-                result.Append(_methodNameArg);
-
-                result.Append("(?)");
-                return result.ToString();
+            if (_methodMissingName != null) {
+                args.InsertMethodName(_methodMissingName);
+                _info.BuildCall(metaBuilder, args, Symbols.MethodMissing);
+            } else {
+                _info.BuildCall(metaBuilder, args, _name);
             }
         }
 
@@ -199,7 +188,7 @@ namespace IronRuby.Builtins {
             result.Append(_name);
 
             // TODO: parameter names?
-            result.Append("()");
+            result.Append((_methodMissingName != null) ? "(?) via method_missing" : "()");
             return result.ToString();            
         }
 

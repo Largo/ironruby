@@ -2363,7 +2363,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static RubyMethod/*!*/ CreateBoundMissingMember(object target, RubyMemberInfo/*!*/ info, string/*!*/ name) {
-            return new RubyMethod.Curried(target, info, name);
+            return RubyMethod.CreateMethodMissing(target, info, name);
         }
 
         [Emitted]

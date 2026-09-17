@@ -1546,7 +1546,7 @@ namespace IronRuby.Builtins {
 
                 var missing = context.ResolveMethod(self, Symbols.MethodMissing, VisibilityContext.AllVisible).Info;
                 if (missing != null) {
-                    return new RubyMethod.Curried(self, missing, name);
+                    return RubyMethod.CreateMethodMissing(self, missing, name);
                 }
             }
 
