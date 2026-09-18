@@ -218,8 +218,16 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private static VisibilityContext GetVisibilityContext(RubyCallSignature callSignature, RubyScope scope) {
+            // A call that can only see public members says so whatever else it carries. It may
+            // still need the scope - Kernel#public_send honours the refinements active where it
+            // was called - and asking the scope who self is would make a protected method visible
+            // to a receiver of the same class, which is exactly what public_send must not do.
+            if (callSignature.IsInteropCall) {
+                return new VisibilityContext(RubyMethodAttributes.Public);
+            }
+
             return callSignature.HasImplicitSelf || !callSignature.HasScope ? 
-                new VisibilityContext(callSignature.IsInteropCall ? RubyMethodAttributes.Public : RubyMethodAttributes.VisibilityMask) :
+                new VisibilityContext(RubyMethodAttributes.VisibilityMask) :
                 new VisibilityContext(scope.SelfImmediateClass);
         }
 

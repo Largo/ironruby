@@ -1345,14 +1345,17 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateArgumentError("no method name given");
         }
 
-        // public_send differs from send only in visibility: the call site does not
-        // pretend self is implicit, so private and protected methods are not found.
+        // public_send differs from send only in visibility: the site sees Ruby-public members
+        // and nothing else. Leaving self explicit is not enough on its own - the site still
+        // carries the scope, for refinements, and a scope-based visibility check makes a
+        // protected method visible to a receiver of the caller's own class.
         [RubyMethod("public_send")]
         public static object PublicSendMessage(RubyScope/*!*/ scope, BlockParam block, object self,
             [DefaultProtocol, NotNull]string/*!*/ methodName, params object[]/*!*/ args) {
 
             var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>(
-                methodName, new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
+                methodName, new RubyCallSignature(1,
+                    RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock | RubyCallFlags.IsInteropCall)
             );
             return site.Target(site, scope, self, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
         }
