@@ -564,11 +564,25 @@ namespace IronRuby.Prism {
                 case Pm.MatchWriteNode matchWrite: {
                     var call = (Pm.CallNode)matchWrite.Call;
                     if (!(Expr(call.Receiver) is RegularExpression regex)) throw Unsupported(node);
+                    var locals = new List<LocalVariable>();
                     foreach (var target in matchWrite.Targets) {
-                        CurrentScope.ResolveOrAddVariable(((Pm.LocalVariableTargetNode)target).Name, Span(target));
+                        locals.Add(CurrentScope.ResolveOrAddVariable(((Pm.LocalVariableTargetNode)target).Name, Span(target)));
                     }
                     var arguments = (Pm.ArgumentsNode)call.Arguments;
-                    return new MatchExpression(regex, Expr(arguments.Arguments[0]), span);
+                    // /(?<name>..)/ =~ str assigns every named group to a local: the group's text,
+                    // or nil when the group did not take part or the match failed
+                    Expression matchAssign;
+                    var matchResult = NewTemp(new MatchExpression(regex, Expr(arguments.Arguments[0]), span), span, out matchAssign);
+                    var statements = new List<Expression> { matchAssign };
+                    foreach (var local in locals) {
+                        statements.Add(new SimpleAssignmentExpression(local,
+                            new AndExpression(new RegexMatchReference(-1, span),
+                                new MethodCall(new RegexMatchReference(-1, span), "[]",
+                                    new Arguments(new SymbolLiteral(local.Name, _encoding, span)), span), span),
+                            null, span));
+                    }
+                    statements.Add(matchResult);
+                    return new BlockExpression(MakeStatements(statements.ToArray()), span);
                 }
 
                 case Pm.MultiWriteNode multiWrite: {
