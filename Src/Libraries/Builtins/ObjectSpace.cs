@@ -15,6 +15,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
+using System.Threading;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Actions;
@@ -27,26 +29,60 @@ namespace IronRuby.Builtins {
     public static class ObjectSpace {
         #region define_finalizer, undefine_finalizer
 
-        private sealed class FinalizerInvoker {
-            // TODO: make this variable invisible to users
+        /// <summary>
+        /// The finalizers of one object. It hangs off the object, so the CLR finalizes it once the object
+        /// is gone; the context runs whatever is left at exit. Each finalizer is called with the object's id.
+        /// </summary>
+        private sealed class FinalizerInvoker : IExitFinalizer {
             public const string InstanceVariableName = "<FINALIZER>";
 
-            private CallSite<Func<CallSite, object, object, object>> _callSite;
-            private object _finalizer;
+            private readonly RubyContext/*!*/ _context;
+            private readonly CallSite<Func<CallSite, object, object, object>>/*!*/ _callSite;
+            private readonly List<object>/*!*/ _finalizers = new List<object>();
+            private readonly object _objectId;
+            private int _ran;
 
-            public FinalizerInvoker(CallSite<Func<CallSite, object, object, object>>/*!*/ callSite, object finalizer) {
-                Assert.NotNull(callSite);
+            public FinalizerInvoker(RubyContext/*!*/ context, CallSite<Func<CallSite, object, object, object>>/*!*/ callSite, object objectId) {
+                Assert.NotNull(context, callSite);
+                _context = context;
                 _callSite = callSite;
-                _finalizer = finalizer;
+                _objectId = objectId;
+            }
+
+            public List<object>/*!*/ Finalizers {
+                get { return _finalizers; }
             }
 
             ~FinalizerInvoker() {
-                if (_callSite != null) {
+                Run();
+            }
+
+            public void RunAtExit() {
+                Run();
+                GC.SuppressFinalize(this);
+            }
+
+            public void Cancel() {
+                Interlocked.Exchange(ref _ran, 1);
+                GC.SuppressFinalize(this);
+            }
+
+            private void Run() {
+                if (Interlocked.Exchange(ref _ran, 1) != 0) {
+                    return;
+                }
+
+                object[] finalizers;
+                lock (_finalizers) {
+                    finalizers = _finalizers.ToArray();
+                }
+                foreach (var finalizer in finalizers) {
                     try {
-                        _callSite.Target(_callSite, _finalizer, 0);
+                        _callSite.Target(_callSite, finalizer, _objectId);
+                    } catch (SystemExit) {
+                        // `exit' in a finalizer ends that finalizer, not the others
                     } catch (Exception e) {
-                        // nop
-                        Utils.Log("An exception has been thrown from finalizer: " + e, "OS:FINALIZER");
+                        _context.ReportFinalizerException(finalizer, e);
                     }
                 }
             }
@@ -56,30 +92,88 @@ namespace IronRuby.Builtins {
         /// The finalizer may be given as a block instead of an argument.
         /// </summary>
         [RubyMethod("define_finalizer", RubyMethodAttributes.PublicSingleton)]
-        public static object DefineFinalizer(RespondToStorage/*!*/ respondTo, BinaryOpStorage/*!*/ call,
+        public static object DefineFinalizer(RespondToStorage/*!*/ respondTo, BinaryOpStorage/*!*/ call, BinaryOpStorage/*!*/ equals,
             [NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self, object obj) {
 
-            return DefineFinalizer(respondTo, call, self, obj, block.Proc);
+            return DefineFinalizer(respondTo, call, equals, self, obj, block.Proc);
         }
 
         [RubyMethod("define_finalizer", RubyMethodAttributes.PublicSingleton)]
-        public static object DefineFinalizer(RespondToStorage/*!*/ respondTo, BinaryOpStorage/*!*/ call, RubyModule/*!*/ self, object obj, object finalizer) {
+        public static object DefineFinalizer(RespondToStorage/*!*/ respondTo, BinaryOpStorage/*!*/ call, BinaryOpStorage/*!*/ equals,
+            RubyModule/*!*/ self, object obj, object finalizer) {
+
+            var context = respondTo.Context;
             if (!Protocols.RespondTo(respondTo, finalizer, "call")) {
                 throw RubyExceptions.CreateArgumentError("finalizer should be callable (respond to :call)");
             }
+            // an immediate - nil, true, a Symbol, a small Integer - is never collected
+            if (obj == null || obj is bool || obj is RubySymbol || !RubyUtils.HasObjectState(obj)) {
+                throw RubyExceptions.CreateArgumentError("cannot define finalizer for {0}", context.GetClassDisplayName(obj));
+            }
+            if (context.IsObjectFrozen(obj)) {
+                throw RubyExceptions.CreateObjectFrozenError(context, obj);
+            }
 
-            respondTo.Context.SetInstanceVariable(obj, FinalizerInvoker.InstanceVariableName, new FinalizerInvoker(call.GetCallSite("call"), finalizer));
+            // A finalizer that holds on to the object keeps it alive for good, so it only runs at exit.
+            if (ReferencesObject(finalizer, obj)) {
+                context.ReportWarning("finalizer references object to be finalized");
+            }
+
+            FinalizerInvoker invoker;
+            object existing;
+            if (context.TryGetInstanceVariable(obj, FinalizerInvoker.InstanceVariableName, out existing) && existing is FinalizerInvoker) {
+                invoker = (FinalizerInvoker)existing;
+            } else {
+                invoker = new FinalizerInvoker(context, call.GetCallSite("call"), RubyUtils.GetObjectId(context, obj));
+                context.SetInstanceVariable(obj, FinalizerInvoker.InstanceVariableName, invoker);
+                context.RegisterExitFinalizer(invoker);
+            }
+
+            // the same finalizer - by #== - is defined once, and answering for it is the one defined first
+            lock (invoker.Finalizers) {
+                foreach (var defined in invoker.Finalizers) {
+                    if (Protocols.IsEqual(equals, defined, finalizer)) {
+                        finalizer = defined;
+                        goto done;
+                    }
+                }
+                invoker.Finalizers.Add(finalizer);
+            }
+
+          done:
             RubyArray result = new RubyArray(2);
             result.Add(0);
             result.Add(finalizer);
             return result;
         }
 
+        private static bool ReferencesObject(object finalizer, object obj) {
+            if (ReferenceEquals(finalizer, obj)) {
+                return true;
+            }
+            var proc = finalizer as Proc;
+            if (proc != null) {
+                return ReferenceEquals(proc.Self, obj);
+            }
+            var method = finalizer as RubyMethod;
+            if (method != null) {
+                return ReferenceEquals(method.Target, obj);
+            }
+            return false;
+        }
+
         [RubyMethod("undefine_finalizer", RubyMethodAttributes.PublicSingleton)]
         public static object UndefineFinalizer(RubyContext/*!*/ context, RubyModule/*!*/ self, object obj) {
+            if (context.IsObjectFrozen(obj)) {
+                throw RubyExceptions.CreateObjectFrozenError(context, obj);
+            }
+
             object invokerObj;
             if (context.TryRemoveInstanceVariable(obj, FinalizerInvoker.InstanceVariableName, out invokerObj)) {
-                GC.SuppressFinalize(invokerObj);
+                var invoker = invokerObj as FinalizerInvoker;
+                if (invoker != null) {
+                    invoker.Cancel();
+                }
             }
             return obj;
         }
@@ -128,9 +222,10 @@ namespace IronRuby.Builtins {
             return matches;
         }
 
+        // GC.start's keywords (full_mark:, immediate_sweep:) have no CLR counterpart and are ignored
         [RubyMethod("garbage_collect", RubyMethodAttributes.PublicSingleton)]
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Reliability", "CA2001:AvoidCallingProblematicMethods")]
-        public static void GarbageCollect(RubyModule/*!*/ self) {
+        public static void GarbageCollect(RubyModule/*!*/ self, [Optional]IDictionary<object, object> options) {
             GC.Collect();
         }
     }

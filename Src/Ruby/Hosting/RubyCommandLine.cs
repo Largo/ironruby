@@ -189,7 +189,19 @@ namespace IronRuby.Hosting {
                 return;
             }
 
-            base.UnhandledException(e);
+            // MRI runs the at_exit handlers first and reports the exception after them - except
+            // for a script that does not parse, which is reported as it is parsed.
+            var context = (RubyContext)Language;
+            if (!(e is SystemExit) && !context.MainScriptFailedToParse) {
+                try {
+                    context.RunShutdownHandlers();
+                } catch (Exception) {
+                    // the handlers report their own failures
+                }
+            }
+
+            // The report already ends in a newline; the base class adds another.
+            Console.Write(Engine.GetService<ExceptionOperations>().FormatException(e), Style.Error);
         }
 
         private bool RaiseAsSignal(Exception/*!*/ e) {

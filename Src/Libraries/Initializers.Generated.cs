@@ -6615,9 +6615,9 @@ namespace IronRuby.Builtins {
         
         private static void LoadObjectSpace_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "define_finalizer", 0x61, 
-                0x00000004U, 0x00000000U, 
-                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.DefineFinalizer), 
-                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.DefineFinalizer)
+                0x00000008U, 0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.DefineFinalizer), 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.DefineFinalizer)
             );
             
             DefineLibraryMethod(module, "each_object", 0x61, 
@@ -6628,7 +6628,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "garbage_collect", 0x61, 
                 0x00000000U, 
-                new Action<IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ObjectSpace.GarbageCollect)
+                new Action<IronRuby.Builtins.RubyModule, System.Collections.Generic.IDictionary<System.Object, System.Object>>(IronRuby.Builtins.ObjectSpace.GarbageCollect)
             );
             
             DefineLibraryMethod(module, "undefine_finalizer", 0x61, 

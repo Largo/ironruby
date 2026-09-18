@@ -46,6 +46,13 @@ using System.Globalization;
 
 namespace IronRuby.Runtime {
     [ReflectionCached]
+    /// <summary>
+    /// Something ObjectSpace.define_finalizer registered that has to run at exit if the object is still alive.
+    /// </summary>
+    public interface IExitFinalizer {
+        void RunAtExit();
+    }
+
     public sealed class RubyContext : LanguageContext {
         #region Constants
 
@@ -3281,13 +3288,32 @@ namespace IronRuby.Runtime {
             return (RubyGlobalScope)globalScope.SetExtension(ContextId, result);
         }
 
+        /// <summary>
+        /// The main script did not parse. MRI reports that as it parses, before the at_exit handlers run.
+        /// </summary>
+        public bool MainScriptFailedToParse { get; private set; }
+
         public override int ExecuteProgram(SourceUnit/*!*/ program) {
             try {
                 RubyCompilerOptions options = new RubyCompilerOptions(_options) {
                     FactoryKind = TopScopeFactoryKind.Main
                 };
 
-                CompileSourceCode(program, options, _runtimeErrorSink).Run();
+                ScriptCode code;
+                try {
+                    code = CompileSourceCode(program, options, _runtimeErrorSink);
+                } catch (SyntaxError) {
+                    MainScriptFailedToParse = true;
+
+                    // MRI requires the -r libraries before it parses the script, so whatever they set
+                    // up - an at_exit handler, say - is in place even when the script does not parse.
+                    // Here they are loaded as the script starts running, so do it now instead.
+                    if (RubyOptions.RequirePaths != null) {
+                        RubyTopLevelScope.CreateTopLevelScope(new Scope(), this, true);
+                    }
+                    throw;
+                }
+                code.Run();
             } catch (SystemExit e) {
                 return e.Status;
             }
@@ -3310,9 +3336,92 @@ namespace IronRuby.Runtime {
             }
         }
 
+        #region Finalizers
+
+        // ObjectSpace.define_finalizer's pending finalizers. The CLR does not finalize what is still
+        // alive when the process ends, and MRI runs every finalizer that has not run by then after
+        // the at_exit handlers - so they are also kept here, weakly, to be run at exit.
+        private readonly List<WeakReference>/*!*/ _exitFinalizers = new List<WeakReference>();
+
+        public void RegisterExitFinalizer(IExitFinalizer/*!*/ finalizer) {
+            lock (_exitFinalizers) {
+                _exitFinalizers.Add(new WeakReference(finalizer));
+            }
+        }
+
+        private void RunExitFinalizers() {
+            // a finalizer may define another one, which then runs too
+            while (true) {
+                WeakReference[] pending;
+                lock (_exitFinalizers) {
+                    if (_exitFinalizers.Count == 0) {
+                        return;
+                    }
+                    pending = _exitFinalizers.ToArray();
+                    _exitFinalizers.Clear();
+                }
+                foreach (var reference in pending) {
+                    var finalizer = reference.Target as IExitFinalizer;
+                    if (finalizer != null) {
+                        finalizer.RunAtExit();
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// MRI reports an exception a finalizer raises and goes on; under -W0 it says nothing.
+        /// </summary>
+        public void ReportFinalizerException(object finalizer, Exception/*!*/ exception) {
+            if (Verbose == null) {
+                return;
+            }
+            try {
+                _runtimeErrorSink.WriteMessage(MutableString.CreateMutable(
+                    "warning: Exception in finalizer " + Inspect(finalizer).ToString() + "\n" + FormatException(exception),
+                    RubyEncoding.UTF8
+                ));
+            } catch (Exception) {
+                // reporting must not take the finalizer thread down
+            }
+        }
+
+        #endregion
+
+        // What the at_exit handlers ended with, kept from the time they run until the process exits.
+        private SystemExit _shutdownSystemExit;
+        private Exception _shutdownException;
+
+        /// <summary>
+        /// Runs the Signal.trap("EXIT") handler and the at_exit handlers registered so far. MRI runs
+        /// them before it reports the exception that ended the script - a handler that calls exit!
+        /// means it is never reported - so the command line calls this before printing it. How they
+        /// ended takes effect when the process exits.
+        /// </summary>
+        public void RunShutdownHandlers() {
+            SystemExit lastSystemExit = _shutdownSystemExit;
+            Exception lastException = _shutdownException;
+            try {
+                RunShutdownHandlers(ref lastSystemExit, ref lastException);
+            } finally {
+                _shutdownSystemExit = lastSystemExit;
+                _shutdownException = lastException;
+            }
+        }
+
         private void ExecuteShutdownHandlers() {
-            SystemExit lastSystemExit = null;
-            Exception lastException = null;
+            RunShutdownHandlers();
+            RunExitFinalizers();
+
+            if (_shutdownSystemExit != null) {
+                throw _shutdownSystemExit;
+            } else if (_shutdownException != null) {
+                // at least one unhandled exception:
+                throw new SystemExit(1);
+            }
+        }
+
+        private void RunShutdownHandlers(ref SystemExit lastSystemExit, ref Exception lastException) {
 
             // `Signal.trap("EXIT")' runs before the at_exit blocks, as MRI's does.
             var exitHandler = ExitSignalHandler;
@@ -3329,17 +3438,19 @@ namespace IronRuby.Runtime {
                 }
             }
 
+            // Last registered, first run - one at a time, so that a handler registered by another
+            // handler runs right after it rather than after all the rest.
             while (true) {
-                Proc[] handlers;
+                Proc handler;
                 lock (ShutdownHandlersLock) {
                     if (_shutdownHandlers.Count == 0) {
                         break;
                     }
-                    handlers = _shutdownHandlers.ToReverseArray();
-                    _shutdownHandlers.Clear();
+                    handler = _shutdownHandlers[_shutdownHandlers.Count - 1];
+                    _shutdownHandlers.RemoveAt(_shutdownHandlers.Count - 1);
                 }
 
-                foreach (var handler in handlers) {
+                {
                     try {
                         handler.Call(null);
                     } catch (SystemExit e) {
@@ -3355,12 +3466,6 @@ namespace IronRuby.Runtime {
                 }
             }
 
-            if (lastSystemExit != null) {
-                throw lastSystemExit;
-            } else if (lastException != null) {
-                // at least one unhandled exception:
-                throw new SystemExit(1);
-            }
         }
 
         public override void Shutdown() {
@@ -3475,7 +3580,9 @@ namespace IronRuby.Runtime {
         public override string/*!*/ FormatException(Exception/*!*/ exception) {
             var syntaxError = exception as SyntaxError;
             if (syntaxError != null && syntaxError.HasLineInfo) {
-                return FormatErrorMessage(syntaxError.Message, null, syntaxError.File, syntaxError.Line, syntaxError.Column, syntaxError.LineSourceCode);
+                // "-e:1: expected a `}' ... (SyntaxError)": MRI names the class, as for any other error
+                return FormatErrorMessage(syntaxError.Message + " (" + GetClassOf(exception).Name + ")", null,
+                    syntaxError.File, syntaxError.Line, syntaxError.Column, syntaxError.LineSourceCode);
             }
 
             var exceptionClass = GetClassOf(exception);
