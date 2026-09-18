@@ -2831,6 +2831,11 @@ namespace IronRuby.Runtime {
             return (obj == null) ? null : ToHashValidator(className, obj);
         }
 
+        [Emitted] // ImplicitTrySplatAction
+        public static object TrySplatToAryValidator(string/*!*/ className, object splattee, object obj) {
+            return (obj == null) ? splattee : ToArrayValidator(className, obj);
+        }
+
         [Emitted] // ProtocolConversionAction
         public static IList/*!*/ ToArrayValidator(string/*!*/ className, object obj) {
             var result = obj as IList;
