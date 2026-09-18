@@ -109,11 +109,12 @@ namespace IronRuby.Builtins {
             if (sourceData.HasCause) {
                 selfData.TrySetCause(sourceData.Cause);
             }
-            // NameError#name / #receiver (NameError#dup has to keep both)
+            // NameError#name / #receiver and NoMethodError#args (#dup has to keep them)
             selfData.Name = sourceData.Name;
             if (sourceData.HasReceiver) {
                 selfData.SetReceiver(sourceData.Receiver);
             }
+            selfData.Arguments = sourceData.Arguments;
             return self;
         }
 

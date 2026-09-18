@@ -129,6 +129,22 @@ namespace IronRuby.Builtins {
 #endif
     }
 
+    /// <summary>
+    /// Ruby's IndexError. Not System.IndexOutOfRangeException, which is sealed: KeyError and
+    /// StopIteration (and Ruby classes) have to be able to subclass it.
+    /// </summary>
+    [Serializable]
+    public class IndexError : SystemException {
+        public IndexError() : this(null, null) { }
+        public IndexError(string message) : this(message, null) { }
+        public IndexError(string message, Exception inner) : base(message, inner) { }
+
+#if FEATURE_SERIALIZATION
+        protected IndexError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+            : base(info, context) { }
+#endif
+    }
+
     [Serializable]
     public class RegexpError : SystemException {
         public RegexpError() : this(null, null) { }

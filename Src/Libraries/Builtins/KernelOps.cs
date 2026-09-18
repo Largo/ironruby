@@ -1103,7 +1103,7 @@ namespace IronRuby.Builtins {
             object value;
             if (!context.TryGetInstanceVariable(self, name, out value)) {
                 // We didn't find it, check if the name is valid
-                RubyUtils.CheckInstanceVariableName(context, self, name);
+                RubyUtils.CheckInstanceVariableName(context, self, name, nameArg);
                 return null;
             }
             return value;
@@ -1113,7 +1113,7 @@ namespace IronRuby.Builtins {
         public static object InstanceVariableSet(ConversionStorage<string>/*!*/ stringCast,
             RubyContext/*!*/ context, object self, object nameArg, object value) {
             string name = ToVariableName(stringCast, nameArg);
-            RubyUtils.CheckInstanceVariableName(context, self, name);
+            RubyUtils.CheckInstanceVariableName(context, self, name, nameArg);
             context.SetInstanceVariable(self, name, value);
             return value;
         }
@@ -1125,7 +1125,7 @@ namespace IronRuby.Builtins {
             object value;
             if (!context.TryGetInstanceVariable(self, name, out value)) {
                 // We didn't find it, check if the name is valid
-                RubyUtils.CheckInstanceVariableName(name);
+                RubyUtils.CheckInstanceVariableName(context, self, name, nameArg);
                 return false;
             }
 

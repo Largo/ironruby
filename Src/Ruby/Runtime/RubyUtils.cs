@@ -658,19 +658,35 @@ namespace IronRuby.Runtime {
         /// name as it was passed (a String here, not a Symbol) and the object it was asked of.
         /// </summary>
         public static void CheckClassVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name) {
-            if (!Tokenizer.IsClassVariableName(name)) {
-                throw RubyExceptions.WithNameAndReceiver(
-                    RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a class variable name", name)),
-                    MutableString.Create(name, context.GetIdentifierEncoding()), receiver);
-            }
+            CheckClassVariableName(context, receiver, name, null);
         }
 
         public static void CheckInstanceVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name) {
+            CheckInstanceVariableName(context, receiver, name, null);
+        }
+
+        /// <summary>
+        /// <paramref name="nameArg"/> is the Symbol or String the caller was given; MRI hands that
+        /// very object back as NameError#name.
+        /// </summary>
+        public static void CheckClassVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name, object nameArg) {
+            if (!Tokenizer.IsClassVariableName(name)) {
+                throw RubyExceptions.WithNameAndReceiver(
+                    RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a class variable name", name)),
+                    GetVariableNameForError(context, name, nameArg), receiver);
+            }
+        }
+
+        public static void CheckInstanceVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name, object nameArg) {
             if (!Tokenizer.IsInstanceVariableName(name)) {
                 throw RubyExceptions.WithNameAndReceiver(
                     RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as an instance variable name", name)),
-                    MutableString.Create(name, context.GetIdentifierEncoding()), receiver);
+                    GetVariableNameForError(context, name, nameArg), receiver);
             }
+        }
+
+        private static object/*!*/ GetVariableNameForError(RubyContext/*!*/ context, string/*!*/ name, object nameArg) {
+            return nameArg is MutableString || nameArg is RubySymbol ? nameArg : MutableString.Create(name, context.GetIdentifierEncoding());
         }
 
         #endregion
