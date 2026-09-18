@@ -112,6 +112,14 @@ namespace IronRuby.Runtime {
         }
     }
 
+    /// <summary>
+    /// Marks a library method that only raises NotImplementedError on this platform, like MRI's
+    /// rb_f_notimplement: #respond_to? answers false for it although the method is defined.
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
+    public sealed class RubyNotImplementedAttribute : Attribute {
+    }
+
     [AttributeUsage(AttributeTargets.Method, AllowMultiple = false)]
     public sealed class RubyConstructorAttribute : RubyAttribute {
         public RubyConstructorAttribute() {

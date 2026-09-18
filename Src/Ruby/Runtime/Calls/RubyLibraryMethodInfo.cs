@@ -90,6 +90,29 @@ namespace IronRuby.Runtime.Calls {
             }
         }
 
+        // 0 = not computed yet, 1 = no, 2 = yes
+        private int _notImplemented;
+
+        /// <summary>
+        /// True if every overload is marked [RubyNotImplemented] - the method exists but can only raise
+        /// NotImplementedError, so #respond_to? denies it.
+        /// </summary>
+        public bool IsNotImplemented {
+            get {
+                if (_notImplemented == 0) {
+                    bool result = true;
+                    foreach (var member in GetMembers()) {
+                        if (!member.IsDefined(typeof(RubyNotImplementedAttribute), false)) {
+                            result = false;
+                            break;
+                        }
+                    }
+                    _notImplemented = result ? 2 : 1;
+                }
+                return _notImplemented == 2;
+            }
+        }
+
         public override MemberInfo/*!*/[]/*!*/ GetMembers() {
             return ArrayUtils.ConvertAll(MethodBases, (o) => o.ReflectionInfo);
         }

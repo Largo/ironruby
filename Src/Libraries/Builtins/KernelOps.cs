@@ -564,6 +564,11 @@ namespace IronRuby.Builtins {
                 return block.Proc;
             }
 
+            // Since 3.3 a Proc object is not turned into a lambda: lambda(&a_proc) is an error.
+            if (!block.IsLiteralBlock) {
+                throw RubyExceptions.CreateArgumentError("the lambda method requires a literal block");
+            }
+
             return block.Proc.ToLambda(null);
         }
 
@@ -1289,8 +1294,11 @@ namespace IronRuby.Builtins {
                 : new VisibilityContext(RubyMethodAttributes.Public);
 
             // A refinement active where #respond_to? was called counts, as it does for a call.
-            if (context.ResolveMethodWithRefinements(self, methodName, visibility, scope).Found) {
-                return true;
+            var method = context.ResolveMethodWithRefinements(self, methodName, visibility, scope);
+            if (method.Found) {
+                // MRI's rb_f_notimplement methods (fork on a platform without it) are defined but denied.
+                var libraryMethod = method.Info as RubyLibraryMethodInfo;
+                return libraryMethod == null || !libraryMethod.IsNotImplemented;
             }
 
             // MRI asks respond_to_missing? before giving up, so that method_missing-backed methods can
@@ -1334,10 +1342,14 @@ namespace IronRuby.Builtins {
         // and nothing else. Leaving self explicit is not enough on its own - the site still
         // carries the scope, for refinements, and a scope-based visibility check makes a
         // protected method visible to a receiver of the caller's own class.
+        //
+        // The name is converted here rather than by the binder, so that a bad one is reported
+        // from inside public_send, as MRI's backtrace has it.
         [RubyMethod("public_send")]
-        public static object PublicSendMessage(RubyScope/*!*/ scope, BlockParam block, object self,
-            [DefaultProtocol, NotNull]string/*!*/ methodName, params object[]/*!*/ args) {
+        public static object PublicSendMessage(ConversionStorage<string>/*!*/ stringCast, RubyScope/*!*/ scope, BlockParam block, object self,
+            object name, params object[]/*!*/ args) {
 
+            string methodName = Protocols.CastToSymbol(stringCast, name);
             var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>(
                 methodName, new RubyCallSignature(1,
                     RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock | RubyCallFlags.IsInteropCall)
@@ -1746,6 +1758,7 @@ namespace IronRuby.Builtins {
         // The method has to exist: fixtures such as spec/core/kernel/fixtures/classes.rb do `public :fork'.
         [RubyMethod("fork", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("fork", RubyMethodAttributes.PublicSingleton)]
+        [RubyNotImplemented]
         public static object Fork(BlockParam block, object self) {
             throw RubyExceptions.CreateNotImplementedError("fork() function is unimplemented on this machine");
         }
@@ -2049,7 +2062,7 @@ namespace IronRuby.Builtins {
                 scope.GlobalScope.Scope, 
                 self, 
                 Protocols.CastToPath(toPath, libraryName), 
-                LoadFlags.Require
+                LoadFlags.Require | LoadFlags.WarnCircular
             );
         }
 
@@ -2210,6 +2223,12 @@ namespace IronRuby.Builtins {
             // no dynamic dispatch to "puts":
             foreach (var arg in inspectedArgs) {
                 PrintOps.Puts(writeStorage, writeStorage.Context.StandardOutput, arg);
+            }
+
+            // rb_f_p flushes $stdout when it is an IO, so the output is visible to a reader at once
+            var stdout = writeStorage.Context.StandardOutput as RubyIO;
+            if (args.Length > 0 && stdout != null) {
+                RubyIOOps.Flush(stdout);
             }
 
             if (args.Length == 0) {

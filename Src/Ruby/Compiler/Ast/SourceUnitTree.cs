@@ -76,11 +76,14 @@ namespace IronRuby.Compiler.Ast {
 
         // The locals an eval's string declares at its top level, which live in the scope it runs in
         // rather than in storage of its own. Those the scope already has belong to the outer lexical scope.
+        // A flip-flop's state is one of them too: left undeclared, a flip-flop inside a block would
+        // create it afresh in the block's scope on every iteration and never stay on.
         private string/*!*/[]/*!*/ GetEvalDeclaredVariables() {
             var result = new List<string>();
             foreach (var entry in _definedScope) {
                 string name = entry.Key;
-                if (entry.Value.DefinitionLexicalDepth < 0 && name.Length > 0 && (name[0] == '_' || Char.IsLetter(name[0]))) {
+                if (entry.Value.DefinitionLexicalDepth < 0 && name.Length > 0 && (name[0] == '_' || Char.IsLetter(name[0]) ||
+                    name.StartsWith(RangeExpression.FlipFlopStatePrefix, StringComparison.Ordinal))) {
                     result.Add(name);
                 }
             }

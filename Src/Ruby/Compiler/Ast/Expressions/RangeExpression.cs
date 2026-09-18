@@ -87,12 +87,15 @@ namespace IronRuby.Compiler.Ast {
 
         private static int _flipFlopVariableId;
 
+        // The hidden local a flip-flop keeps its state in; '#' keeps it out of local_variables.
+        internal const string FlipFlopStatePrefix = "#FlipFlopState";
+
         internal override Expression/*!*/ ToCondition(LexicalScope/*!*/ currentScope) {
             int intBegin, intEnd;
             if (!IsIntegerRange(out intBegin, out intEnd)) {
                 return new RangeCondition(
                     this,
-                    currentScope.GetInnermostStaticTopScope().AddVariable("#FlipFlopState" + Interlocked.Increment(ref _flipFlopVariableId), Location)
+                    currentScope.GetInnermostStaticTopScope().AddVariable(FlipFlopStatePrefix + Interlocked.Increment(ref _flipFlopVariableId), Location)
                 );
             }
             return this;
