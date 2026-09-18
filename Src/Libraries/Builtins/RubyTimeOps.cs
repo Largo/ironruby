@@ -53,6 +53,7 @@ namespace IronRuby.Builtins {
         private static CallSite<Func<CallSite, object, object, object>> _findTimezoneSite;
         private static CallSite<Func<CallSite, object, object>> _allocateSite;
         private static CallSite<Func<CallSite, object, object, object>> _abbrSite;
+        private static CallSite<Func<CallSite, object, object>> _nameSite;
 
         private static object Invoke(RubyContext/*!*/ context, ref CallSite<Func<CallSite, object, object>> site, string/*!*/ name, object target) {
             var s = RubyUtils.GetCallSite(ref site, context, name, 0);
@@ -387,8 +388,10 @@ namespace IronRuby.Builtins {
             if (args.Length == 0) {
                 return null;
             }
-            var hash = args[args.Length - 1] as IDictionary<object, object>;
-            if (hash == null) {
+            // `Time.new(..., in: zone)' is keywords; a Hash handed over as an ordinary argument
+            // is a zone argument like any other, and MRI refuses to make a number of it.
+            var hash = args[args.Length - 1] as Hash;
+            if (hash == null || !hash.IsKeywordArguments) {
                 return null;
             }
             object[] rest = new object[args.Length - 1];
@@ -910,10 +913,17 @@ namespace IronRuby.Builtins {
                     context.SetInstanceVariable(result, "offset", Protocols.Normalize(offset.Numerator));
                 }
 
-                // A time made with a numeric offset has no zone to name, and MRI writes nil.
-                string zoneName = self.HasFixedOffset ? null : self.GetZoneName();
-                context.SetInstanceVariable(result, "zone",
-                    zoneName != null ? MutableString.CreateAscii(zoneName).Freeze() : null);
+                if (self.ZoneObject != null) {
+                    // A timezone object names itself. One that cannot - no #name method - takes
+                    // the whole time down with it, which is what MRI does too.
+                    context.SetInstanceVariable(result, "zone",
+                        Invoke(context, ref _nameSite, "name", self.ZoneObject));
+                } else {
+                    // A time made with a numeric offset has no zone to name, and MRI writes nil.
+                    string zoneName = self.HasFixedOffset ? null : self.GetZoneName();
+                    context.SetInstanceVariable(result, "zone",
+                        zoneName != null ? MutableString.CreateAscii(zoneName).Freeze() : null);
+                }
             }
 
             // Anything finer than a microsecond does not fit in the eight bytes either. MRI
@@ -932,14 +942,26 @@ namespace IronRuby.Builtins {
         /// A time loaded from a dump that named an offset is pinned to that offset, and keeps the
         /// zone's name if the dump had one - MRI answers "AST" from a time loaded in another zone.
         /// </summary>
-        private static RubyTime/*!*/ WithLoadedZone(RubyTime/*!*/ time, bool hasOffset, BigInteger offsetSeconds, MutableString zoneName) {
+        private static RubyTime/*!*/ WithLoadedZone(RubyContext/*!*/ context, RubyClass/*!*/ owner, RubyTime/*!*/ time,
+            bool hasOffset, BigInteger offsetSeconds, MutableString zoneName) {
+
             if (!hasOffset) {
                 // Nothing said where it was read, so it is shown here.
                 return time.WithZone(RubyTimeZoneKind.Local, ExactNum.Zero, null);
             }
 
-            return time.WithZone(RubyTimeZoneKind.FixedOffset, ExactNum.FromInteger(offsetSeconds),
+            var result = time.WithZone(RubyTimeZoneKind.FixedOffset, ExactNum.FromInteger(offsetSeconds),
                 zoneName != null ? zoneName.Clone().Freeze() : null);
+
+            // A class that knows how to look a zone up by name gets the object back rather than
+            // the bare name - the dump only ever carried the name.
+            if (zoneName != null && RespondTo(context, owner, "find_timezone")) {
+                object found = Invoke(context, ref _findTimezoneSite, "find_timezone", owner, zoneName);
+                if (found != null) {
+                    result.ZoneObject = found;
+                }
+            }
+            return result;
         }
 
         /// <summary>The instance variables a dumped Time carries that are not the time itself.</summary>
@@ -1017,7 +1039,7 @@ namespace IronRuby.Builtins {
                 var subsec = ((microseconds == 0) ? ExactNum.Zero : ExactNum.Make(microseconds, RubyTime.MicrosecondsPerSecond))
                     + extraSubsec;
                 return CopyExtraIVars(context, time,
-                    WithLoadedZone(new RubyTime(secondsSinceEpoch, subsec, RubyTimeZoneKind.Local, ExactNum.Zero),
+                    WithLoadedZone(context, self, new RubyTime(secondsSinceEpoch, subsec, RubyTimeZoneKind.Local, ExactNum.Zero),
                         hasOffset, offsetSeconds, zoneName));
             } else {
                 bool isUtc = (data[3] & 0x40) != 0;
@@ -1041,7 +1063,7 @@ namespace IronRuby.Builtins {
                         RubyTimeZoneKind.Utc, ExactNum.Zero, null, false);
 
                     return CopyExtraIVars(context, time,
-                        isUtc ? instant : WithLoadedZone(instant, hasOffset, offsetSeconds, zoneName));
+                        isUtc ? instant : WithLoadedZone(context, self, instant, hasOffset, offsetSeconds, zoneName));
                 } catch (Exception e) when (!(e is RubyTime)) {
                     throw RubyExceptions.CreateTypeError("marshaled time format differ");
                 }

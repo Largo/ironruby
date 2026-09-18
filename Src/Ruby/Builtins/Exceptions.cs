@@ -50,10 +50,15 @@ namespace IronRuby.Builtins {
 
     [Serializable]
     public class SystemExit : Exception {
-        private readonly int _status;
+        private int _status;
 
+        /// <summary>
+        /// Settable because a subclass is built by #allocate and #initialize rather than by the
+        /// constructor, and its #initialize is where the status arrives.
+        /// </summary>
         public int Status {
             get { return _status; }
+            set { _status = value; }
         }
 
         public SystemExit(int status, string message)
@@ -329,7 +334,10 @@ namespace IronRuby.Builtins {
         public SyntaxError(string message) : this(message, null) { }
         public SyntaxError(string message, Exception inner) : base(message, inner) { }
 
-        internal string File {
+        /// <summary>
+        /// The file the source came from, which SyntaxError#path reports.
+        /// </summary>
+        public string File {
             get { return _file; }
         }
 

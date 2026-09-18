@@ -1094,9 +1094,11 @@ namespace IronRuby.Builtins {
                         codepoint = _siteStorage.CastToFixnum(value);
                     } catch (InvalidOperationException e) {
                         string className = _context.GetClassDisplayName(value);
-                        // "X#to_int should return Integer" means to_int exists but misbehaved;
-                        // anything else means there is no conversion at all.
-                        throw (e.Message != null && e.Message.IndexOf("should return") >= 0)
+                        // An object that has #to_int and gave back something else is a different
+                        // complaint from one that never offered a conversion at all, and MRI
+                        // words the two differently. The exception the conversion site raises
+                        // does not always say which it was, so ask the object.
+                        throw _context.ResolveMethod(value, "to_int", VisibilityContext.AllVisible).Found
                             ? RubyExceptions.CreateTypeError(e, "can't convert {0} into Integer", className)
                             : RubyExceptions.CreateTypeError(e, "no implicit conversion of {0} into Integer", className);
                     }

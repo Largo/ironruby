@@ -247,6 +247,9 @@ namespace IronRuby.Builtins {
             // the copy and the original were the same descriptor, so the save was a no-op.
             int duplicated = RubyIO.TryDuplicateDescriptor(source);
             if (duplicated >= 0) {
+                // dup(2) hands back a descriptor without FD_CLOEXEC whatever the original had;
+                // MRI's #dup sets it, so a child never inherits a copy nobody meant to give it.
+                RubyProcess.SetCloseOnExec(duplicated);
                 stream = new FileStream(
                     new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)duplicated, true),
                     source.Mode.CanWrite() ? (source.Mode.CanRead() ? FileAccess.ReadWrite : FileAccess.Write) : FileAccess.Read,
@@ -262,6 +265,12 @@ namespace IronRuby.Builtins {
             self.Mode = source.Mode;
             self.CopyEncodingsFrom(source);
             self.ConversionOptions = source.ConversionOptions;
+
+            // The copy owns the descriptor dup(2) just made it, so it closes it and does not pass
+            // it to a child, whatever the original had been set to. Kernel#dup copied those two
+            // settings across with the rest of the instance variables.
+            self.Context.SetInstanceVariable(self, "@__autoclose", true);
+            self.Context.SetInstanceVariable(self, "@__close_on_exec__", true);
             return self;
         }
 
@@ -313,8 +322,13 @@ namespace IronRuby.Builtins {
             // from Ruby, so a redirected STDOUT went on reaching the terminal for every child
             // process - and this IO kept working through the other one's stream, which broke
             // as soon as that one was closed.
-            if (RubyIO.TryRedirectDescriptor(self, source)) {
+            Stream redirected;
+            if (RubyIO.TryRedirectDescriptor(self, source, out redirected)) {
                 self.Mode = source.Mode;
+                if (redirected != null) {
+                    self.Context.SetStream(self.GetFileDescriptor(), redirected);
+                    self.SetStream(redirected);
+                }
                 return self;
             }
 
@@ -447,8 +461,10 @@ namespace IronRuby.Builtins {
                     try {
                         var site = closeStorage.GetCallSite("close");
                         site.Target(site, obj);                        
-                    } catch (SystemException) {
-                        // MRI: nop
+                    } catch (System.IO.IOException e) when (e.Message == "closed stream") {
+                        // A block that closed the file itself leaves nothing for this close to
+                        // do, and MRI passes over that one IOError in silence. Anything else
+                        // #close raises is the caller's to hear about.
                     }
                 }
             }

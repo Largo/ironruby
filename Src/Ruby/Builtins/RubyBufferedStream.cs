@@ -165,9 +165,11 @@ namespace IronRuby.Builtins {
         }
 
         private void FlushRead() {
-            // unwind cached data:
+            // Unwind cached data. Seek already reckons "current" from the position reads have
+            // reached rather than from the one the underlying stream is at, so this asks to stay
+            // where it is - subtracting the read-ahead here would take it off twice.
             if (ReadAheadCount > 0) {
-                Seek(-ReadAheadCount, SeekOrigin.Current);
+                Seek(0, SeekOrigin.Current);
             }
 
             _bufferStart = _bufferCount = _pushedBackCount = 0;

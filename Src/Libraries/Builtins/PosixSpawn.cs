@@ -461,6 +461,20 @@ namespace IronRuby.Builtins {
             return (flags < 0) ? null : (object)((flags & FD_CLOEXEC) != 0);
         }
 
+        /// <summary>
+        /// Marks a native descriptor close-on-exec. dup(2) does not carry the flag over, and
+        /// MRI's IO#dup sets it on the copy - see IoOps.InitializeCopy.
+        /// </summary>
+        internal static void SetCloseOnExec(int nativeDescriptor) {
+            if (nativeDescriptor < 0) {
+                return;
+            }
+            int flags = SysFcntl(nativeDescriptor, F_GETFD, 0);
+            if (flags >= 0) {
+                SysFcntl(nativeDescriptor, F_SETFD, flags | FD_CLOEXEC);
+            }
+        }
+
         [RubyMethod("__set_cloexec__", RubyMethodAttributes.PublicSingleton)]
         public static object SetCloseOnExec(RubyContext/*!*/ context, RubyModule/*!*/ self,
             [DefaultProtocol]int descriptor, bool value) {

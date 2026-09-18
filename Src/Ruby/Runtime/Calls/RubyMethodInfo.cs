@@ -60,6 +60,14 @@ namespace IronRuby.Runtime.Calls {
             return new RubyMethodInfo(_body, _declaringScope, module, flags);
         }
 
+        /// <summary>
+        /// The same body written as if it had been defined in another lexical place, which is what
+        /// Refinement#import_methods needs - see RubyModule.ImportMethod.
+        /// </summary>
+        internal RubyMethodInfo/*!*/ CopyWithScope(RubyScope/*!*/ scope, RubyModule/*!*/ module) {
+            return new RubyMethodInfo(_body, scope, module, Flags);
+        }
+
         public override bool IsEquivalentTo(RubyMemberInfo/*!*/ other) {
             if (ReferenceEquals(this, other)) {
                 return true;

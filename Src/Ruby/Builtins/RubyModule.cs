@@ -333,6 +333,10 @@ namespace IronRuby.Builtins {
         //
         private Dictionary<RubyModule/*!*/, RubyModule/*!*/> _refinements;
         private RubyModule _refinedModule;
+
+        // set alongside _refinedModule: the module whose `refine' call made this refinement, and
+        // so the module a `using' names to activate it
+        private RubyModule _refinementHolder;
         
         #endregion
 
@@ -415,6 +419,19 @@ namespace IronRuby.Builtins {
         /// Refinement#import_methods, which cannot include the source module.
         /// </summary>
         public void ImportMethod(string/*!*/ name, RubyMemberInfo/*!*/ member) {
+            var method = member as RubyMethodInfo;
+            if (method != null && _refinementHolder != null) {
+                // Imported methods have to be able to call each other: a body that says
+                // `self.indent(n)' is calling a refined method, and that only resolves where the
+                // refinement is in use. The copy therefore gets a scope of its own, sitting
+                // between the body and the scope it was written in, with the refinement's holder
+                // activated - which is exactly what a `using' at that place would have done.
+                var scope = new RubyModuleScope(method.DeclaringScope, this);
+                scope.ActivateRefinements(_refinementHolder);
+                SetMethodNoEvent(Context, name, method.CopyWithScope(scope, this));
+                return;
+            }
+
             SetMethodNoEvent(Context, name, member.Copy(member.Flags, this));
         }
 
@@ -435,6 +452,7 @@ namespace IronRuby.Builtins {
                 }
                 RubyModule refinement = new RubyModule(Context.RefinementClass, null);
                 refinement._refinedModule = refinedModule;
+                refinement._refinementHolder = this;
                 _refinements.Add(refinedModule, refinement);
                 Context.RegisterRefinedModule(refinedModule);
                 return refinement;
@@ -831,8 +849,10 @@ namespace IronRuby.Builtins {
 
             RubyModule result = new RubyModule(immediate.IsSingletonClass ? immediate.SuperClass : immediate, null);
 
-            // singleton members are copied here, not in InitializeCopy:
-            if (copySingletonMembers && immediate.IsSingletonClass) {
+            // Singleton members are copied here, not in InitializeCopy. A module's singleton
+            // methods are its module methods - what `def self.x' writes - and MRI's Module#dup
+            // keeps them, unlike the singleton of an ordinary object, which #dup drops.
+            if (immediate.IsSingletonClass) {
                 var singletonClass = result.GetOrCreateSingletonClass();
                 using (Context.ClassHierarchyLocker()) {
                     singletonClass.InitializeMembersFrom(immediate);
@@ -850,7 +870,12 @@ namespace IronRuby.Builtins {
 
         // A version of a frozen module can still change if its super-classes/mixins change.
         private void Mutate() {
-            Debug.Assert(!IsDummySingletonClass);
+            // The dummy singleton standing in front of Integer and Symbol - what
+            // `1.instance_eval { }' looks methods up through - is not a place to put one. MRI
+            // refuses the same way, because there is no singleton class to put it in.
+            if (IsDummySingletonClass) {
+                throw RubyExceptions.CreateTypeError("can't define singleton");
+            }
             if (IsFrozen) {
                 // MRI raises FrozenError and names what is frozen:
                 //   `def frozen_obj.x`    => "can't modify frozen Object: #<Object:0x...>"
@@ -2112,6 +2137,22 @@ namespace IronRuby.Builtins {
             return ResolveMethodNoLock(name, visibility, options).InvalidateSitesOnOverride();
         }
 
+        /// <summary>
+        /// Method resolution as of a lexical position, so that reflection done where a `using' is
+        /// in effect sees what a call from there would - Module#instance_method does.
+        /// </summary>
+        public MethodResolutionResult ResolveMethodWithRefinements(string/*!*/ name, VisibilityContext visibility, RubyScope scope) {
+            using (Context.ClassHierarchyLocker()) {
+                return ResolveMethodNoLock(name, visibility, MethodLookup.Default,
+                    (scope != null) ? scope.GetActiveRefinements() : null).InvalidateSitesOnOverride();
+            }
+        }
+
+        /// <summary>The module whose `refine' call made this refinement, or null for anything else.</summary>
+        public RubyModule RefinementHolder {
+            get { return _refinementHolder; }
+        }
+
         public MethodResolutionResult ResolveMethodNoLock(string/*!*/ name, VisibilityContext visibility) {
             return ResolveMethodNoLock(name, visibility, MethodLookup.Default);
         }
@@ -2396,6 +2437,21 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // #singleton_methods reaches only what belongs to the object: its singleton class,
+            // whatever is mixed into that, and the same for its class's singletons. A module
+            // mixed into a real class in the chain belongs to that class - `Module.prepend M'
+            // does not put M's methods on every module's singleton. Those have to be gathered up
+            // front, because a prepended module is visited before the class that prepended it.
+            HashSet<RubyModule> classOwned = null;
+            if (singletonMethods) {
+                classOwned = new HashSet<RubyModule>();
+                for (RubyClass c = this as RubyClass; c != null; c = c.SuperClass) {
+                    if (!c.IsSingletonClass) {
+                        c.ForEachDeclaredAncestor((m) => { classOwned.Add(m); return false; });
+                    }
+                }
+            }
+
             bool stop = false;
             ForEachInstanceMethod(true, delegate(RubyModule/*!*/ module, string name, RubyMemberInfo member) {
 
@@ -2409,7 +2465,7 @@ namespace IronRuby.Builtins {
                     if (instanceMethods) {
                         stop = !inherited && (!IsClass || module.IsClass && !module.IsSingletonClass);
                     } else if (singletonMethods) {
-                        if (!inherited && module != this || module.IsClass && !module.IsSingletonClass) {
+                        if (!inherited && module != this || classOwned.Contains(module)) {
                             return true;
                         }
                     } else {

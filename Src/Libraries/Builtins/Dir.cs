@@ -39,6 +39,9 @@ namespace IronRuby.Builtins {
         // 0 will be the first item from Directory.GetFileSystemEntries.
         private int _pos;
 
+        // the `encoding:' option, which labels the names this directory reports
+        private RubyEncoding _encoding;
+
         #region Construction
 
         public RubyDir(RubyClass/*!*/ cls) 
@@ -50,15 +53,43 @@ namespace IronRuby.Builtins {
             Reinitialize(this, dirname);
         }
 
+        public RubyDir(RubyClass/*!*/ cls, MutableString/*!*/ dirname, RubyEncoding encoding)
+            : this(cls, dirname) {
+            _encoding = encoding;
+        }
+
+        /// <summary>
+        /// The `encoding:' option every Dir reader takes. It names how the entries are labelled
+        /// on the way out; the bytes are the filesystem's either way.
+        /// </summary>
+        private static RubyEncoding GetEncodingOption(RubyContext/*!*/ context, IDictionary<object, object> options) {
+            if (options == null) {
+                return null;
+            }
+            foreach (var entry in options) {
+                var key = (entry.Key as RubySymbol);
+                if (key != null && key.ToString() == "encoding" && entry.Value != null) {
+                    var given = entry.Value as RubyEncoding;
+                    if (given != null) {
+                        return given;
+                    }
+                    var name = entry.Value as MutableString;
+                    return context.GetRubyEncoding(name ?? MutableString.Create(context.Inspect(entry.Value)));
+                }
+            }
+            return null;
+        }
+
         [RubyConstructor]
         public static RubyDir/*!*/ Create(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname,
             [Optional]IDictionary<object, object> options) {
-            return new RubyDir(self, Protocols.CastToPath(toPath, dirname));
+            return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
         }
 
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyDir/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ toPath, RubyDir/*!*/ self, object dirname,
             [Optional]IDictionary<object, object> options) {
+            self._encoding = GetEncodingOption(self.ImmediateClass.Context, options);
             return Reinitialize(self, Protocols.CastToPath(toPath, dirname));
         }
 
@@ -201,14 +232,15 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("entries", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetEntries(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object dirname, [Optional]IDictionary<object, object> options) {
-            // TODO: options[:encoding]
-            return new RubyDir(self, Protocols.CastToPath(toPath, dirname)).GetEntries(self.Context);
+            return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options))
+                .GetEntries(self.Context);
         }
 
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
         public static object ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
             [Optional]IDictionary<object, object> options) {
-            return new RubyDir(self, Protocols.CastToPath(toPath, dirname)).EnumerateEntries(self.Context, block, null);
+            return new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options))
+                .EnumerateEntries(self.Context, block, null);
         }
 
         [RubyMethod("getwd", RubyMethodAttributes.PublicSingleton)]
@@ -411,7 +443,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("open", RubyMethodAttributes.PublicSingleton)]
         public static object Open(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object dirname,
             [Optional]IDictionary<object, object> options) {
-            RubyDir rd = new RubyDir(self, Protocols.CastToPath(toPath, dirname));
+            RubyDir rd = new RubyDir(self, Protocols.CastToPath(toPath, dirname), GetEncodingOption(self.Context, options));
 
             try {
                 object result;
@@ -641,15 +673,34 @@ namespace IronRuby.Builtins {
             ThrowIfClosed();
 
             RubyArray ret = new RubyArray(_rawEntries.Length + 2);
-            ret.Add(context.EncodePath("."));
-            ret.Add(context.EncodePath(".."));
+            ret.Add(Label(context, context.EncodePath(".")));
+            ret.Add(Label(context, context.EncodePath("..")));
             foreach (string entry in _rawEntries) {
                 var encoded = context.TryEncodePath(context.Platform.GetFileName(entry));
                 if (encoded != null) {
-                    ret.Add(encoded);
+                    ret.Add(Label(context, encoded));
                 }
             }
             return ret;
+        }
+
+        /// <summary>
+        /// A name as the caller asked to see it: labelled with the `encoding:' option if one was
+        /// given, and otherwise transcoded into the default internal encoding when there is one -
+        /// which is what MRI hands back for every other string that comes in from outside.
+        /// </summary>
+        private MutableString/*!*/ Label(RubyContext/*!*/ context, MutableString/*!*/ name) {
+            if (_encoding != null) {
+                name.ForceEncoding(_encoding);
+                return name;
+            }
+
+            var internalEncoding = context.DefaultInternalEncoding;
+            if (internalEncoding != null && internalEncoding != name.Encoding) {
+                return MutableString.Create(name.ConvertToString(), internalEncoding);
+            }
+
+            return name;
         }
 
         private object EnumerateEntries(RubyContext/*!*/ context, BlockParam block, object defaultResult) {

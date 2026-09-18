@@ -52,7 +52,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
         public static object MethodMissing(RubyContext/*!*/ context, object/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
-            throw RubyExceptions.CreateMethodMissing(context, self, name.ToString());
+            // the arguments of the call that found no method are what NoMethodError#args reports
+            throw NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
         }
 
         #endregion

@@ -38,6 +38,27 @@ namespace IronRuby.Builtins {
             return self.RefinedModule;
         }
 
+        /// <summary>
+        /// A refinement has no name, so MRI describes it by what it refines and who refines it:
+        /// #&lt;refinement:String@#&lt;Module:0x...&gt;&gt;.
+        /// </summary>
+        [RubyMethod("to_s"), RubyMethod("inspect")]
+        public static MutableString/*!*/ ToS(RubyContext/*!*/ context, RubyModule/*!*/ self) {
+            if (!self.IsRefinement) {
+                return RubyUtils.ObjectToMutableString(context, self);
+            }
+
+            var result = MutableString.CreateMutable(context.GetIdentifierEncoding());
+            result.Append("#<refinement:");
+            result.Append(self.RefinedModule.GetDisplayName(context, false));
+            result.Append('@');
+            result.Append(self.RefinementHolder != null
+                ? context.Inspect(self.RefinementHolder)
+                : MutableString.CreateAscii("nil"));
+            result.Append('>');
+            return result;
+        }
+
         [RubyMethod("include")]
         public static RubyModule Include(RubyModule/*!*/ self, params object[]/*!*/ modules) {
             throw RubyExceptions.CreateTypeError("Refinement#include has been removed");

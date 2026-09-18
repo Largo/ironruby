@@ -1818,7 +1818,13 @@ module Kernel
   private
 
   def __dir__
-    File.dirname(File.expand_path(caller.first.split(/:\d/, 2).first))
+    file = caller.first
+    file = file.split(/:\d/, 2).first if file
+    # Only a real file has a directory. Code that came from a string - an eval, the console -
+    # names itself "(eval)" or the like, and MRI answers nil for those rather than pointing at
+    # wherever the process happens to be.
+    return nil if file.nil? || file.empty? || file.start_with?("(")
+    File.dirname(File.expand_path(file))
   end unless private_method_defined?(:__dir__)
 end
 
@@ -2003,6 +2009,18 @@ class << IO
     if external || internal
       # An internal encoding on its own still transcodes, from the default external one.
       io.set_encoding(external || Encoding.default_external, internal)
+    end
+
+    # IO.popen answers an instance of whatever class it was called on, so MyIO.popen gives a
+    # MyIO. The pipe end is an IO; hand its descriptor over to one of the right class and let
+    # the original go without closing the descriptor under it.
+    if self != ::IO && !(readable && writable)
+      fd = io.fileno
+      io.autoclose = false
+      io = new(fd, mode)
+      if external || internal
+        io.set_encoding(external || Encoding.default_external, internal)
+      end
     end
 
     io.instance_variable_set(:@__popen_pid__, pid)
@@ -7612,11 +7630,13 @@ end
         return value.truncate
       end
       unless value.respond_to?(:to_int)
-        ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+        # nil, true and false are named by themselves in this one, as MRI names them
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_conversion_result_name__(value)} into Integer")
       end
       converted = value.to_int
       unless converted.is_a?(::Integer)
-        ::Kernel.raise(::TypeError, "can't convert #{value.class} to Integer")
+        ::Kernel.raise(::TypeError,
+          "can't convert #{value.class} into Integer (#{value.class}#to_int gives #{__ir_conversion_result_name__(converted)})")
       end
       converted
     end
@@ -7631,7 +7651,9 @@ end
 
     def [](index, length = nil)
       unless index.is_a?(::Range)
-        return __ir_bit__(index) if length.nil?
+        # through __bit_position__ so that a Float, or an object with #to_int, reaches the
+        # built-in as the Integer it stands for
+        return __ir_bit__(__bit_position__(index)) if length.nil?
         return __bits_from__(__bit_position__(index), __bit_position__(length))
       end
 
@@ -11591,6 +11613,16 @@ class IO
   # on a stream that is already open this is a read of at most maxlen bytes -
   # which is what MRI does on a regular file too. The result is bytes, so
   # ASCII-8BIT, and end of file is an EOFError rather than nil.
+  # A buffer keeps the encoding it came with: MRI puts the bytes in it and leaves its label
+  # alone, so a caller that handed over an ISO-8859-1 string gets one back.
+  def __fill_buffer__(outbuf, data)
+    encoding = outbuf.encoding
+    outbuf.replace(data)
+    outbuf.force_encoding(encoding)
+    outbuf
+  end
+  private :__fill_buffer__
+
   def readpartial(maxlen, outbuf = nil)
     maxlen = ::Kernel.Integer(maxlen)
     ::Kernel.raise(::ArgumentError, "negative length #{maxlen} given") if maxlen < 0
@@ -11598,15 +11630,15 @@ class IO
       # Even a zero-length readpartial looks at the stream, so a closed one is an error.
       ::Kernel.raise(::IOError, "closed stream") if closed?
       result = "".b
-      return outbuf ? outbuf.replace(result) : result
+      return outbuf ? __fill_buffer__(outbuf, result) : result
     end
     data = __read_available__(maxlen)
     if data.nil? || data.empty?
-      outbuf.replace("".b) if outbuf
+      __fill_buffer__(outbuf, "".b) if outbuf
       ::Kernel.raise(::EOFError, "end of file reached")
     end
     data.force_encoding(::Encoding::BINARY) if data.respond_to?(:force_encoding)
-    outbuf ? outbuf.replace(data) : data
+    outbuf ? __fill_buffer__(outbuf, data) : data
   end unless method_defined?(:readpartial)
 
   class << self
@@ -13481,21 +13513,6 @@ class LoadError
     defined?(@path) ? @path : nil
   end unless method_defined?(:path)
 end
-
-class SyntaxError
-  def path
-    defined?(@path) ? @path : nil
-  end unless method_defined?(:path)
-end
-
-# Deliberately not defined: Regexp.timeout / Regexp.timeout= (Ruby 3.2).
-# An accessor that only stores the value is worse than no accessor at all. The
-# point of the setting is to bound catastrophic backtracking, and ruby/spec tests
-# it by running /^(a*)*$/ against a million characters -- which hangs the .NET
-# matcher outright once Regexp.timeout= stops being a NoMethodError.
-# Implementing it means passing System.Text.RegularExpressions' matchTimeout into
-# RubyRegex.TransformPattern (invalidating the cached Regex when the global
-# changes) and mapping RegexMatchTimeoutException onto a real Regexp::TimeoutError.
 
 class Random
   # 2.0's Random#random_number: rand's behaviour, but a bare call always answers

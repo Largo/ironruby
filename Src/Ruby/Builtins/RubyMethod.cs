@@ -34,14 +34,14 @@ using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Builtins {
     using Ast = Expression;
-    using BlockCallTargetUnsplatN = Func<BlockParam, object, object[], RubyArray, object>;
+    using BlockCallTargetUnsplatProcN = Func<BlockParam, object, object[], RubyArray, Proc, object>;
 
     [DebuggerDisplay("{GetDebugView(), nq}")]
     public partial class RubyMethod : IDuplicable {
         private readonly object _target;
         private readonly string/*!*/ _name;
         private readonly RubyMemberInfo/*!*/ _info;
-        private BlockDispatcherUnsplatN _procDispatcher;
+        private BlockDispatcherUnsplatProcN _procDispatcher;
 
         /// <summary>
         /// Set for a method that stands in for one the object only answers through
@@ -102,24 +102,22 @@ namespace IronRuby.Builtins {
         public virtual Proc/*!*/ ToProc(RubyScope/*!*/ scope) {
             ContractUtils.RequiresNotNull(scope, "scope");
 
-            // TODO: 
-            // This should pass a proc parameter (use BlockDispatcherUnsplatProcN).
-            // MRI 1.9.2 doesn't do so though (see http://redmine.ruby-lang.org/issues/show/3792).
-
             if (_procDispatcher == null) {
-                var site = CallSite<Func<CallSite, object, object, object>>.Create(
+                // the block the proc is called with goes on to the method it wraps, so that
+                // `x.method(:foo).to_proc.call { ... }` reaches a `yield` inside #foo
+                var site = CallSite<Func<CallSite, object, Proc, object, object>>.Create(
                     // TODO: use InvokeBinder
                     RubyCallAction.Make(
                         scope.RubyContext, "call",
-                        new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument)
+                        new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
                     )
                 );
 
-                var block = new BlockCallTargetUnsplatN((blockParam, self, args, unsplat) => {
+                var block = new BlockCallTargetUnsplatProcN((blockParam, self, args, unsplat, procArg) => {
                     // block takes no parameters but unsplat => all actual arguments are added to unsplat:
                     Debug.Assert(args.Length == 0);
 
-                    return site.Target(site, this, unsplat);
+                    return site.Target(site, this, procArg, unsplat);
                 });
 
                 // MRI's proc reports the location of the method it wraps, not of the to_proc call
@@ -137,8 +135,11 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                _procDispatcher = new BlockDispatcherUnsplatN(0, 
-                    BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter, _info.GetArity()),
+                _procDispatcher = new BlockDispatcherUnsplatProcN(0, 
+                    BlockDispatcher.MakeAttributes(
+                        BlockSignatureAttributes.HasUnsplatParameter | BlockSignatureAttributes.HasProcParameter,
+                        _info.GetArity()
+                    ),
                     sourcePath, sourceLine
                 );
 
@@ -148,10 +149,9 @@ namespace IronRuby.Builtins {
 
             // A method binds its arguments strictly and `return` from it returns from the
             // method, both of which are lambda behaviour, so MRI's Method#to_proc answers
-            // #lambda? with true.
-            // TODO: 
-            // MRI: source file/line are that of the to_proc method call:
-            return new Proc(ProcKind.Lambda, scope.SelfObject, scope, _procDispatcher);
+            // #lambda? with true. Its self is the method's receiver rather than whatever self
+            // the to_proc call happened under, which is what #binding hands back.
+            return new Proc(ProcKind.Lambda, _target, scope, _procDispatcher);
         }
 
         #region Dynamic Operations

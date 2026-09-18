@@ -410,6 +410,15 @@ def get_singletons(cls, n)
 end
 ";
 
+        /// <summary>
+        /// Class#superclass of a singleton class. The first level agrees with MRI now: the
+        /// singleton class of a class has the singleton class of its superclass above it, and the
+        /// singleton class of an object has the object's class. It used to answer the object's
+        /// *metaclass* at every level, which is what this test recorded.
+        ///
+        /// The deeper levels still differ from MRI, which builds a meta tower
+        /// (#&lt;Class:#&lt;Class:Object&gt;&gt; and so on) where IronRuby stops at a dummy singleton.
+        /// </summary>
         public void DummySingletons1() {
             Engine.Execute(SingletonHelpers);
             AssertOutput(() =>
@@ -427,22 +436,22 @@ end
 end
 "), @"
 C                                                  Object
-#<Class:C>                                         #<Class:#<Class:C>>
-#<Class:#<Class:C>>                                #<Class:#<Class:#<Class:C>>>
-#<Class:#<Class:#<Class:C>>>                       #<Class:#<Class:#<Class:#<Class:C>>>>
-#<Class:#<Class:#<Class:#<Class:C>>>>              #<Class:#<Class:#<Class:#<Class:C>>>>
+#<Class:C>                                         #<Class:Object>
+#<Class:#<Class:C>>                                #<Class:Class>
+#<Class:#<Class:#<Class:C>>>                       #<Class:Class>
+#<Class:#<Class:#<Class:#<Class:C>>>>              #<Class:Class>
 
 undefined method `superclass' for module M
-#<Class:M>                                         #<Class:#<Class:M>>
-#<Class:#<Class:M>>                                #<Class:#<Class:#<Class:M>>>
-#<Class:#<Class:#<Class:M>>>                       #<Class:#<Class:#<Class:#<Class:M>>>>
-#<Class:#<Class:#<Class:#<Class:M>>>>              #<Class:#<Class:#<Class:#<Class:M>>>>
+#<Class:M>                                         Module
+#<Class:#<Class:M>>                                #<Class:Module>
+#<Class:#<Class:#<Class:M>>>                       #<Class:Module>
+#<Class:#<Class:#<Class:#<Class:M>>>>              #<Class:Module>
 
 undefined method `superclass' for module #<MM:0x*>
-#<Class:#<MM:0x*>>                           #<Class:#<Class:#<MM:0x*>>>
-#<Class:#<Class:#<MM:0x*>>>                  #<Class:#<Class:#<Class:#<MM:0x*>>>>
-#<Class:#<Class:#<Class:#<MM:0x*>>>>         #<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>>
-#<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>> #<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>>
+#<Class:#<MM:0x*>>                           MM
+#<Class:#<Class:#<MM:0x*>>>                  #<Class:MM>
+#<Class:#<Class:#<Class:#<MM:0x*>>>>         #<Class:MM>
+#<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>> #<Class:MM>
 ", OutputFlags.Match);
         }
 

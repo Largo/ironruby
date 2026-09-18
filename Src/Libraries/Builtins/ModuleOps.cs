@@ -1608,8 +1608,12 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("instance_method")]
-        public static UnboundMethod/*!*/ GetInstanceMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
+        public static UnboundMethod/*!*/ GetInstanceMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName) {
+
+            // A refinement active where this is called is active for it too: MRI answers the
+            // refined method, whose #owner is the refinement.
+            RubyMemberInfo method = self.ResolveMethodWithRefinements(methodName, VisibilityContext.AllVisible, scope).Info;
             if (method == null) {
                 throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
             }
@@ -1625,13 +1629,15 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("public_instance_method")]
-        public static UnboundMethod/*!*/ GetPublicInstanceMethod(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
+        public static UnboundMethod/*!*/ GetPublicInstanceMethod(RubyScope/*!*/ scope, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName) {
+
+            RubyMemberInfo method = self.ResolveMethodWithRefinements(methodName, VisibilityContext.AllVisible, scope).Info;
             if (method == null || method.Visibility != RubyMethodVisibility.Public) {
                 throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
             }
 
-            return GetInstanceMethod(self, methodName);
+            return GetInstanceMethod(scope, self, methodName);
         }
 
         #endregion

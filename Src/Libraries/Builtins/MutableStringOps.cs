@@ -2643,6 +2643,8 @@ namespace IronRuby.Builtins {
                         } else if (c == '+') {
                             // Replace last character in last successful match group
                             AppendLastCharOfLastMatchGroup(match, result);
+                        } else if (c == 'k' && TryAppendNamedGroup(match, result, replacement, ref i)) {
+                            // \k<name> or \k'name': the group the pattern gave that name to
                         } else {
                             // unknown escaped replacement char, go ahead and replace untouched
                             result.Append('\\');
@@ -2658,6 +2660,48 @@ namespace IronRuby.Builtins {
             }
             AppendBackslashes(backslashCount, result, 1);
             result.TaintBy(replacement);
+        }
+
+        /// <summary>
+        /// `\k&lt;name&gt;' in a replacement string names a group of the pattern.
+        /// Leaves i where it was and answers false when what follows is not a name, so that a
+        /// lone `\k' goes through untouched the way any other unknown escape does.
+        /// </summary>
+        private static bool TryAppendNamedGroup(MatchData/*!*/ match, MutableString/*!*/ result,
+            MutableString/*!*/ replacement, ref int i) {
+
+            if (i + 1 >= replacement.Length) {
+                return false;
+            }
+
+            // only the angle-bracket form; MRI leaves `\k\'name\'' in a replacement string alone
+            // even though the pattern language accepts it
+            if (replacement.GetChar(i + 1) != '<') {
+                return false;
+            }
+            const char close = '>';
+
+            int start = i + 2;
+            int end = start;
+            while (end < replacement.Length && replacement.GetChar(end) != close) {
+                end++;
+            }
+            if (end >= replacement.Length || end == start) {
+                return false;
+            }
+
+            string name = replacement.GetSlice(start, end - start).ConvertToString();
+            if (!match.HasNamedGroup(name)) {
+                throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", name);
+            }
+
+            var value = match.GetNamedGroupValue(name);
+            if (value != null) {
+                result.Append(value);
+            }
+
+            i = end;
+            return true;
         }
 
         private static void AppendLastCharOfLastMatchGroup(MatchData/*!*/ match, MutableString/*!*/ result) {

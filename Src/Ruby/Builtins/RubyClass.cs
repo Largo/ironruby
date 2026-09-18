@@ -240,7 +240,9 @@ namespace IronRuby.Builtins {
 
         internal RubyClass/*!*/ GetDummySingletonClass() {
             if (_dummySingletonClass == null) {
-                Debug.Assert(IsSubclassOf(Context.ModuleClass));
+                // a class that is not a Module holds one only to stand in for the singleton an
+                // Integer or a Symbol cannot have - see RubyUtils.EvaluateInSingleton
+                Debug.Assert(IsSubclassOf(Context.ModuleClass) || !IsSingletonClass);
                 Interlocked.CompareExchange(ref _dummySingletonClass, CreateDummySingleton(), null);
             }
             return _dummySingletonClass;
@@ -666,8 +668,26 @@ namespace IronRuby.Builtins {
         }
 
         // implements Class#new
-        public static object CreateAnonymousClass(RubyScope/*!*/ scope, BlockParam body, RubyClass/*!*/ self, [DefaultParameterValue(null)]RubyClass superClass) {
+        public static object CreateAnonymousClass(RubyScope/*!*/ scope, BlockParam body, RubyClass/*!*/ self,
+            [Optional]object superClassObject) {
+
             RubyContext context = scope.RubyContext;
+
+            // The argument is checked here rather than by the binder so that what it is wrong
+            // about can be said the way MRI says it - and so that nil, which is a perfectly good
+            // conversion to "no class", is refused rather than taken as Object.
+            RubyClass superClass = null;
+            if (superClassObject != Missing.Value) {
+                superClass = superClassObject as RubyClass;
+                if (superClass == null) {
+                    throw RubyExceptions.CreateTypeError("superclass must be an instance of Class (given an instance of {0})",
+                        context.GetClassDisplayName(superClassObject));
+                }
+                if (superClass.IsSingletonClass) {
+                    throw RubyExceptions.CreateTypeError("can't make subclass of singleton class");
+                }
+            }
+
             RubyModule owner = scope.GetInnerMostModuleForConstantLookup();
             
             // MRI is inconsistent here, it triggers "inherited" event after the body of the method is evaluated.

@@ -40,6 +40,50 @@ namespace IronRuby.Builtins {
         // Ruby 1.8: match operations use KCODE encoding so we need to remember the one for which we have cached CLR Regex.
         private RubyRegexOptions _cachedKCode;
 
+        /// <summary>
+        /// How long a match with this pattern may run before it is abandoned, as
+        /// `Regexp.new(src, timeout: seconds)' asked for. Null means the global setting applies.
+        /// </summary>
+        private double? _timeout;
+
+        /// <summary>
+        /// The timeout every pattern that does not carry one of its own matches under, as
+        /// `Regexp.timeout=' set it. It is a property of the process in MRI too.
+        /// </summary>
+        private static double? _globalTimeout;
+
+        public static double? GlobalTimeout {
+            get { return _globalTimeout; }
+            set { _globalTimeout = value; }
+        }
+
+        public double? Timeout {
+            get { return _timeout; }
+            set { _timeout = value; }
+        }
+
+        /// <summary>
+        /// .NET fixes a Regex's timeout when it is constructed, so the cached one is only good
+        /// while the effective timeout is the one it was built with.
+        /// </summary>
+        private TimeSpan _cachedTimeout;
+
+        private TimeSpan EffectiveTimeout {
+            get {
+                double? seconds = _timeout ?? _globalTimeout;
+                if (seconds == null || seconds.Value <= 0 || Double.IsNaN(seconds.Value)) {
+                    return Regex.InfiniteMatchTimeout;
+                }
+
+                // A timeout longer than a TimeSpan can hold is no timeout at all; asking for one
+                // would only throw where the matcher is built.
+                if (seconds.Value >= TimeSpan.MaxValue.TotalSeconds) {
+                    return Regex.InfiniteMatchTimeout;
+                }
+                return TimeSpan.FromSeconds(seconds.Value);
+            }
+        }
+
         private const int FrozenFlag = 1;
         private const int TaintedFlag = 2;
         private const int UntrustedFlag = 4;
@@ -203,8 +247,10 @@ namespace IronRuby.Builtins {
         }
 
         private Regex/*!*/ TransformPattern(RubyEncoding encoding, RubyRegexOptions kc) {
-            // We can reuse cached CLR regex if it was created for the same k-coding:
-            if (_cachedRegex != null && kc == _cachedKCode) {
+            // We can reuse cached CLR regex if it was created for the same k-coding and the
+            // same timeout:
+            TimeSpan timeout = EffectiveTimeout;
+            if (_cachedRegex != null && kc == _cachedKCode && timeout == _cachedTimeout) {
                 return _cachedRegex;
             }
 
@@ -217,11 +263,12 @@ namespace IronRuby.Builtins {
 
             Regex result;
             try {
-                result = new Regex(RegexpTransformer.Transform(pattern, _options, out _hasGAnchor), ToClrOptions(_options));
+                result = new Regex(RegexpTransformer.Transform(pattern, _options, out _hasGAnchor), ToClrOptions(_options), timeout);
             } catch (Exception e) {
                 throw new RegexpError(e.Message);
             }
 
+            _cachedTimeout = timeout;
             _cachedKCode = kc;
             _cachedRegex = result;
             return result;

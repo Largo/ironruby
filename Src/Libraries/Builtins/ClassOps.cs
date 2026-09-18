@@ -56,15 +56,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("superclass")]
         public static RubyClass GetSuperclass(RubyClass/*!*/ self) {
-            if (self.IsSingletonClass) {
-                RubyClass result = self.ImmediateClass;
-                Debug.Assert(result.IsSingletonClass);
-
-                // do not return dummy singletons, also do not create a new singleton (MRI does):
-                return result.IsDummySingletonClass ? self : result;
-            } else {
-                return self.SuperClass;
-            }
+            // A singleton class inherits along the same chain as the object it belongs to: the
+            // singleton class of a class has the singleton class of its superclass above it, and
+            // the singleton class of a plain object has the object's class. That is exactly what
+            // the class hierarchy already records, so there is nothing special to do here.
+            return self.SuperClass;
         }
 
         [RubyMethod("inherited", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]

@@ -213,6 +213,11 @@ namespace IronRuby.Builtins {
         /// </summary>
         public ConsoleStreamType? ConsoleStreamType {
             get {
+                // a closed stream is no longer any console's; asking it would raise, and
+                // #inspect asks about a closed IO
+                if (Closed) {
+                    return null;
+                }
                 var stream = GetStream();
                 var console = stream.BaseStream as ConsoleStream;
                 return console != null ? console.StreamType : (ConsoleStreamType?)null;
@@ -547,7 +552,9 @@ namespace IronRuby.Builtins {
         /// is. Returns false when either side has no descriptor the kernel knows about, and
         /// the caller then falls back to swapping streams in IronRuby's table.
         /// </summary>
-        public static bool TryRedirectDescriptor(RubyIO/*!*/ io, RubyIO/*!*/ source) {
+        public static bool TryRedirectDescriptor(RubyIO/*!*/ io, RubyIO/*!*/ source, out System.IO.Stream rebuilt) {
+            rebuilt = null;
+
             int target = io.KernelDescriptor;
             int from = source.KernelDescriptor;
             if (target < 0 || from < 0) {
@@ -555,7 +562,55 @@ namespace IronRuby.Builtins {
             }
             io.Flush();
             source.Flush();
-            return target == from || sys_dup2(from, target) >= 0;
+
+            // dup2 makes the two descriptors share one file offset, and the source may have read
+            // further than Ruby has seen - a buffered read pulls in a block at a time. Put the
+            // descriptor back where the reading actually got to before handing it over.
+            DiscardReadAhead(source);
+
+            // Asking a FileStream for its handle seeks the descriptor to where that stream
+            // thinks it is, so it has to happen before the descriptor starts naming the other
+            // file - afterwards it would undo the offset the two are meant to share.
+            var replaced = (target > 2) ? io.GetStream().BaseStream as System.IO.FileStream : null;
+            var replacedHandle = (replaced != null) ? replaced.SafeFileHandle : null;
+
+            if (target != from && sys_dup2(from, target) < 0) {
+                return false;
+            }
+
+            // The descriptor now names the other IO's file. The stream that was reading the old
+            // one has to go with it: it was opened for a different access mode, and it buffers
+            // bytes of a file this IO no longer has. The descriptor is taken away from it first,
+            // so that finalizing it does not close the descriptor out from under the new stream.
+            if (replacedHandle != null) {
+                rebuilt = TryAdoptDescriptor(target, true);
+                if (rebuilt != null) {
+                    replacedHandle.SetHandleAsInvalid();
+                }
+            }
+
+            return true;
+        }
+
+        private static void DiscardReadAhead(RubyIO/*!*/ io) {
+            try {
+                var stream = io.GetStream();
+                if (!stream.CanSeek) {
+                    return;
+                }
+                stream.Seek(stream.Position, System.IO.SeekOrigin.Begin);
+
+                // A FileStream buffers too, and seeking inside its own buffer leaves the
+                // descriptor where the last block read left it. Asking for the handle is what
+                // makes it put the descriptor where the stream says it is.
+                var file = stream.BaseStream as System.IO.FileStream;
+                if (file != null) {
+                    var handle = file.SafeFileHandle;
+                    GC.KeepAlive(handle);
+                }
+            } catch (System.Exception) {
+                // a stream that cannot say where it is has nothing to put back
+            }
         }
 
         /// <summary>dup(2), so that a copy of an IO survives its original being reopened.</summary>
@@ -599,6 +654,10 @@ namespace IronRuby.Builtins {
         /// table knows nothing about it, so IO.new(fd) could only ever answer EBADF for it.
         /// </summary>
         public static System.IO.Stream TryAdoptDescriptor(int descriptor) {
+            return TryAdoptDescriptor(descriptor, false);
+        }
+
+        public static System.IO.Stream TryAdoptDescriptor(int descriptor, bool ownsDescriptor) {
             IOMode mode;
             if (!TryGetDescriptorMode(descriptor, out mode)) {
                 return null;
@@ -610,10 +669,12 @@ namespace IronRuby.Builtins {
                 default: access = System.IO.FileAccess.Read; break;
             }
             try {
-                // ownsHandle: false - the descriptor belongs to whoever passed it in, and a
-                // finalizer closing, say, the inherited standard output would be a disaster.
+                // ownsDescriptor is normally false - the descriptor belongs to whoever passed
+                // it in, and a finalizer closing, say, the inherited standard output would be a
+                // disaster. Only #reopen, which has just taken a descriptor away from the stream
+                // that owned it, asks for the new stream to own it instead.
                 return new System.IO.FileStream(
-                    new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)descriptor, false), access, 1, false
+                    new Microsoft.Win32.SafeHandles.SafeFileHandle((IntPtr)descriptor, ownsDescriptor), access, 1, false
                 );
             } catch (Exception) {
                 return null;

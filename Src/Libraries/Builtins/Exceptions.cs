@@ -87,13 +87,79 @@ namespace IronRuby.Builtins {
             return self.Status == 0;
         }
 
-        [RubyConstructor]
-        public static SystemExit/*!*/ Factory(RubyClass/*!*/ self, object message) {
-            return Factory(self, 0, message);
+        /// <summary>
+        /// An exit status is an Integer, or one of the two Kernel#exit also takes: true for a
+        /// successful exit and false for a failed one.
+        /// </summary>
+        private static bool TryGetStatus(object value, out int status) {
+            if (value is int) {
+                status = (int)value;
+                return true;
+            }
+            if (value is bool) {
+                status = (bool)value ? 0 : 1;
+                return true;
+            }
+            status = 0;
+            return false;
         }
 
         [RubyConstructor]
-        public static SystemExit/*!*/ Factory(RubyClass/*!*/ self, [Optional]int status, [DefaultParameterValue(null)]object message) {
+        public static SystemExit/*!*/ Factory(RubyClass/*!*/ self) {
+            return Make(self, 0, null);
+        }
+
+        /// <summary>
+        /// A single argument is the status when it looks like one and the message otherwise, so
+        /// both `SystemExit.new(42)' and `SystemExit.new("bye")' say what they look like.
+        /// </summary>
+        [RubyConstructor]
+        public static SystemExit/*!*/ Factory(RubyClass/*!*/ self, object statusOrMessage) {
+            int status;
+            return TryGetStatus(statusOrMessage, out status)
+                ? Make(self, status, null)
+                : Make(self, 0, statusOrMessage);
+        }
+
+        [RubyConstructor]
+        public static SystemExit/*!*/ Factory(RubyClass/*!*/ self, object status, object message) {
+            int value;
+            if (!TryGetStatus(status, out value)) {
+                // MRI only has room for a message after a status, so anything else in front of
+                // one leaves it with an argument it cannot place.
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 2, expected 0..1)");
+            }
+            return Make(self, value, message);
+        }
+
+        /// <summary>
+        /// A subclass of SystemExit is built by #allocate and #initialize rather than through the
+        /// constructor above, so without this one `class C &lt; SystemExit; end; C.new(8)' came
+        /// back with a status of zero and the program exited successfully.
+        /// </summary>
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static SystemExit/*!*/ Initialize(SystemExit/*!*/ self, [NotNull]params object[]/*!*/ args) {
+            int status = 0;
+            object message = null;
+
+            if (args.Length == 1) {
+                if (!TryGetStatus(args[0], out status)) {
+                    message = args[0];
+                }
+            } else if (args.Length >= 2) {
+                if (args.Length > 2 || !TryGetStatus(args[0], out status)) {
+                    throw RubyExceptions.CreateArgumentError(
+                        "wrong number of arguments (given {0}, expected 0..1)", args.Length);
+                }
+                message = args[1];
+            }
+
+            self.Status = status;
+            RubyExceptionData.InitializeException(self, message);
+            return self;
+        }
+
+        private static SystemExit/*!*/ Make(RubyClass/*!*/ self, int status, object message) {
             SystemExit result = new SystemExit(status, RubyExceptionData.GetClrMessage(self, message ?? "SystemExit"));
             RubyExceptionData.InitializeException(result, message);
             return result;
@@ -142,6 +208,15 @@ namespace IronRuby.Builtins {
 
     [RubyException("SyntaxError", Extends = typeof(SyntaxError))]
     public static class SyntaxErrorOps {
+        /// <summary>
+        /// The file the unparsable source came from - what `eval' was told to call it, or the
+        /// file `require' was reading. Nil for a SyntaxError built by hand, which carries no
+        /// source at all.
+        /// </summary>
+        [RubyMethod("path")]
+        public static MutableString GetPath(RubyContext/*!*/ context, SyntaxError/*!*/ self) {
+            return self.File == null ? null : context.EncodePath(self.File);
+        }
     }
 
     [RubyException("SystemStackError", Extends = typeof(SystemStackError), Inherits = typeof(SystemException))]
@@ -273,6 +348,15 @@ namespace IronRuby.Builtins {
             // If the value cannot actually be marshalled, it will fail only if the value is later accessed.
             result.Data[typeof(NoMethodErrorOps)] = new ObjectHandle[1] { new ObjectHandle(args) };
             return result;
+        }
+
+        /// <summary>
+        /// Records the arguments of the call that went missing, so that #args can answer them.
+        /// They ride in Exception.Data the same way the ones handed to NoMethodError.new do.
+        /// </summary>
+        internal static Exception/*!*/ SetArguments(Exception/*!*/ error, object[]/*!*/ args) {
+            error.Data[typeof(NoMethodErrorOps)] = new ObjectHandle[1] { new ObjectHandle(new RubyArray(args)) };
+            return error;
         }
 
         [RubyMethod("args")]

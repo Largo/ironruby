@@ -1782,7 +1782,7 @@ end
 ");
             }, @"
 ok1
-C#to_proc should return Proc
+can't convert C into Proc (C#to_proc gives Integer)
 ok2
 ");
         }
@@ -1956,7 +1956,9 @@ q = C.new.method(:foo).to_proc
 p q[1]
 p q[] rescue p $!
 
-# to_proc captures the caller's binding:
+# the proc's binding: MRI's self is the method's receiver rather than the caller's.
+# (MRI's binding has no locals either - `x' there is a NameError - where this one still
+# reaches the scope the to_proc call was made in.)
 eval('puts x, self', q.binding)
 
 p D.new.instance_eval(&q)
@@ -1972,7 +1974,7 @@ p D.new.instance_eval(&q)
 []
 123
 hello
-main
+#<C:0x*>
 #<C:0x*>
 #<D:0x*>
 :b

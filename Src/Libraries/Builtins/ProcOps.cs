@@ -121,7 +121,9 @@ namespace IronRuby.Builtins {
             if (self.LocalScope.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("Can't create Binding from C level Proc");
             }
-            return new Binding(self.LocalScope);
+            // Method#to_proc makes a proc whose self is the method's receiver rather than the
+            // scope's, and the binding reports that one
+            return new Binding(self.LocalScope, self.Self);
         }
 
         [RubyMethod("source_location")]

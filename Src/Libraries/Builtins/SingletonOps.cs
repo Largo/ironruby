@@ -81,6 +81,60 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// The module a definition at the top level lands in: Object, or whatever a hosted scope
+        /// redirects method lookup to. The same one `private' and `public' work on up there.
+        /// </summary>
+        private static RubyModule/*!*/ GetDefinitionModule(RubyScope/*!*/ scope, object/*!*/ self) {
+            var topScope = scope.Top.GlobalScope.TopLocalScope;
+            if (scope == topScope && topScope.MethodLookupModule != null) {
+                return topScope.MethodLookupModule;
+            }
+            return scope.RubyContext.GetClassOf(self);
+        }
+
+        /// <summary>
+        /// A method `def' writes at the top level is private, but one main.define_method writes is
+        /// public - MRI's define_method always is, and at the top level it is main's own method
+        /// rather than Module's that runs.
+        /// </summary>
+        private static RubySymbol/*!*/ MakePublic(RubyScope/*!*/ scope, RubyModule/*!*/ module, RubySymbol/*!*/ name) {
+            ModuleOps.SetMethodAttributes(scope, module, new[] { name.ToString() }, RubyMethodAttributes.PublicInstance);
+            return name;
+        }
+
+        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, [NotNull]BlockParam/*!*/ block, object/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName) {
+
+            var module = GetDefinitionModule(scope, self);
+            return MakePublic(scope, module, ModuleOps.DefineMethod(scope, block, module, methodName));
+        }
+
+        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, object/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]Proc/*!*/ method) {
+
+            var module = GetDefinitionModule(scope, self);
+            return MakePublic(scope, module, ModuleOps.DefineMethod(scope, module, methodName, method));
+        }
+
+        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, object/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]RubyMethod/*!*/ method) {
+
+            var module = GetDefinitionModule(scope, self);
+            return MakePublic(scope, module, ModuleOps.DefineMethod(scope, module, methodName, method));
+        }
+
+        [RubyMethod("define_method", RubyMethodAttributes.PrivateInstance)]
+        public static RubySymbol/*!*/ DefineMethod(RubyScope/*!*/ scope, object/*!*/ self,
+            [DefaultProtocol, NotNull]string/*!*/ methodName, [NotNull]UnboundMethod/*!*/ method) {
+
+            var module = GetDefinitionModule(scope, self);
+            return MakePublic(scope, module, ModuleOps.DefineMethod(scope, module, methodName, method));
+        }
+
+        /// <summary>
         /// main.using activates a module's refinements for the rest of the current file or eval string.
         /// It is only legal at the top level: CRuby refuses to let a method body activate refinements,
         /// because the activation would be for the caller's lexical scope rather than its own.

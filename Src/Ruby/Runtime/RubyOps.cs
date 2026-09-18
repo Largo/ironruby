@@ -616,6 +616,11 @@ namespace IronRuby.Runtime {
                     // defining a method in it is not.
                     var singleton = instanceOwner as RubyClass;
                     if (singleton != null && singleton.IsSingletonClass) {
+                        if (singleton.IsDummySingletonClass) {
+                            // `1.instance_eval { def f; end }' - the dummy stands in for a
+                            // singleton class the receiver can never have
+                            throw RubyExceptions.CreateTypeError("can't define singleton");
+                        }
                         RubyUtils.RequireDefinableSingleton(singleton.SingletonClassOf);
                     }
 
@@ -1977,6 +1982,14 @@ namespace IronRuby.Runtime {
             return _frozenStringLiterals.GetOrAdd(str.Freeze(), str);
         }
 
+        /// <summary>
+        /// The same table, for the other thing MRI puts in it: a String loaded by
+        /// `Marshal.load(..., freeze: true)'.
+        /// </summary>
+        public static MutableString/*!*/ InternFrozenString(MutableString/*!*/ str) {
+            return InternFrozenStringLiteral(str);
+        }
+
         // The StrongBox is one per literal in the program, so the table is consulted once per
         // literal however often it is evaluated - the same shape the regexp literals use.
         [Emitted]
@@ -2521,7 +2534,7 @@ namespace IronRuby.Runtime {
         public static Proc/*!*/ ToProcValidator(string/*!*/ className, object obj) {
             Proc result = obj as Proc;
             if (result == null) {
-                throw RubyExceptions.CreateReturnTypeError(className, "to_proc", "Proc");
+                throw RubyExceptions.CreateReturnTypeError(className, "to_proc", "Proc", obj);
             }
             return result;
         }

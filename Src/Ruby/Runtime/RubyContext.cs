@@ -865,7 +865,7 @@ namespace IronRuby.Runtime {
             };
 
             var classFactories = new Delegate[] {
-                new Func<RubyScope, BlockParam, RubyClass, RubyClass, object>(RubyClass.CreateAnonymousClass),
+                new Func<RubyScope, BlockParam, RubyClass, object, object>(RubyClass.CreateAnonymousClass),
             };
 
             // locks to comply with lock requirements:

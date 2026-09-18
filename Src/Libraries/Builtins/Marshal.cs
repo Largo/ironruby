@@ -1459,6 +1459,11 @@ namespace IronRuby.Builtins {
             // the slot reserved for it - see ReadInstanced's "u" case.
             private bool _selfLinked;
 
+            // Link ids whose record has been read to its end, and those MRI never counts as read
+            // to their end at all: only the former run the proc when a later record refers to them.
+            private readonly HashSet<int>/*!*/ _finished = new HashSet<int>();
+            private readonly HashSet<int>/*!*/ _unfinished = new HashSet<int>();
+
             private object ReadAnObject(bool noCache) {
                 return ReadAnObject(_reader.ReadByte(), noCache ? NoRef : NewRef);
             }
@@ -1469,6 +1474,9 @@ namespace IronRuby.Builtins {
                 bool outermost = (reservedRef == NewRef);
                 bool runProc = (outermost && _proc != null);
                 bool freezable = false;
+
+                // the slot this record took in the link table, if it took one
+                int linkRef = -1;
                 switch (typeFlag) {
                     case '0':
                         obj = null;
@@ -1500,7 +1508,12 @@ namespace IronRuby.Builtins {
                         if (!_objects.TryGetValue(link, out obj)) {
                             throw RubyExceptions.CreateArgumentError("dump format error (unlinked)");
                         }
-                        runProc = false;
+                        // MRI runs the proc over a back-reference too - the proc sees each place
+                        // an object appears in the dump, not each object - but only once the
+                        // object it points at is finished. A container that contains itself is
+                        // read through a reference to its own half-built self, and that one the
+                        // proc never sees.
+                        runProc = runProc && _finished.Contains(link);
                         break;
 
                     default:
@@ -1580,17 +1593,58 @@ namespace IronRuby.Builtins {
                         }
                         if (objectRef >= 0 && !_selfLinked) {
                             _objects[objectRef] = obj;
+                            linkRef = objectRef;
+                        }
+                        if (objectRef >= 0) {
+                            // An object handed to #_load or #marshal_load stays among the
+                            // unfinished ones, so a later reference to it does not reach the
+                            // proc the way a reference to a finished object does - unless an 'I'
+                            // record wraps it, which finishes it as it adds the ivars.
+                            if (typeFlag == 'u' || typeFlag == 'U') {
+                                _unfinished.Add(objectRef);
+                            } else if (typeFlag == 'I') {
+                                _unfinished.Remove(objectRef);
+                            }
+
+                            if (!_unfinished.Contains(objectRef)) {
+                                _finished.Add(objectRef);
+                            }
                         }
                         _selfLinked = false;
                         break;
                 }
                 if (_freeze && freezable && outermost && obj != null) {
                     KernelOps.Freeze(Context, obj);
+
+                    // MRI hands a frozen String to the fstring table, so two equal strings in one
+                    // dump come back as one object. The link table has to point at the survivor
+                    // too, or a back-reference to the second one would answer a different object
+                    // than the record itself did.
+                    var str = obj as MutableString;
+                    if (str != null) {
+                        obj = Deduplicate(str);
+                        if (linkRef >= 0 && !ReferenceEquals(obj, str)) {
+                            _objects[linkRef] = obj;
+                        }
+                    }
                 }
                 if (runProc) {
                     obj = _sites.ProcCall.Target(_sites.ProcCall, _proc, obj);
                 }
                 return obj;
+            }
+
+            /// <summary>
+            /// The one frozen string with these bytes and this encoding, as MRI's fstring table
+            /// keeps it. Only strings with nothing else about them qualify: one carrying instance
+            /// variables or a singleton class is its own object.
+            /// </summary>
+            private MutableString/*!*/ Deduplicate(MutableString/*!*/ str) {
+                if (Context.HasInstanceVariables(str)) {
+                    return str;
+                }
+
+                return RubyOps.InternFrozenString(str);
             }
 
             private object/*!*/ ReadOldModule() {

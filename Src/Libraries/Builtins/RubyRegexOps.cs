@@ -15,6 +15,8 @@
 
 using System;
 using System.Linq;
+using System.Numerics;
+using System.Text.RegularExpressions;
 using System.Collections;
 using System.Diagnostics;
 using System.Reflection;
@@ -29,6 +31,19 @@ using System.Collections.Generic;
 namespace IronRuby.Builtins {
     [RubyClass("Regexp", Extends = typeof(RubyRegex), Inherits = typeof(Object)), Includes(typeof(Enumerable))]
     public static class RegexpOps {
+        /// <summary>
+        /// Raised when a match runs longer than `Regexp.timeout' or the pattern's own `timeout:'
+        /// allows. .NET's own exception for this is the one that travels: it is thrown from deep
+        /// inside the matching engine, and wrapping it at every call would only risk missing one.
+        /// </summary>
+        [RubyException("TimeoutError", Extends = typeof(RegexMatchTimeoutException), Inherits = typeof(RegexpError))]
+        public static class TimeoutErrorOps {
+            [RubyMethod("message"), RubyMethod("to_s")]
+            public static MutableString/*!*/ GetMessage(RegexMatchTimeoutException/*!*/ self) {
+                return MutableString.CreateAscii("regexp match timeout");
+            }
+        }
+
         #region Helpers
 
         internal static bool NormalizeGroupIndex(ref int index, int groupCount) {
@@ -77,12 +92,82 @@ namespace IronRuby.Builtins {
         public static RubyRegex/*!*/ Create(RubyClass/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
 
-            return new RubyRegex(pattern, MakeOptions(self.Context, options, encoding));
+            double? timeout = TakeTimeout(self.Context, ref options);
+            return new RubyRegex(pattern, MakeOptions(self.Context, options, encoding)) { Timeout = timeout };
         }
 
         [RubyMethod("compile", RubyMethodAttributes.PublicSingleton)]
         public static RuleGenerator/*!*/ Compile() {
             return new RuleGenerator(RuleGenerators.InstanceConstructor);
+        }
+
+        [RubyMethod("timeout")]
+        public static object GetTimeout(RubyRegex/*!*/ self) {
+            double? timeout = self.Timeout;
+            return timeout == null ? null : (object)timeout.Value;
+        }
+
+        [RubyMethod("timeout", RubyMethodAttributes.PublicSingleton)]
+        public static object GetGlobalTimeout(RubyClass/*!*/ self) {
+            double? timeout = RubyRegex.GlobalTimeout;
+            return timeout == null ? null : (object)timeout.Value;
+        }
+
+        [RubyMethod("timeout=", RubyMethodAttributes.PublicSingleton)]
+        public static object SetGlobalTimeout(RubyClass/*!*/ self, object value) {
+            RubyRegex.GlobalTimeout = ToTimeout(self.Context, value);
+            return value;
+        }
+
+        /// <summary>
+        /// A timeout is a number of seconds, and nil means none. MRI rejects zero and negative
+        /// values rather than treating them as "give up at once".
+        /// </summary>
+        private static double? ToTimeout(RubyContext/*!*/ context, object value) {
+            if (value == null) {
+                return null;
+            }
+
+            double seconds;
+            if (value is double) {
+                seconds = (double)value;
+            } else if (value is int) {
+                seconds = (int)value;
+            } else if (value is BigInteger) {
+                seconds = Protocols.ConvertToDouble(context, (BigInteger)value);
+            } else {
+                throw RubyExceptions.CreateTypeError("no implicit conversion to float from {0}",
+                    context.GetClassDisplayName(value).ToLowerInvariant());
+            }
+
+            if (Double.IsNaN(seconds) || seconds <= 0) {
+                throw RubyExceptions.CreateArgumentError("invalid timeout: {0}", context.Inspect(value).ToString());
+            }
+            return seconds;
+        }
+
+        /// <summary>
+        /// Regexp.new's `timeout:' keyword. IronRuby has no keyword-argument slot, so it arrives
+        /// as a trailing Hash in the place the flags go; only one written as keywords counts,
+        /// because `Regexp.new(src, {})' is a positional argument MRI warns about instead.
+        /// </summary>
+        private static double? TakeTimeout(RubyContext/*!*/ context, ref object options) {
+            var hash = options as Hash;
+            if (hash == null || !hash.IsKeywordArguments) {
+                return null;
+            }
+
+            object timeout = null;
+            foreach (var entry in hash) {
+                var key = entry.Key as RubySymbol;
+                if (key == null || key.ToString() != "timeout") {
+                    return null;
+                }
+                timeout = entry.Value;
+            }
+
+            options = Missing.Value;
+            return ToTimeout(context, timeout);
         }
 
         /// <summary>
@@ -127,7 +212,9 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]MutableString/*!*/ pattern, [Optional]object options, [DefaultProtocol, Optional]MutableString encoding) {
 
             RequireUninitialized(context, self);
+            double? timeout = TakeTimeout(context, ref options);
             self.Set(pattern, MakeOptions(context, options, encoding));
+            self.Timeout = timeout;
             return self;
         }
 

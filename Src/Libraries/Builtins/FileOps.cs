@@ -784,13 +784,14 @@ namespace IronRuby.Builtins {
             [DefaultParameterValue(null)]object basePath) {
             var context = self.Context;
             MutableString pathStr = Protocols.CastToPath(toPath, path);
+            RequireUsablePathEncoding(context, pathStr);
 
             string result = RubyUtils.ExpandPath(
                 context.Platform,
-                ExpandTilde(context, context.DecodePath(pathStr)),
+                ExpandTilde(context, DecodePathLike(context, pathStr)),
                 (basePath == null)
                     ? context.Platform.CurrentDirectory
-                    : ExpandTilde(context, context.DecodePath(Protocols.CastToPath(toPath, basePath))),
+                    : ExpandTilde(context, DecodePathLike(context, Protocols.CastToPath(toPath, basePath))),
                 false
             );
 
@@ -834,10 +835,57 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// A path in the filesystem encoding has to survive a trip through a .NET string, and one
+        /// whose default external encoding is not ASCII compatible cannot: there is no byte
+        /// sequence for a separator to look for. MRI reports the same thing, as an incompatibility
+        /// between the path and the external encoding.
+        /// </summary>
+        private static void RequireUsablePathEncoding(RubyContext/*!*/ context, MutableString/*!*/ path) {
+            var external = context.DefaultExternalEncoding;
+            if (external != null && !external.IsAsciiIdentity) {
+                throw RubyExceptions.CreateEncodingCompatibilityError(path.Encoding, external);
+            }
+        }
+
+        /// <summary>
+        /// A BINARY path is a sequence of bytes MRI never interprets, so it crosses the .NET
+        /// string layer one byte to one character rather than being decoded - decoding it would
+        /// replace whatever is not valid in the filesystem encoding, and the bytes would be gone.
+        /// </summary>
+        private static string/*!*/ DecodePathLike(RubyContext/*!*/ context, MutableString/*!*/ path) {
+            if (path.Encoding != RubyEncoding.Binary) {
+                return context.DecodePath(path);
+            }
+
+            int count = path.GetByteCount();
+            var chars = new char[count];
+            for (int i = 0; i < count; i++) {
+                chars[i] = (char)path.GetByte(i);
+            }
+            return new String(chars);
+        }
+
+        /// <summary>
         /// The path methods hand back a string in the encoding of the path they were
         /// given, not in the filesystem encoding.
         /// </summary>
         private static MutableString/*!*/ EncodePathLike(RubyContext/*!*/ context, string/*!*/ result, MutableString/*!*/ original) {
+            if (original.Encoding == RubyEncoding.Binary) {
+                // the counterpart of DecodePathLike; anything above U+00FF did not come from
+                // this path's bytes, so that one is left to the general route below
+                var bytes = new byte[result.Length];
+                int i = 0;
+                for (; i < result.Length; i++) {
+                    if (result[i] > 0xFF) {
+                        break;
+                    }
+                    bytes[i] = (byte)result[i];
+                }
+                if (i == result.Length) {
+                    return MutableString.CreateBinary(bytes).TaintBy(original);
+                }
+            }
+
             // Encode with the filesystem encoding and then relabel, rather than transcode:
             // the bytes came from the OS, and a path whose bytes are not representable in
             // the argument's encoding still has to come back (CRuby "forces" the encoding).

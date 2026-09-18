@@ -1257,13 +1257,20 @@ namespace IronRuby.Runtime {
             // question here is what the runtime can make a singleton of at all - not what user
             // code is allowed to hang methods on. A Float, a Bignum and a frozen String are all
             // perfectly good receivers for #instance_eval.
-            // TODO: an Integer and a Symbol are not, and in MRI they are.
-            if (!RubyUtils.HasSingletonClass(self)) {
-                throw RubyExceptions.CreateTypeError("can't define singleton");
+            //
+            // An Integer and a Symbol have no singleton class at all, not even in MRI, so the
+            // block looks methods up through the dummy singleton standing in front of their
+            // class instead. It sits directly below the class, so a private method of Integer
+            // is still reached; a `def' landing in it raises, which is what MRI does too.
+            RubyModule lookupModule;
+            if (RubyUtils.HasSingletonClass(self)) {
+                lookupModule = block.RubyContext.GetOrCreateSingletonClass(self);
+            } else {
+                lookupModule = block.RubyContext.GetImmediateClassOf(self).GetDummySingletonClass();
             }
 
             object result;
-            EvaluateBlock(block, block.RubyContext.GetOrCreateSingletonClass(self), self, args, out result);
+            EvaluateBlock(block, lookupModule, self, args, out result);
             return result;
         }
 
