@@ -201,7 +201,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object BlockReturn(BlockParam/*!*/ blockFlowControl, object returnValue) {
             Proc proc = blockFlowControl.Proc;
-            if (blockFlowControl.CallerKind == BlockCallerKind.Call && proc.Kind == ProcKind.Lambda) {
+            // a lambda stays a lambda when it is passed as a block and yielded to: return leaves
+            // just the lambda (MRI 3.0+)
+            if (proc.Kind == ProcKind.Lambda) {
                 return returnValue;
             }
 
@@ -226,7 +228,7 @@ namespace IronRuby.Runtime {
             if (blockScope != null) {
                 Proc proc = blockScope.BlockFlowControl.Proc;
 
-                if (blockScope.BlockFlowControl.CallerKind == BlockCallerKind.Call && proc.Kind == ProcKind.Lambda) {
+                if (proc.Kind == ProcKind.Lambda) {
                     throw new BlockUnwinder(returnValue, false);
                 }
 

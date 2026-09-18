@@ -32,6 +32,9 @@ namespace IronRuby.Prism {
         private int _tempCounter;
         private SourceUnit _sourceUnit;
         private ErrorSink _errorSink;
+        // An eval whose code does not run inside a method: prism parses eval'd code as a partial
+        // script and accepts a top-level yield, which MRI's compiler then rejects.
+        private bool _evalOutsideMethod;
         // case/in subject temp -> { value, "already computed" flag } holding its #deconstruct result
         private readonly Dictionary<LocalVariable, LocalVariable[]>/*!*/ _deconstructCache =
             new Dictionary<LocalVariable, LocalVariable[]>();
@@ -51,7 +54,7 @@ namespace IronRuby.Prism {
             // what RubyCompilerOptions.InitialLocation carries. Only the old parser ever read it, so
             // every eval under prism started at line 1 no matter what it was given.
             return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
-                options.InitialLocation.Line);
+                options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null);
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path) {
@@ -64,7 +67,7 @@ namespace IronRuby.Prism {
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
-            SourceUnit sourceUnit, ErrorSink errorSink, int startLine) {
+            SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false) {
 
             // --enable/--disable=frozen-string-literal only sets the default; the magic comment
             // in a file still wins, and prism applies that rule itself.
@@ -82,6 +85,7 @@ namespace IronRuby.Prism {
             bridge._startLine = startLine <= 0 ? 1 : startLine;
             bridge._sourceUnit = sourceUnit;
             bridge._errorSink = errorSink;
+            bridge._evalOutsideMethod = evalOutsideMethod;
 
             if (result.Errors.Count > 0) {
                 if (errorSink != null && sourceUnit != null) {
@@ -608,6 +612,9 @@ namespace IronRuby.Prism {
                 case Pm.RetryNode _: return new RetryStatement(span);
                 case Pm.RedoNode _: return new RedoStatement(span);
                 case Pm.YieldNode yield:
+                    if (!IsYieldAllowed() && _errorSink != null) {
+                        _errorSink.Add(_sourceUnit, "Invalid yield", span, 0, Severity.FatalError);
+                    }
                     return new YieldCall(yield.Arguments != null ? BuildArguments(yield.Arguments) : null, span);
 
                 case Pm.SuperNode super: {
@@ -1475,6 +1482,25 @@ namespace IronRuby.Prism {
             } finally {
                 _scopes.Pop();
             }
+        }
+
+        /// <summary>
+        /// MRI rejects a yield whose nearest enclosing method-or-class body is a class, module or
+        /// singleton class body, or the top level. Blocks and lambdas are transparent.
+        /// </summary>
+        private bool IsYieldAllowed() {
+            for (LexicalScope scope = CurrentScope; scope != null; scope = scope.OuterScope) {
+                if (scope is MethodLexicalScope) {
+                    return true;
+                }
+                if (scope is ClassLexicalScope || scope is TopLocalDefinitionLexicalScope) {
+                    return false;
+                }
+                if (scope is TopStaticLexicalScope) {
+                    return !_evalOutsideMethod;
+                }
+            }
+            return true;
         }
 
         private Expression/*!*/ Class(Pm.ClassNode/*!*/ node, SourceSpan span) {
