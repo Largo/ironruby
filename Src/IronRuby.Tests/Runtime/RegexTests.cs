@@ -305,15 +305,13 @@ puts(/b#{/a/}/)
         public void RegexCondition1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
-$_ = 'foo'.taint
+$_ = 'foo'
 if /(foo)/ then
   puts $1
-  puts $1.tainted?
 end
 ");
             }, @"
 foo
-true
 ");
         }
 

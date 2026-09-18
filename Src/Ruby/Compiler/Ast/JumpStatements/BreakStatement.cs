@@ -31,6 +31,22 @@ namespace IronRuby.Compiler.Ast {
         }
 
         // see Ruby Language.doc/Runtime/Control Flow Implementation/Break
+        // a class body inside the loop has to be left first
+        private static MSA.Expression/*!*/ LoopBreak(AstGenerator/*!*/ gen, MSA.Expression/*!*/ value) {
+            var module = gen.GetModuleBodyToEscape(true);
+            if (module != null) {
+                return module.Escape(value, LoopBreak);
+            }
+            return Ast.Block(
+                Ast.Assign(
+                    gen.CurrentLoop.ResultVariable,
+                    Ast.Convert(value, gen.CurrentLoop.ResultVariable.Type)
+                ),
+                Ast.Break(gen.CurrentLoop.BreakLabel),
+                AstUtils.Empty()
+            );
+        }
+
         internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
 
             MSA.Expression transformedReturnValue = TransformReturnValue(gen);
@@ -42,14 +58,7 @@ namespace IronRuby.Compiler.Ast {
 
             // loop:
             if (gen.CurrentLoop != null) {
-                return Ast.Block(
-                    Ast.Assign(
-                        gen.CurrentLoop.ResultVariable,
-                        Ast.Convert(transformedReturnValue, gen.CurrentLoop.ResultVariable.Type)
-                    ),
-                    Ast.Break(gen.CurrentLoop.BreakLabel),
-                    AstUtils.Empty()
-                );
+                return LoopBreak(gen, transformedReturnValue);
             }
 
             // block:

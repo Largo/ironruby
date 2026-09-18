@@ -12028,7 +12028,7 @@ class IO
 end
 
 # caller_locations (2.0) and the Location objects it yields. The runtime only
-# offers caller strings, so parse those: "path:lineno:in `label'".
+# offers caller strings, so parse those: "path:lineno:in 'label'".
 class Thread
   # A thread's own stack is reachable through Kernel#caller.  Another thread's
   # comes from __native_backtrace__, which reads the frame list that thread
@@ -12158,7 +12158,7 @@ class Thread
         base.start_with?("<") ? base : base.sub(/\A[^ ]*[#.]/, "")
       end
 
-      # "path:lineno:in `label'" -> a Location.  Both Kernel#caller_locations and
+      # "path:lineno:in 'label'" -> a Location.  Both Kernel#caller_locations and
       # Thread#backtrace_locations have only the string form to work from.
       def self.__parse__(entry)
         if (m = /\A(.*):(\d+)(?::in [`'](.*)')?\z/.match(entry))
@@ -12169,7 +12169,7 @@ class Thread
       end
 
       def to_s
-        @label ? "#{@path}:#{@lineno}:in `#{@label}'" : "#{@path}:#{@lineno}"
+        @label ? "#{@path}:#{@lineno}:in '#{@label}'" : "#{@path}:#{@lineno}"
       end
 
       def inspect; to_s.inspect; end

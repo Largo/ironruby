@@ -477,7 +477,7 @@ module Gem
       files = Dir["#{File.expand_path path, load_path}#{Gem.suffix_pattern}"]
 
       files.select do |load_path_file|
-        File.file? load_path_file.untaint
+        File.file? load_path_file
       end
     end.flatten
 

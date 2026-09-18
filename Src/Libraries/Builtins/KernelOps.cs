@@ -1020,62 +1020,6 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        // Ruby 3.2 removed these six, and ruby/spec asks that an object no longer answer any of
-        // them - but the 1.9 era standard library bundled here still calls #taint and #untaint
-        // from rubygems, pathname, set and two dozen other files, so taking them away stops the
-        // interpreter before it reaches a spec. They go once that library does.
-        [RubyMethod("tainted?")]
-        public static bool Tainted(RubyContext/*!*/ context, object self) {
-            if (!RubyUtils.HasObjectState(self)) {
-                return false; // can't taint value types
-            }
-            return context.IsObjectTainted(self);
-        }
-
-        [RubyMethod("taint")]
-        public static object Taint(RubyContext/*!*/ context, object self) {
-            if (!RubyUtils.HasObjectState(self)) {
-                return self;
-            }
-            context.SetObjectTaint(self, true);
-            return self;
-        }
-
-        [RubyMethod("untaint")]
-        public static object Untaint(RubyContext/*!*/ context, object self) {
-            if (!RubyUtils.HasObjectState(self)) {
-                return self;
-            }
-            context.SetObjectTaint(self, false);
-            return self;
-        }
-
-        [RubyMethod("untrusted?")]
-        public static bool Untrusted(RubyContext/*!*/ context, object self) {
-            if (!RubyUtils.HasObjectState(self)) {
-                return false; // can't untrust value types
-            }
-            return context.IsObjectUntrusted(self);
-        }
-
-        [RubyMethod("trust")]
-        public static object Trust(RubyContext/*!*/ context, object self) {
-            if (!RubyUtils.HasObjectState(self)) {
-                return self;
-            }
-            context.SetObjectTrustiness(self, false);
-            return self;
-        }
-
-        [RubyMethod("untrust")]
-        public static object Untrust(RubyContext/*!*/ context, object self) {
-            if (!RubyUtils.HasObjectState(self)) {
-                return self;
-            }
-            context.SetObjectTrustiness(self, true);
-            return self;
-        }
-
         #endregion
 
         #region eval
@@ -1950,8 +1894,14 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region syscall, trap
-        
-        //syscall
+
+        // A raw system call by number cannot be made portably from .NET; this is what MRI answers
+        // on a platform without syscall(2).
+        [RubyMethod("syscall", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("syscall", RubyMethodAttributes.PublicSingleton)]
+        public static object Syscall(object self, params object[]/*!*/ args) {
+            throw RubyExceptions.CreateNotImplementedError("syscall() function is unimplemented on this machine");
+        }
 
 #if FEATURE_PROCESS
         [RubyMethod("trap", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_PROCESS")]

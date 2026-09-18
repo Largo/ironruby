@@ -66,7 +66,7 @@ module WEBrick
 
     def escape(data)
       if data.tainted?
-        data.gsub(/[[:cntrl:]\\]+/) {$&.dump[1...-1]}.untaint
+        data.gsub(/[[:cntrl:]\\]+/) {$&.dump[1...-1]}
       else
         data
       end

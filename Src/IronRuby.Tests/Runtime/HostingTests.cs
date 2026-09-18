@@ -527,13 +527,13 @@ end
 ");
             var names = Engine.Operations.GetMemberNames(cls);
             Assert(!names.Contains("foo"));
-            Assert(names.Contains("taint"));
+            Assert(names.Contains("instance_variables"));
             Assert(names.Contains("bar"));
 
             object obj = Engine.Operations.CreateInstance(cls);
             names = Engine.Operations.GetMemberNames(obj);
             Assert(names.Contains("foo"));
-            Assert(names.Contains("taint"));
+            Assert(names.Contains("instance_variables"));
             Assert(!names.Contains("freeze"));
             Assert(!names.Contains("bar"));
         }

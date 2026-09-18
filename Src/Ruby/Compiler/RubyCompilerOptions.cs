@@ -79,6 +79,13 @@ namespace IronRuby.Compiler {
         internal string TopLevelMethodName { get; set; }
 
         /// <summary>
+        /// Eval only: the label of the frame the code runs in, which MRI gives the eval's own frame
+        /// ("Object#m", "block in <main>"): the label without the blocks, and how many blocks deep.
+        /// </summary>
+        internal string EvalFrameBaseLabel { get; set; }
+        internal int EvalFrameBlockLevels { get; set; }
+
+        /// <summary>
         /// Used by super-calls with implicit parameters.
         /// </summary>
         internal string[] TopLevelParameterNames { get; set; }

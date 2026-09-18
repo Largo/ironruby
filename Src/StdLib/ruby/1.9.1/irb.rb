@@ -155,7 +155,6 @@ module IRB
       @scanner.each_top_level_statement do |line, line_no|
 	signal_status(:IN_EVAL) do
 	  begin
-            line.untaint
 	    @context.evaluate(line, line_no)
 	    output_value if @context.echo?
 	    exc = nil

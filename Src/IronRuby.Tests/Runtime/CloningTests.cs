@@ -24,7 +24,6 @@ objects = [{}, [], '', Regexp.new('foo'), Object.new, Module.new, Class.new]
 
 objects.each do |x| 
   puts x.class.name
-  x.taint
   
   class << x
     CONST = 1
@@ -38,8 +37,6 @@ objects.each do |x|
 
   x.instance_variable_set(:@iv_x, 4);
   y = x.clone
-  
-  raise '0' unless y.tainted?
 
   class << y
     raise '1' unless CONST == 1                                     # singleton constants copied

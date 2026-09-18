@@ -293,7 +293,6 @@ module Rake
         new_value = value.clone rescue value
         sibling.instance_variable_set(ivar, new_value)
       end
-      sibling.taint if tainted?
       sibling
     end
 

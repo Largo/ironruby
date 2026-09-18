@@ -89,7 +89,7 @@ class Gem::SourceIndex
                     File.read file_name, :encoding => 'UTF-8'
                   else
                     File.read file_name
-                  end.untaint
+                  end
 
       begin
         gemspec = eval spec_code, binding, file_name
@@ -150,7 +150,7 @@ class Gem::SourceIndex
       spec_files = Dir.glob File.join(spec_dir, '*.gemspec')
 
       spec_files.each do |spec_file|
-        gemspec = self.class.load_specification spec_file.untaint
+        gemspec = self.class.load_specification spec_file
         add_spec gemspec if gemspec
       end
     end

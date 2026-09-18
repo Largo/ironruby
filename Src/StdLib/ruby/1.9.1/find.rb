@@ -38,7 +38,7 @@ module Find
     paths.collect!{|d| raise Errno::ENOENT unless File.exist?(d); d.dup}
     while file = paths.shift
       catch(:prune) do
-	yield file.dup.taint
+	yield file.dup
         begin
           s = File.lstat(file)
         rescue Errno::ENOENT, Errno::EACCES, Errno::ENOTDIR, Errno::ELOOP, Errno::ENAMETOOLONG
@@ -54,7 +54,7 @@ module Find
           fs.reverse_each {|f|
             next if f == "." or f == ".."
             f = File.join(file, f)
-            paths.unshift f.untaint
+            paths.unshift f
           }
         end
       end

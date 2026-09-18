@@ -20,7 +20,6 @@ module DRb
 
     def self.open(uri, config)
       filename, option = parse_uri(uri)
-      filename.untaint
       soc = UNIXSocket.open(filename)
       self.new(uri, soc, config)
     end

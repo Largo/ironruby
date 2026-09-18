@@ -140,9 +140,6 @@ class Queue
   def initialize
     @que = []
     @waiting = []
-    @que.taint		# enable tainted comunication
-    @waiting.taint
-    self.taint
     @mutex = Mutex.new
   end
 
@@ -248,7 +245,6 @@ class SizedQueue < Queue
     raise ArgumentError, "queue size must be positive" unless max > 0
     @max = max
     @queue_wait = []
-    @queue_wait.taint		# enable tainted comunication
     super()
   end
 

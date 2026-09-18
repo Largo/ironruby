@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Reflection;
@@ -36,8 +37,10 @@ namespace IronRuby.Runtime {
         private IList<InterpretedFrameInfo> _interpretedFrames;
         private int _interpretedFrameIndex;
         private string _nextFrameMethodName;
+        private readonly RubyContext/*!*/ _context;
 
         private RubyStackTraceBuilder(RubyContext/*!*/ context) {
+            _context = context;
             _hasFileAccessPermission = DetectFileAccessPermissions();
             _exceptionDetail = context.Options.ExceptionDetail;
             _encoding = context.GetPathEncoding();
@@ -205,7 +208,8 @@ namespace IronRuby.Runtime {
             if (String.IsNullOrEmpty(methodName)) {
                 return String.Format("{0}:{1}", file, line);
             } else {
-                return String.Format("{0}:{1}:in `{2}'", file, line, methodName);
+                // MRI 3.4 quotes the label with two apostrophes; it used to open with a backtick
+                return String.Format("{0}:{1}:in '{2}'", file, line, methodName);
             }
         }
 
@@ -237,8 +241,7 @@ namespace IronRuby.Runtime {
                 object[] attrs = method.GetCustomAttributes(typeof(RubyMethodAttribute), false);
                 if (attrs.Length > 0) {
                     // Ruby library method:
-                    // TODO: aliases
-                    methodName = ((RubyMethodAttribute)attrs[0]).Name;
+                    methodName = GetLibraryMethodLabel(method, attrs);
 
                     if (!_exceptionDetail) {
                         fileName = null;
@@ -260,6 +263,86 @@ namespace IronRuby.Runtime {
                     return false;
                 }
             }
+        }
+
+        private static readonly ConcurrentDictionary<MethodBase, string>/*!*/ _libraryMethodLabels =
+            new ConcurrentDictionary<MethodBase, string>();
+
+        /// <summary>
+        /// MRI labels a builtin's frame with its owner, like any other method: "Integer#times",
+        /// "Kernel#eval", "Integer.sqrt", "File::Stat#initialize". The owner is the module the
+        /// library type defines or extends.
+        /// </summary>
+        private string/*!*/ GetLibraryMethodLabel(MethodBase/*!*/ method, object[]/*!*/ attrs) {
+            string label;
+            if (_libraryMethodLabels.TryGetValue(method, out label)) {
+                return label;
+            }
+
+            // a module function is registered twice, as an instance method and a singleton one, and
+            // MRI reports the instance method
+            RubyMethodAttribute chosen = null;
+            foreach (RubyMethodAttribute attr in attrs) {
+                if ((attr.MethodAttributes & RubyMethodAttributes.Instance) != 0) {
+                    chosen = attr;
+                    break;
+                }
+            }
+            bool singleton = chosen == null;
+            chosen = chosen ?? (RubyMethodAttribute)attrs[0];
+
+            string owner = GetLibraryModuleName(method.DeclaringType);
+            label = (owner != null) ? owner + (singleton ? "." : "#") + chosen.Name : chosen.Name;
+            _libraryMethodLabels.TryAdd(method, label);
+            return label;
+        }
+
+        private string GetLibraryModuleName(Type type) {
+            if (type == null) {
+                return null;
+            }
+            var attr = (RubyModuleAttribute)Attribute.GetCustomAttribute(type, typeof(RubyModuleAttribute), false);
+            if (attr == null || attr is RubySingletonAttribute) {
+                return null;
+            }
+
+            string name = attr.Name;
+            if (name == null && attr.Extends != null && attr.Extends.IsInterface) {
+                // IListOps and IDictionaryOps extend a CLR interface, and Array and Hash copy their
+                // methods in; to Ruby those are Array's and Hash's methods
+                return GetCopyingClassName(type.Assembly, attr.Extends);
+            }
+            if (name == null && attr.Extends != null) {
+                try {
+                    name = _context.GetModule(attr.Extends).Name;
+                } catch (Exception) {
+                    return null;
+                }
+            }
+            if (name != null && attr.DefineIn != null) {
+                string outer = GetLibraryModuleName(attr.DefineIn);
+                if (outer != null) {
+                    name = outer + "::" + name;
+                }
+            }
+            return name;
+        }
+
+        private string GetCopyingClassName(Assembly/*!*/ assembly, Type/*!*/ included) {
+            Type[] types;
+            try {
+                types = assembly.GetTypes();
+            } catch (ReflectionTypeLoadException) {
+                return null;
+            }
+            foreach (Type candidate in types) {
+                foreach (IncludesAttribute includes in candidate.GetCustomAttributes(typeof(IncludesAttribute), false)) {
+                    if (includes.Copy && Array.IndexOf(includes.Types, included) >= 0) {
+                        return GetLibraryModuleName(candidate);
+                    }
+                }
+            }
+            return null;
         }
 
         private static bool IsVisibleClrFrame(MethodBase/*!*/ method) {

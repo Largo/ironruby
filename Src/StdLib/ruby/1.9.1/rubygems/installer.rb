@@ -138,7 +138,7 @@ class Gem::Installer
 
     @spec = @format.spec
 
-    @gem_dir = File.join(@gem_home, "gems", @spec.full_name).untaint
+    @gem_dir = File.join(@gem_home, "gems", @spec.full_name)
   end
 
   ##
@@ -261,7 +261,6 @@ class Gem::Installer
 
     file_name = File.join @gem_home, 'specifications', @spec.spec_name
 
-    file_name.untaint
 
     File.open(file_name, "w") do |file|
       file.puts rubycode
@@ -295,7 +294,6 @@ class Gem::Installer
     raise Gem::FilePermissionError.new(bindir) unless File.writable? bindir
 
     @spec.executables.each do |filename|
-      filename.untaint
       bin_path = File.expand_path "#{@spec.bindir}/#{filename}", @gem_dir
       mode = File.stat(bin_path).mode | 0111
       File.chmod mode, bin_path
@@ -498,7 +496,7 @@ Results logged to #{File.join(Dir.pwd, 'gem_make.out')}
     raise ArgumentError, "format required to extract from" if @format.nil?
 
     @format.file_entries.each do |entry, file_data|
-      path = entry['path'].untaint
+      path = entry['path']
 
       if path =~ /\A\// then # for extra sanity
         raise Gem::InstallError,

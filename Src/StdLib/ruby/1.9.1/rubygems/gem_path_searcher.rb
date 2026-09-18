@@ -70,7 +70,7 @@ class Gem::GemPathSearcher
   def matching_files(spec, path)
     return [] unless @lib_dirs[spec.object_id] # case no paths
     glob = File.join @lib_dirs[spec.object_id], "#{path}#{Gem.suffix_pattern}"
-    Dir[glob].select { |f| File.file? f.untaint }
+    Dir[glob].select { |f| File.file? f }
   end
 
   ##

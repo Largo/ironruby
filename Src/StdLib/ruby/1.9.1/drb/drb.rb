@@ -587,7 +587,6 @@ module DRb
           DRbUnknown.new($!, str)
         ensure
           Thread.current[:drb_untaint].each do |x|
-            x.untaint
           end
           Thread.current[:drb_untaint] = save
         end
@@ -821,8 +820,6 @@ module DRb
     # Open a client connection to +uri+ using configuration +config+.
     def self.open(uri, config)
       host, port, option = parse_uri(uri)
-      host.untaint
-      port.untaint
       soc = TCPSocket.open(host, port)
       self.new(uri, soc, config)
     end

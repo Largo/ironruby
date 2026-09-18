@@ -119,6 +119,48 @@ namespace IronRuby.Runtime {
         internal InterpretedFrame InterpretedFrame { get; set; }
 
         /// <summary>
+        /// The backtrace label of the frame this scope belongs to, without its blocks - "Object#m",
+        /// "<class:C>", "<main>" - and how many blocks deep the scope is in it.
+        /// </summary>
+        internal string GetFrameBaseLabel(out int blockLevels) {
+            blockLevels = 0;
+            for (RubyScope scope = this; scope != null; scope = scope.Parent) {
+                switch (scope.Kind) {
+                    case ScopeKind.Block:
+                    case ScopeKind.BlockMethod:
+                    case ScopeKind.BlockModule:
+                        blockLevels++;
+                        break;
+
+                    case ScopeKind.Method:
+                        var method = (RubyMethodScope)scope;
+                        return IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(method.DefinitionName, method.DeclaringModule);
+
+                    case ScopeKind.Module:
+                        // an instance_eval/class_eval string runs in its caller's frame
+                        if (scope is RubyModuleEvalScope) {
+                            break;
+                        }
+                        var module = scope.Module;
+                        var cls = module as RubyClass;
+                        if (cls != null && cls.IsSingletonClass) {
+                            return "singleton class";
+                        }
+                        string name = module.Name ?? "";
+                        int separator = name.LastIndexOf("::", StringComparison.Ordinal);
+                        if (separator >= 0) {
+                            name = name.Substring(separator + 2);
+                        }
+                        return (cls != null ? "<class:" : "<module:") + name + ">";
+
+                    case ScopeKind.TopLevel:
+                        return ((RubyTopLevelScope)scope).IsMain ? "<main>" : "<top (required)>";
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
         /// The file and line this scope's code is executing, for the builtin it has just called.
         /// Interpreted code knows it from its frame for free; compiled code has to be found on the
         /// CLR stack, which costs a stack walk with file info.
@@ -1184,6 +1226,10 @@ var closureScope = scope as RubyClosureScope;
         public override ScopeKind Kind { get { return ScopeKind.TopLevel; } }
         public override bool InheritsLocalVariables { get { return false; } }
 
+        // The main script's top level, whose frame is "<main>"; a required file's is "<top (required)>".
+        // A hosted scope counts as main.
+        internal bool IsMain { get; set; } = true;
+
         private readonly RubyGlobalScope/*!*/ _globalScope;
         private readonly RubyContext/*!*/ _context;
         private readonly RubyModule _methodLookupModule;
@@ -1253,6 +1299,7 @@ var closureScope = scope as RubyClosureScope;
             RubyGlobalScope rubyGlobalScope = context.InitializeGlobalScope(globalScope, false, false);
 
             RubyTopLevelScope scope = new RubyTopLevelScope(rubyGlobalScope, null, null, rubyGlobalScope.MainObject);
+            scope.IsMain = isMain;
             if (isMain) {
                 scope.SetDebugName("top-main");
                 context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope) { SourcePath = "<main>", SourceLine = 0 });
@@ -1314,6 +1361,7 @@ var closureScope = scope as RubyClosureScope;
             context.GetOrCreateMainSingleton(mainObject, new[] { module });
 
             RubyTopLevelScope scope = new RubyTopLevelScope(rubyGlobalScope, module, null, mainObject);
+            scope.IsMain = false;
             scope.SetDebugName("top-level-wrapped");
 
             return scope;

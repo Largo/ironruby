@@ -250,16 +250,28 @@ namespace IronRuby.Compiler.Ast {
         // is more than one level. This runs after LeaveBlockDefinition, so the generator's
         // block chain is already the enclosing one and this block is the extra level.
         private static string/*!*/ BlockFrameLabel(AstGenerator/*!*/ gen) {
-            string enclosing = gen.CurrentMethod.FrameLabel ?? gen.CurrentMethod.MethodName ?? gen.TopLevelFrameLabel;
-
+            string enclosing;
+            AstGenerator.BlockScope outermost;
             int levels = 1;
-            for (var block = gen.CurrentBlock; block != null; block = block.ParentBlock) {
+            var module = gen.GetEnclosingModuleFrame();
+            if (module != null) {
+                enclosing = module.FrameLabel;
+                outermost = module.OuterBlock;
+            } else if (gen.CompilerOptions.EvalFrameBaseLabel != null && gen.CurrentMethod == gen.TopLevelScope) {
+                // a block in an eval counts its levels from the frame the eval runs in
+                enclosing = gen.CompilerOptions.EvalFrameBaseLabel;
+                levels += gen.CompilerOptions.EvalFrameBlockLevels;
+                outermost = null;
+            } else {
+                enclosing = gen.CurrentMethod.FrameLabel ?? gen.CurrentMethod.MethodName ?? gen.TopLevelFrameLabel;
+                outermost = null;
+            }
+
+            for (var block = gen.CurrentBlock; block != null && block != outermost; block = block.ParentBlock) {
                 levels++;
             }
 
-            return levels == 1
-                ? "block in " + enclosing
-                : "block (" + levels + " levels) in " + enclosing;
+            return AstGenerator.FormatBlockLabel(enclosing, levels);
         }
 
         private MSA.Expression/*!*/ GetParameterAccess(AstParameters/*!*/ parameters, MSA.Expression paramsArray, int i) {

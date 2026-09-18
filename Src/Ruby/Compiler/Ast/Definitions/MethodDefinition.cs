@@ -132,7 +132,7 @@ namespace IronRuby.Compiler.Ast {
         /// The owner is only known once the method is defined, which is also when the body is
         /// compiled, so the label can be baked into the frame name along with everything else.
         /// </summary>
-        private static string/*!*/ QualifyFrameLabel(string/*!*/ name, RubyModule declaringModule) {
+        internal static string/*!*/ QualifyFrameLabel(string/*!*/ name, RubyModule declaringModule) {
             if (declaringModule == null) {
                 return name;
             }

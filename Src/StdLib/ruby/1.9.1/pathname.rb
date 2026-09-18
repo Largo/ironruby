@@ -226,12 +226,9 @@ class Pathname
       raise ArgumentError, "pathname contains \\0: #{@path.inspect}"
     end
 
-    self.taint if @path.tainted?
   end
 
   def freeze() super; @path.freeze; self end
-  def taint() super; @path.taint; self end
-  def untaint() super; @path.untaint; self end
 
   #
   # Compare this pathname with +other+.  The comparison is string-based.

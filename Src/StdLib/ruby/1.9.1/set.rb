@@ -98,17 +98,7 @@ class Set
     self
   end
 
-  def taint	# :nodoc:
-    super
-    @hash.taint
-    self
-  end
 
-  def untaint	# :nodoc:
-    super
-    @hash.untaint
-    self
-  end
 
   # Returns the number of elements.
   def size

@@ -31,6 +31,27 @@ namespace IronRuby.Compiler.Ast {
         }
 
         // see Ruby Language.doc/Runtime/Control Flow Implementation/Redo
+        // a class body inside the loop or block has to be left first
+        private static MSA.Expression/*!*/ LoopRedo(AstGenerator/*!*/ gen, MSA.Expression value) {
+            var module = gen.GetModuleBodyToEscape(true);
+            if (module != null) {
+                return module.Escape(AstUtils.Constant(null), LoopRedo);
+            }
+            return Ast.Block(
+                Ast.Assign(gen.CurrentLoop.RedoVariable, AstUtils.Constant(true)),
+                Ast.Continue(gen.CurrentLoop.ContinueLabel),
+                AstUtils.Empty()
+            );
+        }
+
+        private static MSA.Expression/*!*/ BlockRedo(AstGenerator/*!*/ gen, MSA.Expression value) {
+            var module = gen.GetModuleBodyToEscape(false);
+            if (module != null) {
+                return module.Escape(AstUtils.Constant(null), BlockRedo);
+            }
+            return Ast.Continue(gen.CurrentBlock.RedoLabel);
+        }
+
         internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
 
             // eval:
@@ -40,16 +61,12 @@ namespace IronRuby.Compiler.Ast {
 
             // loop:
             if (gen.CurrentLoop != null) {
-                return Ast.Block(
-                    Ast.Assign(gen.CurrentLoop.RedoVariable, AstUtils.Constant(true)),
-                    Ast.Continue(gen.CurrentLoop.ContinueLabel),
-                    AstUtils.Empty()
-                );
+                return LoopRedo(gen, null);
             }
 
             // block:
             if (gen.CurrentBlock != null) {
-                return Ast.Continue(gen.CurrentBlock.RedoLabel);
+                return BlockRedo(gen, null);
             }
 
             // method:

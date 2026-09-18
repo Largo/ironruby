@@ -369,6 +369,77 @@ namespace IronRuby.Compiler.Ast {
             private readonly bool _isSingleton;
             private ModuleScope _parentModule;
 
+            // The label of the body's frame, and the block the definition is written in - blocks
+            // inside the body count their nesting from the body, not from the enclosing method.
+            public string FrameLabel { get; set; }
+            public BlockScope OuterBlock { get; set; }
+
+            public LoopScope OuterLoop { get; set; }
+
+            // The body is a lambda of its own, so it cannot jump to a label outside it: `break' out of
+            // the loop the definition is written in, `return' from a `class << self' inside a method, a
+            // return a block call propagates. Such a jump leaves the body with a number saying which
+            // one it was and the value it carried, and the code after the call makes it again - from
+            // the enclosing frame, where it may have to escape another body the same way.
+            private MSA.LabelTarget _returnLabel;
+            private MSA.ParameterExpression _escapeCode;
+            private MSA.ParameterExpression _escapeValue;
+            private List<Func<AstGenerator, MSA.Expression, MSA.Expression>> _escapes;
+
+            public ScopeBuilder OuterLocals { get; set; }
+
+            internal MSA.Expression/*!*/ Escape(MSA.Expression/*!*/ value, Func<AstGenerator, MSA.Expression, MSA.Expression>/*!*/ outerJump) {
+                if (_escapes == null) {
+                    _escapes = new List<Func<AstGenerator, MSA.Expression, MSA.Expression>>();
+                    _escapeCode = OuterLocals.DefineHiddenVariable("#escape", typeof(int));
+                    _escapeValue = OuterLocals.DefineHiddenVariable("#escape-value", typeof(object));
+                }
+                _escapes.Add(outerJump);
+                if (value.Type == typeof(void)) {
+                    value = Ast.Block(value, AstUtils.Constant(null, typeof(object)));
+                }
+                return Ast.Block(
+                    Ast.Assign(_escapeValue, AstUtils.Box(value)),
+                    Ast.Assign(_escapeCode, AstUtils.Constant(_escapes.Count)),
+                    Ast.Return(ReturnLabel, AstUtils.Constant(null, typeof(object))),
+                    AstUtils.Empty()
+                );
+            }
+
+            // Before the call: nothing has escaped yet.
+            internal MSA.Expression/*!*/ ResetEscapes() {
+                return _escapes != null ? (MSA.Expression)Ast.Assign(_escapeCode, AstUtils.Constant(0)) : AstUtils.Empty();
+            }
+
+            // After the call, in the enclosing frame: make the jump that escaped.
+            internal MSA.Expression/*!*/ MakeEscapedJumps(AstGenerator/*!*/ gen) {
+                if (_escapes == null) {
+                    return AstUtils.Empty();
+                }
+                var jumps = new List<MSA.Expression>();
+                for (int i = 0; i < _escapes.Count; i++) {
+                    jumps.Add(AstUtils.IfThen(
+                        Ast.Equal(_escapeCode, AstUtils.Constant(i + 1)),
+                        _escapes[i](gen, _escapeValue)
+                    ));
+                }
+                jumps.Add(AstUtils.Empty());
+                return Ast.Block(jumps);
+            }
+
+            internal MSA.LabelTarget/*!*/ ReturnLabel {
+                get {
+                    if (_returnLabel == null) {
+                        _returnLabel = MSA.Expression.Label(typeof(object));
+                    }
+                    return _returnLabel;
+                }
+            }
+
+            internal MSA.Expression/*!*/ AddReturnTarget(MSA.Expression/*!*/ expression) {
+                return _returnLabel != null ? Ast.Label(_returnLabel, expression) : expression;
+            }
+
             public ModuleScope ParentModule {
                 get { return _parentModule; }
                 set { _parentModule = value; }
@@ -564,10 +635,14 @@ namespace IronRuby.Compiler.Ast {
             ScopeBuilder/*!*/ locals,
             MSA.Expression/*!*/ selfVariable,
             MSA.ParameterExpression/*!*/ runtimeScopeVariable, 
-            bool isSingleton) {
+            bool isSingleton,
+            string frameLabel) {
             Assert.NotNull(locals, selfVariable, runtimeScopeVariable);
 
             ModuleScope module = new ModuleScope(locals, selfVariable, runtimeScopeVariable, isSingleton);
+            module.FrameLabel = frameLabel;
+            module.OuterBlock = _currentBlock;
+            module.OuterLoop = _currentLoop;
 
             module.Parent = _currentElement;
             module.ParentVariableScope = _currentVariableScope;
@@ -613,13 +688,37 @@ namespace IronRuby.Compiler.Ast {
         /// The label a top-level frame carries in a backtrace. An eval keeps the anonymous
         /// name: MRI reports the enclosing frame's label there rather than one of its own.
         /// </summary>
+        /// <summary>
+        /// The class or module body the code being compiled is directly in - with no method
+        /// definition in between - or null.
+        /// </summary>
+        internal ModuleScope GetEnclosingModuleFrame() {
+            for (var element = _currentElement; element != null; element = element.Parent) {
+                if (element is ModuleScope) {
+                    return (ModuleScope)element;
+                }
+                if (element is MethodScope) {
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        internal static string/*!*/ FormatBlockLabel(string/*!*/ label, int levels) {
+            return levels == 0 ? label : levels == 1 ? "block in " + label : "block (" + levels + " levels) in " + label;
+        }
+
         internal string/*!*/ TopLevelFrameLabel {
             get {
                 switch (CompilerOptions.FactoryKind) {
                     case TopScopeFactoryKind.Main: return "<main>";
                     case TopScopeFactoryKind.File:
                     case TopScopeFactoryKind.WrappedFile: return "<top (required)>";
-                    default: return RubyStackTraceBuilder.TopLevelMethodName;
+                    default:
+                        if (CompilerOptions.EvalFrameBaseLabel != null) {
+                            return FormatBlockLabel(CompilerOptions.EvalFrameBaseLabel, CompilerOptions.EvalFrameBlockLevels);
+                        }
+                        return RubyStackTraceBuilder.TopLevelMethodName;
                 }
             }
         }
@@ -852,7 +951,27 @@ namespace IronRuby.Compiler.Ast {
             get { return CurrentFrame.ReturnLabel; }
         }
 
+        /// <summary>
+        /// The class or module body a jump to the current loop - or, if there is none, the current
+        /// block or method frame - has to escape first, or null if the target is inside the body.
+        /// </summary>
+        internal ModuleScope GetModuleBodyToEscape(bool toLoop) {
+            var module = GetEnclosingModuleFrame();
+            if (module == null) {
+                return null;
+            }
+            if (toLoop) {
+                return CurrentLoop == module.OuterLoop ? module : null;
+            }
+            return CurrentBlock == module.OuterBlock ? module : null;
+        }
+
         internal MSA.Expression/*!*/ Return(MSA.Expression/*!*/ expression) {
+            var module = GetModuleBodyToEscape(false);
+            if (module != null) {
+                return module.Escape(expression, (gen, value) => gen.Return(value));
+            }
+
             MSA.LabelTarget returnLabel = ReturnLabel;
             if (returnLabel.Type != typeof(void) && expression.Type == typeof(void)) {
                 expression = Ast.Block(expression, AstUtils.Constant(null, typeof(object)));

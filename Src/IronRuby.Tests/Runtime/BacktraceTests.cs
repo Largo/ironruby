@@ -52,14 +52,14 @@ end
 goo
 ", "Backtrace1.rb", SourceCodeKind.File).Execute();
             }, PreciseSinglePassTraces ? @"
-Backtrace1.rb:11:in `Object#bar'
-Backtrace1.rb:7:in `Object#foo'
-Backtrace1.rb:3:in `Object#goo'
+Backtrace1.rb:11:in 'Object#bar'
+Backtrace1.rb:7:in 'Object#foo'
+Backtrace1.rb:3:in 'Object#goo'
 Backtrace1.rb:18
 " : @"
-Backtrace1.rb:10:in `Object#bar'
-Backtrace1.rb:6:in `Object#foo'
-Backtrace1.rb:2:in `Object#goo'
+Backtrace1.rb:10:in 'Object#bar'
+Backtrace1.rb:6:in 'Object#foo'
+Backtrace1.rb:2:in 'Object#goo'
 Backtrace1.rb:0
 ");
         }
@@ -90,16 +90,16 @@ rescue
 end
 ");
             }, PreciseSinglePassTraces ? @"
-Backtrace2.rb:15:in `baz'
-Backtrace2.rb:11:in `bar'
-Backtrace2.rb:7:in `foo'
-Backtrace2.rb:3:in `goo'
+Backtrace2.rb:15:in 'baz'
+Backtrace2.rb:11:in 'bar'
+Backtrace2.rb:7:in 'foo'
+Backtrace2.rb:3:in 'goo'
 Backtrace2.rb:19
 " : @"
-Backtrace2.rb:14:in `baz'
-Backtrace2.rb:10:in `bar'
-Backtrace2.rb:6:in `foo'
-Backtrace2.rb:2:in `goo'
+Backtrace2.rb:14:in 'baz'
+Backtrace2.rb:10:in 'bar'
+Backtrace2.rb:6:in 'foo'
+Backtrace2.rb:2:in 'goo'
 Backtrace2.rb:0
 ");
         }
@@ -134,16 +134,16 @@ rescue
 end
 ");
             }, PreciseSinglePassTraces ? @"
-Backtrace3.rb:19:in `baz'
-Backtrace3.rb:13:in `bar'
-Backtrace3.rb:9:in `foo'
-Backtrace3.rb:3:in `goo'
+Backtrace3.rb:19:in 'baz'
+Backtrace3.rb:13:in 'bar'
+Backtrace3.rb:9:in 'foo'
+Backtrace3.rb:3:in 'goo'
 Backtrace3.rb:23
 " : @"
-Backtrace3.rb:18:in `baz'
-Backtrace3.rb:12:in `bar'
-Backtrace3.rb:8:in `foo'
-Backtrace3.rb:2:in `goo'
+Backtrace3.rb:18:in 'baz'
+Backtrace3.rb:12:in 'bar'
+Backtrace3.rb:8:in 'foo'
+Backtrace3.rb:2:in 'goo'
 Backtrace3.rb:0
 ");
         }
@@ -176,16 +176,16 @@ end
 foo
 ");
             }, PreciseSinglePassTraces ? @"
-Backtrace4.rb:7:in `baz'
-Backtrace4.rb:11:in `block in foo'
-*:*:in `Bar'
-Backtrace4.rb:11:in `foo'
+Backtrace4.rb:7:in 'baz'
+Backtrace4.rb:11:in 'block in foo'
+*:*:in 'Bar'
+Backtrace4.rb:11:in 'foo'
 Backtrace4.rb:14
 " : @"
-Backtrace4.rb:6:in `baz'
-Backtrace4.rb:11:in `block in foo'
-*:*:in `Bar'
-Backtrace4.rb:10:in `foo'
+Backtrace4.rb:6:in 'baz'
+Backtrace4.rb:11:in 'block in foo'
+*:*:in 'Bar'
+Backtrace4.rb:10:in 'foo'
 Backtrace4.rb:0
 ", OutputFlags.Match);
         }
@@ -259,18 +259,18 @@ end
 
 f1 rescue puts $@[0..5]
 ", PreciseSinglePassTraces ? @"
-Backtrace6.rb:23:in `f3'
-Backtrace6.rb:13:in `block in f2'
-Backtrace6.rb:10:in `times'
-Backtrace6.rb:10:in `f2'
-Backtrace6.rb:3:in `f1'
+Backtrace6.rb:23:in 'f3'
+Backtrace6.rb:13:in 'block in f2'
+Backtrace6.rb:10:in 'Integer#times'
+Backtrace6.rb:10:in 'f2'
+Backtrace6.rb:3:in 'f1'
 Backtrace6.rb:26
 " : @"
-Backtrace6.rb:22:in `f3'
-Backtrace6.rb:10:in `block in f2'
-Backtrace6.rb:6:in `times'
-Backtrace6.rb:6:in `f2'
-Backtrace6.rb:2:in `f1'
+Backtrace6.rb:22:in 'f3'
+Backtrace6.rb:10:in 'block in f2'
+Backtrace6.rb:6:in 'Integer#times'
+Backtrace6.rb:6:in 'f2'
+Backtrace6.rb:2:in 'f1'
 Backtrace6.rb:0
 ");
         }

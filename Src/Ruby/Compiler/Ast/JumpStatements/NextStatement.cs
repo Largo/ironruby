@@ -31,6 +31,19 @@ namespace IronRuby.Compiler.Ast {
         }
 
         // see Ruby Language.doc/Runtime/Control Flow Implementation/Next
+        // a class body inside the loop has to be left first
+        private static MSA.Expression/*!*/ LoopNext(AstGenerator/*!*/ gen, MSA.Expression/*!*/ value) {
+            var module = gen.GetModuleBodyToEscape(true);
+            if (module != null) {
+                return module.Escape(value, LoopNext);
+            }
+            return Ast.Block(
+                value, // evaluate for side-effects
+                Ast.Continue(gen.CurrentLoop.ContinueLabel),
+                AstUtils.Empty()
+            );
+        }
+
         internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
 
             MSA.Expression transformedReturnValue = TransformReturnValue(gen);
@@ -42,11 +55,7 @@ namespace IronRuby.Compiler.Ast {
             
             // loop:
             if (gen.CurrentLoop != null) {
-                return Ast.Block(
-                    transformedReturnValue, // evaluate for side-effects
-                    Ast.Continue(gen.CurrentLoop.ContinueLabel),
-                    AstUtils.Empty()
-                );
+                return LoopNext(gen, transformedReturnValue);
             }
 
             // block:

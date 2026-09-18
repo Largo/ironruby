@@ -152,7 +152,7 @@ class Gem::ConfigFile
     operating_system_config = Marshal.load Marshal.dump(OPERATING_SYSTEM_DEFAULTS)
     platform_config = Marshal.load Marshal.dump(PLATFORM_DEFAULTS)
     system_config = load_file SYSTEM_WIDE_CONFIG_FILE
-    user_config = load_file config_file_name.dup.untaint
+    user_config = load_file config_file_name.dup
 
     @hash = operating_system_config.merge platform_config
     @hash = @hash.merge system_config

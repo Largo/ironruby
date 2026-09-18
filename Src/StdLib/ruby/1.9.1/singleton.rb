@@ -267,7 +267,6 @@ end
 a = A.instance
 a.persist = ["persist"]
 a.die = "die"
-a.taint
 
 stored_state = Marshal.dump(a)
 # change state

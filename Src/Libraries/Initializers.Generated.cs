@@ -4925,14 +4925,9 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToString)
             );
             
-            DefineLibraryMethod(module, "taint", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Taint)
-            );
-            
-            DefineLibraryMethod(module, "tainted?", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.Tainted)
+            DefineLibraryMethod(module, "syscall", 0x52, 
+                0x80000000U, 
+                new Func<System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.Syscall)
             );
             
             DefineLibraryMethod(module, "tap", 0x51, 
@@ -4980,35 +4975,15 @@ namespace IronRuby.Builtins {
             );
             
             #endif
-            DefineLibraryMethod(module, "trust", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Trust)
-            );
-            
             DefineLibraryMethod(module, "type", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyClass>(IronRuby.Builtins.KernelOps.GetClassObsolete)
-            );
-            
-            DefineLibraryMethod(module, "untaint", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Untaint)
             );
             
             DefineLibraryMethod(module, "untrace_var", 0x52, 
                 0x00020004U, 0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.UntraceVariable), 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object, System.Object>(IronRuby.Builtins.KernelOps.UntraceVariable)
-            );
-            
-            DefineLibraryMethod(module, "untrust", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Untrust)
-            );
-            
-            DefineLibraryMethod(module, "untrusted?", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.Untrusted)
             );
             
             DefineLibraryMethod(module, "using_clr_extensions", 0x52, 
@@ -5281,6 +5256,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "String", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ToString)
+            );
+            
+            DefineLibraryMethod(module, "syscall", 0x61, 
+                0x80000000U, 
+                new Func<System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.Syscall)
             );
             
             #if FEATURE_FILESYSTEM

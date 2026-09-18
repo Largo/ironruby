@@ -107,17 +107,17 @@ class PP < PrettyPrint
   module PPMethods
     def guard_inspect_key
       if Thread.current[:__recursive_key__] == nil
-        Thread.current[:__recursive_key__] = {}.untrust
+        Thread.current[:__recursive_key__] = {}
       end
 
       if Thread.current[:__recursive_key__][:inspect] == nil
-        Thread.current[:__recursive_key__][:inspect] = {}.untrust
+        Thread.current[:__recursive_key__][:inspect] = {}
       end
 
       save = Thread.current[:__recursive_key__][:inspect]
 
       begin
-        Thread.current[:__recursive_key__][:inspect] = {}.untrust
+        Thread.current[:__recursive_key__][:inspect] = {}
         yield
       ensure
         Thread.current[:__recursive_key__][:inspect] = save

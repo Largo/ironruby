@@ -1147,8 +1147,13 @@ namespace IronRuby.Runtime {
         private static RubyCompilerOptions/*!*/ CreateCompilerOptionsForEval(RubyScope/*!*/ targetScope, RubyMethodScope methodScope,
             bool isModuleEval, int line) {
 
+            int blockLevels;
+            string baseLabel = targetScope.GetFrameBaseLabel(out blockLevels);
+
             return new RubyCompilerOptions(targetScope.RubyContext.RubyOptions) {
                 IsEval = true,
+                EvalFrameBaseLabel = baseLabel,
+                EvalFrameBlockLevels = blockLevels,
                 FactoryKind = isModuleEval ? TopScopeFactoryKind.ModuleEval : TopScopeFactoryKind.None,
                 LocalNames = targetScope.GetVisibleLocalNames(),
                 TopLevelMethodName = (methodScope != null) ? methodScope.DefinitionName : null,

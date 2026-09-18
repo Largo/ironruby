@@ -29,7 +29,6 @@ module REXML
         if enc and enc != UTF_8
           @encoding = enc
           raise ArgumentError, "Bad encoding name #@encoding" unless @encoding =~ /^[\w-]+$/
-          @encoding.untaint
           begin
             require 'rexml/encodings/ICONV.rb'
             Encoding.apply(self, "ICONV")
