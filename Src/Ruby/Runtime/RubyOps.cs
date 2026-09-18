@@ -2084,7 +2084,14 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringM(MutableString str1, RubyEncoding/*!*/ encoding) {
-            return MutableString.CreateInternal(str1, encoding);
+            var result = MutableString.CreateInternal(str1, encoding);
+            // MRI's "#{x}" is "" + x.to_s: an empty literal in the source encoding, which an
+            // ASCII-only x leaves as it is - unless that is US-ASCII, which gives way to any other
+            if (str1 != null && result.Encoding != encoding && encoding != RubyEncoding.Ascii && encoding.IsAsciiIdentity &&
+                result.IsAscii()) {
+                result.ForceEncoding(encoding);
+            }
+            return result;
         }
 
         #region frozen string literals
