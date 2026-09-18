@@ -229,7 +229,7 @@ namespace IronRuby.Prism {
             if (statementsNode is Pm.StatementsNode statements) {
                 var body = statements.Body;
                 for (int i = 0; i < body.Length; i++) {
-                    result.Add((i < body.Length - 1) ? VoidStatement(body[i]) : Expr(body[i]));
+                    result.Add((i < body.Length - 1) ? VoidStatement(body[i]) : Expr(body[i]), Span(body[i]).Start.Line);
                 }
             } else if (statementsNode != null) {
                 result.Add(Expr(statementsNode));
@@ -1353,8 +1353,9 @@ namespace IronRuby.Prism {
 
         private static Statements/*!*/ Prepend(Statements/*!*/ prologue, Statements/*!*/ body) {
             var result = new Statements();
-            foreach (var statement in prologue) result.Add(statement);
-            foreach (var statement in body) result.Add(statement);
+            // the parameter-binding prologue is not a line of the source (TracePoint :line)
+            foreach (var statement in prologue) result.Add(statement, Statements.NoLine);
+            for (int i = 0; i < body.Count; i++) result.Add(body[i], body.GetStartLine(i));
             if (body.Count == 0) {
                 // an empty body is nil, not whatever the last parameter-binding statement
                 // happened to evaluate to

@@ -962,6 +962,10 @@ namespace IronRuby.Builtins {
                 // Thread#kill / Thread#raise may have been called before the thread got a chance to run.
                 RubyUtils.CheckAsyncException();
 
+                if ((TracePoint.ActiveEvents & (int)TraceEvents.ThreadBegin) != 0) {
+                    TracePoint.OnThread(TraceEvents.ThreadBegin, context, Thread.CurrentThread);
+                }
+
                 object threadResult;
                 // TODO: break/returns might throw LocalJumpError if the RFC that was created for startRoutine is not active anymore:
                 if (startRoutine.Yield(args, out threadResult) && startRoutine.Returning(threadResult, out threadResult)) {
@@ -1038,6 +1042,14 @@ namespace IronRuby.Builtins {
                     }
                 }
             } finally {
+                if ((TracePoint.ActiveEvents & (int)TraceEvents.ThreadEnd) != 0) {
+                    try {
+                        TracePoint.OnThread(TraceEvents.ThreadEnd, context, Thread.CurrentThread);
+                    } catch (Exception) {
+                        // the thread is finished; a failing hook cannot change that
+                    }
+                }
+
                 // MRI releases every mutex a thread still holds when it dies.
                 IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(Thread.CurrentThread);
 

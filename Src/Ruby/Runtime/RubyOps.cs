@@ -165,11 +165,16 @@ namespace IronRuby.Runtime {
             RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule, string/*!*/ definitionName, 
             object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame) {
 
-            return new RubyMethodScope(
+            var scope = new RubyMethodScope(
                 locals, variableNames ?? ArrayUtils.EmptyStrings, visibleParameterCount,
                 parentScope, declaringModule, definitionName, selfObject, blockParameter,
                 interpretedFrame
-            );            
+            );
+
+            if ((TracePoint.ActiveEvents & (int)TraceEvents.Call) != 0) {
+                TracePoint.OnMethodCall(scope);
+            }
+            return scope;
         }
 
         [Emitted]
@@ -181,7 +186,30 @@ namespace IronRuby.Runtime {
         public static RubyBlockScope/*!*/ CreateBlockScope(MutableTuple locals, string[] variableNames, 
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
 
-            return new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
+            var scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {
+                TracePoint.OnBlockCall(scope);
+            }
+            return scope;
+        }
+
+        // TracePoint hooks; emitted code only calls them when TracePoint.ActiveEvents has the event.
+
+        [Emitted]
+        public static void TraceLineEvent(RubyScope scope, string path, int line) {
+            TracePoint.OnLine(scope, path, line);
+        }
+
+        [Emitted]
+        public static void TraceReturnEvent(RubyScope scope, object value, string path, int line) {
+            TracePoint.OnReturn(scope, value, path, line);
+        }
+
+        [Emitted]
+        public static void TraceClassEvent(RubyScope scope, string path, int line) {
+            if ((TracePoint.ActiveEvents & (int)TraceEvents.Class) != 0) {
+                TracePoint.OnClass(scope, path, line);
+            }
         }
 
         [Emitted]
@@ -2279,6 +2307,7 @@ namespace IronRuby.Runtime {
             bool result = IsTrue(site.Target(site, classObject, context.CurrentException));
             if (result) {
                 RubyExceptionData.ActiveExceptionHandled(context.CurrentException);
+                TraceRescue(scope, context.CurrentException);
             }
             return result;
         }
@@ -2301,8 +2330,15 @@ namespace IronRuby.Runtime {
             bool result = ec.IsInstanceOf(ec.CurrentException, ec.StandardErrorClass);
             if (result) {
                 RubyExceptionData.ActiveExceptionHandled(ec.CurrentException);
+                TraceRescue(scope, ec.CurrentException);
             }
             return result;
+        }
+
+        private static void TraceRescue(RubyScope/*!*/ scope, Exception exception) {
+            if ((TracePoint.ActiveEvents & (int)TraceEvents.Rescue) != 0 && exception != null) {
+                TracePoint.OnException(TraceEvents.Rescue, scope, scope.RubyContext, exception);
+            }
         }
 
         [Emitted]

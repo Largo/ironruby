@@ -588,14 +588,19 @@ namespace IronRuby.Builtins {
         [RubyStackTraceHidden]
         public static void RaiseException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
-            RubyContext/*!*/ context, object self, params object[]/*!*/ args) {
+            RubyScope/*!*/ scope, object self, params object[]/*!*/ args) {
 
+            RubyContext context = scope.RubyContext;
             Exception exception = CreateExceptionToRaise(respondToStorage, storage0, storage1, setBackTraceStorage, context, args);
 #if DEBUG && FEATURE_THREAD && FEATURE_EXCEPTION_STATE
             if (RubyOptions.UseThreadAbortForSyncRaise) {
                 RubyUtils.RaiseAsyncException(Thread.CurrentThread, exception);
             }
 #endif
+            if ((TracePoint.ActiveEvents & (int)TraceEvents.Raise) != 0) {
+                TracePoint.OnException(TraceEvents.Raise, scope, context, exception);
+            }
+
             // rethrow semantics, preserves the backtrace associated with the exception:
             throw exception;
         }

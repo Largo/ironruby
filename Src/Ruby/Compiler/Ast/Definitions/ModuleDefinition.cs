@@ -140,7 +140,14 @@ namespace IronRuby.Compiler.Ast {
                             parentParameter, 
                             selfParameter
                         ),
-                        Ast.Block(
+                        gen.Traceable ? Ast.Block(
+                            // TracePoint :class and :end (class bodies are rare, a plain call is cheap enough)
+                            Methods.TraceClassEvent.OpCall(scopeVariable, gen.SourcePathConstant, AstUtils.Constant(Location.Start.Line)),
+                            Ast.Assign(bodyResult, new TraceReturnExpression(
+                                scopeVariable, moduleFrame.AddReturnTarget(AstUtils.Box(transformedBody)), TraceEvents.End, gen.SourcePath, Location.End.Line
+                            )),
+                            AstUtils.Empty()
+                        ) : Ast.Block(
                             Ast.Assign(bodyResult, moduleFrame.AddReturnTarget(AstUtils.Box(transformedBody))),
                             AstUtils.Empty()
                         )

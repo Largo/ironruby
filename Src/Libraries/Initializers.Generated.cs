@@ -183,6 +183,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Create), 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.Create)
             );
+            DefineGlobalClass("TracePoint", typeof(IronRuby.Builtins.TracePoint), 0x0000000F, Context.ObjectClass, LoadTracePoint_Instance, LoadTracePoint_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             Context.TrueClass = DefineGlobalClass("TrueClass", typeof(IronRuby.Builtins.TrueClass), 0x0000000F, Context.ObjectClass, LoadTrueClass_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalClass("UnboundMethod", typeof(IronRuby.Builtins.UnboundMethod), 0x0000000F, Context.ObjectClass, LoadUnboundMethod_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             // Skipped primitive: Class
@@ -4591,7 +4592,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "fail", 0x52, 
                 0x80000000U, 
-                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
             );
             
             DefineLibraryMethod(module, "Float", 0x52, 
@@ -4829,7 +4830,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "raise", 0x52, 
                 0x80000000U, 
-                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
             );
             
             DefineLibraryMethod(module, "rand", 0x52, 
@@ -5087,7 +5088,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "fail", 0x61, 
                 0x80000000U, 
-                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
             );
             
             DefineLibraryMethod(module, "Float", 0x61, 
@@ -5202,7 +5203,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "raise", 0x61, 
                 0x80000000U, 
-                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
+                new Action<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Action<System.Runtime.CompilerServices.CallSite, System.Exception, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object[]>(IronRuby.Builtins.KernelOps.RaiseException)
             );
             
             DefineLibraryMethod(module, "rand", 0x61, 
@@ -10136,6 +10137,118 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "utc", 0x61, 
                 0x80000004U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateGmtTime)
+            );
+            
+        }
+        
+        private static void LoadTracePoint_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "binding", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.Binding>(IronRuby.Builtins.TracePointOps.GetBinding)
+            );
+            
+            DefineLibraryMethod(module, "callee_id", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.TracePointOps.GetMethodId)
+            );
+            
+            DefineLibraryMethod(module, "defined_class", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.TracePointOps.GetDefinedClass)
+            );
+            
+            DefineLibraryMethod(module, "disable", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.TracePoint, System.Object>(IronRuby.Builtins.TracePointOps.Disable)
+            );
+            
+            DefineLibraryMethod(module, "enable", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, IronRuby.Builtins.TracePoint, System.Collections.Generic.IDictionary<System.Object, System.Object>, System.Object>(IronRuby.Builtins.TracePointOps.Enable)
+            );
+            
+            DefineLibraryMethod(module, "enabled?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, System.Boolean>(IronRuby.Builtins.TracePointOps.IsEnabled)
+            );
+            
+            DefineLibraryMethod(module, "eval_script", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.MutableString>(IronRuby.Builtins.TracePointOps.GetEvalScript)
+            );
+            
+            DefineLibraryMethod(module, "event", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.TracePointOps.GetEventName)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.MutableString>(IronRuby.Builtins.TracePointOps.Inspect)
+            );
+            
+            DefineLibraryMethod(module, "instruction_sequence", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, System.Object>(IronRuby.Builtins.TracePointOps.GetInstructionSequence)
+            );
+            
+            DefineLibraryMethod(module, "lineno", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, System.Int32>(IronRuby.Builtins.TracePointOps.GetLine)
+            );
+            
+            DefineLibraryMethod(module, "method_id", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.TracePointOps.GetMethodId)
+            );
+            
+            DefineLibraryMethod(module, "parameters", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.TracePointOps.GetParameters)
+            );
+            
+            DefineLibraryMethod(module, "path", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.MutableString>(IronRuby.Builtins.TracePointOps.GetPath)
+            );
+            
+            DefineLibraryMethod(module, "raised_exception", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, System.Object>(IronRuby.Builtins.TracePointOps.GetRaisedException)
+            );
+            
+            DefineLibraryMethod(module, "return_value", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, System.Object>(IronRuby.Builtins.TracePointOps.GetReturnValue)
+            );
+            
+            DefineLibraryMethod(module, "self", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.TracePoint, System.Object>(IronRuby.Builtins.TracePointOps.GetSelf)
+            );
+            
+        }
+        
+        private static void LoadTracePoint_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            module.UndefineMethodNoEvent("allocate");
+            DefineLibraryMethod(module, "allow_reentry", 0x61, 
+                0x00000001U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object>(IronRuby.Builtins.TracePointOps.AllowReentry)
+            );
+            
+            DefineLibraryMethod(module, "new", 0x61, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.TracePoint>(IronRuby.Builtins.TracePointOps.Create)
+            );
+            
+            DefineLibraryMethod(module, "stat", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.Hash>(IronRuby.Builtins.TracePointOps.Stat)
+            );
+            
+            DefineLibraryMethod(module, "trace", 0x61, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.TracePoint>(IronRuby.Builtins.TracePointOps.Trace)
             );
             
         }

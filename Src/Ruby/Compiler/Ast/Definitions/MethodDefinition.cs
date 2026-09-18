@@ -225,21 +225,30 @@ namespace IronRuby.Compiler.Ast {
                 traceReturn
             );
 
-            body = gen.AddReturnTarget(
-                scope.CreateScope(
-                    scopeVariable,
-                    Methods.CreateMethodScope.OpCall(new AstExpressions {
-                        scope.MakeLocalsStorage(),
-                        scope.GetVariableNamesExpression(),
-                        Ast.Constant(visiblePrameterCountAndSignatureFlags),
-                        Ast.Constant(declaringScope, typeof(RubyScope)),
-                        Ast.Constant(declaringModule, typeof(RubyModule)), 
-                        Ast.Constant(_name),
-                        selfParameter, blockParameter,
-                        EnterInterpretedFrameExpression.Instance
-                    }),
-                    body
-                )
+            // TracePoint :return: falling off the end reports the line of `end'; an explicit
+            // `return' reports its own line and jumps past this hook (see ReturnStatement).
+            if (gen.Traceable) {
+                body = new TraceReturnExpression(scopeVariable, gen.AddReturnTarget(body), TraceEvents.Return, gen.SourcePath, Location.End.Line);
+                if (gen.CurrentMethod.ExplicitReturnLabel != null) {
+                    body = Ast.Label(gen.CurrentMethod.ExplicitReturnLabel, body);
+                }
+            } else {
+                body = gen.AddReturnTarget(body);
+            }
+
+            body = scope.CreateScope(
+                scopeVariable,
+                Methods.CreateMethodScope.OpCall(new AstExpressions {
+                    scope.MakeLocalsStorage(),
+                    scope.GetVariableNamesExpression(),
+                    Ast.Constant(visiblePrameterCountAndSignatureFlags),
+                    Ast.Constant(declaringScope, typeof(RubyScope)),
+                    Ast.Constant(declaringModule, typeof(RubyModule)), 
+                    Ast.Constant(_name),
+                    selfParameter, blockParameter,
+                    EnterInterpretedFrameExpression.Instance
+                }),
+                body
             );
 
             gen.LeaveMethodDefinition();

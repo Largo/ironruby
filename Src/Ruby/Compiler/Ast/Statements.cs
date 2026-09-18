@@ -46,6 +46,13 @@ namespace IronRuby.Compiler.Ast {
         private Expression[] _statements;
         private int _count;
 
+        // The line each statement starts on (for TracePoint :line), where the statement's own
+        // location does not say: a local variable read is the variable's node, located where the
+        // variable was defined. NoLine marks a statement the compiler made up.
+        private int[] _lines;
+        private const int Unset = Int32.MinValue;
+        public const int NoLine = -1;
+
         public Statements() {
         }
 
@@ -75,6 +82,35 @@ namespace IronRuby.Compiler.Ast {
                 _count++;
             }
             return statement;
+        }
+
+        /// <summary>
+        /// Adds a statement that starts on the given line.
+        /// </summary>
+        public Expression/*!*/ Add(Expression/*!*/ statement, int line) {
+            Add(statement);
+            if (line != statement.Location.Start.Line) {
+                int oldLength = (_lines != null) ? _lines.Length : 0;
+                if (oldLength < _statements.Length) {
+                    Array.Resize(ref _lines, _statements.Length);
+                    for (int i = oldLength; i < _lines.Length; i++) {
+                        _lines[i] = Unset;
+                    }
+                }
+                _lines[_count - 1] = line;
+            }
+            return statement;
+        }
+
+        public Expression/*!*/ this[int index] {
+            get { return _statements[index]; }
+        }
+
+        public int GetStartLine(int index) {
+            if (_lines != null && index < _lines.Length && _lines[index] != Unset) {
+                return _lines[index];
+            }
+            return _statements[index].Location.Start.Line;
         }
 
         public Expression/*!*/ First {
