@@ -637,7 +637,7 @@ namespace IronRuby.Runtime {
 
         public static void CheckConstantName(string name) {
             if (!Tokenizer.IsConstantName(name)) {
-                throw RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as a constant name", name));
+                throw RubyExceptions.CreateNameError(String.Format("wrong constant name {0}", name));
             }
         }
 

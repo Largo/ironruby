@@ -61,7 +61,9 @@ namespace IronRuby.Builtins {
             }
 
             string strName = className.ConvertToString();
-            RubyUtils.CheckConstantName(strName);
+            if (!IronRuby.Compiler.Tokenizer.IsConstantName(strName)) {
+                throw RubyExceptions.CreateNameError(String.Format("identifier {0} needs to be constant", strName));
+            }
             return Create(block, self, strName, attributeNames);
         }
 
