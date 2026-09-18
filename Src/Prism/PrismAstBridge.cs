@@ -60,7 +60,8 @@ namespace IronRuby.Prism {
             // what RubyCompilerOptions.InitialLocation carries. Only the old parser ever read it, so
             // every eval under prism started at line 1 no matter what it was given.
             return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
-                options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval);
+                options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
+                options.EvalSourceEncoding);
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path) {
@@ -73,7 +74,8 @@ namespace IronRuby.Prism {
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
-            SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false, bool isEval = false) {
+            SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false, bool isEval = false,
+            RubyEncoding evalSourceEncoding = null) {
 
             // --enable/--disable=frozen-string-literal only sets the default; the magic comment
             // in a file still wins, and prism applies that rule itself.
@@ -87,7 +89,14 @@ namespace IronRuby.Prism {
             PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames,
                 frozenStringLiteral, sourceEncoding.Encoding);
 
-            var bridge = new PrismAstBridge(code, path, ResolveEncoding(result.EncodingName, sourceUnit));
+            // An eval'd string without a magic comment is in the string's own encoding, which its
+            // literals and __ENCODING__ then carry (MRI), rather than in UTF-8 as a file would be.
+            RubyEncoding literalEncoding = ResolveEncoding(result.EncodingName, sourceUnit);
+            if (evalSourceEncoding != null && DeclaredEncodingName(code) == null) {
+                literalEncoding = evalSourceEncoding;
+            }
+
+            var bridge = new PrismAstBridge(code, path, literalEncoding);
             bridge._startLine = startLine <= 0 ? 1 : startLine;
             bridge._sourceUnit = sourceUnit;
             bridge._errorSink = errorSink;
@@ -160,7 +169,7 @@ namespace IronRuby.Prism {
         private static readonly System.Text.RegularExpressions.Regex _magicComment =
             new System.Text.RegularExpressions.Regex(
                 @"coding\s*[:=]\s*([A-Za-z0-9_\-]+)",
-                System.Text.RegularExpressions.RegexOptions.Compiled);
+                System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase); // "# CoDiNg: bIg5" too
 
         private static RubyEncoding/*!*/ ResolveEncoding(string name, SourceUnit sourceUnit) {
             if (String.IsNullOrEmpty(name)) {

@@ -1215,6 +1215,7 @@ namespace IronRuby.Runtime {
 
             // we want to create a new top-level local scope:
             var options = CreateCompilerOptionsForEval(targetScope, methodScope, module != null, line);
+            options.EvalSourceEncoding = code.Encoding;
             var source = CreateRubySourceUnit(context, code,
                 file != null ? file.ConvertToString() : DefaultEvalFileName(context));
 
