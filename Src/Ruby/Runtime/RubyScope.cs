@@ -278,11 +278,29 @@ namespace IronRuby.Runtime {
             }
         }
 
-        private bool TryGetLocal(string/*!*/ name, out object value) {
+        // `it' and _1.._9 live in the block's variable table, but eval and Binding do not see them
+        // as locals: `eval("it = 1")' makes a new variable rather than overwriting the parameter.
+        private bool IsImplicitParameter(string/*!*/ name) {
+            var names = OwnImplicitParameterNames;
+            return names != null && Array.IndexOf(names, name) >= 0;
+        }
+
+        /// <summary>The value of this scope's own `it` or _1.._9, for Binding#implicit_parameter_get.</summary>
+        public object GetImplicitParameterValue(string/*!*/ name) {
             EnsureBoxes();
 
             int index;
             if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index)) {
+                return _locals.GetValue(index);
+            }
+            return null;
+        }
+
+        private bool TryGetLocal(string/*!*/ name, out object value) {
+            EnsureBoxes();
+
+            int index;
+            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
                 value = _locals.GetValue(index);
                 return true;
@@ -302,7 +320,7 @@ namespace IronRuby.Runtime {
             EnsureBoxes();
 
             int index;
-            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index)) {
+            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
                 _locals.SetValue(index, value);
                 return true;
