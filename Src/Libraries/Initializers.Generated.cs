@@ -1712,11 +1712,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
             );
             
-            DefineLibraryMethod(module, "to_str", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
-            );
-            
         }
         
         private static void LoadException_Class(IronRuby.Builtins.RubyModule/*!*/ module) {

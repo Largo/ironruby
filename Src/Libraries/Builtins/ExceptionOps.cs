@@ -184,7 +184,6 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("to_s")]
-        [RubyMethod("to_str")]
         public static object StringRepresentation(ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
             object message = RubyExceptionData.GetInstance(self).Message;
             // MRI applies String() to whatever was passed as the message, so

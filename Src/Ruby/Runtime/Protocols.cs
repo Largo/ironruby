@@ -589,6 +589,16 @@ namespace IronRuby.Runtime {
         }
 
         private static bool TryCoerce(BinaryOpStorage/*!*/ coercionStorage, object self, object other, out IList pair, bool nilMeansNotCoercible) {
+            // rb_check_funcall: a respond_to? the object defines for itself is asked first, and
+            // a false from it means there is no #coerce to call.
+            if (HasUserDefinedRespondTo(coercionStorage.Context, other)) {
+                var respondTo = coercionStorage.GetCallSite("respond_to?");
+                if (!IsTrue(respondTo.Target(respondTo, other, coercionStorage.Context.EncodeIdentifier("coerce")))) {
+                    pair = null;
+                    return false;
+                }
+            }
+
             var coerce = coercionStorage.GetCallSite("coerce", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
 
             object coerced;
@@ -630,6 +640,12 @@ namespace IronRuby.Runtime {
         /// itself failing to find the method on <paramref name="other"/>, as opposed to a
         /// NoMethodError raised from inside a #coerce that does exist.
         /// </summary>
+        private static bool HasUserDefinedRespondTo(RubyContext/*!*/ context, object obj) {
+            var method = context.GetImmediateClassOf(obj).ResolveMethod("respond_to?", VisibilityContext.AllVisible);
+            return method.Found &&
+                !(method.Info.DeclaringModule == context.KernelModule && method.Info is RubyLibraryMethodInfo);
+        }
+
         private static bool IsUndefinedCoerce(RubyContext/*!*/ context, MissingMethodException/*!*/ e, object other) {
             var data = RubyExceptionData.TryGetInstance(e);
             if (data == null) {

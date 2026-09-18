@@ -222,9 +222,34 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateNameError(String.Format("no member '{0}' in struct", name));
         }
 
+        // Structs whose #hash is being computed on this thread, outermost first.
+        [ThreadStatic]
+        private static List<RubyStruct> _hashing;
+
+        private sealed class RecursiveHashException : Exception {
+        }
+
         public int GetHashCode(UnaryOpStorage/*!*/ hashStorage, ConversionStorage<int>/*!*/ fixnumCast) {
-            // hash is: struct's hash, plus data hashes
-            return StructInfo.GetHashCode() ^ RubyArray.GetHashCode(hashStorage, fixnumCast, _data);
+            // MRI hashes a struct under rb_exec_recursive_outer: meeting a struct that is already
+            // being hashed abandons the whole computation, and the outermost struct hashes as its
+            // class alone. So a recursive struct hashes the same as an eql? one that holds it.
+            var hashing = _hashing ?? (_hashing = new List<RubyStruct>());
+            foreach (var s in hashing) {
+                if (ReferenceEquals(s, this)) {
+                    throw new RecursiveHashException();
+                }
+            }
+
+            bool outermost = hashing.Count == 0;
+            hashing.Add(this);
+            try {
+                // hash is: struct's hash, plus data hashes
+                return StructInfo.GetHashCode() ^ RubyArray.GetHashCode(hashStorage, fixnumCast, _data);
+            } catch (RecursiveHashException) when (outermost) {
+                return StructInfo.GetHashCode();
+            } finally {
+                hashing.RemoveAt(hashing.Count - 1);
+            }
         }
 
         public bool Equals(BinaryOpStorage/*!*/ eqlStorage, object obj) {

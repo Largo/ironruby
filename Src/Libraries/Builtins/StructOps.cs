@@ -62,6 +62,12 @@ namespace IronRuby.Builtins {
 
             string strName = className.ConvertToString();
             RubyUtils.CheckConstantName(strName);
+
+            // new_struct: MRI warns (rb_warn, so even without -w) and replaces the constant.
+            object existing;
+            if (self.TryGetConstant(null, strName, out existing)) {
+                self.Context.ReportWarning("redefining constant " + self.MakeNestedModuleName(strName));
+            }
             return Create(block, self, strName, attributeNames);
         }
 
