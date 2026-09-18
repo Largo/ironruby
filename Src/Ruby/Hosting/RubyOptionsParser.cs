@@ -503,6 +503,11 @@ namespace IronRuby.Hosting {
 
             if (!_disableRubyGems) {
                 _requiredPaths.Insert(0, "gem_prelude.rb");
+            } else {
+                // gem_prelude.rb ends by requiring ruby4.rb, the Ruby half of the core library
+                // (Set, pattern matching, ...). --disable-gems only turns off RubyGems in MRI,
+                // so the core layer is still loaded.
+                _requiredPaths.Insert(0, "ruby4.rb");
             }
 
             LanguageSetup.Options["RequiredPaths"] = _requiredPaths;

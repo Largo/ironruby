@@ -5893,13 +5893,6 @@ class Array
     self
   end unless method_defined?(:sort_by!)
 
-  # The first argument is the Set class to build, not a Set constructor
-  # argument: `to_set(MySet)` has to answer a MySet.
-  def to_set(klass = nil, *args, &block)
-    require 'set'
-    (klass || ::Set).new(self, *args, &block)
-  end unless method_defined?(:to_set)
-
   def to_h
     result = {}
     each_with_index do |pair, index|
@@ -7296,10 +7289,17 @@ module Enumerable
   # Every Enumerable gets #to_set, not just Array: Hash, Struct, Range and
   # Enumerator are all asked for one by the specs.
   # The first argument is the Set class to build, not a Set constructor
-  # argument: `to_set(MySet)` has to answer a MySet.
-  def to_set(klass = nil, *args, &block)
+  # argument: `to_set(MySet)` has to answer a MySet. Ruby 4.0 deprecated
+  # passing it (prelude.rb warns, uplevel 1).
+  def to_set(*args, &block)
     require 'set'
-    (klass || ::Set).new(self, *args, &block)
+    klass = if args.empty?
+      ::Set
+    else
+      warn "passing arguments to Enumerable#to_set is deprecated", uplevel: 1
+      args.shift
+    end
+    klass.new(self, *args, &block)
   end unless method_defined?(:to_set)
 
   def chain(*others)

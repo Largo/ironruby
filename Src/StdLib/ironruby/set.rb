@@ -256,6 +256,9 @@ class Set
   # self.  This method may not be supported by all subclasses of Set.
   def compare_by_identity
     if @hash.respond_to?(:compare_by_identity)
+      return self if @hash.compare_by_identity?
+      __check_frozen__
+      raise RuntimeError, "compare_by_identity during iteration" if @iter_lev
       @hash.compare_by_identity
       self
     else
@@ -280,16 +283,26 @@ class Set
   end
   private :do_with_enum
 
+  # Ruby 4.0's core Set names itself, not its table, when frozen:
+  # "can't modify frozen Set: Set[1]".
+  def __check_frozen__ # :nodoc:
+    raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
+  end
+  private :__check_frozen__
+
   # Dup internal hash.
   def initialize_dup(orig)
     super
     @hash = orig.instance_variable_get(:@hash).dup
+    # a copy taken inside #each is not itself being iterated
+    remove_instance_variable(:@iter_lev) if defined?(@iter_lev)
   end
 
   # Clone internal hash.
   def initialize_clone(orig, **options)
     super
     @hash = orig.instance_variable_get(:@hash).clone(**options)
+    remove_instance_variable(:@iter_lev) if defined?(@iter_lev) && !frozen?
   end
 
   def freeze    # :nodoc:
@@ -314,6 +327,7 @@ class Set
   #     set.clear                         #=> #<Set: {}>
   #     set                               #=> #<Set: {}>
   def clear
+    __check_frozen__
     @hash.clear
     self
   end
@@ -325,6 +339,8 @@ class Set
   #     set.replace([1, 2])               #=> #<Set: {1, 2}>
   #     set                               #=> #<Set: {1, 2}>
   def replace(enum)
+    __check_frozen__
+    raise RuntimeError, "cannot replace set during iteration" if @iter_lev
     if enum.instance_of?(self.class)
       @hash.replace(enum.instance_variable_get(:@hash))
       self
@@ -496,9 +512,26 @@ class Set
   # Calls the given block once for each element in the set, passing
   # the element as parameter.  Returns an enumerator if no block is
   # given.
+  #
+  # Like MRI, the set counts the iterations running over it (@iter_lev) so
+  # that adding a new element, merging or replacing meanwhile raises.
   def each(&block)
     block_given? or return enum_for(__method__) { size }
-    @hash.each_key(&block)
+    return @hash.each_key(&block) && self if frozen?
+
+    @iter_lev = (@iter_lev || 0) + 1
+    begin
+      @hash.each_key(&block)
+    ensure
+      # a set frozen inside the block keeps the count; it cannot change anyway
+      unless frozen?
+        if @iter_lev > 1
+          @iter_lev -= 1
+        else
+          remove_instance_variable(:@iter_lev)
+        end
+      end
+    end
     self
   end
 
@@ -509,6 +542,10 @@ class Set
   #     Set[1, 2].add([3, 4])               #=> #<Set: {1, 2, [3, 4]}>
   #     Set[1, 2].add(2)                    #=> #<Set: {1, 2}>
   def add(o)
+    __check_frozen__
+    if @iter_lev && !@hash.key?(o)
+      raise RuntimeError, "can't add a new item into set during iteration"
+    end
     @hash[o] = true
     self
   end
@@ -527,6 +564,7 @@ class Set
   # Deletes the given object from the set and returns self.  Use
   # `subtract` to delete many items at once.
   def delete(o)
+    __check_frozen__
     @hash.delete(o)
     self
   end
@@ -542,6 +580,7 @@ class Set
   # given.
   def delete_if
     block_given? or return enum_for(__method__) { size }
+    __check_frozen__
     # @hash.delete_if should be faster, but using it breaks the order
     # of enumeration in subclasses.
     select { |o| yield o }.each { |o| @hash.delete(o) }
@@ -553,6 +592,7 @@ class Set
   # given.
   def keep_if
     block_given? or return enum_for(__method__) { size }
+    __check_frozen__
     # @hash.keep_if should be faster, but using it breaks the order of
     # enumeration in subclasses.
     reject { |o| yield o }.each { |o| @hash.delete(o) }
@@ -563,6 +603,7 @@ class Set
   # Returns an enumerator if no block is given.
   def collect!
     block_given? or return enum_for(__method__) { size }
+    __check_frozen__
     set = self.class.new
     each { |o| set << yield(o) }
     replace(set)
@@ -593,6 +634,8 @@ class Set
   # Merges the elements of the given enumerable objects to the set and
   # returns self.
   def merge(*enums, **nil)
+    __check_frozen__
+    raise RuntimeError, "cannot add to set during iteration" if @iter_lev
     enums.each do |enum|
       if enum.instance_of?(self.class)
         @hash.update(enum.instance_variable_get(:@hash))
@@ -607,6 +650,7 @@ class Set
   # Deletes every element that appears in the given enumerable object
   # and returns self.
   def subtract(enum)
+    __check_frozen__
     do_with_enum(enum) { |o| delete(o) }
     self
   end
@@ -658,9 +702,13 @@ class Set
   #
   #     Set[1, 2] ^ Set[2, 3]                   #=> #<Set: {3, 1}>
   #     Set[1, 'b', 'c'] ^ ['b', 'd']           #=> #<Set: {"d", 1, "c"}>
+  #
+  # Ruby 4.0 starts from a copy of the receiver, so the result keeps its class
+  # and compare_by_identity; the argument is deduplicated first.
   def ^(enum)
-    n = Set.new(enum)
-    each { |o| n.add(o) unless n.delete?(o) }
+    n = dup
+    enum = Set.new(enum) unless enum.is_a?(Set)
+    enum.each { |o| n.add(o) unless n.delete?(o) }
     n
   end
 
@@ -695,6 +743,8 @@ class Set
   #
   # Elements will be reindexed and deduplicated.
   def reset
+    __check_frozen__
+    raise RuntimeError, "reset during iteration" if @iter_lev
     if @hash.respond_to?(:rehash)
       @hash.rehash # This should perform frozenness check.
     else
@@ -781,9 +831,11 @@ class Set
         end
       end
 
-      each { |u|
+      # Ruby 4.0 no longer asks the block to relate an element to itself.
+      elements = to_a
+      elements.each_with_index { |u, i|
         dig[u] = a = []
-        each{ |v| func.call(u, v) and a << v }
+        elements.each_with_index { |v, j| i != j && func.call(u, v) and a << v }
       }
 
       set = Set.new()
@@ -825,7 +877,17 @@ class Set
 
   alias to_s inspect
 
+  # Set itself pretty-prints in the Ruby 4.0 "Set[...]" form, subclasses in
+  # the older one, as #inspect does.
   def pretty_print(pp)  # :nodoc:
+    if instance_of?(::Set)
+      return pp.group(1, 'Set[', ']') {
+        pp.seplist(self) { |o|
+          pp.pp o
+        }
+      }
+    end
+
     pp.group(1, sprintf('#<%s:', self.class.name), '>') {
       pp.breakable
       pp.group(1, '{', '}') {
@@ -837,6 +899,7 @@ class Set
   end
 
   def pretty_print_cycle(pp)    # :nodoc:
+    return pp.text(empty? ? 'Set[]' : 'Set[...]') if instance_of?(::Set)
     pp.text sprintf('#<%s: {%s}>', self.class.name, empty? ? '' : '...')
   end
 end
