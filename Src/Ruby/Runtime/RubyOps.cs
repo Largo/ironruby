@@ -833,7 +833,15 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static RubyClass/*!*/ DefineSingletonClass(RubyScope/*!*/ scope, object obj) {
             RubyUtils.RequireDefinableSingleton(obj);
-            return scope.RubyContext.GetOrCreateSingletonClass(obj);
+            var result = scope.RubyContext.GetOrCreateSingletonClass(obj);
+
+            // MRI's rb_singleton_class: a class's singleton class, once exposed, gets a singleton of its
+            // own, which descends from the superclass's - so D.singleton_class responds to methods
+            // defined in `class << self; class << self` of D's superclass.
+            if (obj is RubyClass) {
+                result.GetOrCreateSingletonClass();
+            }
+            return result;
         }
 
         [Emitted] 

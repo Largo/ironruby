@@ -1093,6 +1093,17 @@ namespace IronRuby.Builtins {
                 // expanding singleton chain:
                 singletonSuper = immediate.SuperClass;
                 singletonImmediate = immediate;
+
+                // The singleton of a class's singleton class descends from the singleton of the
+                // superclass's singleton class, as in MRI: #<Class:#<Class:K>> < #<Class:#<Class:H>>
+                // for K < H. The chain ends at BasicObject's, whose superclass is #<Class:Class>.
+                var cls = this as RubyClass;
+                if (cls != null && cls.IsSingletonClass && cls.SingletonClassOf is RubyClass) {
+                    var super = cls.SuperClass;
+                    if (super != null && super.IsSingletonClass && !super.IsDummySingletonClass) {
+                        singletonSuper = super.GetOrCreateSingletonClass();
+                    }
+                }
             } else {
                 return immediate;
             }
