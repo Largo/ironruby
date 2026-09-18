@@ -133,7 +133,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("unbind")]
         public static UnboundMethod/*!*/ Unbind(RubyMethod/*!*/ self) {
-            return new UnboundMethod(self.GetTargetClass(), self.Name, self.Info);
+            return new UnboundMethod(self.GetTargetClass(), self.Name, self.Info, self.IsMethodMissing);
         }
 
         internal static RubyMemberInfo/*!*/ BindGenericParameters(RubyContext/*!*/ context, RubyMemberInfo/*!*/ info, string/*!*/ name, object[]/*!*/ typeArgs) {

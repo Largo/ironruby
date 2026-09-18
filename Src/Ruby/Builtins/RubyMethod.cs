@@ -167,8 +167,19 @@ namespace IronRuby.Builtins {
             args.SetTarget(AstUtils.Constant(_target, CompilerHelpers.GetVisibleType(_target)), _target);
 
             if (_methodMissingName != null) {
+                // MRI looks method_missing up on the receiver when the Method is called, not when
+                // it was made, so one defined (or stubbed) in the meantime is the one that runs
+                RubyMemberInfo methodMissing;
+                var targetClass = args.TargetClass;
+                using (targetClass.Context.ClassHierarchyLocker()) {
+                    metaBuilder.AddTargetTypeTest(args.Target, targetClass, args.TargetExpression, args.MetaContext,
+                        new[] { Symbols.MethodMissing }
+                    );
+                    methodMissing = targetClass.ResolveMethodForSiteNoLock(Symbols.MethodMissing, VisibilityContext.AllVisible).Info ?? _info;
+                }
+
                 args.InsertMethodName(_methodMissingName);
-                _info.BuildCall(metaBuilder, args, Symbols.MethodMissing);
+                methodMissing.BuildCall(metaBuilder, args, Symbols.MethodMissing);
             } else {
                 _info.BuildCall(metaBuilder, args, _name);
             }

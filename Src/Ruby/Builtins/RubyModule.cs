@@ -2214,8 +2214,26 @@ namespace IronRuby.Builtins {
         /// </summary>
         public MethodResolutionResult ResolveMethodWithRefinements(string/*!*/ name, VisibilityContext visibility, RubyScope scope) {
             using (Context.ClassHierarchyLocker()) {
-                return ResolveMethodNoLock(name, visibility, MethodLookup.Default,
+                var result = ResolveMethodNoLock(name, visibility, MethodLookup.ReturnForwarder,
                     (scope != null) ? scope.GetActiveRefinements() : null).InvalidateSitesOnOverride();
+
+                // `public :m' in a module that inherits m leaves an entry there that only forwards
+                // to the inherited body. MRI's Method made out of it reports that module as its
+                // #owner and the forwarder's visibility, so hand back a copy of the body that says so.
+                if (result.Found && result.Info.IsSuperForwarder) {
+                    var forwarder = (SuperForwarderInfo)result.Info;
+                    var target = result.Owner.ResolveSuperMethodNoLock(forwarder.SuperName, result.Owner).InvalidateSitesOnOverride();
+                    if (!target.Found) {
+                        return target;
+                    }
+
+                    var copy = target.Info.Copy(forwarder.Flags, target.Info.DeclaringModule);
+                    copy.AliasOwner = forwarder.AliasOwner ?? result.Owner;
+                    copy.OriginalName = forwarder.OriginalName ?? target.Info.OriginalName;
+                    return new MethodResolutionResult(copy, result.Owner, true);
+                }
+
+                return result;
             }
         }
 

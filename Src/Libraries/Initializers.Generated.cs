@@ -10243,7 +10243,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "parameters", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.UnboundMethod.GetParameters)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.UnboundMethod, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.UnboundMethod.GetParameters)
             );
             
             DefineLibraryMethod(module, "source_location", 0x51, 

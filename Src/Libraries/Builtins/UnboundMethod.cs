@@ -29,6 +29,9 @@ namespace IronRuby.Builtins {
         private readonly RubyMemberInfo/*!*/ _info;
         private readonly RubyModule/*!*/ _targetConstraint;
 
+        // unbound from a Method that stands in for a name only #method_missing answers
+        private readonly bool _isMethodMissing;
+
         internal RubyMemberInfo/*!*/ Info {
             get { return _info; }
         }
@@ -41,6 +44,10 @@ namespace IronRuby.Builtins {
             get { return _targetConstraint; }
         }
 
+        internal bool IsMethodMissing {
+            get { return _isMethodMissing; }
+        }
+
         internal UnboundMethod(RubyModule/*!*/ targetConstraint, string/*!*/ name, RubyMemberInfo/*!*/ info) {
             Assert.NotNull(targetConstraint, name, info);
 
@@ -49,8 +56,13 @@ namespace IronRuby.Builtins {
             _targetConstraint = targetConstraint;
         }
 
+        internal UnboundMethod(RubyModule/*!*/ targetConstraint, string/*!*/ name, RubyMemberInfo/*!*/ info, bool isMethodMissing)
+            : this(targetConstraint, name, info) {
+            _isMethodMissing = isMethodMissing;
+        }
+
         object IDuplicable.Duplicate(RubyContext/*!*/ context, bool copySingletonMembers) {
-            var result = new UnboundMethod(_targetConstraint, _name, _info);
+            var result = new UnboundMethod(_targetConstraint, _name, _info, _isMethodMissing);
             context.CopyInstanceData(this, result, copySingletonMembers);
             return result;
         }
@@ -60,7 +72,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("==")]
         [RubyMethod("eql?")]
         public static bool Equal(UnboundMethod/*!*/ self, [NotNull]UnboundMethod/*!*/ other) {
-            return self.Info.IsEquivalentTo(other.Info);
+            return self.Info.IsEquivalentTo(other.Info)
+                && (!self._isMethodMissing || other._isMethodMissing && self._name == other._name);
         }
 
         // both names need both overloads, or the two are not the same method and the specs that
@@ -78,7 +91,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("arity")]
         public static int GetArity(UnboundMethod/*!*/ self) {
-            return self.Info.GetArity();
+            return self._isMethodMissing ? -1 : self.Info.GetArity();
         }
 
         /// <summary>
@@ -98,7 +111,9 @@ namespace IronRuby.Builtins {
                 );
             }
             
-            return new RubyMethod(target, self._info, self._name);
+            return self._isMethodMissing
+                ? RubyMethod.CreateMethodMissing(target, self._info, self._name)
+                : new RubyMethod(target, self._info, self._name);
         }
 
         /// <summary>
@@ -108,7 +123,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("super_method")]
         public static UnboundMethod GetSuperMethod(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
             RubyModule owner = self._info.DeclaringModule;
-            if (owner == null) {
+            if (owner == null || self._isMethodMissing) {
                 return null;
             }
 
@@ -163,7 +178,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("to_s"), RubyMethod("inspect")]
         public static MutableString/*!*/ ToS(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
-            return ToS(context, self.Name, self._info, null, "UnboundMethod");
+            return ToS(context, self.Name, self._info, null, "UnboundMethod", self._isMethodMissing);
         }
 
         /// <summary>
@@ -209,7 +224,7 @@ namespace IronRuby.Builtins {
             } else {
                 RubyModule origin = targetModule ?? declaringModule;
                 var originSingleton = origin as RubyClass;
-                if (originSingleton != null && originSingleton.IsSingletonClass && !(originSingleton.SingletonClassOf is RubyModule)) {
+                if (targetModule != null && originSingleton != null && originSingleton.IsSingletonClass && !(originSingleton.SingletonClassOf is RubyModule)) {
                     origin = context.GetClassOf(originSingleton.SingletonClassOf);
                 }
 
@@ -271,11 +286,14 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source_location")]
         public static RubyArray GetSourceLocation(UnboundMethod/*!*/ self) {
-            return GetSourceLocation(self.Info);
+            return self._isMethodMissing ? null : GetSourceLocation(self.Info);
         }
 
         [RubyMethod("parameters")]
-        public static RubyArray/*!*/ GetParameters(UnboundMethod/*!*/ self) {
+        public static RubyArray/*!*/ GetParameters(RubyContext/*!*/ context, UnboundMethod/*!*/ self) {
+            if (self._isMethodMissing) {
+                return new RubyArray(1) { new RubyArray(1) { context.CreateAsciiSymbol("rest") } };
+            }
             return self.Info.GetRubyParameterArray();
         }
 

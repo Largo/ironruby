@@ -53,6 +53,15 @@ namespace IronRuby.Runtime {
         void RunAtExit();
     }
 
+    /// <summary>
+    /// Hidden state kept among an object's instance variables that a copy of the object needs its
+    /// own instance of rather than a shared one: MRI's dup and clone give the copy the original's
+    /// finalizers, called with the copy's id.
+    /// </summary>
+    public interface IPerObjectState {
+        object CopyFor(object copy);
+    }
+
     public sealed class RubyContext : LanguageContext {
         #region Constants
 
@@ -2106,7 +2115,7 @@ namespace IronRuby.Runtime {
             RubyInstanceData sourceData = TryGetInstanceData(source);
             if (sourceData != null) {
                 if (sourceData.HasInstanceVariables) {
-                    sourceData.CopyInstanceVariablesTo(targetData = GetInstanceData(target));
+                    sourceData.CopyInstanceVariablesTo(targetData = GetInstanceData(target), target);
                 }
             }
 

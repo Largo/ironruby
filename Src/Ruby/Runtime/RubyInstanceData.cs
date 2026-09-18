@@ -132,14 +132,15 @@ namespace IronRuby.Runtime {
             }
         }
 
-        internal void CopyInstanceVariablesTo(RubyInstanceData/*!*/ dup) {
+        internal void CopyInstanceVariablesTo(RubyInstanceData/*!*/ dup, object copy) {
             if (_instanceVars == null) {
                 return;
             }
             lock (_instanceVars) {
                 Dictionary<string, object> dupVars = dup.GetInstanceVariables();
                 foreach (var var in _instanceVars) {
-                    dupVars.Add(var.Key, var.Value);
+                    var state = var.Value as IPerObjectState;
+                    dupVars.Add(var.Key, state != null ? state.CopyFor(copy) : var.Value);
                 }
             }
         }
