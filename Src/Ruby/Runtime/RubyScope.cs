@@ -118,6 +118,24 @@ namespace IronRuby.Runtime {
 
         internal InterpretedFrame InterpretedFrame { get; set; }
 
+        /// <summary>
+        /// The file and line this scope's code is executing, for the builtin it has just called.
+        /// Interpreted code knows it from its frame for free; compiled code has to be found on the
+        /// CLR stack, which costs a stack walk with file info.
+        /// </summary>
+        public bool TryGetCurrentSourceLocation(out string path, out int line) {
+            var frame = InterpretedFrame;
+            if (frame != null) {
+                var debugInfo = frame.GetDebugInfo(frame.InstructionIndex);
+                if (debugInfo != null && debugInfo.FileName != null) {
+                    path = debugInfo.FileName;
+                    line = debugInfo.StartLine;
+                    return true;
+                }
+            }
+            return RubyUtils.TryGetCallerSourceLocation(RubyContext, out path, out line);
+        }
+
         public abstract ScopeKind Kind { get; }
         public abstract bool InheritsLocalVariables { get; }
 
@@ -344,6 +362,24 @@ namespace IronRuby.Runtime {
 
                 if (!scope.InheritsLocalVariables) {
                     return null;
+                }
+
+                scope = scope.Parent;
+            }
+        }
+
+        // Defines the variable as nil unless it is already visible from here.
+        internal void DeclareLocalVariable(string/*!*/ name) {
+            RubyScope scope = this;
+            while (true) {
+                object value;
+                if (scope.TryGetLocal(name, out value)) {
+                    return;
+                }
+
+                if (!scope.InheritsLocalVariables) {
+                    DefineDynamicVariable(name, null);
+                    return;
                 }
 
                 scope = scope.Parent;
@@ -1127,9 +1163,9 @@ var closureScope = scope as RubyClosureScope;
         public override ScopeKind Kind { get { return ScopeKind.BindingCopy; } }
         public override bool InheritsLocalVariables { get { return true; } }
 
-        public override RubyModule Module { get { return _parent.Module; } }
+        // No module of its own: lexical walks (Module.nesting, constant lookup) pass through to the parent.
 
-        internal RubyBindingCopyScope(RubyScope/*!*/ parent, object selfObject) {
+        public RubyBindingCopyScope(RubyScope/*!*/ parent, object selfObject) {
             // RuntimeFlowControl:
             _activeFlowControlScope = parent.FlowControlScope;
 
@@ -1219,7 +1255,7 @@ var closureScope = scope as RubyClosureScope;
             RubyTopLevelScope scope = new RubyTopLevelScope(rubyGlobalScope, null, null, rubyGlobalScope.MainObject);
             if (isMain) {
                 scope.SetDebugName("top-main");
-                context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope));
+                context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope) { SourcePath = "<main>", SourceLine = 0 });
                 if (context.RubyOptions.RequirePaths != null) {
                     foreach (var path in context.RubyOptions.RequirePaths) {
                         context.Loader.LoadFile(globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);

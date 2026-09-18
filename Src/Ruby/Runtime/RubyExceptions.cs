@@ -522,6 +522,11 @@ namespace IronRuby.Runtime {
             return WithNameAndReceiver(context, CreateMethodMissing(FormatMethodMissingMessage(context, self, name)), name, self);
         }
 
+        public static Exception/*!*/ CreateUndefinedLocalOrMethod(RubyContext/*!*/ context, object self, string/*!*/ name) {
+            return WithNameAndReceiver(context,
+                CreateNameError(FormatMethodMissingMessage(context, self, name, "undefined local variable or method `{0}' for {1}")), name, self);
+        }
+
         public static Exception/*!*/ CreatePrivateMethodCalled(RubyContext/*!*/ context, object self, string/*!*/ name) {
             return WithNameAndReceiver(context,
                 CreateMethodMissing(FormatMethodMissingMessage(context, self, name, "private method `{0}' called for {1}")), name, self);

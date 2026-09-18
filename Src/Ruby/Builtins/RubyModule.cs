@@ -1170,9 +1170,17 @@ namespace IronRuby.Builtins {
         #region Constants (thread-safe)
 
         // Value of constant that is to be auto-loaded on first use.
-        private sealed class AutoloadedConstant {
+        internal sealed class AutoloadedConstant {
             private readonly MutableString/*!*/ _path;
+            private readonly string/*!*/ _featureName;
             private bool _loaded;
+
+            // The full path of the file, once it has been required some other way than through this
+            // autoload - directly, or before the autoload was even declared. MRI then considers the
+            // autoload done for as long as that feature stays in $LOADED_FEATURES: it remains among
+            // the module's constants but defines nothing - #autoload? is nil, #const_defined? false.
+            // Deleting the feature from $LOADED_FEATURES brings the autoload back.
+            private volatile string _requiredFeature;
 
             // The thread running the file, or null. MRI hides an autoload in progress from the very
             // thread performing it -- so that the file's own assignment is what defines the constant,
@@ -1185,10 +1193,28 @@ namespace IronRuby.Builtins {
             public bool Loaded { get { return _loaded; } }
             public MutableString/*!*/ Path { get { return _path; } }
 
+            // The file name without directory or .rb extension - what a #require of some other
+            // spelling of the same file has to share with it before resolving both is worth it.
+            internal string/*!*/ FeatureName { get { return _featureName; } }
+
             public AutoloadedConstant(MutableString/*!*/ path) {
                 Assert.NotNull(path);
                 Debug.Assert(path.IsFrozen);
                 _path = path;
+                _featureName = Loader.GetFeatureName(path.ConvertToString());
+            }
+
+            public void RequiredAs(string/*!*/ fullPath) {
+                _requiredFeature = fullPath;
+            }
+
+            public bool IsSatisfied(Loader/*!*/ loader) {
+                string feature = _requiredFeature;
+                return feature != null && !IsLoading && loader.IsFeatureRequiredOrRequiring(feature);
+            }
+
+            public bool IsDead {
+                get { return _loaded && !IsLoading; }
             }
 
             public bool IsLoading {
@@ -1229,9 +1255,41 @@ namespace IronRuby.Builtins {
 
                  using (autoloadScope.Context.ClassHierarchyUnlocker()) {
                      _loaded = true;
-                     return autoloadScope.Context.Loader.LoadFile(autoloadScope.Scope, null, _path, LoadFlags.Require);
+                     return RequireFromMain(autoloadScope);
                  }
             }
+
+            // MRI loads the file by calling main.require(path), so a #require redefined on main -
+            // or a mock of it - is what runs. The builtin one is called directly.
+            private bool RequireFromMain(RubyGlobalScope/*!*/ autoloadScope) {
+                var context = autoloadScope.Context;
+                object main = autoloadScope.MainObject;
+                var method = context.ResolveMethod(main, "require", VisibilityContext.AllVisible).Info;
+                if (method == null || method.DeclaringModule == context.KernelModule) {
+                    return context.Loader.LoadFile(autoloadScope.Scope, null, _path, LoadFlags.Require);
+                }
+
+                var site = CallSite<Func<CallSite, object, object, object>>.Create(
+                    RubyCallAction.Make(context, "require", RubyCallSignature.WithImplicitSelf(1))
+                );
+                return RubyOps.IsTrue(site.Target(site, main, _path));
+            }
+        }
+
+        public static bool IsAutoload(object value) {
+            return value is AutoloadedConstant;
+        }
+
+        // An autoload of a file already required, or of the file this thread is requiring right now (an
+        // autoload of __FILE__), is satisfied from the start. Every autoload is registered with the
+        // loader, which is what lets a direct #require of the same file stand in for it.
+        private AutoloadedConstant/*!*/ CreateAutoload(MutableString/*!*/ path, string requiredFeature) {
+            var result = new AutoloadedConstant(path);
+            if (requiredFeature != null) {
+                result.RequiredAs(requiredFeature);
+            }
+            _context.Loader.RegisterAutoload(result);
+            return result;
         }
 
         public string/*!*/ MakeNestedModuleName(string nestedModuleSimpleName) {
@@ -1450,6 +1508,7 @@ namespace IronRuby.Builtins {
         
         // thread-safe:
         public void SetAutoloadedConstant(string/*!*/ name, MutableString/*!*/ path) {
+            string requiredFeature = Context.Loader.GetRequiredFeature(path.ConvertToString());
             using (Context.ClassHierarchyLocker()) {
                 ConstantStorage existing;
                 if (TryGetConstantNoAutoloadCheck(name, out existing)) {
@@ -1459,7 +1518,7 @@ namespace IronRuby.Builtins {
                         return;
                     }
                 }
-                SetConstantNoLock(name, new AutoloadedConstant(MutableString.Create(path).Freeze()));
+                SetConstantNoLock(name, CreateAutoload(MutableString.Create(path).Freeze(), requiredFeature));
             }
         }
 
@@ -1482,7 +1541,8 @@ namespace IronRuby.Builtins {
                         // alone would hide the pending autoload from every thread for its duration.
                         if ((autoloaded = storage.Value as AutoloadedConstant) != null
                             && (!autoloaded.Loaded || autoloaded.IsLoading)
-                            && !autoloaded.IsLoadingOnCurrentThread) {
+                            && !autoloaded.IsLoadingOnCurrentThread
+                            && !autoloaded.IsSatisfied(Context.Loader)) {
                             result = autoloaded.Path;
                         }
                         // a constant found in this module ends the search whether it is an autoload or not
@@ -1591,6 +1651,11 @@ namespace IronRuby.Builtins {
                     return ConstantLookupResult.NotFound;
                 }
 
+                // Nor is an autoload whose file has already been required: it defines nothing.
+                if (autoloaded.IsSatisfied(Context.Loader) || autoloadScope == null && autoloaded.IsDead) {
+                    return ConstantLookupResult.NotFound;
+                }
+
                 if (autoloadScope == null) {
                     return ConstantLookupResult.FoundAutoload;
                 }
@@ -1629,7 +1694,7 @@ namespace IronRuby.Builtins {
                     // MRI keeps the constant registered as an autoload when the file fails to load, so that
                     // referencing it again retries the load. A fresh AutoloadedConstant is needed because the
                     // old one already marked itself as loaded.
-                    owner.SetConstantNoMutateNoLock(name, new AutoloadedConstant(autoloaded.Path));
+                    owner.SetConstantNoMutateNoLock(name, owner.CreateAutoload(autoloaded.Path, null));
                     if (hadLocation) {
                         owner.SetConstantLocationNoLock(name, autoloadPath, autoloadLine);
                     }
@@ -1645,6 +1710,12 @@ namespace IronRuby.Builtins {
                 if (owner.TryGetConstantNoAutoloadCheck(name, out current) && ReferenceEquals(current.Value, autoloaded)) {
                     object removed;
                     owner.TryRemoveConstantNoLock(name, out removed);
+                    if (loaded) {
+                        using (Context.ClassHierarchyUnlocker()) {
+                            Context.ReportWarning(String.Format("Expected {0} to define {1} but it didn't",
+                                autoloaded.Path, owner.MakeNestedModuleName(name)), true);
+                        }
+                    }
                 }
 
                 if (!loaded) {

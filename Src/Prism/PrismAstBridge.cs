@@ -1042,10 +1042,10 @@ namespace IronRuby.Prism {
                     case Pm.AssocNode assoc:
                         maplets.Add(new Maplet(Expr(assoc.Key), Expr(assoc.Value), Span(assoc)));
                         break;
-                    case Pm.AssocSplatNode splat when splat.Value != null:
+                    case Pm.AssocSplatNode splat:
                         result = MergeHash(result, maplets, isKeywordArguments, span);
                         // `**nil` contributes nothing (Ruby 3.4); it is only known at run time
-                        var splatted = new OrExpression(Expr(splat.Value),
+                        var splatted = new OrExpression(splat.Value != null ? Expr(splat.Value) : AnonymousParameter(AnonymousKeywordRestName, splat),
                             new HashConstructor(new Maplet[0], span), span);
                         // always merge rather than pass the splatted object along: Hash#merge is
                         // what applies the #to_hash protocol to it
@@ -1090,7 +1090,9 @@ namespace IronRuby.Prism {
             Expression receiver = node.Receiver != null ? Expr(node.Receiver) : null;
             Block block = OptionalBlock(node.Block);
             Arguments args = node.Arguments != null ? BuildArguments(node.Arguments, ref block) : null;
-            return new MethodCall(receiver, name, args, block, span);
+            return new MethodCall(receiver, name, args, block, span) {
+                IsVariableCall = HasFlag(node, Pm.CallNodeFlags.VariableCall)
+            };
         }
 
         /// <summary>
@@ -1164,10 +1166,18 @@ namespace IronRuby.Prism {
 
         private Expression/*!*/ Argument(Pm.PmNode/*!*/ node) {
             if (node is Pm.SplatNode splat) {
-                if (splat.Expression == null) throw Unsupported(node);
-                return new SplattedArgument(Expr(splat.Expression));
+                // `f(*)` passes on the anonymous rest parameter of the enclosing `def m(*)`
+                return new SplattedArgument(splat.Expression != null ? Expr(splat.Expression) : AnonymousParameter(Symbols.RestArgsLocal, splat));
             }
             return Expr(node);
+        }
+
+        // `*` and `**` as arguments forward what the enclosing method's anonymous rest and keyword rest
+        // parameters took, which the method keeps in hidden locals.
+        private Expression/*!*/ AnonymousParameter(string/*!*/ name, Pm.PmNode/*!*/ node) {
+            var local = CurrentScope.ResolveVariable(name);
+            if (local == null) throw Unsupported(node);
+            return local;
         }
 
         private Arguments/*!*/ BuildArguments(Pm.PmNode argumentsNode) {
@@ -1752,7 +1762,7 @@ namespace IronRuby.Prism {
                     return LowerGeneralParameters(node, autoSplat, isMethod, span, out prologue);
                 }
                 // a lambda checks arity as strictly as a method does; a plain block does not
-                prologue = LowerKeywords(node, optional, isMethod || !autoSplat, mandatory, span);
+                prologue = LowerKeywords(node, optional, isMethod || !autoSplat, mandatory, isMethod, span);
                 if (isMethod) {
                     // only leading mandatory parameters can be here, and they are all locals
                     _zsuperArguments = ZSuperArguments(node, new List<Expression>(mandatory));
@@ -1898,8 +1908,8 @@ namespace IronRuby.Prism {
                     null, span));
             }
 
-            if (node.Rest is Pm.RestParameterNode rest && rest.Name != null) {
-                var local = CurrentScope.ResolveOrAddVariable(rest.Name, Span(node.Rest));
+            if (node.Rest is Pm.RestParameterNode rest && (rest.Name != null || isMethod)) {
+                var local = CurrentScope.ResolveOrAddVariable(rest.Name ?? Symbols.RestArgsLocal, Span(node.Rest));
                 statements.Add(new SimpleAssignmentExpression(local,
                     new MethodCall(args, "shift", new Arguments(
                         new MethodCall(new MethodCall(args, "size", null, span), "-",
@@ -1916,7 +1926,7 @@ namespace IronRuby.Prism {
                 statements.Add(AssignNext(post, args, span));
             }
 
-            foreach (var statement in BindKeywordsFrom(node, kwVar)) {
+            foreach (var statement in BindKeywordsFrom(node, kwVar, isMethod)) {
                 statements.Add(statement);
             }
 
@@ -1956,7 +1966,7 @@ namespace IronRuby.Prism {
         ///   rest = ?kw?.dup ; rest.delete(:j) ; rest.delete(:k)
         /// </summary>
         private Statements/*!*/ LowerKeywords(Pm.ParametersNode/*!*/ node, List<SimpleAssignmentExpression>/*!*/ optional,
-            bool strict, List<LeftValue>/*!*/ mandatory, SourceSpan span) {
+            bool strict, List<LeftValue>/*!*/ mandatory, bool isMethod, SourceSpan span) {
 
             var kwVar = CurrentScope.AddVariable("?kw?", span);
             // The default stands for "the caller passed no keywords", so it is marked as keyword
@@ -1975,7 +1985,7 @@ namespace IronRuby.Prism {
                 }
             }
 
-            foreach (var statement in BindKeywordsFrom(node, kwVar)) {
+            foreach (var statement in BindKeywordsFrom(node, kwVar, isMethod)) {
                 prologue.Add(statement);
             }
             return prologue;
@@ -2074,7 +2084,7 @@ namespace IronRuby.Prism {
         /// Binds each declared keyword parameter (and **rest) out of the hash the caller
         /// passed, raising ArgumentError for missing required keywords like MRI does.
         /// </summary>
-        private List<Expression>/*!*/ BindKeywordsFrom(Pm.ParametersNode/*!*/ node, LocalVariable/*!*/ kwVar) {
+        private List<Expression>/*!*/ BindKeywordsFrom(Pm.ParametersNode/*!*/ node, LocalVariable/*!*/ kwVar, bool isMethod) {
             var span = Span(node);
             var prologue = new List<Expression>();
             var names = new List<string>();
@@ -2108,9 +2118,9 @@ namespace IronRuby.Prism {
                 }
             }
 
-            if (node.KeywordRest is Pm.KeywordRestParameterNode keywordRest && keywordRest.Name != null) {
+            if (node.KeywordRest is Pm.KeywordRestParameterNode keywordRest && (keywordRest.Name != null || isMethod)) {
                 var kwSpan = Span(node.KeywordRest);
-                var restLocal = CurrentScope.ResolveOrAddVariable(keywordRest.Name, kwSpan);
+                var restLocal = CurrentScope.ResolveOrAddVariable(keywordRest.Name ?? AnonymousKeywordRestName, kwSpan);
                 prologue.Add(new SimpleAssignmentExpression(restLocal,
                     new MethodCall(kwVar, "dup", null, kwSpan), null, kwSpan));
                 foreach (var name in names) {
@@ -2175,6 +2185,7 @@ namespace IronRuby.Prism {
         // ---- pattern matching (case/in), lowered to tests + bindings ----
 
         private const string ForwardingRestName = "?fwd?";
+        internal const string AnonymousKeywordRestName = "?kwrest?";
         private const string ForwardingBlockName = "?fwdblk?";
 
         private static Statements/*!*/ MakeStatements(params Expression[]/*!*/ statements) {

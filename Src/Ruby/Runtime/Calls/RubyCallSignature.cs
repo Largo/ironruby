@@ -60,13 +60,18 @@ namespace IronRuby.Runtime.Calls {
 
         // SuperCallAction only: the super site dynamically loads its parameters from scope.
         HasImplicitArguments = 128,
+
+        // CallAction only: a bare identifier that could have been a local variable (`foo`, no receiver,
+        // arguments nor parentheses). When nothing answers it MRI raises NameError "undefined local
+        // variable or method" rather than NoMethodError.
+        IsVariableCall = 256,
     }
         
     /// <summary>
     /// RubyScope/RubyContext, (self), (argument){ArgumentCount}, (splatted-argument)?, (block)?
     /// </summary>
     public struct RubyCallSignature : IEquatable<RubyCallSignature> {
-        private const int FlagsCount = 8;
+        private const int FlagsCount = 9;
 
         private const int ResolveOnlyArgumentCount = (int)(UInt32.MaxValue >> FlagsCount);
         private const int MaxArgumentCount = ResolveOnlyArgumentCount - 1;
@@ -83,6 +88,7 @@ namespace IronRuby.Runtime.Calls {
         public bool IsVirtualCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsVirtualCall) != 0; } }
         public bool HasImplicitArguments { get { return (_countAndFlags & (uint)RubyCallFlags.HasImplicitArguments) != 0; } }
         public bool IsSuperCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsSuperCall) != 0; } }
+        public bool IsVariableCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsVariableCall) != 0; } }
 
         // defined? ignores arguments hence we can use one argument number (max) to represent resolve only sites:
         public bool ResolveOnly { get { return ArgumentCount == ResolveOnlyArgumentCount; } }

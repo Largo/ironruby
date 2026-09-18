@@ -340,11 +340,16 @@ namespace IronRuby.Builtins {
         [RubyMethod("binding", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("binding", RubyMethodAttributes.PublicSingleton)]
         public static Binding/*!*/ GetLocalScope(RubyScope/*!*/ scope, object self) {
-            if (scope.RubyContext.RubyOptions.Compatibility < RubyCompatibility.Ruby19) {
-                return new Binding(scope, self);
-            } else {
-                return new Binding(scope);
+            var result = Binding.Create(scope, scope.RubyContext.RubyOptions.Compatibility < RubyCompatibility.Ruby19 ? self : scope.SelfObject);
+
+            // Binding#source_location is the line that called #binding
+            string path;
+            int line;
+            if (scope.TryGetCurrentSourceLocation(out path, out line)) {
+                result.SourcePath = path;
+                result.SourceLine = line;
             }
+            return result;
         }
 
         [RubyMethod("block_given?", RubyMethodAttributes.PrivateInstance)]
@@ -359,7 +364,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("local_variables", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("local_variables", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ GetLocalVariableNames(RubyScope/*!*/ scope, object self) {
+            // `?rest?', `?kw?' and the like are the compiler's: where anonymous and forwarded
+            // parameters, and the argument list a zsuper passes on, are kept
             var names = scope.GetVisibleLocalNames();
+            names.RemoveAll(name => name.Length > 0 && name[0] == '?');
             return new RubyArray(names.Count).AddRange(scope.RubyContext.StringifyIdentifiers(names));
         }
 
@@ -1083,7 +1091,8 @@ namespace IronRuby.Builtins {
                 targetScope = binding.LocalScope;
                 targetSelf = binding.SelfObject;
             } else {
-                targetScope = scope;
+                // The locals a string defines are its own: a second eval does not see them.
+                targetScope = new RubyBindingCopyScope(scope, self);
                 targetSelf = self;
             }
             return RubyUtils.Evaluate(code, targetScope, targetSelf, null, file, line);
@@ -1282,17 +1291,25 @@ namespace IronRuby.Builtins {
 
         #region autoload, autoloaded?
 
+        // MRI puts the autoload on the cref class, which is where a `def` would go: inside a method
+        // defined in a Class.new block that is the new class, not the lexically enclosing Object.
+        // A singleton class stands for its real class (rb_class_real), so instance_eval autoloads on Object.
+        private static RubyModule/*!*/ GetAutoloadOwner(RubyScope/*!*/ scope) {
+            RubyModule owner = scope.GetMethodDefinitionOwner();
+            return owner.IsSingletonClass ? ((RubyClass)owner).GetNonSingletonClass() : owner;
+        }
+
         [RubyMethod("autoload", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("autoload", RubyMethodAttributes.PublicSingleton)]
         public static void SetAutoloadedConstant(ConversionStorage<MutableString>/*!*/ toPath, RubyScope/*!*/ scope, object self,
             [DefaultProtocol, NotNull]string/*!*/ constantName, object path) {
-            ModuleOps.SetAutoloadedConstant(toPath, scope.GetInnerMostModuleForConstantLookup(), constantName, path);
+            ModuleOps.SetAutoloadedConstant(toPath, GetAutoloadOwner(scope), constantName, path);
         }
 
         [RubyMethod("autoload?", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("autoload?", RubyMethodAttributes.PublicSingleton)]
         public static MutableString GetAutoloadedConstantPath(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ constantName) {
-            return ModuleOps.GetAutoloadedConstantPath(scope.GetInnerMostModuleForConstantLookup(), constantName);
+            return ModuleOps.GetAutoloadedConstantPath(GetAutoloadOwner(scope), constantName);
         }
 
         #endregion

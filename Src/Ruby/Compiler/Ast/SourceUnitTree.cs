@@ -74,6 +74,19 @@ namespace IronRuby.Compiler.Ast {
             _dataOffset = dataOffset;
         }
 
+        // The locals an eval's string declares at its top level, which live in the scope it runs in
+        // rather than in storage of its own. Those the scope already has belong to the outer lexical scope.
+        private string/*!*/[]/*!*/ GetEvalDeclaredVariables() {
+            var result = new List<string>();
+            foreach (var entry in _definedScope) {
+                string name = entry.Key;
+                if (entry.Value.DefinitionLexicalDepth < 0 && name.Length > 0 && (name[0] == '_' || Char.IsLetter(name[0]))) {
+                    result.Add(name);
+                }
+            }
+            return result.ToArray();
+        }
+
         private ScopeBuilder/*!*/ DefineLocals() {
             return new ScopeBuilder(_definedScope.AllocateClosureSlotsForLocals(0), null, _definedScope);
         }
@@ -148,6 +161,12 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression prologue;
             switch (gen.CompilerOptions.FactoryKind) {
                 case TopScopeFactoryKind.None:
+                    var declared = GetEvalDeclaredVariables();
+                    prologue = declared.Length == 0 ?
+                        Methods.InitializeScopeNoLocals.OpCall(runtimeScopeVariable, EnterInterpretedFrameExpression.Instance) :
+                        Methods.InitializeEvalScope.OpCall(runtimeScopeVariable, AstUtils.Constant(declared), EnterInterpretedFrameExpression.Instance);
+                    break;
+
                 case TopScopeFactoryKind.ModuleEval:
                     prologue = Methods.InitializeScopeNoLocals.OpCall(runtimeScopeVariable, EnterInterpretedFrameExpression.Instance);
                     break;

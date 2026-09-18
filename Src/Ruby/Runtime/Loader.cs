@@ -653,6 +653,8 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            var autoloads = tracked ? BeginAutoloadsOf(file.Path) : null;
+            bool succeeded = false;
             try {
                 if (file.SourceUnit != null) {
                     AddScriptLines(file.SourceUnit);
@@ -676,7 +678,9 @@ namespace IronRuby.Runtime {
                 }
 
                 FileLoaded(MutableString.Create(file.Path, pathEncoding), flags);
+                succeeded = true;
             } finally {
+                EndAutoloads(autoloads, file.Path, succeeded);
                 // Only release what was claimed: an untracked #load must not drop the claim a
                 // concurrent #require of the same file is holding.
                 if (tracked) {
@@ -945,6 +949,128 @@ namespace IronRuby.Runtime {
         internal void InsertLoadPaths(IEnumerable<string/*!*/>/*!*/ paths) {
             InsertLoadPaths(paths, 0);
         }
+
+        #region Autoloads
+
+        // Autoloads that have not run yet. Requiring the very file an autoload names is that autoload
+        // running, as far as MRI is concerned: while the file loads, the requiring thread does not see
+        // the pending autoload, and once it is loaded the autoload has nothing left to do.
+        private readonly List<WeakReference<RubyModule.AutoloadedConstant>>/*!*/ _pendingAutoloads =
+            new List<WeakReference<RubyModule.AutoloadedConstant>>();
+
+        internal static string/*!*/ GetFeatureName(string/*!*/ path) {
+            string name = path.Substring(path.LastIndexOfAny(new[] { '/', '\\' }) + 1);
+            return name.EndsWith(".rb", StringComparison.Ordinal) ? name.Substring(0, name.Length - 3) : name;
+        }
+
+        internal void RegisterAutoload(RubyModule.AutoloadedConstant/*!*/ autoload) {
+            lock (_pendingAutoloads) {
+                _pendingAutoloads.Add(new WeakReference<RubyModule.AutoloadedConstant>(autoload));
+            }
+        }
+
+        // The full path #require would load for the given feature, or null.
+        private string ResolveFeature(string/*!*/ path) {
+            try {
+                var files = FindFile(path, true, DomainManager.Configuration.GetFileExtensions(_context), false);
+                return files.Count > 0 ? files[0].Path : null;
+            } catch (Exception) {
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// An autoload of a file that has already been required - or that this thread is requiring right
+        /// now, which is an autoload of __FILE__ - has nothing to load. Returns that file's full path.
+        /// </summary>
+        internal string GetRequiredFeature(string/*!*/ path) {
+            // Only a file whose name matches is worth the file-system probes of resolving the path.
+            string name = GetFeatureName(path);
+            bool candidate = false;
+            lock (_unfinishedFiles) {
+                foreach (var entry in _unfinishedFiles) {
+                    if (entry.Value == Thread.CurrentThread && GetFeatureName(entry.Key) == name) {
+                        candidate = true;
+                        break;
+                    }
+                }
+            }
+            if (!candidate) {
+                foreach (object file in GetLoadedFiles()) {
+                    var loadedPath = file as MutableString;
+                    if (loadedPath != null && GetFeatureName(loadedPath.ToString()) == name) {
+                        candidate = true;
+                        break;
+                    }
+                }
+            }
+            if (!candidate) {
+                return null;
+            }
+
+            string fullPath = ResolveFeature(path);
+            return fullPath != null && IsFeatureRequiredOrRequiring(fullPath) ? fullPath : null;
+        }
+
+        internal bool IsFeatureRequiredOrRequiring(string/*!*/ fullPath) {
+            lock (_unfinishedFiles) {
+                Thread owner;
+                if (_unfinishedFiles.TryGetValue(fullPath, out owner) && owner == Thread.CurrentThread) {
+                    return true;
+                }
+            }
+            return AnyFileLoaded(new[] { _context.EncodePath(fullPath) });
+        }
+
+        // Takes over, for the current thread, every pending autoload that names the file being required.
+        private List<RubyModule.AutoloadedConstant> BeginAutoloadsOf(string/*!*/ fullPath) {
+            string name = GetFeatureName(fullPath);
+            List<RubyModule.AutoloadedConstant> candidates = null;
+            lock (_pendingAutoloads) {
+                for (int i = _pendingAutoloads.Count - 1; i >= 0; i--) {
+                    RubyModule.AutoloadedConstant autoload;
+                    if (!_pendingAutoloads[i].TryGetTarget(out autoload) || autoload.Loaded) {
+                        _pendingAutoloads.RemoveAt(i);
+                    } else if (autoload.FeatureName == name) {
+                        if (candidates == null) {
+                            candidates = new List<RubyModule.AutoloadedConstant>();
+                        }
+                        candidates.Add(autoload);
+                    }
+                }
+            }
+            if (candidates == null) {
+                return null;
+            }
+
+            List<RubyModule.AutoloadedConstant> result = null;
+            foreach (var autoload in candidates) {
+                if (ResolveFeature(autoload.Path.ConvertToString()) == fullPath) {
+                    if (result == null) {
+                        result = new List<RubyModule.AutoloadedConstant>();
+                        _context.EnterAutoload();
+                    }
+                    autoload.BeginLoad();
+                    result.Add(autoload);
+                }
+            }
+            return result;
+        }
+
+        private void EndAutoloads(List<RubyModule.AutoloadedConstant> autoloads, string/*!*/ fullPath, bool loaded) {
+            if (autoloads == null) {
+                return;
+            }
+            foreach (var autoload in autoloads) {
+                if (loaded) {
+                    autoload.RequiredAs(fullPath);
+                }
+                autoload.EndLoad();
+            }
+            _context.LeaveAutoload();
+        }
+
+        #endregion
 
         private void AddLoadedFile(MutableString/*!*/ path) {
             lock (_loadedFiles) {

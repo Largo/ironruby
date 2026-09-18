@@ -48,6 +48,11 @@ namespace IronRuby.Compiler.Ast {
             get { return _target; }
         }
 
+        /// <summary>
+        /// A bare identifier - no receiver, arguments or parentheses - that is not a local variable.
+        /// </summary>
+        public bool IsVariableCall { get; set; }
+
         public MethodCall(Expression target, string/*!*/ methodName, Arguments args, SourceSpan location)
             : this(target, methodName, args, null, location) {
         }
@@ -116,6 +121,8 @@ namespace IronRuby.Compiler.Ast {
                 siteBuilder.RhsArgument = Ast.Assign(rhsVariable, assignmentRhsArgument);
             }
 
+            var call = node as MethodCall;
+            siteBuilder.IsVariableCall = call != null && call.IsVariableCall;
             var dynamicSite = siteBuilder.MakeCallAction(methodName, hasImplicitSelf);
 #if FEATURE_CALL_SITE_TRACER
             if (gen.Context.CallSiteCreated != null) {

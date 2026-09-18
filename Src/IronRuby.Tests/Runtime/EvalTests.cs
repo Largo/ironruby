@@ -66,7 +66,7 @@ undefined");
   puts b rescue p $!
   
   eval <<-END
-    puts b, c
+    puts((b rescue $!.class), (c rescue $!.class))
   END
 }
 
@@ -78,14 +78,17 @@ eval <<-END
   puts b rescue p $!
 END
 ";
+            // Locals an eval defines are its own: neither the frame nor the next eval sees them (MRI 1.9+).
+            // MRI raises NameError for a bare name; only the prism front end tells a bare name apart,
+            // so under this parser it is still NoMethodError, its subclass.
             string output = @"
-#<NoMethodError: * `b' *>
-2
-3
-#<NoMethodError: * `a' *>
-#<NoMethodError: * `b' *>
-#<NoMethodError: * `a' *>
-#<NoMethodError: * `b' *>
+#<N*Error: * `b' *>
+N*Error
+N*Error
+#<N*Error: * `a' *>
+#<N*Error: * `b' *>
+#<N*Error: * `a' *>
+#<N*Error: * `b' *>
 ";
 
             AssertOutput(() => CompilerTest(String.Format(@"def foo; {0}; end; foo", body)), output, OutputFlags.Match);
@@ -123,13 +126,13 @@ class C
 end
 
 z = 1
-instance_eval 'x = z + 1'
-C.class_eval 'y = x + 1; z = 4'
-
-eval('p x,y,z')", @"
+instance_eval 'x = z + 1; p x'
+C.class_eval 'z = 4'
+p z
+begin; eval('x'); rescue NameError; p :undefined; end", @"
 2
-3
 4
+:undefined
 ");
         }
 
@@ -166,9 +169,9 @@ $b.each do |bin|
   END
 end", @"
 [1, nil, nil, nil, nil]
+[1, 2, nil, nil, nil]
 [1, 2, 3, nil, nil]
-[1, 2, 3, nil, nil]
-[1, 2, 3, 4, 5]
+[1, 2, 3, 4, nil]
 [1, 2, 3, 4, 5]
 ");
         }

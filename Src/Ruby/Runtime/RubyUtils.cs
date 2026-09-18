@@ -1240,7 +1240,9 @@ namespace IronRuby.Runtime {
         }
 
         private static RubyScope/*!*/ CreateModuleEvalScope(RubyScope/*!*/ parent, object self, RubyModule/*!*/ module) {
-            var scope = new RubyModuleEvalScope(parent, module, self);
+            // A module-eval scope keeps its new locals in its parent; that parent is a scope of the
+            // string's own, so that they are not left behind in the caller's frame.
+            var scope = new RubyModuleEvalScope(new RubyBindingCopyScope(parent, parent.SelfObject), module, self);
             scope.SetDebugName("instance/module-eval");
             return scope;
         }

@@ -306,6 +306,14 @@ namespace IronRuby.Runtime.Calls {
 
                 case MethodMissingBinding.Fallback:
                     // method_missing is defined in Kernel:
+                    if (defaultFallback && args.Signature.IsVariableCall) {
+                        metaBuilder.SetError(Methods.MakeUndefinedLocalOrMethodError.OpCall(
+                            args.MetaContext.Expression,
+                            AstUtils.Convert(args.TargetExpression, typeof(object)),
+                            Ast.Constant(methodName)
+                        ));
+                        return true;
+                    }
                     if (defaultFallback) {
                         metaBuilder.SetError(Methods.MakeMissingMethodError.OpCall(
                             args.MetaContext.Expression,

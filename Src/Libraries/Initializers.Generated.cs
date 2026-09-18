@@ -648,6 +648,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Binding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.BindingOps.ToS)
             );
             
+            DefineLibraryMethod(module, "source_location", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Binding, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.BindingOps.GetSourceLocation)
+            );
+            
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Binding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.BindingOps.ToS)

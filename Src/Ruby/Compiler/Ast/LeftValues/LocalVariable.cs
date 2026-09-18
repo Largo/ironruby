@@ -46,6 +46,10 @@ namespace IronRuby.Compiler.Ast {
             _closureIndex = -1;
         }
 
+        internal int DefinitionLexicalDepth {
+            get { return _definitionLexicalDepth; }
+        }
+
         internal int ClosureIndex {
             get { return _closureIndex; }
         }

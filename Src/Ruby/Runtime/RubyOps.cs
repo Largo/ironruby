@@ -117,6 +117,19 @@ namespace IronRuby.Runtime {
             scope.InterpretedFrame = interpretedFrame;
         }
 
+        /// <summary>
+        /// An eval's own locals exist from the start, as in any other scope - `if false; a = 1; end'
+        /// leaves `a' defined as nil for the next eval through the same binding - so the ones the
+        /// string declares are defined up front rather than on their first assignment.
+        /// </summary>
+        [Emitted]
+        public static void InitializeEvalScope(RubyScope/*!*/ scope, string/*!*/[]/*!*/ declaredNames, InterpretedFrame interpretedFrame) {
+            scope.InterpretedFrame = interpretedFrame;
+            foreach (var name in declaredNames) {
+                scope.DeclareLocalVariable(name);
+            }
+        }
+
         [Emitted]
         public static void SetDataConstant(RubyScope/*!*/ scope, string/*!*/ dataPath, int dataOffset) {
             Debug.Assert(dataOffset >= 0);
@@ -2420,6 +2433,11 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static Exception/*!*/ MakeMissingMethodError(RubyContext/*!*/ context, object self, string/*!*/ methodName) {
             return RubyExceptions.CreateMethodMissing(context, self, methodName);
+        }
+
+        [Emitted]
+        public static Exception/*!*/ MakeUndefinedLocalOrMethodError(RubyContext/*!*/ context, object self, string/*!*/ methodName) {
+            return RubyExceptions.CreateUndefinedLocalOrMethod(context, self, methodName);
         }
 
         [Emitted]

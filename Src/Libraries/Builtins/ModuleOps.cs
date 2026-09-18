@@ -1255,7 +1255,8 @@ namespace IronRuby.Builtins {
             if (deprecated) {
                 self.Context.ReportConstantDeprecation(self, constantName);
             }
-            return value;
+            // a pending autoload has no value yet
+            return RubyModule.IsAutoload(value) ? null : value;
         }
 
         // public since Ruby 3.0

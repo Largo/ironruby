@@ -114,7 +114,7 @@ namespace IronRuby.Prism {
                 if (outerLocals != null) {
                     writer.Write(1);        // one scope
                     writer.Write(outerLocals.Count);
-                    writer.Write((byte)0);  // forwarding flags
+                    writer.Write(ForwardingFlags(outerLocals));
                     foreach (string local in outerLocals) {
                         byte[] localBytes = Encoding.UTF8.GetBytes(local);
                         writer.Write(localBytes.Length);
@@ -125,6 +125,22 @@ namespace IronRuby.Prism {
                 }
                 return stream.ToArray();
             }
+        }
+
+        // An eval inside `def m(*, **, &)` or `def m(...)` may forward those anonymous parameters, and
+        // prism refuses `f(*)` and the like unless the scope it is given says it has them. The method
+        // keeps them in hidden locals, so their names in the scope are what tells.
+        private static byte ForwardingFlags(IList<string>/*!*/ outerLocals) {
+            byte flags = 0;
+            foreach (string local in outerLocals) {
+                switch (local) {
+                    case "?rest?": flags |= 0x1; break;     // PM_OPTIONS_SCOPE_FORWARDING_POSITIONALS
+                    case "?kwrest?": flags |= 0x2; break;   // PM_OPTIONS_SCOPE_FORWARDING_KEYWORDS
+                    case "?block?": flags |= 0x4; break;    // PM_OPTIONS_SCOPE_FORWARDING_BLOCK
+                    case "?fwd?": flags |= 0x8; break;      // PM_OPTIONS_SCOPE_FORWARDING_ALL
+                }
+            }
+            return flags;
         }
 
         public static string/*!*/ ParseToJson(string/*!*/ source) {

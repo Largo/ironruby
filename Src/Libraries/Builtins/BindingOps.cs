@@ -24,6 +24,14 @@ namespace IronRuby.Builtins {
     [UndefineMethod("LocalScope")]
     public static class BindingOps {
 
+        [RubyMethod("source_location")]
+        public static RubyArray GetSourceLocation(RubyContext/*!*/ context, Binding/*!*/ self) {
+            if (self.SourcePath == null) {
+                return null;
+            }
+            return new RubyArray(2) { context.EncodePath(self.SourcePath), self.SourceLine };
+        }
+
         /// <summary>
         /// `it` and `_1`.. are parameters the block body conjured up by mentioning them. MRI keeps
         /// them out of #local_variables and answers for them here instead, and only for the scope
@@ -31,7 +39,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("implicit_parameters")]
         public static RubyArray/*!*/ GetImplicitParameters(RubyContext/*!*/ context, Binding/*!*/ self) {
-            var names = self.LocalScope.OwnImplicitParameterNames;
+            var names = self.FrameScope.OwnImplicitParameterNames;
             var result = new RubyArray(names != null ? names.Length : 0);
             if (names != null) {
                 foreach (var name in names) {
@@ -59,7 +67,7 @@ namespace IronRuby.Builtins {
         }
 
         private static bool IsImplicitParameter(Binding/*!*/ self, string/*!*/ name) {
-            var names = self.LocalScope.OwnImplicitParameterNames;
+            var names = self.FrameScope.OwnImplicitParameterNames;
             return names != null && Array.IndexOf(names, name) >= 0;
         }
 

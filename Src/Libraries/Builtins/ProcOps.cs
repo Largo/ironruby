@@ -123,7 +123,10 @@ namespace IronRuby.Builtins {
             }
             // Method#to_proc makes a proc whose self is the method's receiver rather than the
             // scope's, and the binding reports that one
-            return new Binding(self.LocalScope, self.Self);
+            var result = Binding.Create(self.LocalScope, self.Self);
+            result.SourcePath = self.Dispatcher.SourcePath;
+            result.SourceLine = self.Dispatcher.SourceLine;
+            return result;
         }
 
         [RubyMethod("source_location")]

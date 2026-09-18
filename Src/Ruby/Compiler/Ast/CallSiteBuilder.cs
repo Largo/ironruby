@@ -85,10 +85,15 @@ namespace IronRuby.Compiler.Ast {
             return MakeCallSite(SuperCallAction.Make(_gen.Context, new RubyCallSignature(Count - HiddenArgumentCount, flags), lexicalScopeId));
         }
 
+        public bool IsVariableCall { get; set; }
+
         public MSA.Expression/*!*/ MakeCallAction(string/*!*/ name, bool hasImplicitSelf) {
             RubyCallFlags flags = GetSignatureFlags();
             if (hasImplicitSelf) {
                 flags |= RubyCallFlags.HasImplicitSelf;
+            }
+            if (IsVariableCall) {
+                flags |= RubyCallFlags.IsVariableCall;
             }
 
             return MakeCallSite(RubyCallAction.Make(_gen.Context, name, new RubyCallSignature(Count - HiddenArgumentCount, flags)));
