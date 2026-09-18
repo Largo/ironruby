@@ -1279,7 +1279,9 @@ namespace IronRuby.Prism {
                     return new ArrayItemAccess(Hoist(Expr(index.Receiver), hoist, span),
                         HoistArguments(BuildArguments(index.Arguments), hoist, span), null, span);
                 case Pm.CallTargetNode callTarget:
-                    return new AttributeAccess(Hoist(Expr(callTarget.Receiver), hoist, span), callTarget.Name.TrimEnd('='), span);
+                    return new AttributeAccess(Hoist(Expr(callTarget.Receiver), hoist, span), callTarget.Name.TrimEnd('='), span) {
+                        IsSafeNavigation = HasFlag(callTarget, Pm.CallNodeFlags.SafeNavigation)
+                    };
                 case Pm.MultiTargetNode multi:
                     return CompoundTarget(multi.Lefts, multi.Rest, multi.Rights, hoist);
                 default:

@@ -44,7 +44,7 @@ namespace IronRuby.Compiler.Ast {
             );
         }
 
-        internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
 
             MSA.Expression transformedReturnValue = TransformReturnValue(gen);
 
