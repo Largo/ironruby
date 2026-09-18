@@ -85,6 +85,15 @@ namespace IronRuby.Hosting {
         }
 
         protected override int RunFile(string fileName) {
+            // A script that cannot be read is a LoadError in MRI, reported without a backtrace:
+            // "ruby: No such file or directory -- x (LoadError)".
+            string scriptPath = RubyUtils.CanonicalizePath(fileName);
+            if (Directory.Exists(scriptPath) || !File.Exists(scriptPath)) {
+                string reason = Directory.Exists(scriptPath) ? "Is a directory" : "No such file or directory";
+                Console.Write(String.Format("ruby: {0} -- {1} (LoadError)\n", reason, fileName), Style.Error);
+                return 1;
+            }
+
             var options = ((RubyContext)Language).RubyOptions;
             if (options.LoopOverInput) {
                 // The program has to be read rather than handed to the compiler as a path, so

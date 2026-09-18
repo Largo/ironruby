@@ -1487,7 +1487,7 @@ namespace IronRuby.Builtins {
                 } catch (NotSupportedException) {
                     // A read-only console stream cannot be flushed and needs no flushing.
                 }
-                int fd = GetNativeFileDescriptor(io);
+                int fd = RubyIO.PrimaryDescriptorOf(io.GetStream().BaseStream);
                 if (fd < 0) {
                     // The console streams are not FileStreams, but their descriptors are
                     // the well-known 0/1/2.
