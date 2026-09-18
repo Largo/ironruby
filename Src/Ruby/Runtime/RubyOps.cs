@@ -874,10 +874,10 @@ namespace IronRuby.Runtime {
             Assert.NotNull(owner);
             RubyClass superClass = ToSuperClass(owner.Context, superClassObject);
 
+            // only the owner's own constants: a class of that name in a module Object includes is
+            // not reopened, a new one is defined (MRI's rb_const_defined_at)
             ConstantStorage existing;
-            if (owner.IsObjectClass
-                ? owner.TryResolveConstant(scope.GlobalScope, name, out existing)
-                : owner.TryGetConstant(scope.GlobalScope, name, out existing)) {
+            if (owner.TryGetConstant(scope.GlobalScope, name, out existing)) {
 
                 RubyClass cls = existing.Value as RubyClass;
                 if (cls == null || !cls.IsClass) {
