@@ -160,8 +160,53 @@ namespace IronRuby.Builtins {
 
         private const string DuplicateGroupNameSeparator = "__ir";
 
+        // A name .NET would not accept - Ruby allows `(?<a+>...)' for a group only ever called
+        // with \g - is spelled with its other characters as hex codes behind this prefix.
+        private const string EncodedGroupNamePrefix = "__irn";
+
         private static string/*!*/ DuplicateGroupName(string/*!*/ name, int occurrence) {
-            return occurrence <= 1 ? name : name + DuplicateGroupNameSeparator + occurrence.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            string clrName = IsClrGroupName(name) ? name : EncodeGroupName(name);
+            return occurrence <= 1 ? clrName : clrName + DuplicateGroupNameSeparator + occurrence.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static bool IsClrGroupName(string/*!*/ name) {
+            if (name.Length == 0 || !(Char.IsLetter(name[0]) || name[0] == '_')) {
+                return false;
+            }
+            foreach (char c in name) {
+                if (!Char.IsLetterOrDigit(c) && c != '_') {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static string/*!*/ EncodeGroupName(string/*!*/ name) {
+            var result = new StringBuilder(EncodedGroupNamePrefix);
+            foreach (char c in name) {
+                if (Char.IsLetterOrDigit(c)) {
+                    result.Append(c);
+                } else {
+                    result.Append('_').Append(((int)c).ToString("x4"));
+                }
+            }
+            return result.ToString();
+        }
+
+        private static string/*!*/ DecodeGroupName(string/*!*/ clrName) {
+            if (!clrName.StartsWith(EncodedGroupNamePrefix, StringComparison.Ordinal)) {
+                return clrName;
+            }
+            var result = new StringBuilder();
+            for (int i = EncodedGroupNamePrefix.Length; i < clrName.Length; i++) {
+                if (clrName[i] == '_' && i + 4 < clrName.Length) {
+                    result.Append((char)Convert.ToInt32(clrName.Substring(i + 1, 4), 16));
+                    i += 4;
+                } else {
+                    result.Append(clrName[i]);
+                }
+            }
+            return result.ToString();
         }
 
         /// <summary>
@@ -179,9 +224,9 @@ namespace IronRuby.Builtins {
                         return clrName;
                     }
                 }
-                return clrName.Substring(0, separator);
+                return DecodeGroupName(clrName.Substring(0, separator));
             }
-            return clrName;
+            return DecodeGroupName(clrName);
         }
 
         private static Dictionary<string, int>/*!*/ CountGroupNames(string/*!*/ pattern) {
@@ -911,6 +956,10 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            if (name[0] == '-' || Tokenizer.IsDecimalDigit(name[0])) {
+                throw MakeError("invalid group name <" + name + ">");
+            }
+
             if (_suppressCaptures) {
                 Append(':');
             } else {
@@ -1078,7 +1127,7 @@ namespace IronRuby.Builtins {
                 inner._callsInProgress = _callsInProgress;
                 inner._groupsBeingParsed = _groupsBeingParsed;
 
-                _sb.Append("(?<").Append(key.StartsWith("#") ? key.Substring(1) : key).Append('>');
+                _sb.Append("(?<").Append(key.StartsWith("#") ? key.Substring(1) : DuplicateGroupName(key, 1)).Append('>');
                 _sb.Append(inner.Transform()).Append(')');
                 _hasGAnchor |= inner._hasGAnchor;
             } finally {

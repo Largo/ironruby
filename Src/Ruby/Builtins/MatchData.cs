@@ -231,16 +231,16 @@ namespace IronRuby.Builtins {
         /// that is the last of them that took part in the match, as in Onigmo.
         /// </summary>
         private Group/*!*/ GetNamedGroup(string/*!*/ name) {
-            Group result = _match.Groups[name];
+            Group result = null;
             foreach (var clrName in _match.Groups.Keys) {
-                if (clrName != name && RegexpTransformer.GetRubyGroupName(clrName) == name) {
+                if (RegexpTransformer.GetRubyGroupName(clrName) == name) {
                     var group = _match.Groups[clrName];
-                    if (group.Success) {
+                    if (result == null || group.Success) {
                         result = group;
                     }
                 }
             }
-            return result;
+            return result ?? _match.Groups[name];
         }
 
         private int[] OffsetsOf(Group/*!*/ group, bool inBytes) {
@@ -320,7 +320,7 @@ namespace IronRuby.Builtins {
 
         public bool HasNamedGroup(string/*!*/ name) {
             foreach (var groupName in _match.Groups.Keys) {
-                if (groupName == name) {
+                if (RegexpTransformer.GetRubyGroupName(groupName) == name) {
                     return true;
                 }
             }
