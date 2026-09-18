@@ -241,6 +241,10 @@ namespace IronRuby.Builtins {
         // List of dependent classes - subclasses of this class and classes to which this module is included to (forms a DAG).
         private WeakList<RubyClass> _dependentClasses;
 
+        // Modules (not classes) whose flattened mixin list contains this module. Since Ruby 3.0 a module
+        // included into this one later shows up in their ancestors too, so the update must reach them.
+        private WeakList<RubyModule> _dependentModules;
+
 #if DEBUG
         private int _referringMethodRulesSinceLastUpdate;
         
@@ -2857,6 +2861,56 @@ namespace IronRuby.Builtins {
 
             MixinsUpdated(_mixins, _mixins = expanded);
             _context.ConstantAccessVersion++;
+
+            if (!IsClass) {
+                PropagateMixinsToDependentsNoLock();
+            }
+        }
+
+        /// <summary>
+        /// This module gained mixins after it had itself been included elsewhere. MRI (since 3.0) makes the
+        /// new modules ancestors of every class and module that includes this one, right after it.
+        /// </summary>
+        private void PropagateMixinsToDependentsNoLock() {
+            Context.RequiresClassHierarchyLock();
+
+            if (_dependentClasses != null) {
+                foreach (var cls in _dependentClasses) {
+                    cls.ReexpandMixinNoLock(this);
+                }
+            }
+
+            if (_dependentModules != null) {
+                foreach (var module in _dependentModules) {
+                    module.ReexpandMixinNoLock(this);
+                }
+            }
+        }
+
+        private void ReexpandMixinNoLock(RubyModule/*!*/ mixin) {
+            if (Array.IndexOf(_mixins, mixin) == -1) {
+                // a subclass, or a module that prepends rather than includes the mixin
+                return;
+            }
+
+            RubyModule[] expanded = ExpandMixinsNoLock(GetSuperClass(), _mixins, new[] { mixin });
+            if (expanded.Length == _mixins.Length) {
+                return;
+            }
+
+            foreach (RubyModule module in expanded) {
+                if (module.IsInterface && !CanIncludeClrInterface && Array.IndexOf(_mixins, module) == -1) {
+                    // the CLR type is already built and cannot gain the interface
+                    return;
+                }
+            }
+
+            MixinsUpdated(_mixins, _mixins = expanded);
+            _context.ConstantAccessVersion++;
+
+            if (!IsClass) {
+                PropagateMixinsToDependentsNoLock();
+            }
         }
 
         internal void InitializeNewMixin(RubyModule/*!*/ mixin) {
@@ -2870,7 +2924,28 @@ namespace IronRuby.Builtins {
         }
 
         internal virtual void MixinsUpdated(RubyModule/*!*/[]/*!*/ oldMixins, RubyModule/*!*/[]/*!*/ newMixins) {
-            // nop
+            // RubyClass overrides this and records itself in DependentClasses instead
+            foreach (var mixin in newMixins) {
+                if (Array.IndexOf(oldMixins, mixin) == -1) {
+                    mixin.AddDependentModule(this);
+                }
+            }
+        }
+
+        private void AddDependentModule(RubyModule/*!*/ dependentModule) {
+            Context.RequiresClassHierarchyLock();
+
+            if (_dependentModules == null) {
+                _dependentModules = new WeakList<RubyModule>();
+            } else {
+                foreach (var module in _dependentModules) {
+                    if (ReferenceEquals(dependentModule, module)) {
+                        return;
+                    }
+                }
+            }
+
+            _dependentModules.Add(dependentModule.WeakSelf);
         }
 
         // Requires hierarchy lock
