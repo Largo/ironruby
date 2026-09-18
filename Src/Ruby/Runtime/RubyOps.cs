@@ -2436,6 +2436,19 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
+        public static Exception/*!*/ SetMissingMethodArguments(Exception/*!*/ error, object[]/*!*/ args, IList splat, object rhs, bool hasRhs) {
+            var list = new RubyArray(args);
+            if (splat != null) {
+                list.AddRange(splat);
+            }
+            if (hasRhs) {
+                list.Add(rhs);
+            }
+            RubyExceptionData.GetInstance(error).Arguments = list;
+            return error;
+        }
+
+        [Emitted]
         public static Exception/*!*/ MakeUndefinedLocalOrMethodError(RubyContext/*!*/ context, object self, string/*!*/ methodName) {
             return RubyExceptions.CreateUndefinedLocalOrMethod(context, self, methodName);
         }

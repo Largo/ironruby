@@ -20,6 +20,7 @@ using Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
@@ -315,11 +316,11 @@ namespace IronRuby.Runtime.Calls {
                         return true;
                     }
                     if (defaultFallback) {
-                        metaBuilder.SetError(Methods.MakeMissingMethodError.OpCall(
+                        metaBuilder.SetError(WithCallArguments(Methods.MakeMissingMethodError.OpCall(
                             args.MetaContext.Expression,
                             AstUtils.Convert(args.TargetExpression, typeof(object)),
                             Ast.Constant(methodName)
-                        ));
+                        ), args));
                         return true;
                     }
                     return false;
@@ -357,6 +358,25 @@ namespace IronRuby.Runtime.Calls {
             throw Assert.Unreachable;
         }
 
+        // NoMethodError#args: MRI records the arguments of the call that found no (callable) method.
+        private static Expression/*!*/ WithCallArguments(Expression/*!*/ error, CallArguments/*!*/ args) {
+            var simple = new List<Expression>();
+            foreach (var arg in args.GetSimpleArgumentExpressions()) {
+                simple.Add(AstUtils.Box(arg));
+            }
+
+            var splat = args.GetSplattedArgumentExpression();
+            var rhs = args.GetRhsArgumentExpression();
+
+            return Methods.SetMissingMethodArguments.OpCall(
+                error,
+                Ast.NewArrayInit(typeof(object), simple),
+                splat != null ? AstUtils.Convert(splat, typeof(IList)) : (Expression)AstUtils.Constant(null, typeof(IList)),
+                rhs != null ? AstUtils.Box(rhs) : AstUtils.Constant(null),
+                AstUtils.Constant(rhs != null)
+            );
+        }
+
         private enum MethodMissingBinding {
             Error,
             Fallback,
@@ -373,12 +393,12 @@ namespace IronRuby.Runtime.Calls {
                 if (isSuperCall) {
                     metaBuilder.SetError(Methods.MakeMissingSuperException.OpCall(AstUtils.Constant(methodName)));
                 } else if (incompatibleVisibility == RubyMethodVisibility.Private) {
-                    metaBuilder.SetError(Methods.MakePrivateMethodCalledError.OpCall(
-                        AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)), args.TargetExpression, AstUtils.Constant(methodName))
+                    metaBuilder.SetError(WithCallArguments(Methods.MakePrivateMethodCalledError.OpCall(
+                        AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)), args.TargetExpression, AstUtils.Constant(methodName)), args)
                     );
                 } else if (incompatibleVisibility == RubyMethodVisibility.Protected) {
-                    metaBuilder.SetError(Methods.MakeProtectedMethodCalledError.OpCall(
-                        AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)), args.TargetExpression, AstUtils.Constant(methodName))
+                    metaBuilder.SetError(WithCallArguments(Methods.MakeProtectedMethodCalledError.OpCall(
+                        AstUtils.Convert(args.MetaContext.Expression, typeof(RubyContext)), args.TargetExpression, AstUtils.Constant(methodName)), args)
                     );
                 } else {
                     return MethodMissingBinding.Fallback;

@@ -75,6 +75,9 @@ namespace IronRuby.Runtime {
         private object _receiver;
         private bool _hasReceiver;
 
+        // NoMethodError#args: the arguments of the call that found no method (nil if unknown).
+        private object _arguments;
+
         [NonSerialized]
         private CallSite<Func<CallSite, RubyContext, Exception, RubyArray, object>> _setBacktraceCallSite;
 
@@ -258,6 +261,14 @@ namespace IronRuby.Runtime {
         public void SetReceiver(object receiver) {
             _receiver = receiver;
             _hasReceiver = true;
+        }
+
+        /// <summary>
+        /// NoMethodError#args. MRI records the arguments of the failed call on the error.
+        /// </summary>
+        public object Arguments {
+            get { return _arguments; }
+            set { _arguments = value; }
         }
 
         public bool TrySetCause(Exception cause) {

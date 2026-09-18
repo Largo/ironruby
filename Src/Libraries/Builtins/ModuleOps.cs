@@ -1053,10 +1053,11 @@ namespace IronRuby.Builtins {
 
         // not thread-safe:
         [RubyMethod("class_variable_get")]
-        public static object GetClassVariable(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName) {
+        public static object GetClassVariable(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object nameArg) {
+            string variableName = Protocols.CastToSymbol(stringCast, nameArg);
             object value;
             if (self.TryResolveClassVariable(variableName, out value) == null) {
-                RubyUtils.CheckClassVariableName(self.Context, self, variableName);
+                RubyUtils.CheckClassVariableName(self.Context, self, variableName, nameArg);
                 throw RubyExceptions.WithNameAndReceiver(self.Context,
                     RubyExceptions.CreateNameError("uninitialized class variable {0} in {1}", variableName, self.Name),
                     variableName, self);

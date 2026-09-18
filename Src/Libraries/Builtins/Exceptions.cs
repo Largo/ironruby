@@ -65,8 +65,18 @@ namespace IronRuby.Builtins {
             : base(info, context) { }
     }
 
+    [RubyException("StopIteration"), Serializable]
+    public class StopIteration : IndexError {
+        public StopIteration() : this(null, null) { }
+        public StopIteration(string message): this(message, null) { }
+        public StopIteration(string message, Exception inner) : base(message ?? "StopIteration", inner) { }
+
+        protected StopIteration(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+            : base(info, context) { }
+    }
+
     [RubyException("ClosedQueueError"), Serializable]
-    public class ClosedQueueError : SystemException {
+    public class ClosedQueueError : StopIteration {
         public ClosedQueueError() : this(null, null) { }
         public ClosedQueueError(string message): this(message, null) { }
         public ClosedQueueError(string message, Exception inner) : base(message ?? "ClosedQueueError", inner) { }
@@ -219,7 +229,7 @@ namespace IronRuby.Builtins {
         }
     }
 
-    [RubyException("SystemStackError", Extends = typeof(SystemStackError), Inherits = typeof(SystemException))]
+    [RubyException("SystemStackError", Extends = typeof(SystemStackError), Inherits = typeof(Exception))]
     public static class SystemStackErrorOps {
     }
 
@@ -236,7 +246,7 @@ namespace IronRuby.Builtins {
     public static class IOErrorOps {
     }
 
-    [RubyException("IndexError", Extends = typeof(IndexOutOfRangeException), Inherits = typeof(SystemException))]
+    [RubyException("IndexError", Extends = typeof(IndexError), Inherits = typeof(SystemException))]
     public static class IndexErrorOps {
     }
 
@@ -342,34 +352,25 @@ namespace IronRuby.Builtins {
             if (hasReceiver) {
                 data.SetReceiver(receiver);
             }
-
-            // Exception.Data requires the value to be Serializable. We workaround this using an array
-            // of size 1 since System.Array is serializable. This will allow the exception to be marshalled.
-            // If the value cannot actually be marshalled, it will fail only if the value is later accessed.
-            result.Data[typeof(NoMethodErrorOps)] = new ObjectHandle[1] { new ObjectHandle(args) };
+            data.Arguments = args;
             return result;
         }
 
         /// <summary>
         /// Records the arguments of the call that went missing, so that #args can answer them.
-        /// They ride in Exception.Data the same way the ones handed to NoMethodError.new do.
         /// </summary>
         internal static Exception/*!*/ SetArguments(Exception/*!*/ error, object[]/*!*/ args) {
-            error.Data[typeof(NoMethodErrorOps)] = new ObjectHandle[1] { new ObjectHandle(new RubyArray(args)) };
+            RubyExceptionData.GetInstance(error).Arguments = new RubyArray(args);
             return error;
         }
 
         [RubyMethod("args")]
         public static object GetArguments(MissingMethodException/*!*/ self) {
-            ObjectHandle[] args = self.Data[typeof(NoMethodErrorOps)] as ObjectHandle[];
-            if (args == null) {
-                return null;
-            }
-            return args[0].Unwrap();
+            return RubyExceptionData.GetInstance(self).Arguments;
         }
     }
 
-    [RubyException("SecurityError", Extends = typeof(SecurityException), Inherits = typeof(SystemException))]
+    [RubyException("SecurityError", Extends = typeof(SecurityException), Inherits = typeof(Exception))]
     public static class SecurityErrorOps {
     }
 

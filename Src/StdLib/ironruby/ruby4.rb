@@ -5401,12 +5401,8 @@ class Rational
   end
 end
 
-# CRuby has KeyError < IndexError and StopIteration < IndexError, but IndexError
-# maps to the sealed System::IndexOutOfRangeException here, so it cannot be
-# subclassed. StandardError is the closest base that actually instantiates;
-# the cost is that `rescue IndexError` will not catch these.
 unless defined?(KeyError)
-  class KeyError < StandardError
+  class KeyError < IndexError
     def initialize(message = nil, receiver: nil, key: nil)
       # The C# core (Kernel#format's named references, Hash#fetch) sets @receiver/@key
       # directly after constructing with just a message.
@@ -5418,7 +5414,7 @@ unless defined?(KeyError)
     attr_reader :receiver, :key
   end
 end
-class StopIteration < StandardError; end unless defined?(StopIteration)
+class StopIteration < IndexError; end unless defined?(StopIteration)
 class UncaughtThrowError < ArgumentError; end unless defined?(UncaughtThrowError)
 class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
 

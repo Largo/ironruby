@@ -669,7 +669,7 @@ namespace IronRuby.Runtime {
         }
 
         public static Exception/*!*/ CreateIndexError(string/*!*/ message, params object[] args) {
-            return new IndexOutOfRangeException(FormatMessage(message, args));
+            return new IndexError(FormatMessage(message, args));
         }
 
         public static Exception/*!*/ CreateRangeError(string/*!*/ message, params object[] args) {
