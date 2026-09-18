@@ -1623,8 +1623,16 @@ namespace IronRuby.Prism {
             var statements = new Statements();
             var hoisted = new Expression[expressions.Length];
             for (int i = 0; i < expressions.Length; i++) {
-                // A splat or a keyword splat is not a plain value and cannot be lifted out.
-                if (expressions[i] is Literal || expressions[i] is SplattedArgument) {
+                // A splat is expanded once, into an array that both halves splat again (so #to_a
+                // runs once); a literal needs no temporary.
+                if (expressions[i] is SplattedArgument splat) {
+                    var array = CurrentScope.AddVariable("?index" + _indexTempCount++ + "?", span);
+                    statements.Add(new SimpleAssignmentExpression(array,
+                        new ArrayConstructor(new Arguments(new Expression[] { splat }), span), null, span));
+                    hoisted[i] = new SplattedArgument(array);
+                    continue;
+                }
+                if (expressions[i] is Literal) {
                     hoisted[i] = expressions[i];
                     continue;
                 }
