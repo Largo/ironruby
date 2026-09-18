@@ -230,9 +230,30 @@ namespace IronRuby.Prism {
             var scope = new TopStaticLexicalScope(
                 outerLocalNames != null ? new RuntimeLexicalScope(outerLocalNames) : null);
             _scopes.Push(scope);
-            var statements = BuildStatements(node.Statements);
+            var statements = BuildStatements(HoistPreExecution(node.Statements));
             _scopes.Pop();
             return new SourceUnitTree(scope, statements, null, _encoding, dataOffset);
+        }
+
+        /// <summary>
+        /// BEGIN blocks run before the rest of the code unit, in the order they appear, however
+        /// far down they are written. They can only be top-level statements.
+        /// </summary>
+        private static Pm.PmNode HoistPreExecution(Pm.PmNode statementsNode) {
+            var statements = statementsNode as Pm.StatementsNode;
+            if (statements == null || !Array.Exists(statements.Body, n => n is Pm.PreExecutionNode)) {
+                return statementsNode;
+            }
+            var reordered = new List<Pm.PmNode>();
+            foreach (var n in statements.Body) {
+                if (n is Pm.PreExecutionNode) reordered.Add(n);
+            }
+            foreach (var n in statements.Body) {
+                if (!(n is Pm.PreExecutionNode)) reordered.Add(n);
+            }
+            return new Pm.StatementsNode {
+                Body = reordered.ToArray(), StartOffset = statements.StartOffset, Length = statements.Length, Flags = statements.Flags
+            };
         }
 
         private Statements/*!*/ BuildStatements(Pm.PmNode statementsNode) {
