@@ -117,6 +117,31 @@ namespace IronRuby.Builtins {
             return null;
         }
 
+        /// <summary>
+        /// An 'o' record is instance variables and nothing else, so it can only carry an object
+        /// whose whole state is instance variables. MRI refuses anything backed by C data - a
+        /// StringIO, a Dir, a Method - unless its class defines _dump_data, and the classes here
+        /// that are backed by a CLR object are the same set. The two exceptions are the two that
+        /// Marshal writes as 'o' records itself: an exception, whose message and backtrace are
+        /// written as pseudo instance variables, and a Range.
+        /// </summary>
+        internal static bool IsDumpableAsObject(RubyClass/*!*/ theClass) {
+            for (RubyClass cls = theClass; cls != null; cls = cls.SuperClass) {
+                // Reaching a root - Object, or BasicObject for a class that descends from it
+                // directly - means nothing along the way was backed by a CLR object.
+                if (cls.IsObjectClass || cls == cls.Context.BasicObjectClass) {
+                    return true;
+                }
+                if (cls.IsRubyClass) {
+                    continue;
+                }
+
+                Type type = cls.GetUnderlyingSystemType();
+                return typeof(Exception).IsAssignableFrom(type) || typeof(Range).IsAssignableFrom(type);
+            }
+            return true;
+        }
+
         internal static bool NeedsEncodingIVar(RubyEncoding encoding) {
             return encoding != null && encoding != RubyEncoding.Binary;
         }
@@ -398,10 +423,18 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteObject(object/*!*/ obj) {
-                _writer.Write((byte)'o');
                 RubyClass theClass = _context.GetClassOf(obj);
+                _writer.Write((byte)'o');
                 TestForAnonymous(theClass);
                 WriteModuleName(theClass);
+            }
+
+            private void RequireDumpableAsObject(RubyClass/*!*/ theClass) {
+                if (!IsDumpableAsObject(theClass)) {
+                    throw RubyExceptions.CreateTypeError("no _dump_data is defined for class {0}",
+                        theClass.Name ?? theClass.GetDisplayName(_context, false).ToString()
+                    );
+                }
             }
 
             /// <summary>
@@ -753,6 +786,7 @@ namespace IronRuby.Builtins {
                             } else if (obj is Exception) {
                                 WriteException((Exception)obj, instanceNames);
                             } else {
+                                RequireDumpableAsObject(_context.GetClassOf(obj));
                                 WriteObject(obj);
                                 WriteIVars(obj, instanceNames, encoding);
                             }
@@ -1154,6 +1188,14 @@ namespace IronRuby.Builtins {
 
             private object/*!*/ ReadObject() {
                 RubyClass theClass = ReadType();
+
+                // The writing side refuses to put a class backed by a CLR object into an 'o'
+                // record, and the reading side refuses to take one out of it: an 'o' record is
+                // instance variables and nothing else, so it cannot rebuild a File.
+                if (!IsDumpableAsObject(theClass)) {
+                    throw RubyExceptions.CreateArgumentError("dump format error");
+                }
+
                 int count = ReadInt32();
                 var attributes = new Dictionary<string, object>();
                 for (int i = 0; i < count; i++) {

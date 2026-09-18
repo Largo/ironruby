@@ -10202,6 +10202,20 @@ unless defined?(Random)
       buffer.to_a.pack("C*")
     end
 
+    # A generator is its seed and how far it has been advanced, so those are what is dumped;
+    # the CLR object behind it is not something Marshal can write.
+    def marshal_dump
+      [@seed, @draws]
+    end
+
+    def marshal_load(data)
+      seed, draws = data
+      initialize(seed)
+      draws.times { @native.next_double }
+      @draws = draws
+      self
+    end
+
     # Taking a value out of the underlying generator moves it on, and #state has to say so.
     def __draw__
       @draws += 1
