@@ -1145,8 +1145,14 @@ var closureScope = scope as RubyClosureScope;
         }
     }
 
-    public sealed class RubyBlockScope : RubyScope {
+    public sealed class RubyBlockScope : RubyClosureScope {
         private readonly BlockParam/*!*/ _blockFlowControl;
+
+        // The block a thread runs keeps its own $~ and $_, as MRI's thread root frame does; any
+        // other block shares them with the method it is in.
+        protected override bool IsClosureScope {
+            get { return _blockFlowControl.IsThreadRoot; }
+        }
 
         public override ScopeKind Kind { 
             get {

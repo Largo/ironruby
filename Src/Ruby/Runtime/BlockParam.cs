@@ -105,6 +105,9 @@ namespace IronRuby.Runtime {
 
         // the thread the call taking the block runs on; a break cannot reach that call from another
         private readonly int _threadId;
+
+        // the block is the body of a Thread (see RubyBlockScope.IsClosureScope)
+        public bool IsThreadRoot { get; set; }
         
         // -- out --
         private BlockReturnReason _returnReason;

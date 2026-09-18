@@ -892,6 +892,7 @@ namespace IronRuby.Builtins {
         private static Thread/*!*/ StartThread(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
             RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
             ThreadGroup group = creator.Group;
+            startRoutine.IsThreadRoot = true;
             Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, startRoutine, args, group)));
 
             // Everything the thread answers about itself before it has run a single instruction -

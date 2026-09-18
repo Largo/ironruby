@@ -2464,15 +2464,17 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.CreateArgumentError("$! not set");
             }
 
-            // check assigned value:
-            RubyArray array = RubyUtils.AsArrayOfStrings(value);
-            if (value != null && array == null) {
-                throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+            // MRI's errat_setter goes through #set_backtrace, which also takes an Array of
+            // Thread::Backtrace::Location (the Ruby-level layer keeps those)
+            if (_setBacktraceSite == null) {
+                System.Threading.Interlocked.CompareExchange(ref _setBacktraceSite,
+                    CallSite<Func<CallSite, object, object, object>>.Create(RubyCallAction.Make(this, "set_backtrace", 1)), null);
             }
-
-            RubyExceptionData.GetInstance(e).Backtrace = array;
-            return array;
+            _setBacktraceSite.Target(_setBacktraceSite, e, value);
+            return RubyExceptionData.GetInstance(e).Backtrace;
         }
+
+        private CallSite<Func<CallSite, object, object, object>> _setBacktraceSite;
         
         /// <summary>
         /// $SAFE
