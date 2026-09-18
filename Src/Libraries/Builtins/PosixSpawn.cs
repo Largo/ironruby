@@ -163,8 +163,8 @@ namespace IronRuby.Builtins {
         /// <summary>The environment this process would pass on, as the "K=V" vector execve wants.</summary>
         private static NativeStrings/*!*/ CurrentEnvironment() {
             var items = new List<object>();
-            foreach (System.Collections.DictionaryEntry entry in Environment.GetEnvironmentVariables()) {
-                items.Add(MutableString.CreateMutable(entry.Key.ToString() + "=" + entry.Value, RubyEncoding.UTF8));
+            foreach (var entry in RubyEnvironment.GetVariables()) {
+                items.Add(MutableString.CreateMutable(entry.Key + "=" + entry.Value, RubyEncoding.UTF8));
             }
             return new NativeStrings(items);
         }

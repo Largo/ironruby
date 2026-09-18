@@ -813,7 +813,7 @@ namespace IronRuby.Builtins {
 
             string home;
             if (userName.Length == 0) {
-                home = context.Platform.GetEnvironmentVariable("HOME");
+                home = RubyEnvironment.GetVariable(context.Platform, "HOME");
                 if (home == null) {
                     home = Posix.GetHomeDirectory(Posix.GetEUid());
                 }

@@ -123,7 +123,7 @@ namespace IronRuby.Builtins {
             //    quotes the FileName :(
             //    
 
-            string comspec = pal.GetEnvironmentVariable("COMSPEC");
+            string comspec = RubyEnvironment.GetVariable(pal, "COMSPEC");
             if (!pal.FileExists(comspec)) {
                 comspec = null;
             }
@@ -226,7 +226,7 @@ namespace IronRuby.Builtins {
             } else {
                 yield return pal.GetFullPath(path);
 
-                string var = pal.GetEnvironmentVariable("PATH");
+                string var = RubyEnvironment.GetVariable(pal, "PATH");
                 if (!String.IsNullOrEmpty(var)) {
                     foreach (var prefix in var.Split(Path.PathSeparator)) {
                         if (prefix.Length > 0) {
@@ -240,7 +240,7 @@ namespace IronRuby.Builtins {
                     yield return Path.Combine(var, path);
                 }
 
-                var = pal.GetEnvironmentVariable("SystemRoot");
+                var = RubyEnvironment.GetVariable(pal, "SystemRoot");
                 if (!String.IsNullOrEmpty(var)) {
                     yield return Path.Combine(var, path);
                 }

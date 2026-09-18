@@ -1740,12 +1740,12 @@ namespace IronRuby.Runtime {
         // 4. Try to generate HOME equivalent from Personal special folder 
 
         public static string/*!*/ GetHomeDirectory(PlatformAdaptationLayer/*!*/ pal) {
-            string result = pal.GetEnvironmentVariable("HOME");
+            string result = RubyEnvironment.GetVariable(pal, "HOME");
             if (result == null) {
-                string homeDrive = pal.GetEnvironmentVariable("HOMEDRIVE");
-                string homePath = pal.GetEnvironmentVariable("HOMEPATH");
+                string homeDrive = RubyEnvironment.GetVariable(pal, "HOMEDRIVE");
+                string homePath = RubyEnvironment.GetVariable(pal, "HOMEPATH");
                 if (homeDrive == null && homePath == null) {
-                    string userEnvironment = pal.GetEnvironmentVariable("USERPROFILE");
+                    string userEnvironment = RubyEnvironment.GetVariable(pal, "USERPROFILE");
                     if (userEnvironment == null) {
                         // This will always succeed with a non-null string, but it can fail
                         // if the Personal folder was renamed or deleted. In this case it returns
@@ -1862,7 +1862,7 @@ namespace IronRuby.Runtime {
                 int length = path.Length;
                 if (length > 0 && path[0] == '~') {
                     if (length == 1 || path[1] == '/' || (FileSystemUsesDriveLetters && path[1] == '\\')) {
-                        string homeDirectory = platform.GetEnvironmentVariable("HOME");
+                        string homeDirectory = RubyEnvironment.GetVariable(platform, "HOME");
                         if (homeDirectory == null) {
                             throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
                         }

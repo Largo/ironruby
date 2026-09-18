@@ -33,21 +33,9 @@ namespace IronRuby.Builtins {
             return MutableString.Create((string)value ?? "", context.GetPathEncoding()).Freeze();
         }
 
-        [System.Runtime.InteropServices.DllImport("libc", EntryPoint = "setenv")]
-        private static extern int NativeSetEnv(string name, string value, int overwrite);
-
         private static void SetEnvironmentVariable(RubyContext/*!*/ context, string/*!*/ name, string value) {
-            // Environment.SetEnvironmentVariable deletes the variable when handed "",
-            // so the platform layer reaches for a native call to set an empty value — but
-            // it only knows the Windows one, and P/Invoking kernel32 on Unix throws
-            // DllNotFoundException. setenv(3) is the Unix equivalent and makes child
-            // processes see the empty variable. Reading it back through ENV still yields
-            // nil, because .NET keeps its own managed copy that cannot hold an empty value.
-            if (value != null && value.Length == 0 && System.IO.Path.DirectorySeparatorChar == '/') {
-                NativeSetEnv(name, value, 1);
-            } else {
-                context.DomainManager.Platform.SetEnvironmentVariable(name, value);
-            }
+            RubyEnvironment.SetVariable(context.DomainManager.Platform, name, value);
+
             if (name == "TZ") {
                 RubyTimeZone zone;
                 if (RubyTime.TryParseTimeZone(value, out zone)) {
@@ -65,7 +53,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("fetch", RubyMethodAttributes.PublicInstance)]
         public static MutableString GetVariable(RubyContext/*!*/ context, object/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ name) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            string value = pal.GetEnvironmentVariable(name.ConvertToString());
+            string value = RubyEnvironment.GetVariable(pal, name.ConvertToString());
             return (value != null) ? FrozenString(context, value) : null;
         }
 
@@ -79,7 +67,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("clear")]
         public static object Clear(RubyContext/*!*/ context, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            foreach (var entry in pal.GetEnvironmentVariables()) {
+            foreach (var entry in RubyEnvironment.GetVariables(pal)) {
                 SetEnvironmentVariable(context, entry.Key, null);
             }
             return self;
@@ -98,7 +86,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("reject!")]
         public static object DeleteIf(RubyContext/*!*/ context, BlockParam block, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            var variables = pal.GetEnvironmentVariables();
+            var variables = RubyEnvironment.GetVariables(pal);
             if (variables.Count > 0 && block == null) {
                 throw RubyExceptions.NoBlockGiven();
             }
@@ -122,7 +110,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_pair")]
         public static object Each(RubyContext/*!*/ context, BlockParam block, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            var variables = pal.GetEnvironmentVariables();
+            var variables = RubyEnvironment.GetVariables(pal);
             if (variables.Count > 0 && block == null) {
                 throw RubyExceptions.NoBlockGiven();
             }
@@ -142,7 +130,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_key")]
         public static object EachKey(RubyContext/*!*/ context, BlockParam block, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            var variables = pal.GetEnvironmentVariables();
+            var variables = RubyEnvironment.GetVariables(pal);
             if (variables.Count > 0 && block == null) {
                 throw RubyExceptions.NoBlockGiven();
             }
@@ -160,7 +148,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_value")]
         public static object EachValue(RubyContext/*!*/ context, BlockParam block, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            var variables = pal.GetEnvironmentVariables();
+            var variables = RubyEnvironment.GetVariables(pal);
             if (variables.Count > 0 && block == null) {
                 throw RubyExceptions.NoBlockGiven();
             }
@@ -178,7 +166,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("empty?")]
         public static bool IsEmpty(RubyContext/*!*/ context, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            return (pal.GetEnvironmentVariables().Count == 0);
+            return (RubyEnvironment.GetVariables(pal).Count == 0);
         }
 
         [RubyMethod("has_key?")]
@@ -186,7 +174,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("key?")]
         public static bool HasKey(RubyContext/*!*/ context, object/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ key) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            return pal.GetEnvironmentVariable(key.ConvertToString()) != null;
+            return RubyEnvironment.GetVariable(pal, key.ConvertToString()) != null;
         }
 
         [RubyMethod("has_value?")]
@@ -200,7 +188,7 @@ namespace IronRuby.Builtins {
 
             var clrStrValue = strValue.ConvertToString();
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            foreach (var entry in pal.GetEnvironmentVariables()) {
+            foreach (var entry in RubyEnvironment.GetVariables(pal)) {
                 if (clrStrValue.Equals(entry.Value)) {
                     return true;
                 }
@@ -212,7 +200,7 @@ namespace IronRuby.Builtins {
         public static MutableString Index(RubyContext/*!*/ context, object/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
             string strValue = value.ConvertToString();
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            foreach (var entry in pal.GetEnvironmentVariables()) {
+            foreach (var entry in RubyEnvironment.GetVariables(pal)) {
                 if (strValue.Equals(entry.Value)) {
                     return FrozenString(context, entry.Key);
                 }
@@ -243,7 +231,7 @@ namespace IronRuby.Builtins {
         public static Hash/*!*/ Invert(RubyContext/*!*/ context, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
             Hash result = new Hash(context);
-            foreach (var entry in pal.GetEnvironmentVariables()) {
+            foreach (var entry in RubyEnvironment.GetVariables(pal)) {
                 result.Add(FrozenString(context, entry.Value), FrozenString(context, entry.Key));
             }
             return result;
@@ -252,7 +240,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("keys")]
         public static RubyArray/*!*/ Keys(RubyContext/*!*/ context, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            var variables = pal.GetEnvironmentVariables();
+            var variables = RubyEnvironment.GetVariables(pal);
             RubyArray result = new RubyArray(variables.Count);
             foreach (var entry in variables) {
                 result.Add(FrozenString(context, entry.Key));
@@ -264,7 +252,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("size")]
         public static int Length(RubyContext/*!*/ context, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            return pal.GetEnvironmentVariables().Count;
+            return RubyEnvironment.GetVariables(pal).Count;
         }
 
         [RubyMethod("rehash")]
@@ -297,12 +285,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("shift")]
         public static object Shift(RubyContext/*!*/ context, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            var variables = pal.GetEnvironmentVariables();
+            var variables = RubyEnvironment.GetVariables(pal);
             if (variables.Count == 0) {
                 return null;
             }
             RubyArray result = new RubyArray(2);
-            foreach (var entry in pal.GetEnvironmentVariables()) {
+            foreach (var entry in RubyEnvironment.GetVariables(pal)) {
                 result.Add(FrozenString(context, entry.Key));
                 result.Add(FrozenString(context, entry.Value));
                 SetEnvironmentVariable(context, entry.Key, null);
@@ -315,7 +303,7 @@ namespace IronRuby.Builtins {
         public static Hash/*!*/ ToHash(RubyContext/*!*/ context, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
             Hash result = new Hash(context);
-            foreach (var entry in pal.GetEnvironmentVariables()) {
+            foreach (var entry in RubyEnvironment.GetVariables(pal)) {
                 result.Add(FrozenString(context, entry.Key), FrozenString(context, entry.Value));
             }
             return result;
@@ -329,7 +317,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("values")]
         public static RubyArray/*!*/ Values(RubyContext/*!*/ context, object/*!*/ self) {
             PlatformAdaptationLayer pal = context.DomainManager.Platform;
-            var variables = pal.GetEnvironmentVariables();
+            var variables = RubyEnvironment.GetVariables(pal);
             RubyArray result = new RubyArray(variables.Count);
             foreach (var entry in variables) {
                 result.Add(FrozenString(context, entry.Value));
