@@ -34,7 +34,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         // see Ruby Language.doc/Runtime/Control Flow Implementation/Return
-        internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
             MSA.Expression transformedReturnValue = TransformReturnValue(gen);
 
             // eval:

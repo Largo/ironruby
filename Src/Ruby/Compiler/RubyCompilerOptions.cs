@@ -93,6 +93,12 @@ namespace IronRuby.Compiler {
         internal bool TopLevelHasUnsplatParameter { get; set; }
 
         /// <summary>
+        /// Eval only: the encoding of the string being evaluated, which is the source encoding
+        /// unless a magic comment says otherwise.
+        /// </summary>
+        internal IronRuby.Builtins.RubyEncoding EvalSourceEncoding { get; set; }
+
+        /// <summary>
         /// Used by dynamic variable look-up.
         /// </summary>
         internal List<string> LocalNames { get; set; }

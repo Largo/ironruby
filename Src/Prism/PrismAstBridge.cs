@@ -32,6 +32,15 @@ namespace IronRuby.Prism {
         private int _tempCounter;
         private SourceUnit _sourceUnit;
         private ErrorSink _errorSink;
+        // An eval whose code does not run inside a method: prism parses eval'd code as a partial
+        // script and accepts a top-level yield, which MRI's compiler then rejects.
+        private bool _evalOutsideMethod;
+        // Whether the method being built uses its block (MethodDefinition.UsesBlock).
+        private bool _usesBlock;
+        // In a `case/in` or `=>`: the key a hash pattern last found missing, or nil. Decides
+        // whether a failed match raises NoMatchingPatternKeyError rather than NoMatchingPatternError.
+        private LocalVariable _patternMissingKey;
+        private bool _isEval;
         // case/in subject temp -> { value, "already computed" flag } holding its #deconstruct result
         private readonly Dictionary<LocalVariable, LocalVariable[]>/*!*/ _deconstructCache =
             new Dictionary<LocalVariable, LocalVariable[]>();
@@ -51,7 +60,8 @@ namespace IronRuby.Prism {
             // what RubyCompilerOptions.InitialLocation carries. Only the old parser ever read it, so
             // every eval under prism started at line 1 no matter what it was given.
             return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
-                options.InitialLocation.Line);
+                options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
+                options.EvalSourceEncoding);
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path) {
@@ -64,7 +74,8 @@ namespace IronRuby.Prism {
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
-            SourceUnit sourceUnit, ErrorSink errorSink, int startLine) {
+            SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false, bool isEval = false,
+            RubyEncoding evalSourceEncoding = null) {
 
             // --enable/--disable=frozen-string-literal only sets the default; the magic comment
             // in a file still wins, and prism applies that rule itself.
@@ -78,10 +89,19 @@ namespace IronRuby.Prism {
             PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames,
                 frozenStringLiteral, sourceEncoding.Encoding);
 
-            var bridge = new PrismAstBridge(code, path, ResolveEncoding(result.EncodingName, sourceUnit));
+            // An eval'd string without a magic comment is in the string's own encoding, which its
+            // literals and __ENCODING__ then carry (MRI), rather than in UTF-8 as a file would be.
+            RubyEncoding literalEncoding = ResolveEncoding(result.EncodingName, sourceUnit);
+            if (evalSourceEncoding != null && DeclaredEncodingName(code) == null) {
+                literalEncoding = evalSourceEncoding;
+            }
+
+            var bridge = new PrismAstBridge(code, path, literalEncoding);
             bridge._startLine = startLine <= 0 ? 1 : startLine;
             bridge._sourceUnit = sourceUnit;
             bridge._errorSink = errorSink;
+            bridge._evalOutsideMethod = evalOutsideMethod;
+            bridge._isEval = isEval;
 
             if (result.Errors.Count > 0) {
                 if (errorSink != null && sourceUnit != null) {
@@ -149,7 +169,7 @@ namespace IronRuby.Prism {
         private static readonly System.Text.RegularExpressions.Regex _magicComment =
             new System.Text.RegularExpressions.Regex(
                 @"coding\s*[:=]\s*([A-Za-z0-9_\-]+)",
-                System.Text.RegularExpressions.RegexOptions.Compiled);
+                System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase); // "# CoDiNg: bIg5" too
 
         private static RubyEncoding/*!*/ ResolveEncoding(string name, SourceUnit sourceUnit) {
             if (String.IsNullOrEmpty(name)) {
@@ -219,9 +239,30 @@ namespace IronRuby.Prism {
             var scope = new TopStaticLexicalScope(
                 outerLocalNames != null ? new RuntimeLexicalScope(outerLocalNames) : null);
             _scopes.Push(scope);
-            var statements = BuildStatements(node.Statements);
+            var statements = BuildStatements(HoistPreExecution(node.Statements));
             _scopes.Pop();
             return new SourceUnitTree(scope, statements, null, _encoding, dataOffset);
+        }
+
+        /// <summary>
+        /// BEGIN blocks run before the rest of the code unit, in the order they appear, however
+        /// far down they are written. They can only be top-level statements.
+        /// </summary>
+        private static Pm.PmNode HoistPreExecution(Pm.PmNode statementsNode) {
+            var statements = statementsNode as Pm.StatementsNode;
+            if (statements == null || !Array.Exists(statements.Body, n => n is Pm.PreExecutionNode)) {
+                return statementsNode;
+            }
+            var reordered = new List<Pm.PmNode>();
+            foreach (var n in statements.Body) {
+                if (n is Pm.PreExecutionNode) reordered.Add(n);
+            }
+            foreach (var n in statements.Body) {
+                if (!(n is Pm.PreExecutionNode)) reordered.Add(n);
+            }
+            return new Pm.StatementsNode {
+                Body = reordered.ToArray(), StartOffset = statements.StartOffset, Length = statements.Length, Flags = statements.Flags
+            };
         }
 
         private Statements/*!*/ BuildStatements(Pm.PmNode statementsNode) {
@@ -348,10 +389,12 @@ namespace IronRuby.Prism {
                     return StatementsAsExpression(embedded.Statements, span);
 
                 case Pm.RegularExpressionNode regex:
+                    WarnRegexp(regex.Unescaped, span);
                     return new RegularExpression(
                         new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped, _encoding), _encoding, span) },
                         RegexOptions(regex), false, span);
                 case Pm.MatchLastLineNode matchLast:
+                    WarnRegexp(matchLast.Unescaped, span);
                     return new RegularExpression(
                         new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped, _encoding), _encoding, span) },
                         RegexOptions(matchLast), true, span);
@@ -474,6 +517,8 @@ namespace IronRuby.Prism {
                     return new OrExpression(Expr(or.Left), Expr(or.Right), span);
 
                 case Pm.CaseNode caseNode: {
+                    // the subject comes first: a variable it declares is visible in the whens
+                    var subject = caseNode.Predicate != null ? Expr(caseNode.Predicate) : null;
                     var whens = new List<WhenClause>();
                     foreach (var condition in caseNode.Conditions) {
                         var when = (Pm.WhenNode)condition;
@@ -485,9 +530,7 @@ namespace IronRuby.Prism {
                     if (caseNode.ElseClause is Pm.ElseNode caseElse) {
                         elseStatements = BuildStatements(caseElse.Statements);
                     }
-                    return new CaseExpression(
-                        caseNode.Predicate != null ? Expr(caseNode.Predicate) : null,
-                        whens.ToArray(), elseStatements, span);
+                    return new CaseExpression(subject, whens.ToArray(), elseStatements, span);
                 }
 
                 case Pm.BeginNode begin: return BuildBeginBody(begin, span, null);
@@ -503,21 +546,33 @@ namespace IronRuby.Prism {
                     // value in pattern  =>  true/false
                     Expression assign;
                     var temp = NewTemp(Expr(matchPredicate.Value), span, out assign);
-                    return new BlockExpression(MakeStatements(new Expression[] {
-                        assign,
-                        new ConditionalExpression(PatternTest(matchPredicate.Pattern, temp, span),
-                            Literal.True(span), Literal.False(span), span)
-                    }), span);
+                    var enclosingMissingKey = _patternMissingKey;
+                    _patternMissingKey = null;
+                    try {
+                        return new BlockExpression(MakeStatements(new Expression[] {
+                            assign,
+                            new ConditionalExpression(PatternTest(matchPredicate.Pattern, temp, span),
+                                Literal.True(span), Literal.False(span), span)
+                        }), span);
+                    } finally {
+                        _patternMissingKey = enclosingMissingKey;
+                    }
                 }
                 case Pm.MatchRequiredNode matchRequired: {
                     // value => pattern  =>  nil, raises NoMatchingPatternError on mismatch
                     Expression assign;
                     var temp = NewTemp(Expr(matchRequired.Value), span, out assign);
-                    return new BlockExpression(MakeStatements(new Expression[] {
-                        assign,
-                        new UnlessExpression(PatternTest(matchRequired.Pattern, temp, span),
-                            new Statements(RaiseNoMatchingPattern(temp, span)), null, span)
-                    }), span);
+                    var enclosingMissingKey = _patternMissingKey;
+                    _patternMissingKey = CurrentScope.ResolveOrAddVariable("?pmk" + _tempCounter++ + "?", span);
+                    try {
+                        return new BlockExpression(MakeStatements(new Expression[] {
+                            assign,
+                            new UnlessExpression(ResetMissingKey(PatternTest(matchRequired.Pattern, temp, span), span),
+                                new Statements(RaiseNoMatchingPattern(temp, span)), null, span)
+                        }), span);
+                    } finally {
+                        _patternMissingKey = enclosingMissingKey;
+                    }
                 }
 
                 case Pm.BackReferenceReadNode backRef: {
@@ -531,15 +586,33 @@ namespace IronRuby.Prism {
                     }
                 }
                 case Pm.NumberedReferenceReadNode numberedRef:
+                    // prism reports 0 for a number too big to be one (and has warned); MRI reads it as nil
+                    if (numberedRef.Number == 0 || numberedRef.Number > int.MaxValue) {
+                        return Literal.Nil(span);
+                    }
                     return new RegexMatchReference((int)numberedRef.Number, span);
                 case Pm.MatchWriteNode matchWrite: {
                     var call = (Pm.CallNode)matchWrite.Call;
                     if (!(Expr(call.Receiver) is RegularExpression regex)) throw Unsupported(node);
+                    var locals = new List<LocalVariable>();
                     foreach (var target in matchWrite.Targets) {
-                        CurrentScope.ResolveOrAddVariable(((Pm.LocalVariableTargetNode)target).Name, Span(target));
+                        locals.Add(CurrentScope.ResolveOrAddVariable(((Pm.LocalVariableTargetNode)target).Name, Span(target)));
                     }
                     var arguments = (Pm.ArgumentsNode)call.Arguments;
-                    return new MatchExpression(regex, Expr(arguments.Arguments[0]), span);
+                    // /(?<name>..)/ =~ str assigns every named group to a local: the group's text,
+                    // or nil when the group did not take part or the match failed
+                    Expression matchAssign;
+                    var matchResult = NewTemp(new MatchExpression(regex, Expr(arguments.Arguments[0]), span), span, out matchAssign);
+                    var statements = new List<Expression> { matchAssign };
+                    foreach (var local in locals) {
+                        statements.Add(new SimpleAssignmentExpression(local,
+                            new AndExpression(new RegexMatchReference(-1, span),
+                                new MethodCall(new RegexMatchReference(-1, span), "[]",
+                                    new Arguments(new SymbolLiteral(local.Name, _encoding, span)), span), span),
+                            null, span));
+                    }
+                    statements.Add(matchResult);
+                    return new BlockExpression(MakeStatements(statements.ToArray()), span);
                 }
 
                 case Pm.MultiWriteNode multiWrite: {
@@ -600,6 +673,11 @@ namespace IronRuby.Prism {
                 }
 
                 case Pm.ReturnNode ret:
+                    if (ret.Arguments != null && !_isEval && CurrentScope is TopStaticLexicalScope &&
+                        _errorSink != null && _sourceUnit != null) {
+                        _errorSink.Add(_sourceUnit, "argument of top-level return is ignored", span,
+                            Errors.RuntimeWarning, Severity.Warning);
+                    }
                     return new ReturnStatement(OptionalArguments(ret.Arguments), span);
                 case Pm.BreakNode brk:
                     return new BreakStatement(OptionalArguments(brk.Arguments), span);
@@ -608,9 +686,17 @@ namespace IronRuby.Prism {
                 case Pm.RetryNode _: return new RetryStatement(span);
                 case Pm.RedoNode _: return new RedoStatement(span);
                 case Pm.YieldNode yield:
+                    _usesBlock = true;
+                    if (!IsYieldAllowed() && _errorSink != null) {
+                        _errorSink.Add(_sourceUnit, "Invalid yield", span, 0, Severity.FatalError);
+                    }
                     return new YieldCall(yield.Arguments != null ? BuildArguments(yield.Arguments) : null, span);
 
                 case Pm.SuperNode super: {
+                    if (super.Block == null) {
+                        // passes the method's own block on
+                        _usesBlock = true;
+                    }
                     Block superBlock = OptionalBlock(super.Block);
                     var superArgs = super.Arguments != null
                         ? BuildArguments(super.Arguments, ref superBlock)
@@ -618,6 +704,9 @@ namespace IronRuby.Prism {
                     return new SuperCall(superArgs, superBlock, span);
                 }
                 case Pm.ForwardingSuperNode forwardingSuper:
+                    if (forwardingSuper.Block == null) {
+                        _usesBlock = true;
+                    }
                     return new SuperCall(_zsuperArguments,
                         forwardingSuper.Block != null ? BlockDef((Pm.BlockNode)forwardingSuper.Block) : null, span, true);
 
@@ -756,6 +845,23 @@ namespace IronRuby.Prism {
                 return RubyEncoding.Ascii;
             }
             return LiteralEncoding(node);
+        }
+
+        /// <summary>
+        /// MRI compiles a regexp literal along with the code around it, so Onigmo's warnings about
+        /// the pattern come when the file is compiled, whether or not the literal is ever reached.
+        /// </summary>
+        private void WarnRegexp(byte[]/*!*/ pattern, SourceSpan span) {
+            if (_errorSink == null || _sourceUnit == null) {
+                return;
+            }
+            string text = System.Text.Encoding.UTF8.GetString(pattern);
+            var warnings = RegexpTransformer.GetWarnings(text);
+            if (warnings != null) {
+                foreach (var warning in warnings) {
+                    _errorSink.Add(_sourceUnit, warning + ": /" + text + "/", span, Errors.RuntimeWarning, Severity.Warning);
+                }
+            }
         }
 
         private Expression/*!*/ BigIntegerLiteral(BigInteger value, SourceSpan span) {
@@ -1265,7 +1371,9 @@ namespace IronRuby.Prism {
                     return new ArrayItemAccess(Hoist(Expr(index.Receiver), hoist, span),
                         HoistArguments(BuildArguments(index.Arguments), hoist, span), null, span);
                 case Pm.CallTargetNode callTarget:
-                    return new AttributeAccess(Hoist(Expr(callTarget.Receiver), hoist, span), callTarget.Name.TrimEnd('='), span);
+                    return new AttributeAccess(Hoist(Expr(callTarget.Receiver), hoist, span), callTarget.Name.TrimEnd('='), span) {
+                        IsSafeNavigation = HasFlag(callTarget, Pm.CallNodeFlags.SafeNavigation)
+                    };
                 case Pm.MultiTargetNode multi:
                     return CompoundTarget(multi.Lefts, multi.Rest, multi.Rights, hoist);
                 default:
@@ -1459,6 +1567,8 @@ namespace IronRuby.Prism {
             Expression target = node.Receiver != null ? Expr(node.Receiver) : null;
             var scope = new MethodLexicalScope(CurrentScope);
             _scopes.Push(scope);
+            bool enclosingUsesBlock = _usesBlock;
+            _usesBlock = false;
             try {
                 Statements prologue = null;
                 Parameters parameters = Parameters.Empty;
@@ -1466,16 +1576,40 @@ namespace IronRuby.Prism {
                 _zsuperArguments = null;
                 try {
                     if (node.Parameters != null) {
-                        parameters = BuildParameters((Pm.ParametersNode)node.Parameters, false, true, out prologue);
+                        var parametersNode = (Pm.ParametersNode)node.Parameters;
+                        if (parametersNode.Block != null || parametersNode.KeywordRest is Pm.ForwardingParameterNode) {
+                            _usesBlock = true;
+                        }
+                        parameters = BuildParameters(parametersNode, false, true, out prologue);
                     }
                     var body = DefinitionBody(node.Body, span, prologue);
-                    return new MethodDefinition(scope, target, node.Name, parameters, body, span);
+                    return new MethodDefinition(scope, target, node.Name, parameters, body, span) { UsesBlock = _usesBlock };
                 } finally {
                     _zsuperArguments = enclosingZSuperArguments;
                 }
             } finally {
                 _scopes.Pop();
+                _usesBlock = enclosingUsesBlock;
             }
+        }
+
+        /// <summary>
+        /// MRI rejects a yield whose nearest enclosing method-or-class body is a class, module or
+        /// singleton class body, or the top level. Blocks and lambdas are transparent.
+        /// </summary>
+        private bool IsYieldAllowed() {
+            for (LexicalScope scope = CurrentScope; scope != null; scope = scope.OuterScope) {
+                if (scope is MethodLexicalScope) {
+                    return true;
+                }
+                if (scope is ClassLexicalScope || scope is TopLocalDefinitionLexicalScope) {
+                    return false;
+                }
+                if (scope is TopStaticLexicalScope) {
+                    return !_evalOutsideMethod;
+                }
+            }
+            return true;
         }
 
         private Expression/*!*/ Class(Pm.ClassNode/*!*/ node, SourceSpan span) {
@@ -1520,8 +1654,16 @@ namespace IronRuby.Prism {
             var statements = new Statements();
             var hoisted = new Expression[expressions.Length];
             for (int i = 0; i < expressions.Length; i++) {
-                // A splat or a keyword splat is not a plain value and cannot be lifted out.
-                if (expressions[i] is Literal || expressions[i] is SplattedArgument) {
+                // A splat is expanded once, into an array that both halves splat again (so #to_a
+                // runs once); a literal needs no temporary.
+                if (expressions[i] is SplattedArgument splat) {
+                    var array = CurrentScope.AddVariable("?index" + _indexTempCount++ + "?", span);
+                    statements.Add(new SimpleAssignmentExpression(array,
+                        new ArrayConstructor(new Arguments(new Expression[] { splat }), span), null, span));
+                    hoisted[i] = new SplattedArgument(array);
+                    continue;
+                }
+                if (expressions[i] is Literal) {
                     hoisted[i] = expressions[i];
                     continue;
                 }
@@ -2247,9 +2389,35 @@ namespace IronRuby.Prism {
         }
 
         private Expression/*!*/ RaiseNoMatchingPattern(Expression/*!*/ subject, SourceSpan span) {
-            return new MethodCall(null, "raise", new Arguments(new Expression[] {
+            Expression result = new MethodCall(null, "raise", new Arguments(new Expression[] {
                 new ConstantVariable("NoMatchingPatternError", span),
                 new MethodCall(subject, "inspect", null, span)
+            }), span);
+
+            if (_patternMissingKey != null) {
+                result = new ConditionalExpression(
+                    new MethodCall(_patternMissingKey, "nil?", null, span),
+                    result,
+                    new MethodCall(null, "raise", new Arguments(
+                        new MethodCall(new ConstantVariable("NoMatchingPatternKeyError", span), "__missing_key__",
+                            new Arguments(new Expression[] { subject, _patternMissingKey }), span)
+                    ), span),
+                    span);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Each attempt at a match - an `in` clause, a branch of `|` - starts with no key missing,
+        /// so that only the failure that ends the match decides the exception.
+        /// </summary>
+        private Expression/*!*/ ResetMissingKey(Expression/*!*/ test, SourceSpan span) {
+            if (_patternMissingKey == null) {
+                return test;
+            }
+            return new BlockExpression(MakeStatements(new Expression[] {
+                new SimpleAssignmentExpression(_patternMissingKey, Literal.Nil(span), null, span),
+                test
             }), span);
         }
 
@@ -2267,9 +2435,11 @@ namespace IronRuby.Prism {
             var clauses = new List<ElseIfClause>();
             Expression firstTest = null;
             Statements firstBody = null;
+            var enclosingMissingKey = _patternMissingKey;
+            _patternMissingKey = node.ElseClause is Pm.ElseNode ? null : CurrentScope.ResolveOrAddVariable("?pmk" + _tempCounter++ + "?", span);
             foreach (var condition in node.Conditions) {
                 var inNode = (Pm.InNode)condition;
-                var test = PatternTest(inNode.Pattern, temp, Span(inNode));
+                var test = ResetMissingKey(PatternTest(inNode.Pattern, temp, Span(inNode)), Span(inNode));
                 var body = BuildStatements(inNode.Statements);
                 if (firstTest == null) {
                     firstTest = test;
@@ -2283,6 +2453,7 @@ namespace IronRuby.Prism {
             } else {
                 clauses.Add(new ElseIfClause(null, new Statements(RaiseNoMatchingPattern(temp, span)), span));
             }
+            _patternMissingKey = enclosingMissingKey;
 
             _deconstructCache.Remove(temp);
             var ifExpr = new IfExpression(firstTest, firstBody, clauses, span);
@@ -2308,8 +2479,8 @@ namespace IronRuby.Prism {
                         BindTrue(local, subject, Span(capture)), span);
                 }
                 case Pm.AlternationPatternNode alternation:
-                    return new OrExpression(PatternTest(alternation.Left, subject, span),
-                        PatternTest(alternation.Right, subject, span), span);
+                    return new OrExpression(ResetMissingKey(PatternTest(alternation.Left, subject, span), span),
+                        ResetMissingKey(PatternTest(alternation.Right, subject, span), span), span);
                 case Pm.PinnedVariableNode pinned:
                     return CaseEqual(Expr(pinned.Variable), subject, Span(pinned));
                 case Pm.PinnedExpressionNode pinnedExpr:
@@ -2443,7 +2614,15 @@ namespace IronRuby.Prism {
                 var assoc = (Pm.AssocNode)element;
                 var key = (Pm.SymbolNode)assoc.Key;
                 var keySymbol = new SymbolLiteral(LiteralText(key.Unescaped), _encoding, Span(key));
-                tests.Add(new MethodCall(hash, "key?", new Arguments(keySymbol), span));
+                Expression hasKey = new MethodCall(hash, "key?", new Arguments(keySymbol), span);
+                if (_patternMissingKey != null) {
+                    hasKey = new OrExpression(hasKey, new BlockExpression(MakeStatements(new Expression[] {
+                        new SimpleAssignmentExpression(_patternMissingKey,
+                            new SymbolLiteral(LiteralText(key.Unescaped), _encoding, Span(key)), null, span),
+                        Literal.False(span)
+                    }), span), span);
+                }
+                tests.Add(hasKey);
 
                 Pm.PmNode valuePattern = assoc.Value is Pm.ImplicitNode implicitValue ? implicitValue.Value : assoc.Value;
                 Expression valueAssign;

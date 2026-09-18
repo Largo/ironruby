@@ -58,6 +58,12 @@ namespace IronRuby.Compiler.Ast {
             get { return _parameters; }
         }
 
+        /// <summary>
+        /// MRI's use_block: the method declares a block parameter, yields, or calls super passing
+        /// its block on. A block given to a method without it may be ignored, which MRI warns about.
+        /// </summary>
+        public bool UsesBlock { get; set; }
+
         public MethodDefinition(LexicalScope/*!*/ definedScope, Expression target, string/*!*/ name, Parameters parameters, Body/*!*/ body, 
             SourceSpan location)
             : base(definedScope, body, location) {

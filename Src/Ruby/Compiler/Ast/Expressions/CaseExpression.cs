@@ -104,7 +104,7 @@ namespace IronRuby.Compiler.Ast {
             } else {
                 if (value != null) {
                     return AstFactory.IsTrue(
-                        CallSiteBuilder.InvokeMethod(gen.Context, "===", RubyCallSignature.WithScope(1),
+                        CallSiteBuilder.InvokeMethod(gen.Context, "===", new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf),
                             gen.CurrentScopeVariable,
                             transformedExpr,
                             value

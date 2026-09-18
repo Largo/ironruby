@@ -1056,14 +1056,17 @@ namespace IronRuby.Compiler.Ast {
 
         internal MSA.Expression/*!*/ TryCatchAny(MSA.Expression/*!*/ tryBody, MSA.Expression/*!*/ catchBody) {
             var variable = CurrentScope.DefineHiddenVariable("#value", tryBody.Type);
+            var exception = Ast.Parameter(typeof(Exception), "#exception");
 
             return
                 Ast.Block(
                     Ast.TryCatch(
                         Ast.Assign(variable, tryBody),
-                        Ast.Catch(typeof(Exception), 
+                        // an exception makes defined? nil, but throw/break/return still unwind through it
+                        Ast.Catch(exception, Ast.Block(
+                            Ast.IfThen(Ast.TypeIs(exception, typeof(StackUnwinder)), Ast.Rethrow()),
                             Ast.Assign(variable, catchBody)
-                        )
+                        ))
                     ),
                     variable
                 );

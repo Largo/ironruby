@@ -43,6 +43,14 @@ namespace IronRuby.Compiler.Ast {
             return (_arguments != null) ? _arguments.TransformToReturnValue(gen) : AstUtils.Constant(null);
         }
 
+        internal abstract MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen);
+
+        // Marks the sequence point like any other statement does, so that caller/backtraces taken
+        // while evaluating `return caller` report the line of the return.
+        internal sealed override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+            return gen.AddDebugInfo(TransformJump(gen), Location);
+        }
+
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
             return Utils.Convert(Transform(gen), typeof(object));
         }

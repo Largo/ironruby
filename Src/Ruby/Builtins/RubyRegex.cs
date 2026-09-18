@@ -836,7 +836,21 @@ namespace IronRuby.Builtins {
         }
 
         public static MatchData SetCurrentMatchData(RubyScope/*!*/ scope, RubyRegex/*!*/ regex, MutableString str) {
+            if (str != null) {
+                regex.WarnHistoricalBinaryMatch(scope.RubyContext, str);
+            }
             return scope.GetInnerMostClosureScope().CurrentMatch = (str != null) ? regex.Match(str) : null;
+        }
+
+        /// <summary>
+        /// MRI's rb_reg_prepare_enc: a /n regexp that has not pinned an encoding still matches a
+        /// non-ASCII string of another encoding, byte by byte, and warns that it does.
+        /// </summary>
+        public void WarnHistoricalBinaryMatch(RubyContext/*!*/ context, MutableString/*!*/ str) {
+            if ((_options & RubyRegexOptions.EncodingMask) == RubyRegexOptions.FIXED && !IsFixedEncoding &&
+                str.Encoding != RubyEncoding.Binary && !str.IsAscii()) {
+                context.ReportWarning(String.Format("historical binary regexp match /.../n against {0} string", str.Encoding.Name));
+            }
         }
 
         #endregion               

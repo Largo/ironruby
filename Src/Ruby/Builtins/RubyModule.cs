@@ -1093,6 +1093,17 @@ namespace IronRuby.Builtins {
                 // expanding singleton chain:
                 singletonSuper = immediate.SuperClass;
                 singletonImmediate = immediate;
+
+                // The singleton of a class's singleton class descends from the singleton of the
+                // superclass's singleton class, as in MRI: #<Class:#<Class:K>> < #<Class:#<Class:H>>
+                // for K < H. The chain ends at BasicObject's, whose superclass is #<Class:Class>.
+                var cls = this as RubyClass;
+                if (cls != null && cls.IsSingletonClass && cls.SingletonClassOf is RubyClass) {
+                    var super = cls.SuperClass;
+                    if (super != null && super.IsSingletonClass && !super.IsDummySingletonClass) {
+                        singletonSuper = super.GetOrCreateSingletonClass();
+                    }
+                }
             } else {
                 return immediate;
             }
@@ -1783,9 +1794,17 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public bool TryRemoveConstant(string/*!*/ name, out object value) {
+            bool result;
             using (Context.ClassHierarchyLocker()) {
-                return TryRemoveConstantNoLock(name, out value);
+                result = TryRemoveConstantNoLock(name, out value);
             }
+
+            // a top-level module was also published to the host scope (see Publish), where the
+            // missing-constant fallback would still find it
+            if (result && IsObjectClass && value is RubyModule) {
+                RubyOps.ScopeRemoveMember(_context.TopGlobalScope, name, value);
+            }
+            return result;
         }
 
         private bool TryRemoveConstantNoLock(string/*!*/ name, out object value) {
@@ -2618,25 +2637,32 @@ namespace IronRuby.Builtins {
         public RubyModule TryResolveClassVariable(string/*!*/ name, out object value) {
             Assert.NotNull(name);
 
-            RubyModule result = null;
-            object constValue = null;
+            RubyModule front = null, target = null;
+            object targetValue = null;
 
+            // MRI's CVAR_LOOKUP: the variable is the one furthest up the ancestors; one defined
+            // lower down as well is "overtaken" by it, which is an error.
             using (Context.ClassHierarchyLocker()) {
-                if (ForEachAncestor(delegate(RubyModule/*!*/ module) {
-                    if (module._classVariables != null && module._classVariables.TryGetValue(name, out constValue)) {
-                        result = module;
-                        return true;
+                ForEachAncestor(delegate(RubyModule/*!*/ module) {
+                    object moduleValue;
+                    if (module._classVariables != null && module._classVariables.TryGetValue(name, out moduleValue)) {
+                        if (front == null) {
+                            front = module;
+                        }
+                        target = module;
+                        targetValue = moduleValue;
                     }
-
                     return false;
-                })) {
-                    value = constValue;
-                    return result;
-                }
+                });
             }
 
-            value = null;
-            return null;
+            if (front != target) {
+                throw new RuntimeError(String.Format("class variable {0} of {1} is overtaken by {2}",
+                    name, Context.GetModuleDisplayName(front), Context.GetModuleDisplayName(target)));
+            }
+
+            value = targetValue;
+            return target;
         }
 
         public bool EnumerateClassVariables(Func<RubyModule, string, object, bool>/*!*/ action) {

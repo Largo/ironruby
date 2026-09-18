@@ -459,6 +459,7 @@ namespace IronRuby.Builtins {
                 if (start < 0) {
                     start += length;
                 }
+                self.WarnHistoricalBinaryMatch(scope.RubyContext, str);
                 match = (start >= 0 && start <= length) ? self.Match(str, start, false) : null;
             }
 

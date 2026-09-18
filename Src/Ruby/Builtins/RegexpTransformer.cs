@@ -77,6 +77,62 @@ namespace IronRuby.Builtins {
         // otherwise it would shift every group number in the pattern.
         private bool _suppressCaptures;
 
+        // Onigmo's warnings about a quantifier applied to a quantifier (regparse.c set_quantifier).
+        private List<string> _warnings;
+
+        // The last quantifier as one of Onigmo's "popular" ones - ? * + ?? *? +? - or null.
+        private string _lastQuantifierKind;
+
+        private static readonly string[] PopularQuantifiers = { "?", "*", "+", "??", "*?", "+?" };
+
+        // ReduceTypeTable[inner, outer]: 0 as is, 1 redundant, otherwise the index into ReducedQuantifiers
+        private static readonly int[,] ReduceTypeTable = {
+            /* '?' '*' '+' '??' '*?' '+?'   outer / inner */
+            { 1, 2, 2, 4, 3, 0 },  /* '?'  */
+            { 1, 1, 1, 5, 5, 1 },  /* '*'  */
+            { 2, 2, 1, 0, 5, 1 },  /* '+'  */
+            { 1, 3, 3, 1, 3, 3 },  /* '??' */
+            { 1, 1, 1, 1, 1, 1 },  /* '*?' */
+            { 0, 6, 1, 3, 3, 1 },  /* '+?' */
+        };
+
+        private static readonly string[] ReducedQuantifiers = { "", "", "*", "*?", "??", "+ and ??", "+? and ?" };
+
+        private void CheckNestedQuantifier(string/*!*/ inner, string/*!*/ outer) {
+            int i = Array.IndexOf(PopularQuantifiers, inner);
+            int o = Array.IndexOf(PopularQuantifiers, outer);
+            if (i < 0 || o < 0) {
+                return;
+            }
+
+            int reduction = ReduceTypeTable[i, o];
+            if (reduction == 0) {
+                return;
+            }
+
+            if (_warnings == null) {
+                _warnings = new List<string>();
+            }
+            _warnings.Add(reduction == 1
+                ? "regular expression has redundant nested repeat operator '" + inner + "'"
+                : "nested repeat operator '" + inner + "' and '" + outer + "' was replaced with '" + ReducedQuantifiers[reduction] + "' in regular expression"
+            );
+        }
+
+        /// <summary>
+        /// The warnings Onigmo gives while compiling the pattern, without the ": /pattern/" MRI
+        /// appends. Null if there are none or the pattern does not compile.
+        /// </summary>
+        internal static List<string> GetWarnings(string/*!*/ rubyPattern) {
+            var transformer = new RegexpTransformer(rubyPattern);
+            try {
+                transformer.Transform();
+            } catch (Exception) {
+                return null;
+            }
+            return transformer._warnings;
+        }
+
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
@@ -92,7 +148,118 @@ namespace IronRuby.Builtins {
 
         private RegexpTransformer(string/*!*/ rubyPattern) {
             _rubyPattern = rubyPattern;
-            _hasNamedGroup = HasNamedGroup(rubyPattern);
+            _groupNameCounts = CountGroupNames(rubyPattern);
+            _hasNamedGroup = _groupNameCounts.Count > 0;
+        }
+
+        // How many groups the pattern declares under each name. Ruby lets several groups share a
+        // name and numbers them all; .NET would merge them into one group, so every occurrence
+        // after the first is given a name of its own (see DuplicateGroupName).
+        private readonly Dictionary<string, int>/*!*/ _groupNameCounts;
+        private readonly Dictionary<string, int>/*!*/ _groupNameOccurrences = new Dictionary<string, int>();
+
+        private const string DuplicateGroupNameSeparator = "__ir";
+
+        // A name .NET would not accept - Ruby allows `(?<a+>...)' for a group only ever called
+        // with \g - is spelled with its other characters as hex codes behind this prefix.
+        private const string EncodedGroupNamePrefix = "__irn";
+
+        private static string/*!*/ DuplicateGroupName(string/*!*/ name, int occurrence) {
+            string clrName = IsClrGroupName(name) ? name : EncodeGroupName(name);
+            return occurrence <= 1 ? clrName : clrName + DuplicateGroupNameSeparator + occurrence.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private static bool IsClrGroupName(string/*!*/ name) {
+            if (name.Length == 0 || !(Char.IsLetter(name[0]) || name[0] == '_')) {
+                return false;
+            }
+            foreach (char c in name) {
+                if (!Char.IsLetterOrDigit(c) && c != '_') {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private static string/*!*/ EncodeGroupName(string/*!*/ name) {
+            var result = new StringBuilder(EncodedGroupNamePrefix);
+            foreach (char c in name) {
+                if (Char.IsLetterOrDigit(c)) {
+                    result.Append(c);
+                } else {
+                    result.Append('_').Append(((int)c).ToString("x4"));
+                }
+            }
+            return result.ToString();
+        }
+
+        private static string/*!*/ DecodeGroupName(string/*!*/ clrName) {
+            if (!clrName.StartsWith(EncodedGroupNamePrefix, StringComparison.Ordinal)) {
+                return clrName;
+            }
+            var result = new StringBuilder();
+            for (int i = EncodedGroupNamePrefix.Length; i < clrName.Length; i++) {
+                if (clrName[i] == '_' && i + 4 < clrName.Length) {
+                    result.Append((char)Convert.ToInt32(clrName.Substring(i + 1, 4), 16));
+                    i += 4;
+                } else {
+                    result.Append(clrName[i]);
+                }
+            }
+            return result.ToString();
+        }
+
+        /// <summary>
+        /// The Ruby name of a .NET group: the name the pattern gave it, whichever occurrence of
+        /// the name it is. Null for a group .NET only knows by number.
+        /// </summary>
+        internal static string GetRubyGroupName(string/*!*/ clrName) {
+            if (clrName.Length == 0 || Char.IsDigit(clrName[0])) {
+                return null;
+            }
+            int separator = clrName.LastIndexOf(DuplicateGroupNameSeparator, StringComparison.Ordinal);
+            if (separator > 0 && separator + DuplicateGroupNameSeparator.Length < clrName.Length) {
+                for (int i = separator + DuplicateGroupNameSeparator.Length; i < clrName.Length; i++) {
+                    if (!Char.IsDigit(clrName[i])) {
+                        return clrName;
+                    }
+                }
+                return DecodeGroupName(clrName.Substring(0, separator));
+            }
+            return DecodeGroupName(clrName);
+        }
+
+        private static Dictionary<string, int>/*!*/ CountGroupNames(string/*!*/ pattern) {
+            var result = new Dictionary<string, int>();
+            bool inCharacterClass = false;
+            for (int i = 0; i < pattern.Length; i++) {
+                char c = pattern[i];
+                if (c == '\\') {
+                    i++;
+                } else if (inCharacterClass) {
+                    inCharacterClass = c != ']';
+                } else if (c == '[') {
+                    inCharacterClass = true;
+                } else if (c == '(' && i + 2 < pattern.Length && pattern[i + 1] == '?') {
+                    char d = pattern[i + 2];
+                    char terminator;
+                    if (d == '\'') {
+                        terminator = '\'';
+                    } else if (d == '<' && i + 3 < pattern.Length && pattern[i + 3] != '=' && pattern[i + 3] != '!') {
+                        terminator = '>';
+                    } else {
+                        continue;
+                    }
+                    int end = pattern.IndexOf(terminator, i + 3);
+                    if (end > i + 3) {
+                        string name = pattern.Substring(i + 3, end - i - 3);
+                        int count;
+                        result.TryGetValue(name, out count);
+                        result[name] = count + 1;
+                    }
+                }
+            }
+            return result;
         }
 
         /// <summary>
@@ -300,21 +467,46 @@ namespace IronRuby.Builtins {
 
                     case '?':
                     case '*':
-                    case '+':
+                    case '+': {
+                        string inner = lastWasQuantifier ? _lastQuantifierKind : null;
                         if (lastWasQuantifier) {
                             // a*** == (?:(?:a*)*)*
                             _sb.Insert(lastEntityIndex, "(?:");
                             Append(')');
                         }
                         Append((char)c);
+                        int next = Peek();
+                        // `?+ *+ ++` are possessive, not a quantifier applied to a quantifier
+                        string kind = (next == '+') ? null : ((char)c).ToString() + (next == '?' ? "?" : "");
+                        if (inner != null && kind != null) {
+                            CheckNestedQuantifier(inner, kind);
+                        }
+                        _lastQuantifierKind = kind;
                         // A quantifier that got wrapped is already a group, so a further
                         // quantifier can apply to it directly.
                         lastWasQuantifier = !ParsePostQuantifier(lastEntityIndex, true, false);
                         break;
+                    }
 
                     case '{': {
                         bool isExactCount;
+                        string inner = lastWasQuantifier ? _lastQuantifierKind : null;
+                        int start = _index;
                         if (ParseConstrainedQuantifier(lastWasQuantifier, lastEntityIndex, out isExactCount)) {
+                            // {0,1} is Onigmo's ?, the one interval that counts as a popular quantifier here
+                            int next = Peek();
+                            string kind = (_rubyPattern.Substring(start, _index - start) == "0,1}")
+                                ? (next == '?' ? "??" : "?")
+                                : null;
+                            if (inner != null && kind != null) {
+                                CheckNestedQuantifier(inner, kind);
+                            }
+                            if (kind != null && next == '+') {
+                                // {n,m}+ is not possessive in Ruby: the + quantifies again
+                                CheckNestedQuantifier(kind, "+");
+                                kind = null;
+                            }
+                            _lastQuantifierKind = kind;
                             lastWasQuantifier = !ParsePostQuantifier(lastEntityIndex, false, isExactCount);
                         } else {
                             goto default;
@@ -585,6 +777,9 @@ namespace IronRuby.Builtins {
                     default:
                         throw MakeError("undefined group option");
                 }
+            } else if (_hasNamedGroup) {
+                // with a named group anywhere in the pattern, Ruby's plain groups do not capture
+                _sb.Append("(?:");
             } else {
                 _groupCount++;
                 groupNumber = _groupCount;
@@ -761,11 +956,20 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            if (name[0] == '-' || Tokenizer.IsDecimalDigit(name[0])) {
+                throw MakeError("invalid group name <" + name + ">");
+            }
+
             if (_suppressCaptures) {
                 Append(':');
             } else {
+                string text = name.ToString();
+                int occurrence;
+                _groupNameOccurrences.TryGetValue(text, out occurrence);
+                _groupNameOccurrences[text] = ++occurrence;
+
                 Append((char)opening);
-                _sb.Append(name);
+                _sb.Append(DuplicateGroupName(text, occurrence));
                 Append((char)closing);
             }
             return name.ToString();
@@ -805,6 +1009,20 @@ namespace IronRuby.Builtins {
                 
                 case 'k':
                     ParseBackreference();
+                    break;
+
+                case 'X':
+                    // An extended grapheme cluster, which .NET has no escape for. This covers what
+                    // text commonly holds (UAX #29 without the Hangul and prepend rules): CRLF, a
+                    // regional indicator pair (a flag), and a code point followed by combining
+                    // marks, variation selectors, emoji modifiers and tags, or joined to further
+                    // code points by ZWJ. Atomic, like Onigmo's.
+                    _sb.Append(
+                        "(?>\\r\\n|\\uD83C[\\uDDE6-\\uDDFF]\\uD83C[\\uDDE6-\\uDDFF]|" +
+                        "(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])" +
+                        "(?:\\p{M}|[\\uFE00-\\uFE0F\\u200C]|\\uD83C[\\uDFFB-\\uDFFF]|\\uDB40[\\uDC20-\\uDC7F]|" +
+                        "\\u200D(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF]))*)"
+                    );
                     break;
 
                 case 'R':
@@ -923,7 +1141,7 @@ namespace IronRuby.Builtins {
                 inner._callsInProgress = _callsInProgress;
                 inner._groupsBeingParsed = _groupsBeingParsed;
 
-                _sb.Append("(?<").Append(key.StartsWith("#") ? key.Substring(1) : key).Append('>');
+                _sb.Append("(?<").Append(key.StartsWith("#") ? key.Substring(1) : DuplicateGroupName(key, 1)).Append('>');
                 _sb.Append(inner.Transform()).Append(')');
                 _hasGAnchor |= inner._hasGAnchor;
             } finally {
@@ -1056,6 +1274,20 @@ namespace IronRuby.Builtins {
                 // \k<name+n> and \k<name-n> are level-scoped references, which .NET has no
                 // equivalent for; Ruby itself rejects them outside a subexpression call.
                 throw MakeError("invalid group name <" + name + ">");
+            }
+
+            int count;
+            if (_groupNameCounts.TryGetValue(name, out count) && count > 1) {
+                // a name several groups share refers to whichever of them has matched
+                _sb.Append("(?:");
+                for (int i = count; i >= 1; i--) {
+                    _sb.Append("\\k<").Append(DuplicateGroupName(name, i)).Append('>');
+                    if (i > 1) {
+                        _sb.Append('|');
+                    }
+                }
+                _sb.Append(')');
+                return;
             }
 
             _sb.Append("\\k<").Append(name).Append('>');
@@ -1451,7 +1683,9 @@ namespace IronRuby.Builtins {
             }
 
             private CharacterSet/*!*/ RequireNoAstral(string/*!*/ operation) {
-                if (HasAstral) {
+                // the non-BMP members a POSIX class brings along are dropped instead, which leaves
+                // such a class as it was before they were added
+                if (HasAstral && !_astralOptional) {
                     // The surrogate-pair alternation is not a character class, so it cannot take
                     // part in [a-[b]] subtraction or && intersection.
                     throw new RegexpError("non-BMP character is not supported in a " + operation + " character class");
@@ -1474,6 +1708,21 @@ namespace IronRuby.Builtins {
             private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral)
                 : this(negate, include, exclude) {
                 _astral = astral;
+            }
+
+            // The non-BMP members came from a POSIX class ([[:lower:]] and friends) and can be
+            // left out where a character class operation cannot keep them.
+            private readonly bool _astralOptional;
+
+            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral, bool astralOptional)
+                : this(negate, include, exclude, astral) {
+                _astralOptional = astralOptional;
+            }
+
+            /// <summary>This set plus non-BMP members that set operations may drop (see _astralOptional).</summary>
+            internal CharacterSet/*!*/ WithOptionalAstral(string/*!*/ astral) {
+                Debug.Assert(!_negated);
+                return new CharacterSet(false, _include, _exclude, JoinAstral(_astral, astral), !HasAstral || _astralOptional);
             }
 
             private static string/*!*/ JoinAstral(string/*!*/ a, string/*!*/ b) {
@@ -1545,7 +1794,8 @@ namespace IronRuby.Builtins {
                     set._exclude.Subtract(GetIncludedSet()).
                         Union(this._exclude.Subtract(set.GetIncludedSet())).
                         Union(this._exclude.Intersect(set._exclude)),
-                    JoinAstral(_astral, set._astral)
+                    JoinAstral(_astral, set._astral),
+                    (!HasAstral || _astralOptional) && (!set.HasAstral || set._astralOptional)
                 );
             }
 
@@ -2112,6 +2362,117 @@ namespace IronRuby.Builtins {
         }
 
         private CharacterSet MakePosixCharacterClassCore(PosixCharacterClass charClass, bool positive) {
+            var result = MakeBmpPosixCharacterClass(charClass, positive);
+            if (positive) {
+                // .NET matches UTF-16 code units, so a class alone never matches a character
+                // outside the BMP; Onigmo's POSIX classes range over all of Unicode
+                string astral = GetAstralPosixMembers(charClass);
+                if (astral != null) {
+                    result = result.WithOptionalAstral(astral);
+                }
+            }
+            return result;
+        }
+
+        private static readonly Dictionary<PosixCharacterClass, string> _astralPosixMembers = new Dictionary<PosixCharacterClass, string>();
+
+        private static string GetAstralPosixMembers(PosixCharacterClass charClass) {
+            Func<System.Globalization.UnicodeCategory, bool> member;
+            switch (charClass) {
+                case PosixCharacterClass.Lower: member = c => c == System.Globalization.UnicodeCategory.LowercaseLetter; break;
+                case PosixCharacterClass.Upper: member = c => c == System.Globalization.UnicodeCategory.UppercaseLetter; break;
+                case PosixCharacterClass.Alpha: member = c => IsLetter(c) || c == System.Globalization.UnicodeCategory.LetterNumber; break;
+                case PosixCharacterClass.Alnum: member = c => IsLetter(c) || c == System.Globalization.UnicodeCategory.LetterNumber || c == System.Globalization.UnicodeCategory.DecimalDigitNumber; break;
+                case PosixCharacterClass.Digit: member = c => c == System.Globalization.UnicodeCategory.DecimalDigitNumber; break;
+                case PosixCharacterClass.Word:
+                    member = c => IsLetter(c) || c == System.Globalization.UnicodeCategory.NonSpacingMark || c == System.Globalization.UnicodeCategory.SpacingCombiningMark ||
+                        c == System.Globalization.UnicodeCategory.EnclosingMark || c == System.Globalization.UnicodeCategory.DecimalDigitNumber ||
+                        c == System.Globalization.UnicodeCategory.LetterNumber || c == System.Globalization.UnicodeCategory.ConnectorPunctuation;
+                    break;
+                case PosixCharacterClass.Print:
+                    member = c => c != System.Globalization.UnicodeCategory.Control && c != System.Globalization.UnicodeCategory.OtherNotAssigned &&
+                        c != System.Globalization.UnicodeCategory.Surrogate && c != System.Globalization.UnicodeCategory.LineSeparator &&
+                        c != System.Globalization.UnicodeCategory.ParagraphSeparator;
+                    break;
+                case PosixCharacterClass.Graph:
+                    member = c => c != System.Globalization.UnicodeCategory.Control && c != System.Globalization.UnicodeCategory.OtherNotAssigned &&
+                        c != System.Globalization.UnicodeCategory.Surrogate && c != System.Globalization.UnicodeCategory.LineSeparator &&
+                        c != System.Globalization.UnicodeCategory.ParagraphSeparator && c != System.Globalization.UnicodeCategory.SpaceSeparator;
+                    break;
+                case PosixCharacterClass.Punct:
+                    member = c => c >= System.Globalization.UnicodeCategory.ConnectorPunctuation && c <= System.Globalization.UnicodeCategory.OtherPunctuation;
+                    break;
+                default:
+                    return null;
+            }
+
+            lock (_astralPosixMembers) {
+                string result;
+                if (!_astralPosixMembers.TryGetValue(charClass, out result)) {
+                    _astralPosixMembers[charClass] = result = BuildAstralMembers(member);
+                }
+                return result;
+            }
+        }
+
+        private static bool IsLetter(System.Globalization.UnicodeCategory c) {
+            return c <= System.Globalization.UnicodeCategory.OtherLetter;
+        }
+
+        /// <summary>
+        /// The non-BMP code points in a category set as surrogate pairs: one character class of
+        /// trailing surrogates per leading one (or run of leading ones with the same trailing
+        /// class), behind a lookahead that turns away anything that is not a leading surrogate.
+        /// </summary>
+        private static string/*!*/ BuildAstralMembers(Func<System.Globalization.UnicodeCategory, bool>/*!*/ member) {
+            var alternatives = new List<KeyValuePair<int, string>>();
+            var trails = new StringBuilder();
+            for (int lead = 0; lead < 0x400; lead++) {
+                trails.Length = 0;
+                int rangeStart = -1;
+                for (int trail = 0; trail <= 0x400; trail++) {
+                    bool isMember = trail < 0x400 &&
+                        member(System.Globalization.CharUnicodeInfo.GetUnicodeCategory(0x10000 + (lead << 10) + trail));
+                    if (isMember && rangeStart < 0) {
+                        rangeStart = trail;
+                    } else if (!isMember && rangeStart >= 0) {
+                        trails.Append("\\u").Append((0xdc00 + rangeStart).ToString("x4"));
+                        if (trail - 1 > rangeStart) {
+                            trails.Append("-\\u").Append((0xdc00 + trail - 1).ToString("x4"));
+                        }
+                        rangeStart = -1;
+                    }
+                }
+                if (trails.Length > 0) {
+                    alternatives.Add(new KeyValuePair<int, string>(lead, trails.ToString()));
+                }
+            }
+
+            if (alternatives.Count == 0) {
+                return "[a-[a]]";
+            }
+
+            var result = new StringBuilder("(?=[\\ud800-\\udbff])(?:");
+            for (int i = 0; i < alternatives.Count; ) {
+                int j = i;
+                while (j + 1 < alternatives.Count && alternatives[j + 1].Key == alternatives[j].Key + 1 &&
+                    alternatives[j + 1].Value == alternatives[i].Value) {
+                    j++;
+                }
+                if (i > 0) {
+                    result.Append('|');
+                }
+                result.Append('[').Append("\\u").Append((0xd800 + alternatives[i].Key).ToString("x4"));
+                if (j > i) {
+                    result.Append("-\\u").Append((0xd800 + alternatives[j].Key).ToString("x4"));
+                }
+                result.Append("][").Append(alternatives[i].Value).Append(']');
+                i = j + 1;
+            }
+            return result.Append(')').ToString();
+        }
+
+        private CharacterSet MakeBmpPosixCharacterClass(PosixCharacterClass charClass, bool positive) {
             switch (charClass) {
                 case PosixCharacterClass.Alnum:
                     if (positive) {

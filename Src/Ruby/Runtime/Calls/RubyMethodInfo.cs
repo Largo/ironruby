@@ -46,6 +46,8 @@ namespace IronRuby.Runtime.Calls {
         public MSA.SymbolDocumentInfo Document { get { return _body.Document; } }
         public SourceSpan SourceSpan { get { return _body.Ast.Location; } }
         public RubyScope/*!*/ DeclaringScope { get { return _declaringScope; } }
+        internal RubyMethodBody/*!*/ Body { get { return _body; } }
+        internal bool UsesBlock { get { return _body.Ast.UsesBlock; } }
 
         // method:
         internal RubyMethodInfo(RubyMethodBody/*!*/ body, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule, RubyMemberFlags flags)

@@ -298,9 +298,8 @@ namespace IronRuby.Runtime.Conversions {
             }
 
             // slow path: invoke respond_to?, to_xxx and result validation.
-            // MRI asks respond_to?(:to_xxx, true) - private conversion methods count - unless the
-            // override only takes the one argument (vm_respond_to).
-            bool passIncludePrivate = respondToMethod.Info.GetArity() != 1;
+            // MRI (vm_respond_to) passes include_all = true unless respond_to? takes only the name.
+            bool passIncludeAll = respondToMethod.Info.GetArity() != 1;
             for (int i = conversions.Length - 1; i >= 0; i--) {
                 string toMethodName = conversions[i].ToMethodName;
                 
@@ -313,18 +312,18 @@ namespace IronRuby.Runtime.Conversions {
                     // If
 
                     // respond_to?()
-                    Methods.IsTrue.OpCall(passIncludePrivate
+                    Methods.IsTrue.OpCall(passIncludeAll
                         ? AstUtils.LightDynamic(
                             RubyCallAction.Make(args.RubyContext, Symbols.RespondTo, RubyCallSignature.WithImplicitSelf(2)),
                             args.TargetExpression, 
                             Ast.Constant(args.RubyContext.CreateSymbol(toMethodName, RubyEncoding.Binary)),
-                            AstUtils.Constant(true)
-                        )
+                            AstUtils.Constant(true, typeof(object))
+                          )
                         : AstUtils.LightDynamic(
                             RubyCallAction.Make(args.RubyContext, Symbols.RespondTo, RubyCallSignature.WithImplicitSelf(1)),
                             args.TargetExpression, 
                             Ast.Constant(args.RubyContext.CreateSymbol(toMethodName, RubyEncoding.Binary))
-                        )
+                          )
                     ),
 
                     // Then
@@ -738,6 +737,12 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ImplicitTrySplatAction : TrySplatAction<ImplicitTrySplatAction> {
         protected sealed override string/*!*/ ToMethodName { get { return Symbols.ToAry; } }
         protected sealed override MethodInfo ConversionResultValidator { get { return Methods.ToArrayValidator; } }
+
+        // a #to_ary answering nil leaves the object unsplatted, as MRI's block argument
+        // destructuring does, rather than being an error
+        protected override Expression/*!*/ MakeValidatorCall(CallArguments/*!*/ args, Expression/*!*/ targetClassNameConstant, Expression/*!*/ result) {
+            return Methods.TrySplatToAryValidator.OpCall(targetClassNameConstant, AstUtils.Box(args.TargetExpression), AstUtils.Box(result));
+        }
     }
 
     /// <summary>

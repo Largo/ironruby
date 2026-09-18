@@ -3871,6 +3871,18 @@ namespace IronRuby.Compiler {
             return IsLetter(c) || IsDecimalDigit(c);
         }
 
+        /// <summary>
+        /// Ruby 2.6+: a constant may begin with any non-ASCII uppercase or titlecase letter.
+        /// </summary>
+        private static bool IsNonAsciiConstantInitial(string/*!*/ name, int index) {
+            if (name[index] < 0x80) {
+                return false;
+            }
+            var category = System.Globalization.CharUnicodeInfo.GetUnicodeCategory(name, index);
+            return category == System.Globalization.UnicodeCategory.UppercaseLetter
+                || category == System.Globalization.UnicodeCategory.TitlecaseLetter;
+        }
+
         public static bool IsUpperLetter(int c) {
             return unchecked((uint)c - 'A' <= (uint)'Z' - 'A');
         }
@@ -4185,7 +4197,7 @@ namespace IronRuby.Compiler {
 
         public static bool IsConstantName(string name) {
             return !String.IsNullOrEmpty(name) 
-                && IsUpperLetter(name[0])
+                && (IsUpperLetter(name[0]) || IsNonAsciiConstantInitial(name, 0))
                 && IsVariableName(name, 1, 1, AllowMultiByteIdentifier)
                 && IsIdentifier(name[name.Length - 1], AllowMultiByteIdentifier);
         }

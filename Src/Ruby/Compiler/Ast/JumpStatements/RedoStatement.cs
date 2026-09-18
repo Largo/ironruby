@@ -52,7 +52,7 @@ namespace IronRuby.Compiler.Ast {
             return Ast.Continue(gen.CurrentBlock.RedoLabel);
         }
 
-        internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
 
             // eval:
             if (gen.CompilerOptions.IsEval) {

@@ -694,7 +694,7 @@ namespace IronRuby.Runtime {
             // produces the deprecation warning rather than an unknown-global nil.
             DefineGlobalVariableNoLock("=", Runtime.GlobalVariables.IgnoreCase);
 
-            DefineGlobalVariableNoLock("SAFE", Runtime.GlobalVariables.SafeLevel);
+            // $SAFE is an ordinary global since Ruby 3.0, so it is not defined here.
 
             try {
                 TrySetCurrentProcessVariables();
@@ -755,6 +755,8 @@ namespace IronRuby.Runtime {
                     _globalVariables["-i"] = new GlobalVariableInfo(
                         MutableString.Create(_options.InplaceMode, GetPathEncoding()).Freeze()
                     );
+                } else {
+                    _globalVariables["-i"] = new GlobalVariableInfo(null);
                 }
 
                 // Hash
@@ -2464,15 +2466,17 @@ namespace IronRuby.Runtime {
                 throw RubyExceptions.CreateArgumentError("$! not set");
             }
 
-            // check assigned value:
-            RubyArray array = RubyUtils.AsArrayOfStrings(value);
-            if (value != null && array == null) {
-                throw RubyExceptions.CreateTypeError("backtrace must be Array of String");
+            // MRI's errat_setter goes through #set_backtrace, which also takes an Array of
+            // Thread::Backtrace::Location (the Ruby-level layer keeps those)
+            if (_setBacktraceSite == null) {
+                System.Threading.Interlocked.CompareExchange(ref _setBacktraceSite,
+                    CallSite<Func<CallSite, object, object, object>>.Create(RubyCallAction.Make(this, "set_backtrace", 1)), null);
             }
-
-            RubyExceptionData.GetInstance(e).Backtrace = array;
-            return array;
+            _setBacktraceSite.Target(_setBacktraceSite, e, value);
+            return RubyExceptionData.GetInstance(e).Backtrace;
         }
+
+        private CallSite<Func<CallSite, object, object, object>> _setBacktraceSite;
         
         /// <summary>
         /// $SAFE
@@ -2813,6 +2817,25 @@ namespace IronRuby.Runtime {
         public void SetWarningEnabled(string/*!*/ category, bool enabled) {
             lock (_warningCategories) {
                 _warningCategories[category] = enabled;
+            }
+        }
+
+        // Names of methods compiled with a use of their block, while :strict_unused_block was off
+        // (MRI's iseq_set_use_block): a block passed to a same-named method is not warned about.
+        private readonly HashSet<string>/*!*/ _methodNamesUsingBlock = new HashSet<string>();
+
+        internal void NoteMethodUsingBlock(string/*!*/ name) {
+            if (IsWarningEnabled("strict_unused_block")) {
+                return;
+            }
+            lock (_methodNamesUsingBlock) {
+                _methodNamesUsingBlock.Add(name);
+            }
+        }
+
+        internal bool IsMethodNameUsingBlock(string/*!*/ name) {
+            lock (_methodNamesUsingBlock) {
+                return _methodNamesUsingBlock.Contains(name);
             }
         }
 

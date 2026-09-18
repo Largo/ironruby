@@ -82,8 +82,10 @@ namespace IronRuby.Compiler.Ast {
             var result = new List<string>();
             foreach (var entry in _definedScope) {
                 string name = entry.Key;
-                if (entry.Value.DefinitionLexicalDepth < 0 && name.Length > 0 && (name[0] == '_' || Char.IsLetter(name[0]) ||
-                    name.StartsWith(RangeExpression.FlipFlopStatePrefix, StringComparison.Ordinal))) {
+                // A flip-flop's hidden state too: a block in the eval would otherwise define it in its
+                // own scope on every call and lose the state between iterations.
+                if (entry.Value.DefinitionLexicalDepth < 0 && name.Length > 0 &&
+                    (name[0] == '_' || Char.IsLetter(name[0]) || name.StartsWith(RangeExpression.FlipFlopVariablePrefix, StringComparison.Ordinal))) {
                     result.Add(name);
                 }
             }
@@ -151,11 +153,23 @@ namespace IronRuby.Compiler.Ast {
 
                 // TODO:
                 var exceptionVariable = Ast.Parameter(typeof(Exception), "#exception");
-                body = AstUtils.Try(
-                    body
-                ).Filter(exceptionVariable, Methods.TraceTopLevelCodeFrame.OpCall(runtimeScopeVariable, exceptionVariable),
-                    Ast.Empty()
-                );
+                var kind = gen.CompilerOptions.FactoryKind;
+                if (kind == TopScopeFactoryKind.None || kind == TopScopeFactoryKind.ModuleEval) {
+                    body = AstUtils.Try(
+                        body
+                    ).Filter(exceptionVariable, Methods.TraceTopLevelCodeFrame.OpCall(runtimeScopeVariable, exceptionVariable),
+                        Ast.Empty()
+                    );
+                } else {
+                    // a file's top level: `return` from a block in it ends the file
+                    body = AstUtils.Try(
+                        body
+                    ).Filter(exceptionVariable, Methods.IsTopLevelReturn.OpCall(runtimeScopeVariable, exceptionVariable),
+                        Ast.Empty()
+                    ).Finally(
+                        Methods.LeaveMethodFrame.OpCall(runtimeScopeVariable)
+                    );
+                }
             } else {
                 body = AstUtils.Constant(null);
             }

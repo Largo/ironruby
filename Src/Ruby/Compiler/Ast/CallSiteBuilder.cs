@@ -95,6 +95,9 @@ namespace IronRuby.Compiler.Ast {
             if (IsVariableCall) {
                 flags |= RubyCallFlags.IsVariableCall;
             }
+            if (_hasBlock) {
+                flags |= RubyCallFlags.HasSourceBlock;
+            }
 
             return MakeCallSite(RubyCallAction.Make(_gen.Context, name, new RubyCallSignature(Count - HiddenArgumentCount, flags)));
         }

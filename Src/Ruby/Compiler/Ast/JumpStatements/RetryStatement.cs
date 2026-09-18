@@ -31,7 +31,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         // see Ruby Language.doc/Runtime/Control Flow Implementation/Retry
-        internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {
+        internal override MSA.Expression/*!*/ TransformJump(AstGenerator/*!*/ gen) {
             return TransformRetry(gen);
         }
 

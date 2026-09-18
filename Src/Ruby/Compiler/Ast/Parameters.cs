@@ -205,7 +205,9 @@ namespace IronRuby.Compiler.Ast {
             }
 
             int arity = _mandatory.Length;
-            if (_unsplat != null || _optional.Length > 0) {
+            if (_unsplat is Placeholder && _optional.Length == 0) {
+                // |a,| takes the rest implicitly: MRI's arity is 1 and a lambda is strict about it
+            } else if (_unsplat != null || _optional.Length > 0) {
                 // optional parameters make the block variadic: MRI reports -(mandatory + 1)
                 arity = -(arity + 1);
             } else if (arity > 0 && _mandatory[_mandatory.Length - 1] is Placeholder) {

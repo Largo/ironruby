@@ -743,7 +743,7 @@ namespace IronRuby.Builtins {
         public override bool IsFrozen {
             get {
                 // a class is frozen if it has been frozen itself or the root of the singleton hierarchy (module, class or object) has been frozen:
-                if (!_isSingletonClass) {
+                if (!_isSingletonClass || IsModuleFrozen) {
                     return IsModuleFrozen;
                 }
 

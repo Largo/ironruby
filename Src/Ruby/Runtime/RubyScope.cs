@@ -278,11 +278,29 @@ namespace IronRuby.Runtime {
             }
         }
 
-        private bool TryGetLocal(string/*!*/ name, out object value) {
+        // `it' and _1.._9 live in the block's variable table, but eval and Binding do not see them
+        // as locals: `eval("it = 1")' makes a new variable rather than overwriting the parameter.
+        private bool IsImplicitParameter(string/*!*/ name) {
+            var names = OwnImplicitParameterNames;
+            return names != null && Array.IndexOf(names, name) >= 0;
+        }
+
+        /// <summary>The value of this scope's own `it` or _1.._9, for Binding#implicit_parameter_get.</summary>
+        public object GetImplicitParameterValue(string/*!*/ name) {
             EnsureBoxes();
 
             int index;
             if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index)) {
+                return _locals.GetValue(index);
+            }
+            return null;
+        }
+
+        private bool TryGetLocal(string/*!*/ name, out object value) {
+            EnsureBoxes();
+
+            int index;
+            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
                 value = _locals.GetValue(index);
                 return true;
@@ -302,7 +320,7 @@ namespace IronRuby.Runtime {
             EnsureBoxes();
 
             int index;
-            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index)) {
+            if (_staticLocalMapping != null && _staticLocalMapping.TryGetValue(name, out index) && !IsImplicitParameter(name)) {
                 Debug.Assert(_locals != null);
                 _locals.SetValue(index, value);
                 return true;
@@ -381,7 +399,7 @@ namespace IronRuby.Runtime {
                     if (implicitParameters != null && Array.IndexOf(implicitParameters, name) >= 0) {
                         continue;
                     }
-                    // the compiler's own hidden locals (a flip-flop's state) are no Ruby variables
+                    // compiler-generated locals such as a flip-flop's state
                     if (name.Length > 0 && name[0] == '#') {
                         continue;
                     }
@@ -532,6 +550,11 @@ namespace IronRuby.Runtime {
 
         public RubyModule/*!*/ GetInnerMostModuleForClassVariableLookup() {
             return GetInnerMostModule(true, RubyContext.ObjectClass);
+        }
+
+        /// <summary>Null when no class or module body encloses the scope, i.e. at the top level.</summary>
+        internal RubyModule GetInnerMostModuleForClassVariableAccess() {
+            return GetInnerMostModule(true, null);
         }
         
         private RubyModule/*!*/ GetInnerMostModule(bool skipSingletons, RubyModule/*!*/ fallbackModule) {
@@ -1145,8 +1168,14 @@ var closureScope = scope as RubyClosureScope;
         }
     }
 
-    public sealed class RubyBlockScope : RubyScope {
+    public sealed class RubyBlockScope : RubyClosureScope {
         private readonly BlockParam/*!*/ _blockFlowControl;
+
+        // The block a thread runs keeps its own $~ and $_, as MRI's thread root frame does; any
+        // other block shares them with the method it is in.
+        protected override bool IsClosureScope {
+            get { return _blockFlowControl.IsThreadRoot; }
+        }
 
         public override ScopeKind Kind { 
             get {
@@ -1233,6 +1262,9 @@ var closureScope = scope as RubyClosureScope;
         // The main script's top level, whose frame is "<main>"; a required file's is "<top (required)>".
         // A hosted scope counts as main.
         internal bool IsMain { get; set; } = true;
+
+        // the thread running the top-level code while it is active (see RubyOps.InitializeScope)
+        internal int ActiveThreadId { get; set; }
 
         private readonly RubyGlobalScope/*!*/ _globalScope;
         private readonly RubyContext/*!*/ _context;

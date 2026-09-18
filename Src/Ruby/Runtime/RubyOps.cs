@@ -110,6 +110,14 @@ namespace IronRuby.Runtime {
                 scope.SetLocals(locals, variableNames ?? ArrayUtils.EmptyStrings);
             }
             scope.InterpretedFrame = interpretedFrame;
+
+            // While a file's top level runs, a proc created in it can return from it, as MRI's
+            // `proc { return }.call` at the top of a file does (see IsTopLevelReturn).
+            var topLevel = scope as RubyTopLevelScope;
+            if (topLevel != null) {
+                topLevel._activeFlowControlScope = topLevel;
+                topLevel.ActiveThreadId = Environment.CurrentManagedThreadId;
+            }
         }
         
         [Emitted]
@@ -395,6 +403,39 @@ namespace IronRuby.Runtime {
         /// the block a method yields to. A plain block does not.
         /// </summary>
         public static void RequireLambdaArity(Proc/*!*/ proc, int argCount) {
+            RequireLambdaArity(proc, argCount, null);
+        }
+
+        /// <summary>
+        /// <paramref name="lastArg"/> is the last of the <paramref name="argCount"/> arguments. A
+        /// block whose keywords were lowered onto positional parameters cannot tell a keyword hash
+        /// from a positional one by the count alone, so its declared signature decides: MRI counts
+        /// only the positional arguments against a lambda, and `|**nil|` refuses keywords in a
+        /// proc as well as in a lambda.
+        /// </summary>
+        public static void RequireLambdaArity(Proc/*!*/ proc, int argCount, object lastArg) {
+            var signature = proc.Dispatcher.ParameterSignature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+                var keywords = argCount > 0 ? lastArg as Hash : null;
+                if (keywords != null && !keywords.IsKeywordArguments) {
+                    keywords = null;
+                }
+                if (keywords != null && keywords.Count > 0 && signature.RefusesKeywords) {
+                    throw RubyExceptions.CreateArgumentError("no keywords accepted");
+                }
+                if (proc.Kind != ProcKind.Lambda) {
+                    return;
+                }
+                int positional = argCount - (keywords != null ? 1 : 0);
+                int min = signature.MinPositionalCount, max = signature.MaxPositionalCount;
+                if (positional < min || (max >= 0 && positional > max)) {
+                    var inv = System.Globalization.CultureInfo.InvariantCulture;
+                    throw (min == max) ? MakeWrongNumberOfArgumentsError(positional, min)
+                        : MakeWrongNumberOfArgumentsErrorN(positional, min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv)));
+                }
+                return;
+            }
+
             if (proc.Kind != ProcKind.Lambda) {
                 return;
             }
@@ -418,7 +459,7 @@ namespace IronRuby.Runtime {
         public static object Yield1(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, 1);
+            RequireLambdaArity(proc, 1, arg1);
             try {
                 // a lambda takes the single argument as it is: no auto-splatting
                 result = proc.Kind == ProcKind.Lambda
@@ -448,7 +489,7 @@ namespace IronRuby.Runtime {
         public static object Yield2(object arg1, object arg2, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, 2);
+            RequireLambdaArity(proc, 2, arg2);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1, arg2);
             } catch (EvalUnwinder evalUnwinder) {
@@ -462,7 +503,7 @@ namespace IronRuby.Runtime {
         public static object Yield3(object arg1, object arg2, object arg3, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, 3);
+            RequireLambdaArity(proc, 3, arg3);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1, arg2, arg3);
             } catch (EvalUnwinder evalUnwinder) {
@@ -476,7 +517,7 @@ namespace IronRuby.Runtime {
         public static object Yield4(object arg1, object arg2, object arg3, object arg4, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, 4);
+            RequireLambdaArity(proc, 4, arg4);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1, arg2, arg3, arg4);
             } catch (EvalUnwinder evalUnwinder) {
@@ -492,7 +533,7 @@ namespace IronRuby.Runtime {
 
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, args.Length);
+            RequireLambdaArity(proc, args.Length, args[args.Length - 1]);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, args);
             } catch (EvalUnwinder evalUnwinder) {
@@ -517,6 +558,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat0(IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 0 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : null);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -530,6 +572,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat1(object arg1, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 1 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg1);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, arg1, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -543,6 +586,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat2(object arg1, object arg2, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 2 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg2);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, arg1, arg2, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -556,6 +600,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat3(object arg1, object arg2, object arg3, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 3 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg3);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, arg1, arg2, arg3, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -569,6 +614,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat4(object arg1, object arg2, object arg3, object arg4, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 4 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg4);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, arg1, arg2, arg3, arg4, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -582,6 +628,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplatN(object[]/*!*/ args, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, args.Length + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : args[args.Length - 1]);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, args, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -595,6 +642,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplatNRhs(object[]/*!*/ args, IList/*!*/ splattee, object rhs, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, args.Length + splattee.Count + 1, rhs);
             try {
                 result = proc.Dispatcher.InvokeSplatRhs(blockParam, self, procArg, args, splattee, rhs);
             } catch (EvalUnwinder evalUnwinder) {
@@ -672,6 +720,10 @@ namespace IronRuby.Runtime {
             }
             
             RubyMethodInfo instanceMethod = null, singletonMethod = null;
+
+            if (body.Ast.UsesBlock) {
+                scope.RubyContext.NoteMethodUsingBlock(body.Name);
+            }
 
             if (instanceOwner != null) {
                 SetMethod(scope.RubyContext, instanceMethod =
@@ -775,11 +827,13 @@ namespace IronRuby.Runtime {
         /// </summary>
         private static void CheckConstantVisibility(RubyModule/*!*/ owner, string/*!*/ name) {
             bool isPrivate;
+            RubyModule declaringOwner;
             using (owner.Context.ClassHierarchyLocker()) {
                 isPrivate = owner.IsPrivateConstantInAncestors(name);
+                declaringOwner = isPrivate ? owner.GetConstantOwnerNoLock(name) : null;
             }
             if (isPrivate) {
-                RubyContext.SetPrivateConstantReference(owner);
+                RubyContext.SetPrivateConstantReference(declaringOwner ?? owner);
                 owner.Context.ResolveMissingConstant(owner, name);
             }
         }
@@ -793,7 +847,7 @@ namespace IronRuby.Runtime {
             if (owner.TryGetConstant(scope.GlobalScope, name, out existing)) {
                 RubyModule module = existing.Value as RubyModule;
                 if (module == null || module.IsClass) {
-                    throw RubyExceptions.CreateTypeError(String.Format("{0} is not a module", name));
+                    throw RubyExceptions.CreateTypeError(DescribePreviousDefinition(owner, name, "{0} is not a module"));
                 }
                 return module;
             } else {
@@ -811,7 +865,15 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static RubyClass/*!*/ DefineSingletonClass(RubyScope/*!*/ scope, object obj) {
             RubyUtils.RequireDefinableSingleton(obj);
-            return scope.RubyContext.GetOrCreateSingletonClass(obj);
+            var result = scope.RubyContext.GetOrCreateSingletonClass(obj);
+
+            // MRI's rb_singleton_class: a class's singleton class, once exposed, gets a singleton of its
+            // own, which descends from the superclass's - so D.singleton_class responds to methods
+            // defined in `class << self; class << self` of D's superclass.
+            if (obj is RubyClass) {
+                result.GetOrCreateSingletonClass();
+            }
+            return result;
         }
 
         [Emitted] 
@@ -840,10 +902,10 @@ namespace IronRuby.Runtime {
             Assert.NotNull(owner);
             RubyClass superClass = ToSuperClass(owner.Context, superClassObject);
 
+            // only the owner's own constants: a class of that name in a module Object includes is
+            // not reopened, a new one is defined (MRI's rb_const_defined_at)
             ConstantStorage existing;
-            if (owner.IsObjectClass
-                ? owner.TryResolveConstant(scope.GlobalScope, name, out existing)
-                : owner.TryGetConstant(scope.GlobalScope, name, out existing)) {
+            if (owner.TryGetConstant(scope.GlobalScope, name, out existing)) {
 
                 RubyClass cls = existing.Value as RubyClass;
                 if (cls == null || !cls.IsClass) {
@@ -930,11 +992,21 @@ namespace IronRuby.Runtime {
 
                 ConstantStorage storage;
                 RubyModule owner = null;
+                bool isPrivateGlobal = false;
                 if (!isGlobal) {
                     missingConstantOwner = scope.TryResolveConstantNoLock(scope.GlobalScope, name, out storage, out owner);
                 } else if (context.ObjectClass.TryResolveConstantNoLock(scope.GlobalScope, name, out storage)) {
-                    missingConstantOwner = null;
-                    owner = context.ObjectClass;
+                    if (context.ObjectClass.IsPrivateConstant(name)) {
+                        // `::NAME' is a qualified reference, which a private constant of Object is out of reach of
+                        RubyContext.SetPrivateConstantReference(context.ObjectClass);
+                        missingConstantOwner = context.ObjectClass;
+                        storage = default(ConstantStorage);
+                        // a cached miss would lose the private-constant message
+                        isPrivateGlobal = true;
+                    } else {
+                        missingConstantOwner = null;
+                        owner = context.ObjectClass;
+                    }
                 } else {
                     missingConstantOwner = context.ObjectClass;
                 }
@@ -953,7 +1025,7 @@ namespace IronRuby.Runtime {
                     newCacheValue = ConstantSiteCache.WeakMissingConstant;
                 }
 
-                if (!context.IsAutoloadInProgress && !deprecated) {
+                if (!context.IsAutoloadInProgress && !deprecated && !isPrivateGlobal && (isGlobal || !IsLexicallyInObjectSingleton(scope))) {
                     cache.Update(newCacheValue, newVersion);
                 }
             }
@@ -983,7 +1055,7 @@ namespace IronRuby.Runtime {
                 object result = ResolveQualifiedConstant(scope, qualifiedName, topModule, true, out storage, out anyMissing);
 
                 // cache result only if no constant was missing:
-                if (!anyMissing && !context.IsAutoloadInProgress) {
+                if (!anyMissing && !context.IsAutoloadInProgress && (isGlobal || !IsLexicallyInObjectSingleton(scope))) {
                     Debug.Assert(result == storage.Value);
                     cache.Update(storage.WeakValue ?? result, newVersion);
                 }
@@ -1034,6 +1106,22 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// Code in `class << obj' runs once per obj when it sits in a loop or a method, and every run
+        /// has its own singleton class - and its own classes nested in it - to find constants in,
+        /// while a constant site's cache is keyed only on the constant version. Such lookups are not
+        /// cached. `class << self' in a class or module body, the common form, keeps the cache.
+        /// </summary>
+        private static bool IsLexicallyInObjectSingleton(RubyScope/*!*/ scope) {
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                var cls = s.Module as RubyClass;
+                if (cls != null && cls.IsSingletonClass && !(cls.SingletonClassOf is RubyModule)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
         /// defined? A
         /// </summary>
         [Emitted]
@@ -1044,7 +1132,7 @@ namespace IronRuby.Runtime {
                 
                 ConstantStorage storage;
                 bool exists = scope.TryResolveConstantNoLock(null, name, out storage) == null;
-                if (!context.IsAutoloadInProgress) {
+                if (!context.IsAutoloadInProgress && !IsLexicallyInObjectSingleton(scope)) {
                     cache.Update(exists, newVersion);
                 }
                 return exists;
@@ -1061,7 +1149,8 @@ namespace IronRuby.Runtime {
                 int newVersion = context.ConstantAccessVersion;
 
                 ConstantStorage storage;
-                bool exists = context.ObjectClass.TryResolveConstantNoLock(null, name, out storage);
+                bool exists = context.ObjectClass.TryResolveConstantNoLock(null, name, out storage) &&
+                    !context.ObjectClass.IsPrivateConstant(name);
                 if (!context.IsAutoloadInProgress) {
                     cache.Update(exists, newVersion);
                 }
@@ -1097,7 +1186,7 @@ namespace IronRuby.Runtime {
                 bool exists = IsVisibleConstantDefined(owner, context, qualifiedName[qualifiedName.Length - 1], out storage);
                 
                 // cache result only if no constant was missing:
-                if (!anyMissing && !context.IsAutoloadInProgress) {
+                if (!anyMissing && !context.IsAutoloadInProgress && (isGlobal || !IsLexicallyInObjectSingleton(scope))) {
                     cache.Update(exists, newVersion);
                 }
 
@@ -1264,7 +1353,8 @@ namespace IronRuby.Runtime {
             }
 
             if (owner.IsPrivateConstantInAncestors(name)) {
-                RubyContext.SetPrivateConstantReference(owner);
+                // the NameError names the module that made the constant private, as MRI's does
+                RubyContext.SetPrivateConstantReference(owner.GetConstantOwnerNoLock(name) ?? owner);
                 storage = default(ConstantStorage);
                 return false;
             }
@@ -1747,6 +1837,20 @@ namespace IronRuby.Runtime {
             return value;
         }
 
+        /// <summary>
+        /// A plain read of a global, which in verbose mode warns when the global was never assigned
+        /// (MRI's rb_gvar_undef_getter). `$x ||= v' reads without the warning.
+        /// </summary>
+        [Emitted]
+        public static object ReadGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
+            object value;
+            var context = scope.RubyContext;
+            if (!context.TryGetGlobalVariable(scope, name, out value) && context.Verbose is bool && (bool)context.Verbose) {
+                context.ReportWarning(String.Format("global variable '${0}' not initialized", name), true);
+            }
+            return value;
+        }
+
         [Emitted]
         public static bool IsDefinedGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             GlobalVariable variable;
@@ -1777,6 +1881,29 @@ namespace IronRuby.Runtime {
             } else {
                 return context.Operations.TryGetMember(scope, name, out value)
                     || (mangled = RubyUtils.TryMangleName(name)) != null && context.Operations.TryGetMember(scope, mangled, out value);
+            }
+        }
+
+        /// <summary>
+        /// Takes back what <see cref="ScopeSetMember"/> published, if the scope still holds that
+        /// very object under the name.
+        /// </summary>
+        internal static void ScopeRemoveMember(Scope/*!*/ scope, string/*!*/ name, object value) {
+            var scopeStorage = ((object)scope.Storage) as ScopeStorage;
+            if (scopeStorage != null) {
+                object current;
+                if (scopeStorage.TryGetValue(name, false, out current) && ReferenceEquals(current, value)) {
+                    scopeStorage.DeleteValue(name, false);
+                }
+                return;
+            }
+
+            var stringDict = ((object)scope.Storage) as StringDictionaryExpando;
+            if (stringDict != null) {
+                object current;
+                if (stringDict.Dictionary.TryGetValue(name, out current) && ReferenceEquals(current, value)) {
+                    stringDict.Dictionary.Remove(name);
+                }
             }
         }
 
@@ -2008,7 +2135,14 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringM(MutableString str1, RubyEncoding/*!*/ encoding) {
-            return MutableString.CreateInternal(str1, encoding);
+            var result = MutableString.CreateInternal(str1, encoding);
+            // MRI's "#{x}" is "" + x.to_s: an empty literal in the source encoding, which an
+            // ASCII-only x leaves as it is - unless that is US-ASCII, which gives way to any other
+            if (str1 != null && result.Encoding != encoding && encoding != RubyEncoding.Ascii && encoding.IsAsciiIdentity &&
+                result.IsAscii()) {
+                result.ForceEncoding(encoding);
+            }
+            return result;
         }
 
         #region frozen string literals
@@ -2223,6 +2357,57 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool TraceTopLevelCodeFrame(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
+            return false;
+        }
+
+        /// <summary>
+        /// MRI 3.4+ (vm_insnhelper.c warn_unused_block): a block passed from Ruby code to a method
+        /// that never uses it may be ignored. Reported once per method, and - unless
+        /// Warning[:strict_unused_block] is on - not at all for a name some method that does use a
+        /// block also has, since the call may well have meant that one.
+        /// </summary>
+        private static readonly System.Text.RegularExpressions.Regex _ironRubyLibraryFile =
+            new System.Text.RegularExpressions.Regex(@"[/\\](StdLib|Lib)[/\\]ironruby[/\\]");
+
+        [Emitted]
+        public static void WarnUnusedBlock(Proc block, RubyMethodInfo/*!*/ method) {
+            if (block == null || method.Body.UnusedBlockReported) {
+                return;
+            }
+
+            var context = method.Context;
+            bool strict = context.IsWarningEnabled("strict_unused_block");
+            if (!strict && context.IsMethodNameUsingBlock(method.DefinitionName)) {
+                return;
+            }
+
+            method.Body.UnusedBlockReported = true;
+            string file = method.Document != null ? method.Document.FileName : null;
+            if (file != null && _ironRubyLibraryFile.IsMatch(file)) {
+                // IronRuby's own Ruby implementations of what MRI writes in C, which never warns
+                return;
+            }
+
+            if (context.Verbose is bool && ((bool)context.Verbose || strict)) {
+                string label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(method.DefinitionName, method.DeclaringModule);
+                context.ReportWarning(file != null
+                    ? String.Format("the block passed to '{0}' defined at {1}:{2} may be ignored", label, file, method.SourceSpan.Start.Line)
+                    : String.Format("the block may be ignored because '{0}' does not use a block", label)
+                );
+            }
+        }
+
+        /// <summary>
+        /// The exception filter around a file's top-level code: a return from a block at the top
+        /// level unwinds to here and ends the file; anything else gets the frame traced and passes.
+        /// </summary>
+        [Emitted]
+        public static bool IsTopLevelReturn(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            var unwinder = exception as MethodUnwinder;
+            if (unwinder != null && unwinder.TargetFrame == scope) {
+                return true;
+            }
             RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
             return false;
         }
@@ -2710,6 +2895,11 @@ namespace IronRuby.Runtime {
         [Emitted] // ProtocolConversionAction
         public static IDictionary<object, object> TryToHashValidator(string/*!*/ className, object obj) {
             return (obj == null) ? null : ToHashValidator(className, obj);
+        }
+
+        [Emitted] // ImplicitTrySplatAction
+        public static object TrySplatToAryValidator(string/*!*/ className, object splattee, object obj) {
+            return (obj == null) ? splattee : ToArrayValidator(className, obj);
         }
 
         [Emitted] // ProtocolConversionAction
@@ -3223,10 +3413,22 @@ namespace IronRuby.Runtime {
 
         #region Class Variables
 
+        /// <summary>
+        /// The module whose class variables @@x names: the innermost class or module body. MRI
+        /// refuses the access where there is none - the top level, a method or block defined there.
+        /// </summary>
+        private static RubyModule/*!*/ GetClassVariableOwner(RubyScope/*!*/ scope) {
+            RubyModule owner = scope.GetInnerMostModuleForClassVariableAccess();
+            if (owner == null) {
+                throw new RuntimeError("class variable access from toplevel");
+            }
+            return owner;
+        }
+
         [Emitted]
         public static object GetClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             // owner is the first module in scope:
-            RubyModule owner = scope.GetInnerMostModuleForClassVariableLookup();
+            RubyModule owner = GetClassVariableOwner(scope);
             return GetClassVariableInternal(owner, name);
         }
 
@@ -3244,7 +3446,7 @@ namespace IronRuby.Runtime {
         public static object TryGetClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             object value;
             // owner is the first module in scope:
-            scope.GetInnerMostModuleForClassVariableLookup().TryResolveClassVariable(name, out value);
+            GetClassVariableOwner(scope).TryResolveClassVariable(name, out value);
             return value;
         }
 
@@ -3258,7 +3460,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static object SetClassVariable(object value, RubyScope/*!*/ scope, string/*!*/ name) {
-            return SetClassVariableInternal(scope.GetInnerMostModuleForClassVariableLookup(), name, value);
+            return SetClassVariableInternal(GetClassVariableOwner(scope), name, value);
         }
 
         private static object SetClassVariableInternal(RubyModule/*!*/ lexicalOwner, string/*!*/ name, object value) {

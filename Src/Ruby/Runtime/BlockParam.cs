@@ -102,6 +102,12 @@ namespace IronRuby.Runtime {
         // Used only for BlockParams that are passed to library method calls.
         // Friend: RubyOps
         internal readonly bool _isLibProcConverter;
+
+        // the thread the call taking the block runs on; a break cannot reach that call from another
+        private readonly int _threadId;
+
+        // the block is the body of a Thread (see RubyBlockScope.IsClosureScope)
+        public bool IsThreadRoot { get; set; }
         
         // -- out --
         private BlockReturnReason _returnReason;
@@ -149,6 +155,7 @@ namespace IronRuby.Runtime {
 
         // friend: RubyOps
         internal BlockParam(Proc/*!*/ proc, BlockCallerKind callerKind, bool isLibProcConverter) {
+            _threadId = Environment.CurrentManagedThreadId;
             _callerKind = callerKind;
             _proc = proc;
             _isLibProcConverter = isLibProcConverter;
@@ -207,13 +214,15 @@ namespace IronRuby.Runtime {
         /// Breaks from the current block.
         /// </summary>
         public object Break(object returnValue) {
-            // break in a lambda returns from the lambda, like return does (see RubyOps.BlockReturn):
-            if (CallerKind == BlockCallerKind.Call && _proc.Kind == ProcKind.Lambda) {
+            // break in a lambda returns from the lambda, like return does (see RubyOps.BlockReturn),
+            // also when the lambda was passed as a block and yielded to:
+            if (_proc.Kind == ProcKind.Lambda) {
                 return returnValue;
             }
 
-            // proc whose home frame is gone (e.g. Proc#call on an orphaned block):
-            if (_proc.Converter == null) {
+            // proc whose home frame is gone (e.g. Proc#call on an orphaned block), or one running
+            // on another thread than the call it would break out of (Thread.new { break }):
+            if (_proc.Converter == null || _threadId != Environment.CurrentManagedThreadId) {
                 throw RubyExceptions.CreateLocalJumpError("break from proc-closure");
             }
 

@@ -362,6 +362,14 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IsDefinedUnqualifiedConstant;
         public static MethodInfo/*!*/ IsFalse { get { return _IsFalse ?? (_IsFalse = CallInstruction.CacheFunc<System.Object, System.Boolean>(RubyOps.IsFalse)); } }
         private static MethodInfo _IsFalse;
+        public static MethodInfo/*!*/ WarnUnusedBlock { get { return _WarnUnusedBlock ?? (_WarnUnusedBlock = CallInstruction.CacheAction<IronRuby.Builtins.Proc, IronRuby.Runtime.Calls.RubyMethodInfo>(RubyOps.WarnUnusedBlock)); } }
+        private static MethodInfo _WarnUnusedBlock;
+        public static MethodInfo/*!*/ ReadGlobalVariable { get { return _ReadGlobalVariable ?? (_ReadGlobalVariable = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.ReadGlobalVariable)); } }
+        private static MethodInfo _ReadGlobalVariable;
+        public static MethodInfo/*!*/ TrySplatToAryValidator { get { return _TrySplatToAryValidator ?? (_TrySplatToAryValidator = CallInstruction.CacheFunc<System.String, System.Object, System.Object, System.Object>(RubyOps.TrySplatToAryValidator)); } }
+        private static MethodInfo _TrySplatToAryValidator;
+        public static MethodInfo/*!*/ IsTopLevelReturn { get { return _IsTopLevelReturn ?? (_IsTopLevelReturn = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.IsTopLevelReturn)); } }
+        private static MethodInfo _IsTopLevelReturn;
         public static MethodInfo/*!*/ IsMethodUnwinderTargetFrame { get { return _IsMethodUnwinderTargetFrame ?? (_IsMethodUnwinderTargetFrame = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.IsMethodUnwinderTargetFrame)); } }
         private static MethodInfo _IsMethodUnwinderTargetFrame;
         public static MethodInfo/*!*/ IsObjectFrozen { get { return _IsObjectFrozen ?? (_IsObjectFrozen = CallInstruction.CacheFunc<IronRuby.Runtime.RubyInstanceData, System.Boolean>(RubyOps.IsObjectFrozen)); } }

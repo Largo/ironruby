@@ -63,7 +63,7 @@ namespace IronRuby.Builtins {
                     String.Format("implicit parameter '{0}' is not defined for {1}", parameterName, context.Inspect(self))
                 );
             }
-            return self.LocalScope.ResolveLocalVariable(parameterName);
+            return self.FrameScope.GetImplicitParameterValue(parameterName);
         }
 
         private static bool IsImplicitParameter(Binding/*!*/ self, string/*!*/ name) {
