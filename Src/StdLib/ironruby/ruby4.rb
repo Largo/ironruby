@@ -3495,10 +3495,10 @@ class String
     starts = simple ? nil : __ir_char_starts__
 
     offset += size if offset < 0
-    return nil if offset < 0
+    return [nil, nil] if offset < 0
     if offset > size
       # #index gives up past the end; #rindex clamps to it.
-      return nil unless reverse
+      return [nil, nil] unless reverse
       offset = size
     end
 
@@ -3510,8 +3510,10 @@ class String
     end
 
     found = reverse ? rindex(needle, char_offset) : index(needle, char_offset)
-    return nil if found.nil?
-    simple ? found : starts[found]
+    # The match goes back to the C# #byteindex/#byterindex, which store it as
+    # the caller's $~.
+    return [nil, $~] if found.nil?
+    [simple ? found : starts[found], $~]
   end
   private :__ir_byte_search__
 
@@ -3540,20 +3542,30 @@ class String
   end
   private :__ir_byte_offset__
 
-  def byteindex(needle, offset = 0)
+  # #byteindex, #byterindex, #partition and #rpartition are C# methods (they
+  # set the caller's $~) that forward their arguments here and receive
+  # [result, match] back.
+  def __ir_byteindex__(args)
+    if args.size < 1 || args.size > 2
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)")
+    end
+    needle, offset = args
+    offset = 0 if args.size < 2
     __ir_byte_search__(false, __ir_byte_needle__(needle), __ir_byte_offset__(offset))
-  end unless method_defined?(:byteindex)
+  end
+  private :__ir_byteindex__
 
   # MRI's default offset is the end of the string, not -1: "hello".byterindex("")
   # answers 5. An explicitly passed nil is still a TypeError.
-  def byterindex(needle, *rest)
-    if rest.size > 1
-      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{rest.size + 1}, expected 1..2)")
+  def __ir_byterindex__(args)
+    if args.size < 1 || args.size > 2
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 1..2)")
     end
-    needle = __ir_byte_needle__(needle)
-    offset = rest.empty? ? bytesize : __ir_byte_offset__(rest[0])
+    needle = __ir_byte_needle__(args[0])
+    offset = args.size < 2 ? bytesize : __ir_byte_offset__(args[1])
     __ir_byte_search__(true, needle, offset)
-  end unless method_defined?(:byterindex)
+  end
+  private :__ir_byterindex__
 
   # Replaces a byte range in place. Every index here is a byte index, so the
   # work is done on a binary copy and tagged back afterwards, like bytesplice.
@@ -3711,41 +3723,37 @@ class String
   end
   private :__ir_separator__
 
-  def partition(pattern)
+  def __ir_partition__(pattern)
     pattern = __ir_separator__(pattern)
     empty = self[0, 0]
     if pattern.is_a?(::Regexp)
       m = pattern.match(self)
-      return [self[0..-1], empty, empty] unless m
-      [m.pre_match, m[0], m.post_match]
+      return [[self[0..-1], empty, empty], nil] unless m
+      [[m.pre_match, m[0], m.post_match], m]
     else
       i = index(pattern)
-      return [self[0..-1], empty, empty] unless i
-      [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
+      return [[self[0..-1], empty, empty], nil] unless i
+      [[self[0, i], pattern.dup, self[(i + pattern.length)..-1]], nil]
     end
-  end unless method_defined?(:partition)
+  end
+  private :__ir_partition__
 
-  def rpartition(pattern)
+  def __ir_rpartition__(pattern)
     pattern = __ir_separator__(pattern)
     empty = self[0, 0]
     if pattern.is_a?(::Regexp)
-      start = nil
-      pos = 0
-      # Regexp#match takes no start offset here, so walk forward keeping the
-      # last match that begins at or after each position.
-      while pos <= length && (i = index(pattern, pos))
-        start = i
-        pos = i + 1
-      end
-      return [empty, empty, self[0..-1]] unless start
-      m = pattern.match(self[start..-1])
-      [self[0, start], m[0], self[(start + m[0].length)..-1]]
+      # MRI searches backwards from the end, like #rindex.
+      start = rindex(pattern)
+      m = $~
+      return [[empty, empty, self[0..-1]], nil] unless start
+      [[self[0, start], m[0], m.post_match], m]
     else
       i = rindex(pattern)
-      return [empty, empty, self[0..-1]] unless i
-      [self[0, i], pattern.dup, self[(i + pattern.length)..-1]]
+      return [[empty, empty, self[0..-1]], nil] unless i
+      [[self[0, i], pattern.dup, self[(i + pattern.length)..-1]], nil]
     end
-  end unless method_defined?(:rpartition)
+  end
+  private :__ir_rpartition__
 
   def prepend(*others)
     others = others.map do |o|
@@ -3921,6 +3929,7 @@ class String
     # String subclass over to the result.
     return __ir_plain_copy__ if valid_encoding?
     default = encoding == ::Encoding::UTF_8 ? "�" : "?"
+    replacement = __ir_scrub_replacement__(replacement) unless replacement.nil?
     if replacement && !replacement.valid_encoding?
       ::Kernel.raise(::ArgumentError, "replacement must be valid byte sequence '#{replacement.inspect}'")
     end
@@ -3932,7 +3941,7 @@ class String
     pending = nil
     flush = lambda do
       next if pending.nil?
-      out << (block ? block.call(pending).to_s : (replacement || default))
+      out << (block ? __ir_scrub_replacement__(block.call(pending)) : (replacement || default))
       pending = nil
     end
     each_char do |ch|
@@ -3968,7 +3977,17 @@ class String
   end
   private :__ir_starts_character__
 
+  # Like #to_str conversion of an argument: MRI's StringValue, no #to_s.
+  def __ir_scrub_replacement__(replacement)
+    return replacement if replacement.is_a?(::String)
+    ::String.try_convert(replacement) ||
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{__ir_type_name__(replacement)} into String")
+  end
+  private :__ir_scrub_replacement__
+
+  # A valid receiver is left alone - MRI does not even check it is frozen.
   def scrub!(replacement = nil, &block)
+    return self if valid_encoding?
     replace(scrub(replacement, &block))
   end unless method_defined?(:scrub!)
 
@@ -7797,7 +7816,6 @@ class String
   # Ruby 2.3: -"str" answers a frozen *deduplicated* string, so that -"x" and
   # -"x" are the same object; +"str" answers a mutable one, which is the
   # receiver itself when it is not frozen.
-  FSTRING_TABLE__ = {}
 
   def -@
     # A subclass instance or a string carrying instance variables is not
@@ -7805,12 +7823,7 @@ class String
     unless instance_of?(::String) && instance_variables.empty?
       return frozen? ? self : dup.freeze
     end
-    table = ::String::FSTRING_TABLE__
-    existing = table[self]
-    return existing if existing
-    interned = frozen? ? self : dup.freeze
-    table[interned] = interned
-    interned
+    __ir_fstring__
   end unless method_defined?(:-@)
 
   alias_method :dedup, :-@

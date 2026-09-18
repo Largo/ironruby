@@ -730,9 +730,10 @@ namespace IronRuby.Builtins {
 
             Match match;
             if (_hasGAnchor) {
-                // This only makes some \G anchors work. It seems that CLR doesn't support \G if preceeded by some characters.
-                // For example, this works in MRI but doesn't in CLR: "abcabczzz".rindex(/.+\G.+/, 3)
-                match = regex.Match(str, start);
+                match = LastMatchWithGAnchor(regex, str, start);
+                if (match == null) {
+                    return null;
+                }
             } else {
                 match = LastMatch(regex, str, start);
                 if (match == null) {
@@ -740,6 +741,39 @@ namespace IronRuby.Builtins {
                 }
             }
             return MatchData.Create(match, input, true, str, kcode, 0, this);
+        }
+
+        /// <summary>
+        /// A backward search in MRI tries each position from "start" down to 0, and \G stands for "start"
+        /// itself rather than for the position being tried. CLR's \G is always the position the match
+        /// starts at, so \G becomes a lookbehind for exactly "start" characters and a candidate position
+        /// only counts when the leftmost match from it starts right there.
+        /// </summary>
+        private static Match LastMatchWithGAnchor(Regex/*!*/ regex, string/*!*/ input, int start) {
+            string pattern = regex.ToString();
+            var sb = new StringBuilder();
+            for (int i = 0; i < pattern.Length; i++) {
+                char c = pattern[i];
+                if (c == '\\' && i + 1 < pattern.Length) {
+                    if (pattern[i + 1] == 'G') {
+                        sb.Append("(?<=\\A[\\s\\S]{").Append(start).Append("})");
+                    } else {
+                        sb.Append(c).Append(pattern[i + 1]);
+                    }
+                    i++;
+                } else {
+                    sb.Append(c);
+                }
+            }
+
+            var rewritten = new Regex(sb.ToString(), regex.Options, regex.MatchTimeout);
+            for (int p = start; p >= 0; p--) {
+                Match match = rewritten.Match(input, p);
+                if (match.Success && match.Index == p) {
+                    return match;
+                }
+            }
+            return null;
         }
 
         /// <summary>

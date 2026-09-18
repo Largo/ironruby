@@ -86,17 +86,29 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
-            // Under --debug-frozen-string-literal every literal remembers where it was written,
-            // so that a FrozenError or a chilled-mutation warning can name the place.
-            string site = gen.Context.RubyOptions.DebugFrozenStringLiteral
-                ? gen.SourcePath + ":" + Location.Start.Line.ToString(CultureInfo.InvariantCulture)
-                : null;
-
+            string site = GetDebugSite(gen);
             switch (_mutability) {
                 case StringLiteralMutability.Frozen: return TransformFrozen(_value, _encoding, site);
                 case StringLiteralMutability.Chilled: return TransformChilled(_value, _encoding, site);
                 default: return Transform(_value, _encoding);
             }
+        }
+
+        // Under --debug-frozen-string-literal every literal remembers where it was written,
+        // so that a FrozenError or a chilled-mutation warning can name the place.
+        private string GetDebugSite(AstGenerator/*!*/ gen) {
+            return gen.Context.RubyOptions.DebugFrozenStringLiteral
+                ? gen.SourcePath + ":" + Location.Start.Line.ToString(CultureInfo.InvariantCulture)
+                : null;
+        }
+
+        /// <summary>
+        /// `"literal".freeze': MRI compiles this to the deduplicated frozen string (opt_str_freeze),
+        /// whatever the file says about frozen_string_literal, so every evaluation answers the same
+        /// object - the one -"literal" answers too.
+        /// </summary>
+        internal MSA.Expression/*!*/ TransformReadFrozen(AstGenerator/*!*/ gen) {
+            return TransformFrozen(_value, _encoding, GetDebugSite(gen));
         }
 
         /// <summary>

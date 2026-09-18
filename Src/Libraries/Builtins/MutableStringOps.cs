@@ -1320,6 +1320,14 @@ namespace IronRuby.Builtins {
             return (self.IsFrozen || self.IsChilled) ? self.Clone() : self;
         }
 
+        // String#-@ (ruby4.rb) interns a bare String here: MRI's fstring table is the one that
+        // frozen string literals and "literal".freeze come from, so -str can answer the very
+        // object a literal evaluates to.
+        [RubyMethod("__ir_fstring__", RubyMethodAttributes.PrivateInstance)]
+        public static MutableString/*!*/ InternFrozen(MutableString/*!*/ self) {
+            return RubyOps.InternFrozenString(self.IsFrozen ? self : self.Clone());
+        }
+
         /// <summary>
         /// #casecmp folds a-z/A-Z and nothing else - it is not the Unicode comparison #casecmp?
         /// is. Confirmed against CRuby 4.0.6: "ä".casecmp("Ä") is 1, and "ss".casecmp("ß") is -1.
@@ -1722,9 +1730,11 @@ namespace IronRuby.Builtins {
         [RubyMethod("bytes")]
         [RubyMethod("each_byte")]
         public static object EachByte([NotNull]BlockParam/*!*/ block, MutableString/*!*/ self) {
-            foreach (byte b in self.GetBytes()) {
+            // MRI re-reads the length and the bytes on every step, so a block that changes the
+            // string sees the iteration carry on from the same index into the new content.
+            for (int i = 0; i < self.GetByteCount(); i++) {
                 object result;
-                if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject((int)b), out result)) {
+                if (block.Yield(ScriptingRuntimeHelpers.Int32ToObject((int)self.GetByte(i)), out result)) {
                     return result;
                 }
             }
@@ -2503,6 +2513,17 @@ namespace IronRuby.Builtins {
 
         #region sub, gsub
 
+        // MRI builds the result piece by piece, so only the part of the input that is copied has to be
+        // compatible with a replacement that already changed the result's encoding - an ASCII-only
+        // stretch of the input is fine even when elsewhere the input is not.
+        private static void AppendInputPiece(MutableString/*!*/ result, MutableString/*!*/ input, int start, int count) {
+            if (result.Encoding == input.Encoding) {
+                result.Append(input, start, count);
+            } else if (count > 0) {
+                result.Append(input.GetSlice(start, count));
+            }
+        }
+
         // returns true if block jumped
         // "result" will be null if there is no successful match
         private static bool BlockReplaceFirst(ConversionStorage<MutableString>/*!*/ tosConversion, 
@@ -2577,7 +2598,7 @@ namespace IronRuby.Builtins {
                 result.TaintBy(replacement);
 
                 // prematch:
-                result.Append(input, offset, match.Index - offset);
+                AppendInputPiece(result, input, offset, match.Index - offset);
 
                 // replacement (unlike ReplaceAll, don't interpolate special sequences like \1 in block return value):
                 result.Append(replacement);
@@ -2586,7 +2607,7 @@ namespace IronRuby.Builtins {
             }
 
             // post-last-match:
-            result.Append(input, offset, input.Length - offset);
+            AppendInputPiece(result, input, offset, input.Length - offset);
 
             blockResult = null;
             return false;
@@ -2634,12 +2655,12 @@ namespace IronRuby.Builtins {
                             AppendGroupByIndex(match, match.GroupCount - 1, result);
                         } else if (c == '`') {
                             // Replace with everything in the input string BEFORE the match
-                            result.Append(input, 0, match.Index);
+                            AppendInputPiece(result, input, 0, match.Index);
                         } else if (c == '\'') {
                             // Replace with everything in the input string AFTER the match
                             int start = match.Index + match.Length;
                             // TODO:
-                            result.Append(input, start, input.GetLength() - start);
+                            AppendInputPiece(result, input, start, input.GetLength() - start);
                         } else if (c == '+') {
                             // Replace last character in last successful match group
                             AppendLastCharOfLastMatchGroup(match, result);
@@ -2737,13 +2758,13 @@ namespace IronRuby.Builtins {
             MutableString result = input.CreateDerived().TaintBy(input);
             
             // prematch:
-            result.Append(input, 0, match.Index);
+            AppendInputPiece(result, input, 0, match.Index);
 
             AppendReplacementExpression(toS, hashDefault, input, match, result, replacement);
 
             // postmatch:
             int offset = match.Index + match.Length;
-            result.Append(input, offset, input.Length - offset);
+            AppendInputPiece(result, input, offset, input.Length - offset);
 
             return result;
         }
@@ -2762,12 +2783,12 @@ namespace IronRuby.Builtins {
 
             int offset = 0;
             foreach (MatchData match in matches) {
-                result.Append(input, offset, match.Index - offset);
+                AppendInputPiece(result, input, offset, match.Index - offset);
                 AppendReplacementExpression(toS, hashDefault, input, match, result, replacement);
                 offset = match.Index + match.Length;
             }
 
-            result.Append(input, offset, input.Length - offset);
+            AppendInputPiece(result, input, offset, input.Length - offset);
 
             matchScope.CurrentMatch = matches[matches.Count - 1];
             return result;
@@ -2873,9 +2894,9 @@ namespace IronRuby.Builtins {
 
             RequireNoVersionChange(self);
 
-            // replace content of self with content of the builder:
-            self.Replace(0, self.Length, builder);
-            return self.TaintBy(builder);
+            // replace content of self with content of the builder - and its encoding, which a
+            // replacement may have changed (MRI's rb_str_shared_replace):
+            return Replace(self, builder);
         }
 
         private static MutableString ReplaceInPlace(ConversionStorage<MutableString> toS, BinaryOpStorage hashDefault, 
@@ -2893,8 +2914,7 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            self.Replace(0, self.Length, builder);
-            return self.TaintBy(builder);
+            return Replace(self, builder);
         }
 
         [RubyMethod("sub!")]
@@ -3051,6 +3071,44 @@ namespace IronRuby.Builtins {
             MatchData match = regex.LastMatch(self, start);
             scope.GetInnerMostClosureScope().CurrentMatch = match;
             return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.Index) : null;
+        }
+
+        // #byteindex, #byterindex, #partition and #rpartition do their work in Ruby (ruby4.rb), but a
+        // Ruby method cannot set its caller's $~. The helper answers [result, match] and the match is
+        // stored here, in the caller's scope - only for a Regexp needle, as in MRI.
+        private static object CallMatchingHelper(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, MutableString/*!*/ self, string/*!*/ helper, object needle, object arg) {
+
+            var site = storage.GetCallSite(helper, new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            var pair = (IList)site.Target(site, self, arg);
+            if (needle is RubyRegex) {
+                scope.GetInnerMostClosureScope().CurrentMatch = pair[1] as MatchData;
+            }
+            return pair[0];
+        }
+
+        [RubyMethod("byteindex")]
+        public static object ByteIndex(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, MutableString/*!*/ self, params object[]/*!*/ args) {
+            return CallMatchingHelper(storage, scope, self, "__ir_byteindex__", args.Length > 0 ? args[0] : null, new RubyArray(args));
+        }
+
+        [RubyMethod("byterindex")]
+        public static object ByteLastIndex(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, MutableString/*!*/ self, params object[]/*!*/ args) {
+            return CallMatchingHelper(storage, scope, self, "__ir_byterindex__", args.Length > 0 ? args[0] : null, new RubyArray(args));
+        }
+
+        [RubyMethod("partition")]
+        public static object Partition(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, MutableString/*!*/ self, object pattern) {
+            return CallMatchingHelper(storage, scope, self, "__ir_partition__", pattern, pattern);
+        }
+
+        [RubyMethod("rpartition")]
+        public static object LastPartition(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, MutableString/*!*/ self, object pattern) {
+            return CallMatchingHelper(storage, scope, self, "__ir_rpartition__", pattern, pattern);
         }
 
         // Start in range ==> search range from the first character towards the end.
