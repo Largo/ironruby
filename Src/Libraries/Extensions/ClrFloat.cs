@@ -966,7 +966,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("<")]
         public static bool LessThan(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            return LessThan(self, Protocols.ConvertToDouble(context, other));
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && -c.Value < 0;
         }
 
         /// <summary>
@@ -1005,7 +1006,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("<=")]
         public static bool LessThanOrEqual(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            return LessThanOrEqual(self, Protocols.ConvertToDouble(context, other));
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && -c.Value <= 0;
         }
 
         /// <summary>
@@ -1044,7 +1046,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod(">")]
         public static bool GreaterThan(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            return GreaterThan(self, Protocols.ConvertToDouble(context, other));
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && -c.Value > 0;
         }
 
         /// <summary>
@@ -1083,7 +1086,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod(">=")]
         public static bool GreaterThanOrEqual(RubyContext/*!*/ context, double self, [NotNull]BigInteger/*!*/ other) {
-            return GreaterThanOrEqual(self, Protocols.ConvertToDouble(context, other));
+            int? c = ClrInteger.CompareToFloat(other, self);
+            return c.HasValue && -c.Value >= 0;
         }
 
         /// <summary>

@@ -668,7 +668,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("<")]
         public static bool LessThan(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
-            return ToFloat(context, self) < other;
+            int? c = CompareToFloat(self, other);
+            return c.HasValue && c.Value < 0;
         }
 
         [RubyMethod("<=")]
@@ -683,7 +684,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("<=")]
         public static bool LessThanOrEqual(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
-            return ToFloat(context, self) <= other;
+            int? c = CompareToFloat(self, other);
+            return c.HasValue && c.Value <= 0;
         }
 
         [RubyMethod(">")]
@@ -698,7 +700,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod(">")]
         public static bool GreaterThan(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
-            return ToFloat(context, self) > other;
+            int? c = CompareToFloat(self, other);
+            return c.HasValue && c.Value > 0;
         }
 
         [RubyMethod(">=")]
@@ -713,7 +716,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod(">=")]
         public static bool GreaterThanOrEqual(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
-            return ToFloat(context, self) >= other;
+            int? c = CompareToFloat(self, other);
+            return c.HasValue && c.Value >= 0;
         }
 
         #endregion
@@ -756,6 +760,14 @@ namespace IronRuby.Builtins {
         /// </remarks>
         [RubyMethod("<=>")]
         public static object Compare(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
+            int? result = CompareToFloat(self, other);
+            return result.HasValue ? (object)result.Value : null;
+        }
+
+        // rb_integer_float_cmp; null for NaN. The relational operators and == go through this
+        // too (rb_integer_float_eq, rb_big_cmp): rounding self to a double first made a Bignum
+        // equal to every Float within half an ulp of it.
+        internal static int? CompareToFloat(BigInteger/*!*/ self, double other) {
             if (Double.IsNaN(other)) {
                 return null;
             }
@@ -825,7 +837,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("==")]
         [RubyMethod("===")]
         public static bool Equal(RubyContext/*!*/ context, BigInteger/*!*/ self, double other) {
-            return !Double.IsNaN(other) && Protocols.ConvertToDouble(context, self) == other;
+            int? c = CompareToFloat(self, other);
+            return c.HasValue && c.Value == 0;
         }
 
         #endregion

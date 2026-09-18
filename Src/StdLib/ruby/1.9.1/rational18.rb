@@ -123,6 +123,17 @@ class Rational < Numeric
   #   r + 1                  # -> Rational(7,4)
   #   r + 0.5                # -> 1.25
   #
+  # rb_num_coerce_bin: an argument that cannot coerce is a TypeError, not a
+  # NoMethodError for #coerce.
+  def __ir_coerce_bin__(other, op)
+    unless other.respond_to?(:coerce)
+      raise TypeError, "#{other.nil? ? 'nil' : other.class} can't be coerced into Rational"
+    end
+    x, y = other.coerce(self)
+    x.__send__(op, y)
+  end
+  private :__ir_coerce_bin__
+
   def + (a)
     if a.kind_of?(Rational)
       num = @numerator * a.denominator
@@ -133,8 +144,7 @@ class Rational < Numeric
     elsif a.kind_of?(Float)
       Float(self) + a
     else
-      x, y = a.coerce(self)
-      x + y
+      __ir_coerce_bin__(a, :+)
     end
   end
 
@@ -157,8 +167,7 @@ class Rational < Numeric
     elsif a.kind_of?(Float)
       Float(self) - a
     else
-      x, y = a.coerce(self)
-      x - y
+      __ir_coerce_bin__(a, :-)
     end
   end
 
@@ -182,8 +191,7 @@ class Rational < Numeric
     elsif a.kind_of?(Float)
       Float(self) * a
     else
-      x, y = a.coerce(self)
-      x * y
+      __ir_coerce_bin__(a, :*)
     end
   end
 
@@ -205,8 +213,7 @@ class Rational < Numeric
     elsif a.kind_of?(Float)
       Float(self) / a
     else
-      x, y = a.coerce(self)
-      x / y
+      __ir_coerce_bin__(a, :/)
     end
   end
 
@@ -254,8 +261,7 @@ class Rational < Numeric
 	Float(self) ** other
       end
     else
-      x, y = other.coerce(self)
-      x ** y
+      __ir_coerce_bin__(other, :**)
     end
   end
 
@@ -272,6 +278,9 @@ class Rational < Numeric
   def % (other)
     # As in #divmod below: the quotient floors rather than truncating, so the remainder
     # takes the sign of the divisor.
+    # num_div: a zero divisor, 0.0 included, is a ZeroDivisionError rather than
+    # the FloatDomainError flooring Infinity or NaN would give.
+    raise ZeroDivisionError, "divided by 0" if other == 0
     value = (self / other).floor
     return self - other * value
   end
@@ -286,6 +295,9 @@ class Rational < Numeric
   def divmod(other)
     # The quotient floors, which is not what #to_i does - it truncates, so this answered
     # [-3, -1/2] for (-7/2).divmod(1) where MRI answers [-4, 1/2].
+    # num_div: a zero divisor, 0.0 included, is a ZeroDivisionError rather than
+    # the FloatDomainError flooring Infinity or NaN would give.
+    raise ZeroDivisionError, "divided by 0" if other == 0
     value = (self / other).floor
     return value, self - other * value
   end

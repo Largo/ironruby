@@ -4284,11 +4284,28 @@ class Float
   end unless method_defined?(:to_r)
 
   def rationalize(eps = nil)
-    return to_r if eps.nil?
+    return __ir_rationalize_by_ulp__ if eps.nil?
     eps = eps.abs
     parts = __rationalize_within__((self - eps).to_r, (self + eps).to_r)
     ::Kernel.Rational(parts[0], parts[1])
   end unless method_defined?(:rationalize)
+
+  # rb_flt_rationalize: with no precision given, the simplest rational within
+  # half a unit in the last place of self, found by nurat_rationalize_internal.
+  def __ir_rationalize_by_ulp__
+    ::Kernel.raise(::FloatDomainError, to_s) if nan? || infinite?
+    return -((-self).__send__(:__ir_rationalize_by_ulp__)) if self < 0
+    fraction, exponent = ::Math.frexp(self)
+    f = ::Math.ldexp(fraction, 53).to_i
+    n = exponent - 53
+    return to_r if f == 0 || n >= 0
+    den = 2**(1 - n)
+    a = ::Kernel.Rational(2 * f - 1, den)
+    b = ::Kernel.Rational(2 * f + 1, den)
+    numer, denom = a.__send__(:__ir_simplest_between__, a, b)
+    ::Kernel.Rational(numer, denom)
+  end
+  private :__ir_rationalize_by_ulp__
 
   # Stern-Brocot search for the simplest fraction inside [low, high].
   def __rationalize_within__(low, high)
@@ -4459,13 +4476,14 @@ end
 # Everything below follows MRI's complex.c.
 class Complex
   # nucomp_real_check: Integer, Float and Rational pass; a Complex passes when
-  # its imaginary part is zero; any other Numeric passes when #real? is true.
+  # its imaginary part is zero, and then stands for its real part; any other
+  # Numeric passes when #real? is true. Answers the value to use.
   def self.__real_check__(n)
-    return if n.is_a?(::Integer) || n.is_a?(::Float) || n.is_a?(::Rational)
+    return n if n.is_a?(::Integer) || n.is_a?(::Float) || n.is_a?(::Rational)
     if n.is_a?(::Complex)
-      return if n.imag == 0
+      return n.real if n.imag == 0
     elsif n.is_a?(::Numeric) && n.real?
-      return
+      return n
     end
     ::Kernel.raise(::TypeError, "not a real")
   end
@@ -4500,8 +4518,8 @@ class Complex
   end
 
   def self.rectangular(real, imag = 0)
-    __real_check__(real)
-    __real_check__(imag)
+    real = __real_check__(real)
+    imag = __real_check__(imag)
     __canon__(real, imag)
   end
   class << self
@@ -4509,9 +4527,12 @@ class Complex
   end
 
   def self.polar(abs, arg = 0)
-    __real_check__(abs)
-    __real_check__(arg)
+    abs = __real_check__(abs)
+    arg = __real_check__(arg)
     return __raw__(abs, 0.0) if abs == 0 || arg == 0
+    # f_complex_polar_real answers the two exact angles exactly.
+    return __raw__(-abs, 0.0) if arg.is_a?(::Float) && arg == ::Math::PI
+    return __raw__(0.0, abs) if arg.is_a?(::Float) && arg == ::Math::PI / 2
     __canon__(abs * ::Math.cos(arg), abs * ::Math.sin(arg))
   end
 
@@ -4579,7 +4600,8 @@ class Complex
     elsif __real_operand__(other)
       ::Complex.__raw__(real.quo(other), imag.quo(other))
     else
-      __coerce_bin__(other, :/)
+      # f_divide passes id_quo on, so a coerced pair divides exactly.
+      __coerce_bin__(other, :quo)
     end
   end
   alias_method :quo, :/
@@ -6469,9 +6491,9 @@ class Enumerator
       source
     when :upto
       # String#upto also lands here, and its length is not arithmetic.
-      (source.is_a?(::Numeric) && args[0].is_a?(::Numeric)) ? (args[0] < source ? 0 : args[0] - source + 1) : nil
+      source.is_a?(::Integer) ? __int_step_size__(source, args[0], :>) : nil
     when :downto
-      (source.is_a?(::Numeric) && args[0].is_a?(::Numeric)) ? (source < args[0] ? 0 : source - args[0] + 1) : nil
+      source.is_a?(::Integer) ? __int_step_size__(args[0], source, :<) : nil
     when :cycle
       __cycle_size__(__source_count__(source), args[0])
     else
@@ -6479,6 +6501,22 @@ class Enumerator
     end
   end
   private :__size_from_target__
+
+  # ruby_num_interval_step_size with a step of 1: the comparison comes first,
+  # so a stop Integer cannot compare with ("A", nil) is an ArgumentError; a
+  # Float stop counts as ruby_float_step_size does.
+  def __int_step_size__(from, to, cmp)
+    if from.is_a?(::Float) || to.is_a?(::Float)
+      n = (to - from).to_f
+      return 0 if n < 0
+      return (n + n * ::Float::EPSILON).floor + 1
+    end
+    stop = cmp == :> ? to : from
+    start = cmp == :> ? from : to
+    return 0 if start.__send__(cmp, stop)
+    (to - from).div(1) + 1
+  end
+  private :__int_step_size__
 
   def inspect
     target = (@generator ? nil : __enum_target__)
@@ -10213,6 +10251,11 @@ end
 # Random (1.9.2) — the runtime only exposes Kernel#rand/srand.
 unless defined?(Random)
   class Random
+    # MRI's generator is MT19937 (see MersenneTwister.cs), seeded and consumed exactly as
+    # random.c does, so a given seed produces the same numbers, bytes and marshal data here.
+    MT = System::Type.get_type("IronRuby.Builtins.MersenneTwister, IronRuby.Libraries").to_class
+    private_constant :MT
+
     def initialize(seed = Random.new_seed)
       # A seed is an Integer however it was given: Random.new(42.5) and Random.new(42)
       # are the same generator, and #seed answers 42 for both.
@@ -10220,42 +10263,43 @@ unless defined?(Random)
         ::Kernel.raise(::TypeError, "no implicit conversion of #{seed.class} into Integer")
       end
       @seed = seed.to_int
-      @draws = 0
-      @native = System::Random.new(@seed.hash & 0x7fffffff)
+      @mt = MT.new(@seed)
+    end
+
+    def initialize_copy(other)
+      super
+      @mt = other.instance_variable_get(:@mt).copy
+      self
     end
 
     attr_reader :seed
 
-    # Everything this generator will produce follows from the seed it was built with and
-    # how far it has been advanced, so that pair is its state. MRI's is the Mersenne
-    # Twister's vector, which is a different generator and not reproducible here; what
-    # matters to a caller is that two generators with equal state agree from here on.
+    # rand_mt_state / rand_mt_left: the state vector as one Integer, and how many words
+    # of it are still to be handed out.
     def state
-      [@seed, @draws]
+      @mt.get_state
     end
     private :state
 
+    def left
+      @mt.left
+    end
+    private :left
+
     def ==(other)
-      other.is_a?(::Random) && state == other.send(:state)
-    end
-
-    def eql?(other)
-      self == other
-    end
-
-    def hash
-      state.hash
+      other.is_a?(::Random) && self.class == other.class &&
+        @mt.state_equals(other.instance_variable_get(:@mt)) && seed == other.seed
     end
 
     def rand(limit = nil)
       case limit
-      when nil then __draw__ { @native.next_double }
+      when nil then @mt.genrand_real(true)
       when ::Range then __rand_in_range__(limit)
       when ::Float
         unless limit > 0
           ::Kernel.raise(::ArgumentError, "invalid argument - #{limit}")
         end
-        __draw__ { @native.next_double } * limit
+        @mt.genrand_real(true) * limit
       else
         n = limit.to_int
         unless n > 0
@@ -10265,21 +10309,9 @@ unless defined?(Random)
       end
     end
 
-    # An Integer uniformly in 0...n. System::Random.next only covers Int32, so a
-    # wider bound is filled from random bytes and rejection-sampled.
+    # An Integer uniformly in 0...n: limited_rand on n - 1.
     def __rand_below__(n)
-      return __draw__ { @native.next(n) } if n <= 2147483647
-
-      bits = n.bit_length
-      bytes = (bits + 7) / 8
-      buffer = System::Array[System::Byte].new(bytes)
-      loop do
-        __draw__ { @native.next_bytes(buffer) }
-        value = 0
-        buffer.to_a.each { |b| value = (value << 8) | b }
-        value >>= (bytes * 8 - bits)
-        return value if value < n
-      end
+      @mt.limited_rand(n - 1)
     end
     private :__rand_below__
 
@@ -10300,55 +10332,58 @@ unless defined?(Random)
       else
         width = span.to_f
         return nil if width < 0 || (width == 0 && range.exclude_end?)
-        first + __draw__ { @native.next_double } * width
+        # random_real: [0, 1) for an exclusive range, [0, 1] for an inclusive one.
+        first + @mt.genrand_real(range.exclude_end?) * width
       end
     end
     private :__rand_in_range__
 
     def bytes(count)
-      buffer = System::Array[System::Byte].new(count)
-      __draw__ { @native.next_bytes(buffer) }
-      buffer.to_a.pack("C*")
+      @mt.genrand_bytes(count.to_int).to_a.pack("C*")
     end
 
-    # A generator is its seed and how far it has been advanced, so those are what is dumped;
-    # the CLR object behind it is not something Marshal can write.
+    # rand_mt_dump: [state, left, seed], which is what MRI writes and reads back.
     def marshal_dump
-      [@seed, @draws]
+      [state, left, @seed]
     end
+    private :marshal_dump
 
     def marshal_load(data)
-      seed, draws = data
-      initialize(seed)
-      draws.times { @native.next_double }
-      @draws = draws
+      state, left, seed = data
+      @seed = seed
+      @mt = MT.new(0)
+      @mt.set_state(state, left)
       self
     end
+    private :marshal_load
 
-    # Taking a value out of the underlying generator moves it on, and #state has to say so.
-    def __draw__
-      @draws += 1
-      yield
-    end
-    private :__draw__
-
+    # fill_random_seed: 128 bits of entropy.
     def self.new_seed
-      Time.now.to_f.hash ^ object_id
+      Random.urandom(16).unpack("Q<2").then { |lo, hi| (hi << 64) | lo }
     end
+
+    def self.__default__
+      @__default__ ||= ::Random.new
+    end
+    private_class_method :__default__
 
     def self.rand(limit = nil)
-      (@default ||= new).rand(limit)
+      ::Random.__send__(:__default__).rand(limit)
     end
 
     def self.bytes(count)
-      (@default ||= new).bytes(count)
+      ::Random.__send__(:__default__).bytes(count)
     end
 
+    def self.seed
+      ::Random.__send__(:__default__).seed
+    end
+
+    # rand_srand: reseeds the default generator and answers the seed it had.
     def self.srand(number = new_seed)
-      previous = @seed_value
-      @seed_value = number
-      @default = new(number)
-      previous || 0
+      previous = ::Random.__send__(:__default__).seed
+      ::Random.instance_variable_set(:@__default__, ::Random.new(number))
+      previous
     end
   end
 end
@@ -10405,17 +10440,24 @@ module Kernel
     alias_method :__ir_rand__, :rand
     private :__ir_rand__
 
+    # rb_f_rand draws from the same default generator as Random.rand, which is
+    # what Random.srand seeds.
     def rand(limit = nil)
-      return __ir_rand__ if limit.nil?
+      return ::Random.rand if limit.nil?
       return ::Random.rand(limit) if limit.is_a?(::Range)
 
       unless limit.respond_to?(:to_int)
         ::Kernel.raise(::TypeError, "no implicit conversion of #{limit.class} into Integer")
       end
       n = limit.to_int.abs
-      n == 0 ? __ir_rand__ : __ir_rand__(n)
+      n == 0 ? ::Random.rand : ::Random.rand(n)
     end
     module_function :rand
+
+    def srand(*args)
+      ::Random.srand(*args)
+    end
+    module_function :srand
   end
 end
 
@@ -13473,6 +13515,7 @@ class Rational
   def marshal_dump
     [numerator, denominator]
   end
+  private :marshal_dump
 
   def marshal_load(pair)
     instance_variable_set(:@numerator, pair[0])
@@ -13486,6 +13529,7 @@ class Complex
   def marshal_dump
     [real, imaginary]
   end
+  private :marshal_dump
 
   def marshal_load(pair)
     instance_variable_set(:@real, pair[0])
