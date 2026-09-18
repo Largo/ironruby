@@ -207,18 +207,18 @@ namespace IronRuby.Compiler.Ast {
                 Ast.Empty()
             );
 
-            body = gen.AddReturnTarget(
-                scope.CreateScope(
-                    scopeVariable,
-                    Methods.CreateBlockScope.OpCall(new AstExpressions {
-                        scope.MakeLocalsStorage(),
-                        scope.GetVariableNamesExpression(),
-                        blockParameter, 
-                        selfParameter,
-                        EnterInterpretedFrameExpression.Instance
-                    }),
-                    body
-                )
+            body = scope.CreateScope(
+                scopeVariable,
+                Methods.CreateBlockScope.OpCall(new AstExpressions {
+                    scope.MakeLocalsStorage(),
+                    scope.GetVariableNamesExpression(),
+                    blockParameter, 
+                    selfParameter,
+                    EnterInterpretedFrameExpression.Instance
+                }),
+                gen.Traceable
+                    ? new TraceReturnExpression(scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
+                    : gen.AddReturnTarget(body)
             );
 
             gen.LeaveBlockDefinition();

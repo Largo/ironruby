@@ -51,6 +51,7 @@ namespace IronRuby.Compiler.Ast {
         private readonly bool _debugCompiler;
         private readonly bool _debugMode;
         private readonly bool _traceEnabled;
+        private readonly bool _traceable;
         private readonly bool _savingToDisk;
 
         private IList<MSA.Expression> _fileInitializers; // lazy
@@ -65,6 +66,7 @@ namespace IronRuby.Compiler.Ast {
             _debugMode = context.DomainManager.Configuration.DebugMode;
             _traceEnabled = context.RubyOptions.EnableTracing;
             _document = document;
+            _traceable = !TracePoint.IsCoreLibraryPath(SourcePath);
             _sequencePointClearance = (document != null) ? Ast.ClearDebugInfo(document) : null;
             _encoding = encoding;
             _profiler = context.RubyOptions.Profile ? Profiler.Instance : null;
@@ -95,6 +97,14 @@ namespace IronRuby.Compiler.Ast {
 
         public bool TraceEnabled {
             get { return _traceEnabled; }
+        }
+
+        /// <summary>
+        /// False for the Ruby half of the core library: TracePoint does not see into it, as MRI does
+        /// not see into its C core.
+        /// </summary>
+        public bool Traceable {
+            get { return _traceable; }
         }
 
         public bool SavingToDisk {
@@ -218,6 +228,9 @@ namespace IronRuby.Compiler.Ast {
             private readonly MSA.Expression/*!*/ _selfVariable;
             private readonly MSA.ParameterExpression/*!*/ _runtimeScopeVariable;
             private VariableScope _parentVariableScope;
+
+            // The line of the last statement given a TracePoint :line hook in this scope's code.
+            internal int LastTracedLine;
 
             public ScopeBuilder/*!*/ Builder {
                 get { return _builder; }
@@ -349,6 +362,10 @@ namespace IronRuby.Compiler.Ast {
             public Parameters Parameters {
                 get { return _parameters; }
             }
+
+            // Where an explicit `return' goes once it has reported TracePoint :return itself, past
+            // the hook that reports the implicit return at `end'. Null until a `return' needs it.
+            internal MSA.LabelTarget ExplicitReturnLabel { get; set; }
 
             public MethodScope(
                 ScopeBuilder/*!*/ builder,
@@ -848,9 +865,11 @@ namespace IronRuby.Compiler.Ast {
                 }
 
                 if (resultOperation.IsIgnore) {
-                    return statements.First.Transform(this);
+                    var trace = TraceLine(statements, 0);
+                    return Traced(trace, statements.First.Transform(this));
                 } else {
-                    return statements.First.TransformResult(this, resultOperation);
+                    var trace = TraceLine(statements, 0);
+                    return Traced(trace, statements.First.TransformResult(this, resultOperation));
                 }
 
             } else {
@@ -861,15 +880,18 @@ namespace IronRuby.Compiler.Ast {
                 }
 
                 // transform all but the last statement if it is an expression stmt:
-                foreach (var statement in statements.AllButLast) {
-                    result.Add(statement.Transform(this));
+                int last = statements.Count - 1;
+                for (int i = 0; i < last; i++) {
+                    var trace = TraceLine(statements, i);
+                    result.Add(Traced(trace, statements[i].Transform(this)));
                 }
 
                 if (statements.Count > 0) {
+                    var trace = TraceLine(statements, last);
                     if (resultOperation.IsIgnore) {
-                        result.Add(statements.Last.Transform(this));
+                        result.Add(Traced(trace, statements.Last.Transform(this)));
                     } else {
-                        result.Add(statements.Last.TransformResult(this, resultOperation));
+                        result.Add(Traced(trace, statements.Last.TransformResult(this, resultOperation)));
                     }
                 }
 
@@ -896,18 +918,43 @@ namespace IronRuby.Compiler.Ast {
                 return toBoolean ? AstUtils.Constant(!positive) : AstUtils.Constant(null);
             }
 
-            var last = toBoolean ? statements.Last.TransformCondition(this, positive) : statements.Last.TransformReadStep(this);
+            int lastIndex = statements.Count - 1;
             if (statements.Count == 1) {
-                return last;
+                var trace = TraceLine(statements, 0);
+                return Traced(trace, toBoolean ? statements.Last.TransformCondition(this, positive) : statements.Last.TransformReadStep(this));
             }
+
+            // the last statement is transformed first (as it always has been), but its hook is
+            // claimed after the others', in source order
+            var last = toBoolean ? statements.Last.TransformCondition(this, positive) : statements.Last.TransformReadStep(this);
 
             var result = new AstBlock();
-            foreach (var statement in statements.AllButLast) {
-                result.Add(statement.Transform(this));
+            for (int i = 0; i < lastIndex; i++) {
+                var trace = TraceLine(statements, i);
+                result.Add(Traced(trace, statements[i].Transform(this)));
             }
-            result.Add(last);
+            result.Add(Traced(TraceLine(statements, lastIndex), last));
 
             return result;
+        }
+
+        /// <summary>
+        /// The TracePoint :line hook for a statement if it is the first statement on its line (MRI
+        /// reports a line once however many statements it holds), or null. Claimed before the
+        /// statement is transformed, so that statements nested in it come second.
+        /// </summary>
+        private MSA.Expression TraceLine(Statements/*!*/ statements, int index) {
+            var scope = _currentVariableScope;
+            int line = statements.GetStartLine(index);
+            if (!_traceable || scope == null || line <= 0 || line == scope.LastTracedLine) {
+                return null;
+            }
+            scope.LastTracedLine = line;
+            return new TraceLineExpression(scope.RuntimeScopeVariable, SourcePath, line);
+        }
+
+        private static MSA.Expression/*!*/ Traced(MSA.Expression trace, MSA.Expression/*!*/ transformed) {
+            return trace != null ? Ast.Block(trace, transformed) : transformed;
         }
 
         internal AstExpressions/*!*/ TransformMapletsToExpressions(IList<Maplet>/*!*/ maplets) {

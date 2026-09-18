@@ -21,6 +21,7 @@ using MSA = Microsoft.Scripting.Ast;
 
 using System.Reflection;
 using Microsoft.Scripting;
+using IronRuby.Builtins;
 using IronRuby.Runtime;
 
 namespace IronRuby.Compiler.Ast {
@@ -47,6 +48,17 @@ namespace IronRuby.Compiler.Ast {
             }
 
             // method:
+            var method = gen.CurrentMethod;
+            if (gen.Traceable && method.MethodName != null && method != gen.TopLevelScope && gen.GetEnclosingModuleFrame() == null) {
+                // TracePoint :return reports the line of the `return', not that of `end'.
+                if (method.ExplicitReturnLabel == null) {
+                    method.ExplicitReturnLabel = Ast.Label(typeof(object));
+                }
+                return Ast.Return(method.ExplicitReturnLabel, new TraceReturnExpression(
+                    gen.CurrentScopeVariable, AstUtils.Box(transformedReturnValue), TraceEvents.Return, gen.SourcePath, Location.Start.Line
+                ));
+            }
+
             return gen.Return(transformedReturnValue);
         }
 

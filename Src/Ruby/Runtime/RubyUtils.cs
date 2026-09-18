@@ -1246,6 +1246,10 @@ namespace IronRuby.Runtime {
             var compiled = (EvalEntryPointDelegate)RubyScriptCode.CompileLambda(lambda, context);
             var blockParameter = (methodScope != null) ? methodScope.BlockParameter : null;
 
+            if ((TracePoint.ActiveEvents & (int)TraceEvents.ScriptCompiled) != 0) {
+                TracePoint.OnScriptCompiled(targetScope, context, code);
+            }
+
             // module-eval: gets a scope of its own, which starts out public
             if (module != null) {
                 targetScope = CreateModuleEvalScope(targetScope, self, module);
