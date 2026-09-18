@@ -4807,9 +4807,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "public_send", 0x51, 
-                0x00000000U, 0x80040008U, 
+                0x00000000U, 0x80000000U, 
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage), 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.String, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage)
+                new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage)
             );
             
             DefineLibraryMethod(module, "putc", 0x52, 

@@ -86,10 +86,12 @@ class Object
     # nil, true and false answer their own class here rather than a singleton class of
     # their own, so `def (nil).foo' defines an ordinary NilClass method and there is no
     # singleton method to hand back.
+    # The method has to come from the singleton class or a module mixed into it (#20620),
+    # not from the object's class. instance_methods(false) here would list the class's
+    # methods too, the way obj.methods(false) does.
     defined = klass && klass.singleton_class? &&
-      (klass.instance_methods(false).include?(name) ||
-       klass.private_instance_methods(false).include?(name) ||
-       klass.protected_instance_methods(false).include?(name))
+      (klass.ancestors - klass.superclass.ancestors).include?(
+        (klass.instance_method(name).owner rescue nil))
     unless defined
       ::Kernel.raise(::NameError, "undefined singleton method `#{name}\' for #{inspect}")
     end
@@ -3006,6 +3008,8 @@ module Kernel
       end
       # MRI's rb_time_interval: an Integer or Float goes straight through, a Rational or
       # anything else that answers #divmod is split into seconds and a fraction.
+      # A nil duration (3.3) is the same as none: sleep until woken.
+      args = [] if args.size == 1 && args[0].nil?
       unless args.empty?
         d = args[0]
         if !d.nil? && !d.is_a?(::Integer) && !d.is_a?(::Float) && d.respond_to?(:divmod)
@@ -6322,8 +6326,9 @@ class Enumerator
 
       return self unless block
       if @generator
+        # The generator block's value is what #each answers, and so what a finished
+        # #next reports as StopIteration#result.
         @generator.call(Yielder.new(&block))
-        self
       else
         each_without_generator(&block)
       end
@@ -13585,6 +13590,11 @@ module Kernel
     # conversion error there where MRI treats it as "not given".
     rest.pop while !rest.empty? && rest.last.nil?
 
+    # FilePathValue: File.open would take an Integer as a file descriptor.
+    unless target.is_a?(::String) || target.respond_to?(:to_path) || target.respond_to?(:to_str)
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{target.nil? ? 'nil' : target.class} into String")
+    end
+
     if options.empty?
       ::File.open(target, *rest, &block)
     else
@@ -13606,10 +13616,21 @@ module Kernel
       converted = object.to_str
       return converted if converted.is_a?(::String)
     end
-    unless object.respond_to?(:to_s)
-      ::Kernel.raise(::TypeError, "can't convert #{object.nil? ? 'nil' : object.class} into String")
+    # rb_check_funcall: a user-defined respond_to? can veto the call; otherwise a missing
+    # #to_s still goes to method_missing, and only a NoMethodError for it means "cannot".
+    no_conversion = "can't convert #{object.nil? ? 'nil' : object.class} into String"
+    custom_respond_to = !object.method(:respond_to?).owner.equal?(::Kernel)
+    ::Kernel.raise(::TypeError, no_conversion) if custom_respond_to && !object.respond_to?(:to_s, true)
+    if ::Kernel.instance_method(:respond_to?).bind_call(object, :to_s, true)
+      converted = object.__send__(:to_s)
+    else
+      begin
+        converted = object.__send__(:to_s)
+      rescue ::NoMethodError => e
+        ::Kernel.raise if e.name != :to_s || !e.receiver.equal?(object)
+        ::Kernel.raise(::TypeError, no_conversion)
+      end
     end
-    converted = object.to_s
     unless converted.is_a?(::String)
       ::Kernel.raise(::TypeError,
         "can't convert #{object.class} into String (#{object.class}#to_s gives #{__ir_conversion_result_name__(converted)})")
@@ -13617,6 +13638,13 @@ module Kernel
     converted
   end
   module_function :String
+
+  # rb_f_puts is a plain forward to $stdout.puts, so a redefined or mocked #puts on
+  # $stdout is what runs (Kernel#print and #p write to it directly instead).
+  def puts(*args)
+    $stdout.puts(*args)
+  end
+  module_function :puts
 
   # Kernel#Hash (1.9). Only nil and [] are special-cased; everything else must
   # answer #to_hash with a Hash.

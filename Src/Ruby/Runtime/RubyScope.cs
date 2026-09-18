@@ -381,6 +381,10 @@ namespace IronRuby.Runtime {
                     if (implicitParameters != null && Array.IndexOf(implicitParameters, name) >= 0) {
                         continue;
                     }
+                    // the compiler's own hidden locals (a flip-flop's state) are no Ruby variables
+                    if (name.Length > 0 && name[0] == '#') {
+                        continue;
+                    }
                     if (seen.Add(name)) {
                         result.Add(name);
                     }

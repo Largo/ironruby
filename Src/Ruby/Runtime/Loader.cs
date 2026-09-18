@@ -47,6 +47,12 @@ namespace IronRuby.Runtime {
         ResolveLoaded = 8,
         AnyLanguage = 16,
 
+        /// <summary>
+        /// A #require the program wrote, as opposed to one the runtime makes on its own (autoload,
+        /// the bootstrap of Complex and Rational): only that one reports a circular require.
+        /// </summary>
+        WarnCircular = 32,
+
         Require = LoadOnce | AppendExtensions,
     }
 
@@ -621,18 +627,20 @@ namespace IronRuby.Runtime {
                         }
                     }
 
-                    claimed = !_unfinishedFiles.ContainsKey(file.Path) && !AlreadyLoaded(path, files, flags);
+                    bool circular = _unfinishedFiles.ContainsKey(file.Path);
+                    claimed = !circular && !AlreadyLoaded(path, files, flags);
                     if (claimed) {
                         // save path as is, no canonicalization nor combination with an extension or directory:
                         _unfinishedFiles.Add(file.Path, Thread.CurrentThread);
                     }
 
-                    // MRI warns "loading in progress, circular require considered harmful" here under
-                    // -w. Not emitted: Kernel#Complex and #Rational are autoloaded constants pointing
-                    // at complex18.rb and rational18.rb, and those files reopen the very class whose
-                    // autoload is running, so the warning fired twice on every `ir -w` startup for a
-                    // circularity the user did not write. It belongs here once those two builtins stop
-                    // being bootstrapped through autoload.
+                    // MRI warns under -w. Only for a require the program made: Kernel#Complex and
+                    // #Rational are autoloaded constants pointing at complex18.rb and rational18.rb,
+                    // and those files reopen the very class whose autoload is running - a circularity
+                    // the user did not write.
+                    if (circular && (flags & LoadFlags.WarnCircular) != 0) {
+                        _context.ReportWarning("loading in progress, circular require considered harmful - " + file.Path, true);
+                    }
                 }
             }
 

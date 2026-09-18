@@ -114,6 +114,23 @@ namespace IronRuby.Runtime {
         internal RuntimeFlowControl TargetFrame { get { return _targetFrame; } }
         internal RubyModule MethodLookupModule { get { return _methodLookupModule; } set { _methodLookupModule = value; } }
         internal bool IsLibProcConverter { get { return _isLibProcConverter; } }
+
+        /// <summary>
+        /// True if the library method got a literal block rather than a Proc object passed with &amp;:
+        /// the block was not a Proc until this call made it one - or until a library method that is
+        /// still running and handed it on did (send), which is how MRI passes a block handler through.
+        /// A block a Ruby method received has that method's scope as its converter, so a block that
+        /// travels through a Ruby method (&amp;b, super) is a Proc object here, as it is in MRI.
+        /// </summary>
+        public bool IsLiteralBlock {
+            get {
+                if (_isLibProcConverter) {
+                    return true;
+                }
+                var converter = _proc.Converter;
+                return converter != null && converter.GetType() == typeof(RuntimeFlowControl) && converter.IsActiveMethod;
+            }
+        }
         
         public Proc/*!*/ Proc { get { return _proc; } }
 
