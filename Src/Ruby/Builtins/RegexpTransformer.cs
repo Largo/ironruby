@@ -1011,6 +1011,20 @@ namespace IronRuby.Builtins {
                     ParseBackreference();
                     break;
 
+                case 'X':
+                    // An extended grapheme cluster, which .NET has no escape for. This covers what
+                    // text commonly holds (UAX #29 without the Hangul and prepend rules): CRLF, a
+                    // regional indicator pair (a flag), and a code point followed by combining
+                    // marks, variation selectors, emoji modifiers and tags, or joined to further
+                    // code points by ZWJ. Atomic, like Onigmo's.
+                    _sb.Append(
+                        "(?>\\r\\n|\\uD83C[\\uDDE6-\\uDDFF]\\uD83C[\\uDDE6-\\uDDFF]|" +
+                        "(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF])" +
+                        "(?:\\p{M}|[\\uFE00-\\uFE0F\\u200C]|\\uD83C[\\uDFFB-\\uDFFF]|\\uDB40[\\uDC20-\\uDC7F]|" +
+                        "\\u200D(?:[\\uD800-\\uDBFF][\\uDC00-\\uDFFF]|[^\\uD800-\\uDFFF]))*)"
+                    );
+                    break;
+
                 case 'R':
                     // A generic line break: CRLF as a unit, or any single line terminator.
                     // Atomic so that CRLF never backtracks into matching just the CR.
@@ -1669,7 +1683,9 @@ namespace IronRuby.Builtins {
             }
 
             private CharacterSet/*!*/ RequireNoAstral(string/*!*/ operation) {
-                if (HasAstral) {
+                // the non-BMP members a POSIX class brings along are dropped instead, which leaves
+                // such a class as it was before they were added
+                if (HasAstral && !_astralOptional) {
                     // The surrogate-pair alternation is not a character class, so it cannot take
                     // part in [a-[b]] subtraction or && intersection.
                     throw new RegexpError("non-BMP character is not supported in a " + operation + " character class");
@@ -1692,6 +1708,21 @@ namespace IronRuby.Builtins {
             private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral)
                 : this(negate, include, exclude) {
                 _astral = astral;
+            }
+
+            // The non-BMP members came from a POSIX class ([[:lower:]] and friends) and can be
+            // left out where a character class operation cannot keep them.
+            private readonly bool _astralOptional;
+
+            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral, bool astralOptional)
+                : this(negate, include, exclude, astral) {
+                _astralOptional = astralOptional;
+            }
+
+            /// <summary>This set plus non-BMP members that set operations may drop (see _astralOptional).</summary>
+            internal CharacterSet/*!*/ WithOptionalAstral(string/*!*/ astral) {
+                Debug.Assert(!_negated);
+                return new CharacterSet(false, _include, _exclude, JoinAstral(_astral, astral), !HasAstral || _astralOptional);
             }
 
             private static string/*!*/ JoinAstral(string/*!*/ a, string/*!*/ b) {
@@ -1763,7 +1794,8 @@ namespace IronRuby.Builtins {
                     set._exclude.Subtract(GetIncludedSet()).
                         Union(this._exclude.Subtract(set.GetIncludedSet())).
                         Union(this._exclude.Intersect(set._exclude)),
-                    JoinAstral(_astral, set._astral)
+                    JoinAstral(_astral, set._astral),
+                    (!HasAstral || _astralOptional) && (!set.HasAstral || set._astralOptional)
                 );
             }
 
@@ -2330,6 +2362,117 @@ namespace IronRuby.Builtins {
         }
 
         private CharacterSet MakePosixCharacterClassCore(PosixCharacterClass charClass, bool positive) {
+            var result = MakeBmpPosixCharacterClass(charClass, positive);
+            if (positive) {
+                // .NET matches UTF-16 code units, so a class alone never matches a character
+                // outside the BMP; Onigmo's POSIX classes range over all of Unicode
+                string astral = GetAstralPosixMembers(charClass);
+                if (astral != null) {
+                    result = result.WithOptionalAstral(astral);
+                }
+            }
+            return result;
+        }
+
+        private static readonly Dictionary<PosixCharacterClass, string> _astralPosixMembers = new Dictionary<PosixCharacterClass, string>();
+
+        private static string GetAstralPosixMembers(PosixCharacterClass charClass) {
+            Func<System.Globalization.UnicodeCategory, bool> member;
+            switch (charClass) {
+                case PosixCharacterClass.Lower: member = c => c == System.Globalization.UnicodeCategory.LowercaseLetter; break;
+                case PosixCharacterClass.Upper: member = c => c == System.Globalization.UnicodeCategory.UppercaseLetter; break;
+                case PosixCharacterClass.Alpha: member = c => IsLetter(c) || c == System.Globalization.UnicodeCategory.LetterNumber; break;
+                case PosixCharacterClass.Alnum: member = c => IsLetter(c) || c == System.Globalization.UnicodeCategory.LetterNumber || c == System.Globalization.UnicodeCategory.DecimalDigitNumber; break;
+                case PosixCharacterClass.Digit: member = c => c == System.Globalization.UnicodeCategory.DecimalDigitNumber; break;
+                case PosixCharacterClass.Word:
+                    member = c => IsLetter(c) || c == System.Globalization.UnicodeCategory.NonSpacingMark || c == System.Globalization.UnicodeCategory.SpacingCombiningMark ||
+                        c == System.Globalization.UnicodeCategory.EnclosingMark || c == System.Globalization.UnicodeCategory.DecimalDigitNumber ||
+                        c == System.Globalization.UnicodeCategory.LetterNumber || c == System.Globalization.UnicodeCategory.ConnectorPunctuation;
+                    break;
+                case PosixCharacterClass.Print:
+                    member = c => c != System.Globalization.UnicodeCategory.Control && c != System.Globalization.UnicodeCategory.OtherNotAssigned &&
+                        c != System.Globalization.UnicodeCategory.Surrogate && c != System.Globalization.UnicodeCategory.LineSeparator &&
+                        c != System.Globalization.UnicodeCategory.ParagraphSeparator;
+                    break;
+                case PosixCharacterClass.Graph:
+                    member = c => c != System.Globalization.UnicodeCategory.Control && c != System.Globalization.UnicodeCategory.OtherNotAssigned &&
+                        c != System.Globalization.UnicodeCategory.Surrogate && c != System.Globalization.UnicodeCategory.LineSeparator &&
+                        c != System.Globalization.UnicodeCategory.ParagraphSeparator && c != System.Globalization.UnicodeCategory.SpaceSeparator;
+                    break;
+                case PosixCharacterClass.Punct:
+                    member = c => c >= System.Globalization.UnicodeCategory.ConnectorPunctuation && c <= System.Globalization.UnicodeCategory.OtherPunctuation;
+                    break;
+                default:
+                    return null;
+            }
+
+            lock (_astralPosixMembers) {
+                string result;
+                if (!_astralPosixMembers.TryGetValue(charClass, out result)) {
+                    _astralPosixMembers[charClass] = result = BuildAstralMembers(member);
+                }
+                return result;
+            }
+        }
+
+        private static bool IsLetter(System.Globalization.UnicodeCategory c) {
+            return c <= System.Globalization.UnicodeCategory.OtherLetter;
+        }
+
+        /// <summary>
+        /// The non-BMP code points in a category set as surrogate pairs: one character class of
+        /// trailing surrogates per leading one (or run of leading ones with the same trailing
+        /// class), behind a lookahead that turns away anything that is not a leading surrogate.
+        /// </summary>
+        private static string/*!*/ BuildAstralMembers(Func<System.Globalization.UnicodeCategory, bool>/*!*/ member) {
+            var alternatives = new List<KeyValuePair<int, string>>();
+            var trails = new StringBuilder();
+            for (int lead = 0; lead < 0x400; lead++) {
+                trails.Length = 0;
+                int rangeStart = -1;
+                for (int trail = 0; trail <= 0x400; trail++) {
+                    bool isMember = trail < 0x400 &&
+                        member(System.Globalization.CharUnicodeInfo.GetUnicodeCategory(0x10000 + (lead << 10) + trail));
+                    if (isMember && rangeStart < 0) {
+                        rangeStart = trail;
+                    } else if (!isMember && rangeStart >= 0) {
+                        trails.Append("\\u").Append((0xdc00 + rangeStart).ToString("x4"));
+                        if (trail - 1 > rangeStart) {
+                            trails.Append("-\\u").Append((0xdc00 + trail - 1).ToString("x4"));
+                        }
+                        rangeStart = -1;
+                    }
+                }
+                if (trails.Length > 0) {
+                    alternatives.Add(new KeyValuePair<int, string>(lead, trails.ToString()));
+                }
+            }
+
+            if (alternatives.Count == 0) {
+                return "[a-[a]]";
+            }
+
+            var result = new StringBuilder("(?=[\\ud800-\\udbff])(?:");
+            for (int i = 0; i < alternatives.Count; ) {
+                int j = i;
+                while (j + 1 < alternatives.Count && alternatives[j + 1].Key == alternatives[j].Key + 1 &&
+                    alternatives[j + 1].Value == alternatives[i].Value) {
+                    j++;
+                }
+                if (i > 0) {
+                    result.Append('|');
+                }
+                result.Append('[').Append("\\u").Append((0xd800 + alternatives[i].Key).ToString("x4"));
+                if (j > i) {
+                    result.Append("-\\u").Append((0xd800 + alternatives[j].Key).ToString("x4"));
+                }
+                result.Append("][").Append(alternatives[i].Value).Append(']');
+                i = j + 1;
+            }
+            return result.Append(')').ToString();
+        }
+
+        private CharacterSet MakeBmpPosixCharacterClass(PosixCharacterClass charClass, bool positive) {
             switch (charClass) {
                 case PosixCharacterClass.Alnum:
                     if (positive) {
