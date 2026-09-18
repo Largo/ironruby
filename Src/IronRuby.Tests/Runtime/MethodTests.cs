@@ -221,8 +221,9 @@ end
 
 C.new.foo
 ",
+// Since Ruby 3.0 a module included into M reaches the classes that already include M.
 @"
-error
+foo
 foo
 ");
         }

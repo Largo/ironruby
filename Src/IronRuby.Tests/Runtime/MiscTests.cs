@@ -563,10 +563,10 @@ p C.class_variables.sort
 p D.class_variables.sort
 p M.class_variables.sort
 ", @"
-[:@@a, :@@b, :@@c]
-[:@@d]
+[:@@a, :@@b, :@@c, :@@m, :@@n]
+[:@@a, :@@b, :@@c, :@@d, :@@m, :@@n]
 [:@@m, :@@n]
-");
+");  // class_variables includes inherited ones by default (as CRuby does)
         }
 
         public void Scenario_ClassVariables2() {
