@@ -37,6 +37,9 @@ namespace IronRuby.Prism {
         private bool _evalOutsideMethod;
         // Whether the method being built uses its block (MethodDefinition.UsesBlock).
         private bool _usesBlock;
+        // In a `case/in` or `=>`: the key a hash pattern last found missing, or nil. Decides
+        // whether a failed match raises NoMatchingPatternKeyError rather than NoMatchingPatternError.
+        private LocalVariable _patternMissingKey;
         private bool _isEval;
         // case/in subject temp -> { value, "already computed" flag } holding its #deconstruct result
         private readonly Dictionary<LocalVariable, LocalVariable[]>/*!*/ _deconstructCache =
@@ -484,6 +487,8 @@ namespace IronRuby.Prism {
                     return new OrExpression(Expr(or.Left), Expr(or.Right), span);
 
                 case Pm.CaseNode caseNode: {
+                    // the subject comes first: a variable it declares is visible in the whens
+                    var subject = caseNode.Predicate != null ? Expr(caseNode.Predicate) : null;
                     var whens = new List<WhenClause>();
                     foreach (var condition in caseNode.Conditions) {
                         var when = (Pm.WhenNode)condition;
@@ -495,9 +500,7 @@ namespace IronRuby.Prism {
                     if (caseNode.ElseClause is Pm.ElseNode caseElse) {
                         elseStatements = BuildStatements(caseElse.Statements);
                     }
-                    return new CaseExpression(
-                        caseNode.Predicate != null ? Expr(caseNode.Predicate) : null,
-                        whens.ToArray(), elseStatements, span);
+                    return new CaseExpression(subject, whens.ToArray(), elseStatements, span);
                 }
 
                 case Pm.BeginNode begin: return BuildBeginBody(begin, span, null);
@@ -513,21 +516,33 @@ namespace IronRuby.Prism {
                     // value in pattern  =>  true/false
                     Expression assign;
                     var temp = NewTemp(Expr(matchPredicate.Value), span, out assign);
-                    return new BlockExpression(MakeStatements(new Expression[] {
-                        assign,
-                        new ConditionalExpression(PatternTest(matchPredicate.Pattern, temp, span),
-                            Literal.True(span), Literal.False(span), span)
-                    }), span);
+                    var enclosingMissingKey = _patternMissingKey;
+                    _patternMissingKey = null;
+                    try {
+                        return new BlockExpression(MakeStatements(new Expression[] {
+                            assign,
+                            new ConditionalExpression(PatternTest(matchPredicate.Pattern, temp, span),
+                                Literal.True(span), Literal.False(span), span)
+                        }), span);
+                    } finally {
+                        _patternMissingKey = enclosingMissingKey;
+                    }
                 }
                 case Pm.MatchRequiredNode matchRequired: {
                     // value => pattern  =>  nil, raises NoMatchingPatternError on mismatch
                     Expression assign;
                     var temp = NewTemp(Expr(matchRequired.Value), span, out assign);
-                    return new BlockExpression(MakeStatements(new Expression[] {
-                        assign,
-                        new UnlessExpression(PatternTest(matchRequired.Pattern, temp, span),
-                            new Statements(RaiseNoMatchingPattern(temp, span)), null, span)
-                    }), span);
+                    var enclosingMissingKey = _patternMissingKey;
+                    _patternMissingKey = CurrentScope.ResolveOrAddVariable("?pmk" + _tempCounter++ + "?", span);
+                    try {
+                        return new BlockExpression(MakeStatements(new Expression[] {
+                            assign,
+                            new UnlessExpression(ResetMissingKey(PatternTest(matchRequired.Pattern, temp, span), span),
+                                new Statements(RaiseNoMatchingPattern(temp, span)), null, span)
+                        }), span);
+                    } finally {
+                        _patternMissingKey = enclosingMissingKey;
+                    }
                 }
 
                 case Pm.BackReferenceReadNode backRef: {
@@ -2321,9 +2336,35 @@ namespace IronRuby.Prism {
         }
 
         private Expression/*!*/ RaiseNoMatchingPattern(Expression/*!*/ subject, SourceSpan span) {
-            return new MethodCall(null, "raise", new Arguments(new Expression[] {
+            Expression result = new MethodCall(null, "raise", new Arguments(new Expression[] {
                 new ConstantVariable("NoMatchingPatternError", span),
                 new MethodCall(subject, "inspect", null, span)
+            }), span);
+
+            if (_patternMissingKey != null) {
+                result = new ConditionalExpression(
+                    new MethodCall(_patternMissingKey, "nil?", null, span),
+                    result,
+                    new MethodCall(null, "raise", new Arguments(
+                        new MethodCall(new ConstantVariable("NoMatchingPatternKeyError", span), "__missing_key__",
+                            new Arguments(new Expression[] { subject, _patternMissingKey }), span)
+                    ), span),
+                    span);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Each attempt at a match - an `in` clause, a branch of `|` - starts with no key missing,
+        /// so that only the failure that ends the match decides the exception.
+        /// </summary>
+        private Expression/*!*/ ResetMissingKey(Expression/*!*/ test, SourceSpan span) {
+            if (_patternMissingKey == null) {
+                return test;
+            }
+            return new BlockExpression(MakeStatements(new Expression[] {
+                new SimpleAssignmentExpression(_patternMissingKey, Literal.Nil(span), null, span),
+                test
             }), span);
         }
 
@@ -2341,9 +2382,11 @@ namespace IronRuby.Prism {
             var clauses = new List<ElseIfClause>();
             Expression firstTest = null;
             Statements firstBody = null;
+            var enclosingMissingKey = _patternMissingKey;
+            _patternMissingKey = node.ElseClause is Pm.ElseNode ? null : CurrentScope.ResolveOrAddVariable("?pmk" + _tempCounter++ + "?", span);
             foreach (var condition in node.Conditions) {
                 var inNode = (Pm.InNode)condition;
-                var test = PatternTest(inNode.Pattern, temp, Span(inNode));
+                var test = ResetMissingKey(PatternTest(inNode.Pattern, temp, Span(inNode)), Span(inNode));
                 var body = BuildStatements(inNode.Statements);
                 if (firstTest == null) {
                     firstTest = test;
@@ -2357,6 +2400,7 @@ namespace IronRuby.Prism {
             } else {
                 clauses.Add(new ElseIfClause(null, new Statements(RaiseNoMatchingPattern(temp, span)), span));
             }
+            _patternMissingKey = enclosingMissingKey;
 
             _deconstructCache.Remove(temp);
             var ifExpr = new IfExpression(firstTest, firstBody, clauses, span);
@@ -2382,8 +2426,8 @@ namespace IronRuby.Prism {
                         BindTrue(local, subject, Span(capture)), span);
                 }
                 case Pm.AlternationPatternNode alternation:
-                    return new OrExpression(PatternTest(alternation.Left, subject, span),
-                        PatternTest(alternation.Right, subject, span), span);
+                    return new OrExpression(ResetMissingKey(PatternTest(alternation.Left, subject, span), span),
+                        ResetMissingKey(PatternTest(alternation.Right, subject, span), span), span);
                 case Pm.PinnedVariableNode pinned:
                     return CaseEqual(Expr(pinned.Variable), subject, Span(pinned));
                 case Pm.PinnedExpressionNode pinnedExpr:
@@ -2517,7 +2561,15 @@ namespace IronRuby.Prism {
                 var assoc = (Pm.AssocNode)element;
                 var key = (Pm.SymbolNode)assoc.Key;
                 var keySymbol = new SymbolLiteral(LiteralText(key.Unescaped), _encoding, Span(key));
-                tests.Add(new MethodCall(hash, "key?", new Arguments(keySymbol), span));
+                Expression hasKey = new MethodCall(hash, "key?", new Arguments(keySymbol), span);
+                if (_patternMissingKey != null) {
+                    hasKey = new OrExpression(hasKey, new BlockExpression(MakeStatements(new Expression[] {
+                        new SimpleAssignmentExpression(_patternMissingKey,
+                            new SymbolLiteral(LiteralText(key.Unescaped), _encoding, Span(key)), null, span),
+                        Literal.False(span)
+                    }), span), span);
+                }
+                tests.Add(hasKey);
 
                 Pm.PmNode valuePattern = assoc.Value is Pm.ImplicitNode implicitValue ? implicitValue.Value : assoc.Value;
                 Expression valueAssign;

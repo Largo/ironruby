@@ -56,7 +56,29 @@ module Kernel
 end
 
 class NoMatchingPatternError < StandardError; end
-class NoMatchingPatternKeyError < NoMatchingPatternError; end
+class NoMatchingPatternKeyError < NoMatchingPatternError
+  # KeyError's shape: the pattern's hash and the key it lacked, both optional.
+  def initialize(message = nil, matchee: (no_matchee = true; nil), key: (no_key = true; nil))
+    message.nil? ? super() : super(message)
+    @matchee = matchee unless no_matchee
+    @key = key unless no_key
+  end
+
+  def matchee
+    ::Kernel.raise ::ArgumentError, "no matchee is available" unless defined?(@matchee)
+    @matchee
+  end
+
+  def key
+    ::Kernel.raise ::ArgumentError, "no key is available" unless defined?(@key)
+    @key
+  end
+
+  # What a `case/in` or `=>` raises when the last thing that failed was a hash pattern's key.
+  def self.__missing_key__(matchee, key)
+    new("#{matchee.inspect}: key not found: #{key.inspect}", matchee: matchee, key: key)
+  end
+end
 class FrozenError < RuntimeError; end unless defined?(FrozenError)
 
 module Kernel
