@@ -1340,8 +1340,15 @@ namespace IronRuby.Builtins {
         #region send, public_send
 
         [RubyMethod("send")]
-        [RubyMethod("public_send")]
         public static object SendMessage(RubyScope/*!*/ scope, object self) {
+            throw RubyExceptions.CreateArgumentError("no method name given");
+        }
+
+        // Its own method rather than a second name on the one above, so that the frame in the
+        // backtrace is called public_send: the stack trace takes the first [RubyMethod] name a
+        // method carries, and ruby/spec looks for that name.
+        [RubyMethod("public_send")]
+        public static object PublicSendMessage(RubyScope/*!*/ scope, object self) {
             throw RubyExceptions.CreateArgumentError("no method name given");
         }
 

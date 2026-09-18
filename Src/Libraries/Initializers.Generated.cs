@@ -4775,7 +4775,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "public_send", 0x51, 
                 0x00000000U, 0x80040008U, 
-                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.SendMessage), 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage), 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.String, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.PublicSendMessage)
             );
             
