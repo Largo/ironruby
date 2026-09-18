@@ -61,7 +61,8 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("size")]
         public static int Size(int self) {
-            return sizeof(int);
+            // the size of MRI's fixnum on a 64-bit machine: a C long
+            return sizeof(long);
         }
     }
 }

@@ -1298,14 +1298,14 @@ class Hash
   end unless method_defined?(:dig)
 
   def transform_values(&block)
-    return to_enum(:transform_values) unless block
+    return to_enum(:transform_values) { size } unless block
     result = __result_hash__
     each { |k, v| result[k] = block.call(v) }
     result
   end unless method_defined?(:transform_values)
 
   def transform_values!(&block)
-    return to_enum(:transform_values!) unless block
+    return to_enum(:transform_values!) { size } unless block
     raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
     keys.each { |k| self[k] = block.call(self[k]) }
     self
@@ -1315,7 +1315,7 @@ class Hash
   # the block for the keys it contains.
   def transform_keys(*args, &block)
     mapping = __key_mapping__(args)
-    return to_enum(:transform_keys) if mapping.nil? && block.nil?
+    return to_enum(:transform_keys) { size } if mapping.nil? && block.nil?
     # CRuby drops the compare_by_identity flag here (but keeps it in #transform_values)
     result = {}
     each do |k, v|
@@ -1333,7 +1333,7 @@ class Hash
 
   def transform_keys!(*args, &block)
     mapping = __key_mapping__(args)
-    return to_enum(:transform_keys!) if mapping.nil? && block.nil?
+    return to_enum(:transform_keys!) { size } if mapping.nil? && block.nil?
     raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
     # CRuby semantics: walk a snapshot of the pairs, deleting the old key only
     # if it has not already been produced as a new key (so `break` leaves the
@@ -1486,8 +1486,9 @@ end
 class Integer
   # pow(n) is **, but pow(n, m) is modular exponentiation, which has to be done
   # by squaring rather than by computing the full power and then taking it mod m.
-  def pow(other, modulo = nil)
-    return self**other if modulo.nil?
+  # An explicit nil modulus is a TypeError like any other non-Integer one.
+  def pow(other, modulo = (no_modulo = true; nil))
+    return self**other if no_modulo
     unless modulo.is_a?(::Integer) && other.is_a?(::Integer)
       ::Kernel.raise(::TypeError, "Integer#pow() 2nd argument not allowed unless all arguments are integers")
     end

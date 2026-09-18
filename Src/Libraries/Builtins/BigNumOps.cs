@@ -44,7 +44,9 @@ namespace IronRuby.Builtins {
         /// </example>
         [RubyMethod("size")]
         public static int Size(BigInteger/*!*/ self) {
-            return self.GetWordCount() * 4;
+            // The bytes the magnitude takes up. Below 2**62 MRI has a fixnum, which is a C long.
+            int bytes = (int)((BigInteger.Abs(self).GetBitLength() + 7) / 8);
+            return Math.Max(bytes, sizeof(long));
         }
     }
 }

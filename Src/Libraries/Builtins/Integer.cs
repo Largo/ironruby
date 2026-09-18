@@ -170,10 +170,16 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("to_r")]
-        [RubyMethod("rationalize")]
         public static object ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational, RubyScope/*!*/ scope, object/*!*/ self) {
            // TODO: reimplement Rational
             return KernelOps.ToRational(toRational, scope, self, self, ClrInteger.One);
+        }
+
+        // an Integer is exact, so the tolerance is taken and ignored
+        [RubyMethod("rationalize")]
+        public static object Rationalize(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational, RubyScope/*!*/ scope, object/*!*/ self,
+            [Optional]object epsilon) {
+            return ToRational(toRational, scope, self);
         }
 
         #endregion

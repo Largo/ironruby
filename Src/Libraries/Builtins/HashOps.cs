@@ -46,10 +46,36 @@ namespace IronRuby.Builtins {
 
         [RubyConstructor]
         public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue) {
-            if (block != null) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments");
+            var result = new Hash(self.Context.EqualityComparer);
+            return Initialize(self.Context, block, result, defaultValue);
+        }
+
+        [RubyConstructor]
+        public static Hash/*!*/ CreateHash(BlockParam block, RubyClass/*!*/ self, object defaultValue, object options) {
+            var result = new Hash(self.Context.EqualityComparer);
+            return Initialize(self.Context, block, result, defaultValue, options);
+        }
+
+        // Hash.new's one keyword is capacity: (3.4), a size hint that has no use here. A Hash passed
+        // as keywords is options; one passed as a plain argument is the default value.
+        private static bool IsOptions(object arg) {
+            var hash = arg as Hash;
+            return hash != null && hash.IsKeywordArguments;
+        }
+
+        private static void CheckOptions(RubyContext/*!*/ context, Hash/*!*/ options) {
+            var unknown = new List<string>();
+            foreach (var key in options.Keys) {
+                var symbol = key as RubySymbol;
+                if (symbol == null || symbol.ToString() != "capacity") {
+                    unknown.Add(context.Inspect(key).ToString());
+                }
             }
-            return new Hash(self.Context.EqualityComparer, null, defaultValue);
+            if (unknown.Count > 0) {
+                throw RubyExceptions.CreateArgumentError(
+                    (unknown.Count == 1 ? "unknown keyword: " : "unknown keywords: ") + String.Join(", ", unknown)
+                );
+            }
         }
 
         [RubyConstructor]
@@ -129,14 +155,30 @@ namespace IronRuby.Builtins {
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static Hash/*!*/ Initialize(BlockParam block, Hash/*!*/ self, object defaultValue) {
+        public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue) {
             Assert.NotNull(self);
+            if (IsOptions(defaultValue)) {
+                CheckOptions(context, (Hash)defaultValue);
+                self.DefaultProc = (block != null) ? block.Proc : null;
+                self.DefaultValue = null;
+                return self;
+            }
             if (block != null) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments");
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 0)");
             }
             self.DefaultProc = null;
             self.DefaultValue = defaultValue;
             return self;
+        }
+
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static Hash/*!*/ Initialize(RubyContext/*!*/ context, BlockParam block, Hash/*!*/ self, object defaultValue, object options) {
+            // a second argument is only allowed as keywords
+            if (!IsOptions(options)) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 2, expected 0..1)");
+            }
+            CheckOptions(context, (Hash)options);
+            return Initialize(context, block, self, defaultValue);
         }
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
