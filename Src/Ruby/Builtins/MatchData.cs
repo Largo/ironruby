@@ -223,7 +223,24 @@ namespace IronRuby.Builtins {
             if (!HasNamedGroup(name)) {
                 throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", name);
             }
-            return OffsetsOf(_match.Groups[name], inBytes);
+            return OffsetsOf(GetNamedGroup(name), inBytes);
+        }
+
+        /// <summary>
+        /// The group a name stands for. When several groups share it (see RegexpTransformer),
+        /// that is the last of them that took part in the match, as in Onigmo.
+        /// </summary>
+        private Group/*!*/ GetNamedGroup(string/*!*/ name) {
+            Group result = _match.Groups[name];
+            foreach (var clrName in _match.Groups.Keys) {
+                if (clrName != name && RegexpTransformer.GetRubyGroupName(clrName) == name) {
+                    var group = _match.Groups[clrName];
+                    if (group.Success) {
+                        result = group;
+                    }
+                }
+            }
+            return result;
         }
 
         private int[] OffsetsOf(Group/*!*/ group, bool inBytes) {
@@ -283,13 +300,13 @@ namespace IronRuby.Builtins {
         /// filtered out here. Not a [RubyMethod]: MatchData's named-group methods are
         /// written in Ruby in the prelude and reach these two as plain CLR methods.
         /// </summary>
-        public string[]/*!*/ GetGroupNames() {
+        public string/*!*/[]/*!*/ GetGroupNames() {
             var names = _match.Groups.Keys;
             var result = new List<string>();
             foreach (var name in names) {
-                int ignored;
-                if (!Int32.TryParse(name, out ignored)) {
-                    result.Add(name);
+                var rubyName = RegexpTransformer.GetRubyGroupName(name);
+                if (rubyName != null && !result.Contains(rubyName)) {
+                    result.Add(rubyName);
                 }
             }
             return result.ToArray();
@@ -297,7 +314,8 @@ namespace IronRuby.Builtins {
 
         /// <summary>The group's name if it has one, otherwise its number as a string.</summary>
         public string/*!*/ GetGroupName(int index) {
-            return _match.Groups[index].Name;
+            string name = _match.Groups[index].Name;
+            return RegexpTransformer.GetRubyGroupName(name) ?? name;
         }
 
         public bool HasNamedGroup(string/*!*/ name) {
@@ -310,19 +328,19 @@ namespace IronRuby.Builtins {
         }
 
         public bool NamedGroupSuccess(string/*!*/ name) {
-            return HasNamedGroup(name) && _match.Groups[name].Success;
+            return HasNamedGroup(name) && GetNamedGroup(name).Success;
         }
 
         /// <summary>Character index where a named group matched, or -1.</summary>
         public int GetNamedGroupStart(string/*!*/ name) {
-            return NamedGroupSuccess(name) ? ToOriginalIndex(_match.Groups[name].Index) : -1;
+            return NamedGroupSuccess(name) ? ToOriginalIndex(GetNamedGroup(name).Index) : -1;
         }
 
         public int GetNamedGroupLength(string/*!*/ name) {
             if (!NamedGroupSuccess(name)) {
                 return -1;
             }
-            var group = _match.Groups[name];
+            var group = GetNamedGroup(name);
             return ToOriginalLength(group.Index, group.Length);
         }
 

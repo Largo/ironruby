@@ -148,7 +148,73 @@ namespace IronRuby.Builtins {
 
         private RegexpTransformer(string/*!*/ rubyPattern) {
             _rubyPattern = rubyPattern;
-            _hasNamedGroup = HasNamedGroup(rubyPattern);
+            _groupNameCounts = CountGroupNames(rubyPattern);
+            _hasNamedGroup = _groupNameCounts.Count > 0;
+        }
+
+        // How many groups the pattern declares under each name. Ruby lets several groups share a
+        // name and numbers them all; .NET would merge them into one group, so every occurrence
+        // after the first is given a name of its own (see DuplicateGroupName).
+        private readonly Dictionary<string, int>/*!*/ _groupNameCounts;
+        private readonly Dictionary<string, int>/*!*/ _groupNameOccurrences = new Dictionary<string, int>();
+
+        private const string DuplicateGroupNameSeparator = "__ir";
+
+        private static string/*!*/ DuplicateGroupName(string/*!*/ name, int occurrence) {
+            return occurrence <= 1 ? name : name + DuplicateGroupNameSeparator + occurrence.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// The Ruby name of a .NET group: the name the pattern gave it, whichever occurrence of
+        /// the name it is. Null for a group .NET only knows by number.
+        /// </summary>
+        internal static string GetRubyGroupName(string/*!*/ clrName) {
+            if (clrName.Length == 0 || Char.IsDigit(clrName[0])) {
+                return null;
+            }
+            int separator = clrName.LastIndexOf(DuplicateGroupNameSeparator, StringComparison.Ordinal);
+            if (separator > 0 && separator + DuplicateGroupNameSeparator.Length < clrName.Length) {
+                for (int i = separator + DuplicateGroupNameSeparator.Length; i < clrName.Length; i++) {
+                    if (!Char.IsDigit(clrName[i])) {
+                        return clrName;
+                    }
+                }
+                return clrName.Substring(0, separator);
+            }
+            return clrName;
+        }
+
+        private static Dictionary<string, int>/*!*/ CountGroupNames(string/*!*/ pattern) {
+            var result = new Dictionary<string, int>();
+            bool inCharacterClass = false;
+            for (int i = 0; i < pattern.Length; i++) {
+                char c = pattern[i];
+                if (c == '\\') {
+                    i++;
+                } else if (inCharacterClass) {
+                    inCharacterClass = c != ']';
+                } else if (c == '[') {
+                    inCharacterClass = true;
+                } else if (c == '(' && i + 2 < pattern.Length && pattern[i + 1] == '?') {
+                    char d = pattern[i + 2];
+                    char terminator;
+                    if (d == '\'') {
+                        terminator = '\'';
+                    } else if (d == '<' && i + 3 < pattern.Length && pattern[i + 3] != '=' && pattern[i + 3] != '!') {
+                        terminator = '>';
+                    } else {
+                        continue;
+                    }
+                    int end = pattern.IndexOf(terminator, i + 3);
+                    if (end > i + 3) {
+                        string name = pattern.Substring(i + 3, end - i - 3);
+                        int count;
+                        result.TryGetValue(name, out count);
+                        result[name] = count + 1;
+                    }
+                }
+            }
+            return result;
         }
 
         /// <summary>
@@ -666,6 +732,9 @@ namespace IronRuby.Builtins {
                     default:
                         throw MakeError("undefined group option");
                 }
+            } else if (_hasNamedGroup) {
+                // with a named group anywhere in the pattern, Ruby's plain groups do not capture
+                _sb.Append("(?:");
             } else {
                 _groupCount++;
                 groupNumber = _groupCount;
@@ -845,8 +914,13 @@ namespace IronRuby.Builtins {
             if (_suppressCaptures) {
                 Append(':');
             } else {
+                string text = name.ToString();
+                int occurrence;
+                _groupNameOccurrences.TryGetValue(text, out occurrence);
+                _groupNameOccurrences[text] = ++occurrence;
+
                 Append((char)opening);
-                _sb.Append(name);
+                _sb.Append(DuplicateGroupName(text, occurrence));
                 Append((char)closing);
             }
             return name.ToString();
@@ -1137,6 +1211,20 @@ namespace IronRuby.Builtins {
                 // \k<name+n> and \k<name-n> are level-scoped references, which .NET has no
                 // equivalent for; Ruby itself rejects them outside a subexpression call.
                 throw MakeError("invalid group name <" + name + ">");
+            }
+
+            int count;
+            if (_groupNameCounts.TryGetValue(name, out count) && count > 1) {
+                // a name several groups share refers to whichever of them has matched
+                _sb.Append("(?:");
+                for (int i = count; i >= 1; i--) {
+                    _sb.Append("\\k<").Append(DuplicateGroupName(name, i)).Append('>');
+                    if (i > 1) {
+                        _sb.Append('|');
+                    }
+                }
+                _sb.Append(')');
+                return;
             }
 
             _sb.Append("\\k<").Append(name).Append('>');

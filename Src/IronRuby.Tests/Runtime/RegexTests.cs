@@ -203,7 +203,7 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation("(?<!x)", "(?<!x)");
             TestCorrectPatternTranslation("(?>)", "(?>)");
             TestCorrectPatternTranslation("(?>x)", "(?>x)");
-            TestCorrectPatternTranslation("(?>(?=(?<!f)(o)(o))(?<bar>))", "(?>(?=(?<!f)(o)(o))(?<bar>))");
+            TestCorrectPatternTranslation("(?>(?=(?<!f)(o)(o))(?<bar>))", "(?>(?=(?<!f)(?:o)(?:o))(?<bar>))");
             
             // backreferences:
             // A numbered backreference is invalid once the pattern declares a named group, so

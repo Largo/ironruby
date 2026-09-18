@@ -286,22 +286,13 @@ namespace IronRuby.Builtins {
             result.Append(context.Inspect(self.GetGroupValue(0)));
 
             // Ruby does not number a group once the pattern names any of them - "(?<a>.)(.)" has
-            // one capture, not two - so when there are names it is the names that are listed.
-            string[] names = self.GetGroupNames();
-            if (names.Length > 0) {
-                foreach (string name in names) {
-                    result.Append(' ');
-                    result.Append(name);
-                    result.Append(':');
-                    result.Append(context.Inspect(self.GetNamedGroupValue(name)));
-                }
-            } else {
-                for (int i = 1; i < self.GroupCount; i++) {
-                    result.Append(' ');
-                    result.Append(self.GetGroupName(i));
-                    result.Append(':');
-                    result.Append(context.Inspect(self.GetGroupValue(i)));
-                }
+            // one capture, not two - and the transformation leaves such a group uncaptured, so
+            // every group listed here is either numbered or named, each shared name once per group.
+            for (int i = 1; i < self.GroupCount; i++) {
+                result.Append(' ');
+                result.Append(self.GetGroupName(i));
+                result.Append(':');
+                result.Append(context.Inspect(self.GetGroupValue(i)));
             }
             result.Append('>');
             return result;
