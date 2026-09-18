@@ -87,6 +87,34 @@ namespace IronRuby.Runtime.Calls {
             return _body.Ast.Parameters.Signature;
         }
 
+        /// <summary>
+        /// Module#ruby2_keywords. The flag goes on the body, which every alias of the method
+        /// shares, so marking one marks them all - before or after the alias was made.
+        /// </summary>
+        public bool TrySetRuby2Keywords() {
+            if (!KeepsTrailingHashInRest) {
+                return false;
+            }
+
+            _body.Ruby2Keywords = true;
+            return true;
+        }
+
+        /// <summary>
+        /// Whether a trailing hash the call supplied as keyword arguments ends up staying in the
+        /// rest parameter. It does not when the method declares keywords of its own: the prologue
+        /// takes the hash back off the end, and it can only recognise it while it still says it is
+        /// keyword arguments. This is also exactly the shape ruby2_keywords is allowed on.
+        /// </summary>
+        internal bool KeepsTrailingHashInRest {
+            get {
+                var signature = _body.Ast.Parameters.Signature;
+                return (signature != null)
+                    ? signature.AcceptsRuby2Keywords
+                    : (_body.Ast.Parameters.Unsplat != null);
+            }
+        }
+
         public override int GetArity() {
             // the declared signature, when the front end recorded one, is the only thing that
             // knows about keywords: they are not in Parameters, having been lowered away
@@ -177,6 +205,20 @@ namespace IronRuby.Runtime.Calls {
 
             // box explicit arguments:
             var boxedArguments = argsBuilder.GetArguments();
+
+            // The rest parameter holds on to whatever the call put in it, so a trailing hash that
+            // was the keyword arguments of *this* call must stop saying so - and a ruby2_keywords
+            // method wants it marked the other way instead. The flag is read here, at call time,
+            // rather than baked into the rule: ruby2_keywords can be applied to a method that has
+            // already been called.
+            if (Parameters.Unsplat != null && KeepsTrailingHashInRest) {
+                int restIndex = argsBuilder.UnsplatParameterIndex;
+                boxedArguments[restIndex] = Methods.NormalizeRestArgument.OpCall(
+                    AstUtils.Convert(boxedArguments[restIndex], typeof(RubyArray)),
+                    AstUtils.Constant(_body)
+                );
+            }
+
             for (int i = 2; i < boxedArguments.Length; i++) {
                 boxedArguments[i] = AstUtils.Box(boxedArguments[i]);
             }

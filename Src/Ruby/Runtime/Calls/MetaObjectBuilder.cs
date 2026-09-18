@@ -358,15 +358,16 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, out int listLength, out ParameterExpression/*!*/ listVariable) {
-            Expression assignment;
-            listVariable = expression as ParameterExpression;
-            if (listVariable != null && typeof(IList).IsAssignableFrom(expression.Type)) {
-                assignment = expression;
-            } else {
-                listVariable = GetTemporary(typeof(IList), "#list");
-                assignment = Ast.Assign(listVariable, AstUtils.Convert(expression, typeof(IList)));
-            }
-            
+            // Every splatted call comes through here, whoever built the list - `f(*args)' in Ruby
+            // source, Kernel#send, an Enumerator replaying the arguments it was made with. A hash
+            // a ruby2_keywords method is carrying goes back to being keyword arguments at exactly
+            // this point, and nowhere else. The list keeps its length, so the rule below is
+            // unaffected.
+            listVariable = GetTemporary(typeof(IList), "#list");
+            Expression assignment = Ast.Assign(listVariable,
+                Methods.SplatRuby2Keywords.OpCall(AstUtils.Convert(expression, typeof(IList)))
+            );
+
             listLength = value.Count;
             AddCondition(Ast.Equal(Ast.Property(assignment, typeof(ICollection).GetDeclaredProperty("Count")), AstUtils.Constant(value.Count)));
         }

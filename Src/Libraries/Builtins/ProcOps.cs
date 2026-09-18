@@ -190,7 +190,12 @@ namespace IronRuby.Builtins {
                 context.ReportWarning(
                     "Skipping set of ruby2_keywords flag for proc (proc accepts keywords or post arguments or proc does not accept argument splat)"
                 );
+                return self;
             }
+
+            // On the dispatcher, which a copy of the proc shares, so that #dup carries the mark
+            // in both directions - as MRI's does.
+            self.Dispatcher.Ruby2Keywords = true;
             return self;
         }
 

@@ -48,6 +48,18 @@ namespace IronRuby.Runtime.Calls {
             _encoding = encoding;
         }
 
+        /// <summary>
+        /// Set by Module#ruby2_keywords. It lives on the body rather than on the method info so
+        /// that it is shared with every alias of the method, which is what MRI does - marking a
+        /// method marks the aliases made of it, before or after.
+        /// </summary>
+        private bool _ruby2Keywords;
+
+        public bool Ruby2Keywords {
+            get { return _ruby2Keywords; }
+            set { _ruby2Keywords = value; }
+        }
+
         public MethodDeclaration Ast { get { return _ast; } }
         public MSA.SymbolDocumentInfo Document { get { return _document; } }
         public bool HasTarget { get { return _ast.Target != null; } }

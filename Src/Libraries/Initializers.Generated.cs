@@ -2879,6 +2879,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadHash_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_mark_ruby2_keywords_hash__", 0x62, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.Hash, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.MarkRuby2KeywordsHash)
+            );
+            
             DefineLibraryMethod(module, "[]", 0x61, 
                 new[] { 0x00000000U, 0x00000000U, 0x00000004U, 0x00000002U, 0x80000000U}, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.CreateSubclass), 
@@ -2886,6 +2891,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Builtins.RubyClass, System.Collections.IList, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.CreateSubclass), 
                 new Func<IronRuby.Builtins.RubyClass, System.Collections.Generic.IDictionary<System.Object, System.Object>, IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.CreateSubclass), 
                 new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.Hash>(IronRuby.Builtins.HashOps.CreateSubclass)
+            );
+            
+            DefineLibraryMethod(module, "ruby2_keywords_hash?", 0x61, 
+                0x00000002U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.Hash, System.Boolean>(IronRuby.Builtins.HashOps.IsRuby2KeywordsHash), 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object, System.Boolean>(IronRuby.Builtins.HashOps.IsRuby2KeywordsHash)
             );
             
             DefineLibraryMethod(module, "try_convert", 0x61, 
@@ -5909,6 +5920,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadModule_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_mark_ruby2_keywords__", 0x52, 
+                0x00010002U, 
+                new Func<IronRuby.Builtins.RubyModule, System.String, System.Boolean>(IronRuby.Builtins.ModuleOps.MarkRuby2Keywords)
+            );
+            
             DefineLibraryMethod(module, "[]", 0x51, 
                 0x80000002U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ModuleOps.Of), 

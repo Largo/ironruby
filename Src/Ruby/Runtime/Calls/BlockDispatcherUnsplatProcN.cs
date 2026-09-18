@@ -75,11 +75,11 @@ namespace IronRuby.Runtime.Calls {
             // TODO: optimize
             if (args.Length < _parameterCount) {
                 Array.Resize(ref args, _parameterCount);
-                return _block(param, self, args, RubyOps.MakeArray0(), procArg);
+                return _block(param, self, args, Rest(RubyOps.MakeArray0()), procArg);
             } else if (args.Length == _parameterCount) {
-                return _block(param, self, args, RubyOps.MakeArray0(), procArg);
+                return _block(param, self, args, Rest(RubyOps.MakeArray0()), procArg);
             } else if (_parameterCount == 0) {
-                return _block(param, self, ArrayUtils.EmptyObjects, RubyOps.MakeArrayN(args), procArg);
+                return _block(param, self, ArrayUtils.EmptyObjects, Rest(RubyOps.MakeArrayN(args)), procArg);
             } else {
                 var actualArgs = NewArgs();
 
@@ -92,7 +92,7 @@ namespace IronRuby.Runtime.Calls {
                     array.Add(args[i]);
                 }
 
-                return _block(param, self, actualArgs, array, procArg);
+                return _block(param, self, actualArgs, Rest(array), procArg);
             }
         }
 
@@ -162,7 +162,7 @@ namespace IronRuby.Runtime.Calls {
                 array.Add(splattee[nextItem++]);
             }
 
-            return _block(param, self, args, array, procArg);
+            return _block(param, self, args, Rest(array), procArg);
         }
     }
 }

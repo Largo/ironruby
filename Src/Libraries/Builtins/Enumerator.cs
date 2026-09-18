@@ -49,7 +49,13 @@ namespace IronRuby.Builtins {
             }
 
             public object Each(RubyScope/*!*/ scope, BlockParam/*!*/ block) {
-                return KernelOps.SendMessageOpt(scope, block, _targetObject, _targetName, _targetArguments);
+                // The arguments were recorded when the enumerator was made. A hash among them
+                // that a ruby2_keywords method was carrying has to go back to being keyword
+                // arguments now, exactly as it would at a splatted call site - `enum_for(:find,
+                // *paths, ignore_error: true)' has to reach #find as keywords.
+                return KernelOps.SendMessageOpt(scope, block, _targetObject, _targetName,
+                    RubyOps.RestoreRuby2Keywords(_targetArguments)
+                );
             }
 
             internal object TargetObject { get { return _targetObject; } }

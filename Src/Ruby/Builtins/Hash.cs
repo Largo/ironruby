@@ -42,6 +42,7 @@ namespace IronRuby.Builtins {
         private const uint IsTaintedFlag = 2;
         private const uint IsUntrustedFlag = 4;
         private const uint IsKeywordArgumentsFlag = 8;
+        private const uint IsRuby2KeywordsHashFlag = 16;
 
         // Hash#compare_by_identity has to swap the comparer of an *existing* dictionary, which
         // Dictionary<,> offers no API for; the field is patched directly and the entries rehashed.
@@ -247,6 +248,18 @@ namespace IronRuby.Builtins {
         public bool IsKeywordArguments {
             get { return (_flags & IsKeywordArgumentsFlag) != 0; }
             set { _flags = (_flags & ~IsKeywordArgumentsFlag) | (value ? IsKeywordArgumentsFlag : 0); }
+        }
+
+        /// <summary>
+        /// True for the hash a ruby2_keywords method's rest parameter is holding: it arrived as
+        /// keyword arguments, and splatting the array it sits in has to send it on as keyword
+        /// arguments again. Unlike <see cref="IsKeywordArguments"/>, which is a property of one
+        /// call in progress, this one belongs to the object and outlives the call - which is why
+        /// Hash.ruby2_keywords_hash? can report it and why the hash is copied before it is set.
+        /// </summary>
+        public bool IsRuby2KeywordsHash {
+            get { return (_flags & IsRuby2KeywordsHashFlag) != 0; }
+            set { _flags = (_flags & ~IsRuby2KeywordsHashFlag) | (value ? IsRuby2KeywordsHashFlag : 0); }
         }
 
         void IRubyObjectState.Freeze() {

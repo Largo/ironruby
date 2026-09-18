@@ -18,6 +18,18 @@
 # unregisters everything in it.
 set -e
 cd "$(dirname "$0")"
+
+# This script rebuilds the in-place assemblies - it has to, since the generator reflects over
+# IronRuby.Libraries.dll - and for part of its run the generated file is an empty skeleton, so
+# the build it leaves behind mid-way has nothing registered. A spec sweep running against that
+# build measures nonsense, and the corruption is silent. Refuse rather than rely on remembering.
+# Matched on the interpreter process itself (comm == ir) rather than on any command line
+# mentioning mspec-run, which would also match the shell that is invoking this script.
+if ps -eo comm=,args= | awk '$1 == "ir" && /mspec-run/ { found = 1 } END { exit !found }'; then
+  echo "refusing to run: an mspec sweep is using the in-place build" >&2
+  echo "wait for it to finish, or stop it first (ps -eo comm=,args= | grep mspec-run)" >&2
+  exit 1
+fi
 export DOTNET_ROOT=${DOTNET_ROOT:-/usr/local/dotnet}
 DOTNET="$DOTNET_ROOT/dotnet"
 DLR=${DLR_SOURCE_DIR:-../dlr/src/core}

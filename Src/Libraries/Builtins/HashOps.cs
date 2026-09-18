@@ -164,6 +164,30 @@ namespace IronRuby.Builtins {
             var site = toHash.GetSite(TryConvertToHashAction.Make(toHash.Context));
             return site.Target(site, obj);
         }
+
+        /// <summary>
+        /// Whether the hash is one a ruby2_keywords method is carrying: it arrived as keyword
+        /// arguments and splatting it will make it keyword arguments again.
+        /// </summary>
+        [RubyMethod("ruby2_keywords_hash?", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsRuby2KeywordsHash(RubyClass/*!*/ self, [NotNull]Hash/*!*/ hash) {
+            return hash.IsRuby2KeywordsHash;
+        }
+
+        [RubyMethod("ruby2_keywords_hash?", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsRuby2KeywordsHash(RubyContext/*!*/ context, RubyClass/*!*/ self, object hash) {
+            throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Hash)", context.GetClassDisplayName(hash));
+        }
+
+        /// <summary>
+        /// Marks the hash the way a ruby2_keywords method's rest parameter would. The copying is
+        /// left to Hash#dup in the prelude, which knows about subclasses and instance variables.
+        /// </summary>
+        [RubyMethod("__ir_mark_ruby2_keywords_hash__", RubyMethodAttributes.PrivateSingleton)]
+        public static Hash/*!*/ MarkRuby2KeywordsHash(RubyClass/*!*/ self, [NotNull]Hash/*!*/ hash) {
+            hash.IsRuby2KeywordsHash = true;
+            return hash;
+        }
         
         #region Instance Methods
         

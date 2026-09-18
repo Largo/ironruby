@@ -420,6 +420,10 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MakeKeywordArgumentsHash0;
         public static MethodInfo/*!*/ IsKeywordArgumentsHash { get { return _IsKeywordArgumentsHash ?? (_IsKeywordArgumentsHash = CallInstruction.CacheFunc<System.Object, System.Boolean>(RubyOps.IsKeywordArgumentsHash)); } }
         private static MethodInfo _IsKeywordArgumentsHash;
+        public static MethodInfo/*!*/ NormalizeRestArgument { get { return _NormalizeRestArgument ?? (_NormalizeRestArgument = CallInstruction.CacheFunc<IronRuby.Builtins.RubyArray, IronRuby.Runtime.Calls.RubyMethodBody, IronRuby.Builtins.RubyArray>(RubyOps.NormalizeRestArgument)); } }
+        private static MethodInfo _NormalizeRestArgument;
+        public static MethodInfo/*!*/ SplatRuby2Keywords { get { return _SplatRuby2Keywords ?? (_SplatRuby2Keywords = CallInstruction.CacheFunc<System.Collections.IList, System.Collections.IList>(RubyOps.SplatRuby2Keywords)); } }
+        private static MethodInfo _SplatRuby2Keywords;
         public static MethodInfo/*!*/ MakeImplicitSuperInBlockMethodError { get { return _MakeImplicitSuperInBlockMethodError ?? (_MakeImplicitSuperInBlockMethodError = CallInstruction.CacheFunc<System.Exception>(RubyOps.MakeImplicitSuperInBlockMethodError)); } }
         private static MethodInfo _MakeImplicitSuperInBlockMethodError;
         public static MethodInfo/*!*/ MakeInvalidArgumentTypesError { get { return _MakeInvalidArgumentTypesError ?? (_MakeInvalidArgumentTypesError = CallInstruction.CacheFunc<System.String, System.Exception>(RubyOps.MakeInvalidArgumentTypesError)); } }

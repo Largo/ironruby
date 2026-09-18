@@ -1395,6 +1395,87 @@ namespace IronRuby.Runtime {
             return hash != null && hash.IsKeywordArguments;
         }
 
+        /// <summary>
+        /// The array a rest parameter is about to be given. A trailing hash that arrived as the
+        /// keyword arguments of this call is not the keyword arguments of anything once it is
+        /// sitting in an array, so the mark comes off - otherwise passing the array on would make
+        /// them keywords again, which is what Ruby 3 separated. A ruby2_keywords method is the
+        /// exception: it gets a hash marked the other way, which a later splat turns back into
+        /// keywords. Either way the caller's hash is left alone and a copy is stored.
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ NormalizeRestArgument(RubyArray/*!*/ args, RubyMethodBody/*!*/ body) {
+            return NormalizeRestArgument(args, body.Ruby2Keywords);
+        }
+
+        public static RubyArray/*!*/ NormalizeRestArgument(RubyArray/*!*/ args, bool ruby2Keywords) {
+            int last = args.Count - 1;
+            if (last < 0) {
+                return args;
+            }
+
+            var hash = args[last] as Hash;
+            if (hash == null || !hash.IsKeywordArguments) {
+                return args;
+            }
+
+            var copy = new Hash(hash);
+            copy.IsRuby2KeywordsHash = ruby2Keywords;
+            args[last] = copy;
+            return args;
+        }
+
+        /// <summary>
+        /// A `*args' at a call site. A hash a ruby2_keywords method is passing along goes back to
+        /// being keyword arguments here - that is the whole point of the mark - as a copy, so that
+        /// the array the caller is holding keeps its marked one.
+        /// </summary>
+        /// <summary>
+        /// The same for an argument array that was recorded rather than splatted - what an
+        /// Enumerator keeps from the call that made it, and replays later.
+        /// </summary>
+        public static object[]/*!*/ RestoreRuby2Keywords(object[]/*!*/ args) {
+            int last = args.Length - 1;
+            if (last < 0) {
+                return args;
+            }
+
+            var hash = args[last] as Hash;
+            if (hash == null || !hash.IsRuby2KeywordsHash) {
+                return args;
+            }
+
+            var copy = new Hash(hash);
+            copy.IsKeywordArguments = true;
+
+            var result = (object[])args.Clone();
+            result[last] = copy;
+            return result;
+        }
+
+        [Emitted]
+        public static IList/*!*/ SplatRuby2Keywords(IList/*!*/ list) {
+            int last = list.Count - 1;
+            if (last < 0) {
+                return list;
+            }
+
+            var hash = list[last] as Hash;
+            if (hash == null || !hash.IsRuby2KeywordsHash) {
+                return list;
+            }
+
+            var copy = new Hash(hash);
+            copy.IsKeywordArguments = true;
+
+            var result = new RubyArray(list.Count);
+            for (int i = 0; i < last; i++) {
+                result.Add(list[i]);
+            }
+            result.Add(copy);
+            return result;
+        }
+
         #endregion
 
         #region Array

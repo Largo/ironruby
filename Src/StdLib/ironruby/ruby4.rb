@@ -97,6 +97,34 @@ class Object
   end unless method_defined?(:singleton_method)
 end
 
+# ruby2_keywords (2.7) marks a method so that a trailing Hash which arrived as keyword
+# arguments keeps saying so while it sits in the method's rest parameter, and becomes keyword
+# arguments again when that rest parameter is splatted onward. The mark itself is kept by the
+# runtime, on the method's body, so that every alias of the method shares it; what is here is
+# the argument checking and the warning.
+class Module
+  def ruby2_keywords(*names)
+    names.each do |name|
+      unless name.is_a?(::Symbol) || name.is_a?(::String)
+        ::Kernel.raise(::TypeError, "#{name.inspect} is not a symbol nor a string")
+      end
+      sym = name.to_sym
+      # NameError, not NoMethodError, and it names the missing method.
+      unless method_defined?(sym) || private_method_defined?(sym)
+        ::Kernel.raise(::NameError, "undefined method `#{sym}' for #{self.inspect}")
+      end
+      # The flag only means anything for a method of the shape `def m(*args)`.
+      # MRI warns and skips otherwise; the wording is rb_warn's, verbatim.
+      unless __ir_mark_ruby2_keywords__(sym)
+        ::Kernel.warn("Skipping set of ruby2_keywords flag for #{sym} " \
+                      "(method accepts keywords or post arguments or method does not accept argument splat)")
+      end
+    end
+    nil
+  end unless private_method_defined?(:ruby2_keywords) || method_defined?(:ruby2_keywords)
+  private :ruby2_keywords rescue nil
+end
+
 module Kernel
   # MRI unified Fixnum and Bignum into Integer in 2.4; IronRuby still has the
   # split classes, so messages that name a class have to hide it.
@@ -2581,7 +2609,9 @@ unless defined?(Fiber)
       end
     end
 
-    def raise(*args)
+    # The arguments are handed straight to Kernel#raise, `cause:' included, so the trailing
+    # keyword hash has to stay keywords across the rest parameter.
+    ruby2_keywords def raise(*args)
       cur = Fiber.current
       exc = Fiber.__make_exception__(args)
       ::Kernel.raise(exc) if cur.equal?(self)
@@ -7215,7 +7245,9 @@ end
 module Kernel
   # MRI defaults the method to :each and takes an optional block returning the
   # enumerator's #size.
-  def to_enum(method = :each, *args, &size_block)
+  # The arguments are kept and handed to the method when the enumerator runs, keywords
+  # included - `enum_for(:find, *paths, ignore_error: true)' has to reach #find as keywords.
+  ruby2_keywords def to_enum(method = :each, *args, &size_block)
     # Not Enumerator.new: Ruby 3.0 removed its (obj, meth, *args) form, and the
     # class-level initializer is what to_enum used to reach through.
     enum = ::Enumerator.allocate
@@ -7717,35 +7749,6 @@ class String
 end
 
 # --- pieces the Ruby 4.0 standard library expects --------------------------
-
-# ruby2_keywords (2.7) flags a method/proc so a trailing Hash keeps its
-# "these were keywords" marking when delegated. Keywords are lowered onto a
-# trailing Hash here anyway, so recording the flag is all that is needed.
-class Module
-  def ruby2_keywords(*names)
-    names.each do |name|
-      unless name.is_a?(::Symbol) || name.is_a?(::String)
-        ::Kernel.raise(::TypeError, "#{name.inspect} is not a symbol nor a string")
-      end
-      sym = name.to_sym
-      # NameError, not NoMethodError, and it names the missing method.
-      unless method_defined?(sym) || private_method_defined?(sym)
-        ::Kernel.raise(::NameError, "undefined method `#{sym}' for #{self.inspect}")
-      end
-      # The flag only means anything for a method of the shape `def m(*args)`.
-      # MRI warns and skips otherwise; the wording is rb_warn's, verbatim.
-      kinds = instance_method(sym).parameters.map { |kind, _| kind }
-      splat = kinds.index(:rest)
-      unless splat && kinds.none? { |k| k == :key || k == :keyreq || k == :keyrest } &&
-             kinds[(splat + 1)..-1].none? { |k| k == :req || k == :opt }
-        ::Kernel.warn("Skipping set of ruby2_keywords flag for #{sym} " \
-                      "(method accepts keywords or post arguments or method does not accept argument splat)")
-      end
-    end
-    nil
-  end unless private_method_defined?(:ruby2_keywords) || method_defined?(:ruby2_keywords)
-  private :ruby2_keywords rescue nil
-end
 
 class Enumerator
   # 2.6's arithmetic sequence: what Range#step and Range#% answer, and what
@@ -9103,11 +9106,11 @@ module Math
                   :sqrt, :tan, :tanh
 end
 
-module Kernel
-  private
-
-  def ruby2_keywords(*names)
-    names
+# `ruby2_keywords' written at the top level is Object.ruby2_keywords. MRI defines it on
+# main's singleton rather than on Kernel, which is where main.private_methods(false) looks.
+class << self
+  private def ruby2_keywords(*names)
+    ::Object.send(:ruby2_keywords, *names)
   end unless private_method_defined?(:ruby2_keywords)
 end
 
@@ -12435,9 +12438,8 @@ class Array
   end
 end
 
-# Hash.ruby2_keywords_hash / .ruby2_keywords_hash? (2.7). Keyword arguments are
-# lowered onto a trailing Hash in this implementation, so the flag is only ever
-# informational; it is stored as a hidden instance variable.
+# Hash.ruby2_keywords_hash and .ruby2_keywords_hash? are the runtime's: the mark is a flag
+# on the hash object, set where a ruby2_keywords method's rest parameter is filled.
 class << Hash
   # the core's try_convert reports a different error and does not accept a nil
   # result from #to_hash
@@ -12445,22 +12447,14 @@ class << Hash
     __ir_try_convert__(object, :to_hash, ::Hash, "Hash")
   end
 
-  def ruby2_keywords_hash?(hash)
-    unless hash.is_a?(Hash)
-      raise TypeError, "wrong argument type #{hash.class} (expected Hash)"
-    end
-    hash.instance_variable_defined?(:@__ruby2_keywords__) &&
-      !!hash.instance_variable_get(:@__ruby2_keywords__)
-  end unless respond_to?(:ruby2_keywords_hash?)
-
+  # The copy is #dup's, so it is of the receiver's own class and carries its instance
+  # variables; only the mark itself comes from the runtime.
   def ruby2_keywords_hash(hash)
-    unless hash.is_a?(Hash)
-      raise TypeError, "wrong argument type #{hash.class} (expected Hash)"
+    unless hash.is_a?(::Hash)
+      ::Kernel.raise(::TypeError, "wrong argument type #{hash.class} (expected Hash)")
     end
-    copy = hash.dup
-    copy.instance_variable_set(:@__ruby2_keywords__, true)
-    copy
-  end unless respond_to?(:ruby2_keywords_hash)
+    __ir_mark_ruby2_keywords_hash__(hash.dup)
+  end
 end
 
 # KeyError gained #receiver and #key in 2.5; Hash#fetch and friends set them.

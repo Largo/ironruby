@@ -418,6 +418,27 @@ namespace IronRuby.Builtins {
         #region define_method (thread-safe)
 
         // thread-safe:
+        /// <summary>
+        /// Records the ruby2_keywords flag on a method, and answers whether the method is one the
+        /// flag can mean anything for - a Ruby method whose parameters are a bare rest. The
+        /// prelude's Module#ruby2_keywords does the argument checking and the warning; this is
+        /// the part that has to reach the method body, which is where the flag lives so that
+        /// every alias of the method shares it.
+        /// </summary>
+        [RubyMethod("__ir_mark_ruby2_keywords__", RubyMethodAttributes.PrivateInstance)]
+        public static bool MarkRuby2Keywords(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+            var info = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
+
+            var method = info as RubyMethodInfo;
+            if (method != null) {
+                return method.TrySetRuby2Keywords();
+            }
+
+            // define_method makes one of these out of a block; the flag lives on the block.
+            var lambda = info as RubyLambdaMethodInfo;
+            return lambda != null && lambda.TrySetRuby2Keywords();
+        }
+
         // Anything that is not a Proc, Method or UnboundMethod: MRI names the three acceptable
         // types rather than reporting a failed conversion to one of them.
         [RubyMethod("define_method")]

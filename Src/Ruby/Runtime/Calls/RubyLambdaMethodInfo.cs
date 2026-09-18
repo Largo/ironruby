@@ -53,6 +53,20 @@ namespace IronRuby.Runtime.Calls {
             return _lambda.Dispatcher.ParameterSignature;
         }
 
+        /// <summary>
+        /// Module#ruby2_keywords on a method made by define_method. The flag goes on the block's
+        /// dispatcher, which is what fills the rest parameter when the method runs.
+        /// </summary>
+        public bool TrySetRuby2Keywords() {
+            var signature = _lambda.Dispatcher.ParameterSignature;
+            if (signature == null || !signature.AcceptsRuby2Keywords) {
+                return false;
+            }
+
+            _lambda.Dispatcher.Ruby2Keywords = true;
+            return true;
+        }
+
         public override int GetArity() {
             var signature = _lambda.Dispatcher.ParameterSignature;
             // define_method turns the block into a method, and a method's parameters bind the

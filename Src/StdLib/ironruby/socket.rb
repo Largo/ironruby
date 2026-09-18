@@ -2147,6 +2147,9 @@ module IronRubySocketErrors__ # :nodoc: all
           raise mapped.equal?(error) ? error : mapped
         end
       end
+      # Several of the wrapped methods take keywords (`exception: false'), which a rest
+      # parameter only passes on as keywords when the method is marked.
+      klass.__send__(:ruby2_keywords, name)
       klass.__send__(:private, name) if klass.private_method_defined?(raw)
     end
   end
@@ -2531,6 +2534,7 @@ class BasicSocket
       __send__(check)
       __send__(raw, *args, &block)
     end
+    ruby2_keywords name
   end
 end
 
@@ -2923,6 +2927,7 @@ module IronRubySocketEOF__ # :nodoc: all
           result
         end
       end
+      klass.__send__(:ruby2_keywords, name)
     end
   end
 end
@@ -2951,6 +2956,9 @@ module IronRubySocketClosed__ # :nodoc: all
         raise IOError, "closed stream" if closed?
         __send__(raw, *args, &block)
       end
+      # The wrapped methods take keywords (`exception: false'), which a rest parameter only
+      # passes on as keywords when the method is marked.
+      klass.__send__(:ruby2_keywords, name)
     end
   end
 end

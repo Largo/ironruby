@@ -139,6 +139,32 @@ namespace IronRuby.Runtime.Calls {
         private readonly string _sourcePath;
         private readonly int _sourceLine;
 
+        /// <summary>
+        /// Set by Proc#ruby2_keywords. It lives on the dispatcher, which a Proc shares with every
+        /// copy of itself, so marking one marks them all - before or after the copy was made.
+        /// </summary>
+        private bool _ruby2Keywords;
+
+        public bool Ruby2Keywords {
+            get { return _ruby2Keywords; }
+            set { _ruby2Keywords = value; }
+        }
+
+        /// <summary>
+        /// The array the block's rest parameter is about to be given. See
+        /// <see cref="RubyOps.NormalizeRestArgument(RubyArray, bool)"/>.
+        /// </summary>
+        protected RubyArray/*!*/ Rest(RubyArray/*!*/ array) {
+            // Only when the trailing hash is going to stay there: a block that declares keywords
+            // of its own has a prologue that takes the hash back off the end, and that prologue
+            // can only recognise it while it still says it is keyword arguments.
+            var signature = ParameterSignature;
+            if (signature != null && !signature.AcceptsRuby2Keywords) {
+                return array;
+            }
+            return RubyOps.NormalizeRestArgument(array, _ruby2Keywords);
+        }
+
         private readonly BlockSignatureAttributes _attributesAndArity;
 
         // the block's parameter list as it was written; null if the front end did not record one
