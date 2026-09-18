@@ -2816,6 +2816,25 @@ namespace IronRuby.Runtime {
             }
         }
 
+        // Names of methods compiled with a use of their block, while :strict_unused_block was off
+        // (MRI's iseq_set_use_block): a block passed to a same-named method is not warned about.
+        private readonly HashSet<string>/*!*/ _methodNamesUsingBlock = new HashSet<string>();
+
+        internal void NoteMethodUsingBlock(string/*!*/ name) {
+            if (IsWarningEnabled("strict_unused_block")) {
+                return;
+            }
+            lock (_methodNamesUsingBlock) {
+                _methodNamesUsingBlock.Add(name);
+            }
+        }
+
+        internal bool IsMethodNameUsingBlock(string/*!*/ name) {
+            lock (_methodNamesUsingBlock) {
+                return _methodNamesUsingBlock.Contains(name);
+            }
+        }
+
         public static readonly string[]/*!*/ WarningCategories =
             new[] { "deprecated", "experimental", "performance", "strict_unused_block" };
 

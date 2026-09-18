@@ -65,13 +65,17 @@ namespace IronRuby.Runtime.Calls {
         // arguments nor parentheses). When nothing answers it MRI raises NameError "undefined local
         // variable or method" rather than NoMethodError.
         IsVariableCall = 256,
+
+        // CallAction only: a call written in Ruby source with a block (literal or &arg), as opposed
+        // to one a library method makes. Only such a call warns that the callee ignores the block.
+        HasSourceBlock = 512,
     }
         
     /// <summary>
     /// RubyScope/RubyContext, (self), (argument){ArgumentCount}, (splatted-argument)?, (block)?
     /// </summary>
     public struct RubyCallSignature : IEquatable<RubyCallSignature> {
-        private const int FlagsCount = 9;
+        private const int FlagsCount = 10;
 
         private const int ResolveOnlyArgumentCount = (int)(UInt32.MaxValue >> FlagsCount);
         private const int MaxArgumentCount = ResolveOnlyArgumentCount - 1;
@@ -89,6 +93,7 @@ namespace IronRuby.Runtime.Calls {
         public bool HasImplicitArguments { get { return (_countAndFlags & (uint)RubyCallFlags.HasImplicitArguments) != 0; } }
         public bool IsSuperCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsSuperCall) != 0; } }
         public bool IsVariableCall { get { return (_countAndFlags & (uint)RubyCallFlags.IsVariableCall) != 0; } }
+        public bool HasSourceBlock { get { return (_countAndFlags & (uint)RubyCallFlags.HasSourceBlock) != 0; } }
 
         // defined? ignores arguments hence we can use one argument number (max) to represent resolve only sites:
         public bool ResolveOnly { get { return ArgumentCount == ResolveOnlyArgumentCount; } }

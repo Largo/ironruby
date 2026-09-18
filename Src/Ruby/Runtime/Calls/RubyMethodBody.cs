@@ -62,6 +62,10 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public MethodDeclaration Ast { get { return _ast; } }
+
+        // Set once the call of this method with a block it ignores has been warned about (or would
+        // have been, had warnings been on): MRI warns once per method definition.
+        internal bool UnusedBlockReported { get; set; }
         public MSA.SymbolDocumentInfo Document { get { return _document; } }
         public bool HasTarget { get { return _ast.Target != null; } }
         public string/*!*/ Name { get { return _ast.Name; } }

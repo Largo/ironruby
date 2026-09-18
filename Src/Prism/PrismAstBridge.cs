@@ -35,6 +35,8 @@ namespace IronRuby.Prism {
         // An eval whose code does not run inside a method: prism parses eval'd code as a partial
         // script and accepts a top-level yield, which MRI's compiler then rejects.
         private bool _evalOutsideMethod;
+        // Whether the method being built uses its block (MethodDefinition.UsesBlock).
+        private bool _usesBlock;
         private bool _isEval;
         // case/in subject temp -> { value, "already computed" flag } holding its #deconstruct result
         private readonly Dictionary<LocalVariable, LocalVariable[]>/*!*/ _deconstructCache =
@@ -619,12 +621,17 @@ namespace IronRuby.Prism {
                 case Pm.RetryNode _: return new RetryStatement(span);
                 case Pm.RedoNode _: return new RedoStatement(span);
                 case Pm.YieldNode yield:
+                    _usesBlock = true;
                     if (!IsYieldAllowed() && _errorSink != null) {
                         _errorSink.Add(_sourceUnit, "Invalid yield", span, 0, Severity.FatalError);
                     }
                     return new YieldCall(yield.Arguments != null ? BuildArguments(yield.Arguments) : null, span);
 
                 case Pm.SuperNode super: {
+                    if (super.Block == null) {
+                        // passes the method's own block on
+                        _usesBlock = true;
+                    }
                     Block superBlock = OptionalBlock(super.Block);
                     var superArgs = super.Arguments != null
                         ? BuildArguments(super.Arguments, ref superBlock)
@@ -632,6 +639,9 @@ namespace IronRuby.Prism {
                     return new SuperCall(superArgs, superBlock, span);
                 }
                 case Pm.ForwardingSuperNode forwardingSuper:
+                    if (forwardingSuper.Block == null) {
+                        _usesBlock = true;
+                    }
                     return new SuperCall(_zsuperArguments,
                         forwardingSuper.Block != null ? BlockDef((Pm.BlockNode)forwardingSuper.Block) : null, span, true);
 
@@ -1474,6 +1484,8 @@ namespace IronRuby.Prism {
             Expression target = node.Receiver != null ? Expr(node.Receiver) : null;
             var scope = new MethodLexicalScope(CurrentScope);
             _scopes.Push(scope);
+            bool enclosingUsesBlock = _usesBlock;
+            _usesBlock = false;
             try {
                 Statements prologue = null;
                 Parameters parameters = Parameters.Empty;
@@ -1481,15 +1493,20 @@ namespace IronRuby.Prism {
                 _zsuperArguments = null;
                 try {
                     if (node.Parameters != null) {
-                        parameters = BuildParameters((Pm.ParametersNode)node.Parameters, false, true, out prologue);
+                        var parametersNode = (Pm.ParametersNode)node.Parameters;
+                        if (parametersNode.Block != null || parametersNode.KeywordRest is Pm.ForwardingParameterNode) {
+                            _usesBlock = true;
+                        }
+                        parameters = BuildParameters(parametersNode, false, true, out prologue);
                     }
                     var body = DefinitionBody(node.Body, span, prologue);
-                    return new MethodDefinition(scope, target, node.Name, parameters, body, span);
+                    return new MethodDefinition(scope, target, node.Name, parameters, body, span) { UsesBlock = _usesBlock };
                 } finally {
                     _zsuperArguments = enclosingZSuperArguments;
                 }
             } finally {
                 _scopes.Pop();
+                _usesBlock = enclosingUsesBlock;
             }
         }
 

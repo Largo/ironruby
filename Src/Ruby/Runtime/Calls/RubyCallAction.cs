@@ -110,7 +110,7 @@ namespace IronRuby.Runtime.Calls {
         protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
             if (Context == null || 
                 Signature.ResolveOnly ||
-                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument)) != 0) {
+                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock)) != 0) {
                 return null;
             }
 
@@ -142,6 +142,11 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
+            // the rule has to check for an ignored block (see BuildCall)
+            if (Signature.HasSourceBlock && RequiresUnusedBlockCheck(method.Info)) {
+                return null;
+            }
+
             var dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
             if (dispatcher != null) {
                 object result = dispatcher.CreateDelegate(MethodDispatcher.UntypedFuncs.Contains(delegateType));
@@ -153,6 +158,11 @@ namespace IronRuby.Runtime.Calls {
         }
 
         #endregion
+
+        private static bool RequiresUnusedBlockCheck(RubyMemberInfo/*!*/ method) {
+            var rubyMethod = method as RubyMethodInfo;
+            return rubyMethod != null && !rubyMethod.UsesBlock;
+        }
 
         protected override bool Build(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, bool defaultFallback) {
             return BuildCall(metaBuilder, _methodName, args, defaultFallback, true);
@@ -181,6 +191,17 @@ namespace IronRuby.Runtime.Calls {
                 }
 
                 method.Info.BuildCall(metaBuilder, args, methodName);
+
+                // MRI 3.4+: a block passed to a method that never uses it may be ignored
+                if (args.Signature.HasSourceBlock && RequiresUnusedBlockCheck(method.Info) && !metaBuilder.Error && metaBuilder.Result != null) {
+                    metaBuilder.Result = Ast.Block(
+                        Methods.WarnUnusedBlock.OpCall(
+                            AstUtils.Convert(args.GetBlockExpression(), typeof(Proc)),
+                            AstUtils.Constant(method.Info, typeof(RubyMethodInfo))
+                        ),
+                        metaBuilder.Result
+                    );
+                }
                 return true;
             } else if (args.Signature.ResolveOnly) {
                 if (!args.Signature.HasImplicitSelf && method.IncompatibleVisibility == RubyMethodVisibility.None) {

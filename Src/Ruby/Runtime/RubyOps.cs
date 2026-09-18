@@ -693,6 +693,10 @@ namespace IronRuby.Runtime {
             
             RubyMethodInfo instanceMethod = null, singletonMethod = null;
 
+            if (body.Ast.UsesBlock) {
+                scope.RubyContext.NoteMethodUsingBlock(body.Name);
+            }
+
             if (instanceOwner != null) {
                 SetMethod(scope.RubyContext, instanceMethod =
                     new RubyMethodInfo(body, DefinitionScope(scope, instanceOwner), instanceOwner, instanceFlags)
@@ -2283,6 +2287,43 @@ namespace IronRuby.Runtime {
         public static bool TraceTopLevelCodeFrame(RubyScope/*!*/ scope, Exception/*!*/ exception) {
             RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
             return false;
+        }
+
+        /// <summary>
+        /// MRI 3.4+ (vm_insnhelper.c warn_unused_block): a block passed from Ruby code to a method
+        /// that never uses it may be ignored. Reported once per method, and - unless
+        /// Warning[:strict_unused_block] is on - not at all for a name some method that does use a
+        /// block also has, since the call may well have meant that one.
+        /// </summary>
+        private static readonly System.Text.RegularExpressions.Regex _ironRubyLibraryFile =
+            new System.Text.RegularExpressions.Regex(@"[/\\](StdLib|Lib)[/\\]ironruby[/\\]");
+
+        [Emitted]
+        public static void WarnUnusedBlock(Proc block, RubyMethodInfo/*!*/ method) {
+            if (block == null || method.Body.UnusedBlockReported) {
+                return;
+            }
+
+            var context = method.Context;
+            bool strict = context.IsWarningEnabled("strict_unused_block");
+            if (!strict && context.IsMethodNameUsingBlock(method.DefinitionName)) {
+                return;
+            }
+
+            method.Body.UnusedBlockReported = true;
+            string file = method.Document != null ? method.Document.FileName : null;
+            if (file != null && _ironRubyLibraryFile.IsMatch(file)) {
+                // IronRuby's own Ruby implementations of what MRI writes in C, which never warns
+                return;
+            }
+
+            if (context.Verbose is bool && ((bool)context.Verbose || strict)) {
+                string label = IronRuby.Compiler.Ast.MethodDefinition.QualifyFrameLabel(method.DefinitionName, method.DeclaringModule);
+                context.ReportWarning(file != null
+                    ? String.Format("the block passed to '{0}' defined at {1}:{2} may be ignored", label, file, method.SourceSpan.Start.Line)
+                    : String.Format("the block may be ignored because '{0}' does not use a block", label)
+                );
+            }
         }
 
         /// <summary>
