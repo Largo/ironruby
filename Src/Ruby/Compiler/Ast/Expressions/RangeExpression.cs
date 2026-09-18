@@ -72,9 +72,9 @@ namespace IronRuby.Compiler.Ast {
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
             int intBegin, intEnd;
             if (IsIntegerRange(out intBegin, out intEnd)) {
-                return (_isExclusive ? Methods.CreateExclusiveIntegerRange : Methods.CreateInclusiveIntegerRange).OpCall(
-                    AstUtils.Constant(intBegin), AstUtils.Constant(intEnd)
-                );
+                // a Range is frozen, and MRI makes a literal one of integers a single object, which
+                // the expression evaluates to every time
+                return AstUtils.Constant(new IronRuby.Builtins.Range(intBegin, intEnd, _isExclusive));
             } else {
                 return (_isExclusive ? Methods.CreateExclusiveRange : Methods.CreateInclusiveRange).OpCall(
                     AstUtils.Box(_begin.TransformRead(gen)),
