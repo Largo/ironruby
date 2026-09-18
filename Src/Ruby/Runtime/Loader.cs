@@ -783,7 +783,17 @@ namespace IronRuby.Runtime {
             }
 
             var result = new List<ResolvedFile>();
-            foreach (var dir in loadPaths) {
+            foreach (var loadPath in loadPaths) {
+                // MRI expands a relative $LOAD_PATH entry (such as ".") against the current
+                // directory, so the feature - and __FILE__ in it - gets an absolute path
+                string dir = loadPath;
+                try {
+                    if (dir.Length > 0 && !Platform.IsAbsolutePath(dir)) {
+                        dir = Platform.GetFullPath(dir);
+                    }
+                } catch (Exception) {
+                    dir = loadPath;
+                }
                 ResolvedFile file = ResolveFile(RubyUtils.CombinePaths(dir, path), extension, appendExtensions, sourceFileExtensions);
                 if (file != null) {
                     result.Add(file);
