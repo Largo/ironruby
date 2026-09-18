@@ -110,6 +110,14 @@ namespace IronRuby.Runtime {
                 scope.SetLocals(locals, variableNames ?? ArrayUtils.EmptyStrings);
             }
             scope.InterpretedFrame = interpretedFrame;
+
+            // While a file's top level runs, a proc created in it can return from it, as MRI's
+            // `proc { return }.call` at the top of a file does (see IsTopLevelReturn).
+            var topLevel = scope as RubyTopLevelScope;
+            if (topLevel != null) {
+                topLevel._activeFlowControlScope = topLevel;
+                topLevel.ActiveThreadId = Environment.CurrentManagedThreadId;
+            }
         }
         
         [Emitted]
@@ -2235,6 +2243,20 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool TraceTopLevelCodeFrame(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
+            return false;
+        }
+
+        /// <summary>
+        /// The exception filter around a file's top-level code: a return from a block at the top
+        /// level unwinds to here and ends the file; anything else gets the frame traced and passes.
+        /// </summary>
+        [Emitted]
+        public static bool IsTopLevelReturn(RubyScope/*!*/ scope, Exception/*!*/ exception) {
+            var unwinder = exception as MethodUnwinder;
+            if (unwinder != null && unwinder.TargetFrame == scope) {
+                return true;
+            }
             RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
             return false;
         }

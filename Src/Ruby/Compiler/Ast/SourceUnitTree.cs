@@ -151,11 +151,23 @@ namespace IronRuby.Compiler.Ast {
 
                 // TODO:
                 var exceptionVariable = Ast.Parameter(typeof(Exception), "#exception");
-                body = AstUtils.Try(
-                    body
-                ).Filter(exceptionVariable, Methods.TraceTopLevelCodeFrame.OpCall(runtimeScopeVariable, exceptionVariable),
-                    Ast.Empty()
-                );
+                var kind = gen.CompilerOptions.FactoryKind;
+                if (kind == TopScopeFactoryKind.None || kind == TopScopeFactoryKind.ModuleEval) {
+                    body = AstUtils.Try(
+                        body
+                    ).Filter(exceptionVariable, Methods.TraceTopLevelCodeFrame.OpCall(runtimeScopeVariable, exceptionVariable),
+                        Ast.Empty()
+                    );
+                } else {
+                    // a file's top level: `return` from a block in it ends the file
+                    body = AstUtils.Try(
+                        body
+                    ).Filter(exceptionVariable, Methods.IsTopLevelReturn.OpCall(runtimeScopeVariable, exceptionVariable),
+                        Ast.Empty()
+                    ).Finally(
+                        Methods.LeaveMethodFrame.OpCall(runtimeScopeVariable)
+                    );
+                }
             } else {
                 body = AstUtils.Constant(null);
             }

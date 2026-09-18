@@ -208,7 +208,7 @@ namespace IronRuby.Runtime {
             }
 
             RuntimeFlowControl owner = proc.LocalScope.FlowControlScope;
-            if (owner.IsActiveMethod) {
+            if (CanReturnTo(proc.LocalScope, owner)) {
                 blockFlowControl.ReturnReason = BlockReturnReason.Return;
                 return new BlockReturnResult(owner, returnValue);
             }
@@ -233,7 +233,7 @@ namespace IronRuby.Runtime {
                 }
 
                 RuntimeFlowControl owner = proc.LocalScope.FlowControlScope;
-                if (owner.IsActiveMethod) {
+                if (CanReturnTo(proc.LocalScope, owner)) {
                     throw new MethodUnwinder(owner, returnValue);
                 }
 
@@ -242,6 +242,30 @@ namespace IronRuby.Runtime {
                 // return from the current method:
                 throw new MethodUnwinder(scope.FlowControlScope, returnValue);
             }
+        }
+
+        /// <summary>
+        /// Whether a return in a block defined in <paramref name="scope"/> can reach
+        /// <paramref name="owner"/>, the frame it returns from. A file's top level qualifies while it
+        /// runs, but not from another thread, and not from a block in a class body, whose flow
+        /// control is the top level's too although MRI rejects a return there.
+        /// </summary>
+        private static bool CanReturnTo(RubyScope/*!*/ scope, RuntimeFlowControl/*!*/ owner) {
+            if (!owner.IsActiveMethod) {
+                return false;
+            }
+
+            var topLevel = owner as RubyTopLevelScope;
+            if (topLevel == null) {
+                return true;
+            }
+
+            for (RubyScope s = scope; s != null && s != topLevel; s = s.Parent) {
+                if (s.Kind == ScopeKind.Module) {
+                    return false;
+                }
+            }
+            return topLevel.ActiveThreadId == Environment.CurrentManagedThreadId;
         }
 
         // post-yield return ops:

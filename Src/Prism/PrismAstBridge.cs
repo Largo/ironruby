@@ -35,6 +35,7 @@ namespace IronRuby.Prism {
         // An eval whose code does not run inside a method: prism parses eval'd code as a partial
         // script and accepts a top-level yield, which MRI's compiler then rejects.
         private bool _evalOutsideMethod;
+        private bool _isEval;
         // case/in subject temp -> { value, "already computed" flag } holding its #deconstruct result
         private readonly Dictionary<LocalVariable, LocalVariable[]>/*!*/ _deconstructCache =
             new Dictionary<LocalVariable, LocalVariable[]>();
@@ -54,7 +55,7 @@ namespace IronRuby.Prism {
             // what RubyCompilerOptions.InitialLocation carries. Only the old parser ever read it, so
             // every eval under prism started at line 1 no matter what it was given.
             return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
-                options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null);
+                options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval);
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path) {
@@ -67,7 +68,7 @@ namespace IronRuby.Prism {
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
-            SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false) {
+            SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false, bool isEval = false) {
 
             // --enable/--disable=frozen-string-literal only sets the default; the magic comment
             // in a file still wins, and prism applies that rule itself.
@@ -86,6 +87,7 @@ namespace IronRuby.Prism {
             bridge._sourceUnit = sourceUnit;
             bridge._errorSink = errorSink;
             bridge._evalOutsideMethod = evalOutsideMethod;
+            bridge._isEval = isEval;
 
             if (result.Errors.Count > 0) {
                 if (errorSink != null && sourceUnit != null) {
@@ -604,6 +606,11 @@ namespace IronRuby.Prism {
                 }
 
                 case Pm.ReturnNode ret:
+                    if (ret.Arguments != null && !_isEval && CurrentScope is TopStaticLexicalScope &&
+                        _errorSink != null && _sourceUnit != null) {
+                        _errorSink.Add(_sourceUnit, "argument of top-level return is ignored", span,
+                            Errors.RuntimeWarning, Severity.Warning);
+                    }
                     return new ReturnStatement(OptionalArguments(ret.Arguments), span);
                 case Pm.BreakNode brk:
                     return new BreakStatement(OptionalArguments(brk.Arguments), span);

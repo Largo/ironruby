@@ -362,6 +362,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IsDefinedUnqualifiedConstant;
         public static MethodInfo/*!*/ IsFalse { get { return _IsFalse ?? (_IsFalse = CallInstruction.CacheFunc<System.Object, System.Boolean>(RubyOps.IsFalse)); } }
         private static MethodInfo _IsFalse;
+        public static MethodInfo/*!*/ IsTopLevelReturn { get { return _IsTopLevelReturn ?? (_IsTopLevelReturn = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.IsTopLevelReturn)); } }
+        private static MethodInfo _IsTopLevelReturn;
         public static MethodInfo/*!*/ IsMethodUnwinderTargetFrame { get { return _IsMethodUnwinderTargetFrame ?? (_IsMethodUnwinderTargetFrame = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.IsMethodUnwinderTargetFrame)); } }
         private static MethodInfo _IsMethodUnwinderTargetFrame;
         public static MethodInfo/*!*/ IsObjectFrozen { get { return _IsObjectFrozen ?? (_IsObjectFrozen = CallInstruction.CacheFunc<IronRuby.Runtime.RubyInstanceData, System.Boolean>(RubyOps.IsObjectFrozen)); } }

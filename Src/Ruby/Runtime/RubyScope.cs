@@ -1234,6 +1234,9 @@ var closureScope = scope as RubyClosureScope;
         // A hosted scope counts as main.
         internal bool IsMain { get; set; } = true;
 
+        // the thread running the top-level code while it is active (see RubyOps.InitializeScope)
+        internal int ActiveThreadId { get; set; }
+
         private readonly RubyGlobalScope/*!*/ _globalScope;
         private readonly RubyContext/*!*/ _context;
         private readonly RubyModule _methodLookupModule;
