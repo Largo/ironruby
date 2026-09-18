@@ -538,7 +538,19 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
-        public static object GetElement(IList/*!*/ self, [DefaultProtocol]IntegerValue index) {
+        public static object GetElement(ConversionStorage<IntegerValue>/*!*/ integerConversion, IList/*!*/ self, object index) {
+            if (index is int) {
+                return GetElement(self, (int)index);
+            }
+            // A Float index is truncated the way MRI's rb_num2long does it - directly, never through
+            // a redefined Float#to_int - and one outside a long is a RangeError.
+            if (index is double) {
+                return GetElement(self, (double)index);
+            }
+            return GetElement(self, Protocols.CastToInteger(integerConversion, index));
+        }
+
+        private static object GetElement(IList/*!*/ self, IntegerValue index) {
             if (!index.IsFixnum) {
                 // MRI indexes with a long, so an index that fits one is merely past the end of any list.
                 long _;
@@ -552,6 +564,14 @@ namespace IronRuby.Builtins {
 
         public static object GetElement(IList/*!*/ self, int index) {
             return InRangeNormalized(self, ref index) ? self[index] : null;
+        }
+
+        private static object GetElement(IList/*!*/ self, double index) {
+            if (Double.IsNaN(index) || index >= 9.2233720368547758E18 || index < -9.2233720368547758E18) {
+                throw RubyExceptions.CreateRangeError(String.Format("float {0} out of range of integer", index));
+            }
+            long truncated = (long)index;
+            return (truncated > Int32.MaxValue || truncated < Int32.MinValue) ? null : GetElement(self, (int)truncated);
         }
 
         [RubyMethod("[]")]
@@ -596,8 +616,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("at")]
-        public static object At(IList/*!*/ self, [DefaultProtocol]IntegerValue index) {
-            return GetElement(self, index);
+        public static object At(ConversionStorage<IntegerValue>/*!*/ integerConversion, IList/*!*/ self, object index) {
+            return GetElement(integerConversion, self, index);
         }
 
         #endregion
