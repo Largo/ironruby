@@ -43,14 +43,20 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static object InitializeCopy(RubyContext/*!*/ context, object self, object source) {
+            // MRI's order (rb_obj_init_copy): copying an object onto itself is nothing to do, even
+            // frozen; otherwise a frozen receiver is refused before the classes are compared.
+            if (ReferenceEquals(self, source) || RubyUtils.IsRubyValueType(self) && Equals(self, source)) {
+                return self;
+            }
+
+            if (context.IsObjectFrozen(self)) {
+                throw RubyExceptions.CreateObjectFrozenError(context, self);
+            }
+
             RubyClass selfClass = context.GetClassOf(self);
             RubyClass sourceClass = context.GetClassOf(source);
             if (sourceClass != selfClass) {
                 throw RubyExceptions.CreateTypeError("initialize_copy should take same class object");
-            }
-
-            if (context.IsObjectFrozen(self)) {
-                throw RubyExceptions.CreateTypeError("can't modify frozen {0}", selfClass.Name);
             }
 
             return self;
@@ -553,6 +559,11 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
 
+            // lambda(&a_lambda) is that lambda
+            if (block.Proc.Kind == ProcKind.Lambda) {
+                return block.Proc;
+            }
+
             return block.Proc.ToLambda(null);
         }
 
@@ -770,12 +781,8 @@ namespace IronRuby.Builtins {
 
         #region =~, !~, ===, <=>, eql?, hash, to_s, inspect, to_a
 
-        [RubyMethod("=~")]
-        public static object Match(object self, object other) {
-            // Default implementation of match that is overridden in descendents (notably String and Regexp)
-            return null;
-        }
-
+        // Object#=~ is gone since Ruby 3.2; #!~ calls whatever #=~ the receiver has, and a
+        // NoMethodError if it has none.
         [RubyMethod("!~")]
         public static bool NotMatch(BinaryOpStorage/*!*/ match, object self, object other) {
             var site = match.GetCallSite("=~", 1);
@@ -971,6 +978,13 @@ namespace IronRuby.Builtins {
             object self, [NotNull]RubyModule/*!*/ module, [NotNullItems]params RubyModule/*!*/[]/*!*/ modules) {
 
             Assert.NotNull(modules);
+
+            // a class is a Module, but not one that can be mixed in
+            foreach (var mixin in new[] { module }.Concat(modules)) {
+                if (mixin is RubyClass) {
+                    throw RubyExceptions.CreateTypeError("wrong argument type Class (expected Module)");
+                }
+            }
 
             // TODO: this is strange:
             RubyUtils.RequireMixins(module.GetOrCreateSingletonClass(), modules);

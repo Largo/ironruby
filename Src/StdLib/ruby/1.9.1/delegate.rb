@@ -118,7 +118,7 @@ class Delegator < BasicObject
   kernel = ::Kernel.dup
   kernel.class_eval do
     [:to_s,:inspect,:=~,:!~,:===,:<=>,:eql?,:hash].each do |m|
-      undef_method m
+      undef_method m if method_defined?(m) # Object#=~ is gone since 3.2
     end
   end
   include kernel

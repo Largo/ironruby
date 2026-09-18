@@ -4459,11 +4459,6 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.CaseEquals)
             );
             
-            DefineLibraryMethod(module, "=~", 0x51, 
-                0x00000000U, 
-                new Func<System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Match)
-            );
-            
             DefineLibraryMethod(module, "abort", 0x52, 
                 0x00000000U, 0x00020004U, 
                 new Action<System.Object>(IronRuby.Builtins.KernelOps.Abort), 

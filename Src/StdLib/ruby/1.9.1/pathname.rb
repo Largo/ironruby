@@ -1069,7 +1069,8 @@ class Pathname    # * mixed *
 end
 
 class Pathname
-  undef =~
+  # Object#=~ is gone since Ruby 3.2, so there may be nothing to undefine
+  undef_method :=~ if method_defined?(:=~)
 end
 
 module Kernel

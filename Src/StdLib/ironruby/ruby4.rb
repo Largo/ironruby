@@ -1828,8 +1828,21 @@ module Kernel
     # names itself "(eval)" or the like, and MRI answers nil for those rather than pointing at
     # wherever the process happens to be.
     return nil if file.nil? || file.empty? || file.start_with?("(")
+    # An eval told a file name that is not a real file answers that name's directory as given.
+    return File.dirname(file) unless File.file?(file)
     File.dirname(File.expand_path(file))
   end unless private_method_defined?(:__dir__)
+
+  # Kernel#readline and #readlines read ARGF, as #gets does.
+  def readline(*args)
+    ::ARGF.readline(*args)
+  end unless private_method_defined?(:readline)
+
+  def readlines(*args)
+    ::ARGF.readlines(*args)
+  end unless private_method_defined?(:readlines)
+
+  module_function :__dir__, :readline, :readlines
 end
 
 class Hash
@@ -10062,6 +10075,9 @@ module Kernel
   def system(*args)
     options = (args.size > 1 && args.last.respond_to?(:to_hash) && !args.last.is_a?(String)) ? args.last.to_hash : {}
     exception = options[:exception]
+    unless exception.nil? || exception == true || exception == false
+      ::Kernel.raise(::ArgumentError, "expected true or false as exception: #{exception.inspect}")
+    end
 
     begin
       pid = Process.spawn(*args)
@@ -12233,6 +12249,14 @@ module Kernel
     return nil if entries.nil?
     entries.map { |entry| Thread::Backtrace::Location.__parse__(entry) }
   end unless private_method_defined?(:caller_locations)
+  module_function :caller_locations
+end
+
+# Object#=~ went away in 3.2; nil keeps one of its own, so `nil =~ re` still answers nil.
+class NilClass
+  def =~(other)
+    nil
+  end unless method_defined?(:=~)
 end
 
 # --- Hash: pieces of the 2.x-4.0 surface the 1.9 core never had ------------
