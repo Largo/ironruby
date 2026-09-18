@@ -432,6 +432,22 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Closes this object and leaves the descriptor open, which is IO#close with #autoclose
+        /// false. What was written is flushed, as MRI does.
+        /// </summary>
+        public void CloseKeepingDescriptor() {
+            if (_stream != null) {
+                try {
+                    _stream.Flush();
+                } catch (ObjectDisposedException) {
+                }
+            }
+            _mode = _mode.Close();
+            _fileDescriptor = -1;
+            _stream = null;
+        }
+
         public void CloseWriter() {
             var duplex = GetStream().BaseStream as DuplexStream;
 
@@ -637,6 +653,18 @@ namespace IronRuby.Builtins {
             }
             var file = stream as System.IO.FileStream;
             return (file != null) ? (int)file.SafeFileHandle.DangerousGetHandle() : -1;
+        }
+
+        /// <summary>
+        /// The descriptor MRI's IO would hold for a stream. IO.popen(cmd, "r+") reads and writes
+        /// two pipes, and MRI's IO is the reading one (the writing one is a second IO tied to it).
+        /// </summary>
+        public static int PrimaryDescriptorOf(System.IO.Stream stream) {
+            var duplex = stream as DuplexStream;
+            if (duplex != null) {
+                stream = (duplex.Reader != null) ? duplex.Reader.BaseStream : duplex.Writer.BaseStream;
+            }
+            return DescriptorOf(stream);
         }
 
         /// <summary>

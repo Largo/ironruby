@@ -40,6 +40,7 @@ using Microsoft.Scripting.Utils;
 namespace IronRuby.Builtins {
     using Ast = Expression;
     using Utils = IronRuby.Runtime.Utils;
+    using TranscodeStorage = CallSiteStorage<Func<CallSite, object, object, object>>;
 
     /// <summary>
     /// Implementation of IO builtin class. 
@@ -329,13 +330,33 @@ namespace IronRuby.Builtins {
                     self.Context.SetStream(self.GetFileDescriptor(), redirected);
                     self.SetStream(redirected);
                 }
+
+                // dup2(2) clears FD_CLOEXEC on the descriptor it points; MRI sets it again on
+                // everything but the standard streams.
+                int native = self.KernelDescriptor;
+                if (native > 2) {
+                    RubyProcess.SetCloseOnExec(native);
+                    self.Context.SetInstanceVariable(self, "@__close_on_exec__", true);
+                }
+                CopyPath(self, source);
                 return self;
             }
 
             self.Context.RedirectFileDescriptor(self.GetFileDescriptor(), source.GetFileDescriptor());
             self.SetStream(source.GetStream());
             self.Mode = source.Mode;
+            CopyPath(self, source);
             return self;
+        }
+
+        // A reopened IO answers the other one's path, as MRI copies it with the descriptor.
+        private static void CopyPath(RubyIO/*!*/ self, RubyIO/*!*/ source) {
+            var file = self as RubyFile;
+            var sourceFile = source as RubyFile;
+            if (file != null && sourceFile != null) {
+                file.Path = sourceFile.Path;
+                file.PathEncoding = sourceFile.PathEncoding;
+            }
         }
 
         [RubyMethod("reopen")]
@@ -393,8 +414,18 @@ namespace IronRuby.Builtins {
             MutableString mode = (modeObject == null || modeObject is Missing) ? null : Protocols.CastToString(toStr, modeObject);
 
             if (RubyFileOps.DirectoryExists(self.Context, path)) {
-                // TODO: What file descriptor should be returned for a directory?
-                return -1;
+                // open(2) takes a directory read-only, and MRI hands that descriptor back. The CLR
+                // has no stream for a directory, so it goes into the table as a bare descriptor.
+                if (!Posix.IsAvailable) {
+                    return -1;
+                }
+                string directory = self.Context.DecodePath(path);
+                int errno;
+                int fd = Posix.Open(directory, Posix.O_RDONLY | Posix.O_CLOEXEC, out errno);
+                if (fd < 0) {
+                    throw Posix.Error(errno, directory);
+                }
+                return self.Context.AllocateFileDescriptor(new DescriptorStream(fd, true, false, true));
             }
 
             // The mode may carry an encoding suffix ("w:utf-8"), which only IOInfo parses.
@@ -988,6 +1019,14 @@ namespace IronRuby.Builtins {
             if (self.Closed) {
                 return;
             }
+
+            // With #autoclose false the descriptor outlives the IO object - another IO may be
+            // using it (IO.new(io.fileno) shares the stream).
+            object autoclose;
+            if (self.Context.TryGetInstanceVariable(self, "@__autoclose", out autoclose) && autoclose is bool && !(bool)autoclose) {
+                self.CloseKeepingDescriptor();
+                return;
+            }
             self.Close();
         }
 
@@ -1024,16 +1063,67 @@ namespace IronRuby.Builtins {
 
         #region fcntl/ioctl, fsync/flush
 
-        [RubyMethod("ioctl")]
         [RubyMethod("fcntl")]
         public static int FileControl(RubyIO/*!*/ self, [DefaultProtocol]int commandId, [Optional]MutableString arg) {
             return self.FileControl(commandId, (arg != null) ? arg.ConvertToBytes() : null);
         }
 
-        [RubyMethod("ioctl")]
         [RubyMethod("fcntl")]
         public static int FileControl(RubyIO/*!*/ self, [DefaultProtocol]int commandId, int arg) {
             return self.FileControl(commandId, arg);
+        }
+
+        // ioctl(2) itself; it used to be fcntl under another name. As in MRI, nil and false pass
+        // 0, true passes 1, an Integer passes itself, and a String is the buffer the call reads
+        // and writes - grown first to the size the request encodes, 256 bytes at least (MRI's
+        // DEFAULT_IOCTL_NARG_LEN), and left at that size.
+        [RubyMethod("ioctl")]
+        public static int IoControl(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ newStorage,
+            RubyIO/*!*/ self, [DefaultProtocol]IntegerValue request, [Optional]object arg) {
+            self.GetStream();
+            int fd = self.KernelDescriptor;
+            if (fd < 0 || !Posix.IsAvailable) {
+                throw new NotSupportedException();
+            }
+
+            long cmd = request.ToInt64();
+            long value = 0;
+            byte[] buffer = null;
+            var str = arg as MutableString;
+            if (str != null) {
+                str.RequireNotFrozen();
+                int length = ((cmd & 0xFFFF0000) == 0) ? 256 : Math.Max((int)((cmd >> 16) & 0x3FFF), 256);
+                buffer = new byte[Math.Max(length, str.GetByteCount())];
+                Buffer.BlockCopy(str.ToByteArray(), 0, buffer, 0, str.GetByteCount());
+            } else if (arg == null || arg == Missing.Value || arg is bool) {
+                value = (arg is bool && (bool)arg) ? 1 : 0;
+            } else if (arg is int) {
+                value = (int)arg;
+            } else if (arg is BigInteger) {
+                value = (long)(BigInteger)arg;
+            } else {
+                throw RubyExceptions.CreateImplicitConversionError(self.Context.GetClassDisplayName(arg), "Integer");
+            }
+
+            int errno;
+            int result = Posix.Ioctl(fd, cmd, buffer, value, out errno);
+            if (result < 0) {
+                // SystemCallError.new(nil, errno) picks the Errno class, Errno::ENOTTY above all.
+                object errorClass;
+                if (self.Context.ObjectClass.TryGetConstant(null, "SystemCallError", out errorClass)) {
+                    var site = newStorage.GetCallSite("new", 2);
+                    var error = site.Target(site, errorClass, null, errno) as Exception;
+                    if (error != null) {
+                        throw error;
+                    }
+                }
+                throw Posix.Error(errno, null);
+            }
+            if (str != null) {
+                str.Clear();
+                str.Append(buffer, 0, buffer.Length);
+            }
+            return result;
         }
 
         [RubyMethod("flush")]
@@ -1291,11 +1381,21 @@ namespace IronRuby.Builtins {
             return 0;
         }
 
+        // MRI refuses to seek past bytes it has read ahead, which would be lost, warns about
+        // written ones it still holds, and answers the new offset.
         [RubyMethod("sysseek")]
-        public static object SysSeek(RubyIO/*!*/ self, [DefaultProtocol]IntegerValue pos, [DefaultProtocol, DefaultParameterValue(SEEK_SET)]int seekOrigin) {
+        public static object SysSeek(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,
+            RubyIO/*!*/ self, [DefaultProtocol]IntegerValue pos, [DefaultProtocol, DefaultParameterValue(SEEK_SET)]int seekOrigin) {
+            var stream = self.GetStream();
+            if (stream.DataBuffered) {
+                throw RubyExceptions.CreateIOError("sysseek for buffered IO");
+            }
+            if (stream.WritePending) {
+                PrintOps.ReportWarning(writeStorage, tosConversion, MutableString.CreateAscii("sysseek for buffered IO"));
+            }
             self.Flush();
             self.Seek(pos.ToInt64(), RubyIO.ToSeekOrigin(seekOrigin));
-            return pos.ToObject();
+            return Pos(self);
         }
 
         [RubyMethod("pos")]
@@ -1362,8 +1462,9 @@ namespace IronRuby.Builtins {
         public static int SysWrite(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,
             RubyContext/*!*/ context, RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
 
+            // MRI warns about what its write buffer holds; read-ahead is simply given back.
             RubyBufferedStream stream = self.GetWritableStream();
-            if (stream.DataBuffered) {
+            if (stream.WritePending) {
                 PrintOps.ReportWarning(writeStorage, tosConversion, MutableString.CreateAscii("syswrite for buffered IO"));
             }
 
@@ -1514,6 +1615,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("sysread")]
         public static MutableString/*!*/ SystemRead(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
+            if (bytes == 0) {
+                // MRI answers a zero-length read before it looks at the stream or the buffer.
+                return buffer ?? MutableString.CreateBinary();
+            }
+
             var stream = self.GetReadableStream();
             if (stream.DataBuffered) {
                 throw RubyExceptions.CreateIOError("sysread for buffered IO");
@@ -1547,6 +1653,12 @@ namespace IronRuby.Builtins {
             var buffer = MutableString.CreateBinary();
             if (bytes == 0) {
                 return buffer;
+            }
+            if (self.GetReadableStream().DataBuffered) {
+                // MRI's buffer would hold whatever the descriptor had ready - #getc and #ungetc
+                // leave only a byte or so in this one - so what is ready is read on top of it.
+                // With bytes in hand this never raises "would block".
+                return ReadOnceWithoutWaiting(self, bytes, buffer);
             }
             return self.AppendAvailableBytes(buffer, bytes) == 0 ? null : buffer;
         }
@@ -1708,34 +1820,55 @@ namespace IronRuby.Builtins {
         // readbyte
 
         [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, RubyIO/*!*/ self) {
-            return ReadLine(scope, self, scope.RubyContext.InputSeparator, -1);
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self) {
+            return RequireLine(Gets(transcode, scope, self));
         }
 
         [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator) {
-            return ReadLine(scope, self, null, -1);
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, [NotNull]Hash/*!*/ options) {
+            return RequireLine(Gets(transcode, scope, self, options));
         }
 
         [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-            if (separatorOrLimit.IsFixnum()) {
-                return ReadLine(scope, self, scope.RubyContext.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                return ReadLine(scope, self, separatorOrLimit.String(), -1);
-            }
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator) {
+            return RequireLine(Gets(transcode, scope, self, separator));
         }
 
         [RubyMethod("readline")]
-        public static MutableString/*!*/ ReadLine(RubyScope/*!*/ scope, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator,
+            [NotNull]Hash/*!*/ options) {
+            return RequireLine(Gets(transcode, scope, self, separator, options));
+        }
 
-            // no dynamic call, modifies $_ scope variable:
-            MutableString result = Gets(scope, self, separator, limit);
-            if (result == null) {
+        [RubyMethod("readline")]
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return RequireLine(Gets(transcode, scope, self, separatorOrLimit));
+        }
+
+        [RubyMethod("readline")]
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit, [NotNull]Hash/*!*/ options) {
+            return RequireLine(Gets(transcode, scope, self, separatorOrLimit, options));
+        }
+
+        [RubyMethod("readline")]
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return RequireLine(Gets(transcode, scope, self, separator, limit));
+        }
+
+        [RubyMethod("readline")]
+        public static MutableString/*!*/ ReadLine(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit, object options) {
+            return RequireLine(Gets(transcode, scope, self, separator, limit, options));
+        }
+
+        private static MutableString/*!*/ RequireLine(MutableString line) {
+            if (line == null) {
                 throw new EOFError("end of file reached");
             }
-
-            return result;
+            return line;
         }
 
         [RubyMethod("readlines")]
@@ -1828,37 +1961,146 @@ namespace IronRuby.Builtins {
             return (c != -1) ? ScriptingRuntimeHelpers.Int32ToObject(c) : null;
         }
 
+        // IO#gets and IO#readline take a chomp: keyword, and they read into $_ of the method
+        // that called them - which is why the keyword and the transcoding are handled here
+        // rather than in a Ruby wrapper, whose own frame would get $_ instead. Keyword
+        // arguments arrive as a trailing Hash flagged IsKeywordArguments.
+
         [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, RubyIO/*!*/ self) {
-            return Gets(scope, self, scope.RubyContext.InputSeparator, -1);
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self) {
+            return Gets(transcode, scope, self, scope.RubyContext.InputSeparator, -1, false);
         }
 
         [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator) {
-            return Gets(scope, self, null, -1);
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, [NotNull]Hash/*!*/ options) {
+            return Gets(transcode, scope, self, scope.RubyContext.InputSeparator, -1, TakeChomp(scope.RubyContext, options));
         }
 
         [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, RubyIO/*!*/ self, [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator) {
+            return Gets(transcode, scope, self, null, -1, false);
+        }
+
+        [RubyMethod("gets")]
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self, DynamicNull separator, [NotNull]Hash/*!*/ options) {
+            return Gets(transcode, scope, self, null, -1, TakeChomp(scope.RubyContext, options));
+        }
+
+        [RubyMethod("gets")]
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
+            return Gets(transcode, scope, self, separatorOrLimit, false);
+        }
+
+        [RubyMethod("gets")]
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit, [NotNull]Hash/*!*/ options) {
+            return Gets(transcode, scope, self, separatorOrLimit, TakeChomp(scope.RubyContext, options));
+        }
+
+        [RubyMethod("gets")]
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+            return Gets(transcode, scope, self, separator, limit, false);
+        }
+
+        [RubyMethod("gets")]
+        public static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit, object options) {
+            return Gets(transcode, scope, self, separator, limit, TakeChomp(scope.RubyContext, options));
+        }
+
+        private static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            Union<MutableString, int> separatorOrLimit, bool chomp) {
             if (separatorOrLimit.IsFixnum()) {
-                return Gets(scope, self, scope.RubyContext.InputSeparator, separatorOrLimit.Fixnum());
+                return Gets(transcode, scope, self, scope.RubyContext.InputSeparator, separatorOrLimit.Fixnum(), chomp);
             } else {
-                return Gets(scope, self, separatorOrLimit.String(), -1);
-            } 
+                return Gets(transcode, scope, self, separatorOrLimit.String(), -1, chomp);
+            }
         }
 
-        [RubyMethod("gets")]
-        public static MutableString Gets(RubyScope/*!*/ scope, RubyIO/*!*/ self, [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
+        private static MutableString Gets(TranscodeStorage/*!*/ transcode, RubyScope/*!*/ scope, RubyIO/*!*/ self,
+            MutableString separator, int limit, bool chomp) {
 
             MutableString result = self.ReadLineOrParagraph(separator, limit);
             if (result != null) {
                 result.IsTainted = true;
+
+                // A stream with an internal encoding or conversion options hands lines back
+                // converted; the conversion is Ruby code (IO#__transcode__ in ruby4.rb).
+                if (self.Enc2 != null || self.ConversionOptions != null) {
+                    var site = transcode.GetCallSite("__transcode__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+                    result = site.Target(site, self, result) as MutableString ?? result;
+                }
+
+                if (chomp) {
+                    ChompLine(result, separator);
+                }
             }
 
             scope.GetInnerMostClosureScope().LastInputLine = result;
             scope.RubyContext.InputProvider.LastInputLineNumber = ++self.LineNumber;
 
             return result;
+        }
+
+        /// <summary>
+        /// MRI tolerates keywords the line readers do not know; only chomp: means anything. A Hash
+        /// passed positionally is a separator or limit argument, and not a usable one.
+        /// </summary>
+        private static bool TakeChomp(RubyContext/*!*/ context, Hash/*!*/ options) {
+            if (!options.IsKeywordArguments) {
+                throw RubyExceptions.CreateImplicitConversionError("Hash", "Integer");
+            }
+            object value;
+            return options.TryGetValue(context.CreateAsciiSymbol("chomp"), out value) && RubyOps.IsTrue(value);
+        }
+
+        // After a separator and a limit only keywords can follow.
+        private static bool TakeChomp(RubyContext/*!*/ context, object options) {
+            var hash = options as Hash;
+            if (hash == null || !hash.IsKeywordArguments) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 3, expected 0..2)");
+            }
+            return TakeChomp(context, hash);
+        }
+
+        /// <summary>
+        /// chomp: removes the separator the read actually stopped at. A nil separator reads
+        /// everything and leaves nothing to remove; the default "\n" takes a "\r" before it too;
+        /// a paragraph (empty separator) loses the run of newlines that ended it, but the last
+        /// paragraph of a file ends at end of file, not at a separator, and keeps its newline.
+        /// </summary>
+        private static void ChompLine(MutableString/*!*/ line, MutableString separator) {
+            if (separator == null) {
+                return;
+            }
+
+            int count = line.GetByteCount();
+            int sepLength = separator.GetByteCount();
+            if (sepLength == 0) {
+                if (count >= 2 && line.GetByte(count - 1) == '\n' && line.GetByte(count - 2) == '\n') {
+                    while (count > 0 && line.GetByte(count - 1) == '\n') {
+                        count--;
+                    }
+                    line.SetByteCount(count);
+                }
+                return;
+            }
+
+            if (count < sepLength) {
+                return;
+            }
+            for (int i = 0; i < sepLength; i++) {
+                if (line.GetByte(count - sepLength + i) != separator.GetByte(i)) {
+                    return;
+                }
+            }
+            count -= sepLength;
+            if (sepLength == 1 && separator.GetByte(0) == '\n' && count > 0 && line.GetByte(count - 1) == '\r') {
+                count--;
+            }
+            line.SetByteCount(count);
         }
 
         [RubyMethod("ungetc")]
@@ -1874,37 +2116,35 @@ namespace IronRuby.Builtins {
 
         #region foreach, each, each_byte, each_line
 
-        // TODO: to_hash, to_str, to_int
-
+        // The reading is Ruby code (IO.__ir_foreach__ in ruby4.rb: it opens the file with the
+        // mode: option and reads through #each_line). What is left here is $_: MRI's foreach
+        // reads into its caller's, so once the block has had every line it is nil.
         [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
-        public static void ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object path) {
-            ForEach(toPath, block, self, path, self.Context.InputSeparator, -1);
-        }
+        public static object ForEach(CallSiteStorage<Func<CallSite, object, Proc, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, RubyClass/*!*/ self, params object[]/*!*/ args) {
 
-        [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
-        public static void ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object path, DynamicNull separator) {
-            ForEach(toPath, block, self, path, null, -1);
-        }
-
-        [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
-        public static void ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object path,
-            [DefaultProtocol, NotNull]Union<MutableString, int> separatorOrLimit) {
-
-            if (separatorOrLimit.IsFixnum()) {
-                ForEach(toPath, block, self, path, self.Context.InputSeparator, separatorOrLimit.Fixnum());
-            } else {
-                ForEach(toPath, block, self, path, separatorOrLimit.String(), -1);
+            object options = null;
+            int count = args.Length;
+            var hash = count > 0 ? args[count - 1] as Hash : null;
+            if (hash != null && hash.IsKeywordArguments) {
+                options = hash;
+                count--;
             }
-        }
-
-        [RubyMethod("foreach", RubyMethodAttributes.PublicSingleton)]
-        public static void ForEach(ConversionStorage<MutableString>/*!*/ toPath, BlockParam block, RubyClass/*!*/ self, object path,
-            [DefaultProtocol]MutableString separator, [DefaultProtocol]int limit) {
-
-            MutableString pathString = Protocols.CastToPath(toPath, path);
-            using (RubyIO io = new RubyIO(self.Context, self.Context.Platform.OpenInputFileStream(pathString.ConvertToString()), IOMode.ReadOnly)) {
-                Each(self.Context, block, io, separator, limit);
+            if (count == 0) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1..3)");
             }
+
+            var rest = new RubyArray();
+            for (int i = 1; i < count; i++) {
+                rest.Add(args[i]);
+            }
+
+            var site = storage.GetCallSite("__ir_foreach__", new RubyCallSignature(3, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            object result = site.Target(site, self, block != null ? block.Proc : null, args[0], rest, options);
+            if (block != null && !(result is BlockReturnResult)) {
+                scope.GetInnerMostClosureScope().LastInputLine = null;
+            }
+            return result;
         }
 
         [RubyMethod("each")]

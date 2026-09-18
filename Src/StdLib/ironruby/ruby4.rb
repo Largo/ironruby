@@ -11620,25 +11620,14 @@ class IO
       return line unless line.end_with?("\n\n")
       return line.sub(/\n+\z/, "")
     end
-    line.end_with?(sep) ? line[0...(line.length - sep.length)] : line
+    # The default separator takes a CR before it too.
+    return line[0...-2] if sep == "\n" && line.end_with?("\r\n")
+    line.end_with?(sep) ?line[0...(line.length - sep.length)] : line
   end
   private :__chomp_line__
 
-  alias_method :__ir_gets__, :gets
-
-  def gets(*args, **opts)
-    args, chomp = __take_chomp__(args, opts)
-    line = __transcode__(__ir_gets__(*args))
-    chomp ? __chomp_line__(line, args) : line
-  end
-
-  alias_method :__ir_readline__, :readline
-
-  def readline(*args, **opts)
-    args, chomp = __take_chomp__(args, opts)
-    line = __transcode__(__ir_readline__(*args))
-    chomp ? __chomp_line__(line, args) : line
-  end
+  # #gets and #readline do chomp: and the transcoding in the built-ins (IoOps.cs):
+  # they set $_ for their caller, and a Ruby wrapper would set its own instead.
 
   alias_method :__ir_readlines__, :readlines
 
@@ -11681,9 +11670,13 @@ class IO
       end
     end
 
-    alias_method :__ir_foreach__, :foreach
-
-    def foreach(name, *args, **options, &block)
+    # IO.foreach itself is a built-in (IoOps.cs) that calls this with the separator and
+    # limit in an Array and the keywords in a Hash, and then sees to its caller's $_.
+    def __ir_foreach__(name, args, options, &block)
+      options ||= {}
+      if args.size > 2
+        ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size + 1}, expected 1..3)")
+      end
       unless block
         return ::Enumerator.new { |y| foreach(name, *args, **options) { |l| y << l } }
       end
@@ -11693,6 +11686,7 @@ class IO
       # MRI's IO.foreach answers nil when it was given a block.
       nil
     end
+    private :__ir_foreach__
   end
 
   # readpartial reads what is there, up to maxlen bytes, and only blocks when
@@ -12062,11 +12056,14 @@ class IO
       if result.nil?
         # End of file empties the buffer before raising, which is what the caller
         # sees if it kept a reference to it.
-        buffer.replace("") if buffer
+        buffer.clear if buffer
         ::Kernel.raise(::EOFError, "end of file reached")
       end
       if buffer
+        # The buffer gets the bytes and keeps its own encoding, as in MRI.
+        encoding = buffer.encoding
         buffer.replace(result)
+        buffer.force_encoding(encoding)
         target || buffer
       else
         result

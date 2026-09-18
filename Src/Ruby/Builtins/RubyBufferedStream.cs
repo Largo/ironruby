@@ -44,6 +44,11 @@ namespace IronRuby.Builtins {
 
         private bool _pushBackPreservesPosition;
 
+        // Whether something was written since the last flush or seek. Writes go straight to the
+        // underlying stream, but MRI would still hold them in its write buffer, and that is what
+        // IO#syswrite and IO#sysseek warn about.
+        private bool _writePending;
+
         private const byte CR = (byte)'\r';
         private const byte LF = (byte)'\n';
 
@@ -62,6 +67,10 @@ namespace IronRuby.Builtins {
             _stream = stream;
             _defaultBufferSize = bufferSize;
             _pushBackPreservesPosition = pushBackPreservesPosition;
+        }
+
+        public bool WritePending {
+            get { return _writePending; }
         }
 
         public Stream/*!*/ BaseStream {
@@ -160,6 +169,7 @@ namespace IronRuby.Builtins {
             // TODO: we might keep the buffered data if we seek within the buffered data (but not in pushed back data):
             // clear any buffer content (including ungetc):
             _bufferStart = _bufferCount = _pushedBackCount = 0;
+            _writePending = false;
 
             return result;
         }
@@ -179,6 +189,7 @@ namespace IronRuby.Builtins {
             FlushRead();
 
             _stream.Write(buffer, offset, count);
+            _writePending = true;
         }
 
         public int WriteBytes(MutableString/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
@@ -189,6 +200,7 @@ namespace IronRuby.Builtins {
         public int WriteBytes(byte[]/*!*/ buffer, int offset, int count, bool preserveEndOfLines) {
             ContractUtils.RequiresArrayRange(buffer.Length, offset, count, "offset", "count");
             FlushRead();
+            _writePending |= count > 0;
 
             if (preserveEndOfLines) {
                 _stream.Write(buffer, offset, count);
@@ -513,8 +525,15 @@ namespace IronRuby.Builtins {
         }
 
         public MutableString ReadParagraph(RubyEncoding/*!*/ encoding, bool preserveEndOfLines, int limit) {
+            // A paragraph starts at its first line that is not empty: MRI swallows the newlines
+            // before it as well as the ones after it.
+            SkipNewlines(preserveEndOfLines);
             var result = ReadLine(MutableString.CreateAscii("\n\n"), encoding, preserveEndOfLines, limit);
+            SkipNewlines(preserveEndOfLines);
+            return result;
+        }
 
+        private void SkipNewlines(bool preserveEndOfLines) {
             int c;
             while ((c = PeekByteNormalizeEoln(preserveEndOfLines)) != -1) {
                 if (c != '\n') {
@@ -522,19 +541,32 @@ namespace IronRuby.Builtins {
                 }
                 ReadByteNormalizeEoln(preserveEndOfLines);
             }
-
-            return result;
         }
 
         /// <summary>
-        /// Whether a byte can only be the continuation of a character that started earlier, so
-        /// that a byte limit that lands on it has to be stretched to the end of that character -
-        /// which is what MRI does, and why a limit of 2 can return three bytes.
+        /// Whether the bytes end part way through a character, so that a byte limit that lands
+        /// there has to be stretched to the end of that character - which is what MRI does, and
+        /// why a limit of 2 can return three bytes.
         /// </summary>
-        private static bool IsContinuationByte(RubyEncoding/*!*/ encoding, int b) {
-            // Only UTF-8 is self-synchronising in a way we can read off a single byte; in a
+        private static bool EndsWithIncompleteCharacter(RubyEncoding/*!*/ encoding, MutableString/*!*/ str) {
+            // Only UTF-8 is self-synchronising in a way we can read off the bytes; in a
             // single-byte encoding every byte is a character of its own anyway.
-            return encoding.StrictEncoding.CodePage == 65001 && (b & 0xC0) == 0x80;
+            if (encoding.StrictEncoding.CodePage != 65001) {
+                return false;
+            }
+
+            int count = str.GetByteCount();
+            int head = count - 1;
+            while (head >= 0 && count - head < 4 && (str.GetByte(head) & 0xC0) == 0x80) {
+                head--;
+            }
+            if (head < 0) {
+                return false;
+            }
+
+            int lead = str.GetByte(head);
+            int length = (lead >= 0xC2 && lead <= 0xDF) ? 2 : (lead >= 0xE0 && lead <= 0xEF) ? 3 : (lead >= 0xF0 && lead <= 0xF4) ? 4 : 1;
+            return count - head < length;
         }
 
         public MutableString ReadLine(MutableString/*!*/ separator, RubyEncoding/*!*/ encoding, bool preserveEndOfLines, int limit) {
@@ -545,6 +577,7 @@ namespace IronRuby.Builtins {
 
             int separatorOffset = 0;
             int separatorLength = separator.GetByteCount();
+            int extraLimit = 16;
             MutableString result = MutableString.CreateBinary(encoding);
 
             do {
@@ -559,8 +592,13 @@ namespace IronRuby.Builtins {
                     separatorOffset = 0;
                 }
 
-                if (result.GetByteCount() >= limit && !IsContinuationByte(encoding, PeekByte(0))) {
-                    break;
+                if (result.GetByteCount() >= limit) {
+                    // MRI relaxes the limit a byte at a time while the last character is
+                    // incomplete, but by 16 bytes at most (extra_limit in io.c).
+                    if (extraLimit == 0 || !EndsWithIncompleteCharacter(encoding, result)) {
+                        break;
+                    }
+                    extraLimit--;
                 }
 
                 b = ReadByteNormalizeEoln(preserveEndOfLines);
@@ -584,6 +622,7 @@ namespace IronRuby.Builtins {
         public override void Flush() {
             FlushRead();
             _stream.Flush();
+            _writePending = false;
         }
 
         public override long Length {
