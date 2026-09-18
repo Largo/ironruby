@@ -126,6 +126,25 @@ namespace IronRuby.Runtime.Calls {
 
                 method = targetClass.ResolveSuperMethodNoLock(currentMethodName, currentDeclaringModule).InvalidateSitesOnOverride().Info;
 
+                // A module's method bound (UnboundMethod#bind) to an object that does not include the
+                // module: MRI runs it as if the module sat just above the object's class, so super
+                // looks the name up on that class. (A refinement is not an ancestor either, but its
+                // super is resolved from the refined module.)
+                if (method == null && !currentDeclaringModule.IsClass && currentDeclaringModule.RefinedModule == null
+                    && !targetClass.HasAncestorNoLock(currentDeclaringModule)) {
+                    var candidate = targetClass.ResolveMethodNoLock(currentMethodName, VisibilityContext.AllVisible).InvalidateSitesOnOverride().Info;
+
+                    // A compiled method body is shared by every `def' of it and remembers the module of
+                    // the first, so the running body can report a module the receiver never included
+                    // (a `def' re-run in Module.new). Landing on that same body again would recurse.
+                    RubyMemberInfo current;
+                    bool skipHidden = false;
+                    if (candidate != null && !(currentDeclaringModule.TryGetMethod(currentMethodName, ref skipHidden, out current)
+                        && current != null && candidate.IsEquivalentTo(current))) {
+                        method = candidate;
+                    }
+                }
+
                 if (_signature.ResolveOnly) {
                     metaBuilder.Result = AstUtils.Constant(method != null);
                     return true;

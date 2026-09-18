@@ -33,7 +33,7 @@ namespace IronRuby.Builtins {
         /// The finalizers of one object. It hangs off the object, so the CLR finalizes it once the object
         /// is gone; the context runs whatever is left at exit. Each finalizer is called with the object's id.
         /// </summary>
-        private sealed class FinalizerInvoker : IExitFinalizer {
+        private sealed class FinalizerInvoker : IExitFinalizer, IPerObjectState {
             public const string InstanceVariableName = "<FINALIZER>";
 
             private readonly RubyContext/*!*/ _context;
@@ -51,6 +51,16 @@ namespace IronRuby.Builtins {
 
             public List<object>/*!*/ Finalizers {
                 get { return _finalizers; }
+            }
+
+            // dup and clone copy the finalizers: they run once for each object, with its own id
+            public object CopyFor(object copy) {
+                var result = new FinalizerInvoker(_context, _callSite, RubyUtils.GetObjectId(_context, copy));
+                lock (_finalizers) {
+                    result._finalizers.AddRange(_finalizers);
+                }
+                _context.RegisterExitFinalizer(result);
+                return result;
             }
 
             ~FinalizerInvoker() {
