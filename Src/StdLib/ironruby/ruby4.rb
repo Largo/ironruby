@@ -303,8 +303,9 @@ module Enumerable
         raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
       end
       # The pattern wins and the block is never called, which is worth saying out loud.
+      # MRI names the line that called #all? and friends: this helper, then the method, then it.
       if block && !args.empty? && !$VERBOSE.nil?
-        warn "warning: given block not used"
+        warn "given block not used", uplevel: 2
       end
     end
     private :__check_pattern_args__
@@ -369,7 +370,7 @@ module Enumerable
           args[-1] = name
         end
         if block && !$VERBOSE.nil?
-          warn "warning: given block not used"
+          warn "given block not used", uplevel: 1
         end
       end
       inject_without_name_check(*args, &block)
@@ -721,7 +722,8 @@ module Enumerable
       size = n
       size = size.to_int if !size.is_a?(Integer) && size.respond_to?(:to_int)
       raise ArgumentError, message if size.is_a?(Integer) && size <= 0
-      n
+      # the converted size, so that #to_int is called once, as in MRI
+      size.is_a?(Integer) ? size : n
     end
     private :__slice_size__
 
@@ -7933,8 +7935,19 @@ class Enumerator
       end
     end
 
+    # Only Range#step, Range#% and Numeric#step make one: .new is undefined and .allocate refuses.
+    class << self
+      alias_method :__allocate__, :allocate
+      private :__allocate__
+      undef_method :new
+
+      def allocate
+        ::Kernel.raise(::TypeError, "allocator undefined for #{self}")
+      end
+    end
+
     def self.__build__(from, to, by, exclude_end, source, inspect_str = nil)
-      seq = allocate
+      seq = __allocate__
       seq.__send__(:__arith_init__, from, to, by, exclude_end, source, inspect_str)
       seq
     end
@@ -8167,7 +8180,10 @@ class Data
     result
   end
 
-  def with(**kwargs)
+  def with(*args, **kwargs)
+    unless args.empty?
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)")
+    end
     return self if kwargs.empty?
     names = __data_members__
     updates = {}
@@ -13188,13 +13204,18 @@ class Range
       if block
         ::Kernel.raise(::ArgumentError, "#step iteration for beginless ranges is meaningless")
       end
-      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self)
+      written = n.nil? ? "((#{inspect}).step)" : "((#{inspect}).step(#{n.inspect}))"
+      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, written)
     end
 
     ::Kernel.raise(::ArgumentError, "step can't be 0") if numeric && unit == 0
 
     unless block
-      return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self) if numeric
+      if numeric
+        # inspected the way it was written: ((1..10).step) or ((1..10).step(2))
+        written = n.nil? ? "((#{inspect}).step)" : "((#{inspect}).step(#{n.inspect}))"
+        return ::Enumerator::ArithmeticSequence.__build__(b, e, unit, exclude_end?, self, written)
+      end
       range = self
       return ::Enumerator.new { |y| range.step(n) { |x| y << x } }
     end
@@ -13216,7 +13237,9 @@ class Range
   end
 
   def %(n)
-    step(n)
+    seq = step(n)
+    seq.instance_variable_set(:@inspect_str, "((#{inspect}).%(#{n.inspect}))") if seq.is_a?(::Enumerator::ArithmeticSequence)
+    seq
   end
 
   # The generic walk: decide which way the range runs, check that adding the

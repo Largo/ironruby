@@ -1176,7 +1176,11 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("fill")]
-        public static IList/*!*/ Fill(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, object obj, object start, [DefaultParameterValue(null)]object length) {
+        public static IList/*!*/ Fill(ConversionStorage<int>/*!*/ fixnumCast, BlockParam block, IList/*!*/ self, object obj, object start, [DefaultParameterValue(null)]object length) {
+            // with a block the value comes from the block, so three arguments are one too many
+            if (block != null) {
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 3, expected 0..2)");
+            }
             int startFixnum = (start == null) ? 0 : Protocols.CastToFixnum(fixnumCast, start);
             if (length == null) {
                 return Fill(self, obj, startFixnum);
