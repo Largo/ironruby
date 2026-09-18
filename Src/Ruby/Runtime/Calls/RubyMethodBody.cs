@@ -20,6 +20,7 @@ using MSA = Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections.Generic;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
@@ -65,19 +66,85 @@ namespace IronRuby.Runtime.Calls {
         public bool HasTarget { get { return _ast.Target != null; } }
         public string/*!*/ Name { get { return _ast.Name; } }
 
+        // The lexical modules the first compilation was made for, when they run through the
+        // singleton class of a plain object; null otherwise. See GetDelegate.
+        private RubyModule[] _singletonLexicalModules;
+        private List<KeyValuePair<RubyModule[], Delegate>> _lexicalVariants;
+
         internal Delegate GetDelegate(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             if (_delegate == null) {
                 lock (this) {
                     if (_delegate == null) {
-                        // TODO: remove options
-                        AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
-                        MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule);
-                        _delegate = RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
+                        _singletonLexicalModules = GetObjectSingletonLexicalModules(declaringScope);
+                        _delegate = Compile(declaringScope, declaringModule);
+                    }
+                }
+            }
+
+            // The declaring scope is baked into the compiled body, which is shared by every
+            // execution of the `def'. For `class << obj' run once per obj (in a loop, a method)
+            // each run has its own singleton class, and constants inside the method have to be
+            // looked up there, so such a body is compiled once per lexical module chain.
+            if (_singletonLexicalModules != null) {
+                var modules = GetLexicalModules(declaringScope);
+                if (!SameModules(modules, _singletonLexicalModules)) {
+                    lock (this) {
+                        if (_lexicalVariants == null) {
+                            _lexicalVariants = new List<KeyValuePair<RubyModule[], Delegate>>();
+                        }
+                        foreach (var variant in _lexicalVariants) {
+                            if (SameModules(modules, variant.Key)) {
+                                return variant.Value;
+                            }
+                        }
+                        var result = Compile(declaringScope, declaringModule);
+                        _lexicalVariants.Add(new KeyValuePair<RubyModule[], Delegate>(modules, result));
+                        return result;
                     }
                 }
             }
 
             return _delegate;
+        }
+
+        private Delegate/*!*/ Compile(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            // TODO: remove options
+            AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
+            MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule);
+            return RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
+        }
+
+        private static RubyModule/*!*/[]/*!*/ GetLexicalModules(RubyScope/*!*/ scope) {
+            var result = new List<RubyModule>();
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                if (s.Module != null) {
+                    result.Add(s.Module);
+                }
+            }
+            return result.ToArray();
+        }
+
+        private static RubyModule[] GetObjectSingletonLexicalModules(RubyScope/*!*/ scope) {
+            var modules = GetLexicalModules(scope);
+            foreach (var module in modules) {
+                var cls = module as RubyClass;
+                if (cls != null && cls.IsSingletonClass && !(cls.SingletonClassOf is RubyModule)) {
+                    return modules;
+                }
+            }
+            return null;
+        }
+
+        private static bool SameModules(RubyModule/*!*/[]/*!*/ a, RubyModule/*!*/[]/*!*/ b) {
+            if (a.Length != b.Length) {
+                return false;
+            }
+            for (int i = 0; i < a.Length; i++) {
+                if (a[i] != b[i]) {
+                    return false;
+                }
+            }
+            return true;
         }
     }
 }

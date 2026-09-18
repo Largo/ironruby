@@ -795,11 +795,13 @@ namespace IronRuby.Runtime {
         /// </summary>
         private static void CheckConstantVisibility(RubyModule/*!*/ owner, string/*!*/ name) {
             bool isPrivate;
+            RubyModule declaringOwner;
             using (owner.Context.ClassHierarchyLocker()) {
                 isPrivate = owner.IsPrivateConstantInAncestors(name);
+                declaringOwner = isPrivate ? owner.GetConstantOwnerNoLock(name) : null;
             }
             if (isPrivate) {
-                RubyContext.SetPrivateConstantReference(owner);
+                RubyContext.SetPrivateConstantReference(declaringOwner ?? owner);
                 owner.Context.ResolveMissingConstant(owner, name);
             }
         }
@@ -950,11 +952,21 @@ namespace IronRuby.Runtime {
 
                 ConstantStorage storage;
                 RubyModule owner = null;
+                bool isPrivateGlobal = false;
                 if (!isGlobal) {
                     missingConstantOwner = scope.TryResolveConstantNoLock(scope.GlobalScope, name, out storage, out owner);
                 } else if (context.ObjectClass.TryResolveConstantNoLock(scope.GlobalScope, name, out storage)) {
-                    missingConstantOwner = null;
-                    owner = context.ObjectClass;
+                    if (context.ObjectClass.IsPrivateConstant(name)) {
+                        // `::NAME' is a qualified reference, which a private constant of Object is out of reach of
+                        RubyContext.SetPrivateConstantReference(context.ObjectClass);
+                        missingConstantOwner = context.ObjectClass;
+                        storage = default(ConstantStorage);
+                        // a cached miss would lose the private-constant message
+                        isPrivateGlobal = true;
+                    } else {
+                        missingConstantOwner = null;
+                        owner = context.ObjectClass;
+                    }
                 } else {
                     missingConstantOwner = context.ObjectClass;
                 }
@@ -973,7 +985,7 @@ namespace IronRuby.Runtime {
                     newCacheValue = ConstantSiteCache.WeakMissingConstant;
                 }
 
-                if (!context.IsAutoloadInProgress && !deprecated) {
+                if (!context.IsAutoloadInProgress && !deprecated && !isPrivateGlobal && (isGlobal || !IsLexicallyInObjectSingleton(scope))) {
                     cache.Update(newCacheValue, newVersion);
                 }
             }
@@ -1003,7 +1015,7 @@ namespace IronRuby.Runtime {
                 object result = ResolveQualifiedConstant(scope, qualifiedName, topModule, true, out storage, out anyMissing);
 
                 // cache result only if no constant was missing:
-                if (!anyMissing && !context.IsAutoloadInProgress) {
+                if (!anyMissing && !context.IsAutoloadInProgress && (isGlobal || !IsLexicallyInObjectSingleton(scope))) {
                     Debug.Assert(result == storage.Value);
                     cache.Update(storage.WeakValue ?? result, newVersion);
                 }
@@ -1054,6 +1066,22 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// Code in `class << obj' runs once per obj when it sits in a loop or a method, and every run
+        /// has its own singleton class - and its own classes nested in it - to find constants in,
+        /// while a constant site's cache is keyed only on the constant version. Such lookups are not
+        /// cached. `class << self' in a class or module body, the common form, keeps the cache.
+        /// </summary>
+        private static bool IsLexicallyInObjectSingleton(RubyScope/*!*/ scope) {
+            for (RubyScope s = scope; s != null; s = s.Parent) {
+                var cls = s.Module as RubyClass;
+                if (cls != null && cls.IsSingletonClass && !(cls.SingletonClassOf is RubyModule)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        /// <summary>
         /// defined? A
         /// </summary>
         [Emitted]
@@ -1064,7 +1092,7 @@ namespace IronRuby.Runtime {
                 
                 ConstantStorage storage;
                 bool exists = scope.TryResolveConstantNoLock(null, name, out storage) == null;
-                if (!context.IsAutoloadInProgress) {
+                if (!context.IsAutoloadInProgress && !IsLexicallyInObjectSingleton(scope)) {
                     cache.Update(exists, newVersion);
                 }
                 return exists;
@@ -1081,7 +1109,8 @@ namespace IronRuby.Runtime {
                 int newVersion = context.ConstantAccessVersion;
 
                 ConstantStorage storage;
-                bool exists = context.ObjectClass.TryResolveConstantNoLock(null, name, out storage);
+                bool exists = context.ObjectClass.TryResolveConstantNoLock(null, name, out storage) &&
+                    !context.ObjectClass.IsPrivateConstant(name);
                 if (!context.IsAutoloadInProgress) {
                     cache.Update(exists, newVersion);
                 }
@@ -1117,7 +1146,7 @@ namespace IronRuby.Runtime {
                 bool exists = IsVisibleConstantDefined(owner, context, qualifiedName[qualifiedName.Length - 1], out storage);
                 
                 // cache result only if no constant was missing:
-                if (!anyMissing && !context.IsAutoloadInProgress) {
+                if (!anyMissing && !context.IsAutoloadInProgress && (isGlobal || !IsLexicallyInObjectSingleton(scope))) {
                     cache.Update(exists, newVersion);
                 }
 
@@ -1284,7 +1313,8 @@ namespace IronRuby.Runtime {
             }
 
             if (owner.IsPrivateConstantInAncestors(name)) {
-                RubyContext.SetPrivateConstantReference(owner);
+                // the NameError names the module that made the constant private, as MRI's does
+                RubyContext.SetPrivateConstantReference(owner.GetConstantOwnerNoLock(name) ?? owner);
                 storage = default(ConstantStorage);
                 return false;
             }
