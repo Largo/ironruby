@@ -1269,6 +1269,10 @@ namespace IronRuby.Runtime {
                 return module.GetOrCreateSingletonClass();
             }
 
+            // A frozen string can have no singleton class, so asking a chilled one for its own is
+            // the same kind of change as writing to it, and MRI warns the same way.
+            MutableString.ReportChilledChange(obj);
+
             return GetOrCreateInstanceSingleton(obj, null, null, null, null);
         }
 
@@ -1761,6 +1765,17 @@ namespace IronRuby.Runtime {
             return GetImmediateClassOf(target).ResolveMethod(name, visibility);
         }
 
+        /// <summary>
+        /// Method resolution on behalf of a lexical position, so that reflection done where a
+        /// `using' is in effect finds what a call from there would - Kernel#method, #public_method
+        /// and #respond_to? all report refined methods in MRI.
+        /// </summary>
+        public MethodResolutionResult ResolveMethodWithRefinements(object target, string/*!*/ name, VisibilityContext visibility,
+            RubyScope scope) {
+
+            return GetImmediateClassOf(target).ResolveMethodWithRefinements(name, visibility, scope);
+        }
+
         // thread-safe:
         public bool TryGetModule(RubyGlobalScope autoloadScope, string/*!*/ moduleName, out RubyModule result) {
             using (ClassHierarchyLocker()) {
@@ -2045,6 +2060,10 @@ namespace IronRuby.Runtime {
             if (IsObjectFrozen(obj, out data)) {
                 throw RubyExceptions.CreateObjectFrozenError(this, obj);
             }
+
+            // Giving a chilled string literal an instance variable is a change a frozen string
+            // could not take either, so MRI warns about it as it warns about a write.
+            MutableString.ReportChilledChange(obj);
             return data;
         }
 
@@ -2937,9 +2956,17 @@ namespace IronRuby.Runtime {
             if (mutatedAt != null) {
                 message.Append(mutatedAt).Append(": ");
             }
-            message.Append("warning: literal string will be frozen in the future");
-            if (createdAt == null) {
-                message.Append(" (run with --debug-frozen-string-literal for more information)");
+
+            if (str.IsChilledSymbolString) {
+                // Symbol#to_s hands back a chilled string, and MRI says which symbol it came from
+                // rather than calling it a literal - there is no literal to point at. The symbol
+                // is spelled exactly as the string reads, quoting and all, as MRI spells it.
+                message.Append("warning: string returned by :").Append(str.ToString()).Append(".to_s will be frozen in the future");
+            } else {
+                message.Append("warning: literal string will be frozen in the future");
+                if (createdAt == null) {
+                    message.Append(" (run with --debug-frozen-string-literal for more information)");
+                }
             }
             message.Append('\n');
 
@@ -2975,19 +3002,20 @@ namespace IronRuby.Runtime {
                     return false;
                 }
 
-                // "file:line:in `method'"
+                // "file:line:in `method'", read from the right: a file name can hold colons of
+                // its own - an eval inside an eval is called "(eval at file:line)" - so the line
+                // number is the last thing before ":in", not the first thing after the path.
                 string first = backtrace[0].ToString();
-                int firstColon = first.IndexOf(':');
-                if (firstColon < 0) {
+                int inIndex = first.LastIndexOf(":in ", StringComparison.Ordinal);
+                string head = (inIndex >= 0) ? first.Substring(0, inIndex) : first;
+
+                int colon = head.LastIndexOf(':');
+                if (colon < 0 || !Int32.TryParse(head.Substring(colon + 1), out line)) {
+                    line = 0;
                     return false;
                 }
-                int secondColon = first.IndexOf(':', firstColon + 1);
-                string lineText = (secondColon < 0)
-                    ? first.Substring(firstColon + 1)
-                    : first.Substring(firstColon + 1, secondColon - firstColon - 1);
 
-                Int32.TryParse(lineText, out line);
-                path = first.Substring(0, firstColon);
+                path = head.Substring(0, colon);
                 return true;
             } catch (Exception) {
                 path = null;
@@ -3286,6 +3314,21 @@ namespace IronRuby.Runtime {
             SystemExit lastSystemExit = null;
             Exception lastException = null;
 
+            // `Signal.trap("EXIT")' runs before the at_exit blocks, as MRI's does.
+            var exitHandler = ExitSignalHandler;
+            if (exitHandler != null) {
+                ExitSignalHandler = null;
+                try {
+                    exitHandler();
+                } catch (SystemExit e) {
+                    lastSystemExit = e;
+                } catch (Exception e) {
+                    CurrentException = e;
+                    lastException = e;
+                    _runtimeErrorSink.WriteMessage(MutableString.CreateMutable(FormatException(e), RubyEncoding.UTF8));
+                }
+            }
+
             while (true) {
                 Proc[] handlers;
                 lock (ShutdownHandlersLock) {
@@ -3494,6 +3537,13 @@ namespace IronRuby.Runtime {
         }
 
         public Action InterruptSignalHandler { get; set; }
+
+        /// <summary>
+        /// What `Signal.trap("EXIT")' installed, if anything. EXIT is not a signal the operating
+        /// system ever sends; it is a handler the runtime runs on its way out, ahead of the
+        /// at_exit blocks. The Signal library sets it, because the handler is its to call.
+        /// </summary>
+        public Action ExitSignalHandler { get; set; }
 
         #endregion
 

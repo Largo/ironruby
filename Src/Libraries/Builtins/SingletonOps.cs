@@ -142,7 +142,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("using", RubyMethodAttributes.PrivateInstance)]
         public static object Using(RubyScope/*!*/ scope, object/*!*/ self, object module) {
             for (RubyScope s = scope; s != null; s = s.Parent) {
-                if (s.Kind == ScopeKind.Method || s.Kind == ScopeKind.BlockMethod) {
+                // A class or module body is not the top level either: `module X; MAIN.send(:using,
+                // m); end' activates for X's body, not for main's file, which is not what the
+                // caller can have meant.
+                if (s.Kind == ScopeKind.Method || s.Kind == ScopeKind.BlockMethod || s.Kind == ScopeKind.Module) {
                     throw RubyExceptions.CreateRuntimeError("main.using is permitted only at toplevel");
                 }
                 if (s.Kind == ScopeKind.TopLevel) {

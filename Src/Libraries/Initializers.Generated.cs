@@ -4732,7 +4732,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "method", 0x51, 
                 0x00040008U, 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.String, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.KernelOps.GetMethod)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.String, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.KernelOps.GetMethod)
             );
             
             DefineLibraryMethod(module, "methods", 0x51, 
@@ -4789,6 +4789,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "protected_methods", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.KernelOps.GetProtectedMethods)
+            );
+            
+            DefineLibraryMethod(module, "public_method", 0x51, 
+                0x00040008U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.String, IronRuby.Builtins.RubyMethod>(IronRuby.Builtins.KernelOps.GetPublicMethod)
             );
             
             DefineLibraryMethod(module, "public_methods", 0x51, 
@@ -4850,7 +4855,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "respond_to?", 0x51, 
                 0x00040008U, 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, System.Object, System.String, System.Boolean, System.Boolean>(IronRuby.Builtins.KernelOps.RespondTo)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.String, System.Boolean, System.Boolean>(IronRuby.Builtins.KernelOps.RespondTo)
             );
             
             DefineLibraryMethod(module, "select", 0x52, 
@@ -4876,6 +4881,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "set_trace_func", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc>(IronRuby.Builtins.KernelOps.SetTraceListener)
+            );
+            
+            DefineLibraryMethod(module, "singleton_class", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyClass>(IronRuby.Builtins.KernelOps.GetSingletonClass)
             );
             
             DefineLibraryMethod(module, "singleton_methods", 0x51, 

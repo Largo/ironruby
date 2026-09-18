@@ -382,6 +382,14 @@ namespace IronRuby.Builtins {
             return (symbol != null) ? symbol.ToString() : null;
         }
 
+        /// <summary>
+        /// Whether a handler means "do not run anything of mine": the three symbolic ones and nil.
+        /// </summary>
+        internal static bool IsDefaultOrIgnore(object command) {
+            command = NormalizeCommand(command);
+            return IsDefault(command) || IsSystemDefault(command) || IsIgnore(command);
+        }
+
         private static bool IsDefault(object command) {
             return CommandName(command) == "DEFAULT";
         }

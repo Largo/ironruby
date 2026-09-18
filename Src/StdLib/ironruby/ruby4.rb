@@ -10448,11 +10448,14 @@ class Binding
   end unless method_defined?(:receiver)
 
   def eval(code, file = nil, line = nil)
-    if file
-      ::Kernel.eval(code, self, file, line || 1)
-    else
-      ::Kernel.eval(code, self)
-    end
+    return ::Kernel.eval(code, self, file, line || 1) if file
+
+    # Kernel#eval names an unnamed eval after the place it was written, and that place is
+    # this method unless it is named here: the caller of Binding#eval is the one that wrote it.
+    at = caller_locations(1, 1)
+    at = at && at.first
+    return ::Kernel.eval(code, self) unless at
+    ::Kernel.eval(code, self, "(eval at #{at.path}:#{at.lineno})", line || 1)
   end unless method_defined?(:eval)
 
   def local_variables
@@ -13461,26 +13464,6 @@ module Kernel
     converted
   end
   module_function :String
-
-  # rb_obj_public_method: #method restricted to public methods. A private or
-  # protected method is reported as undefined, but #method_missing/
-  # #respond_to_missing? are consulted exactly as #method consults them.
-  def public_method(name)
-    sym = name.is_a?(::Symbol) ? name : (name.respond_to?(:to_str) ? name.to_str.to_sym : name)
-    if sym.is_a?(::Symbol)
-      begin
-        visible = singleton_class.public_method_defined?(sym)
-      rescue ::TypeError
-        visible = self.class.public_method_defined?(sym)
-      end
-      # Not a real public method: only #respond_to_missing?(name, false) - which
-      # is what #respond_to? consults - can still produce one.
-      unless visible || respond_to?(sym)
-        ::Kernel.raise(::NameError, "undefined method `#{sym}' for class `#{self.class}'")
-      end
-    end
-    method(name)
-  end
 
   # Kernel#Hash (1.9). Only nil and [] are special-cased; everything else must
   # answer #to_hash with a Hash.

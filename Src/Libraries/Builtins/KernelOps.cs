@@ -1302,7 +1302,9 @@ namespace IronRuby.Builtins {
         // This method is a binder intrinsic and the behavior of the binder needs to be adjusted appropriately if changed.
         [RubyMethod("respond_to?")]
         public static bool RespondTo(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ respondToMissingStorage,
-            RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ methodName, [Optional]bool includePrivate) {
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName, [Optional]bool includePrivate) {
+
+            var context = scope.RubyContext;
 
             // Without include_private only *public* methods count. Resolving with the receiver's own
             // class as the visibility context, which is what the bool overload does, also makes
@@ -1311,7 +1313,8 @@ namespace IronRuby.Builtins {
                 ? VisibilityContext.AllVisible
                 : new VisibilityContext(RubyMethodAttributes.Public);
 
-            if (context.ResolveMethod(self, methodName, visibility).Found) {
+            // A refinement active where #respond_to? was called counts, as it does for a call.
+            if (context.ResolveMethodWithRefinements(self, methodName, visibility, scope).Found) {
                 return true;
             }
 
@@ -1540,9 +1543,13 @@ namespace IronRuby.Builtins {
         // thread-safe:
         [RubyMethod("method")]
         public static RubyMethod/*!*/ GetMethod(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ respondToMissingStorage,
-            RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ name) {
 
-            RubyMemberInfo info = context.ResolveMethod(self, name, VisibilityContext.AllVisible).Info;
+            var context = scope.RubyContext;
+
+            // A refinement active where #method was called is active for it: MRI hands back the
+            // refined method, whose #owner is the refinement.
+            RubyMemberInfo info = context.ResolveMethodWithRefinements(self, name, VisibilityContext.AllVisible, scope).Info;
             if (info != null) {
                 return new RubyMethod(self, info, name);
             }
@@ -1561,6 +1568,54 @@ namespace IronRuby.Builtins {
             }
 
             throw RubyExceptions.CreateUndefinedMethodError(context.GetClassOf(self), name);
+        }
+
+        /// <summary>
+        /// rb_obj_public_method: #method restricted to public methods. A private or protected
+        /// method is reported as undefined, but #method_missing and #respond_to_missing? are
+        /// consulted exactly as #method consults them. In C# rather than in the prelude because
+        /// a refinement is active for the lexical place the call was written, and a Ruby wrapper
+        /// would ask from the prelude's place instead.
+        /// </summary>
+        [RubyMethod("public_method")]
+        public static RubyMethod/*!*/ GetPublicMethod(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ respondToMissingStorage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ name) {
+
+            var context = scope.RubyContext;
+            RubyMemberInfo info = context.ResolveMethodWithRefinements(self, name, VisibilityContext.AllVisible, scope).Info;
+
+            if (info != null) {
+                if (info.Visibility == RubyMethodVisibility.Public) {
+                    return new RubyMethod(self, info, name);
+                }
+                throw RubyExceptions.CreateNameError("method `{0}' for class `{1}' is {2}",
+                    name, context.GetClassDisplayName(self),
+                    info.Visibility == RubyMethodVisibility.Private ? "private" : "protected");
+            }
+
+            // Nothing of that name is defined, so only a public #respond_to_missing? can still
+            // produce one - asked with include_private false, unlike #method, which asks true.
+            var site = respondToMissingStorage.GetCallSite("respond_to_missing?", 2);
+            if (Protocols.IsTrue(site.Target(site, self, context.StringifyIdentifier(name),
+                ScriptingRuntimeHelpers.BooleanToObject(false)))) {
+
+                var missing = context.ResolveMethod(self, Symbols.MethodMissing, VisibilityContext.AllVisible).Info;
+                if (missing != null) {
+                    return RubyMethod.CreateMethodMissing(self, missing, name);
+                }
+            }
+
+            throw RubyExceptions.CreateUndefinedMethodError(context.GetClassOf(self), name);
+        }
+
+        /// <summary>
+        /// `class &lt;&lt; obj; self; end' as a method. In C# rather than in the prelude so that a
+        /// warning raised on the way - a chilled string literal being given a singleton class is
+        /// one - names the caller's line and not the prelude's.
+        /// </summary>
+        [RubyMethod("singleton_class")]
+        public static RubyClass/*!*/ GetSingletonClass(RubyScope/*!*/ scope, object self) {
+            return RubyOps.DefineSingletonClass(scope, self);
         }
 
         // 1.9: public: public_method

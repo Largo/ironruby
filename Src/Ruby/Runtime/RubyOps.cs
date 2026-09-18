@@ -634,7 +634,7 @@ namespace IronRuby.Runtime {
 
             if (instanceOwner != null) {
                 SetMethod(scope.RubyContext, instanceMethod =
-                    new RubyMethodInfo(body, scope, instanceOwner, instanceFlags)
+                    new RubyMethodInfo(body, DefinitionScope(scope, instanceOwner), instanceOwner, instanceFlags)
                 );
             }
 
@@ -656,6 +656,23 @@ namespace IronRuby.Runtime {
 
             // Ruby 2.1+: def returns the method name as a symbol (enables `private def foo`)
             return scope.RubyContext.CreateSymbol(body.Name, RubyEncoding.UTF8);
+        }
+
+        /// <summary>
+        /// The scope a method body is compiled against. Normally the one the `def' was written
+        /// in; for a method of a refinement, one that also has the refinement's holder in use, so
+        /// that the body sees the other refinements the same module declares. The refine block
+        /// had them active while it ran, but that activation goes away with the block, and the
+        /// body runs later.
+        /// </summary>
+        private static RubyScope/*!*/ DefinitionScope(RubyScope/*!*/ scope, RubyModule/*!*/ owner) {
+            if (!owner.IsRefinement || owner.RefinementHolder == null) {
+                return scope;
+            }
+
+            var result = new RubyModuleScope(scope, owner);
+            result.ActivateRefinements(owner.RefinementHolder);
+            return result;
         }
 
         private static void SetMethod(RubyContext/*!*/ callerContext, RubyMethodInfo/*!*/ method) {

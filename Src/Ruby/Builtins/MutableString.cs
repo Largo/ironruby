@@ -84,6 +84,11 @@ namespace IronRuby.Builtins {
         // freezing this is temporary and reversible, so it gets its own bit.
         private const uint IsTemporarilyLockedFlag = 1 << 12;
 
+        // A chilled string that came from Symbol#to_s rather than from a literal. MRI words the
+        // warning differently for those, naming the symbol - which is this very string's content,
+        // so nothing beyond the bit has to be remembered.
+        private const uint IsChilledSymbolStringFlag = 1 << 13;
+
         private const uint MutationGuardFlags =
             IsFrozenFlag | CopyOnWriteFlag | IsChilledFlag | IsTemporarilyLockedFlag;
 
@@ -415,6 +420,8 @@ namespace IronRuby.Builtins {
 
             if ((flags & IsChilledFlag) != 0) {
                 // Report once: after this the string is an ordinary mutable one.
+                // The symbol bit stays set: the reporter reads it to choose the wording, and it
+                // means nothing once the chilled bit is gone.
                 flags &= ~IsChilledFlag;
                 _flags = flags;
 
@@ -459,6 +466,36 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Symbol#to_s hands back a chilled string too, and MRI names the symbol in the warning
+        /// rather than calling it a literal. The symbol is the string's own content, so marking
+        /// it takes nothing but a bit - and Symbol#to_s is hot enough that it had better not.
+        /// </summary>
+        public static MutableString/*!*/ ChillAsSymbolString(MutableString/*!*/ str) {
+            str._flags |= IsChilledFlag | IsChilledSymbolStringFlag;
+            return str;
+        }
+
+        public bool IsChilledSymbolString {
+            get { return (_flags & IsChilledSymbolStringFlag) != 0; }
+        }
+
+        /// <summary>
+        /// Gives a copy the chilled state of the string it came from, which is what #clone does
+        /// with it. Whatever the original would have warned about, the copy warns about too.
+        /// </summary>
+        public static void CopyChilledState(MutableString/*!*/ source, MutableString/*!*/ copy) {
+            if (!source.IsChilled) {
+                return;
+            }
+
+            if (source.IsChilledSymbolString) {
+                ChillAsSymbolString(copy);
+            } else {
+                copy.Chill();
+            }
+        }
+
+        /// <summary>
         /// A literal in a file with no frozen_string_literal comment: mutable, but the first
         /// mutation is worth a deprecation warning.
         /// </summary>
@@ -469,6 +506,24 @@ namespace IronRuby.Builtins {
 
         public bool IsChilled {
             get { return (_flags & IsChilledFlag) != 0; }
+        }
+
+        /// <summary>
+        /// Reports, once, that a chilled string is being changed in a way that is not a write to
+        /// its characters: given a singleton class, or given an instance variable. MRI warns about
+        /// those too, because a frozen string could not have either.
+        /// </summary>
+        public static void ReportChilledChange(object obj) {
+            var str = obj as MutableString;
+            if (str == null || (str._flags & IsChilledFlag) == 0) {
+                return;
+            }
+
+            str._flags &= ~IsChilledFlag;
+            var reporter = ChilledMutationReporter;
+            if (reporter != null) {
+                reporter(str);
+            }
         }
 
         private void MutateContent(uint setFlags) {

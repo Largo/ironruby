@@ -329,8 +329,13 @@ namespace IronRuby.Prism {
                         range.Right != null ? Expr(range.Right) : Literal.Nil(span),
                         HasFlag(range, Pm.RangeFlags.ExcludeEnd), span);
 
-                case Pm.InterpolatedStringNode interp:
-                    return new StringConstructor(StringParts(interp.Parts), StringKind.Mutable, span);
+                case Pm.InterpolatedStringNode interp: {
+                    // `"a" "b"' is one literal written in two pieces. prism reports it as an
+                    // interpolated string with nothing interpolated; MRI treats it as the single
+                    // literal it looks like, frozen or chilled with the rest of the file's.
+                    var folded = TryFoldAdjacentLiterals(interp, span);
+                    return folded ?? new StringConstructor(StringParts(interp.Parts), StringKind.Mutable, span);
+                }
                 case Pm.InterpolatedSymbolNode interpSymbol:
                     return new StringConstructor(StringParts(interpSymbol.Parts), StringKind.Symbol, span);
                 case Pm.XStringNode xstr:
@@ -852,6 +857,47 @@ namespace IronRuby.Prism {
         /// is not the same as saying false: the literal is chilled, mutable but warning the first
         /// time it is mutated.
         /// </summary>
+        /// <summary>
+        /// The one literal behind a string written as several adjacent ones, or null when the
+        /// node really does interpolate something - or holds bytes rather than characters, where
+        /// concatenating the pieces is not this layer's job.
+        /// </summary>
+        private Expression TryFoldAdjacentLiterals(Pm.InterpolatedStringNode/*!*/ node, SourceSpan span) {
+            if (node.Parts == null || node.Parts.Length == 0) {
+                return null;
+            }
+
+            RubyEncoding encoding = null;
+            var text = new System.Text.StringBuilder();
+            foreach (var part in node.Parts) {
+                var str = part as Pm.StringNode;
+                if (str == null) {
+                    return null;
+                }
+
+                var partEncoding = LiteralEncoding(str);
+                if (encoding == null) {
+                    encoding = partEncoding;
+                } else if (encoding != partEncoding) {
+                    return null;
+                }
+
+                var value = LiteralValue(str.Unescaped, partEncoding) as string;
+                if (value == null) {
+                    return null;
+                }
+                text.Append(value);
+            }
+
+            var mutability = HasFlag(node, Pm.InterpolatedStringNodeFlags.Frozen)
+                ? StringLiteralMutability.Frozen
+                : HasFlag(node, Pm.InterpolatedStringNodeFlags.Mutable)
+                    ? StringLiteralMutability.Mutable
+                    : StringLiteralMutability.Chilled;
+
+            return new StringLiteral(text.ToString(), encoding, mutability, span);
+        }
+
         private static StringLiteralMutability StringMutability(Pm.PmNode/*!*/ node) {
             if (HasFlag(node, Pm.StringFlags.Frozen)) {
                 return StringLiteralMutability.Frozen;

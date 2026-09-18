@@ -63,6 +63,18 @@ namespace IronRuby.Builtins {
             }
 
             int number = PosixSignals.ToNumber(context, signalId, true);
+            if (number == SignalExit) {
+                // EXIT is not a signal at all - nothing sends it - so it is the runtime's
+                // shutdown that has to run it, which is what this hands over.
+                object exitCommand = command;
+                context.ExitSignalHandler = PosixSignals.IsDefaultOrIgnore(exitCommand)
+                    ? null
+                    : new Action(() => {
+                        var exitSite = callStorage.GetCallSite("call", 1);
+                        exitSite.Target(exitSite, exitCommand, ScriptingRuntimeHelpers.Int32ToObject(0));
+                    });
+            }
+
             if (number == SignalInterrupt) {
                 var proc = command as Proc;
                 context.InterruptSignalHandler = (proc != null) ? new Action(() => proc.Call(null)) : null;
@@ -111,6 +123,7 @@ namespace IronRuby.Builtins {
         }
 
         private const int SignalInterrupt = 2;
+        private const int SignalExit = 0;
 
         #endregion
     }

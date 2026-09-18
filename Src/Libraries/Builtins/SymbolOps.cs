@@ -37,9 +37,13 @@ namespace IronRuby.Builtins {
         #region to_s, inspect, to_sym, to_clr_string, to_proc
 
         [RubyMethod("id2name")]
+        /// <summary>
+        /// A fresh String each time, chilled since Ruby 3.4: mutating it warns, because a future
+        /// version means to hand back the symbol's own frozen string instead.
+        /// </summary>
         [RubyMethod("to_s")]
         public static MutableString/*!*/ ToString(RubySymbol/*!*/ self) {
-            return self.String.Clone();
+            return MutableString.ChillAsSymbolString(self.String.Clone());
         }
 
         [RubyMethod("inspect")]

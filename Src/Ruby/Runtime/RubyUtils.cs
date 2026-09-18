@@ -309,6 +309,14 @@ namespace IronRuby.Runtime {
             initializeCopySite.Target(initializeCopySite, copy, obj);
             if (cloneSemantics) {
                 context.FreezeObjectBy(copy, obj);
+
+                // #clone carries the chilled state of a string over with the frozen one; #dup
+                // does not, which is why this is here and not in the copy itself.
+                var original = obj as MutableString;
+                var duplicate = copy as MutableString;
+                if (original != null && duplicate != null) {
+                    MutableString.CopyChilledState(original, duplicate);
+                }
             }
 
             return true;
@@ -1154,6 +1162,20 @@ namespace IronRuby.Runtime {
             return context.CreateSourceUnit(new BinaryContentProvider(code.ToByteArray()), path, code.Encoding.Encoding, SourceCodeKind.File);
         }
 
+        /// <summary>
+        /// What `__FILE__' is inside an eval that was not told a file name: MRI names the place
+        /// the eval was written, as "(eval at file:line)". A nested eval nests the same way,
+        /// because the outer one's name is the file the inner one was written in.
+        /// </summary>
+        private static string/*!*/ DefaultEvalFileName(RubyContext/*!*/ context) {
+            string path;
+            int line;
+            if (!context.TryGetCurrentSourceLocation(out path, out line) || path == null) {
+                return "(eval)";
+            }
+            return "(eval at " + path + ":" + line + ")";
+        }
+
         public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module, MutableString file, int line) {
             Assert.NotNull(code, targetScope);
 
@@ -1166,7 +1188,8 @@ namespace IronRuby.Runtime {
 
             // we want to create a new top-level local scope:
             var options = CreateCompilerOptionsForEval(targetScope, methodScope, module != null, line);
-            var source = CreateRubySourceUnit(context, code, file != null ? file.ConvertToString() : "(eval)");
+            var source = CreateRubySourceUnit(context, code,
+                file != null ? file.ConvertToString() : DefaultEvalFileName(context));
 
             Expression<EvalEntryPointDelegate> lambda;
             try {
