@@ -1809,6 +1809,20 @@ namespace IronRuby.Runtime {
             return value;
         }
 
+        /// <summary>
+        /// A plain read of a global, which in verbose mode warns when the global was never assigned
+        /// (MRI's rb_gvar_undef_getter). `$x ||= v' reads without the warning.
+        /// </summary>
+        [Emitted]
+        public static object ReadGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
+            object value;
+            var context = scope.RubyContext;
+            if (!context.TryGetGlobalVariable(scope, name, out value) && context.Verbose is bool && (bool)context.Verbose) {
+                context.ReportWarning(String.Format("global variable '${0}' not initialized", name), true);
+            }
+            return value;
+        }
+
         [Emitted]
         public static bool IsDefinedGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             GlobalVariable variable;

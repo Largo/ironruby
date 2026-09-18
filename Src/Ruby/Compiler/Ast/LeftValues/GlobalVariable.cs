@@ -38,7 +38,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformReadVariable(AstGenerator/*!*/ gen, bool tryRead) {
-            return Methods.GetGlobalVariable.OpCall(gen.CurrentScopeVariable, TransformName(gen));
+            return (tryRead ? Methods.GetGlobalVariable : Methods.ReadGlobalVariable).OpCall(gen.CurrentScopeVariable, TransformName(gen));
         }
 
         internal override MSA.Expression/*!*/ TransformWriteVariable(AstGenerator/*!*/ gen, MSA.Expression/*!*/ rightValue) {

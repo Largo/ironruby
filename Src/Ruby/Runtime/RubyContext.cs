@@ -694,7 +694,7 @@ namespace IronRuby.Runtime {
             // produces the deprecation warning rather than an unknown-global nil.
             DefineGlobalVariableNoLock("=", Runtime.GlobalVariables.IgnoreCase);
 
-            DefineGlobalVariableNoLock("SAFE", Runtime.GlobalVariables.SafeLevel);
+            // $SAFE is an ordinary global since Ruby 3.0, so it is not defined here.
 
             try {
                 TrySetCurrentProcessVariables();
@@ -755,6 +755,8 @@ namespace IronRuby.Runtime {
                     _globalVariables["-i"] = new GlobalVariableInfo(
                         MutableString.Create(_options.InplaceMode, GetPathEncoding()).Freeze()
                     );
+                } else {
+                    _globalVariables["-i"] = new GlobalVariableInfo(null);
                 }
 
                 // Hash

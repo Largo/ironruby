@@ -364,6 +364,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IsFalse;
         public static MethodInfo/*!*/ WarnUnusedBlock { get { return _WarnUnusedBlock ?? (_WarnUnusedBlock = CallInstruction.CacheAction<IronRuby.Builtins.Proc, IronRuby.Runtime.Calls.RubyMethodInfo>(RubyOps.WarnUnusedBlock)); } }
         private static MethodInfo _WarnUnusedBlock;
+        public static MethodInfo/*!*/ ReadGlobalVariable { get { return _ReadGlobalVariable ?? (_ReadGlobalVariable = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.ReadGlobalVariable)); } }
+        private static MethodInfo _ReadGlobalVariable;
         public static MethodInfo/*!*/ IsTopLevelReturn { get { return _IsTopLevelReturn ?? (_IsTopLevelReturn = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.IsTopLevelReturn)); } }
         private static MethodInfo _IsTopLevelReturn;
         public static MethodInfo/*!*/ IsMethodUnwinderTargetFrame { get { return _IsMethodUnwinderTargetFrame ?? (_IsMethodUnwinderTargetFrame = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.IsMethodUnwinderTargetFrame)); } }
