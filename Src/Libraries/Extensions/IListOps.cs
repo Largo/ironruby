@@ -538,7 +538,19 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
-        public static object GetElement(IList/*!*/ self, [DefaultProtocol]int index) {
+        public static object GetElement(IList/*!*/ self, [DefaultProtocol]IntegerValue index) {
+            if (!index.IsFixnum) {
+                // MRI indexes with a long, so an index that fits one is merely past the end of any list.
+                long _;
+                if (!index.Bignum.AsInt64(out _)) {
+                    throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+                }
+                return null;
+            }
+            return GetElement(self, index.Fixnum);
+        }
+
+        public static object GetElement(IList/*!*/ self, int index) {
             return InRangeNormalized(self, ref index) ? self[index] : null;
         }
 
@@ -584,7 +596,7 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("at")]
-        public static object At(IList/*!*/ self, [DefaultProtocol]int index) {
+        public static object At(IList/*!*/ self, [DefaultProtocol]IntegerValue index) {
             return GetElement(self, index);
         }
 
@@ -624,8 +636,28 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // MRI checks frozen before converting the index, so a frozen array rejects a[:foo] = 1
+        // with FrozenError rather than TypeError. Hence the untyped index parameters below.
+        private static int CastIndex(ConversionStorage<int>/*!*/ fixnumCast, object index) {
+            return index is int ? (int)index : Protocols.CastToFixnum(fixnumCast, index);
+        }
+
         [RubyMethod("[]=")]
-        public static object SetElement(RubyArray/*!*/ self, [DefaultProtocol]int index, object value) {
+        public static object SetElement(ConversionStorage<int>/*!*/ fixnumCast, IList/*!*/ self, object index, object value) {
+            RequireNotFrozen(self);
+            int i = CastIndex(fixnumCast, index);
+            RubyArray array = self as RubyArray;
+            return array != null ? SetElement(array, i, value) : SetElement(self, i, value);
+        }
+
+        [RubyMethod("[]=")]
+        public static object SetElement(ConversionStorage<IList>/*!*/ arrayTryCast, ConversionStorage<int>/*!*/ fixnumCast,
+            IList/*!*/ self, object index, object length, object value) {
+            RequireNotFrozen(self);
+            return SetElement(arrayTryCast, self, CastIndex(fixnumCast, index), CastIndex(fixnumCast, length), value);
+        }
+
+        public static object SetElement(RubyArray/*!*/ self, int index, object value) {
             index = NormalizeIndexThrowIfNegative(self, index);
 
             if (index >= self.Count) {
@@ -635,8 +667,7 @@ namespace IronRuby.Builtins {
             return self[index] = value;
         }
 
-        [RubyMethod("[]=")]
-        public static object SetElement(IList/*!*/ self, [DefaultProtocol]int index, object value) {
+        public static object SetElement(IList/*!*/ self, int index, object value) {
             index = NormalizeIndexThrowIfNegative(self, index);
 
             if (index < self.Count) {
@@ -648,9 +679,8 @@ namespace IronRuby.Builtins {
             return value;
         }
 
-        [RubyMethod("[]=")]
         public static object SetElement(ConversionStorage<IList>/*!*/ arrayTryCast, IList/*!*/ self, 
-            [DefaultProtocol]int index, [DefaultProtocol]int length, object value) {
+            int index, int length, object value) {
             if (length < 0) {
                 throw RubyExceptions.CreateIndexError("negative length ({0})", length);
             }

@@ -8676,17 +8676,16 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "[]", 0x51, 
                 0x00010000U, 0x00060000U, 0x00000004U, 0x00000008U, 
-                new Func<System.Collections.IList, System.Int32, System.Object>(IronRuby.Builtins.IListOps.GetElement), 
+                new Func<System.Collections.IList, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.IListOps.GetElement), 
                 new Func<IronRuby.Runtime.UnaryOpStorage, System.Collections.IList, System.Int32, System.Int32, System.Collections.IList>(IronRuby.Builtins.IListOps.GetElements), 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Collections.IList, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.IListOps.GetElements), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.UnaryOpStorage, System.Collections.IList, IronRuby.Builtins.Range, System.Collections.IList>(IronRuby.Builtins.IListOps.GetElements)
             );
             
             DefineLibraryMethod(module, "[]=", 0x51, 
-                0x00010000U, 0x00010000U, 0x00060000U, 0x00000008U, 
-                new Func<IronRuby.Builtins.RubyArray, System.Int32, System.Object, System.Object>(IronRuby.Builtins.IListOps.SetElement), 
-                new Func<System.Collections.IList, System.Int32, System.Object, System.Object>(IronRuby.Builtins.IListOps.SetElement), 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, System.Collections.IList, System.Int32, System.Int32, System.Object, System.Object>(IronRuby.Builtins.IListOps.SetElement), 
+                0x00000000U, 0x00000000U, 0x00000008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, System.Collections.IList, System.Object, System.Object, System.Object>(IronRuby.Builtins.IListOps.SetElement), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Runtime.ConversionStorage<System.Int32>, System.Collections.IList, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.IListOps.SetElement), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Collections.IList>, IronRuby.Runtime.ConversionStorage<System.Int32>, System.Collections.IList, IronRuby.Builtins.Range, System.Object, System.Object>(IronRuby.Builtins.IListOps.SetElement)
             );
             
@@ -8736,7 +8735,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "at", 0x51, 
                 0x00010000U, 
-                new Func<System.Collections.IList, System.Int32, System.Object>(IronRuby.Builtins.IListOps.At)
+                new Func<System.Collections.IList, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.IListOps.At)
             );
             
             DefineLibraryMethod(module, "clear", 0x51, 
@@ -9010,7 +9009,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "slice", 0x51, 
                 0x00010000U, 0x00060000U, 0x00000004U, 0x00000008U, 
-                new Func<System.Collections.IList, System.Int32, System.Object>(IronRuby.Builtins.IListOps.GetElement), 
+                new Func<System.Collections.IList, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.IListOps.GetElement), 
                 new Func<IronRuby.Runtime.UnaryOpStorage, System.Collections.IList, System.Int32, System.Int32, System.Collections.IList>(IronRuby.Builtins.IListOps.GetElements), 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Collections.IList, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.IListOps.GetElements), 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.UnaryOpStorage, System.Collections.IList, IronRuby.Builtins.Range, System.Collections.IList>(IronRuby.Builtins.IListOps.GetElements)
