@@ -783,9 +783,9 @@ namespace IronRuby.Runtime {
             owner.SetConstantLocation(name, sourcePath, sourceLine);
 
             if (owner.SetConstantChecked(name, value)) {
-                // MRI names the owner unless it is Object: "already initialized constant M::X"
-                owner.Context.ReportWarning(String.Format("already initialized constant {0}{1}",
-                    owner.IsObjectClass ? "" : owner.Name + "::", name));
+                // MRI names the owner unless it is Object: "already initialized constant M::X",
+                // and an anonymous owner by its inspect form, "#<Module:0x...>::X"
+                owner.Context.ReportWarning("already initialized constant " + owner.MakeNestedModuleName(name));
             }
 
             // Initializes anonymous module's name, publishes the module:
@@ -988,12 +988,18 @@ namespace IronRuby.Runtime {
                     throw RubyExceptions.CreateTypeError("wrong argument type nil (expected Module)");
                 }
 
-                if (module == target) {
-                    throw RubyExceptions.CreateArgumentError("cyclic include detected");
-                }
-
                 if (module.IsClass) {
                     throw RubyExceptions.CreateTypeError("wrong argument type Class (expected Module)");
+                }
+
+                // including a module that already has the target among its ancestors would make a cycle
+                // (MRI checks the whole chain, not just the module itself); the monitor is reentrant:
+                bool cyclic;
+                using (target.Context.ClassHierarchyLocker()) {
+                    cyclic = module == target || module.HasAncestorNoLock(target);
+                }
+                if (cyclic) {
+                    throw RubyExceptions.CreateArgumentError("cyclic include detected");
                 }
 
                 if (module.Context != target.Context) {

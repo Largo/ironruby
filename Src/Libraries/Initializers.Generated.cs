@@ -5980,8 +5980,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "alias_method", 0x51, 
-                0x0006000cU, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.String, System.String, System.Object>(IronRuby.Builtins.ModuleOps.AliasMethod)
+                0x00040008U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Builtins.RubyModule, System.Object, System.String, System.Object>(IronRuby.Builtins.ModuleOps.AliasMethod)
             );
             
             DefineLibraryMethod(module, "ancestors", 0x51, 
@@ -5995,7 +5995,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "attr", 0x51, 
-                0x00020004U, 0x80020004U, 
+                0x00020004U, 0x00020004U, 0x80020004U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.Attr), 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.Attr), 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.String[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.Attr)
             );
@@ -6035,7 +6036,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "class_exec", 0x51, 
-                0x80000001U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.Execute)
             );
             
@@ -6056,7 +6057,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "class_variables", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.ClassVariables)
+                new Func<IronRuby.Builtins.RubyModule, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.ClassVariables)
             );
             
             DefineLibraryMethod(module, "const_added", 0x5a, 
@@ -6202,7 +6203,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "module_exec", 0x51, 
-                0x80000001U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.Builtins.ModuleOps.Execute)
             );
             
@@ -6379,7 +6380,8 @@ namespace IronRuby.Builtins {
         
         private static void LoadModule_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "constants", 0x61, 
-                0x00000000U, 
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetGlobalConstants), 
                 new Func<IronRuby.Builtins.RubyModule, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetGlobalConstants)
             );
             

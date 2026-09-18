@@ -130,6 +130,12 @@ namespace IronRuby.Runtime.Calls {
                 int mandatory = arity >= 0 ? arity : -arity - 1;
                 int maximum = _lambda.Dispatcher.HasUnsplatParameter ? Int32.MaxValue : _lambda.Dispatcher.ParameterCount;
 
+                // { |a,| } is compiled with a hidden unsplat parameter, yet as a method it takes exactly one argument:
+                var signature = _lambda.Dispatcher.ParameterSignature;
+                if (maximum == Int32.MaxValue && signature != null && signature.MaxArgumentCount >= 0) {
+                    maximum = signature.MaxArgumentCount;
+                }
+
                 if (actual < mandatory || actual > maximum) {
                     if (mandatory == maximum) {
                         metaBuilder.SetWrongNumberOfArgumentsError(actual, mandatory);

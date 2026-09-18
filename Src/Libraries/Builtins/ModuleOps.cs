@@ -91,6 +91,12 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
             }
 
+            foreach (var module in modules) {
+                if (module.IsRefinement) {
+                    throw RubyExceptions.CreateTypeError("Cannot include refinement");
+                }
+            }
+
             RubyUtils.RequireMixins(self, modules);
 
             var appendFeatures = appendFeaturesStorage.GetCallSite("append_features", 1);
@@ -140,6 +146,12 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateTypeError("wrong argument type {0} (expected Module)",
                         self.Context.GetClassDisplayName(args[i])
                     );
+                }
+            }
+
+            foreach (var module in modules) {
+                if (module != null && module.IsRefinement) {
+                    throw RubyExceptions.CreateTypeError("Cannot prepend refinement");
                 }
             }
 
@@ -674,7 +686,16 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("attr")]
-        public static RubyArray/*!*/ Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name, [Optional]bool writable) {
+        public static RubyArray/*!*/ Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name) {
+            var result = new RubyArray();
+            DefineAccessor(scope, self, name, true, false, result);
+            return result;
+        }
+
+        // thread-safe:
+        [RubyMethod("attr")]
+        public static RubyArray/*!*/ Attr(RubyScope/*!*/ scope, RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ name, bool writable) {
+            scope.RubyContext.ReportWarning("optional boolean argument is obsoleted", true);
             var result = new RubyArray();
             DefineAccessor(scope, self, name, true, writable, result);
             return result;
@@ -751,9 +772,27 @@ namespace IronRuby.Builtins {
         // thread-safe:
         // public since Ruby 3.0; returns the new method's name as a Symbol, like define_method
         [RubyMethod("alias_method")]
-        public static object AliasMethod(RubyContext/*!*/ context, RubyModule/*!*/ self,
-            [DefaultProtocol, NotNull]string/*!*/ newName, [DefaultProtocol, NotNull]string/*!*/ oldName) {
+        public static object AliasMethod(ConversionStorage<MutableString>/*!*/ toStr, RubyModule/*!*/ self,
+            object newName, [DefaultProtocol, NotNull]string/*!*/ oldName) {
 
+            string name;
+            var symbol = newName as RubySymbol;
+            if (symbol != null) {
+                name = symbol.ToString();
+            } else {
+                var str = newName as MutableString ?? (newName != null ? Protocols.TryCastToString(toStr, newName) : null);
+                if (str == null) {
+                    throw RubyOps.CreateNotSymbolNorStringError(toStr.Context, newName);
+                }
+                // A String name is interned as a Symbol, so one with bytes invalid in its encoding
+                // raises EncodingError the way String#to_sym does.
+                MutableStringOps.ToSymbol(toStr.Context, str);
+                name = str.ConvertToString();
+            }
+            return AddMethodAlias(toStr.Context, self, name, oldName);
+        }
+
+        private static object AddMethodAlias(RubyContext/*!*/ context, RubyModule/*!*/ self, string/*!*/ newName, string/*!*/ oldName) {
             self.AddMethodAlias(newName, oldName);
             return context.CreateSymbol(newName, RubyEncoding.UTF8);
         }
@@ -1021,7 +1060,10 @@ namespace IronRuby.Builtins {
         // This method is not available in 1.8 so far, but since the usual workaround is very inefficient it is useful to have it in 1.8 as well.
         [RubyMethod("module_exec")]
         [RubyMethod("class_exec")]
-        public static object Execute([NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+        public static object Execute(BlockParam block, RubyModule/*!*/ self, params object[]/*!*/ args) {
+            if (block == null) {
+                throw RubyExceptions.CreateLocalJumpError("no block given");
+            }
             return RubyUtils.EvaluateInModule(self, block, args);
         }
 
@@ -1031,12 +1073,17 @@ namespace IronRuby.Builtins {
 
         // not thread-safe
         [RubyMethod("class_variables")]
-        public static RubyArray/*!*/ ClassVariables(RubyModule/*!*/ self) {
+        public static RubyArray/*!*/ ClassVariables(RubyModule/*!*/ self, [DefaultParameterValue(true)]bool inherit) {
             var result = new RubyArray();
-            self.EnumerateClassVariables((module, name, value) => {
-                result.Add(self.Context.StringifyIdentifier(name));
-                return false;
-            });
+            var seen = new HashSet<string>();
+            using (self.Context.ClassHierarchyLocker()) {
+                self.ForEachClassVariable(inherit, (module, name, value) => {
+                    if (name != null && seen.Add(name)) {
+                        result.Add(self.Context.StringifyIdentifier(name));
+                    }
+                    return false;
+                });
+            }
             return result;
         }
 
@@ -1091,8 +1138,15 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("constants", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ GetGlobalConstants(RubyModule/*!*/ self, [DefaultParameterValue(true)]bool inherited) {
-            return GetDefinedConstants(self.Context.ObjectClass, inherited);
+        public static RubyArray/*!*/ GetGlobalConstants(RubyModule/*!*/ self) {
+            return GetDefinedConstants(self.Context.ObjectClass, true);
+        }
+
+        // Module.constants lists the lexically visible constants only when called without arguments;
+        // with an argument MRI dispatches to Module#constants on the receiver itself.
+        [RubyMethod("constants", RubyMethodAttributes.PublicSingleton)]
+        public static RubyArray/*!*/ GetGlobalConstants(RubyModule/*!*/ self, bool inherited) {
+            return GetDefinedConstants(self, inherited);
         }
 
         // thread-safe:
@@ -1111,7 +1165,8 @@ namespace IronRuby.Builtins {
                             return hideGlobalConstants && module.IsObjectClass;
                         }
 
-                        if (!visited.ContainsKey(name)) {
+                        // private constants are left out, and do not hide an ancestor's public one (as in MRI):
+                        if (!visited.ContainsKey(name) && !module.IsPrivateConstant(name)) {
                             if (Tokenizer.IsConstantName(name)) {
                                 result.Add(self.Context.StringifyIdentifier(name));
                             }
@@ -1124,7 +1179,7 @@ namespace IronRuby.Builtins {
             } else {
                 using (self.Context.ClassHierarchyLocker()) {
                     self.EnumerateConstants((module, name, value) => {
-                        if (Tokenizer.IsConstantName(name)) {
+                        if (Tokenizer.IsConstantName(name) && !module.IsPrivateConstant(name)) {
                             result.Add(self.Context.StringifyIdentifier(name));
                         }
                         return false;
