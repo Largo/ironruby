@@ -6608,9 +6608,22 @@ class Enumerator
       unless block
         ::Kernel.raise(::ArgumentError, "tried to call lazy new without a block")
       end
-      @generator = lambda { |y| obj.each { |*values| block.call(y, *values) } }
+      @generator = lambda { |y, *args| obj.each(*args) { |*values| block.call(y, *values) } }
       @__size__ = size
       self
+    end
+
+    # Arguments to #each (and so to #force and #to_a) reach the source's #each,
+    # as in MRI; a chained lazy's generator simply ignores them.
+    def each(*args, &block)
+      if block && @__deferred__
+        # A blockless #chunk: the block given here is the one it was waiting for.
+        return @__deferred__.call(block)
+      end
+      return super(&block) if args.empty?
+      generator = @generator
+      lazy = Lazy.__raw__(@__size__) { |y| generator.call(y, *args) }
+      block ? lazy.each(&block) : lazy
     end
 
     # Builds a Lazy straight from a generator, bypassing #initialize.
@@ -6654,6 +6667,7 @@ class Enumerator
     end
 
     def inspect
+      return "#<#{self.class}: uninitialized>" if @generator.nil?
       "#<#{self.class}: ...>"
     end
     alias_method :to_s, :inspect
@@ -6671,11 +6685,14 @@ class Enumerator
       __chain__ do |y|
         source.each do |*values|
           result = block.call(*values)
-          # MRI splices an Array (or anything with #to_ary) and yields anything
+          # MRI splices an Array (or anything with #to_ary) and anything that
+          # answers both #each and #force (a nested Lazy), and yields anything
           # else whole, so `flat_map { |x| x }` over strings is not flattened.
           array = result.is_a?(::Array) ? result : (result.respond_to?(:to_ary) ? result.to_ary : nil)
           if array.is_a?(::Array)
             array.each { |item| y << item }
+          elsif result.respond_to?(:each) && result.respond_to?(:force)
+            result.each { |item| y << item }
           else
             y << result
           end
@@ -6904,7 +6921,13 @@ class Enumerator
     # Enumerable versions makes `(1..Float::INFINITY).lazy.chunk_while { }`
     # iterate forever instead of emitting each group as it closes.
     def chunk(&block)
-      __need_block__("chunk", block)
+      unless block
+        # MRI answers `to_enum(:chunk)`: a Lazy whose #each block becomes the chunk block.
+        source = self
+        deferred = Lazy.__raw__ { |y| }
+        deferred.instance_variable_set(:@__deferred__, lambda { |blk| source.chunk(&blk) })
+        return deferred
+      end
       source = self
       __chain__ do |y|
         key = nil
@@ -7050,13 +7073,33 @@ class Enumerator
     end
 
     def force(*args)
-      args.empty? ? to_a : to_a(*args)
+      to_a(*args)
     end
 
-    def to_a
+    def to_a(*args)
       result = []
-      each { |*values| result << (values.size <= 1 ? values[0] : values) }
+      each(*args) { |*values| result << (values.size <= 1 ? values[0] : values) }
       result
+    end
+
+    # Without a block these stay lazy (MRI's lazy_use_super_method); the eager
+    # Enumerator is built first so that its argument checks and size still apply.
+    def each_slice(n, &block)
+      return super(n, &block) if block
+      enum = super(n)
+      to_enum(:each_slice, n) { enum.size }
+    end
+
+    def each_cons(n, &block)
+      return super(n, &block) if block
+      enum = super(n)
+      to_enum(:each_cons, n) { enum.size }
+    end
+
+    def cycle(*args, &block)
+      return super(*args, &block) if block
+      enum = super(*args)
+      to_enum(:cycle, *args) { enum.size }
     end
 
     def __to_int__(value)
@@ -7273,7 +7316,7 @@ module Enumerable
     source = self
     n = (size if respond_to?(:size))
     n = nil unless n.is_a?(::Numeric)
-    ::Enumerator::Lazy.__raw__(n) { |y| source.each { |*values| y.yield(*values) } }
+    ::Enumerator::Lazy.__raw__(n) { |y, *args| source.each(*args) { |*values| y.yield(*values) } }
   end unless method_defined?(:lazy)
 end
 
