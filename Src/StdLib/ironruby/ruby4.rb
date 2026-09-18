@@ -10574,6 +10574,10 @@ class Binding
     unless name =~ /\A[_\p{Alpha}][_\p{Alnum}]*\z/
       ::Kernel.raise(::NameError, "wrong local variable name '#{name}' for #{inspect}")
     end
+    # Ruby 4.0: _1.._9 are never locals, whether or not the block uses them
+    if name =~ /\A_[1-9]\z/
+      ::Kernel.raise(::NameError, "numbered parameter '#{name}' is not a local variable")
+    end
     name
   end
   private :__check_lvar_name__

@@ -183,7 +183,17 @@ namespace IronRuby.Runtime.Calls {
                 method.Info.BuildCall(metaBuilder, args, methodName);
                 return true;
             } else if (args.Signature.ResolveOnly) {
-                metaBuilder.Result = AstFactory.False;
+                if (!args.Signature.HasImplicitSelf && method.IncompatibleVisibility == RubyMethodVisibility.None) {
+                    // defined?(obj.m) for an obj with no m at all: MRI asks respond_to_missing?(:m, false)
+                    metaBuilder.Result = Methods.IsTrue.OpCall(AstUtils.LightDynamic(
+                        RubyCallAction.Make(args.RubyContext, Symbols.RespondToMissing, RubyCallSignature.WithImplicitSelf(2)),
+                        args.TargetExpression,
+                        Ast.Constant(args.RubyContext.CreateSymbol(methodName, RubyEncoding.Binary)),
+                        AstUtils.Constant(false, typeof(object))
+                    ));
+                } else {
+                    metaBuilder.Result = AstFactory.False;
+                }
                 return true;
             } else {
                 return BuildMethodMissingCall(metaBuilder, args, methodName, methodMissing, method.IncompatibleVisibility, false, defaultFallback);
