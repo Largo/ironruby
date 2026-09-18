@@ -95,7 +95,10 @@ namespace IronRuby.Compiler.Ast {
         }
         
         internal static MSA.Expression/*!*/ MakeConversion(AstGenerator/*!*/ gen, Expression/*!*/ expression) {
-            return AstUtils.LightDynamic(ConvertToSAction.Make(gen.Context), typeof(MutableString), expression.TransformRead(gen));
+            // an interpolation in a heredoc can be lines below the statement: a backtrace from it
+            // names its own line
+            var conversion = AstUtils.LightDynamic(ConvertToSAction.Make(gen.Context), typeof(MutableString), expression.TransformRead(gen));
+            return expression.Location.IsValid ? gen.AddDebugInfo(conversion, expression.Location) : conversion;
         }
 
         #region Factories
