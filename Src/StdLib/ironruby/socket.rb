@@ -1444,7 +1444,7 @@ class BasicSocket
       opt = Socket.__ir_optname_arg(lvl, optname)
       # .NET's SetSocketOption(int) silently accepts a null and does nothing;
       # setsockopt(2) has no way to express "no value".
-      raise TypeError, "no implicit conversion from nil to integer" if value.nil?
+      raise TypeError, "no implicit conversion of nil into Integer" if value.nil?
     end
     value = [value ? 1 : 0].pack("i") if value == true || value == false
     __ir_raw_setsockopt(lvl, opt, value)

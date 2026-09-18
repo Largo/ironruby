@@ -940,7 +940,7 @@ namespace IronRuby.Builtins {
             for (int j = 0; j < count; j++) {
                 object value = GetPackArg(self, i + j);
                 if (value == null) {
-                    throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+                    throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
                 }
 
                 IntegerValue integer = Protocols.CastToInteger(integerConversion, value);
@@ -993,7 +993,7 @@ namespace IronRuby.Builtins {
             for (int j = 0; j < count; j++) {
                 object value = GetPackArg(self, i + j);
                 if (value == null) {
-                    throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+                    throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
                 }
 
                 IntegerValue integer = Protocols.CastToInteger(integerConversion, value);

@@ -140,6 +140,11 @@ namespace IronRuby.Runtime.Calls {
             return new RubyAttributeWriterInfo(flags, module, InstanceVariableName);
         }
 
+        // the value to assign: Method#arity 1, #parameters [[:req]]
+        public override int GetArity() {
+            return 1;
+        }
+
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
             return parameterTypes.Length == 1 && parameterTypes[0] == typeof(object) ? this : null;
         }

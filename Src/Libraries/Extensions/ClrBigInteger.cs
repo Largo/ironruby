@@ -485,8 +485,9 @@ namespace IronRuby.Builtins {
         /// <remarks>Calls divmod directly to get the modulus.</remarks>
         [RubyMethod("%"), RubyMethod("modulo")]
         public static object Modulo(BigInteger/*!*/ self, double other) {
+            // Integer#%, unlike Float#%, does not answer NaN for a zero divisor
             if (other == 0.0) {
-                return Double.NaN;
+                throw new DivideByZeroException("divided by 0");
             }
             RubyArray result = DivMod(self, other);
             return result[1];

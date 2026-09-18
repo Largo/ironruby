@@ -1229,7 +1229,7 @@ class Array
     return value if value.is_a?(Integer)
     unless value.respond_to?(:to_int)
       if value.nil?
-        raise TypeError, "no implicit conversion from nil to integer"
+        raise TypeError, "no implicit conversion of nil into Integer"
       end
       raise TypeError, "no implicit conversion of #{value.class} into Integer"
     end
@@ -1746,7 +1746,8 @@ class File
 
   def self.binread(name, length = nil, offset = 0)
     open(name, "rb") do |io|
-      io.seek(offset) if offset && offset > 0
+      # a negative offset is seek's EINVAL, as in MRI
+      io.seek(offset) if offset && offset != 0
       length ? io.read(length) : io.read
     end
   end unless respond_to?(:binread)
@@ -1912,6 +1913,17 @@ class << IO
   # and quietly ignored one.
   def pipe(*args)
     read, write = Process.__os_pipe__
+    unless equal?(::IO)
+      # A subclass's pipe is made of instances of it, made the way #new would make them but
+      # without calling it: allocate, then #initialize(fd, O_RDONLY / O_WRONLY).
+      read, write = [[read, 0], [write, 1]].map do |io, flags|
+        fd = io.fileno
+        io.autoclose = false
+        end_io = allocate
+        end_io.__send__(:initialize, fd, flags)
+        end_io
+      end
+    end
     external, internal = args.reject { |a| a.respond_to?(:to_hash) }
     read.set_encoding(external, internal) if external
 
@@ -9060,7 +9072,7 @@ module Math
       end
       return n.to_i
     end
-    ::Kernel.raise(::TypeError, "no implicit conversion from nil to integer") if n.nil?
+    ::Kernel.raise(::TypeError, "no implicit conversion of nil into Integer") if n.nil?
     unless n.respond_to?(:to_int)
       ::Kernel.raise(::TypeError, "no implicit conversion of #{n.class} into Integer")
     end

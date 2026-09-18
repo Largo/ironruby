@@ -495,6 +495,16 @@ namespace IronRuby.Builtins {
             return MathUtils.FloorRemainder(self, other);
         }
 
+        // Integer#% by a Float zero is a ZeroDivisionError, where Float#% - which the coercion
+        // would otherwise end up in - answers NaN.
+        [RubyMethod("%"), RubyMethod("modulo")]
+        public static double Modulo(int self, double other) {
+            if (other == 0.0) {
+                throw new DivideByZeroException("divided by 0");
+            }
+            return ClrFloat.Modulo((double)self, other);
+        }
+
         /// <summary>
         /// Returns an array containing the quotient and modulus obtained by dividing self by other.
         /// </summary>

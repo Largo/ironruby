@@ -510,7 +510,7 @@ namespace IronRuby.Builtins {
             }
 
             if (args[0] == null) {
-                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
             }
 
             if (args.Length == 7 && inZone != null) {
@@ -855,7 +855,7 @@ namespace IronRuby.Builtins {
 
         private static int GetYear(RubyContext/*!*/ context, object[]/*!*/ components, int index) {
             if (index >= components.Length || components[index] == null) {
-                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
             }
             return ToIntComponent(context, components[index]);
         }

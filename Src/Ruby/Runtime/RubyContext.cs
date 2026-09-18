@@ -817,6 +817,8 @@ namespace IronRuby.Runtime {
             StandardOutput = new RubyIO(this, stream, AllocateFileDescriptor(stream), IOMode.WriteOnly | IOMode.WriteAppends);
             stream = new ConsoleStream(io, ConsoleStreamType.ErrorOutput);
             StandardErrorOutput = new RubyIO(this, stream, AllocateFileDescriptor(stream), IOMode.WriteOnly | IOMode.WriteAppends);
+            // STDERR.sync is true from the start in MRI: a diagnostic should not wait in a buffer
+            ((RubyIO)StandardErrorOutput).AutoFlush = true;
         }
 
         // TODO: internal

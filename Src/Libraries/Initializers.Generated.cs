@@ -3868,12 +3868,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "%", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ModuloOp), 
-                new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Modulo)
+                new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Modulo)
             );
             
             DefineLibraryMethod(module, "^", 0x51, 
@@ -4051,12 +4052,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "modulo", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ModuloOp), 
-                new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Modulo)
+                new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Modulo)
             );
             
             DefineLibraryMethod(module, "quo", 0x51, 

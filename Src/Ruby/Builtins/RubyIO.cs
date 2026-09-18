@@ -434,7 +434,13 @@ namespace IronRuby.Builtins {
 
         public void CloseWriter() {
             var duplex = GetStream().BaseStream as DuplexStream;
-            if (duplex == null && _mode.CanRead() || duplex != null && !_mode.CanWrite()) {
+
+            // closing the side of a duplex stream that is already closed closes the rest (as MRI does)
+            if (duplex != null && !_mode.CanWrite()) {
+                Close();
+                return;
+            }
+            if (duplex == null && _mode.CanRead()) {
                 throw RubyExceptions.CreateIOError("closing non-duplex IO for writing");
             }
             
@@ -450,7 +456,11 @@ namespace IronRuby.Builtins {
 
         public void CloseReader() {
             var duplex = GetStream().BaseStream as DuplexStream;
-            if (duplex == null && _mode.CanWrite() || duplex != null && !_mode.CanRead()) {
+            if (duplex != null && !_mode.CanRead()) {
+                Close();
+                return;
+            }
+            if (duplex == null && _mode.CanWrite()) {
                 throw RubyExceptions.CreateIOError("closing non-duplex IO for reading");
             } 
             

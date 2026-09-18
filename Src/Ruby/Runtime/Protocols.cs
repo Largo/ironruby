@@ -344,7 +344,7 @@ namespace IronRuby.Runtime {
         [CLSCompliant(false)]
         public static uint CastToUInt32Unchecked(ConversionStorage<IntegerValue>/*!*/ integerConversion, object obj) {
             if (obj == null) {
-                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
             }
 
             return CastToInteger(integerConversion, obj).ToUInt32Unchecked();
@@ -356,7 +356,7 @@ namespace IronRuby.Runtime {
         [CLSCompliant(false)]
         public static long CastToInt64Unchecked(ConversionStorage<IntegerValue>/*!*/ integerConversion, object obj) {
             if (obj == null) {
-                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
             }
 
             return CastToInteger(integerConversion, obj).ToInt64();

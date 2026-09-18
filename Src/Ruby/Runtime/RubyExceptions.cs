@@ -170,11 +170,8 @@ namespace IronRuby.Runtime {
         public static Exception/*!*/ CreateImplicitConversionError(string/*!*/ fromType, string/*!*/ toType) {
             Assert.NotNull(fromType, toType);
             string from = MessageTypeName(fromType), to = MessageTypeName(toType);
-            if (from == "nil" && to == "Integer") {
-                // MRI's rb_num2long words this one differently from every other conversion
-                // failure, and ruby/spec matches on the wording.
-                return CreateTypeError("no implicit conversion from nil to integer");
-            }
+            // MRI before 4.1 said "from nil to integer" for this one (rb_num2long); 4.1 words it
+            // like every other conversion failure, and ruby/spec holds other Rubies to that.
             return CreateTypeError("no implicit conversion of {0} into {1}", from, to);
         }
 

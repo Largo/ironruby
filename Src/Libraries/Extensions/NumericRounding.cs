@@ -86,7 +86,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static int GetNDigits(ConversionStorage<IntegerValue>/*!*/ integerCast, object ndigits) {
             if (ndigits == null) {
-                throw RubyExceptions.CreateTypeError("no implicit conversion from nil to integer");
+                throw RubyExceptions.CreateTypeError("no implicit conversion of nil into Integer");
             }
 
             if (ndigits is double) {

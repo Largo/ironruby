@@ -306,12 +306,15 @@ namespace IronRuby.Runtime {
                 return null;
             }
 
-            string name = attr.Name;
-            if (name == null && attr.Extends != null && attr.Extends.IsInterface) {
-                // IListOps and IDictionaryOps extend a CLR interface, and Array and Hash copy their
-                // methods in; to Ruby those are Array's and Hash's methods
-                return GetCopyingClassName(type.Assembly, attr.Extends);
+            // Methods written once for several classes live in a module the classes copy in: IListOps
+            // (a CLR interface) into Array, ClrFloat into Float, ClrInteger into Integer. To Ruby
+            // they are the class's methods.
+            string copiedInto = GetCopyingClassName(type.Assembly, attr.Extends != null && attr.Extends.IsInterface ? attr.Extends : type);
+            if (copiedInto != null) {
+                return copiedInto;
             }
+
+            string name = attr.Name;
             if (name == null && attr.Extends != null) {
                 try {
                     name = _context.GetModule(attr.Extends).Name;
@@ -328,7 +331,20 @@ namespace IronRuby.Runtime {
             return name;
         }
 
+        private static readonly ConcurrentDictionary<Type, Type>/*!*/ _copyingClasses = new ConcurrentDictionary<Type, Type>();
+
+        // The builtin class with a Ruby name of its own (Integer rather than System::Byte, say)
+        // that copies the given module in, or null.
         private string GetCopyingClassName(Assembly/*!*/ assembly, Type/*!*/ included) {
+            Type copying;
+            if (!_copyingClasses.TryGetValue(included, out copying)) {
+                copying = FindCopyingClass(assembly, included);
+                _copyingClasses.TryAdd(included, copying);
+            }
+            return copying != null ? GetLibraryModuleName(copying) : null;
+        }
+
+        private static Type FindCopyingClass(Assembly/*!*/ assembly, Type/*!*/ included) {
             Type[] types;
             try {
                 types = assembly.GetTypes();
@@ -336,9 +352,13 @@ namespace IronRuby.Runtime {
                 return null;
             }
             foreach (Type candidate in types) {
+                var attr = (RubyModuleAttribute)Attribute.GetCustomAttribute(candidate, typeof(RubyModuleAttribute), false);
+                if (attr == null || attr.Name == null) {
+                    continue;
+                }
                 foreach (IncludesAttribute includes in candidate.GetCustomAttributes(typeof(IncludesAttribute), false)) {
                     if (includes.Copy && Array.IndexOf(includes.Types, included) >= 0) {
-                        return GetLibraryModuleName(candidate);
+                        return candidate;
                     }
                 }
             }
