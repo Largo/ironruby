@@ -3347,10 +3347,22 @@ namespace IronRuby.Runtime {
 
         #region Class Variables
 
+        /// <summary>
+        /// The module whose class variables @@x names: the innermost class or module body. MRI
+        /// refuses the access where there is none - the top level, a method or block defined there.
+        /// </summary>
+        private static RubyModule/*!*/ GetClassVariableOwner(RubyScope/*!*/ scope) {
+            RubyModule owner = scope.GetInnerMostModuleForClassVariableAccess();
+            if (owner == null) {
+                throw new RuntimeError("class variable access from toplevel");
+            }
+            return owner;
+        }
+
         [Emitted]
         public static object GetClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             // owner is the first module in scope:
-            RubyModule owner = scope.GetInnerMostModuleForClassVariableLookup();
+            RubyModule owner = GetClassVariableOwner(scope);
             return GetClassVariableInternal(owner, name);
         }
 
@@ -3368,7 +3380,7 @@ namespace IronRuby.Runtime {
         public static object TryGetClassVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             object value;
             // owner is the first module in scope:
-            scope.GetInnerMostModuleForClassVariableLookup().TryResolveClassVariable(name, out value);
+            GetClassVariableOwner(scope).TryResolveClassVariable(name, out value);
             return value;
         }
 
@@ -3382,7 +3394,7 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static object SetClassVariable(object value, RubyScope/*!*/ scope, string/*!*/ name) {
-            return SetClassVariableInternal(scope.GetInnerMostModuleForClassVariableLookup(), name, value);
+            return SetClassVariableInternal(GetClassVariableOwner(scope), name, value);
         }
 
         private static object SetClassVariableInternal(RubyModule/*!*/ lexicalOwner, string/*!*/ name, object value) {

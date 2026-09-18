@@ -551,6 +551,11 @@ namespace IronRuby.Runtime {
         public RubyModule/*!*/ GetInnerMostModuleForClassVariableLookup() {
             return GetInnerMostModule(true, RubyContext.ObjectClass);
         }
+
+        /// <summary>Null when no class or module body encloses the scope, i.e. at the top level.</summary>
+        internal RubyModule GetInnerMostModuleForClassVariableAccess() {
+            return GetInnerMostModule(true, null);
+        }
         
         private RubyModule/*!*/ GetInnerMostModule(bool skipSingletons, RubyModule/*!*/ fallbackModule) {
             RubyScope scope = this;

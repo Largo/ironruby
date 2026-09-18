@@ -1116,7 +1116,9 @@ namespace IronRuby.Builtins {
         [RubyMethod("class_variable_set")]
         public static object ClassVariableSet(RubyModule/*!*/ self, [DefaultProtocol, NotNull]string/*!*/ variableName, object value) {
             RubyUtils.CheckClassVariableName(variableName);
-            self.SetClassVariable(variableName, value);
+            // an ancestor that already has the variable keeps it, as for @@x = value
+            object oldValue;
+            (self.TryResolveClassVariable(variableName, out oldValue) ?? self).SetClassVariable(variableName, value);
             return value;
         }
 

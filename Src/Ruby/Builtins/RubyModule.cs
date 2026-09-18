@@ -2629,25 +2629,32 @@ namespace IronRuby.Builtins {
         public RubyModule TryResolveClassVariable(string/*!*/ name, out object value) {
             Assert.NotNull(name);
 
-            RubyModule result = null;
-            object constValue = null;
+            RubyModule front = null, target = null;
+            object targetValue = null;
 
+            // MRI's CVAR_LOOKUP: the variable is the one furthest up the ancestors; one defined
+            // lower down as well is "overtaken" by it, which is an error.
             using (Context.ClassHierarchyLocker()) {
-                if (ForEachAncestor(delegate(RubyModule/*!*/ module) {
-                    if (module._classVariables != null && module._classVariables.TryGetValue(name, out constValue)) {
-                        result = module;
-                        return true;
+                ForEachAncestor(delegate(RubyModule/*!*/ module) {
+                    object moduleValue;
+                    if (module._classVariables != null && module._classVariables.TryGetValue(name, out moduleValue)) {
+                        if (front == null) {
+                            front = module;
+                        }
+                        target = module;
+                        targetValue = moduleValue;
                     }
-
                     return false;
-                })) {
-                    value = constValue;
-                    return result;
-                }
+                });
             }
 
-            value = null;
-            return null;
+            if (front != target) {
+                throw new RuntimeError(String.Format("class variable {0} of {1} is overtaken by {2}",
+                    name, Context.GetModuleDisplayName(front), Context.GetModuleDisplayName(target)));
+            }
+
+            value = targetValue;
+            return target;
         }
 
         public bool EnumerateClassVariables(Func<RubyModule, string, object, bool>/*!*/ action) {
