@@ -819,7 +819,7 @@ namespace IronRuby.Runtime {
             if (owner.TryGetConstant(scope.GlobalScope, name, out existing)) {
                 RubyModule module = existing.Value as RubyModule;
                 if (module == null || module.IsClass) {
-                    throw RubyExceptions.CreateTypeError(String.Format("{0} is not a module", name));
+                    throw RubyExceptions.CreateTypeError(DescribePreviousDefinition(owner, name, "{0} is not a module"));
                 }
                 return module;
             } else {
