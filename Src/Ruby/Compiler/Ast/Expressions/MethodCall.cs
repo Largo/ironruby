@@ -109,6 +109,44 @@ namespace IronRuby.Compiler.Ast {
 
             var siteBuilder = new CallSiteBuilder(gen, transformedTarget, blockArgVariable);
 
+            // `recv.m(args, &blk)': MRI evaluates the receiver and the arguments - expanding a
+            // splat into a fresh array - before the block argument, which is computed first below
+            // for a literal block's sake (retry). So they are evaluated into temporaries up front.
+            MSA.Expression hoisted = null;
+            if (block != null && !block.IsDefinition && singleArgument == null && assignmentRhsArgument == null) {
+                var scratch = new CallSiteBuilder(gen, transformedTarget, blockArgVariable);
+                if (arguments != null) {
+                    arguments.TransformToCall(gen, scratch);
+                }
+
+                var assignments = new AstBlock();
+                var targetTemp = gen.CurrentScope.DefineHiddenVariable("#target", typeof(object));
+                assignments.Add(Ast.Assign(targetTemp, AstUtils.Box(transformedTarget)));
+
+                var ordered = new CallSiteBuilder(gen, targetTemp, blockArgVariable);
+                int index = 0;
+                foreach (var argument in scratch) {
+                    // skip the scope, the instance and the block
+                    if (index++ < 3) {
+                        continue;
+                    }
+                    var temp = gen.CurrentScope.DefineHiddenVariable("#arg", argument.Type);
+                    assignments.Add(Ast.Assign(temp, argument));
+                    ordered.Add(temp);
+                }
+                if (scratch.SplattedArgument != null) {
+                    var temp = gen.CurrentScope.DefineHiddenVariable("#splat", typeof(RubyArray));
+                    assignments.Add(Ast.Assign(temp,
+                        Ast.New(typeof(RubyArray).GetConstructor(new[] { typeof(System.Collections.IList) }),
+                            AstUtils.Convert(scratch.SplattedArgument, typeof(System.Collections.IList)))
+                    ));
+                    ordered.SplattedArgument = temp;
+                }
+                hoisted = assignments;
+                arguments = null;
+                siteBuilder = ordered;
+            }
+
             if (arguments != null) {
                 arguments.TransformToCall(gen, siteBuilder);
             } else if (singleArgument != null) {
@@ -133,7 +171,7 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression result = gen.DebugMark(dynamicSite, methodName);
 
             if (block != null) {
-                result = gen.DebugMark(MakeCallWithBlockRetryable(gen, result, blockArgVariable, transformedBlock, block.IsDefinition),
+                result = gen.DebugMark(MakeCallWithBlockRetryable(gen, result, blockArgVariable, transformedBlock, block.IsDefinition, hoisted),
                     "#RB: method call with a block ('" + methodName + "')");
             }
 
@@ -146,6 +184,11 @@ namespace IronRuby.Compiler.Ast {
 
         internal static MSA.Expression/*!*/ MakeCallWithBlockRetryable(AstGenerator/*!*/ gen, MSA.Expression/*!*/ invoke,
             MSA.Expression blockArgVariable, MSA.Expression transformedBlock, bool isBlockDefinition) {
+            return MakeCallWithBlockRetryable(gen, invoke, blockArgVariable, transformedBlock, isBlockDefinition, null);
+        }
+
+        internal static MSA.Expression/*!*/ MakeCallWithBlockRetryable(AstGenerator/*!*/ gen, MSA.Expression/*!*/ invoke,
+            MSA.Expression blockArgVariable, MSA.Expression transformedBlock, bool isBlockDefinition, MSA.Expression argumentEvaluation) {
             Assert.NotNull(invoke);
             Debug.Assert((blockArgVariable == null) == (transformedBlock == null));
 
@@ -156,6 +199,7 @@ namespace IronRuby.Compiler.Ast {
             MSA.LabelTarget retryLabel = Ast.Label("retry");
 
             var result = new AstBlock {
+                argumentEvaluation,
                 Ast.Assign(blockArgVariable, Ast.Convert(transformedBlock, blockArgVariable.Type)),
 
                 Ast.Label(retryLabel),
