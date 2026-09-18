@@ -80,7 +80,10 @@ namespace IronRuby.Compiler.Ast {
             var result = new List<string>();
             foreach (var entry in _definedScope) {
                 string name = entry.Key;
-                if (entry.Value.DefinitionLexicalDepth < 0 && name.Length > 0 && (name[0] == '_' || Char.IsLetter(name[0]))) {
+                // A flip-flop's hidden state too: a block in the eval would otherwise define it in its
+                // own scope on every call and lose the state between iterations.
+                if (entry.Value.DefinitionLexicalDepth < 0 && name.Length > 0 &&
+                    (name[0] == '_' || Char.IsLetter(name[0]) || name.StartsWith(RangeExpression.FlipFlopVariablePrefix, StringComparison.Ordinal))) {
                     result.Add(name);
                 }
             }

@@ -76,6 +76,32 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         public string[] ImplicitParameterNames { get; set; }
 
+        /// <summary>Declares keyword parameters or a keyword splat.</summary>
+        public bool TakesKeywords {
+            get { return _hasKeywords || _hasKeywordRest; }
+        }
+
+        /// <summary>Declares `**nil`.</summary>
+        public bool RefusesKeywords {
+            get {
+                foreach (var parameter in _parameters) {
+                    if (parameter.Kind == "nokey") {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }
+
+        /// <summary>The bounds on the positional arguments alone; -1 as the maximum means unbounded.</summary>
+        public int MinPositionalCount {
+            get { return _leadingCount + _postCount; }
+        }
+
+        public int MaxPositionalCount {
+            get { return _hasRest ? -1 : _leadingCount + _optionalCount + _postCount; }
+        }
+
         public static readonly RubyParameterSignature/*!*/ Empty =
             new RubyParameterSignature(new Parameter[0], 0, 0, 0, false, 0, false, false);
 

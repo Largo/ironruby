@@ -367,6 +367,39 @@ namespace IronRuby.Runtime {
         /// the block a method yields to. A plain block does not.
         /// </summary>
         public static void RequireLambdaArity(Proc/*!*/ proc, int argCount) {
+            RequireLambdaArity(proc, argCount, null);
+        }
+
+        /// <summary>
+        /// <paramref name="lastArg"/> is the last of the <paramref name="argCount"/> arguments. A
+        /// block whose keywords were lowered onto positional parameters cannot tell a keyword hash
+        /// from a positional one by the count alone, so its declared signature decides: MRI counts
+        /// only the positional arguments against a lambda, and `|**nil|` refuses keywords in a
+        /// proc as well as in a lambda.
+        /// </summary>
+        public static void RequireLambdaArity(Proc/*!*/ proc, int argCount, object lastArg) {
+            var signature = proc.Dispatcher.ParameterSignature;
+            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+                var keywords = argCount > 0 ? lastArg as Hash : null;
+                if (keywords != null && !keywords.IsKeywordArguments) {
+                    keywords = null;
+                }
+                if (keywords != null && keywords.Count > 0 && signature.RefusesKeywords) {
+                    throw RubyExceptions.CreateArgumentError("no keywords accepted");
+                }
+                if (proc.Kind != ProcKind.Lambda) {
+                    return;
+                }
+                int positional = argCount - (keywords != null ? 1 : 0);
+                int min = signature.MinPositionalCount, max = signature.MaxPositionalCount;
+                if (positional < min || (max >= 0 && positional > max)) {
+                    var inv = System.Globalization.CultureInfo.InvariantCulture;
+                    throw (min == max) ? MakeWrongNumberOfArgumentsError(positional, min)
+                        : MakeWrongNumberOfArgumentsErrorN(positional, min.ToString(inv) + (max < 0 ? "+" : ".." + max.ToString(inv)));
+                }
+                return;
+            }
+
             if (proc.Kind != ProcKind.Lambda) {
                 return;
             }
@@ -390,7 +423,7 @@ namespace IronRuby.Runtime {
         public static object Yield1(object arg1, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, 1);
+            RequireLambdaArity(proc, 1, arg1);
             try {
                 // a lambda takes the single argument as it is: no auto-splatting
                 result = proc.Kind == ProcKind.Lambda
@@ -420,7 +453,7 @@ namespace IronRuby.Runtime {
         public static object Yield2(object arg1, object arg2, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, 2);
+            RequireLambdaArity(proc, 2, arg2);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1, arg2);
             } catch (EvalUnwinder evalUnwinder) {
@@ -434,7 +467,7 @@ namespace IronRuby.Runtime {
         public static object Yield3(object arg1, object arg2, object arg3, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, 3);
+            RequireLambdaArity(proc, 3, arg3);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1, arg2, arg3);
             } catch (EvalUnwinder evalUnwinder) {
@@ -448,7 +481,7 @@ namespace IronRuby.Runtime {
         public static object Yield4(object arg1, object arg2, object arg3, object arg4, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, 4);
+            RequireLambdaArity(proc, 4, arg4);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, arg1, arg2, arg3, arg4);
             } catch (EvalUnwinder evalUnwinder) {
@@ -464,7 +497,7 @@ namespace IronRuby.Runtime {
 
             object result;
             var proc = blockParam.Proc;
-            RequireLambdaArity(proc, args.Length);
+            RequireLambdaArity(proc, args.Length, args[args.Length - 1]);
             try {
                 result = proc.Dispatcher.Invoke(blockParam, self, procArg, args);
             } catch (EvalUnwinder evalUnwinder) {
@@ -489,6 +522,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat0(IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 0 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : null);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -502,6 +536,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat1(object arg1, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 1 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg1);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, arg1, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -515,6 +550,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat2(object arg1, object arg2, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 2 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg2);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, arg1, arg2, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -528,6 +564,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat3(object arg1, object arg2, object arg3, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 3 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg3);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, arg1, arg2, arg3, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -541,6 +578,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplat4(object arg1, object arg2, object arg3, object arg4, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, 4 + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : arg4);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, arg1, arg2, arg3, arg4, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -554,6 +592,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplatN(object[]/*!*/ args, IList/*!*/ splattee, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, args.Length + splattee.Count, splattee.Count > 0 ? splattee[splattee.Count - 1] : args[args.Length - 1]);
             try {
                 result = proc.Dispatcher.InvokeSplat(blockParam, self, procArg, args, splattee);
             } catch (EvalUnwinder evalUnwinder) {
@@ -567,6 +606,7 @@ namespace IronRuby.Runtime {
         public static object YieldSplatNRhs(object[]/*!*/ args, IList/*!*/ splattee, object rhs, Proc procArg, object self, BlockParam/*!*/ blockParam) {
             object result;
             var proc = blockParam.Proc;
+            RequireLambdaArity(proc, args.Length + splattee.Count + 1, rhs);
             try {
                 result = proc.Dispatcher.InvokeSplatRhs(blockParam, self, procArg, args, splattee, rhs);
             } catch (EvalUnwinder evalUnwinder) {

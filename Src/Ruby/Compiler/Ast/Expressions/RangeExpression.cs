@@ -88,14 +88,22 @@ namespace IronRuby.Compiler.Ast {
         private static int _flipFlopVariableId;
 
         internal override Expression/*!*/ ToCondition(LexicalScope/*!*/ currentScope) {
-            int intBegin, intEnd;
-            if (!IsIntegerRange(out intBegin, out intEnd)) {
-                return new RangeCondition(
-                    this,
-                    currentScope.GetInnermostStaticTopScope().AddVariable("#FlipFlopState" + Interlocked.Increment(ref _flipFlopVariableId), Location)
-                );
+            // An integer literal as a flip-flop end compares with $. (MRI's cond0), as in `if 4..5`.
+            var range = new RangeExpression(LineNumberCondition(_begin), LineNumberCondition(_end), _isExclusive, Location);
+            return new RangeCondition(
+                range,
+                currentScope.GetInnermostStaticTopScope().AddVariable(FlipFlopVariablePrefix + Interlocked.Increment(ref _flipFlopVariableId), Location)
+            );
+        }
+
+        internal const string FlipFlopVariablePrefix = "#FlipFlopState";
+
+        private static Expression/*!*/ LineNumberCondition(Expression/*!*/ expression) {
+            var literal = expression as Literal;
+            if (literal == null || !(literal.Value is int)) {
+                return expression;
             }
-            return this;
+            return new MethodCall(literal, "==", new Arguments(new GlobalVariable(".", literal.Location)), literal.Location);
         }
     }
 

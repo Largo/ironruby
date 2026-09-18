@@ -220,35 +220,35 @@ namespace IronRuby.Builtins {
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1) {
-            RequireParameterCount(self, 1);
+            RubyOps.RequireLambdaArity(self, 1, arg1);
             return self.Call(block != null ? block.Proc : null, arg1);
         }
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1, object arg2) {
-            RequireParameterCount(self, 2);
+            RubyOps.RequireLambdaArity(self, 2, arg2);
             return self.Call(block != null ? block.Proc : null, arg1, arg2);
         }
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1, object arg2, object arg3) {
-            RequireParameterCount(self, 3);
+            RubyOps.RequireLambdaArity(self, 3, arg3);
             return self.Call(block != null ? block.Proc : null, arg1, arg2, arg3);
         }
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
         public static object Call(BlockParam block, Proc/*!*/ self, object arg1, object arg2, object arg3, object arg4) {
-            RequireParameterCount(self, 4);
+            RubyOps.RequireLambdaArity(self, 4, arg4);
             return self.Call(block != null ? block.Proc : null, arg1, arg2, arg3, arg4);
         }
 
         [RubyMethod("==="), RubyMethod("[]"), RubyMethod("yield"), RubyMethod("call")]
         [RubyStackTraceHidden]
         public static object Call(BlockParam block, Proc/*!*/ self, params object[]/*!*/ args) {
-            RequireParameterCount(self, args.Length);
+            RubyOps.RequireLambdaArity(self, args.Length, args.Length > 0 ? args[args.Length - 1] : null);
             return self.CallN(block != null ? block.Proc : null, args);
         }
 

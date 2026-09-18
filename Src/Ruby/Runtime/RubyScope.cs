@@ -381,6 +381,10 @@ namespace IronRuby.Runtime {
                     if (implicitParameters != null && Array.IndexOf(implicitParameters, name) >= 0) {
                         continue;
                     }
+                    // compiler-generated locals such as a flip-flop's state
+                    if (name.Length > 0 && name[0] == '#') {
+                        continue;
+                    }
                     if (seen.Add(name)) {
                         result.Add(name);
                     }
