@@ -77,6 +77,62 @@ namespace IronRuby.Builtins {
         // otherwise it would shift every group number in the pattern.
         private bool _suppressCaptures;
 
+        // Onigmo's warnings about a quantifier applied to a quantifier (regparse.c set_quantifier).
+        private List<string> _warnings;
+
+        // The last quantifier as one of Onigmo's "popular" ones - ? * + ?? *? +? - or null.
+        private string _lastQuantifierKind;
+
+        private static readonly string[] PopularQuantifiers = { "?", "*", "+", "??", "*?", "+?" };
+
+        // ReduceTypeTable[inner, outer]: 0 as is, 1 redundant, otherwise the index into ReducedQuantifiers
+        private static readonly int[,] ReduceTypeTable = {
+            /* '?' '*' '+' '??' '*?' '+?'   outer / inner */
+            { 1, 2, 2, 4, 3, 0 },  /* '?'  */
+            { 1, 1, 1, 5, 5, 1 },  /* '*'  */
+            { 2, 2, 1, 0, 5, 1 },  /* '+'  */
+            { 1, 3, 3, 1, 3, 3 },  /* '??' */
+            { 1, 1, 1, 1, 1, 1 },  /* '*?' */
+            { 0, 6, 1, 3, 3, 1 },  /* '+?' */
+        };
+
+        private static readonly string[] ReducedQuantifiers = { "", "", "*", "*?", "??", "+ and ??", "+? and ?" };
+
+        private void CheckNestedQuantifier(string/*!*/ inner, string/*!*/ outer) {
+            int i = Array.IndexOf(PopularQuantifiers, inner);
+            int o = Array.IndexOf(PopularQuantifiers, outer);
+            if (i < 0 || o < 0) {
+                return;
+            }
+
+            int reduction = ReduceTypeTable[i, o];
+            if (reduction == 0) {
+                return;
+            }
+
+            if (_warnings == null) {
+                _warnings = new List<string>();
+            }
+            _warnings.Add(reduction == 1
+                ? "regular expression has redundant nested repeat operator '" + inner + "'"
+                : "nested repeat operator '" + inner + "' and '" + outer + "' was replaced with '" + ReducedQuantifiers[reduction] + "' in regular expression"
+            );
+        }
+
+        /// <summary>
+        /// The warnings Onigmo gives while compiling the pattern, without the ": /pattern/" MRI
+        /// appends. Null if there are none or the pattern does not compile.
+        /// </summary>
+        internal static List<string> GetWarnings(string/*!*/ rubyPattern) {
+            var transformer = new RegexpTransformer(rubyPattern);
+            try {
+                transformer.Transform();
+            } catch (Exception) {
+                return null;
+            }
+            return transformer._warnings;
+        }
+
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
@@ -300,21 +356,46 @@ namespace IronRuby.Builtins {
 
                     case '?':
                     case '*':
-                    case '+':
+                    case '+': {
+                        string inner = lastWasQuantifier ? _lastQuantifierKind : null;
                         if (lastWasQuantifier) {
                             // a*** == (?:(?:a*)*)*
                             _sb.Insert(lastEntityIndex, "(?:");
                             Append(')');
                         }
                         Append((char)c);
+                        int next = Peek();
+                        // `?+ *+ ++` are possessive, not a quantifier applied to a quantifier
+                        string kind = (next == '+') ? null : ((char)c).ToString() + (next == '?' ? "?" : "");
+                        if (inner != null && kind != null) {
+                            CheckNestedQuantifier(inner, kind);
+                        }
+                        _lastQuantifierKind = kind;
                         // A quantifier that got wrapped is already a group, so a further
                         // quantifier can apply to it directly.
                         lastWasQuantifier = !ParsePostQuantifier(lastEntityIndex, true, false);
                         break;
+                    }
 
                     case '{': {
                         bool isExactCount;
+                        string inner = lastWasQuantifier ? _lastQuantifierKind : null;
+                        int start = _index;
                         if (ParseConstrainedQuantifier(lastWasQuantifier, lastEntityIndex, out isExactCount)) {
+                            // {0,1} is Onigmo's ?, the one interval that counts as a popular quantifier here
+                            int next = Peek();
+                            string kind = (_rubyPattern.Substring(start, _index - start) == "0,1}")
+                                ? (next == '?' ? "??" : "?")
+                                : null;
+                            if (inner != null && kind != null) {
+                                CheckNestedQuantifier(inner, kind);
+                            }
+                            if (kind != null && next == '+') {
+                                // {n,m}+ is not possessive in Ruby: the + quantifies again
+                                CheckNestedQuantifier(kind, "+");
+                                kind = null;
+                            }
+                            _lastQuantifierKind = kind;
                             lastWasQuantifier = !ParsePostQuantifier(lastEntityIndex, false, isExactCount);
                         } else {
                             goto default;

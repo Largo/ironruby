@@ -356,10 +356,12 @@ namespace IronRuby.Prism {
                     return StatementsAsExpression(embedded.Statements, span);
 
                 case Pm.RegularExpressionNode regex:
+                    WarnRegexp(regex.Unescaped, span);
                     return new RegularExpression(
                         new List<Expression> { new StringLiteral(LiteralValue(regex.Unescaped, _encoding), _encoding, span) },
                         RegexOptions(regex), false, span);
                 case Pm.MatchLastLineNode matchLast:
+                    WarnRegexp(matchLast.Unescaped, span);
                     return new RegularExpression(
                         new List<Expression> { new StringLiteral(LiteralValue(matchLast.Unescaped, _encoding), _encoding, span) },
                         RegexOptions(matchLast), true, span);
@@ -539,6 +541,10 @@ namespace IronRuby.Prism {
                     }
                 }
                 case Pm.NumberedReferenceReadNode numberedRef:
+                    // prism reports 0 for a number too big to be one (and has warned); MRI reads it as nil
+                    if (numberedRef.Number == 0 || numberedRef.Number > int.MaxValue) {
+                        return Literal.Nil(span);
+                    }
                     return new RegexMatchReference((int)numberedRef.Number, span);
                 case Pm.MatchWriteNode matchWrite: {
                     var call = (Pm.CallNode)matchWrite.Call;
@@ -780,6 +786,23 @@ namespace IronRuby.Prism {
                 return RubyEncoding.Ascii;
             }
             return LiteralEncoding(node);
+        }
+
+        /// <summary>
+        /// MRI compiles a regexp literal along with the code around it, so Onigmo's warnings about
+        /// the pattern come when the file is compiled, whether or not the literal is ever reached.
+        /// </summary>
+        private void WarnRegexp(byte[]/*!*/ pattern, SourceSpan span) {
+            if (_errorSink == null || _sourceUnit == null) {
+                return;
+            }
+            string text = System.Text.Encoding.UTF8.GetString(pattern);
+            var warnings = RegexpTransformer.GetWarnings(text);
+            if (warnings != null) {
+                foreach (var warning in warnings) {
+                    _errorSink.Add(_sourceUnit, warning + ": /" + text + "/", span, Errors.RuntimeWarning, Severity.Warning);
+                }
+            }
         }
 
         private Expression/*!*/ BigIntegerLiteral(BigInteger value, SourceSpan span) {
