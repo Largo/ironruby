@@ -1856,6 +1856,29 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Takes back what <see cref="ScopeSetMember"/> published, if the scope still holds that
+        /// very object under the name.
+        /// </summary>
+        internal static void ScopeRemoveMember(Scope/*!*/ scope, string/*!*/ name, object value) {
+            var scopeStorage = ((object)scope.Storage) as ScopeStorage;
+            if (scopeStorage != null) {
+                object current;
+                if (scopeStorage.TryGetValue(name, false, out current) && ReferenceEquals(current, value)) {
+                    scopeStorage.DeleteValue(name, false);
+                }
+                return;
+            }
+
+            var stringDict = ((object)scope.Storage) as StringDictionaryExpando;
+            if (stringDict != null) {
+                object current;
+                if (stringDict.Dictionary.TryGetValue(name, out current) && ReferenceEquals(current, value)) {
+                    stringDict.Dictionary.Remove(name);
+                }
+            }
+        }
+
         // TODO:
         internal static void ScopeSetMember(Scope scope, string name, object value) {
             object storage = (object)scope.Storage;

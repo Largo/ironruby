@@ -1794,9 +1794,17 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public bool TryRemoveConstant(string/*!*/ name, out object value) {
+            bool result;
             using (Context.ClassHierarchyLocker()) {
-                return TryRemoveConstantNoLock(name, out value);
+                result = TryRemoveConstantNoLock(name, out value);
             }
+
+            // a top-level module was also published to the host scope (see Publish), where the
+            // missing-constant fallback would still find it
+            if (result && IsObjectClass && value is RubyModule) {
+                RubyOps.ScopeRemoveMember(_context.TopGlobalScope, name, value);
+            }
+            return result;
         }
 
         private bool TryRemoveConstantNoLock(string/*!*/ name, out object value) {
