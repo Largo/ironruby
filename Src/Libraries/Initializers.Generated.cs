@@ -7426,6 +7426,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadString_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_fstring__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.InternFrozen)
+            );
+            
             DefineLibraryMethod(module, "__locktmp__", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.LockTemporarily)
@@ -7522,6 +7527,16 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "ascii_only?", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.Builtins.MutableStringOps.IsAscii)
+            );
+            
+            DefineLibraryMethod(module, "byteindex", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, System.Object[], System.Object>(IronRuby.Builtins.MutableStringOps.ByteIndex)
+            );
+            
+            DefineLibraryMethod(module, "byterindex", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, System.Object[], System.Object>(IronRuby.Builtins.MutableStringOps.ByteLastIndex)
             );
             
             DefineLibraryMethod(module, "bytes", 0x51, 
@@ -7832,6 +7847,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.MutableString, System.Int32>(IronRuby.Builtins.MutableStringOps.Ord)
             );
             
+            DefineLibraryMethod(module, "partition", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.MutableStringOps.Partition)
+            );
+            
             DefineLibraryMethod(module, "replace", 0x51, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Replace)
@@ -7858,6 +7878,11 @@ namespace IronRuby.Builtins {
                 0x00010000U, 0x00030004U, 
                 new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.RightJustify), 
                 new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.RightJustify)
+            );
+            
+            DefineLibraryMethod(module, "rpartition", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.Builtins.MutableStringOps.LastPartition)
             );
             
             DefineLibraryMethod(module, "rstrip", 0x51, 
