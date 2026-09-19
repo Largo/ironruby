@@ -4,9 +4,12 @@
 # it gives the right answer for a descriptor nobody here opened. Not every
 # stream has one: IronRuby's IO.pipe is not backed by a FileStream, so
 # IO#GetNativeDescriptor answers -1 for a pipe and there is no flag to read. For
-# those the value is remembered instead, which is a weaker answer and is why a
-# pipe reports false here where MRI reports true - MRI opens its pipes
-# non-blocking, and these really are blocking.
+# those the value is remembered instead, which is a weaker answer.
+#
+# A pipe is remembered too, even with a descriptor: MRI opens its pipes
+# non-blocking, so a pipe reports true until told otherwise, but the
+# descriptor itself stays blocking - the .NET stream reading it expects that,
+# and IO's own reads and writes wait either way.
 
 class IO
   # Linux values, the same ones IO#fcntl uses.
@@ -19,8 +22,15 @@ class IO
   end
   private :__nonblock_native__?
 
+  def __nonblock_pipe__?
+    stat.pipe? rescue false
+  end
+  private :__nonblock_pipe__?
+
   def nonblock?
-    if __nonblock_native__?
+    if __nonblock_pipe__?
+      defined?(@__nonblock__) ? !!@__nonblock__ : true
+    elsif __nonblock_native__?
       (fcntl(NONBLOCK_GET__, 0) & NONBLOCK_FLAG__) != 0
     else
       defined?(@__nonblock__) ? !!@__nonblock__ : false
@@ -28,7 +38,7 @@ class IO
   end
 
   def nonblock=(value)
-    if __nonblock_native__?
+    if !__nonblock_pipe__? && __nonblock_native__?
       flags = fcntl(NONBLOCK_GET__, 0)
       flags = value ? (flags | NONBLOCK_FLAG__) : (flags & ~NONBLOCK_FLAG__)
       fcntl(NONBLOCK_SET__, flags)
