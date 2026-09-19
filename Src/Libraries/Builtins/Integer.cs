@@ -276,6 +276,7 @@ namespace IronRuby.Builtins {
                     goto default;
 
                 case RubyEncoding.CodePageSJIS:
+                case RubyEncoding.CodePageWindows31J:
                     // Single byte: ASCII plus the half-width katakana block. Double byte: a
                     // lead byte from 0x81-0x9f/0xe0-0xfc and a trail byte from 0x40-0xfc
                     // excluding 0x7f.
@@ -293,6 +294,8 @@ namespace IronRuby.Builtins {
                     throw OutOfCharRange(codepoint);
 
                 case RubyEncoding.CodePageEUCJP:
+                case RubyEncoding.CodePageEucJpMs:
+                case RubyEncoding.CodePageCP51932:
                     // Single byte ASCII; two byte 0xa1-0xfe pairs for JIS X 0208 and the 0x8e
                     // prefix for half-width katakana; three byte 0x8f pairs for JIS X 0212.
                     if (codepoint <= 0x7f) {

@@ -1104,14 +1104,7 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                if (codepoint < 0 || codepoint > 0x10FFFF) {
-                    throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint.ToString());
-                }
-                text = Char.ConvertFromUtf32(codepoint);
-
-                if (codepoint > 0x7F && !IsRepresentable(text)) {
-                    throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint.ToString());
-                }
+                text = FormatCodepoint(codepoint);
             }
 
             // width counts characters, not UTF-16 code units
@@ -1124,6 +1117,49 @@ namespace IronRuby.Builtins {
             } else {
                 _buf.Append(' ', pad).Append(text);
             }
+        }
+
+        /// <summary>
+        /// The character %c makes of an Integer. The code point is interpreted in the encoding of
+        /// the result, as MRI's rb_enc_mbcput does: in EUC-JP 0x8FABB1 is one character, not an
+        /// out of range Unicode code point.
+        /// </summary>
+        private string/*!*/ FormatCodepoint(int codepoint) {
+            RubyEncoding encoding = _resultEncoding ?? _encoding;
+            if (codepoint > 0x7F && encoding != null && !encoding.IsUnicodeEncoding && encoding.IsAsciiIdentity && encoding != RubyEncoding.Binary) {
+                if (encoding == RubyEncoding.Ascii) {
+                    // A US-ASCII format has no character above 0x7F, so MRI makes the result binary.
+                    if (codepoint > 0xFF) {
+                        throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+                    }
+                    _resultEncoding = RubyEncoding.Binary;
+                    return ((char)codepoint).ToString();
+                }
+
+                MutableString character;
+                try {
+                    character = Integer.ToChr(encoding, encoding, codepoint);
+                } catch (ArgumentOutOfRangeException e) {
+                    if (e.Message.StartsWith("invalid codepoint", StringComparison.Ordinal)) {
+                        throw RubyExceptions.CreateArgumentError("invalid character");
+                    }
+                    throw;
+                }
+                if (character.ContainsInvalidCharacters()) {
+                    throw RubyExceptions.CreateArgumentError("invalid character");
+                }
+                return character.ToString();
+            }
+
+            if (codepoint < 0 || codepoint > 0x10FFFF) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+            }
+            string text = Char.ConvertFromUtf32(codepoint);
+
+            if (codepoint > 0x7F && !IsRepresentable(text)) {
+                throw RubyExceptions.CreateRangeError("{0} out of char range", codepoint);
+            }
+            return text;
         }
 
         /// <summary>True if the text can be encoded in the encoding the result will carry.</summary>
