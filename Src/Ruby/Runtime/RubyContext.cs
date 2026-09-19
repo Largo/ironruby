@@ -3659,8 +3659,25 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Kills the threads still running when the program ends (the Thread library sets it once it
+        /// has started one). Runs after the at_exit handlers, as MRI's rb_thread_terminate_all does.
+        /// </summary>
+        public Action ThreadTerminator { get; set; }
+
         private void ExecuteShutdownHandlers() {
             RunShutdownHandlers();
+
+            var terminator = ThreadTerminator;
+            if (terminator != null) {
+                ThreadTerminator = null;
+                try {
+                    terminator();
+                } catch (Exception) {
+                    // the program is over; a thread that won't die just stays behind
+                }
+            }
+
             RunExitFinalizers();
 
             if (_shutdownSystemExit != null) {
@@ -3835,13 +3852,34 @@ namespace IronRuby.Runtime {
                     syntaxError.File, syntaxError.Line, syntaxError.Column, syntaxError.LineSourceCode);
             }
 
+            StringBuilder sb = new StringBuilder();
+            AppendExceptionReport(sb, exception);
+
+            // MRI follows the report with the exception's causes, each reported the same way:
+            var shown = new HashSet<Exception>(ReferenceEqualityComparer<Exception>.Instance) { exception };
+            Exception cause = exception;
+            while ((cause = RubyExceptionData.GetInstance(cause).Cause) != null && shown.Add(cause)) {
+                AppendExceptionReport(sb, cause);
+            }
+
+            // display the raw CLR exception & strack trace if requested
+            if (Options.ShowClrExceptions) {
+                sb.AppendLine().AppendLine();
+                sb.AppendLine("CLR exception:");
+                sb.Append(base.FormatException(exception));
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+
+        private void AppendExceptionReport(StringBuilder/*!*/ sb, Exception/*!*/ exception) {
             var exceptionClass = GetClassOf(exception);
             RubyExceptionData data = RubyExceptionData.GetInstance(exception);
             string message = RubyExceptionData.GetClrMessage(this, data.Message);
 
             RubyArray backtrace = data.Backtrace;
 
-            StringBuilder sb = new StringBuilder();
             if (backtrace != null && backtrace.Count > 0) {
                 sb.AppendFormat("{0}: {1} ({2})", Protocols.ToClrStringNoThrow(this, backtrace[0]), message, exceptionClass.Name);
                 sb.AppendLine();
@@ -3857,16 +3895,6 @@ namespace IronRuby.Runtime {
             } else {
                 sb.AppendFormat("unknown: {0} ({1})", message, exceptionClass.Name).AppendLine();
             }
-
-            // display the raw CLR exception & strack trace if requested
-            if (Options.ShowClrExceptions) {
-                sb.AppendLine().AppendLine();
-                sb.AppendLine("CLR exception:");
-                sb.Append(base.FormatException(exception));
-                sb.AppendLine();
-            }
-
-            return sb.ToString();
         }
 
         internal static string/*!*/ FormatErrorMessage(string/*!*/ message, string prefix, string file, int line, int column, string lineSource) {

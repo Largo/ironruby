@@ -954,6 +954,9 @@ namespace IronRuby.Builtins {
             RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
             ThreadGroup group = creator.Group;
             ThreadStarter s = starter = new ThreadStarter();
+            if (context.ThreadTerminator == null) {
+                context.ThreadTerminator = () => TerminateAllThreads(context);
+            }
             Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group)));
             if (subclass != null) {
                 context.AdoptClrObject(result, subclass);
@@ -1409,6 +1412,72 @@ namespace IronRuby.Builtins {
         public static object SetFiberOwner(object self, [NotNull]Thread/*!*/ owner) {
             RubyUtils.SetFiberOwnerThread(owner);
             return owner;
+        }
+
+        private static volatile bool _terminating;
+
+        /// <summary>
+        /// True once the program has ended and the remaining threads are being killed. The Fiber
+        /// implementation asks, so that a killed fiber does not hand control back to the fiber that
+        /// resumed it: that fiber is suspended, and in MRI nothing of it runs again.
+        /// </summary>
+        [RubyMethod("__terminating__", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsTerminating(object self) {
+            return _terminating;
+        }
+
+        /// <summary>
+        /// MRI kills every other thread when the program ends (after the at_exit handlers), and waits
+        /// for them. What runs is the ensure clauses of each thread's current fiber; a suspended
+        /// fiber is abandoned. Every fiber here is a CLR thread of its own, so "kill the thread" means
+        /// kill the CLR thread of the fiber that is running, and leave the others parked.
+        /// </summary>
+        private static void TerminateAllThreads(RubyContext/*!*/ context) {
+            _terminating = true;
+
+            RubySymbol currentFiberKey = context.CreateAsciiSymbol("__ir_fiber_current__");
+            RubySymbol resumed = context.CreateAsciiSymbol("resumed");
+            List<Thread> killed = new List<Thread>();
+            List<Thread> busy = new List<Thread>();
+
+            foreach (RubyThreadInfo info in RubyThreadInfo.Threads) {
+                Thread thread = info.Thread;
+                if (thread == Thread.CurrentThread || thread == context.MainThread || !info.CreatedFromRuby || !thread.IsAlive) {
+                    continue;
+                }
+
+                object fiber = info[currentFiberKey];
+                object status;
+                if (fiber != null && context.TryGetInstanceVariable(fiber, "@status", out status) && !ReferenceEquals(status, resumed)) {
+                    // a suspended fiber (or a thread whose root fiber is suspended)
+                    continue;
+                }
+
+                // The kill is delivered at the thread's next blocking point, and a thread blocked in a
+                // managed wait (sleep, Queue#pop, Mutex, ConditionVariable) is woken for it. One that is
+                // computing, or blocked in a system call, may never get there: give it a moment only.
+                bool waiting = (thread.ThreadState & ThreadState.WaitSleepJoin) != 0;
+                try {
+                    Kill(thread);
+                    (waiting ? killed : busy).Add(thread);
+                } catch (Exception) {
+                    // the thread finished in the meantime
+                }
+            }
+
+            // MRI waits as long as it takes; don't let a thread stuck in an ensure clause hang the exit.
+            JoinAll(killed, TimeSpan.FromSeconds(5));
+            JoinAll(busy, TimeSpan.FromMilliseconds(100));
+        }
+
+        private static void JoinAll(List<Thread>/*!*/ threads, TimeSpan timeout) {
+            DateTime deadline = DateTime.UtcNow + timeout;
+            foreach (Thread thread in threads) {
+                TimeSpan left = deadline - DateTime.UtcNow;
+                if (left <= TimeSpan.Zero || !thread.Join(left)) {
+                    return;
+                }
+            }
         }
 
         [RubyMethod("stop?", RubyMethodAttributes.PublicInstance)]

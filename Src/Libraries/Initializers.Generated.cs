@@ -9833,6 +9833,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Threading.Thread, System.Object>(IronRuby.Builtins.ThreadOps.SetFiberOwner)
             );
             
+            DefineLibraryMethod(module, "__terminating__", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.IsTerminating)
+            );
+            
             DefineLibraryMethod(module, "abort_on_exception", 0x61, 
                 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GlobalAbortOnException)
