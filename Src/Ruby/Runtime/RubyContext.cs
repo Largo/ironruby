@@ -3898,6 +3898,22 @@ namespace IronRuby.Runtime {
             return GetSourceReader(stream, defaultEncoding);
         }
 
+        /// <summary>
+        /// A file is UTF-8 unless it says otherwise, and so is a binary or ASCII string given to
+        /// eval. A string in any other encoding is eval'd as the characters it holds in that
+        /// encoding - reading its bytes as UTF-8 failed outright for most Shift_JIS or EUC-JP text.
+        /// </summary>
+        private static Encoding/*!*/ SourceDefaultEncoding(Encoding/*!*/ defaultEncoding) {
+            switch (defaultEncoding.CodePage) {
+                case RubyEncoding.CodePageBinary:
+                case RubyEncoding.CodePageAscii:
+                case RubyEncoding.CodePageUTF8:
+                    return RubyEncoding.UTF8.StrictEncoding;
+            }
+            var encoding = RubyEncoding.GetRubyEncoding(defaultEncoding);
+            return encoding.IsAsciiIdentity ? encoding.StrictEncoding : RubyEncoding.UTF8.StrictEncoding;
+        }
+
         private SourceCodeReader/*!*/ GetSourceReader(Stream/*!*/ stream, Encoding/*!*/ defaultEncoding) {
             long initialPosition = stream.Position;
             var reader = new StreamReader(stream, BinaryEncoding.Instance, true);
@@ -3907,6 +3923,15 @@ namespace IronRuby.Runtime {
 
             Encoding preambleEncoding = (reader.CurrentEncoding != BinaryEncoding.Instance) ? reader.CurrentEncoding : null;
             Encoding rubyPreambleEncoding = null;
+
+            // Ruby knows only the UTF-8 BOM. A UTF-16 or UTF-32 one is two or four bytes that are
+            // not UTF-8, and the file is a syntax error ("invalid multibyte char") rather than a
+            // file in that encoding.
+            if (preambleEncoding != null && preambleEncoding.CodePage != RubyEncoding.CodePageUTF8) {
+                preambleEncoding = null;
+                stream.Seek(initialPosition, SeekOrigin.Begin);
+                reader = new StreamReader(stream, BinaryEncoding.Instance, false);
+            }
 
             // header:
             string encodingName;
@@ -3931,7 +3956,23 @@ namespace IronRuby.Runtime {
             // Ruby 2.0 made UTF-8 the default source encoding; before that it was
             // US-ASCII and a magic comment was required for anything else. A magic
             // comment or a BOM still wins.
-            var encoding = rubyPreambleEncoding ?? preambleEncoding ?? RubyEncoding.UTF8.StrictEncoding;
+            var encoding = rubyPreambleEncoding ?? preambleEncoding ?? SourceDefaultEncoding(defaultEncoding);
+            if (encoding == RubyEncoding.UTF8.StrictEncoding) {
+                // Bytes that are not UTF-8 are prism's to report, as the syntax error MRI gives for
+                // them, so they have to survive being read: they are decoded to the escapes
+                // RubyEncoding.EscapingEncoding turns back into the same bytes, which is what the
+                // parser is handed. Decoding them strictly threw a bare DecoderFallbackException.
+                var bytes = new MemoryStream();
+                stream.CopyTo(bytes);
+                var data = bytes.ToArray();
+                string text;
+                try {
+                    text = encoding.GetString(data);
+                } catch (DecoderFallbackException) {
+                    text = RubyEncoding.UTF8.EscapingEncoding.GetString(data);
+                }
+                return new SourceCodeReader(new StringReader(text), encoding);
+            }
             return new SourceCodeReader(new StreamReader(stream, encoding, false), encoding);
         }
 
@@ -3962,8 +4003,7 @@ namespace IronRuby.Runtime {
                 case "LOCALE": return _options.LocaleEncoding.StrictEncoding;
                 case "EXTERNAL": return _defaultExternalEncoding.StrictEncoding;
                 // Mono doesn't recognize 'SJIS' encoding name:
-                case "SJIS": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
-                case "WINDOWS-31J": return Encoding.GetEncoding(932);
+                case "WINDOWS-31J": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
                 case "MACCYRILLIC": return Encoding.GetEncoding(10007);
 
                 // encodings whose name only differs in casing are returned by Windows:
@@ -4000,6 +4040,18 @@ namespace IronRuby.Runtime {
                 case "CESU-8": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8).StrictEncoding;
                 case "TIS-620": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageTIS620).StrictEncoding;
                 case "EMACS-MULE": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEmacsMule).StrictEncoding;
+                case "SHIFT_JIS": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageShiftJIS).StrictEncoding;
+                case "UTF8-MAC": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF8Mac).StrictEncoding;
+                case "CP51932": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCP51932).StrictEncoding;
+                case "EUCJP-MS": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEucJpMs).StrictEncoding;
+                case "STATELESS-ISO-2022-JP": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageStatelessISO2022JP).StrictEncoding;
+                case "ISO-2022-JP-2": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO2022JP2).StrictEncoding;
+                case "GB12345": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageGB12345).StrictEncoding;
+                case "EUC-TW": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEUCTW).StrictEncoding;
+                case "GB1988": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageGB1988).StrictEncoding;
+                case "ISO-8859-10": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO8859_10).StrictEncoding;
+                case "ISO-8859-14": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO8859_14).StrictEncoding;
+                case "ISO-8859-16": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO8859_16).StrictEncoding;
 
                 default:
                     string alias;

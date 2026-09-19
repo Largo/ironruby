@@ -1108,7 +1108,30 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                return enc.IsAsciiIdentity ? null : RubyEncoding.UTF8;
+                // MRI answers from its transcoder tables: the encoding a converter out of an
+                // ASCII incompatible one produces as its first step.
+                switch (enc.CodePage) {
+                    case RubyEncoding.CodePageUTF16BE:
+                    case RubyEncoding.CodePageUTF16LE:
+                    case RubyEncoding.CodePageUTF32BE:
+                    case RubyEncoding.CodePageUTF32LE:
+                    case RubyEncoding.CodePageUTF16:
+                    case RubyEncoding.CodePageUTF32:
+                    case RubyEncoding.CodePageCESU8:
+                        return RubyEncoding.UTF8;
+
+                    case 37: // IBM037
+                        return RubyEncoding.GetRubyEncoding(28591);
+
+                    case 50220: // ISO-2022-JP
+                        return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageStatelessISO2022JP);
+
+                    case 50221: // CP50221
+                        return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCP51932);
+
+                    default:
+                        return null;
+                }
             }
 
             [RubyMethod("source_encoding")]

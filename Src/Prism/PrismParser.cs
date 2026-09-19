@@ -30,10 +30,20 @@ namespace IronRuby.Prism {
         /// </summary>
         public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
             int frozenStringLiteral, Encoding/*!*/ sourceEncoding) {
+            return Parse(source, path, startLine, outerLocals, frozenStringLiteral, sourceEncoding, null);
+        }
+
+        /// <summary>
+        /// <paramref name="encodingName"/> tells prism what encoding the bytes are in when nothing
+        /// in the source says so - an eval'd Shift_JIS string, whose trail bytes prism would
+        /// otherwise read as ASCII punctuation.
+        /// </summary>
+        public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
+            int frozenStringLiteral, Encoding/*!*/ sourceEncoding, string encodingName) {
 
             byte[] sourceBytes = sourceEncoding.GetBytes(source);
             PrismParseResult result = PrismLoader.LoadParse(
-                ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral)));
+                ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName)));
             result.DataOffset = ComputeDataOffset(result.DataLocation, sourceBytes);
             return result;
         }
@@ -95,13 +105,24 @@ namespace IronRuby.Prism {
         }
 
         internal static byte[]/*!*/ BuildOptionsData(string path, int startLine, IList<string> outerLocals, int frozenStringLiteral) {
+            return BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, null);
+        }
+
+        internal static byte[]/*!*/ BuildOptionsData(string path, int startLine, IList<string> outerLocals, int frozenStringLiteral,
+            string encodingName) {
             using (var stream = new MemoryStream())
             using (var writer = new BinaryWriter(stream)) {
                 byte[] pathBytes = Encoding.UTF8.GetBytes(path ?? "");
                 writer.Write(pathBytes.Length);
                 writer.Write(pathBytes);
                 writer.Write(startLine);
-                writer.Write(0);            // encoding name length (default)
+                if (encodingName == null) {
+                    writer.Write(0);        // encoding name length (default)
+                } else {
+                    byte[] nameBytes = Encoding.ASCII.GetBytes(encodingName);
+                    writer.Write(nameBytes.Length);
+                    writer.Write(nameBytes);
+                }
                 // 1 enabled, -1 (0xff) disabled, 0 unset - a magic comment in the file wins
                 // over either, which prism does itself.
                 writer.Write((sbyte)frozenStringLiteral);

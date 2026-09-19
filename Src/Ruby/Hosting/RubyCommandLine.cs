@@ -15,6 +15,7 @@
 #if FEATURE_FULL_CONSOLE
 
 using System;
+using System.Collections.Generic;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
@@ -78,7 +79,14 @@ namespace IronRuby.Hosting {
             // stdin is redirected. Only a real terminal gets the interactive loop — and
             // the banner that goes with it.
             if (Options.Command == null && Options.FileName == null && System.Console.IsInputRedirected) {
-                return RunFile(CreateCommandSource(System.Console.In.ReadToEnd(), SourceCodeKind.File, "-"));
+                // The program is read as bytes: a magic comment may say they are not UTF-8, and
+                // decoding them before the parser has seen it mangles them.
+                var program = new MemoryStream();
+                using (var stdin = System.Console.OpenStandardInput()) {
+                    stdin.CopyTo(program);
+                }
+                return RunFile(Engine.CreateScriptSource(new BinaryContentProvider(program.ToArray()), "-",
+                    GetSourceCodeEncoding(), SourceCodeKind.File));
             }
 
             return base.Run();
@@ -154,7 +162,70 @@ namespace IronRuby.Hosting {
                 command = WrapInInputLoop(command, options);
             }
 
+            byte[] raw = options.LoopOverInput ? null : GetRawCommandBytes(command);
+            if (raw != null) {
+                return RunFile(Engine.CreateScriptSource(new BinaryContentProvider(raw), "-e", GetSourceCodeEncoding(), SourceCodeKind.Statements));
+            }
+
             return RunFile(CreateCommandSource(command, SourceCodeKind.Statements, "-e"));
+        }
+
+        /// <summary>
+        /// The bytes the -e arguments were given as, when .NET could not decode them as UTF-8 and
+        /// put U+FFFD in their place: `-e "# encoding: big5..."` holds Big5 bytes, which only the
+        /// magic comment can make sense of. On Linux the process's own command line has them.
+        /// Null when there is nothing to recover or it cannot be done.
+        /// </summary>
+        private static byte[] GetRawCommandBytes(string/*!*/ command) {
+            if (command.IndexOf('\uFFFD') < 0) {
+                return null;
+            }
+            try {
+                const string cmdline = "/proc/self/cmdline";
+                if (!File.Exists(cmdline)) {
+                    return null;
+                }
+                byte[] data = File.ReadAllBytes(cmdline);
+                var args = new List<byte[]>();
+                int start = 0;
+                for (int i = 0; i < data.Length; i++) {
+                    if (data[i] == 0) {
+                        var arg = new byte[i - start];
+                        Array.Copy(data, start, arg, 0, arg.Length);
+                        args.Add(arg);
+                        start = i + 1;
+                    }
+                }
+
+                var joined = new List<byte>();
+                bool any = false;
+                for (int i = 0; i < args.Count; i++) {
+                    byte[] arg = args[i];
+                    byte[] code = null;
+                    if (arg.Length == 2 && arg[0] == '-' && arg[1] == 'e' && i + 1 < args.Count) {
+                        code = args[++i];
+                    } else if (arg.Length > 2 && arg[0] == '-' && arg[1] == 'e') {
+                        code = new byte[arg.Length - 2];
+                        Array.Copy(arg, 2, code, 0, code.Length);
+                    } else if (arg.Length == 2 && arg[0] == '-' && arg[1] == '-') {
+                        break;
+                    }
+                    if (code != null) {
+                        if (any) {
+                            joined.Add((byte)'\n');
+                        }
+                        joined.AddRange(code);
+                        any = true;
+                    }
+                }
+
+                byte[] result = joined.ToArray();
+                return any && Encoding.UTF8.GetString(result) == command ? result : null;
+            } catch (IOException) {
+                return null;
+            } catch (UnauthorizedAccessException) {
+                return null;
+            }
         }
 
         private ScriptSource/*!*/ CreateCommandSource(string/*!*/ command, SourceCodeKind kind, string/*!*/ sourceUnitId) {

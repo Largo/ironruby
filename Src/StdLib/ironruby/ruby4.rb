@@ -7690,8 +7690,13 @@ class Hash
       body = map { |k, v|
         if k.is_a?(Symbol)
           name = k.to_s
-          # `a=` is not a valid label, so it has to be quoted
-          key = name =~ /\A[A-Za-z_][A-Za-z0-9_]*[?!]?\z/ ? name : name.inspect
+          # MRI's symbol_key_needs_quote: the key is bare when the symbol inspects bare (which
+          # also decides whether a non-ASCII name can be shown in the default external
+          # encoding), except for the names that would not read back as a label - `a=`, `+`,
+          # `@a`, `$a`, `!`.
+          bare = !k.inspect.start_with?(':"') && !name.empty? &&
+            !%w[@ $ !].include?(name[0]) && !%w(+ - * / ` % ^ & | ] < = > ~ @).include?(name[-1])
+          key = bare ? name : name.inspect
           "#{key}: #{__ir_inspect__(v)}"
         else
           "#{__ir_inspect__(k)} => #{__ir_inspect__(v)}"
