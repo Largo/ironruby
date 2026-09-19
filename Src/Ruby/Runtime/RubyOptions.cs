@@ -36,6 +36,9 @@ namespace IronRuby.Runtime {
         private readonly bool _chopLines;
         private readonly string _inputRecordSeparator;
         private readonly string _inplaceMode;
+        private readonly string _fieldSeparator;
+        private readonly bool _scriptSwitches;
+        private readonly bool _skipToRubyShebang;
         private readonly int _frozenStringLiteral;
         private readonly bool _debugFrozenStringLiteral;
         private readonly int _backtraceLimit;
@@ -156,6 +159,21 @@ namespace IronRuby.Runtime {
             get { return _inplaceMode; }
         }
 
+        /// <summary>The pattern given by -F, which $; starts out as (a Regexp), or null.</summary>
+        public string FieldSeparator {
+            get { return _fieldSeparator; }
+        }
+
+        /// <summary>-s: the leading -name[=value] arguments of ARGV become global variables.</summary>
+        public bool ScriptSwitches {
+            get { return _scriptSwitches; }
+        }
+
+        /// <summary>-x: the main script starts after its first #!...ruby line.</summary>
+        public bool SkipToRubyShebang {
+            get { return _skipToRubyShebang; }
+        }
+
         public string MainFile {
             get { return _mainFile; }
         }
@@ -233,6 +251,9 @@ namespace IronRuby.Runtime {
             _chopLines = GetOption(options, "ChopLines", false);
             _inputRecordSeparator = GetOption<string>(options, "InputRecordSeparator", null);
             _inplaceMode = GetOption<string>(options, "InplaceMode", null);
+            _fieldSeparator = GetOption<string>(options, "FieldSeparator", null);
+            _scriptSwitches = GetOption(options, "ScriptSwitches", false);
+            _skipToRubyShebang = GetOption(options, "SkipToRubyShebang", false);
             _frozenStringLiteral = GetOption(options, "FrozenStringLiteral", 0);
             _debugFrozenStringLiteral = GetOption(options, "DebugFrozenStringLiteral", false);
             _backtraceLimit = GetOption(options, "BacktraceLimit", -1);

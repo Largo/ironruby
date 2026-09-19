@@ -75,6 +75,13 @@ namespace IronRuby.Hosting {
                 InputLoopOps.Define((RubyContext)Language);
             }
 
+            if (((RubyContext)Language).RubyOptions.ScriptSwitches) {
+                int? status = ProcessScriptSwitches((RubyContext)Language);
+                if (status.HasValue) {
+                    return status.Value;
+                }
+            }
+
             // `ruby` with no -e and no script argument reads the program from stdin when
             // stdin is redirected. Only a real terminal gets the interactive loop — and
             // the banner that goes with it.
@@ -92,6 +99,45 @@ namespace IronRuby.Hosting {
             return base.Run();
         }
 
+        /// <summary>
+        /// -s: the leading arguments that look like switches are taken out of ARGV and become
+        /// global variables, -name as $name = true and -name=value as $name = "value", with the
+        /// dashes after the first one turned into underscores. The first argument that is not a
+        /// switch ends them, and so does "--", which is removed as well (MRI's process_sflag).
+        /// Returns the exit status when a switch cannot name a global variable.
+        /// </summary>
+        private int? ProcessScriptSwitches(RubyContext/*!*/ context) {
+            RubyArray argv = context.InputProvider.CommandLineArguments;
+            int consumed = 0;
+            while (consumed < argv.Count) {
+                string arg = argv[consumed] is MutableString str ? str.ToString() : argv[consumed] as string;
+                if (arg == null || !arg.StartsWith("-", StringComparison.Ordinal)) {
+                    break;
+                }
+                consumed++;
+                if (arg == "--") {
+                    break;
+                }
+
+                string name = arg.Substring(1);
+                object value = true;
+                int eq = name.IndexOf('=');
+                if (eq >= 0) {
+                    value = MutableString.Create(name.Substring(eq + 1), context.RubyOptions.LocaleEncoding);
+                    name = name.Substring(0, eq);
+                }
+                foreach (char c in name) {
+                    if (c != '-' && c != '_' && !Char.IsLetterOrDigit(c)) {
+                        Console.Write(String.Format("ruby: invalid name for global variable - -{0} (NameError)\n", name), Style.Error);
+                        return 1;
+                    }
+                }
+                context.SetGlobalVariable(null, name.Replace('-', '_'), value);
+            }
+            argv.RemoveRange(0, consumed);
+            return null;
+        }
+
         protected override int RunFile(string fileName) {
             // A script that cannot be read is a LoadError in MRI, reported without a backtrace:
             // "ruby: No such file or directory -- x (LoadError)".
@@ -103,7 +149,12 @@ namespace IronRuby.Hosting {
             }
 
             var options = ((RubyContext)Language).RubyOptions;
-            if (options.LoopOverInput) {
+            if (!HasRubyScript(scriptPath, options.SkipToRubyShebang)) {
+                Console.Write(String.Format("{0}: no Ruby script found in input (LoadError)\n", fileName), Style.Error);
+                return 1;
+            }
+
+            if (options.LoopOverInput && RubyContext.AlternativeParser == null) {
                 // The program has to be read rather than handed to the compiler as a path, so
                 // that the -n loop can be wrapped around it.
                 string path = RubyUtils.CanonicalizePath(fileName);
@@ -115,6 +166,36 @@ namespace IronRuby.Hosting {
             }
 
             return RunFile(Engine.CreateScriptSourceFromFile(RubyUtils.CanonicalizePath(fileName), GetSourceCodeEncoding()));
+        }
+
+        /// <summary>
+        /// Under -x, or when the script's own #! line does not name ruby, the program starts at
+        /// the first #!...ruby line (prism skips to it); a script without one is a LoadError that
+        /// MRI reports without a backtrace.
+        /// </summary>
+        private static bool HasRubyScript(string/*!*/ path, bool skipToRubyShebang) {
+            try {
+                using (var reader = new StreamReader(path, Encoding.Latin1)) {
+                    string line = reader.ReadLine();
+                    if (line == null || !line.StartsWith("#!", StringComparison.Ordinal)) {
+                        if (!skipToRubyShebang) {
+                            return true;
+                        }
+                    } else if (line.IndexOf("ruby", StringComparison.Ordinal) >= 0) {
+                        return true;
+                    }
+                    while ((line = reader.ReadLine()) != null) {
+                        if (line.StartsWith("#!", StringComparison.Ordinal) && line.IndexOf("ruby", StringComparison.Ordinal) >= 0) {
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            } catch (IOException) {
+                return true;
+            } catch (UnauthorizedAccessException) {
+                return true;
+            }
         }
 
         /// <summary>
@@ -158,11 +239,13 @@ namespace IronRuby.Hosting {
 
         protected override int RunCommand(string/*!*/ command) {
             var options = ((RubyContext)Language).RubyOptions;
-            if (options.LoopOverInput) {
+            // prism wraps the loop around the parsed program itself (PrismAstBridge).
+            bool wrap = options.LoopOverInput && RubyContext.AlternativeParser == null;
+            if (wrap) {
                 command = WrapInInputLoop(command, options);
             }
 
-            byte[] raw = options.LoopOverInput ? null : GetRawCommandBytes(command);
+            byte[] raw = wrap ? null : GetRawCommandBytes(command);
             if (raw != null) {
                 return RunFile(Engine.CreateScriptSource(new BinaryContentProvider(raw), "-e", GetSourceCodeEncoding(), SourceCodeKind.Statements));
             }

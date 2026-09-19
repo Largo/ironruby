@@ -569,7 +569,10 @@ namespace IronRuby.Runtime {
             // print put back what the loop chomped off.
             _inputSeparator = MutableString.CreateAscii(_options.InputRecordSeparator ?? "\n").Freeze();
             _outputSeparator = _options.ChopLines ? _inputSeparator : null;
-            _stringSeparator = null;
+            // -F names $; - as a Regexp, the way MRI compiles it.
+            _stringSeparator = _options.FieldSeparator != null
+                ? new RubyRegex(MutableString.Create(_options.FieldSeparator, RubyEncoding.UTF8), RubyRegexOptions.NONE)
+                : null;
             _itemSeparator = null;
             _mainThread = Thread.CurrentThread;
             

@@ -2510,6 +2510,44 @@ namespace IronRuby.Builtins {
             return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, GetArgFile(storage.Context), separator, limit);
         }
 
+        // gets(nil) reads the rest of the input: under -0777 -n the loop is `while gets($/)` with a nil $/.
+        [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
+        public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self,
+            DynamicNull separator) {
+
+            var site = storage.GetCallSite("gets", 1);
+            return scope.GetInnerMostClosureScope().LastInputLine = site.Target(site, GetArgFile(storage.Context), null);
+        }
+
+        // gets(sep, chomp: true), which is also the loop -n -l runs: `while gets($/, chomp: true)`.
+        // The line is chomped here: the keywords would not survive ARGF's Ruby-level *args.
+        [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
+        public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self,
+            MutableString separator, [NotNull]Hash/*!*/ options) {
+
+            if (!options.IsKeywordArguments) {
+                throw RubyExceptions.CreateImplicitConversionError("Hash", "Integer");
+            }
+            object chomp;
+            bool doChomp = options.TryGetValue(storage.Context.CreateAsciiSymbol("chomp"), out chomp) && RubyOps.IsTrue(chomp);
+
+            var site = storage.GetCallSite("gets", 1);
+            object line = site.Target(site, GetArgFile(storage.Context), separator);
+            if (doChomp && line is MutableString str) {
+                RubyIOOps.ChompLine(str, separator);
+            }
+            return scope.GetInnerMostClosureScope().LastInputLine = line;
+        }
+
+        [RubyMethod("gets", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("gets", RubyMethodAttributes.PublicSingleton)]
+        public static object ReadInputLine(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ storage, RubyScope/*!*/ scope, object self,
+            [NotNull]Hash/*!*/ options) {
+            return ReadInputLine(storage, scope, self, storage.Context.InputSeparator, options);
+        }
+
         #endregion
 
         #region split, chomp, chop, gsub, sub, format, sprintf
