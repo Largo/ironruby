@@ -434,6 +434,10 @@ namespace IronRuby.Hosting {
                         case "TabCompletion":
                         case "ColorfulConsole":
                             throw new InvalidOptionException(String.Format("Option `{0}' not supported", optionName));
+
+                        case "ObjectSpace":
+                            LanguageSetup.Options["ObjectSpace"] = ScriptingRuntimeHelpers.True;
+                            return;
                     }
                     goto default;
                     
@@ -568,6 +572,7 @@ namespace IronRuby.Hosting {
                 { "-profile",                    "enable support for 'pi = IronRuby::Clr.profile { block_to_profile }'" },
                 
                 { "-X:ExceptionDetail",          "enable ExceptionDetail mode" },
+                { "-X:ObjectSpace",              "let ObjectSpace.each_object find objects, not just modules (slows down Object#new)" },
                 { "-X:NoAdaptiveCompilation",    "disable adaptive compilation - all code will be compiled" },
                 { "-X:CompilationThreshold",     "the number of iterations before the interpreter starts compiling" },
                 { "-X:PassExceptions",           "do not catch exceptions that are unhandled by script code" },

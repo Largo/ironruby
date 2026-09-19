@@ -190,46 +190,125 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        // MRI walks its heap. The CLR cannot, so IronRuby records what each_object can find as it is
+        // created (RubyContext.ObjectSpaceModules/Objects): modules and classes, and - with
+        // -X:ObjectSpace - the instances of Ruby classes deriving from Object or BasicObject. What is
+        // not recorded - instances of the builtin types (String, Array, Exception, ...), or any object
+        // without -X:ObjectSpace - is asked for with an error rather than an empty walk, as in JRuby.
         [RubyMethod("each_object", RubyMethodAttributes.PublicSingleton)]
-        public static Enumerator/*!*/ GetEachObjectEnumerator(RubyModule/*!*/ self, [NotNull]RubyClass/*!*/ theClass) {
-            return new Enumerator((_, block) => EachObject(block, self, theClass));
+        public static Enumerator/*!*/ GetEachObjectEnumerator(RubyModule/*!*/ self, [Optional]RubyModule theModule) {
+            return new Enumerator((_, block) => EachObject(block, self, theModule));
         }
 
         [RubyMethod("each_object", RubyMethodAttributes.PublicSingleton)]
-        public static object EachObject([NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self, [NotNull]RubyClass/*!*/ theClass) {
-            if (!theClass.HasAncestor(self.Context.ModuleClass)) {
-                throw RubyExceptions.CreateRuntimeError("each_object only supported for objects of type Class or Module");
+        public static object EachObject([NotNull]BlockParam/*!*/ block, RubyModule/*!*/ self, [Optional]RubyModule theModule) {
+            var context = self.Context;
+            var objects = context.GetObjectSpaceObjects();
+            if (objects == null) {
+                if (theModule == null || !OnlyModulesAreInstances(theModule)) {
+                    throw RubyExceptions.CreateRuntimeError(
+                        "each_object only supported for modules and classes unless ObjectSpace is enabled (-X:ObjectSpace)"
+                    );
+                }
+            } else if (theModule != null && !CanFindInstances(theModule)) {
+                throw RubyExceptions.CreateRuntimeError(
+                    "each_object only supported for modules, classes and objects of classes derived from Object or BasicObject"
+                );
             }
 
             int matches = 0;
-            List<RubyModule> visitedModules = new List<RubyModule>();
-            Stack<RubyModule> pendingModules = new Stack<RubyModule>();
-            pendingModules.Push(theClass.Context.ObjectClass);
-
-            while (pendingModules.Count > 0) {
-                RubyModule next = pendingModules.Pop();
-                visitedModules.Add(next);
-
-                if (theClass.Context.IsKindOf(next, theClass)) {
-                    matches++;
-
-                    object result;
-                    if (block.Yield(next, out result)) {
-                        return result;
-                    }
+            foreach (var list in new[] { context.GetObjectSpaceModules(), objects }) {
+                if (list == null) {
+                    continue;
                 }
+                foreach (object obj in list) {
+                    var module = obj as RubyModule;
+                    if (module != null && IsHidden(module)) {
+                        continue;
+                    }
 
-                using (theClass.Context.ClassHierarchyLocker()) {
-                    next.EnumerateConstants(delegate(RubyModule module, string name, object value) {
-                        RubyModule constAsModule = value as RubyModule;
-                        if (constAsModule != null && !visitedModules.Contains(constAsModule)) {
-                            pendingModules.Push(constAsModule);
+                    if (theModule == null || context.IsKindOf(obj, theModule)) {
+                        matches++;
+
+                        object result;
+                        if (block.Yield(obj, out result)) {
+                            return result;
                         }
-                        return false;
-                    });
+                    }
                 }
             }
             return matches;
+        }
+
+        // The dummy singleton class that ends a chain of singleton classes has no MRI counterpart. And
+        // MRI hides the singleton class of a class until it has a singleton class of its own
+        // (rb_singleton_class_internal_p) - it gets one when Kernel#singleton_class exposes it; IronRuby
+        // creates the singleton class of every class eagerly, with a dummy one after it.
+        private static bool IsHidden(RubyModule/*!*/ module) {
+            if (module.IsDummySingletonClass) {
+                return true;
+            }
+            var cls = module as RubyClass;
+            return cls != null && cls.IsSingletonClass && cls.SingletonClassOf is RubyClass && cls.ImmediateClass.IsDummySingletonClass;
+        }
+
+        // Module, Class, singleton classes of modules - and modules, which may extend a module.
+        private static bool OnlyModulesAreInstances(RubyModule/*!*/ module) {
+            var cls = module as RubyClass;
+            return cls == null || cls.HasAncestor(module.Context.ModuleClass);
+        }
+
+        private static bool CanFindInstances(RubyModule/*!*/ module) {
+            if (OnlyModulesAreInstances(module)) {
+                return true;
+            }
+            var cls = (RubyClass)module;
+            while (cls.IsSingletonClass) {
+                cls = cls.SuperClass;
+            }
+            Type type = cls.GetUnderlyingSystemType();
+            return type == typeof(object) || typeof(RubyObject).IsAssignableFrom(type);
+        }
+
+        // Deprecated in 4.0 but still working. Only an id MRI computes (nil, true, false, an Integer)
+        // or one of the objects each_object can find (with -X:ObjectSpace for anything but modules)
+        // is turned back into its object: IronRuby keeps no table from ids to the other objects.
+        [RubyMethod("_id2ref", RubyMethodAttributes.PublicSingleton)]
+        public static object IdToReference(RubyModule/*!*/ self, [DefaultProtocol]IntegerValue id) {
+            var context = self.Context;
+            context.ReportDeprecationWarning("ObjectSpace._id2ref is deprecated");
+
+            if (id.IsFixnum) {
+                int value = id.Fixnum;
+                if (value == RubyUtils.NilObjectId) {
+                    return null;
+                } else if (value == RubyUtils.TrueObjectId) {
+                    return ScriptingRuntimeHelpers.True;
+                } else if (value == RubyUtils.FalseObjectId) {
+                    return ScriptingRuntimeHelpers.False;
+                }
+
+                foreach (var list in new[] { context.GetObjectSpaceModules(), context.GetObjectSpaceObjects() }) {
+                    if (list == null) {
+                        continue;
+                    }
+                    foreach (object obj in list) {
+                        // an object whose id has not been asked for yet has no instance data, and it is not created here
+                        var rubyObject = obj as IRubyObject;
+                        if (rubyObject != null && rubyObject.TryGetInstanceData() != null && RubyUtils.GetObjectId(context, obj) == value) {
+                            return obj;
+                        }
+                    }
+                }
+
+                // The ids IronRuby hands out to objects are consecutive, so an odd one is not
+                // necessarily an Integer's (2n + 1) as in MRI: the objects were looked at first.
+                if ((value & 1) != 0) {
+                    return ScriptingRuntimeHelpers.Int32ToObject(value >> 1);
+                }
+            }
+
+            throw RubyExceptions.CreateRangeError(String.Format("\"{0}\" is not an id value", id.IsFixnum ? id.Fixnum.ToString() : id.Bignum.ToString()));
         }
 
         // GC.start's keywords (full_mark:, immediate_sweep:) have no CLR counterpart and are ignored

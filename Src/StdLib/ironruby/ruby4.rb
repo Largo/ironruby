@@ -10502,41 +10502,33 @@ module Kernel
 end
 
 module ObjectSpace
-  # A real weak map needs runtime support; this keeps strong references, which
-  # is safe (entries merely outlive what MRI would collect) but not weak.
-  class WeakMap
-    include Enumerable
-
-    def initialize
-      @table = {}
-    end
-
-    def [](key); @table[key.object_id] && @table[key.object_id][1]; end
-    def []=(key, value); @table[key.object_id] = [key, value]; end
-    def key?(key); @table.key?(key.object_id); end
-    alias_method :member?, :key?
-    alias_method :include?, :key?
-    def each; @table.each_value { |(k, v)| yield(k, v) }; self; end
-    def keys; @table.values.map { |(k, _)| k }; end
-    def values; @table.values.map { |(_, v)| v }; end
-    def size; @table.size; end
-    alias_method :length, :size
-    def delete(key); entry = @table.delete(key.object_id); entry && entry[1]; end
-    def each_key; @table.each_value { |(k, _)| yield k }; self; end
-    def each_value; @table.each_value { |(_, v)| yield v }; self; end
-    alias_method :each_pair, :each
-  end unless const_defined?(:WeakMap)
-
   # 3.2's map with weakly-held keys compared by equality rather than identity.
-  # Same caveat as WeakMap: the references here are strong, so entries outlive
-  # what MRI would collect, which is safe but not weak.
+  # Unlike WeakMap (Builtins/WeakMap.cs) the references here are strong, so
+  # entries outlive what MRI would collect, which is safe but not weak.
   class WeakKeyMap
+    # Keys are looked up by #hash and #eql?, like a Hash, but kept as given: a Hash would store a
+    # frozen copy of a String key instead.
+    class Key # :nodoc:
+      attr_reader :object, :hash
+
+      def initialize(object)
+        @object = object
+        @hash = object.__send__(:hash)
+      end
+
+      def eql?(other)
+        @object.equal?(other.object) || @object.eql?(other.object)
+      end
+    end
+    private_constant :Key
+
     def initialize
       @table = {}
     end
 
     def [](key)
-      @table[key]
+      entry = @table[Key.new(key)]
+      entry && entry[1]
     end
 
     def []=(key, value)
@@ -10545,12 +10537,17 @@ module ObjectSpace
       when ::Integer, ::Float, ::Symbol, ::TrueClass, ::FalseClass, ::NilClass
         ::Kernel.raise(::ArgumentError, "WeakKeyMap keys must be garbage collectable")
       end
-      @table[key] = value
+      # an equal key already there is replaced by this one, as in MRI
+      k = Key.new(key)
+      @table.delete(k)
+      @table[k] = [key, value]
+      value
     end
 
     def delete(key)
-      if @table.key?(key)
-        @table.delete(key)
+      entry = @table.delete(Key.new(key))
+      if entry
+        entry[1]
       elsif block_given?
         yield key
       end
@@ -10558,12 +10555,12 @@ module ObjectSpace
 
     # The key already in the map that is equal to the one given.
     def getkey(key)
-      @table.each_key { |k| return k if k == key }
-      nil
+      entry = @table[Key.new(key)]
+      entry && entry[0]
     end
 
     def key?(key)
-      @table.key?(key)
+      @table.key?(Key.new(key))
     end
     alias_method :member?, :key?
     alias_method :include?, :key?
@@ -10572,7 +10569,6 @@ module ObjectSpace
       @table.clear
       self
     end
-
 
     def inspect
       "#<ObjectSpace::WeakKeyMap:0x#{(object_id << 1).to_s(16).rjust(16, '0')} size=#{@table.size}>"
