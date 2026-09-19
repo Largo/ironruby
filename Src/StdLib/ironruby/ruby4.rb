@@ -10238,6 +10238,15 @@ module Kernel
   module_function :`
 end
 
+# MRI's default SIGINT disposition raises Interrupt on the main thread; left to the
+# platform the signal just ends the process. Installing Ruby's default does that.
+if ::File::ALT_SEPARATOR.nil? && defined?(::Signal.trap)
+  begin
+    ::Signal.trap("INT", "DEFAULT")
+  rescue ::StandardError, ::NotImplementedError
+  end
+end
+
 class SignalException
   # MRI's #initialize names a signal, by number or by name, rather than taking a
   # message: a number may be given a message alongside it, a name may not, and
@@ -10298,6 +10307,11 @@ class Interrupt
 
   private def __signal_exception_super__(message)
     ::Exception.instance_method(:initialize).bind(self).call(message)
+  end
+
+  # also for one the runtime raised for a SIGINT without going through #initialize
+  def signo
+    defined?(@signo) ? @signo : ::Signal.list["INT"]
   end
 end
 

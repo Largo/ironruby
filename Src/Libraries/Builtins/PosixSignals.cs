@@ -116,6 +116,19 @@ namespace IronRuby.Builtins {
 
         #region kill
 
+        private const int SignalPipe = 13;
+
+        [DllImport("libc", EntryPoint = "signal")]
+        private static extern IntPtr SysSignal(int signal, IntPtr handler);
+
+        private static void SetPipeDisposition(bool systemDefault) {
+            try {
+                SysSignal(SignalPipe, systemDefault ? IntPtr.Zero : new IntPtr(1));   // SIG_DFL : SIG_IGN
+            } catch (DllNotFoundException) {
+            } catch (EntryPointNotFoundException) {
+            }
+        }
+
         [DllImport("libc", SetLastError = true, EntryPoint = "kill")]
         private static extern int SysKill(int pid, int signal);
 
@@ -266,14 +279,22 @@ namespace IronRuby.Builtins {
             lock (_handlers) {
                 Handler handler;
                 // MRI spells "nobody ever trapped this" SYSTEM_DEFAULT; DEFAULT means a handler
-                // was installed and then taken away again.
-                object previous = MutableString.CreateAscii(signal == SignalInterrupt ? "DEFAULT" : "SYSTEM_DEFAULT");
+                // was installed and then taken away again. SIGPIPE starts out ignored by the
+                // interpreter itself (as it is by .NET), which trap reports as nil.
+                object previous = (signal == SignalPipe) ? null :
+                    MutableString.CreateAscii(signal == SignalInterrupt ? "DEFAULT" : "SYSTEM_DEFAULT");
                 if (_handlers.TryGetValue(signal, out handler)) {
                     previous = handler.Command;
                     if (handler.Registration != null) {
                         handler.Registration.Dispose();
                     }
                     _handlers.Remove(signal);
+                }
+
+                // SYSTEM_DEFAULT hands SIGPIPE back to the OS, which ends the process on a write to
+                // a closed pipe; anything else keeps it ignored so the write fails with EPIPE.
+                if (signal == SignalPipe) {
+                    SetPipeDisposition(IsSystemDefault(command));
                 }
 
                 var installed = new Handler { Command = command };
