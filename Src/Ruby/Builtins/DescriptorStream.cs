@@ -51,11 +51,38 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "fcntl")]
         private static extern int sys_fcntl(int fd, int cmd, int arg);
 
+        [DllImport("libc", SetLastError = true, EntryPoint = "open")]
+        private static extern int sys_open(string path, int flags);
+
+        private const int O_RDONLY = 0;
+        private const int O_DIRECTORY = 0x10000;
+        private const int O_CLOEXEC = 0x80000;
+
+        /// <summary>
+        /// open(2) of a directory for reading - which FileStream refuses and MRI's File.open
+        /// allows; reading from it then fails with EISDIR. Null where it cannot be done.
+        /// </summary>
+        public static DescriptorStream TryOpenDirectory(string/*!*/ path) {
+            if (Path.DirectorySeparatorChar != '/') {
+                return null;
+            }
+            int fd;
+            try {
+                fd = sys_open(path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+            } catch (DllNotFoundException) {
+                return null;
+            } catch (EntryPointNotFoundException) {
+                return null;
+            }
+            return (fd < 0) ? null : new DescriptorStream(fd, true, false, true);
+        }
+
         private const short POLLIN = 0x001;
         private const short POLLOUT = 0x004;
         private const int EINTR = 4;
         private const int EAGAIN = 11;   // == EWOULDBLOCK on Linux
         public const int EPIPE = 32;
+        private const int EISDIR = 21;
         private const int F_GETFL = 3;
         private const int F_SETFL = 4;
         private const int O_NONBLOCK = 0x800;
@@ -148,7 +175,11 @@ namespace IronRuby.Builtins {
                         // was left non-blocking by #read_nonblock. Wait for more either way.
                         continue;
                     }
-                    throw new IOException("read failed");
+                    if (error == EISDIR) {
+                        // a directory opened by TryOpenDirectory
+                        throw RubyExceptions.CreateEISDIR("read");
+                    }
+                    throw new IOException("read failed", error);
                 }
                 Buffer.BlockCopy(chunk, 0, buffer, offset, read);
                 return read;

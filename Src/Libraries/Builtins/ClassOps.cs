@@ -60,6 +60,9 @@ namespace IronRuby.Builtins {
             // singleton class of a class has the singleton class of its superclass above it, and
             // the singleton class of a plain object has the object's class. That is exactly what
             // the class hierarchy already records, so there is nothing special to do here.
+            if (self.IsUninitializedAllocation) {
+                throw RubyExceptions.CreateTypeError("uninitialized class");
+            }
             return self.SuperClass;
         }
 

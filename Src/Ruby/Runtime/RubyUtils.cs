@@ -1204,6 +1204,11 @@ namespace IronRuby.Runtime {
         }
 
         public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module, MutableString file, int line) {
+            return Evaluate(code, targetScope, self, module, null, file, line);
+        }
+
+        public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module,
+            RubyModule lexicalConstantModule, MutableString file, int line) {
             Assert.NotNull(code, targetScope);
 
             RubyContext context = targetScope.RubyContext;
@@ -1253,8 +1258,11 @@ namespace IronRuby.Runtime {
 
             // module-eval: gets a scope of its own, which starts out public
             if (module != null) {
-                targetScope = CreateModuleEvalScope(targetScope, self, module);
-                return compiled(targetScope, self, module, blockParameter);
+                var moduleScope = CreateModuleEvalScope(targetScope, self, module);
+                if (lexicalConstantModule != null) {
+                    moduleScope.SetLexicalConstantModule(lexicalConstantModule);
+                }
+                return compiled(moduleScope, self, module, blockParameter);
             }
 
             // A plain string eval runs in the scope it was called from, so it has nowhere of its
@@ -1271,7 +1279,7 @@ namespace IronRuby.Runtime {
             }
         }
 
-        private static RubyScope/*!*/ CreateModuleEvalScope(RubyScope/*!*/ parent, object self, RubyModule/*!*/ module) {
+        private static RubyModuleEvalScope/*!*/ CreateModuleEvalScope(RubyScope/*!*/ parent, object self, RubyModule/*!*/ module) {
             // A module-eval scope keeps its new locals in its parent; that parent is a scope of the
             // string's own, so that they are not left behind in the caller's frame.
             var scope = new RubyModuleEvalScope(new RubyBindingCopyScope(parent, parent.SelfObject), module, self);

@@ -49,19 +49,22 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
+        // Like Module#public: a single Array argument lists the names, and the result is what was passed.
         [RubyMethod("public", RubyMethodAttributes.PublicInstance)]
-        public static RubyModule/*!*/ SetPublicVisibility(RubyScope/*!*/ scope, object/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object SetPublicVisibility(ConversionStorage<string>/*!*/ stringCast, RubyScope/*!*/ scope, object/*!*/ self,
+            params object[]/*!*/ methodNames) {
 
-            return SetVisibility(scope, self, methodNames, RubyMethodAttributes.PublicInstance);
+            SetVisibility(scope, self, ModuleOps.ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PublicInstance);
+            return ModuleOps.VisibilityResult(methodNames);
         }
 
         // thread-safe:
         [RubyMethod("private", RubyMethodAttributes.PublicInstance)]
-        public static RubyModule/*!*/ SetPrivateVisibility(RubyScope/*!*/ scope, object/*!*/ self,
-            [DefaultProtocol, NotNullItems]params string/*!*/[]/*!*/ methodNames) {
+        public static object SetPrivateVisibility(ConversionStorage<string>/*!*/ stringCast, RubyScope/*!*/ scope, object/*!*/ self,
+            params object[]/*!*/ methodNames) {
 
-            return SetVisibility(scope, self, methodNames, RubyMethodAttributes.PrivateInstance);
+            SetVisibility(scope, self, ModuleOps.ToMethodNames(stringCast, methodNames), RubyMethodAttributes.PrivateInstance);
+            return ModuleOps.VisibilityResult(methodNames);
         }
 
         private static RubyModule/*!*/ SetVisibility(RubyScope/*!*/ scope, object/*!*/ self, string/*!*/[]/*!*/ methodNames, RubyMethodAttributes attributes) {
@@ -159,8 +162,9 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("include", RubyMethodAttributes.PublicInstance)]
-        public static RubyClass/*!*/ Include(RubyContext/*!*/ context, object/*!*/ self, params RubyModule[]/*!*/ modules) {
-            RubyClass result = context.GetClassOf(self);
+        public static RubyModule/*!*/ Include(RubyScope/*!*/ scope, object/*!*/ self, params RubyModule[]/*!*/ modules) {
+            // MRI: in a file loaded with wrapping the modules go into the wrapper module, not Object
+            RubyModule result = scope.Top.Module ?? scope.RubyContext.GetClassOf(self);
             result.IncludeModules(modules);
             return result;
         }

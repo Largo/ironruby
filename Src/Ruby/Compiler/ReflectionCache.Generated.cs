@@ -460,6 +460,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MakeTypeConversionError;
         public static MethodInfo/*!*/ MakeVirtualClassInstantiatedError { get { return _MakeVirtualClassInstantiatedError ?? (_MakeVirtualClassInstantiatedError = CallInstruction.CacheFunc<System.Exception>(RubyOps.MakeVirtualClassInstantiatedError)); } }
         private static MethodInfo _MakeVirtualClassInstantiatedError;
+        public static MethodInfo/*!*/ MakeUninitializedClassInstantiatedError { get { return _MakeUninitializedClassInstantiatedError ?? (_MakeUninitializedClassInstantiatedError = CallInstruction.CacheFunc<System.Exception>(RubyOps.MakeUninitializedClassInstantiatedError)); } }
+        private static MethodInfo _MakeUninitializedClassInstantiatedError;
         public static MethodInfo/*!*/ MakeWrongNumberOfArgumentsError { get { return _MakeWrongNumberOfArgumentsError ?? (_MakeWrongNumberOfArgumentsError = CallInstruction.CacheFunc<System.Int32, System.Int32, System.ArgumentException>(RubyOps.MakeWrongNumberOfArgumentsError)); } }
         private static MethodInfo _MakeWrongNumberOfArgumentsError;
         public static MethodInfo/*!*/ MakeWrongNumberOfArgumentsErrorN { get { return _MakeWrongNumberOfArgumentsErrorN ?? (_MakeWrongNumberOfArgumentsErrorN = CallInstruction.CacheFunc<System.Int32, System.String, System.ArgumentException>(RubyOps.MakeWrongNumberOfArgumentsErrorN)); } }

@@ -189,7 +189,18 @@ namespace IronRuby.Builtins {
             string current = block != null ? pal.CurrentDirectory : null;
 
             int errno;
+            // MRI keeps a descriptor of the directory it came from and fchdirs back to it, so the
+            // block may even remove that directory without the way back failing.
+            int savedFd = -1;
+            if (block != null) {
+                savedFd = Posix.Open(".", Posix.O_RDONLY | Posix.O_DIRECTORY | Posix.O_CLOEXEC, out errno);
+            }
+
             if (Posix.FChDir(fd, out errno) != 0) {
+                if (savedFd >= 0) {
+                    int closeErrno;
+                    Posix.Close(savedFd, out closeErrno);
+                }
                 throw SyscallError(errno, "fchdir");
             }
 
@@ -205,7 +216,19 @@ namespace IronRuby.Builtins {
                 block.Yield(out result);
                 return result;
             } finally {
-                pal.CurrentDirectory = current;
+                if (savedFd >= 0 && Posix.FChDir(savedFd, out errno) == 0) {
+                    try {
+                        SyncCurrentDirectory(pal);
+                    } catch (IOException) {
+                        // the directory we are back in no longer exists and has no path
+                    }
+                    Posix.Close(savedFd, out errno);
+                } else {
+                    if (savedFd >= 0) {
+                        Posix.Close(savedFd, out errno);
+                    }
+                    pal.CurrentDirectory = current;
+                }
             }
         }
 
@@ -555,11 +578,19 @@ namespace IronRuby.Builtins {
 
             MutableString ret;
             if (self._pos == -2) {
-                ret = context.EncodePath(".");
+                ret = self.Label(context, context.EncodePath("."));
             } else if (self._pos == -1) {
-                ret = context.EncodePath("..");
+                ret = self.Label(context, context.EncodePath(".."));
             } else {
-                ret = context.EncodePath(context.Platform.GetFileName(self._rawEntries[self._pos]));
+                string name = context.Platform.GetFileName(self._rawEntries[self._pos]);
+                MutableString encoded = context.TryEncodePath(name);
+                if (encoded != null) {
+                    ret = self.Label(context, encoded);
+                } else {
+                    // MRI does not fail on a name its encodings cannot convert: it hands back the
+                    // bytes as they are, labelled with the file system encoding.
+                    ret = MutableString.CreateBinary(System.Text.Encoding.UTF8.GetBytes(name), self._encoding ?? context.GetPathEncoding());
+                }
             }
             self._pos++;
             return ret;

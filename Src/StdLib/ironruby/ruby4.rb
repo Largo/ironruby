@@ -5575,8 +5575,10 @@ class Dir
     result
   end unless method_defined?(:entries)
 
+  # MRI changes to the open directory itself (fchdir), not to its path, where there are
+  # descriptors to do it with.
   def chdir(&block)
-    Dir.chdir(path, &block)
+    File::ALT_SEPARATOR ? Dir.chdir(path, &block) : Dir.fchdir(fileno, &block)
   end unless method_defined?(:chdir)
 end
 

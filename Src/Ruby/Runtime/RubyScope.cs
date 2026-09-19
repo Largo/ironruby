@@ -189,6 +189,11 @@ namespace IronRuby.Runtime {
             get { return null; }
         }
 
+        // The module whose own constant table stands for this scope in the lexical part of a lookup.
+        internal virtual RubyModule LexicalConstantModule {
+            get { return Module; }
+        }
+
         public object SelfObject {
             get { return _selfObject; }
         }
@@ -755,8 +760,9 @@ namespace IronRuby.Runtime {
                 if (module != null) {
 	                Debug.Assert(module.Context == context);
 
-                    if (module.TryGetConstantNoLock(autoloadScope, name, out result)) {
-                        owner = module;
+                    RubyModule lexicalModule = scope.LexicalConstantModule;
+                    if (lexicalModule.TryGetConstantNoLock(autoloadScope, name, out result)) {
+                        owner = lexicalModule;
                         return null;
                     }
 
@@ -1114,6 +1120,18 @@ var closureScope = scope as RubyClosureScope;
     /// </remarks>
     public sealed class RubyModuleEvalScope : RubyClosureScope {
         private readonly RubyModule _module;
+        private RubyModule _lexicalConstantModule;
+
+        // MRI's instance_eval of a string does not create the receiver's singleton class up front:
+        // until something is defined in it, the eval's cref is the receiver's class, whose own
+        // constants are then seen before the caller's lexical scopes.
+        internal override RubyModule LexicalConstantModule {
+            get { return _lexicalConstantModule ?? _module; }
+        }
+
+        internal void SetLexicalConstantModule(RubyModule module) {
+            _lexicalConstantModule = module;
+        }
 
         public override ScopeKind Kind { get { return ScopeKind.Module; } }
         public override bool InheritsLocalVariables { get { return true; } }

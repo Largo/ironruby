@@ -67,7 +67,7 @@ namespace IronRuby.Runtime {
                 blockFlowControl.SetFlowControl(BlockReturnReason.Retry, null, blockFlowControl.Proc.Kind);
                 return BlockReturnResult.Retry;
             } else {
-                throw new LocalJumpError("retry from proc-closure");
+                throw new LocalJumpError("retry from proc-closure", "retry", null);
             }
         }
 
@@ -82,7 +82,7 @@ namespace IronRuby.Runtime {
                 // TODO: can this happen? 
                 // If proc was null then the block argument passed to the call-with-block that returned RetrySingleton would be null and thus 
                 // the call cannot yield to any block that retries.
-                throw new LocalJumpError("retry used out of rescue", scope.FlowControlScope);
+                throw new LocalJumpError("retry used out of rescue", scope.FlowControlScope, "retry", null);
             }
         }
 
@@ -106,10 +106,10 @@ namespace IronRuby.Runtime {
                     throw new EvalUnwinder(BlockReturnReason.Retry, null, blockScope.BlockFlowControl.Proc.Kind, BlockReturnResult.Retry);
                 }
                 //if (blockScope.BlockFlowControl.IsMethod) {
-                throw new LocalJumpError("retry from proc-closure");// TODO: RFC
+                throw new LocalJumpError("retry from proc-closure", "retry", null);// TODO: RFC
             }
 
-            throw new LocalJumpError("retry used out of rescue", scope.FlowControlScope);
+            throw new LocalJumpError("retry used out of rescue", scope.FlowControlScope, "retry", null);
         }
 
         #endregion
@@ -129,7 +129,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static void MethodBreak(object returnValue) {
-            throw new LocalJumpError("unexpected break");
+            throw new LocalJumpError("unexpected break", "break", returnValue);
         }
 
         /// <summary>
@@ -148,7 +148,7 @@ namespace IronRuby.Runtime {
                 var proc = blockScope.BlockFlowControl.Proc;
                 throw new EvalUnwinder(BlockReturnReason.Break, proc.Converter, proc.Kind, returnValue);
             } else {
-                throw new LocalJumpError("unexpected break");
+                throw new LocalJumpError("unexpected break", "break", returnValue);
             }
         }
 
@@ -158,12 +158,12 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static void MethodNext(RubyScope/*!*/ scope, object returnValue) {
-            throw new LocalJumpError("unexpected next", scope.FlowControlScope);
+            throw new LocalJumpError("unexpected next", scope.FlowControlScope, "next", returnValue);
         }
 
         [Emitted]
         public static void MethodRedo(RubyScope/*!*/ scope) {
-            throw new LocalJumpError("unexpected redo", scope.FlowControlScope);
+            throw new LocalJumpError("unexpected redo", scope.FlowControlScope, "redo", null);
         }
 
         [Emitted]
@@ -188,7 +188,7 @@ namespace IronRuby.Runtime {
                 throw new BlockUnwinder(returnValue, isRedo); 
             }
 
-            throw new LocalJumpError(String.Format("unexpected {0}", isRedo ? "redo" : "next"));
+            throw new LocalJumpError(String.Format("unexpected {0}", isRedo ? "redo" : "next"), isRedo ? "redo" : "next", returnValue);
         }
 
         #endregion
@@ -213,7 +213,7 @@ namespace IronRuby.Runtime {
                 return new BlockReturnResult(owner, returnValue);
             }
             
-            throw new LocalJumpError("unexpected return");
+            throw new LocalJumpError("unexpected return", "return", returnValue);
         }
 
         /// <summary>
@@ -238,7 +238,7 @@ namespace IronRuby.Runtime {
                     throw new MethodUnwinder(owner, returnValue);
                 }
 
-                throw new LocalJumpError("unexpected return");
+                throw new LocalJumpError("unexpected return", "return", returnValue);
             } else {
                 // return from the current method:
                 throw new MethodUnwinder(scope.FlowControlScope, returnValue);
@@ -380,7 +380,7 @@ namespace IronRuby.Runtime {
                     throw new MethodUnwinder(targetFrame, returnValue);
                 }
             } else {
-                throw new LocalJumpError("break from proc-closure");
+                throw new LocalJumpError("break from proc-closure", "break", returnValue);
             }
         }
 
@@ -402,7 +402,7 @@ namespace IronRuby.Runtime {
                     throw new MethodUnwinder(targetFrame, returnValue);
                 //}
             } else {
-                throw new LocalJumpError("break from proc-closure");
+                throw new LocalJumpError("break from proc-closure", "break", returnValue);
             }
         }
 
@@ -411,7 +411,7 @@ namespace IronRuby.Runtime {
                 // do not "optimize" for current RFC, we need to unwind stack anyway
                 throw new MethodUnwinder(blockFlowControl.TargetFrame, returnValue);
             } else {
-                throw new LocalJumpError("break from proc-closure");
+                throw new LocalJumpError("break from proc-closure", "break", returnValue);
             }
         }
 

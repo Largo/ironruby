@@ -215,8 +215,10 @@ namespace IronRuby.Builtins {
             MutableString file = (args.Length > 1 && args[1] != null) ? Protocols.CastToString(toStr, args[1]) : null;
             int line = (args.Length > 2) ? Protocols.CastToFixnum(toInt, args[2]) : 1;
 
+            // MRI looks constants up in the receiver's class if it has no singleton class yet
+            RubyClass immediate = scope.RubyContext.GetImmediateClassOf(self);
             RubyClass singleton = scope.RubyContext.GetOrCreateSingletonClass(self);
-            return RubyUtils.Evaluate(code, scope, self, singleton, file, line);
+            return RubyUtils.Evaluate(code, scope, self, singleton, immediate.IsSingletonClass ? null : immediate, file, line);
         }
 
         [RubyMethod("instance_exec")]

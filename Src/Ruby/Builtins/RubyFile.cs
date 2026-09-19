@@ -99,6 +99,13 @@ namespace IronRuby.Builtins {
                     // distinguishes it, so only a genuine one stays EACCES (which is
                     // what UnauthorizedAccessException already maps to).
                     if (context.DomainManager.Platform.DirectoryExists(path)) {
+                        // MRI opens a directory read-only like any other file
+                        if (access == FileAccess.Read) {
+                            Stream directory = DescriptorStream.TryOpenDirectory(path);
+                            if (directory != null) {
+                                return directory;
+                            }
+                        }
                         throw RubyExceptions.CreateEISDIR(path);
                     }
                     throw;
@@ -107,7 +114,8 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if ((mode & IOMode.Truncate) != 0) {
+            // O_TRUNC does nothing to what cannot be truncated, a FIFO for one
+            if ((mode & IOMode.Truncate) != 0 && stream.CanSeek) {
                 try {
                     stream.SetLength(0);
                 } catch (IOException) {

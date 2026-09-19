@@ -32,10 +32,43 @@ namespace IronRuby.Builtins {
             get { return _skipFrame; }
         }
 
+        [NonSerialized]
+        private readonly string _reason;
+
+        [NonSerialized]
+        private readonly object _exitValue;
+
+        /// <summary>
+        /// LocalJumpError#reason: the jump that had nowhere to go ("break", "next", "redo",
+        /// "retry" or "return"), or null for MRI's :noreason.
+        /// </summary>
+        public string Reason {
+            get { return _reason; }
+        }
+
+        /// <summary>
+        /// LocalJumpError#exit_value: the value the jump carried.
+        /// </summary>
+        public object ExitValue {
+            get { return _exitValue; }
+        }
+
         internal LocalJumpError(string/*!*/ message, RuntimeFlowControl/*!*/ skipFrame)
             : this(message, (Exception)null) {
             Assert.NotNull(message, skipFrame);
             _skipFrame = skipFrame;
+        }
+
+        internal LocalJumpError(string/*!*/ message, string/*!*/ reason, object exitValue)
+            : this(message, (Exception)null) {
+            _reason = reason;
+            _exitValue = exitValue;
+        }
+
+        internal LocalJumpError(string/*!*/ message, RuntimeFlowControl/*!*/ skipFrame, string/*!*/ reason, object exitValue)
+            : this(message, skipFrame) {
+            _reason = reason;
+            _exitValue = exitValue;
         }
 
         public LocalJumpError() : this(null, (Exception)null) { }

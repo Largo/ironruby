@@ -77,6 +77,11 @@ namespace IronRuby.Builtins {
         // whether initialize_copy can be called (the class has just been duplicated):
         private bool _isUninitializedCopy; 
 
+        // Class.allocate: MRI's class has no superclass yet and can't be instantiated.
+        private bool _isUninitializedAllocation;
+
+        public bool IsUninitializedAllocation { get { return _isUninitializedAllocation; } }
+
         // immutable:
         private readonly Delegate/*!*/[]/*!*/ _factories;
 
@@ -300,6 +305,7 @@ namespace IronRuby.Builtins {
             : this(rubyClass.Context, null, null, null, null, null, null, rubyClass.Context.ObjectClass, null, null, null, true, false, ModuleRestrictions.None) {
             
             InitializeImmediateClass(rubyClass, null);
+            _isUninitializedAllocation = true;
         }
         
         // friend: RubyContext
@@ -1399,7 +1405,9 @@ namespace IronRuby.Builtins {
             argsBuilder.AddCallArguments(metaBuilder, args);
 
             if (!metaBuilder.Error) {
-                if (!BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
+                if (_isUninitializedAllocation) {
+                    metaBuilder.SetError(Methods.MakeUninitializedClassInstantiatedError.OpCall());
+                } else if (!BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name))) {
                     metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));
                 }
             }
@@ -1430,6 +1438,11 @@ namespace IronRuby.Builtins {
         public void BuildObjectConstructionNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ methodName) {
             if (IsSingletonClass) {
                 metaBuilder.SetError(Methods.MakeVirtualClassInstantiatedError.OpCall());
+                return;
+            }
+
+            if (_isUninitializedAllocation) {
+                metaBuilder.SetError(Methods.MakeUninitializedClassInstantiatedError.OpCall());
                 return;
             }
 

@@ -198,6 +198,15 @@ namespace IronRuby.Builtins {
 
     [RubyException("LocalJumpError", Extends = typeof(LocalJumpError))]
     public static class LocalJumpErrorOps {
+        [RubyMethod("reason")]
+        public static RubySymbol/*!*/ GetReason(RubyContext/*!*/ context, LocalJumpError/*!*/ self) {
+            return context.EncodeIdentifier(self.Reason ?? "noreason");
+        }
+
+        [RubyMethod("exit_value")]
+        public static object GetExitValue(LocalJumpError/*!*/ self) {
+            return self.ExitValue;
+        }
     }
 
     [RubyException("ScriptError", Extends = typeof(ScriptError))]

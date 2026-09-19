@@ -567,7 +567,9 @@ namespace IronRuby.Builtins {
                 // prefix removed. Stripping first happened to work while the prefix was always
                 // "./", but with `base: "sub"` it asked the file system about "x" instead of
                 // "sub/x" and every match was discarded.
-                string full = NoEscapes ? path : Unescape(path, 0);
+                // path is a real file name by now: escapes were taken out of the literal parts of
+                // the pattern as they were joined on, and wildcard matches are names as listed.
+                string full = path;
                 string match = (_stripPrefix > 0 && full.Length >= _stripPrefix) ? full.Substring(_stripPrefix) : full;
                 if (match.Length == 0) {
                     // The base directory itself is not a match, so Dir["**/"] does not lead
@@ -639,11 +641,14 @@ namespace IronRuby.Builtins {
                     bool containsWildcard;
                     pos = FindNextSeparator(0, false, out containsWildcard);
                     if (pos == _pattern.Length) {
-                        TestPath(_pattern, pos, true, true);
+                        TestPath(NoEscapes ? _pattern : Unescape(_pattern, 0), pos, true, true);
                         return _result;
                     }
                     if (pos > 0 || _pattern[0] == '/') {
                         baseDirectory = _pattern.Substring(0, pos);
+                        if (!NoEscapes) {
+                            baseDirectory = Unescape(baseDirectory, 0);
+                        }
                     }
                 }
 
@@ -685,7 +690,13 @@ namespace IronRuby.Builtins {
                 }
 
                 if (!containsWildcard) {
-                    string path = Combine(baseDirectory, dirSegment);
+                    string literal = NoEscapes ? dirSegment : Unescape(dirSegment, 0);
+                    string path = Combine(baseDirectory, literal);
+                    // MRI keeps repeated separators: "a//*" gives "a//b", and the literal part
+                    // ends in one of them ("a/") when the next part has a wildcard.
+                    if (!isLastPathSegment && literal.EndsWith("/", StringComparison.Ordinal)) {
+                        path += "/";
+                    }
                     TestPath(path, patternEnd, isLastPathSegment, atBase);
                     return;
                 }

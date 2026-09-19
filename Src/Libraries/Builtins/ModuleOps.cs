@@ -275,7 +275,7 @@ namespace IronRuby.Builtins {
         /// the list of names - `private [:a, :b]` - so it is spread here; everything else is
         /// converted with the usual symbol-or-string protocol.
         /// </summary>
-        private static string/*!*/[]/*!*/ ToMethodNames(ConversionStorage<string>/*!*/ stringCast, object[]/*!*/ argv) {
+        internal static string/*!*/[]/*!*/ ToMethodNames(ConversionStorage<string>/*!*/ stringCast, object[]/*!*/ argv) {
             object[] names = argv;
             if (argv.Length == 1 && argv[0] is System.Collections.IList list) {
                 names = new object[list.Count];
@@ -295,7 +295,7 @@ namespace IronRuby.Builtins {
         /// What a visibility modifier answers since Ruby 3.1: nil with no arguments, the single
         /// argument as it was passed, or an Array of the arguments. Not the module.
         /// </summary>
-        private static object VisibilityResult(object[]/*!*/ argv) {
+        internal static object VisibilityResult(object[]/*!*/ argv) {
             switch (argv.Length) {
                 case 0: return null;
                 case 1: return argv[0];
