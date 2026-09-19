@@ -7679,6 +7679,17 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.MutableString, System.Int32>(IronRuby.Builtins.MutableStringOps.GetByteCount)
             );
             
+            DefineLibraryMethod(module, "byteslice", 0x51, 
+                new[] { 0x00010000U, 0x00000002U, 0x00030000U, 0x00010004U, 0x00020002U, 0x00000006U, 0x00000004U}, 
+                new Func<IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSlice), 
+                new Func<IronRuby.Builtins.MutableString, System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSlice), 
+                new Func<IronRuby.Builtins.MutableString, System.Int32, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSlice), 
+                new Func<IronRuby.Builtins.MutableString, System.Int32, System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSlice), 
+                new Func<IronRuby.Builtins.MutableString, System.Numerics.BigInteger, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSlice), 
+                new Func<IronRuby.Builtins.MutableString, System.Numerics.BigInteger, System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSlice), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.MutableString, IronRuby.Builtins.Range, IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.ByteSlice)
+            );
+            
             DefineLibraryMethod(module, "capitalize", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Builtins.MutableString, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.Builtins.MutableStringOps.Capitalize)

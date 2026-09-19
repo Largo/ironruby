@@ -60,39 +60,19 @@ namespace IronRuby.Runtime {
         }
 
         public static bool IsAscii(this string/*!*/ str) {
-            for (int i = 0; i < str.Length; i++) {
-                if (str[i] > 0x7f) {
-                    return false;
-                }
-            }
-            return true;
+            return System.Text.Ascii.IsValid(str);
         }
 
         public static bool IsAscii(this byte[]/*!*/ bytes, int count) {
-            for (int i = 0; i < count; i++) {
-                if (bytes[i] > 0x7f) {
-                    return false;
-                }
-            }
-            return true;
+            return System.Text.Ascii.IsValid(new ReadOnlySpan<byte>(bytes, 0, count));
         }
 
         public static bool IsAscii(this char[]/*!*/ str, int count) {
-            for (int i = 0; i < count; i++) {
-                if (str[i] > 0x7f) {
-                    return false;
-                }
-            }
-            return true;
+            return System.Text.Ascii.IsValid(new ReadOnlySpan<char>(str, 0, count));
         }
 
         public static bool IsAscii(this char[]/*!*/ str, int start, int count) {
-            for (int i = 0; i < count; i++) {
-                if (str[start + i] > 0x7f) {
-                    return false;
-                }
-            }
-            return true;
+            return System.Text.Ascii.IsValid(new ReadOnlySpan<char>(str, start, count));
         }
 
         internal static bool IsBinary(this string/*!*/ str) {
@@ -105,47 +85,34 @@ namespace IronRuby.Runtime {
         }
 
         internal static int GetCharacterCount(this string/*!*/ str) {
-            int surrogateCount = 0;
-            bool wasHighSurrogate = false;
-            for (int i = 0; i < str.Length; i++) {
-                char c = str[i];
-                if (c >= '\uD800') {
-                    if (c <= '\uDBFF') {
-                        wasHighSurrogate = true;
-                    } else if (wasHighSurrogate && c <= '\uDFFF') {
-                        surrogateCount++;
-                        wasHighSurrogate = false;
-                    }
-                }
-            }
-            return str.Length - surrogateCount;
+            return GetCharacterCount(str.AsSpan());
         }
 
         /// <summary>
         /// Calculates the number of Unicode characters in given array.
-        /// Assumes that the content of the array beyond count chars doesn't contain significant data and can be overwritten.
         /// </summary>
         internal static int GetCharacterCount(this char[]/*!*/ str, int count) {
-            int surrogateCount = 0;
-            bool wasHighSurrogate = false;
-            if (count < str.Length) {
-                str[count] = '\uffff';
-            }
+            return GetCharacterCount(new ReadOnlySpan<char>(str, 0, count));
+        }
 
-            for (int i = 0; i < str.Length; i++) {
-                char c = str[i];
-                if (c >= '\uD800') {
-                    if (i >= count) {
-                        break;
-                    } else if (c <= '\uDBFF') {
-                        wasHighSurrogate = true;
-                    } else if (wasHighSurrogate && c <= '\uDFFF') {
-                        surrogateCount++;
-                        wasHighSurrogate = false;
-                    }
+        /// <summary>
+        /// The number of UTF-16 code units less the number of well-formed surrogate pairs.
+        /// </summary>
+        internal static int GetCharacterCount(ReadOnlySpan<char> str) {
+            int pairs = 0;
+            int i = 0;
+            while (true) {
+                int j = str.Slice(i).IndexOfAnyInRange('\uD800', '\uDBFF');
+                if (j < 0) {
+                    break;
+                }
+                i += j + 1;
+                if (i < str.Length && Char.IsLowSurrogate(str[i])) {
+                    pairs++;
+                    i++;
                 }
             }
-            return str.Length - surrogateCount;
+            return str.Length - pairs;
         }
 
         public static string/*!*/ ToAsciiString(this string/*!*/ str) {
@@ -741,10 +708,9 @@ namespace IronRuby.Runtime {
                 defaultResult = 0;
             }
 
-            for (int i = 0; i < min; i++) {
-                if (array[i] != other[i]) {
-                    return (int)array[i] - other[i];
-                }
+            int i = new ReadOnlySpan<byte>(array, 0, min).CommonPrefixLength(new ReadOnlySpan<byte>(other, 0, min));
+            if (i < min) {
+                return (int)array[i] - other[i];
             }
 
             return defaultResult;
@@ -762,10 +728,9 @@ namespace IronRuby.Runtime {
                 defaultResult = 0;
             }
 
-            for (int i = 0; i < min; i++) {
-                if (array[i] != other[i]) {
-                    return (int)array[i] - other[i];
-                }
+            int i = new ReadOnlySpan<char>(array, 0, min).CommonPrefixLength(new ReadOnlySpan<char>(other, 0, min));
+            if (i < min) {
+                return (int)array[i] - other[i];
             }
 
             return defaultResult;
@@ -782,10 +747,9 @@ namespace IronRuby.Runtime {
                 defaultResult = 0;
             }
 
-            for (int i = 0; i < min; i++) {
-                if (array[i] != other[i]) {
-                    return (int)array[i] - other[i];
-                }
+            int i = new ReadOnlySpan<char>(array, 0, min).CommonPrefixLength(other.AsSpan(0, min));
+            if (i < min) {
+                return (int)array[i] - other[i];
             }
 
             return defaultResult;
@@ -823,10 +787,9 @@ namespace IronRuby.Runtime {
                 defaultResult = 0;
             }
 
-            for (int i = 0; i < min; i++) {
-                if (str[i] != other[i]) {
-                    return (int)str[i] - other[i];
-                }
+            int i = str.AsSpan(0, min).CommonPrefixLength(other.AsSpan(0, min));
+            if (i < min) {
+                return (int)str[i] - other[i];
             }
 
             return defaultResult;

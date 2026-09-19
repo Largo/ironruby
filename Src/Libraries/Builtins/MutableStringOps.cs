@@ -883,6 +883,60 @@ namespace IronRuby.Builtins {
             return self.CreateDerived().Append(self, start, count).TaintBy(self);
         }
 
+        #region byteslice
+
+        // String#[] on byte offsets. Used to be Ruby that made a BINARY copy of the whole string to
+        // index it, which made every call cost the length of the receiver.
+
+        [RubyMethod("byteslice")]
+        public static MutableString ByteSlice(MutableString/*!*/ self, [DefaultProtocol]int index) {
+            return InExclusiveRangeNormalized(self.GetByteCount(), ref index) ? GetByteSubstring(self, index, 1) : null;
+        }
+
+        [RubyMethod("byteslice")]
+        public static MutableString ByteSlice(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ index) {
+            return ByteSlice(self, NarrowIndex(index));
+        }
+
+        [RubyMethod("byteslice")]
+        public static MutableString ByteSlice(MutableString/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int count) {
+            int byteCount = self.GetByteCount();
+            if (!NormalizeSubstringRange(byteCount, ref start, ref count)) {
+                return (start == byteCount && count >= 0) ? self.CreateDerived() : null;
+            }
+            return GetByteSubstring(self, start, count);
+        }
+
+        [RubyMethod("byteslice")]
+        public static MutableString ByteSlice(MutableString/*!*/ self, [DefaultProtocol]int start, [NotNull]BigInteger/*!*/ count) {
+            return ByteSlice(self, start, NarrowIndex(count));
+        }
+
+        [RubyMethod("byteslice")]
+        public static MutableString ByteSlice(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ start, [DefaultProtocol]int count) {
+            return ByteSlice(self, NarrowIndex(start), count);
+        }
+
+        [RubyMethod("byteslice")]
+        public static MutableString ByteSlice(MutableString/*!*/ self, [NotNull]BigInteger/*!*/ start, [NotNull]BigInteger/*!*/ count) {
+            return ByteSlice(self, NarrowIndex(start), NarrowIndex(count));
+        }
+
+        [RubyMethod("byteslice")]
+        public static MutableString ByteSlice(ConversionStorage<int>/*!*/ fixnumCast, MutableString/*!*/ self, [NotNull]Range/*!*/ range) {
+            int begin, count;
+            if (!NormalizeSubstringRange(fixnumCast, range, self.GetByteCount(), out begin, out count)) {
+                return null;
+            }
+            return (count < 0) ? self.CreateDerived() : ByteSlice(self, begin, count);
+        }
+
+        private static MutableString/*!*/ GetByteSubstring(MutableString/*!*/ self, int start, int count) {
+            return self.CreateDerived().Append(self.GetBinarySlice(start, count));
+        }
+
+        #endregion
+
         /// <summary>
         /// An index or a length too large for an Int32 still means something: MRI narrows it to a
         /// C long, so a value out of range on the negative side simply misses the string and
@@ -3174,6 +3228,23 @@ namespace IronRuby.Builtins {
             if (byteOffset == 0) {
                 return true;
             }
+
+            // UTF-8 is walked on its bytes, and only as far as the offset: enumerating the characters
+            // switches the whole string to characters (and #start_with? just read it as bytes).
+            if (self.Encoding == RubyEncoding.UTF8) {
+                int n = Math.Min(self.GetByteCount(), byteOffset + 4);
+                byte[] head = self.GetBinarySlice(0, n);
+                int offset = 0;
+                while (offset < byteOffset) {
+                    System.Text.Rune rune;
+                    int consumed;
+                    var status = System.Text.Rune.DecodeFromUtf8(new ReadOnlySpan<byte>(head, offset, n - offset), out rune, out consumed);
+                    // each byte of an invalid sequence is a character of its own:
+                    offset += (status == System.Buffers.OperationStatus.Done) ? consumed : 1;
+                }
+                return offset == byteOffset;
+            }
+
             int at = 0;
             var characters = self.GetCharacters();
             while (characters.MoveNext()) {
@@ -4003,6 +4074,9 @@ namespace IronRuby.Builtins {
         }
 
         private static void GetTrimRange(MutableString/*!*/ str, bool left, bool right, out int leftIndex, out int rightIndex) {
+            // Length and GetChar have to agree on the representation: a string held as bytes would
+            // give its byte count and then be indexed by character.
+            str.PrepareForCharacterRead();
             GetTrimRange(
                 str.Length,
                 !left ? (Func<int, bool>)null : (i) => IsStrippedCharacter(str.GetChar(i)),
