@@ -81,6 +81,7 @@ namespace IronRuby.Prism {
         private static byte CommandLineFlags(RubyOptions/*!*/ options, string path) {
             byte flags = 0;
             if (options.AutoSplit) flags |= 0x1;           // PM_OPTIONS_COMMAND_LINE_A
+            if (path == "-e") flags |= 0x2;               // PM_OPTIONS_COMMAND_LINE_E: MRI keeps some warnings out of -e code
             if (options.ChopLines) flags |= 0x4;           // PM_OPTIONS_COMMAND_LINE_L
             if (options.LoopOverInput) flags |= 0x8;       // PM_OPTIONS_COMMAND_LINE_N
             if (options.PrintEachLine) flags |= 0x10;      // PM_OPTIONS_COMMAND_LINE_P

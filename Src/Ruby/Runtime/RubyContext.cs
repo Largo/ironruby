@@ -3094,7 +3094,9 @@ namespace IronRuby.Runtime {
             }
 
             var resolved = GetImmediateClassOf(warningModule).ResolveMethod("warn", VisibilityContext.AllVisible);
-            if (!resolved.Found) {
+            // Until the prelude's `extend self' has run - the main script is parsed before that - the
+            // lookup falls through to Kernel#warn, which would add a newline of its own.
+            if (!resolved.Found || resolved.Info.DeclaringModule == KernelModule) {
                 _runtimeErrorSink.WriteMessage(message);
                 return;
             }
