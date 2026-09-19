@@ -664,8 +664,26 @@ namespace IronRuby.Builtins {
 
             Debug.Assert(_superClass != null, "BasicObject cannot be duplicated");
 
-            RubyClass result = Context.CreateClass(Name, _underlyingSystemType, singletonClassOf, null, null, null, _factories,
-                _superClass, null, null, _structInfo, IsRubyClass, IsSingletonClass, ModuleRestrictions.None
+            Type type = _underlyingSystemType;
+            bool isRubyClass = IsRubyClass;
+
+            // A copy of a built-in class (Time.dup) has instances of its own, and they are not instances of
+            // the original. The original's CLR type can't say which class an instance belongs to, so the copy
+            // allocates what a Ruby subclass of the original would.
+            if (!IsSingletonClass && !isRubyClass && type != null && !type.IsValueType && !type.IsSealed && !type.IsAbstract
+                && !typeof(IRubyObject).IsAssignableFrom(type) && !typeof(Delegate).IsAssignableFrom(type) && !type.IsArray
+                && _structInfo == null) {
+                try {
+                    type = RubyTypeDispenser.GetOrCreateType(type, Type.EmptyTypes, (Restrictions & ModuleRestrictions.NoOverrides) != 0);
+                    isRubyClass = true;
+                } catch (Exception) {
+                    // a type that can't be derived from: the copy allocates instances of the original, as before
+                    type = _underlyingSystemType;
+                }
+            }
+
+            RubyClass result = Context.CreateClass(Name, type, singletonClassOf, null, null, null, _factories,
+                _superClass, null, null, _structInfo, isRubyClass, IsSingletonClass, ModuleRestrictions.None
             );
 
             if (!IsSingletonClass) {

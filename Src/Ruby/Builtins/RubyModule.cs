@@ -818,7 +818,9 @@ namespace IronRuby.Builtins {
             if (module._methods != null) {
                 _methods = new Dictionary<string, RubyMemberInfo>(module._methods.Count);
                 foreach (var method in module._methods) {
-                    _methods[method.Key] = method.Value.Copy(method.Value.Flags, this);
+                    // the undefined/hidden markers are shared singletons, not copied (Integer.dup copies undef'd .new):
+                    _methods[method.Key] = (method.Value.IsUndefined || method.Value.IsHidden || method.Value.IsInteropMember) ?
+                        method.Value : method.Value.Copy(method.Value.Flags, this);
                 }
             } else {
                 _methods = null;
