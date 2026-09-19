@@ -9350,7 +9350,8 @@ module Process
       when :millisecond then (seconds * 1_000).to_i
       when :microsecond then (seconds * 1_000_000).to_i
       when :nanosecond then (seconds * 1_000_000_000).to_i
-      else seconds
+      when nil then seconds
+      else ::Kernel.raise(::ArgumentError, "unexpected unit: #{unit}")
       end
     end
   end
@@ -9391,7 +9392,8 @@ module Process
       when :millisecond then (seconds * 1_000).to_i
       when :microsecond then (seconds * 1_000_000).to_i
       when :nanosecond then (seconds * 1_000_000_000).to_i
-      else seconds
+      when nil then seconds
+      else ::Kernel.raise(::ArgumentError, "unexpected unit: #{unit}")
       end
     end
     module_function :clock_getres
@@ -10038,7 +10040,8 @@ module Process
 
   unless respond_to?(:getpriority)
     def getpriority(which, who)
-      __check__(__getpriority__(which.to_int, who.to_int))
+      result = __getpriority__(which.to_int, who.to_int)
+      result <= -1000 ? __check__(result + 1000) : result
     end
     module_function :getpriority
 
