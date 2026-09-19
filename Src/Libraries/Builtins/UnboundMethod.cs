@@ -300,8 +300,13 @@ namespace IronRuby.Builtins {
         internal static RubyArray GetSourceLocation(RubyMemberInfo/*!*/ info) {
             RubyMethodInfo rubyInfo = info as RubyMethodInfo;
             if (rubyInfo != null) {
+                string file = rubyInfo.Document.FileName;
+                // a core method written in Ruby is where MRI's are: <internal:kernel> and the like
+                if (RubyStackTraceBuilder.IsInternalFile(file) && rubyInfo.DeclaringModule.Name != null) {
+                    file = "<internal:" + rubyInfo.DeclaringModule.Name.ToLowerInvariant() + ">";
+                }
                 return new RubyArray(2) {
-                    rubyInfo.DeclaringModule.Context.EncodePath(rubyInfo.Document.FileName),
+                    rubyInfo.DeclaringModule.Context.EncodePath(file),
                     rubyInfo.SourceSpan.Start.Line
                 };
             }

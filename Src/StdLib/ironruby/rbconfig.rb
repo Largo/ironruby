@@ -97,6 +97,9 @@ module RbConfig
   CONFIG["NULLCMD"] = windows ? "rem" : ":"
   CONFIG["DLEXT"] = "so"
   CONFIG["DLEXT2"] = "dll"
+  # The standard extensions (etc, socket, zlib, ...) are built in rather than loaded from
+  # shared objects, as in an MRI built with --with-static-linked-ext.
+  CONFIG["EXTSTATIC"] = "static"
 
   def RbConfig::expand(val, config = CONFIG)
     newval = val.gsub(/\$\$|\$\(([^()]+)\)|\$\{([^{}]+)\}/) do

@@ -44,6 +44,9 @@ namespace IronRuby.Compiler.Ast {
 
             // block:
             if (gen.CurrentBlock != null) {
+                for (var block = gen.CurrentBlock.ParentBlock; block != null; block = block.ParentBlock) {
+                    block.HasNestedReturn = true;
+                }
                 return gen.Return(Methods.BlockReturn.OpCall(gen.CurrentBlock.BfcVariable, AstUtils.Box(transformedReturnValue)));
             }
 

@@ -185,14 +185,13 @@ namespace IronRuby.Runtime {
                 }
             } else {
 #if DEBUG
-                // For developer use, add Src/StdLib
-                string devStdLib = "../../Src/StdLib";
-                if (Directory.Exists(devStdLib))
-                    path = devStdLib;
-#else
-                path = "../Lib";
+                // For developer use, add the Src/StdLib of the source tree the binaries were built in
+                path = FindSourceTreeStandardLibrary();
 #endif
-                isFullPath = false;
+                if (path == null) {
+                    path = "../Lib";
+                }
+                isFullPath = Platform.IsAbsolutePath(path);
             }
 
             if (!isFullPath) {
@@ -216,11 +215,44 @@ namespace IronRuby.Runtime {
             }
 
             path = path.Replace('\\', '/');
-            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ironruby")));
+
+            // As in MRI the site directory (RbConfig's sitelibdir) comes first, and every default
+            // entry carries @gem_prelude_index (itself), which is how RubyGems tells them from the
+            // -I ones before them.
+            int firstDefault = loadPaths.Count;
             loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/site_ruby/" + _context.StandardLibraryVersion)));
+            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ironruby")));
+            string rubyLib4 = RubyUtils.CombinePaths(path, "ruby/4.0");
+            if (Directory.Exists(rubyLib4)) {
+                loadPaths.Add(_context.EncodePath(rubyLib4));
+            }
             loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/" + _context.StandardLibraryVersion)));
+
+            for (int i = firstDefault; i < loadPaths.Count; i++) {
+                var entry = (MutableString)loadPaths[i];
+                _context.SetInstanceVariable(entry, "@gem_prelude_index", entry);
+                entry.Freeze();
+            }
 #endif
             }
+
+#if DEBUG
+        // bin/Debug/net8.0 of a project under Src/: the nearest ancestor with a StdLib/ironruby directory
+        private static string FindSourceTreeStandardLibrary() {
+            try {
+                var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+                for (int i = 0; i < 6 && dir != null; i++, dir = dir.Parent) {
+                    string candidate = Path.Combine(dir.FullName, "StdLib");
+                    if (Directory.Exists(Path.Combine(candidate, "ironruby"))) {
+                        return candidate;
+                    }
+                }
+            } catch (Exception) {
+                // no access
+            }
+            return null;
+        }
+#endif
 
         private void AddAbsoluteLibraryPaths(RubyArray/*!*/ result, string applicationBaseDir, ICollection<string>/*!*/ paths) {
             foreach (var path in paths) {
@@ -1135,6 +1167,39 @@ namespace IronRuby.Runtime {
 
         #endregion
 
+        // Features the core prelude loaded: kept out of $" (MRI's own Ruby-defined core is not in
+        // it either) but still loaded, so that requiring one again does nothing.
+        private readonly HashSet<string>/*!*/ _hiddenLoadedFiles = new HashSet<string>(StringComparer.Ordinal);
+
+        private static readonly string[]/*!*/ _CorePreludeFiles = {
+            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "complex18.rb", "rational18.rb"
+        };
+
+        // What MRI 4.0 has in $" before the program starts: features that are part of the core
+        // and so already required.
+        private static readonly string[]/*!*/ _ProvidedFeatures = {
+            "enumerator.so", "thread.rb", "fiber.so", "rational.so", "complex.so", "pathname.so", "ruby2_keywords.rb", "set.rb"
+        };
+
+        /// <summary>
+        /// Called once the core prelude has been required: hides the prelude's own files from $"
+        /// and lists the provided features instead, as MRI does.
+        /// </summary>
+        internal void ProvideCoreFeatures() {
+            lock (_loadedFiles) {
+                for (int i = _loadedFiles.Count - 1; i >= 0; i--) {
+                    var path = _loadedFiles[i] as MutableString;
+                    if (path != null && Array.IndexOf(_CorePreludeFiles, Path.GetFileName(path.ToString())) >= 0) {
+                        _hiddenLoadedFiles.Add(path.ToString());
+                        _loadedFiles.RemoveAt(i);
+                    }
+                }
+                for (int i = 0; i < _ProvidedFeatures.Length; i++) {
+                    _loadedFiles.Insert(i, MutableString.CreateAscii(_ProvidedFeatures[i]));
+                }
+            }
+        }
+
         private void AddLoadedFile(MutableString/*!*/ path) {
             lock (_loadedFiles) {
                 _loadedFiles.Add(path);
@@ -1228,9 +1293,16 @@ namespace IronRuby.Runtime {
         private bool AlreadyLoaded(string/*!*/ path, IEnumerable<ResolvedFile>/*!*/ files, LoadFlags flags) {
             // An extensionless entry in $" says nothing about a file that was found: MRI only
             // counts "foo" as loaded when no foo.rb (or library) could be found at all.
-            IEnumerable<MutableString> requested = RubyUtils.GetExtension(path).Length == 0
-                ? Enumerable.Empty<MutableString>()
-                : new[] { _context.EncodePath(path) };
+            // A feature listed by name ("set.rb", "complex.so" - what MRI provides) is loaded for
+            // a require of that name, with or without the extension.
+            IEnumerable<MutableString> requested;
+            if (RubyUtils.GetExtension(path).Length != 0) {
+                requested = new[] { _context.EncodePath(path) };
+            } else if (!Platform.IsAbsolutePath(path) && !path.StartsWith(".", StringComparison.Ordinal)) {
+                requested = new[] { _context.EncodePath(path + ".rb"), _context.EncodePath(path + ".so") };
+            } else {
+                requested = Enumerable.Empty<MutableString>();
+            }
             return (flags & LoadFlags.LoadOnce) != 0 && AnyFileLoaded(
                 requested.Concat(files.Select((file) => _context.EncodePath(file.Path)))
             );
@@ -1247,6 +1319,12 @@ namespace IronRuby.Runtime {
                 // use case sensitive comparison
                 MutableString loadedPath = Protocols.CastToPath(toPath, file);
                 if (paths.Any((path) => loadedPath.Equals(path))) {
+                    return true;
+                }
+            }
+
+            lock (_loadedFiles) {
+                if (_hiddenLoadedFiles.Count > 0 && paths.Any((path) => _hiddenLoadedFiles.Contains(path.ToString()))) {
                     return true;
                 }
             }

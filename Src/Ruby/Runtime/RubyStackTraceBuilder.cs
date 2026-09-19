@@ -28,7 +28,7 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Interpreter;
 
 namespace IronRuby.Runtime {
-    internal sealed class RubyStackTraceBuilder {
+    public sealed class RubyStackTraceBuilder {
 #if FEATURE_STACK_TRACE
         private readonly RubyArray/*!*/ _trace;
         private readonly bool _hasFileAccessPermission;
@@ -36,7 +36,10 @@ namespace IronRuby.Runtime {
         private readonly RubyEncoding/*!*/ _encoding;
         private IList<InterpretedFrameInfo> _interpretedFrames;
         private int _interpretedFrameIndex;
-        private string _nextFrameMethodName;
+        // Frames reported with the source info of the next frame out that has its own: a library
+        // method's, and a core method written in Ruby (see IsInternalFile). Innermost first.
+        private readonly List<string>/*!*/ _deferredMethodNames = new List<string>();
+        private bool _lastDeferredIsLibrary;
         private readonly RubyContext/*!*/ _context;
 
         private RubyStackTraceBuilder(RubyContext/*!*/ context) {
@@ -113,6 +116,18 @@ namespace IronRuby.Runtime {
                     continue;
                 }
 
+                if (IsInternalFile(file)) {
+                    if (IsInternalMethodFrame(methodName)) {
+                        _deferredMethodNames.Add(methodName);
+                    }
+                    continue;
+                }
+
+                foreach (var deferred in _deferredMethodNames) {
+                    _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
+                }
+                _deferredMethodNames.Clear();
+
                 _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
             }
         }
@@ -179,21 +194,36 @@ namespace IronRuby.Runtime {
                     } else if (TryGetStackFrameInfo(frame, out methodName, out file, out line)) {
                         // special case: the frame will be added with the next frame's source info:
                         if (line == NextFrameLine) {
-                            _nextFrameMethodName = methodName;
+                            // of library methods calling one another only the outermost is reported
+                            if (_lastDeferredIsLibrary) {
+                                _deferredMethodNames[_deferredMethodNames.Count - 1] = methodName;
+                            } else {
+                                _deferredMethodNames.Add(methodName);
+                            }
+                            _lastDeferredIsLibrary = true;
                             continue;
                         }
                     } else {
                         continue;
                     }
 
-                    if (_nextFrameMethodName != null) {
+                    if (IsInternalFile(file)) {
+                        if (IsInternalMethodFrame(methodName)) {
+                            _deferredMethodNames.Add(methodName);
+                            _lastDeferredIsLibrary = false;
+                        }
+                        continue;
+                    }
+
+                    foreach (var deferred in _deferredMethodNames) {
                         if (skipFrames == 0) {
-                            _trace.Add(MutableString.Create(FormatFrame(file, line, _nextFrameMethodName), _encoding));
+                            _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
                         } else {
                             skipFrames--;
                         }
-                        _nextFrameMethodName = null;
                     }
+                    _deferredMethodNames.Clear();
+                    _lastDeferredIsLibrary = false;
 
                     if (skipFrames == 0) {
                         _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
@@ -202,6 +232,10 @@ namespace IronRuby.Runtime {
                     }
                 }
             }
+        }
+
+        private static bool IsInternalMethodFrame(string methodName) {
+            return !String.IsNullOrEmpty(methodName) && !methodName.StartsWith("block ", StringComparison.Ordinal) && methodName[0] != '<';
         }
 
         private static string/*!*/ FormatFrame(string file, int line, string methodName) {
@@ -395,6 +429,26 @@ namespace IronRuby.Runtime {
 #endif
         }
 #endif
+        private static readonly string[]/*!*/ _InternalFiles = { "/ironruby/ruby4.rb", "/ironruby/argf.rb", "/ironruby/thread.rb" };
+
+        /// <summary>
+        /// The Ruby half of the core library. MRI 3.4+ reports a frame of a core method written in
+        /// Ruby (&lt;internal:kernel&gt; and the like) the way it reports a C method's: with the
+        /// location of the code that called it. Blocks and file-level code inside such a file are
+        /// implementation detail and not reported at all.
+        /// </summary>
+        public static bool IsInternalFile(string file) {
+            if (file == null) {
+                return false;
+            }
+            foreach (var suffix in _InternalFiles) {
+                if (file.EndsWith(suffix, StringComparison.Ordinal) || file.Replace('\\', '/').EndsWith(suffix, StringComparison.Ordinal)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         internal const string TopLevelMethodName = "#"; 
         // Not ':': since 3.4 a method frame's label carries the owner ("M::C#foo"), which
         // contains colons, and the parser below splits on the first separator it finds.

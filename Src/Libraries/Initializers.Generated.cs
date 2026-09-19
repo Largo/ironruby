@@ -1257,9 +1257,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "collect", 0x51, 
-                0x00000000U, 0x00000002U, 
+                0x00000000U, 0x00000004U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.BlockParam, System.Object, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.Enumerable.GetMapEnumerator), 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.Enumerable.Map)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.Enumerable.Map)
             );
             
             DefineLibraryMethod(module, "count", 0x51, 
@@ -1378,9 +1378,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "map", 0x51, 
-                0x00000000U, 0x00000002U, 
+                0x00000000U, 0x00000004U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.BlockParam, System.Object, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.Enumerable.GetMapEnumerator), 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.Enumerable.Map)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.Enumerable.Map)
             );
             
             DefineLibraryMethod(module, "max", 0x51, 
@@ -1486,6 +1486,11 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "each", 0x51, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Collections.IList, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Enumerator, System.Object[], System.Object>(IronRuby.Builtins.Enumerator.EachFromCaller)
+            );
+            
+            DefineLibraryMethod(module, "each_without_generator", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.Each)
             );
@@ -4982,11 +4987,6 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "syscall", 0x52, 
                 0x80000000U, 
                 new Func<System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.Syscall)
-            );
-            
-            DefineLibraryMethod(module, "tap", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Tap)
             );
             
             #if FEATURE_FILESYSTEM

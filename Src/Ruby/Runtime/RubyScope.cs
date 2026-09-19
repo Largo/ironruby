@@ -1281,6 +1281,10 @@ var closureScope = scope as RubyClosureScope;
             get { return _blockFlowControl; }
         }
 
+        // Set only for a block whose body has a return in a nested block: 1 while the body runs
+        // (and catches a LambdaUnwinder aimed at this scope), 2 once it has finished.
+        internal byte LambdaReturnState;
+
         public override string[] OwnImplicitParameterNames {
             get {
                 var signature = _blockFlowControl.Proc.Dispatcher.ParameterSignature;
@@ -1422,8 +1426,14 @@ var closureScope = scope as RubyClosureScope;
                 scope.SetDebugName("top-main");
                 context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope) { SourcePath = "<main>", SourceLine = 0 });
                 if (context.RubyOptions.RequirePaths != null) {
+                    bool first = true;
                     foreach (var path in context.RubyOptions.RequirePaths) {
                         context.Loader.LoadFile(globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
+                        // the first is the core prelude (gem_prelude.rb or ruby4.rb)
+                        if (first && (path == "gem_prelude.rb" || path == "ruby4.rb")) {
+                            context.Loader.ProvideCoreFeatures();
+                        }
+                        first = false;
                     }
                 }
             } else {

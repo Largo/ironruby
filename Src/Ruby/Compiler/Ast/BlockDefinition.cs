@@ -187,23 +187,44 @@ namespace IronRuby.Compiler.Ast {
                 traceCall = traceReturn = Ast.Empty();
             }
 
+            MSA.Expression statements = gen.TransformStatements(_body, ResultOperation.Return);
+            bool hasNestedReturn = gen.CurrentBlock.HasNestedReturn;
+
+            var bodyTry = AstUtils.Try(
+                statements
+            ).Catch(blockUnwinder = Ast.Parameter(typeof(BlockUnwinder), "#u"),
+                // redo:
+                AstUtils.IfThen(Ast.Field(blockUnwinder, BlockUnwinder.IsRedoField), Ast.Goto(redoLabel)),
+
+                // next:
+                gen.Return(Ast.Field(blockUnwinder, BlockUnwinder.ReturnValueField))
+            );
+
+            MSA.Expression enterNestedReturn, leaveNestedReturn;
+            if (hasNestedReturn) {
+                // a return in a nested block leaves this block if it runs as a lambda, however it was invoked:
+                MSA.ParameterExpression lambdaUnwinder;
+                bodyTry = bodyTry.Filter(lambdaUnwinder = Ast.Parameter(typeof(Exception), "#lu"),
+                    Methods.IsLambdaScopeUnwinderTarget.OpCall(scopeVariable, lambdaUnwinder),
+                    gen.Return(Methods.GetLambdaUnwinderReturnValue.OpCall(lambdaUnwinder))
+                );
+                enterNestedReturn = Methods.EnterLambdaReturnScope.OpCall(scopeVariable);
+                leaveNestedReturn = Methods.LeaveLambdaReturnScope.OpCall(scopeVariable);
+            } else {
+                enterNestedReturn = leaveNestedReturn = Ast.Empty();
+            }
+
             MSA.Expression body = AstUtils.Try(
+                enterNestedReturn,
                 paramInit,
                 traceCall,
                 Ast.Label(redoLabel),
-                AstUtils.Try(
-                    gen.TransformStatements(_body, ResultOperation.Return)
-                ).Catch(blockUnwinder = Ast.Parameter(typeof(BlockUnwinder), "#u"),
-                    // redo:
-                    AstUtils.IfThen(Ast.Field(blockUnwinder, BlockUnwinder.IsRedoField), Ast.Goto(redoLabel)),
-
-                    // next:
-                    gen.Return(Ast.Field(blockUnwinder, BlockUnwinder.ReturnValueField))
-                )
+                bodyTry
             ).Filter(filterVariable = Ast.Parameter(typeof(Exception), "#e"),
                 Methods.FilterBlockException.OpCall(scopeVariable, filterVariable)
             ).Finally(
                 traceReturn,
+                leaveNestedReturn,
                 Ast.Empty()
             );
 

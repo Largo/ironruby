@@ -89,6 +89,13 @@ module Kernel
     yield self
   end unless method_defined?(:yield_self)
   alias_method :then, :yield_self unless method_defined?(:then)
+
+  # Written in Ruby, as MRI's is (<internal:kernel>): its frame is reported with its caller's
+  # location, and it has a source_location.
+  def tap
+    yield(self)
+    self
+  end
 end
 
 class Object
@@ -3447,7 +3454,8 @@ module Kernel
         # trailing ":in `method'" that MRI's uplevel prefix does not.
         # As RubyGems' own Kernel#warn does, frames of its #require don't count: a warning
         # from a required file names the line that required it, not custom_require.rb.
-        frames = caller(1) || []
+        # Frames of <internal: code (an eval that names itself so) don't count either.
+        frames = (caller(1) || []).reject { |frame| frame.start_with?("<internal:") }
         index = 0
         index += 1 while frames[index] && frames[index].include?("/rubygems/custom_require.rb:")
         uplevel.times do
@@ -6333,8 +6341,21 @@ module GC
   end
 end
 
-# Ruby 3.2 autoloads Set; the 1.9 snapshot requires an explicit require.
-autoload :Set, "set" unless defined?(Set)
+# Set and Pathname are core in Ruby 4.0 ("set.rb" and "pathname.so" are in $" from the
+# start, so requiring them does nothing); here they are autoloaded from their files, by
+# path, and Kernel#Pathname loads the class and hands over to the real one it defines.
+autoload :Set, File.expand_path("set.rb", File.dirname(__FILE__)) unless defined?(Set)
+unless defined?(Pathname)
+  autoload :Pathname, File.expand_path("../ruby/1.9.1/pathname.rb", File.dirname(__FILE__))
+  module Kernel
+    def Pathname(path)
+      ::Object.const_get(:Pathname) # loads pathname.rb, which redefines this method
+      Pathname(path)
+    end
+    module_function :Pathname
+    private :Pathname
+  end
+end
 
 # --- Enumerator: the block form and the methods 1.9 never had --------------
 # The core class only implements #each. Instances the runtime creates itself
@@ -6367,8 +6388,7 @@ class Enumerator
     end
   end unless const_defined?(:Yielder)
 
-  unless method_defined?(:each_without_generator)
-    alias_method :each_without_generator, :each
+  unless private_method_defined?(:__ir_each_impl__)
     # The built-in #initialize lives on Enumerator itself, so redefining it here
     # hides it from `super`, which would find Object#initialize and silently
     # leave the enumerator with no target. __enum_init__ is the way back in.
@@ -6388,8 +6408,9 @@ class Enumerator
 
     # Ruby 1.9: extra arguments are appended to the ones the enumerator was built
     # with and handed to the underlying method; without a block that produces a
-    # new enumerator rather than iterating.
-    def each(*args, &block)
+    # new enumerator rather than iterating. #each itself is the built-in one, which takes the plain case (no arguments, no generator) straight to the target method
+    # with the caller's frame - String#scan sets $~ there - and hands the rest to this.
+    def __ir_each_impl__(*args, &block)
       unless args.empty?
         target = __enum_target__
         if target
@@ -6409,6 +6430,7 @@ class Enumerator
         each_without_generator(&block)
       end
     end
+    private :__ir_each_impl__
   end
 
   # nil means "no offset", and anything else has to answer #to_int - a Float

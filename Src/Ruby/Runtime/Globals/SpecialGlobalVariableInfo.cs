@@ -267,6 +267,7 @@ namespace IronRuby.Runtime {
 
                 case GlobalVariableId.CommandLineProgramPath:
                     context.CommandLineProgramPath = context.CastToString(value);
+                    SetProcessTitle(context.CommandLineProgramPath.ToByteArray());
                     return;
                 
                 case GlobalVariableId.KCode:
@@ -295,6 +296,39 @@ namespace IronRuby.Runtime {
         private static void ReportNonNilDeprecation(RubyContext/*!*/ context, string/*!*/ name, object newValue) {
             if (newValue != null) {
                 context.ReportDeprecationWarning(String.Format("non-nil '${0}' is deprecated", name));
+            }
+        }
+
+        /// <summary>
+        /// Assigning $0 retitles the process, as MRI's setproctitle does: on Linux the title
+        /// overwrites the argument area that /proc/PID/cmdline (and so ps) shows, padded with NULs
+        /// and cut to that area's size. Best effort - nothing happens where that isn't possible.
+        /// </summary>
+        private static void SetProcessTitle(byte[]/*!*/ title) {
+            if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux)) {
+                return;
+            }
+
+            try {
+                // arg_start and arg_end are fields 48 and 49 of /proc/self/stat; the command name
+                // (field 2) is in parentheses and may contain spaces, so count from the last ')'.
+                string stat = System.IO.File.ReadAllText("/proc/self/stat");
+                string[] fields = stat.Substring(stat.LastIndexOf(')') + 2).Split(' ');
+                long argStart = Int64.Parse(fields[48 - 3]);
+                long argEnd = Int64.Parse(fields[49 - 3]);
+                int size = (int)Math.Min(argEnd - argStart, 4096);
+                if (argStart <= 0 || size <= 1) {
+                    return;
+                }
+
+                var buffer = new byte[size];
+                Array.Copy(title, buffer, Math.Min(title.Length, size - 1));
+                using (var mem = new System.IO.FileStream("/proc/self/mem", System.IO.FileMode.Open, System.IO.FileAccess.Write)) {
+                    mem.Seek(argStart, System.IO.SeekOrigin.Begin);
+                    mem.Write(buffer, 0, buffer.Length);
+                }
+            } catch (Exception) {
+                // not permitted or not available
             }
         }
 
