@@ -4003,7 +4003,7 @@ namespace IronRuby.Runtime {
                 case "LOCALE": return _options.LocaleEncoding.StrictEncoding;
                 case "EXTERNAL": return _defaultExternalEncoding.StrictEncoding;
                 // Mono doesn't recognize 'SJIS' encoding name:
-                case "SHIFT_JIS": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
+                case "WINDOWS-31J": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
                 case "MACCYRILLIC": return Encoding.GetEncoding(10007);
 
                 // encodings whose name only differs in casing are returned by Windows:
@@ -4040,7 +4040,7 @@ namespace IronRuby.Runtime {
                 case "CESU-8": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8).StrictEncoding;
                 case "TIS-620": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageTIS620).StrictEncoding;
                 case "EMACS-MULE": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEmacsMule).StrictEncoding;
-                case "WINDOWS-31J": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageWindows31J).StrictEncoding;
+                case "SHIFT_JIS": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageShiftJIS).StrictEncoding;
                 case "UTF8-MAC": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF8Mac).StrictEncoding;
                 case "CP51932": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCP51932).StrictEncoding;
                 case "EUCJP-MS": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEucJpMs).StrictEncoding;

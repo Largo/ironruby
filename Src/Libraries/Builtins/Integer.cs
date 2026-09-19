@@ -276,7 +276,7 @@ namespace IronRuby.Builtins {
                     goto default;
 
                 case RubyEncoding.CodePageSJIS:
-                case RubyEncoding.CodePageWindows31J:
+                case RubyEncoding.CodePageShiftJIS:
                     // Single byte: ASCII plus the half-width katakana block. Double byte: a
                     // lead byte from 0x81-0x9f/0xe0-0xfc and a trail byte from 0x40-0xfc
                     // excluding 0x7f.

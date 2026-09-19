@@ -131,7 +131,7 @@ namespace IronRuby.Builtins {
 
         [RubyConstant("SHIFT_JIS")]
         [RubyConstant("Shift_JIS")]
-        public static readonly RubyEncoding SHIFT_JIS = RubyEncoding.SJIS;
+        public static readonly RubyEncoding SHIFT_JIS = RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageShiftJIS);
         
         [RubyConstant]
         public static readonly RubyEncoding EUC_JP = RubyEncoding.EUCJP;
@@ -320,7 +320,7 @@ namespace IronRuby.Builtins {
             // enumerate on this platform. Leaving them out would make Encoding.find answer with an
             // encoding that Encoding.list says does not exist.
             foreach (var codepage in new[] { 51936 /* GB2312 */, 51949 /* EUC-KR */, 54936 /* GB18030 */, 50220, 50221,
-                RubyEncoding.CodePageWindows31J, RubyEncoding.CodePageUTF8Mac, RubyEncoding.CodePageCP51932, RubyEncoding.CodePageEucJpMs,
+                RubyEncoding.CodePageShiftJIS, RubyEncoding.CodePageUTF8Mac, RubyEncoding.CodePageCP51932, RubyEncoding.CodePageEucJpMs,
                 RubyEncoding.CodePageStatelessISO2022JP, RubyEncoding.CodePageISO2022JP2, RubyEncoding.CodePageGB12345, RubyEncoding.CodePageEUCTW,
                 RubyEncoding.CodePageGB1988, RubyEncoding.CodePageISO8859_10, RubyEncoding.CodePageISO8859_14, RubyEncoding.CodePageISO8859_16 }) {
                 try {

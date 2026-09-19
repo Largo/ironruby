@@ -45,7 +45,7 @@ namespace IronRuby.Runtime {
                 // Ruby's stateless-ISO-2022-JP is a replica of Emacs-Mule under another name.
                 case RubyEncoding.CodePageStatelessISO2022JP: return new EmacsMuleEncoding(codepage, "stateless-ISO-2022-JP", throwOnError);
 
-                case RubyEncoding.CodePageWindows31J: return new RenamedEncoding(codepage, "Windows-31J", 932, throwOnError);
+                case RubyEncoding.CodePageShiftJIS: return new RenamedEncoding(codepage, "Shift_JIS", RubyEncoding.CodePageSJIS, throwOnError);
                 case RubyEncoding.CodePageUTF8Mac: return new RenamedEncoding(codepage, "UTF8-MAC", RubyEncoding.CodePageUTF8, throwOnError);
                 case RubyEncoding.CodePageCP51932: return new RenamedEncoding(codepage, "CP51932", RubyEncoding.CodePageEUCJP, throwOnError);
                 case RubyEncoding.CodePageISO2022JP2: return new RenamedEncoding(codepage, "ISO-2022-JP-2", 50220, throwOnError);
@@ -71,7 +71,7 @@ namespace IronRuby.Runtime {
                 case RubyEncoding.CodePageTIS620:
                 case RubyEncoding.CodePageEmacsMule:
                 case RubyEncoding.CodePageStatelessISO2022JP:
-                case RubyEncoding.CodePageWindows31J:
+                case RubyEncoding.CodePageShiftJIS:
                 case RubyEncoding.CodePageUTF8Mac:
                 case RubyEncoding.CodePageCP51932:
                 case RubyEncoding.CodePageISO2022JP2:
@@ -96,7 +96,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         internal static int GetTableCodePage(int codepage) {
             switch (codepage) {
-                case RubyEncoding.CodePageWindows31J: return 932;
+                case RubyEncoding.CodePageShiftJIS: return RubyEncoding.CodePageSJIS;
                 case RubyEncoding.CodePageUTF8Mac: return RubyEncoding.CodePageUTF8;
                 case RubyEncoding.CodePageCP51932: return RubyEncoding.CodePageEUCJP;
                 case RubyEncoding.CodePageEucJpMs: return RubyEncoding.CodePageEUCJP;
@@ -124,7 +124,7 @@ namespace IronRuby.Runtime {
 
             // .NET's code page 932 decodes 0x80, 0xA0 and 0xFD-0xFF as characters of their own;
             // in Ruby's Shift_JIS and Windows-31J they begin nothing.
-            if (encoding.CodePage == RubyEncoding.CodePageSJIS || encoding.CodePage == RubyEncoding.CodePageWindows31J) {
+            if (encoding.CodePage == RubyEncoding.CodePageSJIS || encoding.CodePage == RubyEncoding.CodePageShiftJIS) {
                 return FindInvalidShiftJis(bytes, index, count) < 0;
             }
 
@@ -170,8 +170,8 @@ namespace IronRuby.Runtime {
     }
 
     /// <summary>
-    /// A .NET encoding under the name of a distinct Ruby encoding - Windows-31J is .NET's code
-    /// page 932 (which Ruby also has as the narrower Shift_JIS), UTF8-MAC is UTF-8, and so on.
+    /// A .NET encoding under the name of a distinct Ruby encoding - Shift_JIS is .NET's code
+    /// page 932 (which is Ruby's Windows-31J; Ruby's Shift_JIS lacks the Microsoft extensions), UTF8-MAC is UTF-8, and so on.
     /// Ruby keeps these apart, so they need a code page of their own; the bytes are the inner
     /// encoding's.
     /// </summary>

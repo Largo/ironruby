@@ -65,7 +65,7 @@ namespace IronRuby.Builtins {
         public const int CodePageCESU8 = 1000008;
         public const int CodePageTIS620 = 1000620;
         public const int CodePageEmacsMule = 1000230;
-        public const int CodePageWindows31J = 1000931;
+        public const int CodePageShiftJIS = 1000931;
         public const int CodePageUTF8Mac = 1065001;
         public const int CodePageCP51932 = 1051932;
         public const int CodePageEucJpMs = 1051933;
@@ -277,7 +277,7 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageCESU8: return "CESU-8";
                 case RubyEncoding.CodePageTIS620: return "TIS-620";
                 case RubyEncoding.CodePageEmacsMule: return "Emacs-Mule";
-                case RubyEncoding.CodePageWindows31J: return "Windows-31J";
+                case RubyEncoding.CodePageShiftJIS: return "Shift_JIS";
                 case RubyEncoding.CodePageUTF8Mac: return "UTF8-MAC";
                 case RubyEncoding.CodePageCP51932: return "CP51932";
                 case RubyEncoding.CodePageEucJpMs: return "eucJP-ms";
@@ -289,7 +289,9 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageISO8859_10: return "ISO-8859-10";
                 case RubyEncoding.CodePageISO8859_14: return "ISO-8859-14";
                 case RubyEncoding.CodePageISO8859_16: return "ISO-8859-16";
-                case RubyEncoding.CodePageSJIS: return "Shift_JIS";
+                // .NET's code page 932 is Microsoft's Shift_JIS, which Ruby calls Windows-31J (CP932, and
+                // the SJIS of -Ks and /s); Ruby's narrower Shift_JIS is a code page of its own.
+                case RubyEncoding.CodePageSJIS: return "Windows-31J";
                 case RubyEncoding.CodePageAscii: return "US-ASCII";
 
                 // disambiguates CP 20932 and CP 51932:
