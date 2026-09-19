@@ -23,7 +23,8 @@ namespace IronRuby.StandardLibrary.Yaml {
     
     public sealed class YamlLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
         protected override void LoadModules() {
-            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RuntimeError));
+            IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(IronRuby.Builtins.RubyObject));
             
             
             ExtendModule(typeof(IronRuby.Builtins.FalseClass), 0x00000000, LoadIronRuby__Builtins__FalseClass_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -39,33 +40,39 @@ namespace IronRuby.StandardLibrary.Yaml {
             ExtendModule(typeof(IronRuby.Builtins.RubyTime), 0x00000000, LoadIronRuby__Builtins__RubyTime_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(IronRuby.Builtins.TrueClass), 0x00000000, LoadIronRuby__Builtins__TrueClass_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(Microsoft.Scripting.Runtime.DynamicNull), 0x00000000, LoadMicrosoft__Scripting__Runtime__DynamicNull_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def5 = DefineGlobalModule("Psych", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml), 0x00000008, null, LoadPsych_Class, LoadPsych_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def6 = DefineModule("Psych::BaseNode", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.BaseNode), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def7 = DefineClass("Psych::Exception", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.PsychException), 0x00000008, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(YamlLibraryInitializer.ExceptionFactory__Psych__Exception));
+            IronRuby.Builtins.RubyClass def10 = DefineClass("Psych::Stream", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.YamlStream), 0x00000008, classRef1, LoadPsych__Stream_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.Hash, IronRuby.StandardLibrary.Yaml.RubyYaml.YamlStream>(IronRuby.StandardLibrary.Yaml.RubyYaml.YamlStream.CreateStream)
+            );
+            IronRuby.Builtins.RubyModule def1 = DefineModule("Psych::Syck", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Double), 0x00000000, LoadSystem__Double_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Exception), 0x00000000, LoadSystem__Exception_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Int32), 0x00000000, LoadSystem__Int32_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Numerics.BigInteger), 0x00000000, LoadSystem__Numerics__BigInteger_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Object), 0x00000000, null, LoadSystem__Object_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyModule def5 = DefineGlobalModule("YAML", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml), 0x00000008, null, LoadYAML_Class, LoadYAML_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyModule def6 = DefineModule("YAML::BaseNode", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.BaseNode), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyClass def8 = DefineClass("YAML::Stream", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.YamlStream), 0x00000008, classRef0, LoadYAML__Stream_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.Hash, IronRuby.StandardLibrary.Yaml.RubyYaml.YamlStream>(IronRuby.StandardLibrary.Yaml.RubyYaml.YamlStream.CreateStream)
-            );
-            IronRuby.Builtins.RubyModule def1 = DefineModule("YAML::Syck", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalClass("Date", typeof(IronRuby.StandardLibrary.Yaml.YamlDateOps), 0x00000018, Context.ObjectClass, LoadDate_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyClass def4 = DefineClass("YAML::Syck::Emitter", typeof(IronRuby.StandardLibrary.Yaml.RubyRepresenter), 0x00000008, Context.ObjectClass, LoadYAML__Syck__Emitter_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyClass def3 = DefineClass("YAML::Syck::Node", typeof(IronRuby.StandardLibrary.Yaml.Node), 0x00000008, Context.ObjectClass, LoadYAML__Syck__Node_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def6});
-            IronRuby.Builtins.RubyClass def7 = DefineClass("YAML::Syck::Out", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.Out), 0x00000008, Context.ObjectClass, LoadYAML__Syck__Out_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyClass def2 = DefineClass("YAML::Syck::Map", typeof(IronRuby.StandardLibrary.Yaml.MappingNode), 0x00000008, def3, LoadYAML__Syck__Map_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyClass def9 = DefineClass("YAML::Syck::Scalar", typeof(IronRuby.StandardLibrary.Yaml.ScalarNode), 0x00000008, def3, LoadYAML__Syck__Scalar_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyClass def10 = DefineClass("YAML::Syck::Seq", typeof(IronRuby.StandardLibrary.Yaml.SequenceNode), 0x00000008, def3, LoadYAML__Syck__Seq_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def4 = DefineClass("Psych::Syck::Emitter", typeof(IronRuby.StandardLibrary.Yaml.RubyRepresenter), 0x00000008, Context.ObjectClass, LoadPsych__Syck__Emitter_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def3 = DefineClass("Psych::Syck::Node", typeof(IronRuby.StandardLibrary.Yaml.Node), 0x00000008, Context.ObjectClass, LoadPsych__Syck__Node_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def6});
+            IronRuby.Builtins.RubyClass def9 = DefineClass("Psych::Syck::Out", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.Out), 0x00000008, Context.ObjectClass, LoadPsych__Syck__Out_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def8 = DefineClass("Psych::SyntaxError", typeof(IronRuby.StandardLibrary.Yaml.RubyYaml.PsychSyntaxError), 0x00000008, def7, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(YamlLibraryInitializer.ExceptionFactory__Psych__SyntaxError));
+            IronRuby.Builtins.RubyClass def2 = DefineClass("Psych::Syck::Map", typeof(IronRuby.StandardLibrary.Yaml.MappingNode), 0x00000008, def3, LoadPsych__Syck__Map_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def11 = DefineClass("Psych::Syck::Scalar", typeof(IronRuby.StandardLibrary.Yaml.ScalarNode), 0x00000008, def3, LoadPsych__Syck__Scalar_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def12 = DefineClass("Psych::Syck::Seq", typeof(IronRuby.StandardLibrary.Yaml.SequenceNode), 0x00000008, def3, LoadPsych__Syck__Seq_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             SetConstant(def5, "BaseNode", def6);
-            SetConstant(def5, "Stream", def8);
+            SetConstant(def5, "Exception", def7);
+            SetConstant(def5, "Stream", def10);
             SetConstant(def5, "Syck", def1);
             SetConstant(def1, "Emitter", def4);
             SetConstant(def1, "Node", def3);
-            SetConstant(def1, "Out", def7);
+            SetConstant(def1, "Out", def9);
+            SetConstant(def5, "SyntaxError", def8);
             SetConstant(def1, "Map", def2);
-            SetConstant(def1, "Scalar", def9);
-            SetConstant(def1, "Seq", def10);
+            SetConstant(def1, "Scalar", def11);
+            SetConstant(def1, "Seq", def12);
         }
         
         private static void LoadDate_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -160,14 +167,14 @@ namespace IronRuby.StandardLibrary.Yaml {
         }
         
         private static void LoadIronRuby__Builtins__RubyModule_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "yaml_as", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Yaml.YamlModuleOps.YamlAs)
-            );
-            
             DefineLibraryMethod(module, "to_yaml_node", 0x12, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlModuleOps.ToYamlNode)
+            );
+            
+            DefineLibraryMethod(module, "yaml_as", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Yaml.YamlModuleOps.YamlAs)
             );
             
         }
@@ -250,93 +257,12 @@ namespace IronRuby.StandardLibrary.Yaml {
             
         }
         
-        private static void LoadSystem__Double_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "taguri", 0x11, 
-                0x00000000U, 
-                new Func<System.Double, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlDoubleOps.TagUri)
-            );
-            
-            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
-                0x00000002U, 
-                new Func<System.Double, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlDoubleOps.ToYaml)
-            );
-            
-        }
-        
-        private static void LoadSystem__Exception_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "taguri", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlExceptionOps.TagUri)
-            );
-            
-            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
-                0x00000004U, 
-                new Func<IronRuby.Runtime.UnaryOpStorage, System.Exception, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlExceptionOps.ToYamlNode)
-            );
-            
-        }
-        
-        private static void LoadSystem__Int32_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "taguri", 0x11, 
-                0x00000000U, 
-                new Func<System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlFixnumOps.TagUri)
-            );
-            
-            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
-                0x00000002U, 
-                new Func<System.Int32, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlFixnumOps.ToYaml)
-            );
-            
-        }
-        
-        private static void LoadSystem__Numerics__BigInteger_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "taguri", 0x11, 
-                0x00000001U, 
-                new Func<System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlBigIntegerOps.TagUri)
-            );
-            
-            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
-                0x00000003U, 
-                new Func<System.Numerics.BigInteger, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlBigIntegerOps.ToYaml)
-            );
-            
-        }
-        
-        private static void LoadSystem__Object_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "taguri", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.TagUri)
-            );
-            
-            DefineLibraryMethod(module, "to_yaml", 0x11, 
-                0x00000002U, 0x00000000U, 
-                new Func<System.Object, IronRuby.StandardLibrary.Yaml.RubyRepresenter, System.Object>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYaml), 
-                new Func<IronRuby.StandardLibrary.Yaml.YamlCallSiteStorage, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYaml)
-            );
-            
-            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
-                0x00000002U, 
-                new Func<System.Object, IronRuby.StandardLibrary.Yaml.RubyRepresenter, System.Object>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYamlProperties)
-            );
-            
-            DefineLibraryMethod(module, "to_yaml_properties", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYamlProperties)
-            );
-            
-            DefineLibraryMethod(module, "to_yaml_style", 0x11, 
-                0x00000000U, 
-                new Func<System.Object, System.Object>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYamlStyle)
-            );
-            
-        }
-        
-        private static void LoadYAML_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadPsych_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
             SetConstant(module, "Emitter", IronRuby.StandardLibrary.Yaml.RubyYaml.Emitter(module));
             
         }
         
-        private static void LoadYAML_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadPsych_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "add_builtin_type", 0x21, 
                 0x00020005U, 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Yaml.RubyYaml.AddBuiltinType)
@@ -441,7 +367,7 @@ namespace IronRuby.StandardLibrary.Yaml {
             
         }
         
-        private static void LoadYAML__Stream_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadPsych__Stream_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "[]", 0x11, 
                 0x00020000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Yaml.RubyYaml.YamlStream, System.Int32, System.Object>(IronRuby.StandardLibrary.Yaml.RubyYaml.YamlStream.GetDocument)
@@ -489,7 +415,7 @@ namespace IronRuby.StandardLibrary.Yaml {
             
         }
         
-        private static void LoadYAML__Syck__Emitter_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadPsych__Syck__Emitter_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "level", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Yaml.RubyRepresenter, System.Int32>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.RepresenterOps.GetLevel)
@@ -502,10 +428,20 @@ namespace IronRuby.StandardLibrary.Yaml {
             
         }
         
-        private static void LoadYAML__Syck__Map_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadPsych__Syck__Map_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "add", 0x11, 
                 0x00000000U, 
                 new Action<IronRuby.StandardLibrary.Yaml.YamlCallSiteStorage, IronRuby.StandardLibrary.Yaml.MappingNode, System.Object, System.Object>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.MapOps.Add)
+            );
+            
+            DefineLibraryMethod(module, "children", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Yaml.MappingNode, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.MapOps.GetChildren)
+            );
+            
+            DefineLibraryMethod(module, "flow?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Yaml.MappingNode, System.Boolean>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.MapOps.IsFlow)
             );
             
             DefineLibraryMethod(module, "style=", 0x11, 
@@ -520,7 +456,12 @@ namespace IronRuby.StandardLibrary.Yaml {
             
         }
         
-        private static void LoadYAML__Syck__Node_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadPsych__Syck__Node_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "tag", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Yaml.Node, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.NodeOps.GetTag)
+            );
+            
             DefineLibraryMethod(module, "transform", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.StandardLibrary.Yaml.Node, System.Object>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.NodeOps.Transform)
@@ -528,7 +469,7 @@ namespace IronRuby.StandardLibrary.Yaml {
             
         }
         
-        private static void LoadYAML__Syck__Out_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadPsych__Syck__Out_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "emitter", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.Out, IronRuby.StandardLibrary.Yaml.RubyRepresenter>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.Out.GetEmitter)
@@ -551,7 +492,12 @@ namespace IronRuby.StandardLibrary.Yaml {
             
         }
         
-        private static void LoadYAML__Syck__Scalar_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadPsych__Syck__Scalar_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "style", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Yaml.ScalarNode, System.Int32>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.ScalarOps.GetStyle)
+            );
+            
             DefineLibraryMethod(module, "style=", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Yaml.ScalarNode, System.Object, System.Object>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.ScalarOps.SetStyle)
@@ -564,10 +510,20 @@ namespace IronRuby.StandardLibrary.Yaml {
             
         }
         
-        private static void LoadYAML__Syck__Seq_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+        private static void LoadPsych__Syck__Seq_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "add", 0x11, 
                 0x00000000U, 
                 new Action<IronRuby.StandardLibrary.Yaml.YamlCallSiteStorage, IronRuby.StandardLibrary.Yaml.SequenceNode, System.Object>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.SeqOps.Add)
+            );
+            
+            DefineLibraryMethod(module, "children", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Yaml.SequenceNode, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.SeqOps.GetChildren)
+            );
+            
+            DefineLibraryMethod(module, "flow?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Yaml.SequenceNode, System.Boolean>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.SeqOps.IsFlow)
             );
             
             DefineLibraryMethod(module, "style=", 0x11, 
@@ -580,6 +536,95 @@ namespace IronRuby.StandardLibrary.Yaml {
                 new Func<IronRuby.StandardLibrary.Yaml.MappingNode, System.Object>(IronRuby.StandardLibrary.Yaml.RubyYaml.Syck.SeqOps.GetValue)
             );
             
+        }
+        
+        private static void LoadSystem__Double_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "taguri", 0x11, 
+                0x00000000U, 
+                new Func<System.Double, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlDoubleOps.TagUri)
+            );
+            
+            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
+                0x00000002U, 
+                new Func<System.Double, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlDoubleOps.ToYaml)
+            );
+            
+        }
+        
+        private static void LoadSystem__Exception_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "taguri", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlExceptionOps.TagUri)
+            );
+            
+            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, System.Exception, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlExceptionOps.ToYamlNode)
+            );
+            
+        }
+        
+        private static void LoadSystem__Int32_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "taguri", 0x11, 
+                0x00000000U, 
+                new Func<System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlFixnumOps.TagUri)
+            );
+            
+            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
+                0x00000002U, 
+                new Func<System.Int32, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlFixnumOps.ToYaml)
+            );
+            
+        }
+        
+        private static void LoadSystem__Numerics__BigInteger_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "taguri", 0x11, 
+                0x00000001U, 
+                new Func<System.Numerics.BigInteger, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlBigIntegerOps.TagUri)
+            );
+            
+            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
+                0x00000003U, 
+                new Func<System.Numerics.BigInteger, IronRuby.StandardLibrary.Yaml.RubyRepresenter, IronRuby.StandardLibrary.Yaml.Node>(IronRuby.StandardLibrary.Yaml.YamlBigIntegerOps.ToYaml)
+            );
+            
+        }
+        
+        private static void LoadSystem__Object_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "taguri", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.TagUri)
+            );
+            
+            DefineLibraryMethod(module, "to_yaml", 0x11, 
+                0x00000002U, 0x00000000U, 
+                new Func<System.Object, IronRuby.StandardLibrary.Yaml.RubyRepresenter, System.Object>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYaml), 
+                new Func<IronRuby.StandardLibrary.Yaml.YamlCallSiteStorage, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYaml)
+            );
+            
+            DefineLibraryMethod(module, "to_yaml_node", 0x12, 
+                0x00000002U, 
+                new Func<System.Object, IronRuby.StandardLibrary.Yaml.RubyRepresenter, System.Object>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYamlProperties)
+            );
+            
+            DefineLibraryMethod(module, "to_yaml_properties", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYamlProperties)
+            );
+            
+            DefineLibraryMethod(module, "to_yaml_style", 0x11, 
+                0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.StandardLibrary.Yaml.YamlObjectOps.ToYamlStyle)
+            );
+            
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__Psych__Exception(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Yaml.RubyYaml.PsychException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__Psych__SyntaxError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Yaml.RubyYaml.PsychSyntaxError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
     }

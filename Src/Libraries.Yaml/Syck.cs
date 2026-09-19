@@ -102,6 +102,13 @@ namespace IronRuby.StandardLibrary.Yaml {
                 public static object Transform(RubyScope/*!*/ scope, Node/*!*/ self) {
                     return new RubyConstructor(scope.GlobalScope, new SimpleNodeProvider(self, RubyYaml.GetEncoding(scope.RubyContext))).GetData();
                 }
+
+                // The resolved tag ("tag:yaml.org,2002:int", "tag:ruby.yaml.org,2002:object:Foo", ...),
+                // which psych.rb reads to check a safe load against its permitted classes.
+                [RubyMethod("tag")]
+                public static MutableString GetTag(Node/*!*/ self) {
+                    return self.Tag != null ? MutableString.Create(self.Tag, RubyEncoding.UTF8) : null;
+                }
             }
 
             [RubyClass("Map", Extends = typeof(MappingNode), Inherits = typeof(Node), Restrictions = ModuleRestrictions.NoUnderlyingType)]
@@ -121,6 +128,22 @@ namespace IronRuby.StandardLibrary.Yaml {
                 public static void Add(YamlCallSiteStorage/*!*/ siteStorage, MappingNode/*!*/ self, object key, object value) {
                     RubyRepresenter rep = new RubyRepresenter(siteStorage);
                     self.Nodes.Add(rep.RepresentItem(key), rep.RepresentItem(value));
+                }
+
+                // Keys and values interleaved, as Psych::Nodes::Mapping#children has them.
+                [RubyMethod("children")]
+                public static RubyArray/*!*/ GetChildren(MappingNode/*!*/ self) {
+                    var result = new RubyArray(self.Nodes.Count * 2);
+                    foreach (var entry in self.Nodes) {
+                        result.Add(entry.Key);
+                        result.Add(entry.Value);
+                    }
+                    return result;
+                }
+
+                [RubyMethod("flow?")]
+                public static bool IsFlow(MappingNode/*!*/ self) {
+                    return self.FlowStyle == FlowStyle.Inline;
                 }
             }
 
@@ -144,6 +167,20 @@ namespace IronRuby.StandardLibrary.Yaml {
                     RubyRepresenter rep = new RubyRepresenter(siteStorage);
                     self.Nodes.Add(rep.RepresentItem(value));
                 }
+
+                [RubyMethod("children")]
+                public static RubyArray/*!*/ GetChildren(SequenceNode/*!*/ self) {
+                    var result = new RubyArray(self.Nodes.Count);
+                    foreach (var node in self.Nodes) {
+                        result.Add(node);
+                    }
+                    return result;
+                }
+
+                [RubyMethod("flow?")]
+                public static bool IsFlow(SequenceNode/*!*/ self) {
+                    return self.FlowStyle == FlowStyle.Inline;
+                }
             }
 
             [RubyClass("Scalar", Extends = typeof(ScalarNode), Inherits = typeof(Node), Restrictions = ModuleRestrictions.NoUnderlyingType)]
@@ -158,7 +195,21 @@ namespace IronRuby.StandardLibrary.Yaml {
 
                 [RubyMethod("value")]
                 public static object GetValue(ScalarNode/*!*/ self) {
-                    return MutableString.CreateAscii(self.Value);
+                    // An empty (null) scalar reads as "", as in Psych; the text is not always ASCII.
+                    return MutableString.Create(self.Value ?? String.Empty, RubyEncoding.UTF8);
+                }
+
+                // Psych::Nodes::Scalar's style constants: PLAIN = 1, SINGLE_QUOTED = 2,
+                // DOUBLE_QUOTED = 3, LITERAL = 4, FOLDED = 5.
+                [RubyMethod("style")]
+                public static int GetStyle(ScalarNode/*!*/ self) {
+                    switch (self.Style) {
+                        case ScalarQuotingStyle.Single: return 2;
+                        case ScalarQuotingStyle.Double: return 3;
+                        case ScalarQuotingStyle.Literal: return 4;
+                        case ScalarQuotingStyle.Folded: return 5;
+                        default: return 1;
+                    }
                 }
             }
         }

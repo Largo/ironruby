@@ -29,12 +29,38 @@ using System.Diagnostics;
 
 namespace IronRuby.StandardLibrary.Yaml {
 
-    [RubyModule("YAML")]    
+    [RubyModule("Psych")]
     public static partial class RubyYaml {
         [RubyModule("BaseNode")]
         public static class BaseNode {
             // TODO: which of these we need to implement?
             // "children_with_index", "[]", "select!", "children", "at", "search", "match_path", "match_segment", "select", "emit"
+        }
+
+        // Psych::Exception and Psych::SyntaxError. The rest of Psych's exception hierarchy
+        // (DisallowedClass, BadAlias, ...) is raised by the Ruby layer in psych.rb.
+        [RubyException("Exception"), Serializable]
+        public class PsychException : RuntimeError {
+            public PsychException() : this(null, null) { }
+            public PsychException(string message) : this(message, null) { }
+            public PsychException(string message, Exception inner) : base(message ?? "Psych::Exception", inner) { }
+        }
+
+        [RubyException("SyntaxError"), Serializable]
+        public class PsychSyntaxError : PsychException {
+            public PsychSyntaxError() : this(null, null) { }
+            public PsychSyntaxError(string message) : this(message, null) { }
+            public PsychSyntaxError(string message, Exception inner) : base(message ?? "Psych::SyntaxError", inner) { }
+        }
+
+        // A malformed document is a Psych::SyntaxError, as in Psych; "(<unknown>)" is the file
+        // name Psych reports when none is given (psych.rb substitutes the filename: keyword).
+        internal static bool IsSyntaxError(Exception/*!*/ e) {
+            return e is ScannerException || e is ParserException || e is ComposerException;
+        }
+
+        internal static Exception/*!*/ MakeSyntaxError(Exception/*!*/ e) {
+            return new PsychSyntaxError("(<unknown>): " + e.Message, e);
         }
 
         [RubyConstant("Emitter")]
@@ -169,7 +195,9 @@ namespace IronRuby.StandardLibrary.Yaml {
                     return obj;
                 }
                 return null;
-            } catch (Exception e) {
+            } catch (Exception e) when (IsSyntaxError(e)) {
+                throw MakeSyntaxError(e);
+            } catch (Exception e) when (!(e is PsychException)) {
                 throw RubyExceptions.CreateArgumentError(e, e.Message);
             } finally {
                 RubyIO rio = io as RubyIO;
@@ -236,15 +264,19 @@ namespace IronRuby.StandardLibrary.Yaml {
 
         [RubyMethod("parse", RubyMethodAttributes.PublicSingleton)]
         public static object Parse(ConversionStorage<MutableString>/*!*/ toStr, RespondToStorage/*!*/ respondTo, RubyModule/*!*/ self, object io) {
-            using (Stream stream = GetStream(toStr, respondTo, io)) {
-                foreach (Node obj in MakeComposer(self.Context, stream)) {
-                    // TODO: the enumerator shouldn't return null:
-                    if (obj == null) {
-                        break;
-                    } 
-                    
-                    return obj;
+            try {
+                using (Stream stream = GetStream(toStr, respondTo, io)) {
+                    foreach (Node obj in MakeComposer(self.Context, stream)) {
+                        // TODO: the enumerator shouldn't return null:
+                        if (obj == null) {
+                            break;
+                        } 
+                        
+                        return obj;
+                    }
                 }
+            } catch (Exception e) when (IsSyntaxError(e)) {
+                throw MakeSyntaxError(e);
             }
             return ScriptingRuntimeHelpers.False;
         }

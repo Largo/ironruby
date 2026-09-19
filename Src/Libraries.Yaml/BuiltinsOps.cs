@@ -94,7 +94,7 @@ namespace IronRuby.StandardLibrary.Yaml {
         [RubyMethod("yaml_as")]
         public static object YamlAs(RubyScope/*!*/ scope, RubyModule/*!*/ self, object tag) {
             RubyModule yamlModule;
-            scope.RubyContext.TryGetModule(scope.GlobalScope, "YAML", out yamlModule);
+            scope.RubyContext.TryGetModule(scope.GlobalScope, "Psych", out yamlModule);
             return RubyYaml.TagClass(yamlModule, tag, self);
         }
 

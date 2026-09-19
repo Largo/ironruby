@@ -516,13 +516,10 @@ namespace IronRuby.StandardLibrary.Yaml {
             );
 
             if (!String.IsNullOrEmpty(fract_s)) {
-                long fract = Int32.Parse(fract_s, CultureInfo.InvariantCulture);
-                if (fract > 0) {
-                    while (fract < 1000000) {
-                        fract *= 10;
-                    }
-                    dt = dt.AddTicks(fract);
-                }
+                // The digits are a decimal fraction of a second: a tick is 100ns, so the first
+                // seven digits (padded on the right) count ticks and any further ones are dropped.
+                string ticks_s = fract_s.Length > 7 ? fract_s.Substring(0, 7) : fract_s.PadRight(7, '0');
+                dt = dt.AddTicks(Int64.Parse(ticks_s, CultureInfo.InvariantCulture));
             }
 
             if (!isUtc) {

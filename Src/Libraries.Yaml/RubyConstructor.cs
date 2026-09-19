@@ -288,8 +288,8 @@ namespace IronRuby.StandardLibrary.Yaml {
                     return RubyUtils.CreateObject((RubyClass)module, EnumerateAttributes(globalScope.Context, values));
                 }
             } else {
-                //TODO: YAML::Object
-                throw new NotImplementedError("YAML::Object is not implemented yet");
+                // Psych's class loader: an unknown class name is an ArgumentError.
+                throw RubyExceptions.CreateArgumentError("undefined class/module {0}", className);
             }
         }
 

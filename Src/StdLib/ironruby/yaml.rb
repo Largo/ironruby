@@ -13,19 +13,7 @@
 #
 # ****************************************************************************
 
-require 'stringio'
-require 'date'
-load_assembly 'IronRuby.Libraries.Yaml', 'IronRuby.StandardLibrary.Yaml'
+# As in CRuby, YAML is Psych; see psych.rb for the Psych API on IronRuby's YAML engine.
+require 'psych'
 
-require 'yaml/types'
-
-module YAML
-  # Psych's load_stream: every document, yielded one at a time when there is a
-  # block and gathered into an Array when there is not (Syck answered a
-  # YAML::Stream).
-  def self.load_stream(io)
-    documents = []
-    each_document(io) { |doc| block_given? ? yield(doc) : documents << doc }
-    block_given? ? nil : documents
-  end
-end
+YAML = Psych # :nodoc:
