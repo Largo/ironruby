@@ -103,10 +103,21 @@ namespace IronRuby.Builtins {
 
             if (options != null) {
                 info = info.AddOptions(toStr, options);
+
+                // perm: says what the third argument would, and MRI refuses both at once.
+                object permOption;
+                if (options.TryGetValue(context.CreateAsciiSymbol("perm"), out permOption) && permOption != null) {
+                    if (optionsOrPermissions != Missing.Value && optionsOrPermissions != null) {
+                        throw RubyExceptions.CreateArgumentError("perm specified twice");
+                    }
+                    int? p = toIntSite.Target(toIntSite, permOption);
+                    if (!p.HasValue) {
+                        throw RubyExceptions.CreateImplicitConversionError(context.GetClassName(permOption), "Integer");
+                    }
+                    permissions = p.Value;
+                }
             }
             self.ConversionOptions = options;
-
-            // TODO: permissions
             
             // descriptor or path:
             int? descriptor = toIntSite.Target(toIntSite, descriptorOrPath);
