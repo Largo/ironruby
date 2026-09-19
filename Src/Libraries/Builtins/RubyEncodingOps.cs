@@ -541,7 +541,12 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("locale_charmap", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ GetDefaultCharmap(RubyClass/*!*/ self) {
-            return MutableString.Create(self.Context.RubyOptions.LocaleEncoding.Name);
+            var encoding = self.Context.RubyOptions.LocaleEncoding;
+            // nl_langinfo(CODESET) of the C locale, as glibc spells it
+            if (encoding == RubyEncoding.Ascii && Environment.OSVersion.Platform == PlatformID.Unix) {
+                return MutableString.CreateAscii("ANSI_X3.4-1968");
+            }
+            return MutableString.Create(encoding.Name);
         }
 
         #endregion

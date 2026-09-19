@@ -179,10 +179,40 @@ namespace IronRuby.Runtime {
                 interpretedFrame
             );
 
+            if (_aliasCallSeen) {
+                string callee = _pendingCallee;
+                if (callee != null) {
+                    _pendingCallee = null;
+                    if (_pendingCalleeDefinition == definitionName) {
+                        scope.CalleeName = callee;
+                    }
+                }
+            }
+
             if ((TracePoint.ActiveEvents & (int)TraceEvents.Call) != 0) {
                 TracePoint.OnMethodCall(scope);
             }
             return scope;
+        }
+
+        // The name an aliased method was called by, handed from the call site to the scope the
+        // method body creates first thing (MRI keeps it in the frame for __callee__).
+        [ThreadStatic]
+        private static string _pendingCallee;
+        [ThreadStatic]
+        private static string _pendingCalleeDefinition;
+        private static bool _aliasCallSeen;
+
+        /// <summary>
+        /// Wraps the last argument of a call to a method through an alias, so that the name is
+        /// recorded after every argument has been evaluated, just before the method body runs.
+        /// </summary>
+        [Emitted]
+        public static object MarkAliasCall(object lastArgument, string/*!*/ calleeName, string/*!*/ definitionName) {
+            _aliasCallSeen = true;
+            _pendingCallee = calleeName;
+            _pendingCalleeDefinition = definitionName;
+            return lastArgument;
         }
 
         [Emitted]
@@ -737,6 +767,10 @@ namespace IronRuby.Runtime {
                 );
             }
 
+            if (instanceOwner != null && scope.RubyContext.IsWarningEnabled("performance")) {
+                WarnOptimizedMethodRedefinition(scope.RubyContext, instanceOwner, body.Name);
+            }
+
             // the method's scope saves the result => singleton module-function uses instance-method
             var method = instanceMethod ?? singletonMethod;
 
@@ -749,6 +783,34 @@ namespace IronRuby.Runtime {
 
             // Ruby 2.1+: def returns the method name as a symbol (enables `private def foo`)
             return scope.RubyContext.CreateSymbol(body.Name, RubyEncoding.UTF8);
+        }
+
+        // MRI's vm_init_redefined_flag: the core methods its instructions inline, by class.
+        private static readonly Dictionary<string, string[]>/*!*/ _optimizedMethods = new Dictionary<string, string[]> {
+            { "Integer", new[] { "+", "-", "*", "/", "%", "==", "===", "<", "<=", ">", ">=", "[]", "succ", "&", "|" } },
+            { "Float", new[] { "+", "-", "*", "/", "%", "==", "===", "<", "<=", ">", ">=" } },
+            { "String", new[] { "+", "==", "===", "<<", "length", "size", "empty?", "succ", "=~", "freeze", "-@" } },
+            { "Array", new[] { "+", "<<", "[]", "[]=", "length", "size", "empty?", "max", "min", "hash", "pack", "include?" } },
+            { "Hash", new[] { "[]", "[]=", "length", "size", "empty?" } },
+            { "Symbol", new[] { "==", "===" } },
+            { "NilClass", new[] { "===", "nil?" } },
+            { "TrueClass", new[] { "===" } },
+            { "FalseClass", new[] { "===" } },
+            { "Regexp", new[] { "=~" } },
+            { "Proc", new[] { "call" } },
+            { "BasicObject", new[] { "!", "!=" } },
+        };
+
+        /// <summary>
+        /// Warning[:performance]: redefining a core method MRI's interpreter optimises is reported.
+        /// </summary>
+        private static void WarnOptimizedMethodRedefinition(RubyContext/*!*/ context, RubyModule/*!*/ owner, string/*!*/ name) {
+            string[] names;
+            if (owner.IsClass && owner.Name != null && _optimizedMethods.TryGetValue(owner.Name, out names)
+                && Array.IndexOf(names, name) >= 0) {
+                context.ReportCategoryWarning("performance",
+                    String.Format("Redefining '{0}#{1}' disables interpreter and JIT optimizations", owner.Name, name));
+            }
         }
 
         /// <summary>

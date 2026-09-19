@@ -246,14 +246,24 @@ namespace IronRuby.Runtime.Calls {
             var method = GetDelegate();
             if (method.GetType() == ParamsArrayDelegateType) {
                 // Func<object, Proc, object[], object>
-                metaBuilder.Result = AstFactory.CallDelegate(method, new[] { 
-                    boxedArguments[0], 
-                    boxedArguments[1], 
-                    Ast.NewArrayInit(typeof(object), ArrayUtils.ShiftLeft(boxedArguments, 2)) 
-                });
-            } else {
-                metaBuilder.Result = AstFactory.CallDelegate(method, boxedArguments);
+                boxedArguments = new[] {
+                    boxedArguments[0],
+                    boxedArguments[1],
+                    Ast.NewArrayInit(typeof(object), ArrayUtils.ShiftLeft(boxedArguments, 2))
+                };
             }
+
+            // Called through an alias: the body's scope has to learn the name for __callee__.
+            if (name != DefinitionName) {
+                int last = boxedArguments.Length - 1;
+                var lastArgument = boxedArguments[last];
+                boxedArguments[last] = Ast.Convert(
+                    Methods.MarkAliasCall.OpCall(AstUtils.Box(lastArgument), AstUtils.Constant(name), AstUtils.Constant(DefinitionName)),
+                    lastArgument.Type
+                );
+            }
+
+            metaBuilder.Result = AstFactory.CallDelegate(method, boxedArguments);
         }
 
         /// <summary>

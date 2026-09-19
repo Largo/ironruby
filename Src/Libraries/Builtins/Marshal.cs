@@ -70,6 +70,13 @@ namespace IronRuby.Builtins {
                 get { return RubyUtils.GetCallSite(ref _load, Context, "_load", 1); }
             }
 
+            // private in MRI's classes, so called as if from the object itself
+            private CallSite<Func<CallSite, object, object, object>> _loadData;
+
+            public CallSite<Func<CallSite, object, object, object>>/*!*/ LoadData {
+                get { return RubyUtils.GetCallSite(ref _loadData, Context, "_load_data", RubyCallSignature.WithImplicitSelf(1)); }
+            }
+
             public CallSite<Func<CallSite, Proc, object, object>>/*!*/ ProcCall {
                 get { return RubyUtils.GetCallSite(ref _procCall, Context, "call", 1); }
             }
@@ -1245,10 +1252,38 @@ namespace IronRuby.Builtins {
                 return _sites.Load.Target(_sites.Load, theClass, ReadString());
             }
 
+            // MRI's TYPE_DATA: an object wrapping native data, rebuilt by #_load_data from the
+            // object #_dump_data gave. A class whose instances are plain objects has no such data.
+            private object/*!*/ ReadData(int objectRef) {
+                RubyClass theClass = ReadType();
+                if (IsDumpableAsObject(theClass)) {
+                    throw RubyExceptions.CreateArgumentError("dump format error");
+                }
+
+                object obj = RubyUtils.CreateObject(theClass);
+                if (objectRef >= 0) {
+                    _objects[objectRef] = obj;
+                }
+                if (!Context.ResolveMethod(obj, "_load_data", true).Found) {
+                    throw RubyExceptions.CreateTypeError("class {0} needs to have instance method '_load_data'",
+                        theClass.GetDisplayName(Context, false).ToString());
+                }
+                object data = ReadAnObject(false);
+                _sites.LoadData.Target(_sites.LoadData, obj, data);
+                return obj;
+            }
+
             private object/*!*/ ReadUsingMarshalLoad(int objectRef) {
+                // taken before anything nested is read, which must not be extended with it
+                RubyModule extension = _pendingExtension;
+                _pendingExtension = null;
+
                 object obj = UnmarshalNewObject();
                 if (objectRef >= 0) {
                     _objects[objectRef] = obj;
+                }
+                if (extension != null) {
+                    ModuleOps.ExtendObject(extension, obj);
                 }
                 _sites.MarshalLoad.Target(_sites.MarshalLoad, obj, ReadAnObject(false));
                 return obj;
@@ -1374,10 +1409,21 @@ namespace IronRuby.Builtins {
             private object/*!*/ ReadExtended(int objectRef) {
                 string extensionName = ReadIdentifier();
                 RubyModule module = ReadClassOrModule('m', extensionName) as RubyModule;
-                object obj = ReadAnObject(_reader.ReadByte(), objectRef);
-                ModuleOps.ExtendObject(module, obj);
+                int typeFlag = _reader.ReadByte();
+
+                // MRI extends a user-marshaled object as soon as it is allocated, so that its
+                // #marshal_load already sees the module (see ReadUsingMarshalLoad).
+                if (typeFlag == 'U') {
+                    _pendingExtension = module;
+                }
+                object obj = ReadAnObject(typeFlag, objectRef);
+                if (typeFlag != 'U') {
+                    ModuleOps.ExtendObject(module, obj);
+                }
                 return obj;
             }
+
+            private RubyModule _pendingExtension;
 
             private object/*!*/ ReadUserClass(int objectRef) {
                 object obj = UnmarshalNewObject();
@@ -1565,6 +1611,9 @@ namespace IronRuby.Builtins {
                                 break;
                             case 'U':
                                 obj = ReadUsingMarshalLoad(objectRef);
+                                break;
+                            case 'd':
+                                obj = ReadData(objectRef);
                                 break;
                             case 'c':
                             case 'm':

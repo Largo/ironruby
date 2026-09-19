@@ -147,6 +147,12 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
+            // a call through an alias has to tell the method its name (see RubyMethodInfo.BuildCallNoFlow)
+            var rubyMethod = method.Info as RubyMethodInfo;
+            if (rubyMethod != null && rubyMethod.DefinitionName != _methodName) {
+                return null;
+            }
+
             var dispatcher = method.Info.GetDispatcher(delegateType, Signature, target, version);
             if (dispatcher != null) {
                 object result = dispatcher.CreateDelegate(MethodDispatcher.UntypedFuncs.Contains(delegateType));

@@ -15,6 +15,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Runtime;
@@ -66,6 +67,16 @@ namespace IronRuby.Runtime {
         int IEqualityComparer<object>.GetHashCode(object obj) {
             if (obj is int) {
                 return (int)obj;
+            }
+
+            // MRI's any_hash hashes these core values itself and never dispatches #hash, so a
+            // redefined Integer#hash or String#hash does not affect Hash lookups. The values are
+            // the ones the built-in #hash methods answer. A String subclass still dispatches.
+            if (obj == null) {
+                return RubyUtils.NilObjectId;
+            }
+            if (obj is bool || obj is double || obj is RubySymbol || obj is BigInteger || obj.GetType() == typeof(MutableString)) {
+                return obj.GetHashCode();
             }
 
             return Protocols.ToHashCode(_hashSite.Target(_hashSite, obj));

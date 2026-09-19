@@ -520,8 +520,7 @@ namespace IronRuby.Hosting {
             LanguageSetup.Options["WarningCategoryFlags"] = _warningCategoryFlags;
             LanguageSetup.Options["ExternalEncoding"] = _externalEncodingName;
             LanguageSetup.Options["InternalEncoding"] = _internalEncodingName;
-            LanguageSetup.Options["LocaleEncoding"] = _defaultEncoding ??
-                RubyEncoding.GetRubyEncoding(Console.InputEncoding);
+            LanguageSetup.Options["LocaleEncoding"] = _defaultEncoding ?? GetLocaleEncoding();
 
 #if DEBUG
             // Can be set to nl-BE, ja-JP, etc
@@ -534,6 +533,26 @@ namespace IronRuby.Hosting {
                 ConsoleOptions.PrintVersion = true;
                 ConsoleOptions.Exit = true;
             }
+        }
+
+        /// <summary>
+        /// The C (or POSIX) locale named in LC_ALL, LC_CTYPE or LANG - the first one set wins, as
+        /// in setlocale(3) - has the ASCII codeset, which is what MRI takes as the locale
+        /// encoding. .NET would answer UTF-8 for it.
+        /// </summary>
+        private static RubyEncoding/*!*/ GetLocaleEncoding() {
+            if (Environment.OSVersion.Platform == PlatformID.Unix) {
+                foreach (var name in new[] { "LC_ALL", "LC_CTYPE", "LANG" }) {
+                    string value = Environment.GetEnvironmentVariable(name);
+                    if (!String.IsNullOrEmpty(value)) {
+                        if (value == "C" || value == "POSIX") {
+                            return RubyEncoding.Ascii;
+                        }
+                        break;
+                    }
+                }
+            }
+            return RubyEncoding.GetRubyEncoding(Console.InputEncoding);
         }
 
         public override void GetHelp(out string commandLine, out string[,] options, out string[,] environmentVariables, out string comments) {

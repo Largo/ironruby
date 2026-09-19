@@ -286,20 +286,25 @@ namespace IronRuby.StandardLibrary.Zlib {
 
         #region Module functions
 
+        // module_function in MRI: private instance methods as well as singleton ones.
+
         [RubyMethod("zlib_version", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ ZlibVersion(RubyModule/*!*/ self) {
+        [RubyMethod("zlib_version", RubyMethodAttributes.PrivateInstance)]
+        public static MutableString/*!*/ ZlibVersion(object self) {
             return MutableString.CreateAscii(LibZ.Version);
         }
 
         [RubyMethod("crc32", RubyMethodAttributes.PublicSingleton)]
-        public static object GetCrc(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyModule/*!*/ self,
+        [RubyMethod("crc32", RubyMethodAttributes.PrivateInstance)]
+        public static object GetCrc(ConversionStorage<IntegerValue>/*!*/ integerConversion, object self,
             [Optional, DefaultProtocol]MutableString str, [Optional]object initialCrc) {
 
             return Checksum(integerConversion, str, initialCrc, false);
         }
 
         [RubyMethod("adler32", RubyMethodAttributes.PublicSingleton)]
-        public static object GetAdler(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyModule/*!*/ self,
+        [RubyMethod("adler32", RubyMethodAttributes.PrivateInstance)]
+        public static object GetAdler(ConversionStorage<IntegerValue>/*!*/ integerConversion, object self,
             [Optional, DefaultProtocol]MutableString str, [Optional]object initialAdler) {
 
             return Checksum(integerConversion, str, initialAdler, true);
@@ -325,7 +330,8 @@ namespace IronRuby.StandardLibrary.Zlib {
         }
 
         [RubyMethod("crc32_combine", RubyMethodAttributes.PublicSingleton)]
-        public static object CrcCombine(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyModule/*!*/ self,
+        [RubyMethod("crc32_combine", RubyMethodAttributes.PrivateInstance)]
+        public static object CrcCombine(ConversionStorage<IntegerValue>/*!*/ integerConversion, object self,
             object crc1, object crc2, [DefaultProtocol]int length) {
 
             return Protocols.Normalize((uint)LibZ.crc32_combine(
@@ -335,7 +341,8 @@ namespace IronRuby.StandardLibrary.Zlib {
         }
 
         [RubyMethod("adler32_combine", RubyMethodAttributes.PublicSingleton)]
-        public static object AdlerCombine(ConversionStorage<IntegerValue>/*!*/ integerConversion, RubyModule/*!*/ self,
+        [RubyMethod("adler32_combine", RubyMethodAttributes.PrivateInstance)]
+        public static object AdlerCombine(ConversionStorage<IntegerValue>/*!*/ integerConversion, object self,
             object adler1, object adler2, [DefaultProtocol]int length) {
 
             return Protocols.Normalize((uint)LibZ.adler32_combine(
@@ -345,7 +352,8 @@ namespace IronRuby.StandardLibrary.Zlib {
         }
 
         [RubyMethod("crc_table", RubyMethodAttributes.PublicSingleton)]
-        public static RubyArray/*!*/ CrcTable(RubyModule/*!*/ self) {
+        [RubyMethod("crc_table", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ CrcTable(object self) {
             // get_crc_table() hands back 256 z_crc_t (uint32 since zlib 1.2.7) entries.
             IntPtr table = LibZ.get_crc_table();
             var result = new RubyArray(256);

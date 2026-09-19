@@ -132,7 +132,10 @@ namespace IronRuby.Builtins {
                 // you can't do ungetc(x) at the beginning of the stream.
                 // (see http://redmine.ruby-lang.org/issues/show/1909)
                 if (_pushBackPreservesPosition) {
-                    return _stream.Position - ReadAheadCount;
+                    // MRI counts pushed back bytes as unread, even past the start: after
+                    // getc and ungetc the position is back where it was, and ungetc("xy") at
+                    // the very start reports -2.
+                    return _stream.Position - _bufferCount;
                 } else {
                     return Math.Max(_stream.Position - _bufferCount, 0);
                 }

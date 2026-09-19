@@ -569,16 +569,6 @@ module Enumerable
     result
   end unless method_defined?(:to_h)
 
-  def grep_v(pattern)
-    result = []
-    each do |*values|
-      item = __enum_item__(values)
-      next if pattern === item
-      result << (block_given? ? yield(item) : item)
-    end
-    result
-  end unless method_defined?(:grep_v)
-
   # The whole slicing family answers a lazy Enumerator, never an Array: the
   # receiver may be endless, and code that chains .lazy or .first onto one of
   # these must not force the source. Each of them therefore does its work
@@ -2979,6 +2969,15 @@ module Kernel
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         raise ::TypeError, "can't convert nil into Float" if arg.nil?
+        if ::Kernel === arg && !(::Integer === arg || ::Float === arg || ::Rational === arg ||
+            ::String === arg || true.equal?(arg) || false.equal?(arg)) && arg.respond_to?(:to_f, true)
+          # MRI hands back the very Float #to_f returned (the same NaN, say), so the
+          # result must not go through the C# conversion, which reboxes it.
+          result = arg.__send__(:to_f)
+          return result if ::Float === result
+          name = arg.class.to_s
+          raise ::TypeError, "can't convert #{name} to Float (#{name}#to_f gives #{result.class})"
+        end
         __ir_Float__(arg)
       end
     end
@@ -3160,6 +3159,13 @@ end
 # Float define their own, so what changes here is what a Numeric subclass
 # written in Ruby gets.
 class Numeric
+  # MRI's num_sadded: numbers are values and take no singleton methods, so the
+  # one just defined is removed again.
+  def singleton_method_added(name)
+    singleton_class.__send__(:remove_method, name)
+    ::Kernel.raise(::TypeError, "can't define singleton method \"#{name}\" for #{self.class}")
+  end
+
   def div(other)
     ::Kernel.raise(::ZeroDivisionError, "divided by 0") if other == 0
     (self / other).floor
@@ -6616,6 +6622,7 @@ class Enumerator
     @__fiber__ ||= begin
       source = self
       @__iter_done__ = false
+      @__iter_started__ = false
       ::Fiber.new do
         result = source.each { |*args| ::Fiber.yield([:y, args]) }
         [:done, result]
@@ -6636,10 +6643,23 @@ class Enumerator
   def __iter_advance__
     return if @__peeked__
     __iter_stop__ if @__iter_done__
-    fed = @__feed__
-    @__feed__ = nil
-    @__has_feed__ = false
-    tag, payload = __iter_fiber__.resume(fed)
+    fiber = __iter_fiber__
+    fed = nil
+    # A fed value is what the suspended yield returns, so it waits while the
+    # fiber has not reached a yield yet.
+    if @__iter_started__
+      fed = @__feed__
+      @__feed__ = nil
+      @__has_feed__ = false
+    end
+    @__iter_started__ = true
+    begin
+      tag, payload = fiber.resume(fed)
+    rescue ::Exception
+      # An exception ends that iteration; the next #next starts a fresh one.
+      @__fiber__ = nil
+      raise
+    end
     if tag == :y
       @__peek__ = payload
       @__peeked__ = true
@@ -6835,7 +6855,7 @@ class Enumerator
       __chain__ do |y|
         source.each do |*values|
           value = values.size <= 1 ? values[0] : values
-          next unless pattern === value
+          next unless __ir_case_match__(pattern, value, block)
           y << (block ? block.call(value) : value)
         end
       end
@@ -6846,7 +6866,7 @@ class Enumerator
       __chain__ do |y|
         source.each do |*values|
           value = values.size <= 1 ? values[0] : values
-          next if pattern === value
+          next if __ir_case_match__(pattern, value, block)
           y << (block ? block.call(value) : value)
         end
       end
@@ -7672,9 +7692,9 @@ class Hash
           name = k.to_s
           # `a=` is not a valid label, so it has to be quoted
           key = name =~ /\A[A-Za-z_][A-Za-z0-9_]*[?!]?\z/ ? name : name.inspect
-          "#{key}: #{v.inspect}"
+          "#{key}: #{__ir_inspect__(v)}"
         else
-          "#{k.inspect} => #{v.inspect}"
+          "#{__ir_inspect__(k)} => #{__ir_inspect__(v)}"
         end
       }
       "{" + body.join(", ") + "}"
@@ -13800,5 +13820,16 @@ class IO
     include IO::WaitWritable
   end
 end
+
+# MRI's prelude: Kernel#pp is there from the start and loads the pp library the
+# first time it is called; the library then replaces it with its own.
+module Kernel
+  def pp(*objs)
+    require "pp"
+    objs.each { |obj| ::PP.pp(obj) }
+    objs.size <= 1 ? objs.first : objs
+  end
+  module_function :pp
+end unless Kernel.private_method_defined?(:pp) || Kernel.method_defined?(:pp)
 
 require "argf"

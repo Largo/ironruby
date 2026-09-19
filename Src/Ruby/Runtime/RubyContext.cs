@@ -2015,6 +2015,18 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Drops the singleton class of an object of a CLR type, so that the next one it needs is a
+        /// fresh one. IO#reopen does this: MRI gives the IO the class of the one it was reopened
+        /// with, and that leaves its old singleton class behind.
+        /// </summary>
+        public void DropClrInstanceSingleton(object/*!*/ obj) {
+            RubyInstanceData data;
+            if (!(obj is IRubyObject) && TryGetClrTypeInstanceData(obj, out data) && data.InstanceSingleton != null) {
+                data.ImmediateClass = null;
+            }
+        }
+
         internal RubyInstanceData/*!*/ GetInstanceData(object obj) {
             IRubyObject rubyObject = obj as IRubyObject;
             if (rubyObject != null) {
@@ -2264,7 +2276,70 @@ namespace IronRuby.Runtime {
             RubyClass cls = GetClassOf(obj);
             var inspect = cls.InspectSite;
             var toS = cls.InspectResultConversionSite;
-            return toS.Target(toS, inspect.Target(inspect, obj));
+            return EscapeInspectResult(toS.Target(toS, inspect.Target(inspect, obj)));
+        }
+
+        /// <summary>
+        /// MRI's rb_inspect: a result with non-ASCII content in an encoding other than the one
+        /// output is read in (default internal, else default external) comes back escaped by
+        /// rb_str_escape, as US-ASCII, so that Array#inspect or p never mix incompatible encodings.
+        /// </summary>
+        private MutableString/*!*/ EscapeInspectResult(MutableString/*!*/ str) {
+            RubyEncoding target = DefaultInternalEncoding ?? DefaultExternalEncoding;
+            RubyEncoding encoding = str.Encoding;
+            if (encoding.IsAsciiIdentity && str.IsAscii()) {
+                return str;
+            }
+            if (target.IsAsciiIdentity && encoding == target) {
+                return str;
+            }
+
+            var result = new StringBuilder();
+            bool unicode = encoding.IsUnicodeEncoding;
+            var characters = str.GetCharacters();
+            while (characters.MoveNext()) {
+                var c = characters.Current;
+                if (!c.IsValid) {
+                    foreach (byte b in c.Invalid) {
+                        result.AppendFormat(CultureInfo.InvariantCulture, "\\x{0:X2}", b);
+                    }
+                    continue;
+                }
+
+                int codepoint;
+                if (unicode) {
+                    codepoint = c.Codepoint;
+                } else {
+                    // a codepoint of a legacy encoding is its bytes read as one number
+                    byte[] bytes = encoding.StrictEncoding.GetBytes(c.IsSurrogate ? new[] { c.Value, c.LowSurrogate } : new[] { c.Value });
+                    codepoint = 0;
+                    foreach (byte b in bytes) {
+                        codepoint = (codepoint << 8) | b;
+                    }
+                }
+
+                switch (codepoint) {
+                    case '\0': result.Append("\\0"); continue;
+                    case '\n': result.Append("\\n"); continue;
+                    case '\r': result.Append("\\r"); continue;
+                    case '\t': result.Append("\\t"); continue;
+                    case '\f': result.Append("\\f"); continue;
+                    case '\v': result.Append("\\v"); continue;
+                    case '\b': result.Append("\\b"); continue;
+                    case '\a': result.Append("\\a"); continue;
+                    case 0x1b: result.Append("\\e"); continue;
+                    case 0x7f: result.Append("\\c?"); continue;
+                }
+
+                if (codepoint >= 0x20 && codepoint < 0x7f && (encoding.IsAsciiIdentity || unicode)) {
+                    result.Append((char)codepoint);
+                } else if (unicode) {
+                    result.AppendFormat(CultureInfo.InvariantCulture, codepoint < 0x10000 ? "\\u{0:X4}" : "\\u{{{0:X}}}", codepoint);
+                } else {
+                    result.AppendFormat(CultureInfo.InvariantCulture, codepoint < 0x100 ? "\\x{0:X2}" : "\\x{{{0:X}}}", codepoint);
+                }
+            }
+            return MutableString.CreateAscii(result.ToString());
         }
 
         #endregion

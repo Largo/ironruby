@@ -429,15 +429,33 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The offset that applies to a wall-clock reading. Two passes, because the offset
-        /// itself is what turns the reading into the instant it must be looked up by.
+        /// The offset that applies to a wall-clock reading. The offsets in force a day either side
+        /// are the candidates; one fits if the instant it gives has that offset. As in MRI, a
+        /// reading that occurs twice (the clocks went back) is the later instant (the earlier, daylight
+        /// saving one with <paramref name="preferDst"/>), and one that
+        /// never occurs (the clocks went forward) is taken with the offset from before the change.
         /// </summary>
-        internal long GetOffsetForWallClock(long wallSeconds) {
+        internal long GetOffsetForWallClock(long wallSeconds, bool preferDst = false) {
             if (_file == null) {
                 return _fixedOffset;
             }
+            long before = _file.GetOffset(wallSeconds - 86400);
+            long after = _file.GetOffset(wallSeconds + 86400);
+            bool beforeFits = _file.GetOffset(wallSeconds - before) == before;
+            bool afterFits = _file.GetOffset(wallSeconds - after) == after;
+            if (beforeFits && afterFits) {
+                return preferDst ? Math.Max(before, after) : Math.Min(before, after);
+            }
+            if (afterFits) {
+                return after;
+            }
+            if (beforeFits) {
+                return before;
+            }
+            // neither fits: a gap, or more than one change within the day
             long guess = _file.GetOffset(wallSeconds);
-            return _file.GetOffset(wallSeconds - guess);
+            long second = _file.GetOffset(wallSeconds - guess);
+            return (_file.GetOffset(wallSeconds - second) == second) ? second : before;
         }
 
         internal string/*!*/ GetAbbreviation(long unixSeconds) {

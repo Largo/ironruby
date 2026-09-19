@@ -98,7 +98,8 @@ namespace IronRuby.Builtins {
 
                 var members = new List<KeyValuePair<string, RubyMemberInfo>>();
                 using (self.Context.ClassHierarchyLocker()) {
-                    module.ForEachMember(false, RubyMethodAttributes.DefaultVisibility, (name, owner, member) => {
+                    // every method of the module, private and protected ones as well
+                    module.ForEachMember(false, RubyMethodAttributes.VisibilityMask, (name, owner, member) => {
                         members.Add(new KeyValuePair<string, RubyMemberInfo>(name, member));
                     });
                 }

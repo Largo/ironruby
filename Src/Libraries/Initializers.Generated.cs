@@ -1357,7 +1357,12 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "grep", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.Enumerable.Grep)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.Enumerable.Grep)
+            );
+            
+            DefineLibraryMethod(module, "grep_v", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Object>>, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.Enumerable.GrepV)
             );
             
             DefineLibraryMethod(module, "include?", 0x51, 
@@ -4436,12 +4441,32 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "__callee__", 0x52, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentCalleeName)
+            );
+            
+            DefineLibraryMethod(module, "__ir_argf_gets__", 0x52, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.ArgfGets)
+            );
+            
+            DefineLibraryMethod(module, "__ir_argf_readline__", 0x52, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.ArgfReadline)
+            );
+            
+            DefineLibraryMethod(module, "__ir_case_match__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object, IronRuby.Builtins.Proc, System.Boolean>(IronRuby.Builtins.KernelOps.CaseMatchInto)
             );
             
             DefineLibraryMethod(module, "__ir_clone_with_freeze__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.KernelOps.CloneWithFreeze)
+            );
+            
+            DefineLibraryMethod(module, "__ir_inspect__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.InspectForDisplay)
             );
             
             DefineLibraryMethod(module, "__method__", 0x52, 
@@ -5005,7 +5030,7 @@ namespace IronRuby.Builtins {
         private static void LoadKernel_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "__callee__", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
+                new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentCalleeName)
             );
             
             DefineLibraryMethod(module, "__method__", 0x61, 
@@ -10225,17 +10250,17 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "gm", 0x61, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateGmtTime)
             );
             
             DefineLibraryMethod(module, "local", 0x61, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateLocalTime)
             );
             
             DefineLibraryMethod(module, "mktime", 0x61, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateLocalTime)
             );
             
@@ -10245,7 +10270,7 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "utc", 0x61, 
-                0x80000004U, 
+                0x80000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, System.Object[], IronRuby.Builtins.RubyTime>(IronRuby.Builtins.RubyTimeOps.CreateGmtTime)
             );
             
@@ -10259,7 +10284,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "callee_id", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.TracePointOps.GetMethodId)
+                new Func<IronRuby.Builtins.TracePoint, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.TracePointOps.GetCalleeId)
             );
             
             DefineLibraryMethod(module, "defined_class", 0x51, 
@@ -12088,7 +12113,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(System.Object));
             
             
-            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Zlib", typeof(IronRuby.StandardLibrary.Zlib.Zlib), 0x00000008, null, LoadZlib_Class, LoadZlib_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Zlib", typeof(IronRuby.StandardLibrary.Zlib.Zlib), 0x00000008, LoadZlib_Instance, LoadZlib_Class, LoadZlib_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
             IronRuby.Builtins.RubyClass def5 = DefineClass("Zlib::Error", typeof(IronRuby.StandardLibrary.Zlib.Zlib.Error), 0x00000008, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(ZlibLibraryInitializer.ExceptionFactory__Zlib__Error));
             IronRuby.Builtins.RubyClass def13 = DefineClass("Zlib::ZStream", typeof(IronRuby.StandardLibrary.Zlib.Zlib.ZStream), 0x00000008, classRef1, LoadZlib__ZStream_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -12176,30 +12201,63 @@ namespace IronRuby.StandardLibrary.Zlib {
             
         }
         
+        private static void LoadZlib_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "adler32", 0x12, 
+                0x00020000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.GetAdler)
+            );
+            
+            DefineLibraryMethod(module, "adler32_combine", 0x12, 
+                0x00080000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.AdlerCombine)
+            );
+            
+            DefineLibraryMethod(module, "crc_table", 0x12, 
+                0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Zlib.Zlib.CrcTable)
+            );
+            
+            DefineLibraryMethod(module, "crc32", 0x12, 
+                0x00020000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.GetCrc)
+            );
+            
+            DefineLibraryMethod(module, "crc32_combine", 0x12, 
+                0x00080000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.CrcCombine)
+            );
+            
+            DefineLibraryMethod(module, "zlib_version", 0x12, 
+                0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zlib.Zlib.ZlibVersion)
+            );
+            
+        }
+        
         private static void LoadZlib_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "adler32", 0x21, 
                 0x00020000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.GetAdler)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.GetAdler)
             );
             
             DefineLibraryMethod(module, "adler32_combine", 0x21, 
                 0x00080000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.AdlerCombine)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.AdlerCombine)
             );
             
             DefineLibraryMethod(module, "crc_table", 0x21, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Zlib.Zlib.CrcTable)
+                new Func<System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Zlib.Zlib.CrcTable)
             );
             
             DefineLibraryMethod(module, "crc32", 0x21, 
                 0x00020000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.GetCrc)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.GetCrc)
             );
             
             DefineLibraryMethod(module, "crc32_combine", 0x21, 
                 0x00080000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.CrcCombine)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Runtime.IntegerValue>, System.Object, System.Object, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Zlib.Zlib.CrcCombine)
             );
             
             DefineLibraryMethod(module, "deflate", 0x21, 
@@ -12224,7 +12282,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             
             DefineLibraryMethod(module, "zlib_version", 0x21, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zlib.Zlib.ZlibVersion)
+                new Func<System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Zlib.Zlib.ZlibVersion)
             );
             
         }

@@ -466,10 +466,18 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("__method__", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("__method__", RubyMethodAttributes.PublicSingleton)]
-        [RubyMethod("__callee__", RubyMethodAttributes.PrivateInstance)]
-        [RubyMethod("__callee__", RubyMethodAttributes.PublicSingleton)]
         public static object GetCurrentMethodName(RubyScope/*!*/ scope, object self) {
             string name = scope.GetCurrentMethodName();
+            return name != null ? scope.RubyContext.EncodeIdentifier(name) : null;
+        }
+
+        /// <summary>
+        /// Like __method__, but the name the method was called by, which differs through an alias.
+        /// </summary>
+        [RubyMethod("__callee__", RubyMethodAttributes.PrivateInstance)]
+        [RubyMethod("__callee__", RubyMethodAttributes.PublicSingleton)]
+        public static object GetCurrentCalleeName(RubyScope/*!*/ scope, object self) {
+            string name = scope.GetCurrentMethodName(true);
             return name != null ? scope.RubyContext.EncodeIdentifier(name) : null;
         }
 
@@ -604,6 +612,13 @@ namespace IronRuby.Builtins {
 #endif
             if ((TracePoint.ActiveEvents & (int)TraceEvents.Raise) != 0) {
                 TracePoint.OnException(TraceEvents.Raise, scope, context, exception);
+            }
+
+            // An exception raised before whose backtrace was since set to nil gets a new one, as in
+            // MRI. The interpreter keeps the frames of the first throw on the exception and would
+            // hand those back again.
+            if (RubyExceptionData.GetInstance(exception).Backtrace == null) {
+                exception.RemoveData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo));
             }
 
             // rethrow semantics, preserves the backtrace associated with the exception:
@@ -927,6 +942,57 @@ namespace IronRuby.Builtins {
         /// given. MRI passes that value on to #initialize_clone, and freezes the copy - or leaves
         /// it alone - according to it rather than according to the original.
         /// </summary>
+        /// <summary>
+        /// `pattern === value' for the prelude's Enumerator::Lazy#grep/grep_v. A Regexp pattern
+        /// stores its match (or nil) as $~ of <paramref name="target"/>'s scope, the frame MRI's
+        /// C implementation would have set it in, rather than in the prelude method's own.
+        /// </summary>
+        /// <summary>
+        /// MRI's rb_inspect for the prelude: #inspect, escaped when its result is in an
+        /// encoding the output cannot take (see RubyContext.Inspect).
+        /// </summary>
+        [RubyMethod("__ir_inspect__", RubyMethodAttributes.PrivateInstance)]
+        public static MutableString/*!*/ InspectForDisplay(RubyContext/*!*/ context, object self, object value) {
+            return context.Inspect(value);
+        }
+
+        /// <summary>
+        /// ARGF#gets and #readline (argf.rb) are aliases of these, so that the line read lands in
+        /// the $_ of the code that called them, as MRI's C implementation does; the reading
+        /// itself is the prelude's __ir_gets__ / __ir_readline__.
+        /// </summary>
+        [RubyMethod("__ir_argf_gets__", RubyMethodAttributes.PrivateInstance)]
+        public static object ArgfGets(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, params object[]/*!*/ args) {
+            return ArgfRead(storage, scope, self, "__ir_gets__", args);
+        }
+
+        [RubyMethod("__ir_argf_readline__", RubyMethodAttributes.PrivateInstance)]
+        public static object ArgfReadline(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, params object[]/*!*/ args) {
+            return ArgfRead(storage, scope, self, "__ir_readline__", args);
+        }
+
+        private static object ArgfRead(CallSiteStorage<Func<CallSite, object, RubyArray, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, string/*!*/ method, object[]/*!*/ args) {
+            var site = storage.GetCallSite(method, new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument));
+            object line = site.Target(site, self, RubyOps.MakeArrayN(args));
+            scope.GetInnerMostClosureScope().LastInputLine = line;
+            return line;
+        }
+
+        [RubyMethod("__ir_case_match__", RubyMethodAttributes.PrivateInstance)]
+        public static bool CaseMatchInto(ConversionStorage<MutableString>/*!*/ stringTryCast, BinaryOpStorage/*!*/ caseEquals,
+            object self, object pattern, object value, Proc target) {
+
+            var regex = pattern as RubyRegex;
+            if (regex != null && target != null) {
+                return RegexpOps.CaseCompare(stringTryCast, target.LocalScope, regex, value);
+            }
+            var site = caseEquals.GetCallSite("===");
+            return RubyOps.IsTrue(site.Target(site, pattern, value));
+        }
+
         [RubyMethod("__ir_clone_with_freeze__", RubyMethodAttributes.PrivateInstance)]
         public static object/*!*/ CloneWithFreeze(
             CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ initializeCopyStorage,
@@ -1010,6 +1076,9 @@ namespace IronRuby.Builtins {
             foreach (var mixin in new[] { module }.Concat(modules)) {
                 if (mixin is RubyClass) {
                     throw RubyExceptions.CreateTypeError("wrong argument type Class (expected Module)");
+                }
+                if (mixin.IsRefinement) {
+                    throw RubyExceptions.CreateTypeError("Cannot extend object with refinement");
                 }
             }
 

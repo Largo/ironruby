@@ -350,7 +350,10 @@ namespace IronRuby.Builtins {
         }
 
         // A reopened IO answers the other one's path, as MRI copies it with the descriptor.
+        // MRI also gives it the other one's class, which leaves its singleton class behind.
         private static void CopyPath(RubyIO/*!*/ self, RubyIO/*!*/ source) {
+            self.Context.DropClrInstanceSingleton(self);
+
             var file = self as RubyFile;
             var sourceFile = source as RubyFile;
             if (file != null && sourceFile != null) {

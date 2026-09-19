@@ -130,17 +130,23 @@ ARGF_CLASS = Class.new do
 
   # ---- reading ----
 
-  def gets(*args)
+  def __ir_gets__(*args)
     return nil unless prepare_read
     line = @current.gets(*args)
     count_line(line)
   end
 
-  def readline(*args)
-    line = gets(*args)
+  def __ir_readline__(*args)
+    line = __ir_gets__(*args)
     raise EOFError, "end of file reached" if line.nil?
     line
   end
+
+  # These are C# (Kernel#__ir_argf_gets__ and friends) so that the line lands in
+  # the caller's $_, as it does in MRI.
+  alias_method :gets, :__ir_argf_gets__
+  alias_method :readline, :__ir_argf_readline__
+  public :gets, :readline
 
   def readlines(*args)
     result = []
