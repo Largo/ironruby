@@ -60,22 +60,87 @@ namespace IronRuby.Builtins {
 
         private CharacterClassMode _characterClassMode;
 
-        // The Ruby source text of each capturing group's body, so that a \g<...> subexpression call
-        // can be served by re-transforming it. Shared with the sub-transformers a call spawns.
-        private Dictionary<int, string> _groupSourcesByNumber = new Dictionary<int, string>();
-        private Dictionary<string, string> _groupSourcesByName = new Dictionary<string, string>();
+        /// <summary>
+        /// A capturing group as a subexpression call or a loop copy needs it: its Ruby body and
+        /// the parser state at the start of that body, so that the body can be transformed again
+        /// with its nested groups getting the numbers and names they have in the original.
+        /// </summary>
+        private sealed class GroupDefinition {
+            public string/*!*/ Source;
+            public int Number;
+            public string Name;
+            public int Occurrence;
+            public Dictionary<string, int> OccurrencesBefore;
+            public CharacterClassMode Mode;
+        }
 
-        // The groups currently being inlined, so a call that re-enters one can be reported as the
-        // recursion it is rather than expanded forever. .NET has no recursion construct.
-        private HashSet<string> _callsInProgress = new HashSet<string>();
+        /// <summary>
+        /// State shared by a transformer and every sub-transformer it spawns to copy a group.
+        /// </summary>
+        private sealed class SharedState {
+            // Every capturing group, recorded in a prescan so that a call may precede - or sit
+            // inside - the group it calls.
+            public readonly Dictionary<int, GroupDefinition>/*!*/ ByNumber = new Dictionary<int, GroupDefinition>();
+            public readonly Dictionary<string, GroupDefinition>/*!*/ ByName = new Dictionary<string, GroupDefinition>();
 
-        // The groups whose body is currently being parsed. A call naming one of these is a direct
-        // self-reference, which is the other way recursion shows up.
-        private HashSet<string> _groupsBeingParsed = new HashSet<string>();
+            // Keys ("name" or "#number") of the groups whose body is being emitted - parsed in
+            // place or copied for a call. A call to one of them is recursion; a backreference to
+            // one of them never matches, as in Onigmo.
+            public readonly List<string>/*!*/ OpenGroups = new List<string>();
 
-        // Set on the sub-transformer that expands a \g<...> call: the copy must not capture,
-        // otherwise it would shift every group number in the pattern.
-        private bool _suppressCaptures;
+            // Groups some \k<name+level> refers to, and the hidden per-level groups made for them.
+            public readonly HashSet<string>/*!*/ LevelReferenced = new HashSet<string>();
+            public readonly Dictionary<string, int>/*!*/ LevelGroups = new Dictionary<string, int>();
+            public readonly HashSet<int>/*!*/ DefinedLevelGroups = new HashSet<int>();
+
+            public string RootPattern;
+            public bool Collecting;
+            public int HiddenGroupCount;
+            public RegexOptions ClrOptions = RegexOptions.Multiline | RegexOptions.CultureInvariant;
+            public int MaxCallDepth = DefaultMaxCallDepth;
+            public int Emitted;
+        }
+
+        private sealed class ExpansionTooLargeException : Exception {
+        }
+
+        // .NET's Regex cannot recurse, so a recursive subexpression call is expanded inline this
+        // many levels deep; deeper nesting fails to match. When the expansion grows too large
+        // (a group calling itself more than once per level grows exponentially) the depth is
+        // reduced until it fits.
+        private const int DefaultMaxCallDepth = 50;
+        private const int ExpansionBudget = 200000;
+
+        // Hidden groups emitted for level-scoped backreferences are numbered from here, above any
+        // group Ruby numbers, so MatchData can leave them out (see IsHiddenGroupNumber).
+        internal const int HiddenGroupBase = 100000;
+
+        private SharedState/*!*/ _state;
+        private RegexOptions _clrOptions = RegexOptions.Multiline | RegexOptions.CultureInvariant;
+
+        // Set on a sub-transformer that copies a group - for a \g<...> call or to unroll a loop:
+        // the copy's groups are emitted under the numbers and names of the groups they copy.
+        private bool _copyGroups;
+
+        // How many subexpression calls deep the text being emitted is.
+        private int _callDepth;
+
+        // Backreferences and conditionals emitted so far, and empty capturing groups: a loop
+        // whose body contains either can behave differently after an empty iteration (see
+        // RewriteLoop).
+        private int _backrefCount;
+        private int _emptyCaptureCount;
+
+        /// <summary>A quantified group, as RewriteLoop needs it.</summary>
+        private sealed class LoopBody {
+            public string Source;
+            public int GroupCountBefore;
+            public int GroupCountAfter;
+            public int BackrefCountBefore;
+            public int EmptyCaptureCountBefore;
+            public Dictionary<string, int> OccurrencesBefore;
+            public CharacterClassMode Mode;
+        }
 
         // Onigmo's warnings about a quantifier applied to a quantifier (regparse.c set_quantifier).
         private List<string> _warnings;
@@ -141,6 +206,7 @@ namespace IronRuby.Builtins {
             }
             
             RegexpTransformer transformer = new RegexpTransformer(rubyPattern);
+            transformer._clrOptions = RubyRegex.ToClrOptions(options);
             var result = transformer.Transform();
             hasGAnchor = transformer._hasGAnchor;
             return result;
@@ -150,6 +216,92 @@ namespace IronRuby.Builtins {
             _rubyPattern = rubyPattern;
             _groupNameCounts = CountGroupNames(rubyPattern);
             _hasNamedGroup = _groupNameCounts.Count > 0;
+            _state = new SharedState();
+        }
+
+        /// <summary>
+        /// A transformer for <paramref name="source"/>, the body of a group of the pattern
+        /// <paramref name="parent"/> is transforming, that emits the body's groups under the
+        /// numbers and names they have in the whole pattern.
+        /// </summary>
+        private RegexpTransformer(RegexpTransformer/*!*/ parent, string/*!*/ source, int groupCount,
+            Dictionary<string, int> occurrences, CharacterClassMode mode, int callDepth) {
+            _rubyPattern = source;
+            _groupNameCounts = parent._groupNameCounts;
+            _hasNamedGroup = parent._hasNamedGroup;
+            _state = parent._state;
+            _copyGroups = true;
+            _groupCount = groupCount;
+            if (occurrences != null) {
+                _groupNameOccurrences = new Dictionary<string, int>(occurrences);
+            }
+            _characterClassMode = mode;
+            _callDepth = callDepth;
+            // a copy is never the top level of the pattern (\K)
+            _groupDepth = 1;
+        }
+
+        private string/*!*/ TransformCopy(RegexpTransformer/*!*/ copy) {
+            string result = copy.Transform();
+            _hasGAnchor |= copy._hasGAnchor;
+            _backrefCount += copy._backrefCount;
+            _state.Emitted += result.Length;
+            if (_state.Emitted > ExpansionBudget) {
+                throw new ExpansionTooLargeException();
+            }
+            return result;
+        }
+
+        internal static bool IsHiddenGroupNumber(int number) {
+            return number >= HiddenGroupBase;
+        }
+
+        private static string/*!*/ GroupKey(int number, string name) {
+            return name ?? "#" + number.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        private void OpenGroup(string/*!*/ key) {
+            _state.OpenGroups.Add(key);
+        }
+
+        private void CloseGroup(string/*!*/ key) {
+            _state.OpenGroups.RemoveAt(_state.OpenGroups.LastIndexOf(key));
+        }
+
+        private bool IsOpenGroup(string/*!*/ key) {
+            return _state.OpenGroups.Contains(key);
+        }
+
+        /// <summary>
+        /// The number of the hidden group that records what group <paramref name="key"/> captures
+        /// at subexpression call level <paramref name="level"/>.
+        /// </summary>
+        private int GetLevelGroup(string/*!*/ key, int level) {
+            string id = key + "@" + level.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            int number;
+            if (!_state.LevelGroups.TryGetValue(id, out number)) {
+                number = AllocateHiddenGroup();
+                _state.LevelGroups.Add(id, number);
+            }
+            return number;
+        }
+
+        private int AllocateHiddenGroup() {
+            return HiddenGroupBase + _state.HiddenGroupCount++;
+        }
+
+        /// <summary>
+        /// Opens the hidden per-level group of a capturing group when a level-scoped
+        /// backreference refers to it. Returns whether one was opened.
+        /// </summary>
+        private bool OpenLevelGroup(string/*!*/ key) {
+            if (_state.Collecting || !_state.LevelReferenced.Contains(key)) {
+                return false;
+            }
+            int number = GetLevelGroup(key, _callDepth);
+            _state.DefinedLevelGroups.Add(number);
+            _sb.Append("(?<").Append(number).Append('>');
+            return true;
         }
 
         // How many groups the pattern declares under each name. Ruby lets several groups share a
@@ -438,6 +590,61 @@ namespace IronRuby.Builtins {
         }
 
         private string/*!*/ Transform() {
+            if (_copyGroups) {
+                return TransformBody();
+            }
+
+            // A call may precede the group it calls, and a level-scoped backreference decides how
+            // the group it refers to is emitted, so both need the whole pattern scanned first.
+            bool prescan = _rubyPattern.IndexOf("\\g", StringComparison.Ordinal) >= 0
+                || _rubyPattern.IndexOf("\\k", StringComparison.Ordinal) >= 0;
+
+            for (int depth = DefaultMaxCallDepth; ; depth /= 2) {
+                _state = new SharedState();
+                _state.MaxCallDepth = depth;
+                _state.ClrOptions = _clrOptions;
+                _state.RootPattern = _rubyPattern;
+                if (prescan) {
+                    var collector = new RegexpTransformer(_rubyPattern);
+                    collector._state = _state;
+                    _state.Collecting = true;
+                    collector.TransformBody();
+                    _state.Collecting = false;
+                    _state.OpenGroups.Clear();
+                }
+
+                _index = 0;
+                _groupCount = 0;
+                _groupDepth = 0;
+                _absentDepth = 0;
+                _hasGAnchor = false;
+                _warnings = null;
+                _backrefCount = 0;
+                _characterClassMode = CharacterClassMode.Default;
+                _groupNameOccurrences.Clear();
+                try {
+                    string result = TransformBody();
+                    // A level-scoped backreference may name a level no group is ever emitted at;
+                    // it never matches, but .NET requires the group to exist.
+                    StringBuilder undefined = null;
+                    foreach (int number in _state.LevelGroups.Values) {
+                        if (!_state.DefinedLevelGroups.Contains(number)) {
+                            if (undefined == null) {
+                                undefined = new StringBuilder(result).Append("(?:(?!)");
+                            }
+                            undefined.Append("(?<").Append(number).Append(">)");
+                        }
+                    }
+                    return undefined != null ? undefined.Append(")?").ToString() : result;
+                } catch (ExpansionTooLargeException) {
+                    if (depth <= 1) {
+                        throw MakeError("too big regular expression");
+                    }
+                }
+            }
+        }
+
+        private string/*!*/ TransformBody() {
             _sb = new StringBuilder(_rubyPattern.Length);
             Parse(false);
             var result = _sb.ToString();
@@ -447,6 +654,8 @@ namespace IronRuby.Builtins {
 
         private void Parse(bool isSubexpression) {
             int lastEntityIndex = 0;
+            // The group the next quantifier would apply to, when its loop needs RewriteLoop.
+            LoopBody lastEntity = null;
             // Ruby allows a quantifier to be quantified again (a***, a+?*); .NET rejects that as a
             // nested quantifier, so the whole quantified entity has to be wrapped first.
             bool lastWasQuantifier = false;
@@ -462,6 +671,7 @@ namespace IronRuby.Builtins {
                     case '\\':
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
+                        lastEntity = null;
                         ParseEscape();
                         break;
 
@@ -469,6 +679,13 @@ namespace IronRuby.Builtins {
                     case '*':
                     case '+': {
                         string inner = lastWasQuantifier ? _lastQuantifierKind : null;
+                        if (c != '?' && !lastWasQuantifier && Peek() != '+' &&
+                            RewriteLoop(lastEntity, lastEntityIndex, c == '+' ? 1 : 0, -1, Peek() == '?')) {
+                            _lastQuantifierKind = ((char)c).ToString() + (Peek() == '?' ? "?" : "");
+                            Read('?');
+                            lastWasQuantifier = true;
+                            break;
+                        }
                         if (lastWasQuantifier) {
                             // a*** == (?:(?:a*)*)*
                             _sb.Insert(lastEntityIndex, "(?:");
@@ -492,6 +709,20 @@ namespace IronRuby.Builtins {
                         bool isExactCount;
                         string inner = lastWasQuantifier ? _lastQuantifierKind : null;
                         int start = _index;
+                        int min, max, end;
+                        if (!lastWasQuantifier && lastEntity != null && TryReadInterval(out min, out max, out end) &&
+                            (end == _rubyPattern.Length || _rubyPattern[end] != '+') &&
+                            // {n}? is a quantified quantifier, not a lazy one
+                            (max != min || end == _rubyPattern.Length || _rubyPattern[end] != '?') &&
+                            RewriteLoop(lastEntity, lastEntityIndex, min, max, end < _rubyPattern.Length && _rubyPattern[end] == '?')) {
+                            _index = end;
+                            if (Peek() == '?') {
+                                Skip();
+                            }
+                            _lastQuantifierKind = null;
+                            lastWasQuantifier = true;
+                            break;
+                        }
                         if (ParseConstrainedQuantifier(lastWasQuantifier, lastEntityIndex, out isExactCount)) {
                             // {0,1} is Onigmo's ?, the one interval that counts as a popular quantifier here
                             int next = Peek();
@@ -514,11 +745,28 @@ namespace IronRuby.Builtins {
                         break;
                     }
 
-                    case '(':
+                    case '(': {
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
+                        lastEntity = new LoopBody {
+                            GroupCountBefore = _groupCount,
+                            BackrefCountBefore = _backrefCount,
+                            EmptyCaptureCountBefore = _emptyCaptureCount,
+                            OccurrencesBefore = _hasNamedGroup ? new Dictionary<string, int>(_groupNameOccurrences) : null,
+                            Mode = _characterClassMode,
+                        };
+                        int entityStart = _index - 1;
                         ParseGroup();
+                        lastEntity.Source = _rubyPattern.Substring(entityStart, _index - entityStart);
+                        lastEntity.GroupCountAfter = _groupCount;
+                        if (lastEntity.GroupCountBefore == _groupCount ||
+                            (lastEntity.BackrefCountBefore == _backrefCount && lastEntity.EmptyCaptureCountBefore == _emptyCaptureCount)) {
+                            // no capture that an empty iteration could set, or nothing that could
+                            // observe it: .NET's loop gives the same result
+                            lastEntity = null;
+                        }
                         break;
+                    }
 
                     case ')':
                         if (isSubexpression) {
@@ -530,6 +778,7 @@ namespace IronRuby.Builtins {
                     case '[':
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
+                        lastEntity = null;
                         ParseCharacterGroup(false).AppendTo(_sb, true);
                         break;
 
@@ -537,6 +786,7 @@ namespace IronRuby.Builtins {
                         Append('|');
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
+                        lastEntity = null;
                         break;
 
                     case '^':
@@ -546,16 +796,163 @@ namespace IronRuby.Builtins {
                         // character. "a\n\nb".scan(/^/).size is 3 in Ruby, 4 in .NET.
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
+                        lastEntity = null;
                         _sb.Append("(?:\\A|(?<=\\n)(?!\\z))");
                         break;
 
                     default:
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
+                        lastEntity = null;
                         Append((char)c);
                         break;
                 }
             }
+        }
+
+        /// <summary>
+        /// Reads the interval of a {n,m} {n,} {,m} or {n} quantifier whose '{' has just been read,
+        /// without consuming it. <paramref name="max"/> is -1 when unbounded;
+        /// <paramref name="end"/> is the index just past the '}'.
+        /// </summary>
+        private bool TryReadInterval(out int min, out int max, out int end) {
+            min = max = end = -1;
+            int i = _index;
+            int n = -1, m = -1;
+            bool comma = false;
+            while (true) {
+                if (i >= _rubyPattern.Length) {
+                    return false;
+                }
+                char c = _rubyPattern[i++];
+                if (c == '}') {
+                    break;
+                } else if (c == ',' && !comma) {
+                    comma = true;
+                } else if (Tokenizer.IsDecimalDigit(c)) {
+                    int value = comma ? m : n;
+                    value = (value < 0 ? 0 : value) * 10 + (c - '0');
+                    if (value > 100000) {
+                        return false;
+                    }
+                    if (comma) { m = value; } else { n = value; }
+                } else {
+                    return false;
+                }
+            }
+            if (n < 0 && m < 0) {
+                return false;
+            }
+            min = n < 0 ? 0 : n;
+            max = comma ? m : min;
+            end = i;
+            return max < 0 || max >= min;
+        }
+
+        /// <summary>
+        /// Onigmo ends a loop after an iteration that matched the empty string only if the
+        /// iteration left the captures as they were; .NET ends it after any empty iteration past
+        /// the minimum count. It matters when a later iteration can observe the capture - through
+        /// a backreference, as in (a|\2b|())* on "aaabbb", or through the capture's final value.
+        /// Such a loop of a group X is rewritten so that no .NET loop has to go on past an empty
+        /// iteration: iterations are grouped into units of up to K+1, X' being a copy of X whose
+        /// groups keep their numbers, and only a unit that is empty as a whole ends the loop.
+        /// A unit only continues while it is still empty (E: the input left is the same as at
+        /// the unit start S), so each run of iterations divides into units in exactly one way.
+        ///
+        ///   X*      (?:S X(?:E X'(?:E X')?)?)*       (K = 2; lazily (?:S X(?:|E X'(?:|E X')))*?)
+        ///   X{n,}   X{n}(?:S X'(?:E X'(?:E X')?)?)*
+        ///   X{n,m}  X{n}(?:X'(?:X')?)?         (the optional iterations nested: no loop at all)
+        ///
+        /// K bounds how many empty iterations in a row are possible; each of them has to set
+        /// another group, so it is one less than the groups in X, at most 3.
+        /// Only loops of a group that can match the empty string and has a backreference or an
+        /// empty capture () in its body are rewritten - the units cost more: Onigmo itself only
+        /// checks the captures after an empty iteration when a backreference could observe them.
+        /// </summary>
+        private bool RewriteLoop(LoopBody entity, int entityIndex, int min, int max, bool lazy) {
+            if (entity == null || _state.Collecting || _absentDepth != 0) {
+                return false;
+            }
+            Debug.Assert(entity.Source != null);
+            if (!CanMatchEmpty(_sb.ToString(entityIndex, _sb.Length - entityIndex))) {
+                return false;
+            }
+
+            // An optional part: (?:...)? or, lazily, (?:|...) - .NET overflows its backtracking
+            // stack on (?:...)?? nested in a lazy loop.
+            string open = lazy ? "(?:|" : "(?:";
+            string close = lazy ? ")" : ")?";
+            if (max < 0) {
+                int units = Math.Max(1, Math.Min(entity.GroupCountAfter - entity.GroupCountBefore - 1, 3));
+                string copy = CopyLoopBody(entity);
+                // A unit goes on only while it is still empty, so that a run of iterations can
+                // be cut into units in just one way: otherwise a failing match would try them all.
+                // The unit start is remembered as the rest of the input, in a hidden group.
+                int rest = AllocateHiddenGroup();
+                string start = "(?=(?<" + rest + ">[\\s\\S]*))";
+                string stillEmpty = "(?=\\k<" + rest + ">\\z)";
+                string more = "";
+                for (int i = 0; i < units; i++) {
+                    more = open + stillEmpty + copy + more + close;
+                }
+                if (min == 0) {
+                    _sb.Insert(entityIndex, "(?:" + start);
+                    _sb.Append(more).Append(")*");
+                } else {
+                    if (min > 1) {
+                        _sb.Append('{').Append(min).Append('}');
+                    }
+                    _sb.Append("(?:").Append(start).Append(copy).Append(more).Append(")*");
+                }
+                if (lazy) {
+                    _sb.Append('?');
+                }
+                return true;
+            }
+
+            int optional = max - min;
+            if (optional <= 0) {
+                return false;
+            }
+            string body = CopyLoopBody(entity);
+            if ((long)body.Length * optional > ExpansionBudget / 10) {
+                return false;
+            }
+            if (min == 0) {
+                _sb.Insert(entityIndex, open);
+                optional--;
+            } else if (min > 1) {
+                _sb.Append('{').Append(min).Append('}');
+            }
+            for (int i = 0; i < optional; i++) {
+                _sb.Append(open).Append(body);
+            }
+            for (int i = 0; i < optional; i++) {
+                _sb.Append(close);
+            }
+            if (min == 0) {
+                _sb.Append(close);
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Whether the translated group can match the empty string - when unsure, true. A
+        /// backreference to a group outside of it makes .NET reject the pattern alone.
+        /// </summary>
+        private bool CanMatchEmpty(string/*!*/ clrPattern) {
+            try {
+                return new Regex("\\A(?:" + clrPattern + ")\\z", _state.ClrOptions, TimeSpan.FromSeconds(1)).IsMatch(String.Empty);
+            } catch (ArgumentException) {
+                return true;
+            } catch (RegexMatchTimeoutException) {
+                return true;
+            }
+        }
+
+        private string/*!*/ CopyLoopBody(LoopBody/*!*/ entity) {
+            return TransformCopy(new RegexpTransformer(this, entity.Source, entity.GroupCountBefore, entity.OccurrencesBefore, entity.Mode, _callDepth));
         }
 
         // {n,m}
@@ -758,6 +1155,7 @@ namespace IronRuby.Builtins {
                         }
 
                         string name = condition.ToString();
+                        _backrefCount++;
                         int number = ResolveGroupNumber(name);
                         if (number >= 0) {
                             // (?(01)...), (?(<-1>)...) - .NET only understands a plain number
@@ -783,14 +1181,35 @@ namespace IronRuby.Builtins {
             } else {
                 _groupCount++;
                 groupNumber = _groupCount;
-                _sb.Append(_suppressCaptures ? "(?:" : "(");
+                if (_copyGroups) {
+                    // a copy's group is the same group as the one it copies
+                    _sb.Append("(?<").Append(groupNumber).Append('>');
+                } else {
+                    _sb.Append('(');
+                }
             }
             var savedMode = _characterClassMode;
             int bodyStart = _index;
+            GroupDefinition definition = null;
+            bool hasLevelGroup = false;
             if (groupNumber >= 0) {
-                _groupsBeingParsed.Add("#" + groupNumber);
+                OpenGroup("#" + groupNumber);
                 if (groupName != null) {
-                    _groupsBeingParsed.Add(groupName);
+                    OpenGroup(groupName);
+                }
+                hasLevelGroup = OpenLevelGroup(GroupKey(groupNumber, groupName));
+                if (!_copyGroups) {
+                    int occurrence = 0;
+                    if (groupName != null) {
+                        _groupNameOccurrences.TryGetValue(groupName, out occurrence);
+                    }
+                    definition = new GroupDefinition {
+                        Number = groupNumber,
+                        Name = groupName,
+                        Occurrence = occurrence,
+                        OccurrencesBefore = _hasNamedGroup ? new Dictionary<string, int>(_groupNameOccurrences) : null,
+                        Mode = _characterClassMode,
+                    };
                 }
             }
             _groupDepth++;
@@ -798,15 +1217,25 @@ namespace IronRuby.Builtins {
             _groupDepth--;
             _characterClassMode = savedMode;
             if (groupNumber >= 0) {
-                _groupsBeingParsed.Remove("#" + groupNumber);
+                CloseGroup("#" + groupNumber);
                 if (groupName != null) {
-                    _groupsBeingParsed.Remove(groupName);
+                    CloseGroup(groupName);
                 }
-                // _index is now just past the ')' Parse consumed
-                string source = _rubyPattern.Substring(bodyStart, _index - 1 - bodyStart);
-                _groupSourcesByNumber[groupNumber] = source;
-                if (groupName != null) {
-                    _groupSourcesByName[groupName] = source;
+                if (hasLevelGroup) {
+                    Append(')');
+                }
+                string body = _rubyPattern.Substring(bodyStart, _index - 1 - bodyStart);
+                if (body.Length == 0) {
+                    // () - a capture that is only ever set without consuming anything (see RewriteLoop)
+                    _emptyCaptureCount++;
+                }
+                if (definition != null) {
+                    // _index is now just past the ')' Parse consumed
+                    definition.Source = body;
+                    _state.ByNumber[groupNumber] = definition;
+                    if (groupName != null && !_state.ByName.ContainsKey(groupName)) {
+                        _state.ByName[groupName] = definition;
+                    }
                 }
             }
             Append(')');
@@ -936,8 +1365,7 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Reads a group name and emits the .NET spelling of the declaration, unless captures are
-        /// being suppressed - a \g&lt;...&gt; expansion emits (?: instead. Returns the name.
+        /// Reads a group name and emits the .NET spelling of the declaration. Returns the name.
         /// </summary>
         private string/*!*/ ParseGroupName(int c, int terminator, int opening) {
             if (c == terminator || c == -1) {
@@ -960,19 +1388,15 @@ namespace IronRuby.Builtins {
                 throw MakeError("invalid group name <" + name + ">");
             }
 
-            if (_suppressCaptures) {
-                Append(':');
-            } else {
-                string text = name.ToString();
-                int occurrence;
-                _groupNameOccurrences.TryGetValue(text, out occurrence);
-                _groupNameOccurrences[text] = ++occurrence;
+            string text = name.ToString();
+            int occurrence;
+            _groupNameOccurrences.TryGetValue(text, out occurrence);
+            _groupNameOccurrences[text] = ++occurrence;
 
-                Append((char)opening);
-                _sb.Append(DuplicateGroupName(text, occurrence));
-                Append((char)closing);
-            }
-            return name.ToString();
+            Append((char)opening);
+            _sb.Append(DuplicateGroupName(text, occurrence));
+            Append((char)closing);
+            return text;
         }
 
         #region Escapes
@@ -1070,13 +1494,16 @@ namespace IronRuby.Builtins {
             }
         }
 
-        // \g<n>  \g'n'  \g<-n>  \g'-n'  \g<name>  \g'name'
+        // \g<n>  \g'n'  \g<-n>  \g'-n'  \g<name>  \g'name'  \g<0>
         //
         // A subexpression call re-runs a group's pattern at this point. .NET has no such construct,
         // so the group's Ruby source is transformed again and spliced in here. The copy is emitted
-        // under the called group's own name or number, which .NET permits and treats as the same
-        // group, so - as in Onigmo - running the copy updates that group's capture. Groups nested
-        // inside the copy do not capture, so the numbering of the rest of the pattern is unchanged.
+        // under the called group's own name or number, and so are the groups nested in it, which
+        // .NET permits and treats as the same groups: as in Onigmo, running the copy updates those
+        // groups' captures, and the numbering of the rest of the pattern is unchanged.
+        //
+        // A recursive call is expanded the same way, up to SharedState.MaxCallDepth levels deep;
+        // at that depth the call fails to match. Input nested deeper than that is not matched.
         private void ParseSubexpressionCall() {
             int terminator;
             int c = Read();
@@ -1104,49 +1531,72 @@ namespace IronRuby.Builtins {
                 throw MakeError("group name is empty");
             }
 
-            if (name == "0") {
-                // \g<0> calls the whole pattern, which is recursion by construction.
-                throw MakeError("recursive subexpression call is not supported");
+            if (_state.Collecting) {
+                // the groups are not all known yet; this pass only records them
+                return;
             }
 
             // Unlike \k<...>, a call may name a group whose name carries a '+' or a '-'.
-            string source;
+            GroupDefinition definition;
             string key;
-            int number = IsGroupNumber(name) ? ResolveGroupNumber(name) : -1;
-            key = (number >= 0) ? "#" + number : name;
-            if (_groupsBeingParsed.Contains(key)) {
-                throw MakeError("recursive subexpression call is not supported");
-            }
-            if (number >= 0) {
-                if (!_groupSourcesByNumber.TryGetValue(number, out source)) {
+            if (name == "0") {
+                // \g<0> calls the whole pattern
+                key = "#0";
+                definition = new GroupDefinition { Source = _state.RootPattern, Number = 0 };
+            } else if (IsGroupNumber(name)) {
+                if (_hasNamedGroup) {
+                    throw MakeError("numbered backref/call is not allowed. (use name)");
+                }
+                int number = ResolveGroupNumber(name);
+                key = "#" + number;
+                if (!_state.ByNumber.TryGetValue(number, out definition)) {
                     throw MakeError("undefined group <" + name + ">");
                 }
             } else {
-                if (!_groupSourcesByName.TryGetValue(name, out source)) {
+                key = name;
+                if (!_state.ByName.TryGetValue(name, out definition)) {
                     throw MakeError("undefined group name <" + name + ">");
                 }
             }
 
-            if (_groupsBeingParsed.Contains(key) || !_callsInProgress.Add(key)) {
-                // .NET's Regex has no recursion construct and no way to express one; producing a
-                // finite approximation here would silently match the wrong language.
-                throw MakeError("recursive subexpression call is not supported");
+            bool recursive = key == "#0" || IsOpenGroup(key);
+            if (recursive && _callDepth >= _state.MaxCallDepth) {
+                _sb.Append("(?!)");
+                return;
             }
-            try {
-                var inner = new RegexpTransformer(source);
-                inner._suppressCaptures = true;
-                inner._characterClassMode = _characterClassMode;
-                inner._groupSourcesByNumber = _groupSourcesByNumber;
-                inner._groupSourcesByName = _groupSourcesByName;
-                inner._callsInProgress = _callsInProgress;
-                inner._groupsBeingParsed = _groupsBeingParsed;
 
-                _sb.Append("(?<").Append(key.StartsWith("#") ? key.Substring(1) : DuplicateGroupName(key, 1)).Append('>');
-                _sb.Append(inner.Transform()).Append(')');
-                _hasGAnchor |= inner._hasGAnchor;
-            } finally {
-                _callsInProgress.Remove(key);
+            int depth = _callDepth + 1;
+            var copy = new RegexpTransformer(this, definition.Source, definition.Number, definition.OccurrencesBefore, definition.Mode, depth);
+            string numberKey = "#" + definition.Number;
+            OpenGroup(numberKey);
+            if (definition.Name != null) {
+                OpenGroup(definition.Name);
             }
+            string body;
+            try {
+                body = TransformCopy(copy);
+            } finally {
+                CloseGroup(numberKey);
+                if (definition.Name != null) {
+                    CloseGroup(definition.Name);
+                }
+            }
+
+            if (definition.Number == 0) {
+                _sb.Append("(?:").Append(body).Append(')');
+                return;
+            }
+
+            _sb.Append("(?<").Append(definition.Name != null ? DuplicateGroupName(definition.Name, definition.Occurrence) : definition.Number.ToString(System.Globalization.CultureInfo.InvariantCulture)).Append('>');
+            string levelKey = GroupKey(definition.Number, definition.Name);
+            if (_state.LevelReferenced.Contains(levelKey)) {
+                int level = GetLevelGroup(levelKey, depth);
+                _state.DefinedLevelGroups.Add(level);
+                _sb.Append("(?<").Append(level).Append('>').Append(body).Append(')');
+            } else {
+                _sb.Append(body);
+            }
+            _sb.Append(')');
         }
 
         private static bool IsGroupNumber(string/*!*/ text) {
@@ -1197,7 +1647,7 @@ namespace IronRuby.Builtins {
                 if (_hasNamedGroup) {
                     throw MakeError("numbered backref/call is not allowed. (use name)");
                 }
-                _sb.Append('\\').Append(value);
+                AppendBackreference(value, false);
                 return;
             }
 
@@ -1214,7 +1664,23 @@ namespace IronRuby.Builtins {
             if (_hasNamedGroup) {
                 throw MakeError("numbered backref/call is not allowed. (use name)");
             }
-            _sb.Append('\\').Append(value);
+            AppendBackreference(value, false);
+        }
+
+        /// <summary>
+        /// A backreference to a group that has not been closed yet - \1 inside (a\1?)+ - never
+        /// matches in Onigmo, even when an earlier iteration captured the group; in .NET it would
+        /// match that earlier capture.
+        /// </summary>
+        private void AppendBackreference(int number, bool bracketed) {
+            _backrefCount++;
+            if (IsOpenGroup("#" + number)) {
+                _sb.Append("(?!)");
+            } else if (bracketed) {
+                _sb.Append("\\k<").Append(number).Append('>');
+            } else {
+                _sb.Append('\\').Append(number);
+            }
         }
 
         // \k<n>
@@ -1266,16 +1732,16 @@ namespace IronRuby.Builtins {
                 if (_hasNamedGroup) {
                     throw MakeError("numbered backref/call is not allowed. (use name)");
                 }
-                _sb.Append("\\k<").Append(number).Append('>');
+                AppendBackreference(number, true);
                 return;
             }
 
             if (IsLevelSpecifier(name)) {
-                // \k<name+n> and \k<name-n> are level-scoped references, which .NET has no
-                // equivalent for; Ruby itself rejects them outside a subexpression call.
-                throw MakeError("invalid group name <" + name + ">");
+                ParseLevelBackreference(name);
+                return;
             }
 
+            _backrefCount++;
             int count;
             if (_groupNameCounts.TryGetValue(name, out count) && count > 1) {
                 // a name several groups share refers to whichever of them has matched
@@ -1290,7 +1756,58 @@ namespace IronRuby.Builtins {
                 return;
             }
 
+            if (IsOpenGroup(name)) {
+                // see AppendBackreference
+                _sb.Append("(?!)");
+                return;
+            }
             _sb.Append("\\k<").Append(name).Append('>');
+        }
+
+        /// <summary>
+        /// \k<name+n> and \k<name-n> refer to what the group captured at the subexpression call
+        /// level n above or below the reference's own (\k<name-0>: the same level). Each level
+        /// of an expanded call is a separate copy, so a group referred to this way is wrapped,
+        /// in every copy, in a hidden group of its own for that level (see OpenLevelGroup).
+        /// </summary>
+        private void ParseLevelBackreference(string/*!*/ reference) {
+            int separator = Math.Max(reference.LastIndexOf('+'), reference.LastIndexOf('-'));
+            string name = reference.Substring(0, separator);
+            string levelText = reference.Substring(separator + 1);
+            int offset = 0;
+            bool valid = separator > 0 && levelText.Length > 0;
+            foreach (char d in levelText) {
+                if (!Tokenizer.IsDecimalDigit(d) || offset > 1000) {
+                    valid = false;
+                    break;
+                }
+                offset = offset * 10 + (d - '0');
+            }
+
+            string key = null;
+            if (valid) {
+                int number = IsGroupNumber(name) ? ResolveGroupNumber(name) : -1;
+                if (number >= 0) {
+                    if (_hasNamedGroup) {
+                        throw MakeError("numbered backref/call is not allowed. (use name)");
+                    }
+                    key = "#" + number;
+                } else if (_groupNameCounts.ContainsKey(name)) {
+                    key = name;
+                }
+            }
+            if (key == null) {
+                throw MakeError("invalid group name <" + reference + ">");
+            }
+
+            _backrefCount++;
+            _state.LevelReferenced.Add(key);
+            int level = _callDepth + (reference[separator] == '+' ? offset : -offset);
+            if (level < 0 || _state.Collecting) {
+                _sb.Append("(?!)");
+            } else {
+                _sb.Append("\\k<").Append(GetLevelGroup(key, level)).Append('>');
+            }
         }
 
         //
