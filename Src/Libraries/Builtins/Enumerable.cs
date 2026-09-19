@@ -158,7 +158,8 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("collect")]
         [RubyMethod("map")]
-        public static object Map(CallSiteStorage<EachSite>/*!*/ each, [NotNull]BlockParam/*!*/ collector, object self) {
+        public static object Map(CallSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ each, RubyScope/*!*/ scope,
+            [NotNull]BlockParam/*!*/ collector, object self) {
             RubyArray resultArray = new RubyArray();
             object result = resultArray;
 
@@ -176,7 +177,10 @@ namespace IronRuby.Builtins {
                 return null;
             }, ProcOps.GetArity(collector.Proc));
 
-            Each(each, self, block);
+            // #each runs with the frame that called #map, so a Regexp match it makes (an
+            // enumerator over String#scan) lands in the $~ the block reads, as in MRI.
+            var site = each.GetCallSite("each", new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock));
+            site.Target(site, scope, self, block);
             return result;
         }
 

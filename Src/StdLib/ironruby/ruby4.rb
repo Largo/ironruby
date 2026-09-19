@@ -6364,8 +6364,7 @@ class Enumerator
     end
   end unless const_defined?(:Yielder)
 
-  unless method_defined?(:each_without_generator)
-    alias_method :each_without_generator, :each
+  unless private_method_defined?(:__ir_each_impl__)
     # The built-in #initialize lives on Enumerator itself, so redefining it here
     # hides it from `super`, which would find Object#initialize and silently
     # leave the enumerator with no target. __enum_init__ is the way back in.
@@ -6385,8 +6384,9 @@ class Enumerator
 
     # Ruby 1.9: extra arguments are appended to the ones the enumerator was built
     # with and handed to the underlying method; without a block that produces a
-    # new enumerator rather than iterating.
-    def each(*args, &block)
+    # new enumerator rather than iterating. #each itself is the built-in one, which takes the plain case (no arguments, no generator) straight to the target method
+    # with the caller's frame - String#scan sets $~ there - and hands the rest to this.
+    def __ir_each_impl__(*args, &block)
       unless args.empty?
         target = __enum_target__
         if target
@@ -6406,6 +6406,7 @@ class Enumerator
         each_without_generator(&block)
       end
     end
+    private :__ir_each_impl__
   end
 
   # nil means "no offset", and anything else has to answer #to_int - a Float

@@ -143,9 +143,30 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        [RubyMethod("each")]
+        [RubyMethod("each_without_generator")]
         public static object Each(RubyScope/*!*/ scope, BlockParam/*!*/ block, Enumerator/*!*/ self) {
             return self._impl.Each(scope, block);
+        }
+
+        /// <summary>
+        /// Enumerator#each. Iterating a method-based enumerator
+        /// calls the method with the frame that called #each, as MRI's C #each does, so a Regexp
+        /// match the method makes (String#scan) lands in the $~ the block reads. Anything else -
+        /// arguments, a generator, no block - is the prelude's __ir_each_impl__.
+        /// </summary>
+        [RubyMethod("each")]
+        public static object EachFromCaller(CallSiteStorage<Func<CallSite, object, Proc, System.Collections.IList, object>>/*!*/ implStorage,
+            RubyScope/*!*/ scope, BlockParam block, Enumerator/*!*/ self, params object[]/*!*/ args) {
+
+            object generator;
+            if (args.Length == 0 && block != null && self._impl != null &&
+                !(scope.RubyContext.TryGetInstanceVariable(self, "@generator", out generator) && generator != null)) {
+                return self._impl.Each(scope, block);
+            }
+
+            var site = implStorage.GetCallSite("__ir_each_impl__",
+                new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock | RubyCallFlags.HasSplattedArgument));
+            return site.Target(site, self, (block != null) ? block.Proc : null, new RubyArray(args));
         }
 
         /// <summary>
