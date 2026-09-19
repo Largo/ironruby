@@ -1245,7 +1245,86 @@ namespace IronRuby.Builtins {
                 lock (this) { _loadingThread = Thread.CurrentThread; }
             }
 
+            // What the loading thread assigned to the constant (and where) while the file ran. MRI
+            // keeps such a value in the autoload until the file has finished: the loading thread
+            // sees the constant, every other thread still sees the pending autoload - and waits for
+            // it rather than find a half-built class.
+            private RubyModule _pendingOwner;
+            private string _pendingName;
+            private object _pendingValue;
+            private string _pendingSourcePath;
+            private int _pendingSourceLine;
+
+            internal bool TrySetPendingValue(RubyModule/*!*/ owner, string/*!*/ name, object value) {
+                lock (this) {
+                    if (_loadingThread != Thread.CurrentThread) {
+                        return false;
+                    }
+                    _pendingOwner = owner;
+                    _pendingName = name;
+                    _pendingValue = value;
+                    return true;
+                }
+            }
+
+            internal bool TrySetPendingLocation(string/*!*/ sourcePath, int sourceLine) {
+                lock (this) {
+                    if (_loadingThread != Thread.CurrentThread || _pendingOwner == null) {
+                        return false;
+                    }
+                    _pendingSourcePath = sourcePath;
+                    _pendingSourceLine = sourceLine;
+                    return true;
+                }
+            }
+
+            // The value the current thread assigned while loading the file, if it is that thread.
+            internal bool TryGetPendingValue(out object value) {
+                lock (this) {
+                    if (_loadingThread == Thread.CurrentThread && _pendingOwner != null) {
+                        value = _pendingValue;
+                        return true;
+                    }
+                }
+                value = null;
+                return false;
+            }
+
+            internal bool TryGetPendingLocation(out string sourcePath, out int sourceLine) {
+                lock (this) {
+                    if (_loadingThread == Thread.CurrentThread && _pendingSourcePath != null) {
+                        sourcePath = _pendingSourcePath;
+                        sourceLine = _pendingSourceLine;
+                        return true;
+                    }
+                }
+                sourcePath = null;
+                sourceLine = 0;
+                return false;
+            }
+
             public void EndLoad() {
+                RubyModule owner;
+                lock (this) {
+                    owner = _pendingOwner;
+                }
+
+                if (owner != null) {
+                    // publish the value before any waiting thread is let go
+                    using (owner.Context.ClassHierarchyLocker()) {
+                        lock (this) {
+                            owner.PublishAutoloadedValueNoLock(this, _pendingName, _pendingValue, _pendingSourcePath, _pendingSourceLine);
+                            _pendingOwner = null;
+                            _pendingName = null;
+                            _pendingValue = null;
+                            _pendingSourcePath = null;
+                            _loadingThread = null;
+                            Monitor.PulseAll(this);
+                        }
+                    }
+                    return;
+                }
+
                 lock (this) {
                     _loadingThread = null;
                     Monitor.PulseAll(this);
@@ -1465,6 +1544,13 @@ namespace IronRuby.Builtins {
         }
 
         private void SetConstantLocationNoLock(string/*!*/ name, string/*!*/ sourcePath, int sourceLine) {
+            ConstantStorage existing;
+            AutoloadedConstant autoloaded;
+            if (_constants != null && _constants.TryGetValue(name, out existing) && !existing.IsRemoved
+                && (autoloaded = existing.Value as AutoloadedConstant) != null && autoloaded.TrySetPendingLocation(sourcePath, sourceLine)) {
+                return;
+            }
+
             if (_constantLocations == null) {
                 _constantLocations = new Dictionary<string, KeyValuePair<string, int>>();
             }
@@ -1472,6 +1558,15 @@ namespace IronRuby.Builtins {
         }
 
         public bool TryGetConstantLocation(string/*!*/ name, out string sourcePath, out int sourceLine) {
+            using (Context.ClassHierarchyLocker()) {
+                ConstantStorage existing;
+                AutoloadedConstant autoloaded;
+                if (_constants != null && _constants.TryGetValue(name, out existing) && !existing.IsRemoved
+                    && (autoloaded = existing.Value as AutoloadedConstant) != null && autoloaded.TryGetPendingLocation(out sourcePath, out sourceLine)) {
+                    return true;
+                }
+            }
+
             KeyValuePair<string, int> location;
             if (_constantLocations != null && _constantLocations.TryGetValue(name, out location)) {
                 sourcePath = location.Key;
@@ -1503,7 +1598,33 @@ namespace IronRuby.Builtins {
 
             InitializeConstantsNoLock();
             _context.ConstantAccessVersion++;
+
+            // assigned by the file an autoload of the constant is running: kept by the autoload until it is done
+            ConstantStorage existing;
+            AutoloadedConstant autoloaded;
+            if (!(value is AutoloadedConstant) && _constants.TryGetValue(name, out existing) && !existing.IsRemoved
+                && (autoloaded = existing.Value as AutoloadedConstant) != null && autoloaded.TrySetPendingValue(this, name, value)) {
+                return;
+            }
+
             _constants[name] = new ConstantStorage(value);
+        }
+
+        // An autoload finished: what its file assigned to the constant becomes the constant, unless
+        // the autoload is no longer what the constant holds.
+        private void PublishAutoloadedValueNoLock(AutoloadedConstant/*!*/ autoloaded, string/*!*/ name, object value,
+            string sourcePath, int sourceLine) {
+            Context.RequiresClassHierarchyLock();
+
+            ConstantStorage existing;
+            if (_constants != null && _constants.TryGetValue(name, out existing) && !existing.IsRemoved && ReferenceEquals(existing.Value, autoloaded)) {
+                Mutate();
+                _context.ConstantAccessVersion++;
+                _constants[name] = new ConstantStorage(value);
+                if (sourcePath != null) {
+                    SetConstantLocationNoLock(name, sourcePath, sourceLine);
+                }
+            }
         }
 
         /// <summary>
@@ -1662,8 +1783,14 @@ namespace IronRuby.Builtins {
                     return ConstantLookupResult.Found;
                 }
 
-                // The thread running the file does not see its own pending autoload at all.
+                // The thread running the file does not see its own pending autoload at all - only
+                // the value the file has assigned to the constant so far.
                 if (autoloaded.IsLoadingOnCurrentThread) {
+                    object pending;
+                    if (autoloaded.TryGetPendingValue(out pending)) {
+                        value = new ConstantStorage(pending);
+                        return ConstantLookupResult.Found;
+                    }
                     return ConstantLookupResult.NotFound;
                 }
 
