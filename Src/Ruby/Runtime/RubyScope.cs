@@ -1236,6 +1236,10 @@ var closureScope = scope as RubyClosureScope;
             get { return _blockFlowControl; }
         }
 
+        // Set only for a block whose body has a return in a nested block: 1 while the body runs
+        // (and catches a LambdaUnwinder aimed at this scope), 2 once it has finished.
+        internal byte LambdaReturnState;
+
         public override string[] OwnImplicitParameterNames {
             get {
                 var signature = _blockFlowControl.Proc.Dispatcher.ParameterSignature;

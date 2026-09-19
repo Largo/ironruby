@@ -316,6 +316,10 @@ namespace IronRuby.Compiler.Ast {
                 get { return _redoLabel; }
             }
 
+            // A block nested in this one has a return statement: if this block runs as a lambda,
+            // that return leaves it, so its body catches the LambdaUnwinder.
+            public bool HasNestedReturn;
+
             public BlockScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable,
                 MSA.Expression/*!*/ bfcVariable, MSA.LabelTarget/*!*/ redoLabel)
                 : base(builder, selfVariable, runtimeScopeVariable) {

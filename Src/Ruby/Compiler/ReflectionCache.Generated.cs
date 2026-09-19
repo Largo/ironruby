@@ -372,6 +372,12 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IsTopLevelReturn;
         public static MethodInfo/*!*/ IsLambdaUnwinderTarget { get { return _IsLambdaUnwinderTarget ?? (_IsLambdaUnwinderTarget = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, System.Exception, System.Boolean>(RubyOps.IsLambdaUnwinderTarget)); } }
         private static MethodInfo _IsLambdaUnwinderTarget;
+        public static MethodInfo/*!*/ IsLambdaScopeUnwinderTarget { get { return _IsLambdaScopeUnwinderTarget ?? (_IsLambdaScopeUnwinderTarget = CallInstruction.CacheFunc<IronRuby.Runtime.RubyBlockScope, System.Exception, System.Boolean>(RubyOps.IsLambdaScopeUnwinderTarget)); } }
+        private static MethodInfo _IsLambdaScopeUnwinderTarget;
+        public static MethodInfo/*!*/ EnterLambdaReturnScope { get { return _EnterLambdaReturnScope ?? (_EnterLambdaReturnScope = CallInstruction.CacheAction<IronRuby.Runtime.RubyBlockScope>(RubyOps.EnterLambdaReturnScope)); } }
+        private static MethodInfo _EnterLambdaReturnScope;
+        public static MethodInfo/*!*/ LeaveLambdaReturnScope { get { return _LeaveLambdaReturnScope ?? (_LeaveLambdaReturnScope = CallInstruction.CacheAction<IronRuby.Runtime.RubyBlockScope>(RubyOps.LeaveLambdaReturnScope)); } }
+        private static MethodInfo _LeaveLambdaReturnScope;
         public static MethodInfo/*!*/ GetLambdaUnwinderReturnValue { get { return _GetLambdaUnwinderReturnValue ?? (_GetLambdaUnwinderReturnValue = CallInstruction.CacheFunc<System.Exception, System.Object>(RubyOps.GetLambdaUnwinderReturnValue)); } }
         private static MethodInfo _GetLambdaUnwinderReturnValue;
         public static MethodInfo/*!*/ LeaveProcCall { get { return _LeaveProcCall ?? (_LeaveProcCall = CallInstruction.CacheAction<IronRuby.Runtime.BlockParam>(RubyOps.LeaveProcCall)); } }

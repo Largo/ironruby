@@ -259,10 +259,14 @@ namespace IronRuby.Runtime {
             for (var blockScope = scope as RubyBlockScope; blockScope != null; blockScope = blockScope.Parent as RubyBlockScope) {
                 BlockParam call = blockScope.BlockFlowControl;
                 if (call.Proc.Kind == ProcKind.Lambda) {
+                    // the lambda's body catches the return itself (however the lambda was invoked):
+                    if (blockScope.LambdaReturnState == 1) {
+                        throw new LambdaUnwinder(blockScope, returnValue);
+                    }
                     if (call.IsActiveLambdaCall) {
                         throw new LambdaUnwinder(call, returnValue);
                     }
-                    if (call.CallerKind == BlockCallerKind.Call) {
+                    if (call.CallerKind == BlockCallerKind.Call || blockScope.LambdaReturnState == 2) {
                         throw new LocalJumpError("unexpected return", "return", returnValue);
                     }
                     return;
@@ -274,6 +278,22 @@ namespace IronRuby.Runtime {
         public static bool IsLambdaUnwinderTarget(BlockParam/*!*/ call, Exception/*!*/ exception) {
             var unwinder = exception as LambdaUnwinder;
             return unwinder != null && unwinder.Target == call;
+        }
+
+        [Emitted]
+        public static bool IsLambdaScopeUnwinderTarget(RubyBlockScope/*!*/ scope, Exception/*!*/ exception) {
+            var unwinder = exception as LambdaUnwinder;
+            return unwinder != null && unwinder.Target == scope;
+        }
+
+        [Emitted]
+        public static void EnterLambdaReturnScope(RubyBlockScope/*!*/ scope) {
+            scope.LambdaReturnState = 1;
+        }
+
+        [Emitted]
+        public static void LeaveLambdaReturnScope(RubyBlockScope/*!*/ scope) {
+            scope.LambdaReturnState = 2;
         }
 
         [Emitted]
