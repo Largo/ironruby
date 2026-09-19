@@ -929,6 +929,7 @@ namespace IronRuby.Builtins {
         internal sealed class ThreadStarter {
             internal BlockParam StartRoutine;
             internal object[] Args;
+            internal Thread Creator;
         }
 
         private static Thread/*!*/ StartThread(RubyContext/*!*/ context, RubyClass subclass, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
@@ -957,7 +958,8 @@ namespace IronRuby.Builtins {
             if (context.ThreadTerminator == null) {
                 context.ThreadTerminator = () => TerminateAllThreads(context);
             }
-            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group)));
+            s.Creator = Thread.CurrentThread;
+            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group, s.Creator)));
             if (subclass != null) {
                 context.AdoptClrObject(result, subclass);
             }
@@ -1018,7 +1020,21 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args, ThreadGroup group) {
+        private static void WaitForCreatorToBlock(Thread creator) {
+            if (creator == null) {
+                return;
+            }
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            while (creator.IsAlive && (creator.ThreadState & System.Threading.ThreadState.WaitSleepJoin) == 0 && watch.ElapsedMilliseconds < 100) {
+                // not Thread.Sleep: this thread has to look running (Thread#status) while it waits
+                if (!Thread.Yield()) {
+                    Thread.SpinWait(100);
+                }
+            }
+        }
+
+        private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args, ThreadGroup group,
+            Thread creator) {
             RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.CreatedFromRuby = true;
 
@@ -1028,6 +1044,12 @@ namespace IronRuby.Builtins {
                 // Thread#kill / Thread#raise may have been called before the thread got a chance to run.
                 RubyUtils.CheckAsyncException();
 
+                if ((TracePoint.ActiveEvents & (int)(TraceEvents.ThreadBegin | TraceEvents.ThreadEnd)) != 0) {
+                    // Under MRI's GVL a new thread runs once its creator blocks (or its time slice ends), so
+                    // a :thread_begin/:thread_end hook sees whatever the creator did with Thread.new's result -
+                    // typically stored it in a variable the hook compares Thread.current with. Wait for that.
+                    WaitForCreatorToBlock(creator);
+                }
                 if ((TracePoint.ActiveEvents & (int)TraceEvents.ThreadBegin) != 0) {
                     TracePoint.OnThread(TraceEvents.ThreadBegin, context, Thread.CurrentThread);
                 }

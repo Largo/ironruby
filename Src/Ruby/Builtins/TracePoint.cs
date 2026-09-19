@@ -150,13 +150,29 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private static void UpdateActiveEvents() {
+        private void UpdateActiveEvents() {
             int events = 0;
             foreach (var tp in _enabledTracePoints) {
                 events |= (int)tp._events;
             }
             ActiveEvents = events;
+
+            // :c_call/:c_return are compiled into the call-site rules of library methods only while
+            // some TracePoint wants them (see RubyLibraryMethodInfo), so switching them on or off
+            // throws away every rule bound so far.
+            bool cTracing = (events & (int)(TraceEvents.CCall | TraceEvents.CReturn)) != 0;
+            if (cTracing != CCallTracing) {
+                CCallTracing = cTracing;
+                using (_context.ClassHierarchyLocker()) {
+                    _context.BasicObjectClass.AllDependentMethodsUpdated("TracePoint c_call");
+                }
+            }
         }
+
+        /// <summary>
+        /// Whether rules for calls to library methods report :c_call and :c_return.
+        /// </summary>
+        public static volatile bool CCallTracing;
 
         #endregion
 
@@ -294,8 +310,47 @@ namespace IronRuby.Builtins {
             ResolveMethod(info);
             SetMethodLocation(info, false);
             if (!IsCoreLibraryPath(info.Path)) {
-                Deliver(info);
+                if ((ActiveEvents & (int)TraceEvents.Call) != 0) {
+                    Deliver(info);
+                }
+                return;
             }
+
+            // A method of the core library written in Ruby is a C function in MRI: calling it from a
+            // program is a :c_call, reported at the caller's location. Its calls to others aren't.
+            if ((ActiveEvents & (int)TraceEvents.CCall) != 0 && !_inLibraryCallEvent) {
+                info.Event = TraceEvents.CCall;
+                info.Path = null;
+                _inLibraryCallEvent = true;
+                try {
+                    RubyArray trace = RubyExceptionData.CreateBacktrace(info.Context, 0);
+                    if (trace != null && trace.Count > 1 && IsCoreLibraryPath(ParseFrame(trace[0], out info.Line))) {
+                        info.Path = ParseFrame(trace[1], out info.Line);
+                    }
+                } catch (Exception) {
+                    info.Path = null;
+                } finally {
+                    _inLibraryCallEvent = false;
+                }
+                if (info.Path != null && !IsCoreLibraryPath(info.Path)) {
+                    Deliver(info);
+                }
+            }
+        }
+
+        // "path:line:in ..." => path, line
+        private static string ParseFrame(object frameObject, out int line) {
+            line = 0;
+            string frame = frameObject.ToString();
+            int inIndex = frame.LastIndexOf(":in ", StringComparison.Ordinal);
+            if (inIndex > 0) {
+                frame = frame.Substring(0, inIndex);
+            }
+            int colon = frame.LastIndexOf(':');
+            if (colon > 0 && Int32.TryParse(frame.Substring(colon + 1), out line)) {
+                return frame.Substring(0, colon);
+            }
+            return null;
         }
 
         private static void SetMethodLocation(TraceEventInfo/*!*/ info, bool end) {
@@ -423,6 +478,50 @@ namespace IronRuby.Builtins {
             SetCallerLocation(info);
             Deliver(info);
         }
+
+        /// <summary>
+        /// :c_call / :c_return of a library method, reported from the call-site rule. The location is
+        /// the caller's, as in MRI.
+        /// </summary>
+        internal static void OnLibraryCall(TraceEvents e, RubyScope scope, object self, RubyMemberInfo/*!*/ method, string/*!*/ name,
+            object returnValue) {
+
+            if (_currentEvent != null || _inLibraryCallEvent || (ActiveEvents & (int)e) == 0) {
+                return;
+            }
+
+            // MRI's TracePoint methods are written in Ruby (trace_point.rb) and report nothing
+            if (method.DeclaringModule.Name == "TracePoint") {
+                return;
+            }
+
+            var info = new TraceEventInfo {
+                Event = e,
+                Context = method.Context,
+                Scope = scope,
+                Self = self,
+                ReturnValue = returnValue,
+                MethodName = name,
+                CalleeName = name,
+                DefinedClass = method.DeclaringModule,
+                Method = method,
+                MethodResolved = true,
+            };
+
+            // finding the caller's location calls library methods of its own
+            _inLibraryCallEvent = true;
+            try {
+                SetCallerLocation(info);
+            } finally {
+                _inLibraryCallEvent = false;
+            }
+            if (!IsCoreLibraryPath(info.Path)) {
+                Deliver(info);
+            }
+        }
+
+        [ThreadStatic]
+        private static bool _inLibraryCallEvent;
 
         public static void OnThread(TraceEvents e, RubyContext/*!*/ context, Thread/*!*/ thread) {
             if (_currentEvent != null) {

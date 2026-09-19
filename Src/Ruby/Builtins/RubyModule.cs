@@ -981,6 +981,33 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// Invalidates the rules bound to this module and to every module that depends on it, visiting
+        /// each once. (MethodsUpdated walks every path of the dependency graph, which from BasicObject
+        /// is far too many.)
+        /// </summary>
+        internal void AllDependentMethodsUpdated(string/*!*/ reason) {
+            Context.RequiresClassHierarchyLock();
+
+            var visited = new HashSet<RubyModule>(ReferenceEqualityComparer<RubyModule>.Instance);
+            var stack = new Stack<RubyModule>();
+            stack.Push(this);
+            while (stack.Count > 0) {
+                var module = stack.Pop();
+                if (!visited.Add(module)) {
+                    continue;
+                }
+                module.IncrementMethodVersion();
+                if (module._dependentClasses != null) {
+                    foreach (var cls in module._dependentClasses) {
+                        stack.Push(cls);
+                    }
+                }
+            }
+
+            Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5}", Name, reason, visited.Count), "UPDATED");
+        }
+
+        /// <summary>
         /// Calls given action on all modules that are directly or indirectly nested into this module.
         /// </summary>
         private bool ForEachRecursivelyDependentClass(Func<RubyModule, bool>/*!*/ action) {

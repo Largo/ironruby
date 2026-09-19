@@ -189,7 +189,7 @@ namespace IronRuby.Runtime {
                 }
             }
 
-            if ((TracePoint.ActiveEvents & (int)TraceEvents.Call) != 0) {
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0) {
                 TracePoint.OnMethodCall(scope);
             }
             return scope;
@@ -2822,6 +2822,17 @@ namespace IronRuby.Runtime {
                 // TODO: optimize this (we can have a hashtable of singletons per class: Weak(object) => Struct { ImmediateClass, InstanceVariables, Flags }):
                 && !(context.TryGetClrTypeInstanceData(target, out data) && (immediate = data.ImmediateClass) != null
                     && (immediate.IsSingletonClass || immediate.IsRubyClass));
+        }
+
+        // :c_call / :c_return around a library method call; only in rules bound while TracePoint.CCallTracing
+        [Emitted]
+        public static void TraceLibraryCall(RubyScope scope, object self, RubyMemberInfo/*!*/ method, string/*!*/ name) {
+            TracePoint.OnLibraryCall(TraceEvents.CCall, scope, self, method, name, null);
+        }
+
+        [Emitted]
+        public static void TraceLibraryReturn(RubyScope scope, object self, RubyMemberInfo/*!*/ method, string/*!*/ name, object value) {
+            TracePoint.OnLibraryCall(TraceEvents.CReturn, scope, self, method, name, value);
         }
 
         /// <summary>
