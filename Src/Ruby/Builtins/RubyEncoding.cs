@@ -65,6 +65,18 @@ namespace IronRuby.Builtins {
         public const int CodePageCESU8 = 1000008;
         public const int CodePageTIS620 = 1000620;
         public const int CodePageEmacsMule = 1000230;
+        public const int CodePageWindows31J = 1000931;
+        public const int CodePageUTF8Mac = 1065001;
+        public const int CodePageCP51932 = 1051932;
+        public const int CodePageEucJpMs = 1051933;
+        public const int CodePageStatelessISO2022JP = 1002022;
+        public const int CodePageISO2022JP2 = 1002023;
+        public const int CodePageGB12345 = 1012345;
+        public const int CodePageEUCTW = 1000951;
+        public const int CodePageGB1988 = 1001988;
+        public const int CodePageISO8859_10 = 1028600;
+        public const int CodePageISO8859_14 = 1028604;
+        public const int CodePageISO8859_16 = 1028606;
 
         // TODO: how does MRI sort encodings?
 
@@ -265,6 +277,18 @@ namespace IronRuby.Builtins {
                 case RubyEncoding.CodePageCESU8: return "CESU-8";
                 case RubyEncoding.CodePageTIS620: return "TIS-620";
                 case RubyEncoding.CodePageEmacsMule: return "Emacs-Mule";
+                case RubyEncoding.CodePageWindows31J: return "Windows-31J";
+                case RubyEncoding.CodePageUTF8Mac: return "UTF8-MAC";
+                case RubyEncoding.CodePageCP51932: return "CP51932";
+                case RubyEncoding.CodePageEucJpMs: return "eucJP-ms";
+                case RubyEncoding.CodePageStatelessISO2022JP: return "stateless-ISO-2022-JP";
+                case RubyEncoding.CodePageISO2022JP2: return "ISO-2022-JP-2";
+                case RubyEncoding.CodePageGB12345: return "GB12345";
+                case RubyEncoding.CodePageEUCTW: return "EUC-TW";
+                case RubyEncoding.CodePageGB1988: return "GB1988";
+                case RubyEncoding.CodePageISO8859_10: return "ISO-8859-10";
+                case RubyEncoding.CodePageISO8859_14: return "ISO-8859-14";
+                case RubyEncoding.CodePageISO8859_16: return "ISO-8859-16";
                 case RubyEncoding.CodePageSJIS: return "Shift_JIS";
                 case RubyEncoding.CodePageAscii: return "US-ASCII";
 
@@ -273,6 +297,7 @@ namespace IronRuby.Builtins {
                 case 20932: return "CP20932";
 
                 case 50220: return "ISO-2022-JP";
+                case 50221: return "CP50221";
                 case 50222: return "CP50222";
 
                 // .NET reports IANA "WebName"s, which are lower case. Ruby spells most of
@@ -591,6 +616,7 @@ namespace IronRuby.Builtins {
                 case 50222: // CP50222 (ISO-2022-JP, SO/SI)
                 case 50225: // ISO-2022-KR
                 case 50227: // ISO-2022-CN
+                case CodePageISO2022JP2:
                 case 52936: // HZ-GB-2312
                 case 37:    // IBM037, EBCDIC - no ASCII byte means itself
                 case CodePageUTF7:
@@ -620,6 +646,9 @@ namespace IronRuby.Builtins {
             get {
                 switch (CodePage) {
                     case CodePageEmacsMule:
+                    case CodePageStatelessISO2022JP:
+                    case CodePageEUCTW:
+                    case CodePageGB1988:
                     case CodePageUTF7:
                         return true;
 
@@ -659,7 +688,7 @@ namespace IronRuby.Builtins {
                     // A dummy encoding says nothing about characters - Ruby treats a string
                     // tagged with one as a string of bytes - so it counts as single byte here
                     // even where the underlying .NET encoding would gladly decode something.
-                    _isSingleByteCharacterSet = IsSBCS(CodePage) || IsDummy;
+                    _isSingleByteCharacterSet = IsSBCS(RubyOnlyEncodings.GetTableCodePage(CodePage)) || IsDummy;
                 }
 
                 return _isSingleByteCharacterSet.Value;
@@ -669,7 +698,7 @@ namespace IronRuby.Builtins {
         public bool IsDoubleByteCharacterSet {
             get {
                 if (!_isDoubleByteCharacterSet.HasValue) {
-                    _isDoubleByteCharacterSet = IsDBCS(CodePage);
+                    _isDoubleByteCharacterSet = IsDBCS(RubyOnlyEncodings.GetTableCodePage(CodePage));
                 }
 
                 return _isDoubleByteCharacterSet.Value;
@@ -716,6 +745,7 @@ namespace IronRuby.Builtins {
                 switch (CodePage) {
                     case CodePageUTF7:
                     case CodePageUTF8:
+                    case CodePageUTF8Mac:
                     case CodePageUTF16BE:
                     case CodePageUTF16LE:
                     case CodePageUTF32BE:
@@ -775,9 +805,9 @@ namespace IronRuby.Builtins {
                 { "IBM850", "CP850" }, 
                 { "eucJP", "EUC-JP" }, 
                 { "eucKR", "EUC-KR" }, 
-                // { "eucTW", "EUC-TW" }, 
+                { "eucTW", "EUC-TW" }, 
                 { "ISO2022-JP", "ISO-2022-JP" }, 
-                // { "ISO2022-JP2", "ISO-2022-JP-2" }, 
+                { "ISO2022-JP2", "ISO-2022-JP-2" }, 
                 { "ISO8859-1", "ISO-8859-1" }, 
                 { "ISO8859-2", "ISO-8859-2" }, 
                 { "ISO8859-3", "ISO-8859-3" }, 
@@ -787,17 +817,20 @@ namespace IronRuby.Builtins {
                 { "ISO8859-7", "ISO-8859-7" }, 
                 { "ISO8859-8", "ISO-8859-8" }, 
                 { "ISO8859-9", "ISO-8859-9" }, 
-                // { "ISO8859-10", "ISO-8859-10" }, 
+                { "ISO8859-10", "ISO-8859-10" }, 
                 { "ISO8859-11", "ISO-8859-11" }, 
                 { "ISO8859-13", "ISO-8859-13" }, 
-                // { "ISO8859-14", "ISO-8859-14" }, 
+                { "ISO8859-14", "ISO-8859-14" }, 
                 { "ISO8859-15", "ISO-8859-15" }, 
-                // { "ISO8859-16", "ISO-8859-16" }, 
-                { "SJIS", "Shift_JIS" }, 
+                { "ISO8859-16", "ISO-8859-16" }, 
+                // MRI's SJIS is Windows-31J, not Shift_JIS
+                { "SJIS", "Windows-31J" }, 
+                { "PCK", "Windows-31J" }, 
+                { "euc-jp-ms", "eucJP-ms" }, 
                 { "csWindows31J", "Windows-31J" }, 
                 // { "MacJapan", "MacJapanese" }, 
-                // { "UTF-8-MAC", "UTF8-MAC" }, 
-                // { "UTF-8-HFS", "UTF8-MAC" }, 
+                { "UTF-8-MAC", "UTF8-MAC" }, 
+                { "UTF-8-HFS", "UTF8-MAC" }, 
                 { "UCS-2BE", "UTF-16BE" }, 
                 { "UCS-4BE", "UTF-32BE" }, 
                 { "UCS-4LE", "UTF-32LE" },  

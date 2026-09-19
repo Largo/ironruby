@@ -3962,8 +3962,7 @@ namespace IronRuby.Runtime {
                 case "LOCALE": return _options.LocaleEncoding.StrictEncoding;
                 case "EXTERNAL": return _defaultExternalEncoding.StrictEncoding;
                 // Mono doesn't recognize 'SJIS' encoding name:
-                case "SJIS": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
-                case "WINDOWS-31J": return Encoding.GetEncoding(932);
+                case "SHIFT_JIS": return Encoding.GetEncoding(RubyEncoding.CodePageSJIS);
                 case "MACCYRILLIC": return Encoding.GetEncoding(10007);
 
                 // encodings whose name only differs in casing are returned by Windows:
@@ -4000,6 +3999,18 @@ namespace IronRuby.Runtime {
                 case "CESU-8": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCESU8).StrictEncoding;
                 case "TIS-620": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageTIS620).StrictEncoding;
                 case "EMACS-MULE": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEmacsMule).StrictEncoding;
+                case "WINDOWS-31J": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageWindows31J).StrictEncoding;
+                case "UTF8-MAC": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageUTF8Mac).StrictEncoding;
+                case "CP51932": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageCP51932).StrictEncoding;
+                case "EUCJP-MS": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEucJpMs).StrictEncoding;
+                case "STATELESS-ISO-2022-JP": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageStatelessISO2022JP).StrictEncoding;
+                case "ISO-2022-JP-2": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO2022JP2).StrictEncoding;
+                case "GB12345": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageGB12345).StrictEncoding;
+                case "EUC-TW": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageEUCTW).StrictEncoding;
+                case "GB1988": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageGB1988).StrictEncoding;
+                case "ISO-8859-10": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO8859_10).StrictEncoding;
+                case "ISO-8859-14": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO8859_14).StrictEncoding;
+                case "ISO-8859-16": return RubyEncoding.GetRubyEncoding(RubyEncoding.CodePageISO8859_16).StrictEncoding;
 
                 default:
                     string alias;
