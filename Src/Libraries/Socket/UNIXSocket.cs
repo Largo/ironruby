@@ -54,7 +54,8 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         private static Socket/*!*/ Connect(RubyContext/*!*/ context, MutableString/*!*/ path) {
-            string pathStr = context.DecodePath(path);
+            // an embedded NUL would silently truncate the name (CVE-2018-8779)
+            string pathStr = context.DecodePath(Protocols.CheckPath(path));
             Socket socket = NewUnixSocket(SocketType.Stream);
             try {
                 socket.Connect(ToEndPoint(pathStr));
@@ -247,7 +248,8 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         private static Socket/*!*/ Bind(RubyContext/*!*/ context, MutableString/*!*/ path) {
-            string pathStr = context.DecodePath(path);
+            // an embedded NUL would silently truncate the name (CVE-2018-8779)
+            string pathStr = context.DecodePath(Protocols.CheckPath(path));
             Socket socket = NewUnixSocket(SocketType.Stream);
             try {
                 socket.Bind(ToEndPoint(pathStr));

@@ -100,19 +100,22 @@ class Gem::CommandManager
   ##
   # Run the config specified by +args+.
 
-  def run(args)
-    process_args(args)
+  # Error message components can come from arguments or from the network, so
+  # they are sanitised (backported from RubyGems 3.0.3, CVE-2019-8325).
+
+  def run(args, build_args = nil)
+    process_args(args, build_args)
   rescue StandardError, Timeout::Error => ex
-    alert_error "While executing gem ... (#{ex.class})\n    #{ex.to_s}"
+    alert_error clean_text("While executing gem ... (#{ex.class})\n    #{ex.to_s}")
     ui.errs.puts "\t#{ex.backtrace.join "\n\t"}" if
       Gem.configuration.backtrace
     terminate_interaction(1)
   rescue Interrupt
-    alert_error "Interrupted"
+    alert_error clean_text("Interrupted")
     terminate_interaction(1)
   end
 
-  def process_args(args)
+  def process_args(args, build_args = nil)
     args = args.to_str.split(/\s+/) if args.respond_to?(:to_str)
     if args.size == 0
       say Gem::Command::HELP
@@ -126,7 +129,7 @@ class Gem::CommandManager
       say Gem::VERSION
       terminate_interaction(0)
     when /^-/
-      alert_error "Invalid option: #{args[0]}.  See 'gem --help'."
+      alert_error clean_text("Invalid option: #{args[0]}. See 'gem --help'.")
       terminate_interaction(1)
     else
       cmd_name = args.shift.downcase
@@ -157,24 +160,20 @@ class Gem::CommandManager
   def load_and_instantiate(command_name)
     command_name = command_name.to_s
     const_name = command_name.capitalize.gsub(/_(.)/) { $1.upcase } << "Command"
-    commands = Gem::Commands
-    retried = false
 
     begin
-      commands.const_get const_name
-    rescue NameError
-      raise if retried
-
-      retried = true
       begin
         require "rubygems/commands/#{command_name}_command"
-      rescue Exception => e
-        alert_error "Loading command: #{command_name} (#{e.class})\n    #{e}"
-        ui.errs.puts "\t#{e.backtrace.join "\n\t"}" if
-          Gem.configuration.backtrace
+      rescue LoadError
+        # it may have been defined from a rubygems_plugin.rb file
       end
-      retry
-    end.new
+
+      Gem::Commands.const_get(const_name).new
+    rescue StandardError => e
+      alert_error clean_text("Loading command: #{command_name} (#{e.class})\n\t#{e}")
+      ui.errs.puts "\t#{e.backtrace.join "\n\t"}" if
+        Gem.configuration.backtrace
+    end
   end
 
 end

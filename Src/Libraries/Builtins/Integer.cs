@@ -42,6 +42,23 @@ namespace IronRuby.Builtins {
             : base(cls) { 
         }
 
+        #region hash
+
+        /// <summary>
+        /// Seeded per process, as in MRI (CVE-2011-4815).
+        /// </summary>
+        [RubyMethod("hash")]
+        public static int Hash(int self) {
+            return RubyUtils.GetFixnumHashCode(self);
+        }
+
+        [RubyMethod("hash")]
+        public static int Hash([NotNull]BigInteger/*!*/ self) {
+            return self.GetHashCode();
+        }
+
+        #endregion
+
         #region induced_from
 
         /// <summary>

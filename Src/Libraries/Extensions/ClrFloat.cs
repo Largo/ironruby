@@ -789,7 +789,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("hash")]
         public static int Hash(double self) {
-            return self.GetHashCode();
+            return RubyUtils.GetFloatHashCode(self);
         }
 
         #endregion

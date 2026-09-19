@@ -353,11 +353,12 @@ namespace IronRuby.Builtins {
         /// Converts one pattern and rejects the NUL separated form, which MRI dropped:
         /// Dir.glob("a\0b") is an ArgumentError, not a two pattern glob.
         /// </summary>
-        private static MutableString/*!*/ ToGlobPattern(ConversionStorage<MutableString>/*!*/ toPath, object pattern) {
+        private static MutableString/*!*/ ToGlobPattern(ConversionStorage<MutableString>/*!*/ toPath, object pattern, bool single) {
             try {
                 return Protocols.CastToPath(toPath, pattern);
-            } catch (ArgumentException e) when (e.Message == "path name contains null byte") {
-                // A glob pattern reports an embedded NUL in its own words.
+            } catch (ArgumentException e) when (single && e.Message == "path name contains null byte") {
+                // A lone glob pattern reports an embedded NUL in its own words; one of several
+                // patterns (an Array, or Dir.[] with more arguments) is an ordinary path name.
                 throw RubyExceptions.CreateArgumentError("nul-separated glob pattern is deprecated");
             }
         }
@@ -367,14 +368,14 @@ namespace IronRuby.Builtins {
 
             var patterns = pattern as IList<object>;
             if (patterns == null) {
-                return IronRuby.Builtins.Glob.GetMatches(context, ToGlobPattern(toPath, pattern), options.Flags, options.Base, options.Sort);
+                return IronRuby.Builtins.Glob.GetMatches(context, ToGlobPattern(toPath, pattern, true), options.Flags, options.Base, options.Sort);
             }
 
             // Dir.glob (but not Dir.[]) also accepts an Array of patterns; the results are
             // concatenated in pattern order.
             var all = new List<MutableString>();
             foreach (var p in patterns) {
-                all.AddRange(IronRuby.Builtins.Glob.GetMatches(context, ToGlobPattern(toPath, p), options.Flags, options.Base, options.Sort));
+                all.AddRange(IronRuby.Builtins.Glob.GetMatches(context, ToGlobPattern(toPath, p, false), options.Flags, options.Base, options.Sort));
             }
             return all;
         }
@@ -419,7 +420,7 @@ namespace IronRuby.Builtins {
             RubyArray result = new RubyArray();
             foreach (var pattern in args) {
                 foreach (var fileName in IronRuby.Builtins.Glob.GetMatches(self.Context,
-                    ToGlobPattern(toPath, pattern), options.Flags, options.Base, options.Sort)) {
+                    ToGlobPattern(toPath, pattern, args.Length == 1), options.Flags, options.Base, options.Sort)) {
                     result.Add(fileName);
                 }
             }

@@ -17,6 +17,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.Dynamic;
 using System.IO;
 using System.Runtime.InteropServices;
@@ -1250,7 +1251,13 @@ namespace IronRuby.Builtins {
                         while (i < format.Length && Tokenizer.IsDecimalDigit(format[i])) {
                             i++;
                         }
-                        count = Int32.Parse(format.Substring(pos1, (i - pos1)));
+                        // MRI reads the count as a C long (CVE-2018-8778): one that does not fit is
+                        // an error, and one that fits a long but not an int cannot be satisfied anyway.
+                        long longCount;
+                        if (!Int64.TryParse(format.Substring(pos1, (i - pos1)), NumberStyles.None, CultureInfo.InvariantCulture, out longCount)) {
+                            throw RubyExceptions.CreateRangeError("pack length too big");
+                        }
+                        count = (int)Math.Min(longCount, Int32.MaxValue);
                         i--;
                     } else if (c2 == '*') {
                         count = null;

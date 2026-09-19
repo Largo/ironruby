@@ -66,7 +66,7 @@ namespace IronRuby.Runtime {
 
         int IEqualityComparer<object>.GetHashCode(object obj) {
             if (obj is int) {
-                return (int)obj;
+                return RubyUtils.GetFixnumHashCode((int)obj);
             }
 
             // MRI's any_hash hashes these core values itself and never dispatches #hash, so a
@@ -75,7 +75,10 @@ namespace IronRuby.Runtime {
             if (obj == null) {
                 return RubyUtils.NilObjectId;
             }
-            if (obj is bool || obj is double || obj is RubySymbol || obj is BigInteger || obj.GetType() == typeof(MutableString)) {
+            if (obj is double) {
+                return RubyUtils.GetFloatHashCode((double)obj);
+            }
+            if (obj is bool || obj is RubySymbol || obj is BigInteger || obj.GetType() == typeof(MutableString)) {
                 return obj.GetHashCode();
             }
 

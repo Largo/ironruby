@@ -48,6 +48,32 @@ namespace IronRuby.Runtime {
         public static readonly int TrueObjectId = 2;
         public static readonly int NilObjectId = 4;
 
+        // MRI seeds the hash of immediate values with a random per-process key (CVE-2011-4815), so
+        // an attacker cannot precompute colliding keys. Integer and Float hashes are mixed with it;
+        // String and Symbol hashes already come from .NET's randomized string hashing.
+        private static readonly uint _hashSeed = (uint)System.Security.Cryptography.RandomNumberGenerator.GetInt32(Int32.MinValue, Int32.MaxValue);
+
+        private static int MixHash(uint h) {
+            unchecked {
+                h ^= _hashSeed;
+                h ^= h >> 16;
+                h *= 0x85ebca6b;
+                h ^= h >> 13;
+                h *= 0xc2b2ae35;
+                h ^= h >> 16;
+                return (int)h;
+            }
+        }
+
+        public static int GetFixnumHashCode(int value) {
+            return MixHash(unchecked((uint)value));
+        }
+
+        public static int GetFloatHashCode(double value) {
+            // 0.0 and -0.0 are eql? and must hash alike, which Double.GetHashCode already ensures
+            return MixHash(unchecked((uint)value.GetHashCode() + 0x9e3779b9));
+        }
+
         /// <summary>
         /// Ruby value types:
         /// 

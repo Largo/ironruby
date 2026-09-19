@@ -4,6 +4,8 @@
 # See LICENSE.txt for permissions.
 #++
 
+require 'rubygems/text'
+
 ##
 # Module that defines the default UserInteraction.  Any class including this
 # module will have access to the +ui+ method that returns the default UI.
@@ -84,6 +86,8 @@ module Gem::UserInteraction
 
   include Gem::DefaultUserInteraction
 
+  include Gem::Text
+
   ##
   # :method: alert
 
@@ -122,6 +126,14 @@ module Gem::UserInteraction
         ui.#{methname}(*args)
       end
     }, __FILE__, __LINE__
+  end
+
+  ##
+  # Displays the given +msg+ (or the block's result) only in really verbose
+  # mode, sanitised (backported from RubyGems 3.0.3, CVE-2019-8321).
+
+  def verbose(msg = nil)
+    say(clean_text(msg || yield)) if Gem.configuration.really_verbose
   end
 end
 

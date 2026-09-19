@@ -3007,6 +3007,12 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.Integer.GcdLcm)
             );
             
+            DefineLibraryMethod(module, "hash", 0x51, 
+                0x00000000U, 0x00000001U, 
+                new Func<System.Int32, System.Int32>(IronRuby.Builtins.Integer.Hash), 
+                new Func<System.Numerics.BigInteger, System.Int32>(IronRuby.Builtins.Integer.Hash)
+            );
+            
             DefineLibraryMethod(module, "id2name", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Int32, System.Object>(IronRuby.Builtins.Integer.Id2Name)
