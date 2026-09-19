@@ -42,6 +42,7 @@ namespace IronRuby.Runtime {
         private readonly int _frozenStringLiteral;
         private readonly bool _debugFrozenStringLiteral;
         private readonly int _backtraceLimit;
+        private readonly bool _checkSyntaxOnly;
         private readonly ReadOnlyCollection<string>/*!*/ _warningCategoryFlags;
         private readonly string _standardLibraryPath;
         private readonly string _applicationBase;
@@ -137,6 +138,13 @@ namespace IronRuby.Runtime {
         /// </summary>
         public int BacktraceLimit {
             get { return _backtraceLimit; }
+        }
+
+        /// <summary>
+        /// -c: the program is compiled and "Syntax OK" printed instead of running it.
+        /// </summary>
+        public bool CheckSyntaxOnly {
+            get { return _checkSyntaxOnly; }
         }
 
         /// <summary>
@@ -257,6 +265,7 @@ namespace IronRuby.Runtime {
             _frozenStringLiteral = GetOption(options, "FrozenStringLiteral", 0);
             _debugFrozenStringLiteral = GetOption(options, "DebugFrozenStringLiteral", false);
             _backtraceLimit = GetOption(options, "BacktraceLimit", -1);
+            _checkSyntaxOnly = GetOption(options, "CheckSyntaxOnly", false);
             _warningCategoryFlags = GetStringCollectionOption(options, "WarningCategoryFlags") ?? EmptyStringCollection;
 
             _mainFile = GetOption(options, "MainFile", (string)null);

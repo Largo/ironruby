@@ -14,7 +14,8 @@ fi
 
 # Ruby 4.0's standard library comes first; the 1.9 tree is still on the path
 # behind it for the libraries 4.0 gemified or implements as C extensions.
+# -X:StdLib puts them on $LOAD_PATH after -I, RUBYOPT's -I and RUBYLIB, where
+# MRI keeps its own library directories.
+S="$IR_ROOT/Src/StdLib"
 exec "$IR_ROOT/Src/Console/bin/Debug/net8.0/ir" -X:UsePrism \
-  "-I$IR_ROOT/Src/StdLib/ironruby" \
-  "-I$IR_ROOT/Src/StdLib/ruby/4.0" \
-  "-I$IR_ROOT/Src/StdLib/ruby/1.9.1" "$@"
+  "-X:StdLib=$S/ironruby:$S/ruby/4.0:$S/ruby/1.9.1" "$@"

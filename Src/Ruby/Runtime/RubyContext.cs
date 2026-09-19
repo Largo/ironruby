@@ -3502,6 +3502,13 @@ namespace IronRuby.Runtime {
                     }
                     throw;
                 }
+
+                // -c: parsing (and compiling) the program is all that is asked for
+                if (RubyOptions.CheckSyntaxOnly) {
+                    Console.Out.Write("Syntax OK\n");
+                    Console.Out.Flush();
+                    return 0;
+                }
                 code.Run();
             } catch (SystemExit e) {
                 return e.Status;
@@ -3799,7 +3806,13 @@ namespace IronRuby.Runtime {
 
             var exceptionClass = GetClassOf(exception);
             RubyExceptionData data = RubyExceptionData.GetInstance(exception);
-            string message = RubyExceptionData.GetClrMessage(this, data.Message);
+            // The message is written as it is: MRI does not escape control characters or
+            // backslashes in it, so a message can color itself with "\e[31m". Only bytes that
+            // are not characters are shown escaped.
+            var rawMessage = data.Message as MutableString;
+            string message = (rawMessage != null && !rawMessage.IsBinary && !rawMessage.ContainsInvalidCharacters())
+                ? rawMessage.ToString()
+                : RubyExceptionData.GetClrMessage(this, data.Message);
 
             RubyArray backtrace = data.Backtrace;
 
@@ -3808,13 +3821,18 @@ namespace IronRuby.Runtime {
                 sb.AppendFormat("{0}: {1} ({2})", Protocols.ToClrStringNoThrow(this, backtrace[0]), message, exceptionClass.Name);
                 sb.AppendLine();
 
-                // --backtrace-limit=N caps the number of "from" lines; -1 means no cap.
+                // --backtrace-limit=N keeps N "from" lines and says how many it left out - but only
+                // when that is at least two, as MRI's print_backtrace does; -1 means no cap.
                 int limit = RubyOptions.BacktraceLimit;
-                for (int i = 1; i < backtrace.Count; i++) {
-                    if (limit >= 0 && i > limit) {
-                        break;
-                    }
+                int count = backtrace.Count;
+                if (limit >= 0 && count > limit + 2) {
+                    count = limit + 1;
+                }
+                for (int i = 1; i < count; i++) {
                     sb.Append("\tfrom ").Append(Protocols.ToClrStringNoThrow(this, backtrace[i])).AppendLine();
+                }
+                if (count < backtrace.Count) {
+                    sb.Append("\t ... ").Append(backtrace.Count - count).Append(" levels...").AppendLine();
                 }
             } else {
                 sb.AppendFormat("unknown: {0} ({1})", message, exceptionClass.Name).AppendLine();

@@ -39,6 +39,9 @@ namespace IronRuby.Hosting {
         private string _externalEncodingName;
         private string _internalEncodingName;
         private bool _disableRubyGems;
+        private bool _disableRubyOpt;
+        private bool _enableDidYouMean;
+        private readonly List<string>/*!*/ _stdLibPaths = new List<string>();
         private readonly List<string>/*!*/ _warningCategoryFlags = new List<string>();
 
 #if DEBUG
@@ -82,34 +85,222 @@ namespace IronRuby.Hosting {
 #endif
 
         /// <summary>
-        /// One feature named by --enable / --disable. MRI silently accepts the names of features
-        /// it has compiled out, so an unrecognised one here is not an error either - it would turn
-        /// a working command line into a startup failure on an implementation detail.
+        /// One feature named by --enable / --disable. MRI accepts the names of features it has
+        /// compiled out, so the ones not implemented here are accepted too; a name that is no
+        /// feature at all only gets a warning, as in MRI.
         /// </summary>
         private void SetFeature(string/*!*/ feature, bool enable) {
-            switch (feature) {
+            // MRI treats '-' and '_' in a feature name alike.
+            switch (feature.Replace('-', '_')) {
                 case "gems":
                 case "gem":
                     _disableRubyGems = !enable;
                     break;
 
-                case "frozen-string-literal":
                 case "frozen_string_literal":
                     // prism's numbering, which is where this ends up.
                     LanguageSetup.Options["FrozenStringLiteral"] = enable ? 1 : -1;
                     break;
 
+                case "rubyopt":
+                    _disableRubyOpt = !enable;
+                    break;
+
+                // did_you_mean is only loaded when asked for: it hooks every NameError message,
+                // which is more than the default startup should take on.
+                case "did_you_mean":
+                    _enableDidYouMean = enable;
+                    break;
+
                 case "all":
                     _disableRubyGems = !enable;
+                    _disableRubyOpt = !enable;
+                    _enableDidYouMean = enable;
                     LanguageSetup.Options["FrozenStringLiteral"] = enable ? 1 : -1;
                     break;
 
+                case "error_highlight":
+                case "syntax_suggest":
+                case "jit":
+                case "yjit":
+                case "zjit":
+                    // accepted and ignored: nothing here implements them
+                    break;
+
                 default:
-                    // did_you_mean, error_highlight, syntax_suggest, jit, yjit, rubyopt: nothing
-                    // here implements them yet, and refusing the option would be worse than
-                    // ignoring it.
+                    // MRI warns and carries on rather than refusing the command line.
+                    string option = enable ? "--enable" : "--disable";
+                    Console.Error.WriteLine("ir: warning: unknown argument for {0}: '{1}'", option, feature);
+                    Console.Error.WriteLine("ir: warning: features are [gems, error_highlight, did_you_mean, syntax_suggest, rubyopt, frozen_string_literal, yjit, zjit].");
                     break;
             }
+        }
+
+        /// <summary>
+        /// -I paths are expanded against the current directory (and ~), as File.expand_path does:
+        /// $LOAD_PATH holds them absolute whether or not they exist. Symlinks are left alone.
+        /// </summary>
+        private static string/*!*/ ExpandIncludePath(string/*!*/ path) {
+            try {
+                if (path == "~" || path.StartsWith("~/", StringComparison.Ordinal)) {
+                    string home = Environment.GetEnvironmentVariable("HOME");
+                    if (!String.IsNullOrEmpty(home)) {
+                        path = home + path.Substring(1);
+                    }
+                }
+                return Path.GetFullPath(path).Replace('\\', '/');
+            } catch (Exception) {
+                return path;
+            }
+        }
+
+        /// <summary>
+        /// MRI's set_option_encoding_once: an encoding may be named again, but naming a different
+        /// one is an error ("-Eascii:ascii -U").
+        /// </summary>
+        private static void SetEncodingOnce(string/*!*/ type, ref string name, string/*!*/ value) {
+            if (name != null && !String.Equals(name, value, StringComparison.OrdinalIgnoreCase)) {
+                throw new InvalidOptionException(String.Format("ir: {0} already set to {1} (RuntimeError)", type, name));
+            }
+            name = value;
+        }
+
+        /// <summary>
+        /// The value of -E / --encoding: "ext", "ext:", ":int" or "ext:int"; anything after a
+        /// second colon is an error.
+        /// </summary>
+        private void SetEncodings(string/*!*/ option, string/*!*/ value) {
+            int colon = value.IndexOf(':');
+            string external = colon >= 0 ? value.Substring(0, colon) : value;
+            if (external.Length > 0) {
+                SetEncodingOnce("default_external", ref _externalEncodingName, external);
+            }
+            if (colon < 0) {
+                return;
+            }
+
+            string rest = value.Substring(colon + 1);
+            colon = rest.IndexOf(':');
+            string internalName = colon >= 0 ? rest.Substring(0, colon) : rest;
+            if (internalName.Length > 0) {
+                SetEncodingOnce("default_internal", ref _internalEncodingName, internalName);
+            }
+            if (colon >= 0 && colon + 1 < rest.Length) {
+                throw new InvalidOptionException(String.Format("ir: extra argument for {0}: {1} (RuntimeError)", option, rest.Substring(colon + 1)));
+            }
+        }
+
+        /// <summary>
+        /// RUBYOPT holds switches for every ruby run, separated by whitespace. Only the ones that
+        /// merely configure the interpreter are allowed there. The command line wins over it for
+        /// the warning level and the encodings, and its -I and -r come after the command line's.
+        /// </summary>
+        private void ProcessRubyOpt(string/*!*/ rubyopt) {
+            string[] args = rubyopt.Split(new[] { ' ', '\t', '\n', '\r', '\f', '\v' }, StringSplitOptions.RemoveEmptyEntries);
+            if (args.Length == 0) {
+                return;
+            }
+
+            object verbosity;
+            bool verbositySet = LanguageSetup.Options.TryGetValue("Verbosity", out verbosity);
+            string external = _externalEncodingName, internalName = _internalEncodingName;
+            RubyEncoding sourceEncoding = _defaultEncoding;
+            _externalEncodingName = _internalEncodingName = null;
+            _defaultEncoding = null;
+            // RUBYOPT's -W:category flags go first so that the command line's win.
+            var cliWarningFlags = new List<string>(_warningCategoryFlags);
+            _warningCategoryFlags.Clear();
+
+            for (int i = 0; i < args.Length; i++) {
+                string arg = args[i].StartsWith("-", StringComparison.Ordinal) ? args[i] : "-" + args[i];
+
+                // a switch whose argument is the next word
+                if (i + 1 < args.Length) {
+                    switch (arg) {
+                        case "-I": case "-r": case "-E":
+                            arg += args[++i];
+                            break;
+                        case "--encoding": case "--external-encoding": case "--internal-encoding":
+                        case "--enable": case "--disable": case "--backtrace-limit":
+                            arg += "=" + args[++i];
+                            break;
+                    }
+                }
+
+                ParseRubyOptSwitch(arg);
+            }
+
+            if (verbositySet) {
+                LanguageSetup.Options["Verbosity"] = verbosity;
+            }
+            if (external != null) _externalEncodingName = external;
+            if (internalName != null) _internalEncodingName = internalName;
+            if (sourceEncoding != null) _defaultEncoding = sourceEncoding;
+            _warningCategoryFlags.AddRange(cliWarningFlags);
+        }
+
+        private void ParseRubyOptSwitch(string/*!*/ arg) {
+            if (arg.StartsWith("--", StringComparison.Ordinal)) {
+                int eq = arg.IndexOf('=');
+                string name = eq >= 0 ? arg.Substring(0, eq) : arg;
+                switch (name) {
+                    case "--debug":
+                    case "--verbose":
+                    case "--encoding":
+                    case "--external-encoding":
+                    case "--internal-encoding":
+                    case "--backtrace-limit":
+                    case "--jit":
+                    case "--yjit":
+                    case "--zjit":
+                        break;
+                    default:
+                        if (!name.StartsWith("--enable", StringComparison.Ordinal) &&
+                            !name.StartsWith("--disable", StringComparison.Ordinal) &&
+                            !name.StartsWith("--yjit-", StringComparison.Ordinal) &&
+                            !name.StartsWith("--zjit-", StringComparison.Ordinal)) {
+                            throw InvalidRubyOptSwitch(name);
+                        }
+                        break;
+                }
+                if (name == "--jit" || name.StartsWith("--yjit", StringComparison.Ordinal) || name.StartsWith("--zjit", StringComparison.Ordinal)) {
+                    return;
+                }
+                ParseArgument(arg);
+                return;
+            }
+
+            // single-letter switches, which may be run together: -wd, -wIdir
+            while (arg.Length >= 2) {
+                char c = arg[1];
+                switch (c) {
+                    case 'd':
+                    case 'v':
+                    case 'w':
+                    case 'U':
+                        ParseArgument(arg.Substring(0, 2));
+                        if (arg.Length == 2) {
+                            return;
+                        }
+                        arg = "-" + arg.Substring(2);
+                        break;
+
+                    case 'W':
+                    case 'I':
+                    case 'r':
+                    case 'E':
+                    case 'K':
+                        ParseArgument(arg);
+                        return;
+
+                    default:
+                        throw InvalidRubyOptSwitch(arg.Substring(0, 2));
+                }
+            }
+        }
+
+        private static Exception/*!*/ InvalidRubyOptSwitch(string/*!*/ name) {
+            return new InvalidOptionException(String.Format("ir: invalid switch in RUBYOPT: {0} (RuntimeError)", name));
         }
 
         private static string[] GetPaths(string input) {
@@ -178,55 +369,66 @@ namespace IronRuby.Hosting {
                     includePaths = arg.Substring(2);
                 }
 
-                _loadPaths.AddRange(GetPaths(includePaths));
+                foreach (string path in GetPaths(includePaths)) {
+                    _loadPaths.Add(ExpandIncludePath(path));
+                }
                 return;
             }
 
+            // -Kx names the source encoding of the main program, and the external encoding too
+            // unless something already has (MRI). An unknown letter is ignored.
             if (arg.StartsWith("-K", StringComparison.Ordinal)) {
-                _defaultEncoding = arg.Length >= 3 ? RubyEncoding.GetEncodingByNameInitial(arg[2]) : null;
+                RubyEncoding encoding = null;
+                if (arg.Length >= 3) {
+                    encoding = (arg[2] == 'a' || arg[2] == 'A' || arg[2] == 'n' || arg[2] == 'N')
+                        ? RubyEncoding.Binary : RubyEncoding.GetEncodingByNameInitial(arg[2]);
+                }
+                if (encoding != null) {
+                    _defaultEncoding = encoding;
+                    if (_externalEncodingName == null) {
+                        _externalEncodingName = encoding.Name;
+                    }
+                }
                 return;
             }
 
             // -Eext, -E ext, -Eext:int and the long spellings. Unlike -K this says nothing about
             // how the source is read: it sets Encoding.default_external (and default_internal).
             if (arg.StartsWith("-E", StringComparison.Ordinal) || arg.StartsWith("--encoding", StringComparison.Ordinal)) {
-                string value;
+                string value, option;
                 if (arg == "-E" || arg == "--encoding") {
+                    option = arg;
                     value = PopNextArg();
                 } else if (arg.StartsWith("--encoding=", StringComparison.Ordinal)) {
+                    option = "--encoding";
                     value = arg.Substring("--encoding=".Length);
                 } else if (arg.StartsWith("-E", StringComparison.Ordinal)) {
+                    option = "-E";
                     value = arg.Substring(2);
                 } else {
                     throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));
                 }
 
-                int separator = value.IndexOf(':');
-                if (separator >= 0) {
-                    _externalEncodingName = value.Substring(0, separator);
-                    _internalEncodingName = value.Substring(separator + 1);
-                } else {
-                    _externalEncodingName = value;
-                }
+                SetEncodings(option, value);
                 return;
             }
 
             if (arg.StartsWith("--external-encoding", StringComparison.Ordinal)) {
-                _externalEncodingName = (arg == "--external-encoding")
-                    ? PopNextArg() : arg.Substring("--external-encoding=".Length);
+                SetEncodingOnce("default_external", ref _externalEncodingName, (arg == "--external-encoding")
+                    ? PopNextArg() : arg.Substring("--external-encoding=".Length));
                 return;
             }
 
             if (arg.StartsWith("--internal-encoding", StringComparison.Ordinal)) {
-                _internalEncodingName = (arg == "--internal-encoding")
-                    ? PopNextArg() : arg.Substring("--internal-encoding=".Length);
+                SetEncodingOnce("default_internal", ref _internalEncodingName, (arg == "--internal-encoding")
+                    ? PopNextArg() : arg.Substring("--internal-encoding=".Length));
                 return;
             }
 
             // -U is -E's internal half on its own: default_internal becomes UTF-8 and the external
             // encoding is left alone.
             if (arg == "-U") {
-                _internalEncodingName = "UTF-8";
+                SetEncodingOnce("default_internal", ref _internalEncodingName, "UTF-8");
                 return;
             }
 
@@ -343,7 +545,11 @@ namespace IronRuby.Hosting {
             switch (optionName) {
                 #region Ruby options
 
+                // -c: compile the program and report "Syntax OK" instead of running it
                 case "-c":
+                    LanguageSetup.Options["CheckSyntaxOnly"] = true;
+                    break;
+
                 case "--copyright":
                     throw new InvalidOptionException(String.Format("Option `{0}' not supported", optionName));
 
@@ -367,6 +573,7 @@ namespace IronRuby.Hosting {
                 case "-d":
                 case "--debug":
                     LanguageSetup.Options["DebugVariable"] = true; // $DEBUG = true
+                    LanguageSetup.Options["Verbosity"] = 2; // and $VERBOSE = true, as in MRI
                     // --debug turns on every debugging aid MRI has, which includes naming the
                     // place a string literal was written.
                     LanguageSetup.Options["DebugFrozenStringLiteral"] = true;
@@ -479,6 +686,17 @@ namespace IronRuby.Hosting {
                             LanguageSetup.Options["ObjectSpace"] = ScriptingRuntimeHelpers.True;
                             return;
                     }
+
+                    // -X:StdLib=dir[:dir...] names the standard library directories. They go on
+                    // $LOAD_PATH after -I, RUBYOPT's -I and RUBYLIB, where MRI keeps its own.
+                    if (optionValue != null && optionValue.StartsWith("StdLib=", StringComparison.Ordinal)) {
+                        foreach (string path in GetPaths(optionValue.Substring("StdLib=".Length))) {
+                            if (!_stdLibPaths.Contains(path)) {
+                                _stdLibPaths.Add(path);
+                            }
+                        }
+                        return;
+                    }
                     goto default;
                     
                default:
@@ -539,6 +757,17 @@ namespace IronRuby.Hosting {
         }
 
         protected override void AfterParse() {
+            if (!_disableRubyOpt) {
+                try {
+                    string rubyopt = Environment.GetEnvironmentVariable("RUBYOPT");
+                    if (rubyopt != null) {
+                        ProcessRubyOpt(rubyopt);
+                    }
+                } catch (SecurityException) {
+                    // nop
+                }
+            }
+
             var existingSearchPaths =
                 LanguageOptions.GetSearchPathsOption(LanguageSetup.Options) ??
                 LanguageOptions.GetSearchPathsOption(RuntimeSetup.Options);
@@ -555,9 +784,13 @@ namespace IronRuby.Hosting {
             } catch (SecurityException) {
                 // nop
             }
+            _loadPaths.AddRange(_stdLibPaths);
             LanguageSetup.Options["SearchPaths"] = _loadPaths;
 
             if (!_disableRubyGems) {
+                if (_enableDidYouMean) {
+                    _requiredPaths.Insert(0, "did_you_mean");
+                }
                 _requiredPaths.Insert(0, "gem_prelude.rb");
             } else {
                 // gem_prelude.rb ends by requiring ruby4.rb, the Ruby half of the core library

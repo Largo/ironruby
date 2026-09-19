@@ -119,6 +119,15 @@ namespace IronRuby.Prism {
                 encodingName = evalSourceEncoding.Name;
             }
 
+            // -K names the encoding of the main program - the script or -e, not what it requires -
+            // unless a magic comment says otherwise.
+            RubyEncoding kcode = context != null ? context.RubyOptions.DefaultEncoding : null;
+            if (kcode != null && kcode != RubyEncoding.UTF8 && !isEval && DeclaredEncodingName(code) == null &&
+                sourceUnit.Path != null && sourceUnit.Path == context.RubyOptions.MainFile) {
+                sourceEncoding = kcode;
+                encodingName = kcode.Name;
+            }
+
             // A UTF-8 source may hold bytes that are not UTF-8, read in as escapes (see
             // RubyContext.GetSourceReader); the escaping encoding gives prism those bytes back.
             PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames,
