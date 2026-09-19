@@ -4446,6 +4446,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
             );
             
+            DefineLibraryMethod(module, "__source_location_of__", 0x52, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.GetSourceFileLocation)
+            );
+            
             DefineLibraryMethod(module, "!~", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.NotMatch)

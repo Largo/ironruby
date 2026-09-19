@@ -178,7 +178,12 @@ module Kernel
 
   def require_relative(path)
     caller_path = caller.first.split(/:\d/, 2).first
-    require File.expand_path(path, File.dirname(caller_path))
+    # Relative to where the file really is: through a symlink, the link's target, and for a
+    # file run by a relative path, where it was before any chdir.
+    if !File.file?(caller_path) || File.symlink?(caller_path)
+      location = __source_location_of__(caller_path)
+    end
+    require File.expand_path(path, File.dirname(location || caller_path))
   end unless private_method_defined?(:require_relative)
 
   # Like #require, this is both a private instance method and a public singleton
@@ -1852,6 +1857,9 @@ module Kernel
     # names itself "(eval)" or the like, and MRI answers nil for those rather than pointing at
     # wherever the process happens to be.
     return nil if file.nil? || file.empty? || file.start_with?("(")
+    # A file run by a relative path is still where it was after a chdir.
+    location = __source_location_of__(file)
+    return File.dirname(location) if location && !File.file?(file)
     # An eval told a file name that is not a real file answers that name's directory as given.
     return File.dirname(file) unless File.file?(file)
     File.dirname(File.expand_path(file))
@@ -12314,6 +12322,10 @@ class Thread
       # frame - code eval'd under a made-up file name, or a <internal:...> frame.
       def absolute_path
         return nil if @path.nil? || @path.start_with?("(") || @path.start_with?("<")
+        # where the file was when it ran: it may have been reached through a relative path
+        # before a chdir, or through a symlink that is gone now
+        location = __source_location_of__(@path)
+        return (File.realpath(location) rescue location) if location
         File.realpath(@path) rescue nil
       end
 
