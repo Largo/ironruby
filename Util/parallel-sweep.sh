@@ -10,7 +10,7 @@
 # Usage:  Util/parallel-sweep.sh OUT_DIR [BASELINE_OUT_DIR]
 #   IR=./ir.sh           interpreter script the specs run under (also RUBY_EXE for ruby_exe)
 #   JOBS=8               parallel jobs
-#   SUITES="core library language"
+#   SUITES="core library language command_line security"
 #
 # OUT_DIR/<suite>.txt gets the sorted unique names of failing examples, OUT_DIR/<suite>/*.log
 # the logs. With a baseline, the summary lists the names that are new and the ones fixed.
@@ -23,7 +23,7 @@ OUT=${1:?usage: Util/parallel-sweep.sh OUT_DIR [BASELINE_OUT_DIR]}
 BASE=${2:-}
 IR=${IR:-./ir.sh}
 JOBS=${JOBS:-8}
-SUITES=${SUITES:-"core library language"}
+SUITES=${SUITES:-"core library language command_line security"}
 
 mkdir -p "$OUT"
 jobs_file="$OUT/jobs.txt"
@@ -32,6 +32,7 @@ for s in $SUITES; do
   rm -rf "${OUT:?}/$s"
   mkdir -p "$OUT/$s"
   for d in spec/$s/*/; do
+    [ -d "$d" ] || continue
     # no trailing blank: xargs -L takes one as "this line continues on the next"
     files=$(find "$d" -name '*_spec.rb' | sort | paste -sd' ')
     [ -n "$files" ] && echo "$s $(basename "$d") $files" >> "$jobs_file"
