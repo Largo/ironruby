@@ -1673,7 +1673,27 @@ class File
       ::Kernel.raise(::ArgumentError,
                      "wrong number of arguments (given #{args.size}, expected 1..3)")
     end
+    # "BOM|<encoding>", in the mode string or the :encoding option, lets a byte-order mark
+    # at the start of a readable file name the encoding; the mode parser underneath does
+    # not know the prefix.
+    bom = false
+    if args[1].is_a?(::String) && args[1] =~ /:\s*BOM\|/i
+      args = args.dup
+      args[1] = args[1].sub(/BOM\|/i, "")
+      bom = true
+    end
+    [:mode, :encoding].each do |key|
+      value = opts[key]
+      if value.is_a?(::String) && value =~ (key == :mode ? /:\s*BOM\|/i : /\ABOM\|/i)
+        opts = opts.merge(key => value.sub(/BOM\|/i, ""))
+        bom = true
+      end
+    end
     opts.empty? ? __ir_initialize__(*args) : __ir_initialize__(*args, opts)
+    if bom
+      from_bom = __ir_skip_bom__
+      set_encoding(from_bom, internal_encoding) if from_bom
+    end
   end
 end
 
