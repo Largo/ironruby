@@ -2238,30 +2238,40 @@ namespace IronRuby.Builtins {
             RubyIO srcIO = src as RubyIO;
             RubyIO dstIO = dst as RubyIO;
             Stream srcStream = null, dstStream = null;
+            // only a stream opened here from a path is closed here; an IO passed in stays open
+            bool ownsSrc = false, ownsDst = false;
             var context = toPath.Context;
             CallSite<Func<CallSite, object, object, object>> writeSite = null;
             CallSite<Func<CallSite, object, object, object, object>> readSite = null;
 
             try {
-                if (srcIO == null || dstIO == null) {
-                    var toPathSite = toPath.GetSite(TryConvertToPathAction.Make(toPath.Context));
+                // Each side on its own: an IO is read or written as that IO - a File is not reopened by
+                // its path, which used to truncate and overwrite a file opened only for reading - and
+                // anything else is a path or an object with #read / #write.
+                var toPathSite = toPath.GetSite(TryConvertToPathAction.Make(toPath.Context));
+                if (srcIO != null) {
+                    srcStream = srcIO.GetReadableStream();
+                } else {
                     var srcPath = toPathSite.Target(toPathSite, src);
                     if (srcPath != null) {
                         srcStream = self.Context.Platform.OpenInputFileStream(context.DecodePath(srcPath), FileMode.Open, FileAccess.Read, FileShare.Read);
+                        ownsSrc = true;
                     } else {
                         readSite = readStorage.GetCallSite("read", 2);
                     }
+                }
 
+                if (dstIO != null) {
+                    dstStream = dstIO.GetWritableStream();
+                } else {
                     var dstPath = toPathSite.Target(toPathSite, dst);
                     if (dstPath != null) {
                         // Create, not Truncate: MRI's copy_stream makes the destination when it is not there.
                         dstStream = self.Context.Platform.OpenInputFileStream(context.DecodePath(dstPath), FileMode.Create, FileAccess.ReadWrite, FileShare.Read);
+                        ownsDst = true;
                     } else {
                         writeSite = writeStorage.GetCallSite("write", 1);
                     }
-                } else {
-                    srcStream = srcIO.GetReadableStream();
-                    dstStream = dstIO.GetWritableStream();
                 }
 
                 if (src_offset != -1) {
@@ -2317,11 +2327,13 @@ namespace IronRuby.Builtins {
                 return Protocols.Normalize(bytesCopied);
 
             } finally {
-                if (srcStream != null) {
+                if (ownsSrc) {
                     srcStream.Dispose();
                 }
-                if (dstStream != null) {
+                if (ownsDst) {
                     dstStream.Dispose();
+                } else if (dstStream != null) {
+                    dstStream.Flush();
                 }
             }
         }

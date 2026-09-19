@@ -55,7 +55,7 @@ namespace IronRuby.Builtins {
 
             // dup and clone copy the finalizers: they run once for each object, with its own id
             public object CopyFor(object copy) {
-                var result = new FinalizerInvoker(_context, _callSite, RubyUtils.GetObjectId(_context, copy));
+                var result = new FinalizerInvoker(_context, _callSite, ClrInteger.Narrow(RubyUtils.GetObjectId(_context, copy)));
                 lock (_finalizers) {
                     result._finalizers.AddRange(_finalizers);
                 }
@@ -134,7 +134,9 @@ namespace IronRuby.Builtins {
             if (context.TryGetInstanceVariable(obj, FinalizerInvoker.InstanceVariableName, out existing) && existing is FinalizerInvoker) {
                 invoker = (FinalizerInvoker)existing;
             } else {
-                invoker = new FinalizerInvoker(context, call.GetCallSite("call"), RubyUtils.GetObjectId(context, obj));
+                invoker = new FinalizerInvoker(context, call.GetCallSite("call"),
+                    // the id as #object_id answers it - an Integer, which a Hash keyed by object_id can find
+                    ClrInteger.Narrow(RubyUtils.GetObjectId(context, obj)));
                 context.SetInstanceVariable(obj, FinalizerInvoker.InstanceVariableName, invoker);
                 context.RegisterExitFinalizer(invoker);
             }
