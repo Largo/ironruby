@@ -52,6 +52,7 @@ namespace IronRuby.Runtime {
         private readonly bool _profile;
         private readonly bool _hasSearchPaths;
         private readonly bool _noAssemblyResolveHook;
+        private readonly bool _objectSpace;
 
 #if DEBUG
         public static bool UseThreadAbortForSyncRaise;
@@ -183,6 +184,14 @@ namespace IronRuby.Runtime {
             get { return _noAssemblyResolveHook; }
         }
 
+        /// <summary>
+        /// Record every RubyObject weakly, so that ObjectSpace.each_object can find them. Off by
+        /// default: it costs a weak GC handle per object, which about triples the cost of Object#new.
+        /// </summary>
+        public bool ObjectSpace {
+            get { return _objectSpace; }
+        }
+
         public string StandardLibraryPath {
             get { return _standardLibraryPath; }
         }
@@ -237,6 +246,7 @@ namespace IronRuby.Runtime {
             _loadFromDisk = GetOption(options, "LoadFromDisk", false);
             _profile = GetOption(options, "Profile", false);
             _noAssemblyResolveHook = GetOption(options, "NoAssemblyResolveHook", false);
+            _objectSpace = GetOption(options, "ObjectSpace", false);
             _requirePaths = GetStringCollectionOption(options, "RequiredPaths", ';', ',');
             _hasSearchPaths = GetOption<object>(options, "SearchPaths", null) != null;
             _standardLibraryPath = GetOption(options, "StandardLibrary", (string)null);

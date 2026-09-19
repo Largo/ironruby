@@ -632,6 +632,7 @@ namespace IronRuby.Builtins {
             Version = new VersionHandle(Interlocked.Increment(ref _globalMethodVersion));
             Version.SetName(name);
             Id = Interlocked.Increment(ref _globalModuleId);
+            context.ObjectSpaceModules.Add(this);
         }
 
         #region Initialization (thread-safe)

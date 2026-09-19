@@ -526,6 +526,9 @@ namespace IronRuby.Runtime {
             : base(manager) {
             ContractUtils.RequiresNotNull(manager, "manager");
             _options = new RubyOptions(options);
+            if (_options.ObjectSpace) {
+                ObjectSpaceObjects = new ObjectSpaceRegistry();
+            }
 
             _runtimeId = Interlocked.Increment(ref _RuntimeIdGenerator);
             _upTime = new Stopwatch();
@@ -3371,6 +3374,29 @@ namespace IronRuby.Runtime {
                 _shutdownHandlers.Add(proc);
             }
         }
+
+        #region ObjectSpace
+
+        // What ObjectSpace.each_object can see: every module and class, and - with -X:ObjectSpace
+        // only, since a weak handle per object is not cheap - every RubyObject: the instances of Ruby
+        // classes deriving from Object/BasicObject, structs included. Instances of the builtin types
+        // (String, Array, ...) and their subclasses are never recorded.
+        internal readonly ObjectSpaceRegistry/*!*/ ObjectSpaceModules = new ObjectSpaceRegistry();
+        internal ObjectSpaceRegistry ObjectSpaceObjects;
+
+        public List<object>/*!*/ GetObjectSpaceModules() {
+            return ObjectSpaceModules.GetObjects();
+        }
+
+        /// <summary>
+        /// Null unless objects are recorded (RubyOptions.ObjectSpace).
+        /// </summary>
+        public List<object> GetObjectSpaceObjects() {
+            var registry = ObjectSpaceObjects;
+            return registry != null ? registry.GetObjects() : null;
+        }
+
+        #endregion
 
         #region Finalizers
 

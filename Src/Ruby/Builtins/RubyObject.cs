@@ -44,6 +44,10 @@ namespace IronRuby.Builtins {
             Assert.NotNull(cls);
             Debug.Assert(!cls.IsSingletonClass);
             _immediateClass = cls;
+            var registry = cls.Context.ObjectSpaceObjects;
+            if (registry != null) {
+                registry.Add(this);
+            }
         }
 
         /// <summary>
