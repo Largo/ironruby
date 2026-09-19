@@ -121,6 +121,11 @@ namespace IronRuby.StandardLibrary.Yaml {
         #region NodeProvider Members
 
         public override bool CheckNode() {
+            // Drop STREAM-START first, as PyYAML does: otherwise an empty stream looks like it has
+            // a document in it, and composing that one consumes STREAM-END and never stops.
+            if (_parser.PeekEvent() is StreamStartEvent) {
+                _parser.GetEvent();
+            }
             return !(_parser.PeekEvent() is StreamEndEvent);
         }
 

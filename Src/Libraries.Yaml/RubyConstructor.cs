@@ -66,6 +66,8 @@ namespace IronRuby.StandardLibrary.Yaml {
             AddConstructor(Tags.RubySymbol, ConstructRubySymbol);
             AddConstructor(Tags.RubyRange, ConstructRubyRange);
             AddConstructor(Tags.RubyRegexp, ConstructRubyRegexp);
+            AddConstructor("tag:ruby.yaml.org,2002:class", ConstructRubyModule);
+            AddConstructor("tag:ruby.yaml.org,2002:module", ConstructRubyModule);
             AddMultiConstructor("tag:ruby.yaml.org,2002:object:", ConstructPrivateObject);
             AddMultiConstructor("tag:ruby.yaml.org,2002:struct:", ConstructRubyStruct);
             AddConstructor(Tags.Binary, ConstructRubyBinary);
@@ -177,6 +179,16 @@ namespace IronRuby.StandardLibrary.Yaml {
 
         private static object ConstructRubySymbol(RubyConstructor/*!*/ ctor, Node/*!*/ node) {
             return ctor.GlobalScope.Context.CreateAsciiSymbol(((ScalarNode)node).Value);
+        }
+
+        // "!ruby/class 'Foo'" and "!ruby/module 'Foo'" name a constant to look up.
+        private static object ConstructRubyModule(RubyConstructor/*!*/ ctor, Node/*!*/ node) {
+            string name = ((ScalarNode)node).Value;
+            RubyModule module;
+            if (!ctor.GlobalScope.Context.TryGetModule(ctor.GlobalScope, name, out module)) {
+                throw RubyExceptions.CreateArgumentError("undefined class/module {0}", name);
+            }
+            return module;
         }
 
         private static Range/*!*/ ConstructRubyRange(RubyConstructor/*!*/ ctor, Node/*!*/ node) {

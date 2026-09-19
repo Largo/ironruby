@@ -407,11 +407,12 @@ class DateTime < Date
 
   end
 
+  # Since Ruby 2.4 the Time keeps the DateTime's own offset (date_core.c's
+  # datetime_to_time) rather than being moved into the local zone.
   def to_time
-    g = new_offset(0).gregorian
-    t = Time.utc(g.year, g.mon, g.mday, g.hour, g.min, g.sec)
-    t += g.sec_fraction unless g.sec_fraction.zero?
-    t.getlocal
+    g = gregorian
+    sec = g.sec_fraction.zero? ? g.sec : g.sec + g.sec_fraction
+    Time.new(g.year, g.mon, g.mday, g.hour, g.min, sec, (g.offset * 86400).to_i)
   end
 
 end

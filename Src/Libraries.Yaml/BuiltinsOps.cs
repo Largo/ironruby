@@ -85,7 +85,7 @@ namespace IronRuby.StandardLibrary.Yaml {
     public static class YamlClassOps {
         [RubyMethod("to_yaml_node", RubyMethodAttributes.PrivateInstance)]
         public static Node ToYamlNode(RubyContext/*!*/ context, object self, RubyRepresenter rep) {
-            throw RubyExceptions.CreateTypeError("can't dump anonymous class " + context.GetClassDisplayName(self));
+            return YamlModuleOps.ModuleToYamlNode(context, (RubyModule)self, rep, "class");
         }
     }
 
@@ -96,6 +96,21 @@ namespace IronRuby.StandardLibrary.Yaml {
             RubyModule yamlModule;
             scope.RubyContext.TryGetModule(scope.GlobalScope, "YAML", out yamlModule);
             return RubyYaml.TagClass(yamlModule, tag, self);
+        }
+
+        [RubyMethod("to_yaml_node", RubyMethodAttributes.PrivateInstance)]
+        public static Node ToYamlNode(RubyContext/*!*/ context, RubyModule/*!*/ self, RubyRepresenter rep) {
+            return ModuleToYamlNode(context, self, rep, "module");
+        }
+
+        // Psych dumps a class or module by name - "!ruby/class 'Foo'" - and refuses an
+        // anonymous one, which has no name to be loaded back by.
+        internal static Node ModuleToYamlNode(RubyContext/*!*/ context, RubyModule/*!*/ self, RubyRepresenter rep, string/*!*/ kind) {
+            string name = self.Name;
+            if (name == null) {
+                throw RubyExceptions.CreateTypeError("can't dump anonymous {0}: {1}", kind, self.GetDisplayName(context, false).ToString());
+            }
+            return rep.Scalar("tag:ruby.yaml.org,2002:" + kind, name, ScalarQuotingStyle.Single);
         }
     }
 
@@ -147,15 +162,17 @@ namespace IronRuby.StandardLibrary.Yaml {
 
         [RubyMethod("taguri")]
         public static MutableString/*!*/ TagUri(RubyStruct/*!*/ self) {
-            MutableString str = MutableString.CreateMutable("tag:ruby.yaml.org,2002:struct:", self.ImmediateClass.Context.GetIdentifierEncoding());
+            MutableString str = MutableString.CreateMutable("tag:ruby.yaml.org,2002:struct", self.ImmediateClass.Context.GetIdentifierEncoding());
             string name = self.ImmediateClass.GetNonSingletonClass().Name;
-            if (name != null) {
-                string structPrefix = "Struct::";
-                if (name.StartsWith(structPrefix, StringComparison.Ordinal)) {
-                    name = name.Substring(structPrefix.Length);
-                }
+            // An anonymous struct is tagged plain "!ruby/struct", as Psych does.
+            if (name == null) {
+                return str;
             }
-            return str.Append(name);
+            string structPrefix = "Struct::";
+            if (name.StartsWith(structPrefix, StringComparison.Ordinal)) {
+                name = name.Substring(structPrefix.Length);
+            }
+            return str.Append(':').Append(name);
         }
     }
 
@@ -167,8 +184,10 @@ namespace IronRuby.StandardLibrary.Yaml {
             var map = new Dictionary<object, object>();
             rep.AddYamlProperties(map, self, false);
             return rep.Map(
+                // Psych writes the backtrace alongside the message, nil or not.
                 new Dictionary<Node, Node> {
-                    { rep.Scalar(null, "message", ScalarQuotingStyle.None), rep.RepresentItem(site.Target(site, self)) }
+                    { rep.Scalar(null, "message", ScalarQuotingStyle.None), rep.RepresentItem(site.Target(site, self)) },
+                    { rep.Scalar(null, "backtrace", ScalarQuotingStyle.None), rep.RepresentItem(RubyExceptionData.GetInstance(self).Backtrace) }
                 },
                 rep.GetTagUri(self),
                 map, 

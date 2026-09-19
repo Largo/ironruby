@@ -609,7 +609,8 @@ namespace IronRuby.StandardLibrary.Yaml {
                 chunks.Append(_buffer, _pointer, length);
                 Forward(length);
                 spaces = ScanPlainSpaces(ind);
-                if (spaces == null || (FlowLevel == 0 && _column < ind)) {
+                // An empty separator means the scalar ended - at a "---" or "..." line, say.
+                if (String.IsNullOrEmpty(spaces) || (FlowLevel == 0 && _column < ind)) {
                     break;
                 }
             }

@@ -39,6 +39,7 @@ namespace IronRuby.StandardLibrary.Yaml {
         private int _column;
         private bool _whitespace;
         private bool _indentation;
+        private bool _pendingSpace;
 
         private readonly bool _canonical;
         private readonly int _bestIndent = 2;
@@ -194,6 +195,23 @@ namespace IronRuby.StandardLibrary.Yaml {
             _writer.Flush();
         }
 
+        private void Write(string/*!*/ data) {
+            FlushPendingSpace();
+            _writer.Write(data);
+        }
+
+        private void Write(char c) {
+            FlushPendingSpace();
+            _writer.Write(c);
+        }
+
+        private void FlushPendingSpace() {
+            if (_pendingSpace) {
+                _pendingSpace = false;
+                _writer.Write(' ');
+            }
+        }
+
         private void WriteIndicator(string indicator, bool needWhitespace, bool whitespace, bool indentation) {
             if (!_whitespace && needWhitespace) {
                 indicator = " " + indicator;
@@ -201,7 +219,13 @@ namespace IronRuby.StandardLibrary.Yaml {
             _whitespace = whitespace;
             _indentation = _indentation && indentation;
             _column += indicator.Length;
-            _writer.Write(indicator);
+            if (whitespace && indicator.Length > 1 && indicator[indicator.Length - 1] == ' ') {
+                // The separator is only written once something follows it on the same line.
+                Write(indicator.Substring(0, indicator.Length - 1));
+                _pendingSpace = true;
+            } else {
+                Write(indicator);
+            }
         }
 
         private void WriteIndent() {
@@ -218,17 +242,17 @@ namespace IronRuby.StandardLibrary.Yaml {
                 _whitespace = true;
                 string data = new string(' ', indent - _column);
                 _column = indent;
-                _writer.Write(data);
+                Write(data);
             }
         }
 
         private void WriteVersionDirective(string version_text) {
-            _writer.Write("%Yaml " + version_text);
+            Write("%Yaml " + version_text);
             WriteLineBreak();
         }
 
         private void WriteTagDirective(string handle, string prefix) {
-            _writer.Write("%TAG " + handle + " " + prefix);
+            Write("%TAG " + handle + " " + prefix);
             WriteLineBreak();
         }
 
@@ -247,7 +271,7 @@ namespace IronRuby.StandardLibrary.Yaml {
                     if (start < ending) {
                         data = text.Substring(start, ending - start);
                         _column += data.Length;
-                        _writer.Write(data);
+                        Write(data);
                         start = ending;
                     }
                     if (ch != 0) {
@@ -262,7 +286,7 @@ namespace IronRuby.StandardLibrary.Yaml {
                             data = "\\u" + str;
                         }
                         _column += data.Length;
-                        _writer.Write(data);
+                        Write(data);
                         start = ending + 1;
                     }
                 }
@@ -276,13 +300,13 @@ namespace IronRuby.StandardLibrary.Yaml {
                     }
 
                     _column += data.Length;
-                    _writer.Write(data);
+                    Write(data);
                     WriteIndent();
                     _whitespace = false;
                     _indentation = false;
 
                     if (start < (text.Length + 1) && text[start] == ' ') {
-                        _writer.Write('\\');
+                        Write('\\');
                     }
                 }
                 ending += 1;
@@ -311,7 +335,7 @@ namespace IronRuby.StandardLibrary.Yaml {
                         } else {
                             data = text.Substring(start, ending - start);
                             _column += data.Length;
-                            _writer.Write(data);
+                            Write(data);
                         }
                         start = ending;
                     }
@@ -329,7 +353,7 @@ namespace IronRuby.StandardLibrary.Yaml {
                         if (start < ending) {
                             data = text.Substring(start, ending - start);
                             _column += data.Length;
-                            _writer.Write(data);
+                            Write(data);
                             start = ending;
                         }
                     }
@@ -337,7 +361,7 @@ namespace IronRuby.StandardLibrary.Yaml {
                 if (c == '\'') {
                     data = "''";
                     _column += 2;
-                    _writer.Write(data);
+                    Write(data);
                     start = ending + 1;
                 }
                 if (c != 0) {
@@ -387,14 +411,14 @@ namespace IronRuby.StandardLibrary.Yaml {
                         } else {
                             data = text.Substring(start, ending - start);
                             _column += data.Length;
-                            _writer.Write(data);
+                            Write(data);
                         }
                         start = ending;
                     }
                 } else {
                     if (ceh == 0 || ' ' == ceh || '\n' == ceh) {
                         data = text.Substring(start, ending - start);
-                        _writer.Write(data);
+                        Write(data);
                         if (ceh == 0) {
                             WriteLineBreak();
                         }
@@ -436,7 +460,7 @@ namespace IronRuby.StandardLibrary.Yaml {
                     }
                 } else if (c == 0 || c == '\n') {
                     // non-empty line:
-                    _writer.Write(text.Substring(start, ending - start));
+                    Write(text.Substring(start, ending - start));
                     if (c == 0) {
                         WriteLineBreak();
                     }
@@ -458,7 +482,7 @@ namespace IronRuby.StandardLibrary.Yaml {
 
             if (!_whitespace) {
                 _column += 1;
-                _writer.Write(' ');
+                Write(' ');
             }
             _whitespace = false;
             _indentation = false;
@@ -479,7 +503,7 @@ namespace IronRuby.StandardLibrary.Yaml {
                         } else {
                             data = text.Substring(start, ending - start);
                             _column += data.Length;
-                            _writer.Write(data);
+                            Write(data);
                         }
                         start = ending;
                     }
@@ -503,7 +527,7 @@ namespace IronRuby.StandardLibrary.Yaml {
                     if (c == 0 || ' ' == c || '\n' == c) {
                         data = text.Substring(start, ending - start);
                         _column += data.Length;
-                        _writer.Write(data);
+                        Write(data);
                         start = ending;
                     }
                 }
@@ -520,6 +544,9 @@ namespace IronRuby.StandardLibrary.Yaml {
             _indentation = true;
             _line++;
             _column = 0;
+            // A separator space that ended up at the end of a line is not written: libyaml
+            // (Psych) emits "---" and "key:" with nothing after them before a line break.
+            _pendingSpace = false;
             _writer.Write('\n');
         }
 
@@ -1223,6 +1250,12 @@ namespace IronRuby.StandardLibrary.Yaml {
             ScalarEvent ev = (ScalarEvent)_event;
 
             switch (ev.Style) {
+                case ScalarQuotingStyle.Single:
+                    if (ev.AllowSingleQuoted && !(simpleKey && ev.IsMultiline)) {
+                        return ScalarQuotingStyle.Single;
+                    }
+                    break;
+
                 case ScalarQuotingStyle.Double:
                     if (_canonical || ev.IsEmpty) {
                         return ScalarQuotingStyle.Double;

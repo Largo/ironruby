@@ -137,13 +137,29 @@ module Etc
         entry
       end
 
-      def getpwuid(uid = nil)
-        uid = Process.uid if uid.nil?
-        raise TypeError, "no implicit conversion of #{uid.class} into Integer" unless uid.is_a?(Integer)
+      # Only an omitted id means the current process's; an explicit nil is refused.
+      def getpwuid(uid = (omitted = true; nil))
+        uid = omitted ? Process.uid : __id_argument__(uid)
         entry = each_passwd.find { |pw| pw.uid == uid }
         raise ArgumentError, "can't find user for #{uid}" unless entry
         entry
       end
+
+      # A uid or gid argument the way MRI's NUM2UIDT takes it: a Float is truncated and
+      # anything else must convert implicitly.
+      def __id_argument__(value)
+        case value
+        when Integer then value
+        when Float then value.to_i
+        else
+          unless !value.nil? && value.respond_to?(:to_int)
+            name = (value.nil? || value == true || value == false) ? value.inspect : value.class
+            raise TypeError, "no implicit conversion of #{name} into Integer"
+          end
+          value.to_int
+        end
+      end
+      private :__id_argument__
 
       def getgrnam(name)
         raise TypeError, "no implicit conversion of #{name.class} into String" unless name.is_a?(String)
@@ -152,9 +168,8 @@ module Etc
         entry
       end
 
-      def getgrgid(gid = nil)
-        gid = Process.gid if gid.nil?
-        raise TypeError, "no implicit conversion of #{gid.class} into Integer" unless gid.is_a?(Integer)
+      def getgrgid(gid = (omitted = true; nil))
+        gid = omitted ? Process.gid : __id_argument__(gid)
         entry = each_group.find { |gr| gr.gid == gid }
         raise ArgumentError, "can't find group for #{gid}" unless entry
         entry

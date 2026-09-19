@@ -165,7 +165,7 @@ namespace IronRuby.Builtins {
 
             public override Content/*!*/ EscapeRegularExpression() {
                 StringBuilder sb = RubyRegex.EscapeToStringBuilder(_data);
-                return (sb != null) ? new StringContent(sb.ToString(), _owner) : this;
+                return (sb != null) ? new StringContent(sb.ToString(), _owner) : Clone();
             }
 
             public override void CheckEncoding() {
