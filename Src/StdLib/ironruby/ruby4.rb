@@ -6330,8 +6330,21 @@ module GC
   end
 end
 
-# Ruby 3.2 autoloads Set; the 1.9 snapshot requires an explicit require.
-autoload :Set, "set" unless defined?(Set)
+# Set and Pathname are core in Ruby 4.0 ("set.rb" and "pathname.so" are in $" from the
+# start, so requiring them does nothing); here they are autoloaded from their files, by
+# path, and Kernel#Pathname loads the class and hands over to the real one it defines.
+autoload :Set, File.expand_path("set.rb", File.dirname(__FILE__)) unless defined?(Set)
+unless defined?(Pathname)
+  autoload :Pathname, File.expand_path("../ruby/1.9.1/pathname.rb", File.dirname(__FILE__))
+  module Kernel
+    def Pathname(path)
+      ::Pathname
+      Pathname(path)
+    end
+    module_function :Pathname
+    private :Pathname
+  end
+end
 
 # --- Enumerator: the block form and the methods 1.9 never had --------------
 # The core class only implements #each. Instances the runtime creates itself

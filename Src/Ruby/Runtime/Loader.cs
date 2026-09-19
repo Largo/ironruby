@@ -1167,6 +1167,39 @@ namespace IronRuby.Runtime {
 
         #endregion
 
+        // Features the core prelude loaded: kept out of $" (MRI's own Ruby-defined core is not in
+        // it either) but still loaded, so that requiring one again does nothing.
+        private readonly HashSet<string>/*!*/ _hiddenLoadedFiles = new HashSet<string>(StringComparer.Ordinal);
+
+        private static readonly string[]/*!*/ _CorePreludeFiles = {
+            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "complex18.rb", "rational18.rb"
+        };
+
+        // What MRI 4.0 has in $" before the program starts: features that are part of the core
+        // and so already required.
+        private static readonly string[]/*!*/ _ProvidedFeatures = {
+            "enumerator.so", "thread.rb", "fiber.so", "rational.so", "complex.so", "pathname.so", "ruby2_keywords.rb", "set.rb"
+        };
+
+        /// <summary>
+        /// Called once the core prelude has been required: hides the prelude's own files from $"
+        /// and lists the provided features instead, as MRI does.
+        /// </summary>
+        internal void ProvideCoreFeatures() {
+            lock (_loadedFiles) {
+                for (int i = _loadedFiles.Count - 1; i >= 0; i--) {
+                    var path = _loadedFiles[i] as MutableString;
+                    if (path != null && Array.IndexOf(_CorePreludeFiles, Path.GetFileName(path.ToString())) >= 0) {
+                        _hiddenLoadedFiles.Add(path.ToString());
+                        _loadedFiles.RemoveAt(i);
+                    }
+                }
+                for (int i = 0; i < _ProvidedFeatures.Length; i++) {
+                    _loadedFiles.Insert(i, MutableString.CreateAscii(_ProvidedFeatures[i]));
+                }
+            }
+        }
+
         private void AddLoadedFile(MutableString/*!*/ path) {
             lock (_loadedFiles) {
                 _loadedFiles.Add(path);
@@ -1260,9 +1293,16 @@ namespace IronRuby.Runtime {
         private bool AlreadyLoaded(string/*!*/ path, IEnumerable<ResolvedFile>/*!*/ files, LoadFlags flags) {
             // An extensionless entry in $" says nothing about a file that was found: MRI only
             // counts "foo" as loaded when no foo.rb (or library) could be found at all.
-            IEnumerable<MutableString> requested = RubyUtils.GetExtension(path).Length == 0
-                ? Enumerable.Empty<MutableString>()
-                : new[] { _context.EncodePath(path) };
+            // A feature listed by name ("set.rb", "complex.so" - what MRI provides) is loaded for
+            // a require of that name, with or without the extension.
+            IEnumerable<MutableString> requested;
+            if (RubyUtils.GetExtension(path).Length != 0) {
+                requested = new[] { _context.EncodePath(path) };
+            } else if (!Platform.IsAbsolutePath(path) && !path.StartsWith(".", StringComparison.Ordinal)) {
+                requested = new[] { _context.EncodePath(path + ".rb"), _context.EncodePath(path + ".so") };
+            } else {
+                requested = Enumerable.Empty<MutableString>();
+            }
             return (flags & LoadFlags.LoadOnce) != 0 && AnyFileLoaded(
                 requested.Concat(files.Select((file) => _context.EncodePath(file.Path)))
             );
@@ -1279,6 +1319,12 @@ namespace IronRuby.Runtime {
                 // use case sensitive comparison
                 MutableString loadedPath = Protocols.CastToPath(toPath, file);
                 if (paths.Any((path) => loadedPath.Equals(path))) {
+                    return true;
+                }
+            }
+
+            lock (_loadedFiles) {
+                if (_hiddenLoadedFiles.Count > 0 && paths.Any((path) => _hiddenLoadedFiles.Contains(path.ToString()))) {
                     return true;
                 }
             }
