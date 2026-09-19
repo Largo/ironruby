@@ -1730,6 +1730,7 @@ class File
   # first and leaves the rest of the file intact, matching IO.write.
   def self.write(name, string, offset = nil, **opts)
     open_args = opts[:open_args]
+    perm = nil
     if open_args
       # :open_args is the whole argument list for the open, and it displaces every
       # other option - including the mode, which is then read-only if it is absent.
@@ -1742,6 +1743,8 @@ class File
     else
       mode = opts[:mode]
       encoding = opts[:encoding]
+      # the permissions a file that has to be created gets, as File.open's third argument
+      perm = opts[:perm]
       if encoding && mode.is_a?(::String) && mode.include?(":")
         ::Kernel.raise(::ArgumentError, "encoding specified twice")
       end
@@ -1753,7 +1756,7 @@ class File
       end
     end
 
-    open(name, mode) do |io|
+    open(name, mode, *(perm ? [perm] : [])) do |io|
       io.set_encoding(encoding) if encoding
       io.seek(offset) if offset
       io.write(string)
@@ -9795,7 +9798,8 @@ module Process
 
     if args.size == 1 && !array_form
       command = __check_spawn_string__(first, "command")
-      if command =~ SPAWN_SHELL_META
+      # a command line is bytes to the shell; one that is not valid in its encoding still runs
+      if (command.valid_encoding? ? command : command.b) =~ SPAWN_SHELL_META
         return ["/bin/sh", ["sh", "-c", command]]
       end
       words = command.split(" ")
@@ -9870,8 +9874,15 @@ module Process
 
   def self.spawn(*args)
     file, argv, envp, actions, pgroup, options = __spawn_setup__(args)
+    close_others = options[:close_others] ? true : false
     __with_umask__(options[:umask]) do
-      __check__(__spawn__(file, argv, envp, actions, pgroup, options[:close_others] ? true : false), file)
+      result = __spawn__(file, argv, envp, actions, pgroup, close_others)
+      # An executable file with no #! line is a shell script to execve(2), which refuses it
+      # (ENOEXEC); MRI then runs it with /bin/sh, as a shell would.
+      if result == -8 && file != "/bin/sh"
+        result = __spawn__("/bin/sh", ["sh", file] + argv[1..-1], envp, actions, pgroup, close_others)
+      end
+      __check__(result, file)
     end
   rescue SystemCallError
     # MRI forks first and only then discovers that the command cannot be run, so the child
