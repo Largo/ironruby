@@ -2120,7 +2120,7 @@ namespace IronRuby.Builtins {
         /// a paragraph (empty separator) loses the run of newlines that ended it, but the last
         /// paragraph of a file ends at end of file, not at a separator, and keeps its newline.
         /// </summary>
-        private static void ChompLine(MutableString/*!*/ line, MutableString separator) {
+        internal static void ChompLine(MutableString/*!*/ line, MutableString separator) {
             if (separator == null) {
                 return;
             }

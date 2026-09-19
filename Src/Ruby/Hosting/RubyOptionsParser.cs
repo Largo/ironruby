@@ -130,7 +130,7 @@ namespace IronRuby.Hosting {
 
             // The flags that take no argument cluster with whatever follows them, so -ne 'code'
             // is -n -e 'code'. Peeling one off at a time also covers -np, -nal and so on.
-            if (arg.Length > 2 && arg[0] == '-' && "nplad".IndexOf(arg[1]) >= 0) {
+            if (arg.Length > 2 && arg[0] == '-' && "nplads".IndexOf(arg[1]) >= 0) {
                 ParseArgument(arg.Substring(0, 2));
                 ParseArgument("-" + arg.Substring(2));
                 return;
@@ -282,10 +282,51 @@ namespace IronRuby.Hosting {
                 return;
             }
 
+            // -Fpattern: $; for -a's split, compiled as a Regexp. An empty -F is ignored, as by MRI.
+            if (arg.StartsWith("-F", StringComparison.Ordinal)) {
+                if (arg.Length > 2) {
+                    LanguageSetup.Options["FieldSeparator"] = arg.Substring(2);
+                }
+                return;
+            }
+
+            // -x[dir]: the script starts at its first #!...ruby line; a directory is cd'ed to first.
+            if (arg.StartsWith("-x", StringComparison.Ordinal)) {
+                LanguageSetup.Options["SkipToRubyShebang"] = true;
+                if (arg.Length > 2) {
+                    ConsoleOptions.ChangeDirectory = arg.Substring(2);
+                }
+                return;
+            }
+
+            // -X dir / -Xdir is MRI's other spelling of -C. -X:Name stays IronRuby's own option.
+            if (arg.StartsWith("-X", StringComparison.Ordinal) && !arg.StartsWith("-X:", StringComparison.Ordinal)) {
+                ConsoleOptions.ChangeDirectory = (arg == "-X") ? PopNextArg() : arg.Substring(2);
+                return;
+            }
+
+            if (arg == "-s") {
+                LanguageSetup.Options["ScriptSwitches"] = true;
+                return;
+            }
+
+            // "--" ends the interpreter's options: what follows is the script and its arguments,
+            // or with -e only arguments.
+            if (arg == "--") {
+                string[] rest = PopRemainingArgs();
+                if (ConsoleOptions.Command != null) {
+                    LanguageSetup.Options["MainFile"] = "-e";
+                    LanguageSetup.Options["Arguments"] = rest;
+                } else if (rest.Length > 0) {
+                    ConsoleOptions.FileName = rest[0];
+                    LanguageSetup.Options["MainFile"] = RubyUtils.CanonicalizePath(rest[0]);
+                    LanguageSetup.Options["Arguments"] = ArrayUtils.ShiftLeft(rest, 1);
+                }
+                return;
+            }
+
             if (arg.StartsWith("-C", StringComparison.Ordinal) ||
-                arg.StartsWith("-F", StringComparison.Ordinal) ||
-                arg.StartsWith("-T", StringComparison.Ordinal) ||
-                arg.StartsWith("-x", StringComparison.Ordinal)) {
+                arg.StartsWith("-T", StringComparison.Ordinal)) {
                 throw new InvalidOptionException(String.Format("Option `{0}' not supported", arg));
             }
 
@@ -304,7 +345,6 @@ namespace IronRuby.Hosting {
 
                 case "-c":
                 case "--copyright":
-                case "-s":
                     throw new InvalidOptionException(String.Format("Option `{0}' not supported", optionName));
 
                 case "-n":
@@ -475,12 +515,24 @@ namespace IronRuby.Hosting {
             LanguageSetup.Options["Arguments"] = args.ToArray();
         }
 
+        /// <summary>
+        /// -S looks for the script in RUBYPATH and then in PATH; a name found in neither is taken
+        /// as it is.
+        /// </summary>
         private string FindMainFileFromPath(string mainFileFromPath) {
-            string path = Platform.GetEnvironmentVariable("PATH");
-            foreach (string p in path.Split(';')) {
-                string fullPath = RubyUtils.CombinePaths(p, mainFileFromPath);
-                if (Platform.FileExists(fullPath)) {
-                    return fullPath;
+            foreach (string variable in new[] { "RUBYPATH", "PATH" }) {
+                string path = Platform.GetEnvironmentVariable(variable);
+                if (String.IsNullOrEmpty(path)) {
+                    continue;
+                }
+                foreach (string p in path.Split(Path.PathSeparator)) {
+                    if (p.Length == 0) {
+                        continue;
+                    }
+                    string fullPath = RubyUtils.CombinePaths(p, mainFileFromPath);
+                    if (Platform.FileExists(fullPath)) {
+                        return fullPath;
+                    }
                 }
             }
             return mainFileFromPath;

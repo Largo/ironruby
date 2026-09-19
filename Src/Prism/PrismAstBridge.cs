@@ -59,9 +59,32 @@ namespace IronRuby.Prism {
             // eval("...", binding, file, line) reports __LINE__ and backtraces from `line`, which is
             // what RubyCompilerOptions.InitialLocation carries. Only the old parser ever read it, so
             // every eval under prism started at line 1 no matter what it was given.
+            byte commandLine = 0;
+            bool mainScript = false;
+            if (options.FactoryKind == TopScopeFactoryKind.Main && sourceUnit.LanguageContext is RubyContext context) {
+                commandLine = CommandLineFlags(context.RubyOptions, sourceUnit.Path);
+                mainScript = sourceUnit.Path != "-e";
+            }
             return ParseText(sourceUnit.GetCode(), sourceUnit.Path, options.LocalNames, sourceUnit, errorSink,
                 options.InitialLocation.Line, options.IsEval && options.TopLevelMethodName == null, options.IsEval,
-                options.EvalSourceEncoding);
+                options.EvalSourceEncoding, commandLine, mainScript);
+        }
+
+        /// <summary>
+        /// The main program is parsed the way MRI parses it: prism itself wraps the -n / -p loop
+        /// around it (with -a's split and -l's chomp), so BEGIN and END are still top-level
+        /// statements, and -x has prism skip to the first #!...ruby line.
+        /// </summary>
+        private static byte CommandLineFlags(RubyOptions/*!*/ options, string path) {
+            byte flags = 0;
+            if (options.AutoSplit) flags |= 0x1;           // PM_OPTIONS_COMMAND_LINE_A
+            if (options.ChopLines) flags |= 0x4;           // PM_OPTIONS_COMMAND_LINE_L
+            if (options.LoopOverInput) flags |= 0x8;       // PM_OPTIONS_COMMAND_LINE_N
+            if (options.PrintEachLine) flags |= 0x10;      // PM_OPTIONS_COMMAND_LINE_P
+            if (options.SkipToRubyShebang && path != "-e") {
+                flags |= 0x20;                             // PM_OPTIONS_COMMAND_LINE_X
+            }
+            return flags;
         }
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path) {
@@ -75,7 +98,7 @@ namespace IronRuby.Prism {
 
         public static SourceUnitTree ParseText(string/*!*/ code, string path, List<string> outerLocalNames,
             SourceUnit sourceUnit, ErrorSink errorSink, int startLine, bool evalOutsideMethod = false, bool isEval = false,
-            RubyEncoding evalSourceEncoding = null) {
+            RubyEncoding evalSourceEncoding = null, byte commandLine = 0, bool mainScript = false) {
 
             // --enable/--disable=frozen-string-literal only sets the default; the magic comment
             // in a file still wins, and prism applies that rule itself.
@@ -100,7 +123,7 @@ namespace IronRuby.Prism {
             // RubyContext.GetSourceReader); the escaping encoding gives prism those bytes back.
             PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames,
                 frozenStringLiteral, sourceEncoding == RubyEncoding.UTF8 ? sourceEncoding.EscapingEncoding : sourceEncoding.Encoding,
-                encodingName);
+                encodingName, commandLine, mainScript);
 
             // An eval'd string without a magic comment is in the string's own encoding, which its
             // literals and __ENCODING__ then carry (MRI), rather than in UTF-8 as a file would be.
@@ -263,6 +286,25 @@ namespace IronRuby.Prism {
         /// </summary>
         private static Pm.PmNode HoistPreExecution(Pm.PmNode statementsNode) {
             var statements = statementsNode as Pm.StatementsNode;
+
+            // -n / -p: prism has put the program inside `while gets`, BEGIN blocks and all. They
+            // still run once, before the loop.
+            if (statements != null && statements.Body.Length == 1 && statements.Body[0] is Pm.WhileNode loop &&
+                loop.Statements is Pm.StatementsNode loopBody && Array.Exists(loopBody.Body, n => n is Pm.PreExecutionNode)) {
+                var hoisted = new List<Pm.PmNode>();
+                var rest = new List<Pm.PmNode>();
+                foreach (var n in loopBody.Body) {
+                    (n is Pm.PreExecutionNode ? hoisted : rest).Add(n);
+                }
+                loop.Statements = new Pm.StatementsNode {
+                    Body = rest.ToArray(), StartOffset = loopBody.StartOffset, Length = loopBody.Length, Flags = loopBody.Flags
+                };
+                hoisted.Add(loop);
+                return new Pm.StatementsNode {
+                    Body = hoisted.ToArray(), StartOffset = statements.StartOffset, Length = statements.Length, Flags = statements.Flags
+                };
+            }
+
             if (statements == null || !Array.Exists(statements.Body, n => n is Pm.PreExecutionNode)) {
                 return statementsNode;
             }

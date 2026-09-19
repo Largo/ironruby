@@ -40,10 +40,21 @@ namespace IronRuby.Prism {
         /// </summary>
         public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
             int frozenStringLiteral, Encoding/*!*/ sourceEncoding, string encodingName) {
+            return Parse(source, path, startLine, outerLocals, frozenStringLiteral, sourceEncoding, encodingName, 0, false);
+        }
+
+        /// <summary>
+        /// <paramref name="commandLine"/> holds prism's PM_OPTIONS_COMMAND_LINE_* bits (-n, -p, -l,
+        /// -a, -x), and <paramref name="mainScript"/> says this is the program ruby was started
+        /// with, whose non-ruby #! line makes prism look further down for a #!...ruby one.
+        /// </summary>
+        public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
+            int frozenStringLiteral, Encoding/*!*/ sourceEncoding, string encodingName, byte commandLine, bool mainScript) {
 
             byte[] sourceBytes = sourceEncoding.GetBytes(source);
             PrismParseResult result = PrismLoader.LoadParse(
-                ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName)));
+                ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName,
+                    commandLine, mainScript)));
             result.DataOffset = ComputeDataOffset(result.DataLocation, sourceBytes);
             return result;
         }
@@ -110,6 +121,11 @@ namespace IronRuby.Prism {
 
         internal static byte[]/*!*/ BuildOptionsData(string path, int startLine, IList<string> outerLocals, int frozenStringLiteral,
             string encodingName) {
+            return BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName, 0, false);
+        }
+
+        internal static byte[]/*!*/ BuildOptionsData(string path, int startLine, IList<string> outerLocals, int frozenStringLiteral,
+            string encodingName, byte commandLine, bool mainScript) {
             using (var stream = new MemoryStream())
             using (var writer = new BinaryWriter(stream)) {
                 byte[] pathBytes = Encoding.UTF8.GetBytes(path ?? "");
@@ -126,10 +142,10 @@ namespace IronRuby.Prism {
                 // 1 enabled, -1 (0xff) disabled, 0 unset - a magic comment in the file wins
                 // over either, which prism does itself.
                 writer.Write((sbyte)frozenStringLiteral);
-                writer.Write((byte)0);      // command line flags
+                writer.Write(commandLine);  // command line flags
                 writer.Write((byte)0);      // syntax version (latest)
                 writer.Write((byte)0);      // encoding locked
-                writer.Write((byte)0);      // main script
+                writer.Write((byte)(mainScript ? 1 : 0));  // main script
                 writer.Write((byte)0);      // partial script
                 writer.Write((byte)0);      // freeze
                 if (outerLocals != null) {
