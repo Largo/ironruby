@@ -668,6 +668,13 @@ namespace IronRuby.Builtins {
             }
 
             SetCause(context, exception, hasCause, cause);
+
+            // An exception with no backtrace - new, or cleared by set_backtrace(nil) - gets one from
+            // where it is raised now. The interpreter keeps the frames of the first throw on the
+            // exception and would otherwise report those again.
+            if (RubyExceptionData.GetInstance(exception).Backtrace == null) {
+                exception.SetData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo), null);
+            }
             return exception;
         }
 

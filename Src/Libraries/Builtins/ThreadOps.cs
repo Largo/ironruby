@@ -135,7 +135,10 @@ namespace IronRuby.Builtins {
                 lock (_threadLocalStorage) {
                     RubyArray result = new RubyArray(_threadLocalStorage.Count);
                     foreach (RubySymbol key in _threadLocalStorage.Keys) {
-                        result.Add(key);
+                        // the runtime's own bookkeeping (the Ruby-level Fiber's) is not the program's
+                        if (!key.ToString().StartsWith("__ir_", StringComparison.Ordinal)) {
+                            result.Add(key);
+                        }
                     }
                     return result;
                 }
