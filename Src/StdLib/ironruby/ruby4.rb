@@ -3439,7 +3439,16 @@ module Kernel
         raise ::ArgumentError, "negative level (#{uplevel})" if uplevel < 0
         # IronRuby's Kernel#caller only takes the start argument, and its entries carry a
         # trailing ":in `method'" that MRI's uplevel prefix does not.
-        location = (caller(uplevel + 1) || [])[0]
+        # As RubyGems' own Kernel#warn does, frames of its #require don't count: a warning
+        # from a required file names the line that required it, not custom_require.rb.
+        frames = caller(1) || []
+        index = 0
+        index += 1 while frames[index] && frames[index].include?("/rubygems/custom_require.rb:")
+        uplevel.times do
+          index += 1
+          index += 1 while frames[index] && frames[index].include?("/rubygems/custom_require.rb:")
+        end
+        location = frames[index]
         location = location.sub(/:in [`'].*\z/, '') if location
         # MRI prefixes "warning: " even when the level is past the end of the backtrace.
         prefix = location ? "#{location}: warning: " : "warning: "
@@ -6850,27 +6859,23 @@ class Enumerator
       __chain__ { |y| source.each { |*values| item = __value__(values); y << item unless block.call(item) } }
     end
 
-    def grep(pattern, &block)
+    # grep and grep_v are Kernel#__ir_lazy_grep__ / __ir_lazy_grep_v__, which hand this the
+    # frame that called them: without a block a Regexp match lands in its $~.
+    def __ir_lazy_grep_impl__(pattern, invert, caller_frame, block)
       source = self
       __chain__ do |y|
         source.each do |*values|
           value = values.size <= 1 ? values[0] : values
-          next unless __ir_case_match__(pattern, value, block)
+          next if __ir_case_match__(pattern, value, block || caller_frame) == invert
           y << (block ? block.call(value) : value)
         end
       end
     end
+    private :__ir_lazy_grep_impl__
 
-    def grep_v(pattern, &block)
-      source = self
-      __chain__ do |y|
-        source.each do |*values|
-          value = values.size <= 1 ? values[0] : values
-          next if __ir_case_match__(pattern, value, block)
-          y << (block ? block.call(value) : value)
-        end
-      end
-    end
+    alias_method :grep, :__ir_lazy_grep__
+    alias_method :grep_v, :__ir_lazy_grep_v__
+    public :grep, :grep_v
 
     def compact
       source = self
@@ -7942,9 +7947,10 @@ class String
       return self
     end
 
-    # Two single characters walk the codepoints between them: "9".upto("A")
-    # answers 9 : ; < = > ? @ A.
-    if length == 1 && stop.length == 1
+    # Two single ASCII characters walk the codepoints between them: "9".upto("A")
+    # answers 9 : ; < = > ? @ A. Any other pair walks #succ (MRI's str_upto_each
+    # measures in bytes), so "\u0999".upto("\u9999") ends where #succ outgrows it.
+    if bytesize == 1 && stop.bytesize == 1
       from = ord
       to = stop.ord
       to -= 1 if exclusive
@@ -7960,7 +7966,7 @@ class String
       block.call(current)
       break if current == stop
       current = current.succ
-      break if current.length > stop.length
+      break if current.bytesize > stop.bytesize
     end
     self
   end

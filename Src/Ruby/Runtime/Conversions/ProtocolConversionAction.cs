@@ -238,6 +238,11 @@ namespace IronRuby.Runtime.Conversions {
                 respondToMethod = targetClass.ResolveMethodForSiteNoLock(Symbols.RespondTo, VisibilityContext.AllVisible);
                 if (!respondToMethod.Found ||
                     (respondToMethod.Info.DeclaringModule == targetClass.Context.KernelModule && respondToMethod.Info is RubyLibraryMethodInfo)) { // TODO: better override detection
+                    if (!respondToMethod.Found) {
+                        // a BasicObject that defines respond_to? later has to get the slow path then
+                        methodMissing = targetClass.ResolveMethodNoLock(Symbols.MethodMissing, VisibilityContext.AllVisible);
+                        methodMissing.InvalidateSitesOnMissingMethodAddition(Symbols.RespondTo, targetClass.Context);
+                    }
                     respondToMethod = MethodResolutionResult.NotFound;
 
                     // get the first applicable conversion:

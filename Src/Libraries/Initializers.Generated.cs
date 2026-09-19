@@ -584,8 +584,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "equal?", 0x51, 
-                0x00000000U, 
-                new Func<System.Object, System.Object, System.Boolean>(IronRuby.Builtins.BasicObjectOps.IsEqual)
+                0x00000001U, 0x00000000U, 
+                new Func<IronRuby.Runtime.IRubyObject, System.Object, System.Boolean>(IronRuby.Builtins.BasicObjectOps.ValueEquals), 
+                new Func<System.Object, System.Object, System.Boolean>(IronRuby.Builtins.BasicObjectOps.ValueEquals)
             );
             
             DefineLibraryMethod(module, "initialize", 0x5a, 
@@ -4456,7 +4457,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "__ir_case_match__", 0x52, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object, IronRuby.Builtins.Proc, System.Boolean>(IronRuby.Builtins.KernelOps.CaseMatchInto)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.CaseMatchInto)
             );
             
             DefineLibraryMethod(module, "__ir_clone_with_freeze__", 0x52, 
@@ -4467,6 +4468,16 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__ir_inspect__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.InspectForDisplay)
+            );
+            
+            DefineLibraryMethod(module, "__ir_lazy_grep__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.LazyGrep)
+            );
+            
+            DefineLibraryMethod(module, "__ir_lazy_grep_v__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.LazyGrepV)
             );
             
             DefineLibraryMethod(module, "__method__", 0x52, 

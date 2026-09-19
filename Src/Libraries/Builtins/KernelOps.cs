@@ -981,16 +981,46 @@ namespace IronRuby.Builtins {
             return line;
         }
 
+        /// <summary>
+        /// pattern === value, with a Regexp's match landing in the $~ of <paramref name="target"/>:
+        /// a Proc (the block of grep) or a Binding (the frame that called grep).
+        /// </summary>
         [RubyMethod("__ir_case_match__", RubyMethodAttributes.PrivateInstance)]
         public static bool CaseMatchInto(ConversionStorage<MutableString>/*!*/ stringTryCast, BinaryOpStorage/*!*/ caseEquals,
-            object self, object pattern, object value, Proc target) {
+            object self, object pattern, object value, object target) {
 
             var regex = pattern as RubyRegex;
-            if (regex != null && target != null) {
-                return RegexpOps.CaseCompare(stringTryCast, target.LocalScope, regex, value);
+            RubyScope targetScope = (target is Proc) ? ((Proc)target).LocalScope : (target is Binding) ? ((Binding)target).LocalScope : null;
+            if (regex != null && targetScope != null) {
+                return RegexpOps.CaseCompare(stringTryCast, targetScope, regex, value);
             }
             var site = caseEquals.GetCallSite("===");
             return RubyOps.IsTrue(site.Target(site, pattern, value));
+        }
+
+        /// <summary>
+        /// Enumerator::Lazy#grep and #grep_v (ruby4.rb aliases them to these). Without a block the
+        /// matches of a Regexp land in the $~ of the code that called grep - which is where the
+        /// block that later takes the values (each, map, ...) reads it - and only a library method
+        /// is given that frame; the work is __ir_lazy_grep_impl__'s.
+        /// </summary>
+        [RubyMethod("__ir_lazy_grep__", RubyMethodAttributes.PrivateInstance)]
+        public static object LazyGrep(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, object pattern) {
+            return LazyGrep(storage, scope, block, self, pattern, false);
+        }
+
+        [RubyMethod("__ir_lazy_grep_v__", RubyMethodAttributes.PrivateInstance)]
+        public static object LazyGrepV(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, object pattern) {
+            return LazyGrep(storage, scope, block, self, pattern, true);
+        }
+
+        private static object LazyGrep(CallSiteStorage<Func<CallSite, object, object, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, object pattern, bool invert) {
+            var site = storage.GetCallSite("__ir_lazy_grep_impl__", new RubyCallSignature(4, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, pattern, ScriptingRuntimeHelpers.BooleanToObject(invert),
+                new Binding(scope), (block != null) ? block.Proc : null);
         }
 
         [RubyMethod("__ir_clone_with_freeze__", RubyMethodAttributes.PrivateInstance)]

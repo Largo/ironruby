@@ -257,6 +257,93 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        /// <summary>
+        /// A zone described by a POSIX TZ string with a daylight saving part ("EST5EDT",
+        /// "CET-1CEST,M3.5.0,M10.5.0/3"), as glibc reads one when no zoneinfo file has that
+        /// name. The transitions are worked out for every year a Time is likely to be asked
+        /// about. Offsets are seconds east of UTC; a rule is null when the string gave none,
+        /// and then the US rules glibc falls back on apply.
+        /// </summary>
+        internal static TzFile/*!*/ FromPosixRule(string/*!*/ stdName, int stdOffset, string/*!*/ dstName, int dstOffset,
+            string startRule, string endRule) {
+            if (startRule == null || endRule == null) {
+                startRule = "M3.2.0";
+                endRule = "M11.1.0";
+            }
+
+            var transitions = new List<long>();
+            var types = new List<byte>();
+            for (int year = 1900; year <= 2200; year++) {
+                // the start is given in standard time, the end in daylight saving time
+                long start = PosixRuleDay(startRule, year) - stdOffset;
+                long end = PosixRuleDay(endRule, year) - dstOffset;
+                if (start < end) {
+                    transitions.Add(start); types.Add(1);
+                    transitions.Add(end); types.Add(0);
+                } else {
+                    transitions.Add(end); types.Add(0);
+                    transitions.Add(start); types.Add(1);
+                }
+            }
+
+            return new TzFile(transitions.ToArray(), types.ToArray(), new[] { stdOffset, dstOffset },
+                new[] { false, true }, new[] { stdName, dstName });
+        }
+
+        /// <summary>
+        /// The wall-clock second (counted from the epoch as if the wall clock were UTC) at which
+        /// a POSIX rule date - "Mm.w.d", "Jn" or "n", with an optional "/time" - falls in a year.
+        /// </summary>
+        private static long PosixRuleDay(string/*!*/ rule, int year) {
+            long time = 2 * 3600;
+            int slash = rule.IndexOf('/');
+            if (slash >= 0) {
+                time = ParsePosixTime(rule.Substring(slash + 1));
+                rule = rule.Substring(0, slash);
+            }
+
+            DateTime day;
+            if (rule.StartsWith("M", StringComparison.Ordinal)) {
+                string[] parts = rule.Substring(1).Split('.');
+                int month = Int32.Parse(parts[0], CultureInfo.InvariantCulture);
+                int week = Int32.Parse(parts[1], CultureInfo.InvariantCulture);
+                int weekday = Int32.Parse(parts[2], CultureInfo.InvariantCulture);
+                day = new DateTime(year, month, 1, 0, 0, 0, DateTimeKind.Utc);
+                day = day.AddDays((weekday - (int)day.DayOfWeek + 7) % 7 + 7 * (week - 1));
+                while (day.Month != month) {
+                    day = day.AddDays(-7);
+                }
+            } else if (rule.StartsWith("J", StringComparison.Ordinal)) {
+                // 1..365, February 29 is never counted
+                int n = Int32.Parse(rule.Substring(1), CultureInfo.InvariantCulture);
+                day = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddDays(n - 1);
+                if (DateTime.IsLeapYear(year) && n >= 60) {
+                    day = day.AddDays(1);
+                }
+            } else {
+                // 0..365, February 29 is counted
+                day = new DateTime(year, 1, 1, 0, 0, 0, DateTimeKind.Utc).AddDays(Int32.Parse(rule, CultureInfo.InvariantCulture));
+            }
+
+            return (long)(day - RubyTime.Epoch).TotalSeconds + time;
+        }
+
+        internal static int ParsePosixTime(string/*!*/ value) {
+            int sign = 1;
+            if (value.StartsWith("-", StringComparison.Ordinal)) {
+                sign = -1;
+                value = value.Substring(1);
+            } else if (value.StartsWith("+", StringComparison.Ordinal)) {
+                value = value.Substring(1);
+            }
+            string[] parts = value.Split(':');
+            int result = 0;
+            for (int i = 0; i < 3; i++) {
+                result = result * 60 + (i < parts.Length ? Int32.Parse(parts[i], CultureInfo.InvariantCulture) : 0);
+            }
+            return sign * result;
+        }
+
         private static int ReadInt32(byte[]/*!*/ data, int offset) {
             return (data[offset] << 24) | (data[offset + 1] << 16) | (data[offset + 2] << 8) | data[offset + 3];
         }
@@ -407,6 +494,12 @@ namespace IronRuby.Builtins {
 
         internal static RubyTimeZone/*!*/ MakeFixed(long offsetSeconds, string/*!*/ name) {
             return new RubyTimeZone(null, offsetSeconds, name);
+        }
+
+        internal static RubyTimeZone/*!*/ FromPosixRule(string/*!*/ stdName, long stdOffset, string/*!*/ dstName, long dstOffset,
+            string startRule, string endRule) {
+            TzFile file = TzFile.FromPosixRule(stdName, (int)stdOffset, dstName, (int)dstOffset, startRule, endRule);
+            return new RubyTimeZone(file, 0, stdName);
         }
 
         internal static RubyTimeZone FromId(string/*!*/ id) {

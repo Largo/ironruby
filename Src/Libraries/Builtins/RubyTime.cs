@@ -97,10 +97,13 @@ namespace IronRuby.Builtins {
             }
 
             if (_tzPattern == null) {
-                // TODO: we require an offset and don't recognize DST rules
+                // std offset [dst [offset] [,start[/time],end[/time]]]; we require the offset
                 _tzPattern = new Regex(@"^\s*
                     (?<std>[^-+:,0-9\0]{3,})
                     (?<sign>[+-]?)(?<sh>[0-9]{1,2})((:(?<sm>[0-9]{1,2}))?(:(?<ss>[0-9]{1,2}))?)?
+                    (?<dst>[A-Za-z]{3,})?
+                    (?<doff>[+-]?[0-9]{1,2}(:[0-9]{1,2}){0,2})?
+                    (,(?<start>[^,]+),(?<end>[^,]+))?
                     ",
                     RegexOptions.IgnorePatternWhitespace | RegexOptions.CultureInvariant
                 );
@@ -126,6 +129,20 @@ namespace IronRuby.Builtins {
             if (totalSeconds <= -24 * 3600 || totalSeconds >= 24 * 3600) {
                 timeZone = null;
                 return false;
+            }
+
+            if (match.Groups["dst"].Success) {
+                // daylight saving time is an hour ahead of standard time unless it says otherwise
+                long dstSeconds = match.Groups["doff"].Success ? -TzFile.ParsePosixTime(match.Groups["doff"].Value) : totalSeconds + 3600;
+                try {
+                    timeZone = RubyTimeZone.FromPosixRule(match.Groups["std"].Value, totalSeconds, match.Groups["dst"].Value, dstSeconds,
+                        match.Groups["start"].Success ? match.Groups["start"].Value : null,
+                        match.Groups["end"].Success ? match.Groups["end"].Value : null);
+                    return true;
+                } catch (FormatException) {
+                } catch (ArgumentException) {
+                } catch (IndexOutOfRangeException) {
+                }
             }
 
             timeZone = RubyTimeZone.MakeFixed(totalSeconds, match.Groups["std"].Value);

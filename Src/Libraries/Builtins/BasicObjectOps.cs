@@ -138,13 +138,21 @@ namespace IronRuby.Builtins {
 
         #region ==, !=, !, equal?
 
+        // equal? is an alias of == in BasicObject, so both names sit on both overloads (an
+        // UnboundMethod for one is == to one for the other).
         [RubyMethod("==")]
+        [RubyMethod("equal?")]
         public static bool ValueEquals([NotNull]IRubyObject/*!*/ self, object other) {
             return self.BaseEquals(other);
         }
 
         [RubyMethod("==")]
+        [RubyMethod("equal?")]
         public static bool ValueEquals(object self, object other) {
+            // a String, Regexp or Time compares its contents in Equals; for them this is identity
+            if (self is MutableString || self is RubyRegex || self is RubyTime) {
+                return self == other;
+            }
             return Object.Equals(self, other);
         }
 
@@ -166,21 +174,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("__id__")]
         public static object GetObjectId(RubyContext/*!*/ context, object self) {
             return ClrInteger.Narrow(RubyUtils.GetObjectId(context, self));
-        }
-
-        [RubyMethod("equal?")]
-        public static bool IsEqual(object self, object other) {
-            // Comparing object IDs is (potentially) expensive because it forces us
-            // to generate InstanceData and a new object ID
-            if (self == other) {
-                return true;
-            }
-
-            if (RubyUtils.IsRubyValueType(self) && RubyUtils.IsRubyValueType(other)) {
-                return object.Equals(self, other);
-            }
-
-            return false;
         }
 
         #endregion

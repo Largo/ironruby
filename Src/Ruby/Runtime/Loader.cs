@@ -1182,8 +1182,13 @@ namespace IronRuby.Runtime {
         /// Return true if any of the files has alraedy been loaded.
         /// </summary>
         private bool AlreadyLoaded(string/*!*/ path, IEnumerable<ResolvedFile>/*!*/ files, LoadFlags flags) {
+            // An extensionless entry in $" says nothing about a file that was found: MRI only
+            // counts "foo" as loaded when no foo.rb (or library) could be found at all.
+            IEnumerable<MutableString> requested = RubyUtils.GetExtension(path).Length == 0
+                ? Enumerable.Empty<MutableString>()
+                : new[] { _context.EncodePath(path) };
             return (flags & LoadFlags.LoadOnce) != 0 && AnyFileLoaded(
-                new[] { _context.EncodePath(path) }.Concat(files.Select((file) => _context.EncodePath(file.Path)))
+                requested.Concat(files.Select((file) => _context.EncodePath(file.Path)))
             );
         }
 
