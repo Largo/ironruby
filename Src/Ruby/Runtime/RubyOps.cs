@@ -2820,7 +2820,19 @@ namespace IronRuby.Runtime {
 
             return versionHandle.Method == expectedVersion
                 // TODO: optimize this (we can have a hashtable of singletons per class: Weak(object) => Struct { ImmediateClass, InstanceVariables, Flags }):
-                && !(context.TryGetClrTypeInstanceData(target, out data) && (immediate = data.ImmediateClass) != null && immediate.IsSingletonClass);
+                && !(context.TryGetClrTypeInstanceData(target, out data) && (immediate = data.ImmediateClass) != null
+                    && (immediate.IsSingletonClass || immediate.IsRubyClass));
+        }
+
+        /// <summary>
+        /// A rule for an object of a sealed CLR type whose class is a Ruby subclass of that type (see
+        /// RubyContext.AdoptClrObject) holds for objects with exactly that immediate class.
+        /// </summary>
+        [Emitted]
+        public static bool IsAdoptedClrRuleValid(RubyContext/*!*/ context, object/*!*/ target, RubyClass/*!*/ expectedClass, int expectedVersion) {
+            RubyInstanceData data;
+            return context.TryGetClrTypeInstanceData(target, out data) && ReferenceEquals(data.ImmediateClass, expectedClass)
+                && expectedClass.Version.Method == expectedVersion;
         }
 
         // super call condition

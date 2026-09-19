@@ -9901,7 +9901,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "new", 0x61, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.CreateThread)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.CreateThread)
             );
             
             DefineLibraryMethod(module, "pass", 0x61, 

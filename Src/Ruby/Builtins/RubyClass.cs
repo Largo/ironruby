@@ -103,6 +103,13 @@ namespace IronRuby.Builtins {
         //
         internal Dictionary<string, bool> ClrSingletonMethods { get; set; }
 
+        /// <summary>
+        /// Set on the class of a sealed CLR type once an object of that type has been given a Ruby
+        /// subclass of it as its class (RubyContext.AdoptClrObject). Rules bound to the CLR class then
+        /// have to check that the incoming object is not such an object.
+        /// </summary>
+        internal bool HasAdoptedInstances { get; set; }
+
         // Increased each time an extension method is defined on interfaces or generic definitions included in this class.
         internal int _extensionVersion;
 

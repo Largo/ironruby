@@ -21,6 +21,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -175,6 +176,12 @@ namespace IronRuby.Builtins {
 
             /// <summary>"file:line" of the Thread.new call, which MRI puts in Thread#inspect.</summary>
             internal string Location { get; set; }
+
+            /// <summary>
+            /// Set while a thread of a Thread subclass is between allocation and the Thread#initialize
+            /// (called by the subclass's #initialize through super) that starts it.
+            /// </summary>
+            internal ThreadStarter Starter { get; set; }
 
             // Thread#[] is fiber-local in MRI (and, since every fiber is its own CLR thread here, the
             // dictionary above already is); Thread#thread_variable_get is thread-local, so it needs
@@ -876,11 +883,35 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
-        public static Thread/*!*/ CreateThread(RubyContext/*!*/ context, BlockParam startRoutine, object self, params object[]/*!*/ args) {
-            if (startRoutine == null) {
-                throw new ThreadError("must be called with a block");
+        public static Thread/*!*/ CreateThread(CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>/*!*/ storage,
+            BlockParam startRoutine, object self, params object[]/*!*/ args) {
+
+            RubyContext context = storage.Context;
+            RubyClass cls = self as RubyClass;
+            if (cls == null || !cls.IsRubyClass) {
+                // Thread itself: its #initialize is the one that starts the thread, so skip the call.
+                if (startRoutine == null) {
+                    throw new ThreadError("must be called with a block");
+                }
+                return StartThread(context, null, startRoutine, args);
             }
-            return StartThread(context, startRoutine, args);
+
+            // A Thread subclass: its #initialize decides the block (calling super with one), and the
+            // thread starts in Thread#initialize.
+            ThreadStarter starter;
+            Thread result = AllocateThread(context, cls, out starter);
+            RubyThreadInfo info = RubyThreadInfo.FromThread(result);
+            info.Starter = starter;
+
+            var initialize = storage.GetCallSite("initialize",
+                new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock));
+            initialize.Target(initialize, result, startRoutine != null ? startRoutine.Proc : null, RubyOps.MakeArrayN(args));
+
+            if (info.Starter != null) {
+                info.Starter = null;
+                throw new ThreadError(String.Format("uninitialized thread - check '{0}#initialize'", cls.GetDisplayName(context, false)));
+            }
+            return result;
         }
 
         // Thread.start and Thread.fork bypass #initialize; without a block they fail the way
@@ -891,18 +922,42 @@ namespace IronRuby.Builtins {
             if (startRoutine == null) {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
-            return StartThread(context, startRoutine, args);
+            RubyClass cls = self as RubyClass;
+            return StartThread(context, (cls != null && cls.IsRubyClass) ? cls : null, startRoutine, args);
+        }
+
+        internal sealed class ThreadStarter {
+            internal BlockParam StartRoutine;
+            internal object[] Args;
+        }
+
+        private static Thread/*!*/ StartThread(RubyContext/*!*/ context, RubyClass subclass, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
+            ThreadStarter starter;
+            Thread result = AllocateThread(context, subclass, out starter);
+            Start(result, starter, startRoutine, args);
+            return result;
+        }
+
+        private static void Start(Thread/*!*/ thread, ThreadStarter/*!*/ starter, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
+            startRoutine.IsThreadRoot = true;
+            starter.StartRoutine = startRoutine;
+            starter.Args = args;
+            thread.Start();
         }
 
         /// <summary>
-        /// A Ruby subclass of Thread cannot have instances: System.Threading.Thread is sealed, so
-        /// there is no CLR type to allocate for one. Every thread created here is a plain Thread.
+        /// Creates the CLR thread for a Ruby thread, ready to start once <paramref name="starter"/> has
+        /// been given its block. System.Threading.Thread is sealed, so a thread of a Ruby subclass of
+        /// Thread is a plain CLR thread whose Ruby class is recorded by RubyContext.AdoptClrObject.
         /// </summary>
-        private static Thread/*!*/ StartThread(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
+        private static Thread/*!*/ AllocateThread(RubyContext/*!*/ context, RubyClass subclass, out ThreadStarter/*!*/ starter) {
             RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
             ThreadGroup group = creator.Group;
-            startRoutine.IsThreadRoot = true;
-            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, startRoutine, args, group)));
+            ThreadStarter s = starter = new ThreadStarter();
+            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group)));
+            if (subclass != null) {
+                context.AdoptClrObject(result, subclass);
+            }
 
             // Everything the thread answers about itself before it has run a single instruction -
             // #inspect, #priority, #report_on_exception - has to be in place before Start().
@@ -922,8 +977,6 @@ namespace IronRuby.Builtins {
 
             // Ruby exits when the main thread exits. So all other threads need to be marked as background threads
             result.IsBackground = true;
-
-            result.Start();
             return result;
         }
 
@@ -1235,6 +1288,21 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static Thread/*!*/ Reinitialize(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, params object[]/*!*/ args) {
+            // A thread of a Thread subclass, allocated by Thread.new and waiting for its block:
+            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
+            ThreadStarter starter = info.Starter;
+            if (starter != null) {
+                if (block == null) {
+                    throw new ThreadError("must be called with a block");
+                }
+                info.Starter = null;
+                Start(self, starter, block, args);
+                return self;
+            }
+
+            if (info.Location != null) {
+                throw new ThreadError("already initialized thread - " + info.Location);
+            }
             throw new ThreadError("already initialized thread");
         }
 

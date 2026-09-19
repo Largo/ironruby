@@ -302,14 +302,26 @@ namespace IronRuby.Runtime.Calls {
                 return;
             }
 
+            // An object of a sealed CLR type whose class is a Ruby subclass of that type (a Thread subclass):
+            if (targetClass.GetNonSingletonClass().IsRubyClass) {
+                AddTypeRestriction(target.GetType(), targetParameter);
+                AddCondition(Methods.IsAdoptedClrRuleValid.OpCall(
+                    metaContext.Expression,
+                    targetParameter,
+                    AstUtils.Constant(targetClass),
+                    AstUtils.Constant(targetClass.Version.Method)
+                ));
+                return;
+            }
+
             var nominalClass = targetClass.NominalClass;
 
             Debug.Assert(!nominalClass.IsSingletonClass);
             Debug.Assert(!nominalClass.IsRubyClass);
 
-            // Do we need a singleton check?
-            if (nominalClass.ClrSingletonMethods == null ||
-                CollectionUtils.TrueForAll(resolvedNames, (methodName) => !nominalClass.ClrSingletonMethods.ContainsKey(methodName))) {
+            // Do we need a singleton check? (Always, once some object of the type has a Ruby subclass as its class.)
+            if (!nominalClass.HasAdoptedInstances && (nominalClass.ClrSingletonMethods == null ||
+                CollectionUtils.TrueForAll(resolvedNames, (methodName) => !nominalClass.ClrSingletonMethods.ContainsKey(methodName)))) {
 
                 // no: there is no singleton subclass of target class that defines any method being called:
                 AddTypeRestriction(target.GetType(), targetParameter);
