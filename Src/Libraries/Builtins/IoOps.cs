@@ -2299,8 +2299,13 @@ namespace IronRuby.Builtins {
                         userBuffer = null;
                         bytesRead = srcStream.Read(buffer, 0, chunkSize);
                     } else {
+                        // MRI copies what src.read(len, buf) put in buf; read answers nil at the end of the stream
                         userBuffer = MutableString.CreateBinary();
-                        bytesRead = Protocols.CastToFixnum(toInt, readSite.Target(readSite, src, chunkSize, userBuffer));
+                        object chunk = readSite.Target(readSite, src, chunkSize, userBuffer);
+                        if (chunk == null) {
+                            break;
+                        }
+                        bytesRead = userBuffer.GetByteCount();
                     }
                     
                     if (bytesRead <= 0) {

@@ -325,16 +325,17 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fetch")]
         public static object Fetch(RubyContext/*!*/ context, BlockParam block, IDictionary<object, object>/*!*/ self, object key, [Optional]object defaultValue) {
+            // MRI warns whenever both are given, even if the key is present
+            if (block != null && defaultValue != Missing.Value) {
+                context.ReportWarning("block supersedes default value argument");
+            }
+
             object result;
             if (self.TryGetValue(CustomStringDictionary.NullToObj(key), out result)) {
                 return result;
             }
 
             if (block != null) {
-                if (defaultValue != Missing.Value) {
-                    context.ReportWarning("block supersedes default value argument");
-                }
-
                 block.Yield(key, out result);
                 return result;
             }

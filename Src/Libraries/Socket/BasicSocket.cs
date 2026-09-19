@@ -617,6 +617,38 @@ namespace IronRuby.StandardLibrary.Sockets {
         ///      IO.select([s])
         ///      p s.recv_nonblock(10) #=> "aaa"
         /// </example>
+        #region libc getsockopt, setsockopt
+
+        /// <summary>
+        /// getsockopt(2) with the *platform's* level and option numbers (the Ruby layer translates
+        /// Socket's winsock-numbered constants). Answers [errno, data], data nil on failure, or
+        /// nil when options cannot go to libc on this platform. See the note on getsockopt.
+        /// </summary>
+        [RubyMethod("__ir_raw_libc_getsockopt")]
+        public static RubyArray LibcGetSocketOption(RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname) {
+            if (!PosixMessages.HasSocketOptions) {
+                return null;
+            }
+            byte[] value;
+            int errno = PosixMessages.GetSocketOption((int)self.Socket.Handle, level, optname, out value);
+            return new RubyArray { errno, value != null ? MutableString.CreateBinary(value) : null };
+        }
+
+        /// <summary>
+        /// setsockopt(2) with the platform's level and option numbers. Answers the errno (0 on
+        /// success), or nil when options cannot go to libc on this platform.
+        /// </summary>
+        [RubyMethod("__ir_raw_libc_setsockopt")]
+        public static object LibcSetSocketOption(RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname,
+            [NotNull]MutableString/*!*/ value) {
+            if (!PosixMessages.HasSocketOptions) {
+                return null;
+            }
+            return PosixMessages.SetSocketOption((int)self.Socket.Handle, level, optname, value.ConvertToBytes());
+        }
+
+        #endregion
+
         #region sendmsg, recvmsg
 
         /// <summary>

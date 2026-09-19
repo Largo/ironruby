@@ -1422,8 +1422,10 @@ namespace IronRuby.Runtime {
                 if (name != null && !builtin) {
                     // Do not run constant initializer - all modules that the name might refer to should have already been set up;
                     // A library definition should only reopen Ruby class/module definition, not another library definition.
+                    // A pending autoload of the name is not a definition: `autoload :OpenSSL, "openssl"`
+                    // (net/http does that) followed by the require that loads this library.
                     ConstantStorage c;
-                    if (_objectClass.TryGetConstantNoAutoloadNoInit(name, out c)) {
+                    if (_objectClass.TryGetConstantNoAutoloadNoInit(name, out c) && !RubyModule.IsAutoload(c.Value)) {
                         var result = c.Value as T;
                         bool isClass = typeof(T) == typeof(RubyClass);
                         if (result == null || result.IsClass != isClass) {

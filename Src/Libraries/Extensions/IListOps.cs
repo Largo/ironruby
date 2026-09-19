@@ -1160,6 +1160,11 @@ namespace IronRuby.Builtins {
             object/*!*/ index, 
             [Optional]object defaultValue) {
 
+            // MRI warns whenever both are given, even if the index is in range
+            if (outOfRangeValueProvider != null && defaultValue != Missing.Value) {
+                fixnumCast.Context.ReportWarning("block supersedes default value argument");
+            }
+
             int convertedIndex = Protocols.CastToFixnum(fixnumCast, index);
             int originalIndex = convertedIndex;
 
@@ -1168,10 +1173,6 @@ namespace IronRuby.Builtins {
             }
 
             if (outOfRangeValueProvider != null) {
-                if (defaultValue != Missing.Value) {
-                    fixnumCast.Context.ReportWarning("block supersedes default value argument");
-                }
-
                 object result;
                 outOfRangeValueProvider.Yield(index, out result);
                 return result;
