@@ -24,8 +24,10 @@ cd "$(dirname "$0")"
 # the build it leaves behind mid-way has nothing registered. A spec sweep running against that
 # build measures nonsense, and the corruption is silent. Refuse rather than rely on remembering.
 # Matched on the interpreter process itself (comm == ir) rather than on any command line
-# mentioning mspec-run, which would also match the shell that is invoking this script.
-if ps -eo comm=,args= | awk '$1 == "ir" && /mspec-run/ { found = 1 } END { exit !found }'; then
+# mentioning mspec-run, which would also match the shell that is invoking this script. Only
+# runs of this tree's own binary count: other worktrees have their own build.
+BIN="$(pwd -P)/Src/Console/bin/"
+if ps -eo comm=,args= | awk -v bin="$BIN" '$1 == "ir" && /mspec-run/ && index($2, bin) == 1 { found = 1 } END { exit !found }'; then
   echo "refusing to run: an mspec sweep is using the in-place build" >&2
   echo "wait for it to finish, or stop it first (ps -eo comm=,args= | grep mspec-run)" >&2
   exit 1
