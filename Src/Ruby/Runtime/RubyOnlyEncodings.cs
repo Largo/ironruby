@@ -122,6 +122,12 @@ namespace IronRuby.Runtime {
                 return structured.FindInvalid(bytes, index, count) < 0;
             }
 
+            // .NET's code page 932 decodes 0x80, 0xA0 and 0xFD-0xFF as characters of their own;
+            // in Ruby's Shift_JIS and Windows-31J they begin nothing.
+            if (encoding.CodePage == RubyEncoding.CodePageSJIS || encoding.CodePage == RubyEncoding.CodePageWindows31J) {
+                return FindInvalidShiftJis(bytes, index, count) < 0;
+            }
+
             // Every byte of a single byte encoding is a character as far as Ruby is concerned,
             // even the ones its conversion table leaves undefined. US-ASCII is the exception: it
             // is seven bit.
@@ -129,6 +135,29 @@ namespace IronRuby.Runtime {
                 return true;
             }
             return null;
+        }
+
+        private static int FindInvalidShiftJis(byte[]/*!*/ bytes, int index, int count) {
+            int end = index + count;
+            int i = index;
+            while (i < end) {
+                byte b = bytes[i];
+                if (b < 0x80 || b >= 0xa1 && b <= 0xdf) {
+                    i++;
+                } else if (b >= 0x81 && b <= 0x9f || b >= 0xe0 && b <= 0xfc) {
+                    if (i + 1 >= end) {
+                        return i;
+                    }
+                    byte trail = bytes[i + 1];
+                    if (trail < 0x40 || trail == 0x7f || trail > 0xfc) {
+                        return i;
+                    }
+                    i += 2;
+                } else {
+                    return i;
+                }
+            }
+            return -1;
         }
     }
 
