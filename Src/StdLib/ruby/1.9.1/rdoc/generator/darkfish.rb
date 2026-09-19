@@ -223,7 +223,7 @@ class RDoc::Generator::Darkfish
 		debug_msg "Rendering the index page..."
 
 		template_src = template_file.read
-		template = ERB.new( template_src, nil, '<>' )
+		template = ERB.new( template_src, trim_mode: '<>' )
 		template.filename = template_file.to_s
 		context = binding()
 
@@ -339,7 +339,7 @@ class RDoc::Generator::Darkfish
 
 	def render_template( template_file, context, outfile )
 		template_src = template_file.read
-		template = ERB.new( template_src, nil, '<>' )
+		template = ERB.new( template_src, trim_mode: '<>' )
 		template.filename = template_file.to_s
 
 		output = begin

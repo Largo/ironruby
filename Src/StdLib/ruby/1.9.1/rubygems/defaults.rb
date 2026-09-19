@@ -30,6 +30,14 @@ module Gem
   end
 
   ##
+  # Path to specification files of default gems (RubyGems 2.0+ API; IronRuby
+  # ships no default gems, so nothing is ever installed there).
+
+  def self.default_specifications_dir
+    File.join(Gem.default_dir, "specifications", "default")
+  end
+
+  ##
   # Path for gems in the user's home directory
 
   def self.user_dir

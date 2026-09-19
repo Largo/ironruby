@@ -33,6 +33,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Json.JsonLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Date.DateLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Syslog.SyslogLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Coverage.CoverageLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -14460,6 +14461,49 @@ namespace IronRuby.StandardLibrary.Syslog {
             DefineLibraryMethod(module, "__syslog__", 0x22, 
                 0x00030004U, 
                 new Action<IronRuby.Builtins.RubyModule, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Syslog.SyslogOps.Log)
+            );
+            
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Coverage {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class CoverageLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            
+            
+            DefineGlobalModule("Coverage", typeof(IronRuby.StandardLibrary.Coverage.CoverageOps), 0x00000008, null, LoadCoverage_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+        }
+        
+        private static void LoadCoverage_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__clear__", 0x22, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule>(IronRuby.StandardLibrary.Coverage.CoverageOps.Clear)
+            );
+            
+            DefineLibraryMethod(module, "__peek__", 0x22, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Coverage.CoverageOps.Peek)
+            );
+            
+            DefineLibraryMethod(module, "__reset__", 0x22, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule>(IronRuby.StandardLibrary.Coverage.CoverageOps.Reset)
+            );
+            
+            DefineLibraryMethod(module, "__resume__", 0x22, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule, System.Boolean>(IronRuby.StandardLibrary.Coverage.CoverageOps.Resume)
+            );
+            
+            DefineLibraryMethod(module, "__setup__", 0x22, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.StandardLibrary.Coverage.CoverageOps.Setup)
             );
             
         }

@@ -66,6 +66,15 @@ namespace IronRuby.Compiler.Ast {
 
             MSA.Expression result;
 
+            // the :line hooks of elsif conditions are claimed in source order, before the clauses
+            // are transformed (last first)
+            var traces = new MSA.Expression[_elseIfClauses.Count];
+            for (int j = 0; j < _elseIfClauses.Count; j++) {
+                if (_elseIfClauses[j].IsElsif) {
+                    traces[j] = gen.TraceLine(_elseIfClauses[j].Location.Start.Line);
+                }
+            }
+
             int i = _elseIfClauses.Count - 1;
 
             if (i >= 0 && _elseIfClauses[i].Condition == null) {
@@ -78,10 +87,20 @@ namespace IronRuby.Compiler.Ast {
             }
 
             while (i >= 0) {
+                var clause = _elseIfClauses[i];
+                var condition = clause.Condition.TransformCondition(gen, true);
+                if (traces[i] != null) {
+                    condition = MSA.Expression.Block(traces[i], condition);
+                }
+                if (clause.IsElsif) {
+                    // a statement on the elsif's line has no event of its own
+                    gen.SetLastTracedLine(clause.Location.Start.Line);
+                }
+
                 // emit: else (if (condition) body else result)
                 result = AstFactory.Condition(
-                    _elseIfClauses[i].Condition.TransformCondition(gen, true),
-                    gen.TransformStatementsToExpression(_elseIfClauses[i].Statements),
+                    condition,
+                    gen.TransformStatementsToExpression(clause.Statements),
                     result
                 );
                 i--;
