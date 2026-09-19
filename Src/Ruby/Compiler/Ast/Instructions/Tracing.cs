@@ -39,14 +39,20 @@ namespace IronRuby.Compiler.Ast {
         private readonly MSA.Expression/*!*/ _scope;
         private readonly string _path;
         private readonly int _line;
+        private readonly LineCoverage _coverage;
 
-        public TraceLineExpression(MSA.Expression/*!*/ scope, string path, int line) {
+        public TraceLineExpression(MSA.Expression/*!*/ scope, string path, int line, LineCoverage coverage) {
             _scope = scope;
             _path = path;
             _line = line;
+            _coverage = coverage;
         }
 
         public void AddInstructions(LightCompiler/*!*/ compiler) {
+            if (_coverage != null) {
+                compiler.Instructions.Emit(new CountLineInstruction(_coverage, _line - 1));
+            }
+
             var guard = new TraceGuardInstruction(TraceEvents.Line);
             compiler.Instructions.Emit(guard);
             int start = compiler.Instructions.Count;
@@ -56,15 +62,51 @@ namespace IronRuby.Compiler.Ast {
         }
 
         public override MSA.Expression/*!*/ Reduce() {
-            return AstUtils.IfThen(
+            var trace = AstUtils.IfThen(
                 TraceGuardInstruction.MakeTest(TraceEvents.Line),
                 Methods.TraceLineEvent.OpCall(AstUtils.Convert(_scope, typeof(RubyScope)), AstUtils.Constant(_path, typeof(string)), AstUtils.Constant(_line))
+            );
+
+            if (_coverage == null) {
+                return trace;
+            }
+
+            return Ast.Block(
+                AstUtils.IfThen(
+                    Ast.Field(AstUtils.Constant(_coverage.State), typeof(CoverageState).GetField("Resumed")),
+                    Ast.PreIncrementAssign(Ast.ArrayAccess(AstUtils.Constant(_coverage.Counts), AstUtils.Constant(_line - 1)))
+                ),
+                trace
             );
         }
 
         protected override MSA.Expression/*!*/ VisitChildren(MSA.ExpressionVisitor/*!*/ visitor) {
             var scope = visitor.Visit(_scope);
-            return scope == _scope ? this : new TraceLineExpression(scope, _path, _line);
+            return scope == _scope ? this : new TraceLineExpression(scope, _path, _line, _coverage);
+        }
+
+        /// <summary>
+        /// Counts the line for the Coverage library while the measurement runs.
+        /// </summary>
+        private sealed class CountLineInstruction : Instruction {
+            private readonly LineCoverage/*!*/ _coverage;
+            private readonly int _index;
+
+            internal CountLineInstruction(LineCoverage/*!*/ coverage, int index) {
+                _coverage = coverage;
+                _index = index;
+            }
+
+            public override int Run(InterpretedFrame/*!*/ frame) {
+                if (_coverage.State.Resumed) {
+                    _coverage.Counts[_index]++;
+                }
+                return +1;
+            }
+
+            public override string InstructionName {
+                get { return "Ruby:CountLine"; }
+            }
         }
 
         private sealed class TraceLineInstruction : Instruction {

@@ -270,12 +270,28 @@ namespace IronRuby.Prism {
             if (statementsNode is Pm.StatementsNode statements) {
                 var body = statements.Body;
                 for (int i = 0; i < body.Length; i++) {
-                    result.Add((i < body.Length - 1) ? VoidStatement(body[i]) : Expr(body[i]), Span(body[i]).Start.Line);
+                    result.Add((i < body.Length - 1) ? VoidStatement(body[i]) : Expr(body[i]), StatementLine(body[i]));
                 }
             } else if (statementsNode != null) {
                 result.Add(Expr(statementsNode));
             }
             return result;
+        }
+
+        /// <summary>
+        /// The line of a statement's TracePoint :line event. Prism gives a conditional or a loop's
+        /// newline flag to its predicate, so `foo(...) if cond` spanning lines reports cond's line.
+        /// </summary>
+        private int StatementLine(Pm.PmNode/*!*/ node) {
+            Pm.PmNode predicate = null;
+            switch (node) {
+                case Pm.IfNode ifNode: predicate = ifNode.Predicate; break;
+                case Pm.UnlessNode unlessNode: predicate = unlessNode.Predicate; break;
+                // (begin ... end while: MRI's events differ again; left at the statement's start)
+                case Pm.WhileNode whileNode when !HasFlag(whileNode, Pm.LoopFlags.BeginModifier): predicate = whileNode.Predicate; break;
+                case Pm.UntilNode untilNode when !HasFlag(untilNode, Pm.LoopFlags.BeginModifier): predicate = untilNode.Predicate; break;
+            }
+            return Span(predicate ?? node).Start.Line;
         }
 
         /// <summary>
@@ -1127,7 +1143,7 @@ namespace IronRuby.Prism {
             var subsequent = node.Subsequent;
             while (subsequent != null) {
                 if (subsequent is Pm.IfNode elseIf) {
-                    elseIfClauses.Add(new ElseIfClause(Condition(elseIf.Predicate), BuildStatements(elseIf.Statements), Span(elseIf)));
+                    elseIfClauses.Add(new ElseIfClause(Condition(elseIf.Predicate), BuildStatements(elseIf.Statements), Span(elseIf)) { IsElsif = true });
                     subsequent = elseIf.Subsequent;
                 } else {
                     var elseNode = (Pm.ElseNode)subsequent;

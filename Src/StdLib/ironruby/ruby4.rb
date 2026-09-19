@@ -5203,6 +5203,27 @@ class Rational
   end
   private :initialize
 
+  # nurat_coerce. rational18's version handed anything else to Numeric#coerce,
+  # which turns both sides into Floats; MRI raises instead.
+  def coerce(other)
+    case other
+    when ::Integer
+      [::Rational.__raw__(other, 1), self]
+    when ::Float
+      [other, to_f]
+    when ::Rational
+      [other, self]
+    when ::Complex
+      imag = other.imaginary
+      # only an exact zero imaginary part lets the Complex become a Rational
+      return [other, ::Kernel.Complex(self, 0)] unless !imag.is_a?(::Float) && imag == 0
+      real = other.real
+      [real.is_a?(::Float) ? real.to_r : ::Kernel.Rational(real), self]
+    else
+      ::Kernel.raise(::TypeError, "#{other.class} can't be coerced into #{self.class}")
+    end
+  end
+
   # rational.c's read_num/parse_rat. `nexp` is the decimal exponent still owed:
   # the value is num * 10**(-nexp) / den.
   def self.__read_num__(s, i, n)

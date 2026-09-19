@@ -70,6 +70,11 @@ internal sealed class Host : RubyConsoleHost {
         return rubyOptions;
     }
 
+    // ruby -v / --version print RUBY_DESCRIPTION
+    protected override void PrintVersion() {
+        Console.WriteLine(RubyContext.MakeDescriptionString());
+    }
+
     protected override void ReportInvalidOption(InvalidOptionException e) {
         Console.Error.WriteLine(e.Message);
     }

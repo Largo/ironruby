@@ -27,6 +27,7 @@ using System.IO;
 using System.Numerics;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Security;
 using System.Text;
 using System.Threading;
@@ -71,9 +72,11 @@ namespace IronRuby.Runtime {
 
         // MRI compliance: language level targeted by the prism front end.
         // The bundled standard library is still the 1.9 snapshot.
-        public string/*!*/ MriVersion { 
-            get { return "4.0.0"; } 
+        public string/*!*/ MriVersion {
+            get { return MriVersionString; }
         }
+
+        private const string MriVersionString = "4.0.0";
 
         public string/*!*/ StandardLibraryVersion {
             get { return "1.9.1"; }
@@ -791,8 +794,12 @@ namespace IronRuby.Runtime {
             return String.Empty;
         }
 
+        // Like MRI's ("ruby 4.0.6 (...) [x86_64-linux]") and JRuby's, the description
+        // names the language version and RUBY_PLATFORM.
         public static string/*!*/ MakeDescriptionString() {
-            return String.Format(CultureInfo.InvariantCulture, "IronRuby {0} on {1}", IronRuby.CurrentVersion.DisplayVersion, MakeRuntimeDesriptionString());
+            return String.Format(CultureInfo.InvariantCulture, "IronRuby {0} ({1}) on {2} [{3}]",
+                IronRuby.CurrentVersion.DisplayVersion, MriVersionString, MakeRuntimeDesriptionString(), MakePlatformName()
+            );
         }
 
         internal static string MakeRuntimeDesriptionString() {
@@ -803,20 +810,37 @@ namespace IronRuby.Runtime {
         }
 
         private static MutableString/*!*/ MakePlatformString() {
+            return MutableString.CreateAscii(MakePlatformName());
+        }
+
+        private static string/*!*/ MakePlatformName() {
             switch (Environment.OSVersion.Platform) {
                 case PlatformID.MacOSX:
-                    return MutableString.CreateAscii("i386-darwin");
-                
+                    return MakeUnixCpuName(true) + "-darwin";
+
                 case PlatformID.Unix:
-                    return MutableString.CreateAscii("i386-linux"); 
+                    // .NET reports macOS as Unix as well
+                    return RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ?
+                        MakeUnixCpuName(true) + "-darwin" : MakeUnixCpuName(false) + "-linux";
 
                 case PlatformID.Win32NT:
                 case PlatformID.Win32S:
                 case PlatformID.Win32Windows:
-                    return MutableString.CreateAscii("i386-mswin32");
+                    return "i386-mswin32";
 
                 default:
-                    return MutableString.CreateAscii("unknown");
+                    return "unknown";
+            }
+        }
+
+        // The CPU half of RUBY_PLATFORM is the architecture the process runs as, spelled
+        // the way MRI's configure (config.guess) spells it; RbConfig's host_cpu matches it.
+        private static string/*!*/ MakeUnixCpuName(bool darwin) {
+            switch (RuntimeInformation.ProcessArchitecture) {
+                case Architecture.X64: return "x86_64";
+                case Architecture.Arm64: return darwin ? "arm64" : "aarch64";
+                case Architecture.Arm: return "arm";
+                default: return "i386";
             }
         }
 
@@ -3256,15 +3280,31 @@ namespace IronRuby.Runtime {
         }
 
         internal MSA.Expression<T>/*!*/ TransformTree<T>(SourceUnitTree/*!*/ ast, SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options) {
-            return ast.Transform<T>(
-                new AstGenerator(
-                    this,
-                    options,
-                    sourceUnit.Document,
-                    ast.Encoding,
-                    sourceUnit.Kind == SourceCodeKind.InteractiveCode
-                )
+            var gen = new AstGenerator(
+                this,
+                options,
+                sourceUnit.Document,
+                ast.Encoding,
+                sourceUnit.Kind == SourceCodeKind.InteractiveCode
             );
+
+            var coverage = _coverage;
+            if (coverage != null && gen.Traceable && !gen.SavingToDisk && sourceUnit.Kind != SourceCodeKind.InteractiveCode) {
+                gen.Coverage = coverage.GetCoverage(ast, sourceUnit.Path, options.IsEval, options.InitialLocation.Line, sourceUnit.GetCode());
+            }
+
+            return ast.Transform<T>(gen);
+        }
+
+        private CoverageState _coverage;
+
+        /// <summary>
+        /// The Coverage library's measurement, null unless it is set up. Code compiled while it
+        /// is set up is measured.
+        /// </summary>
+        public CoverageState Coverage {
+            get { return _coverage; }
+            set { _coverage = value; }
         }
 
         public override CompilerOptions/*!*/ GetCompilerOptions() {

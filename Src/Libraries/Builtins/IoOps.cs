@@ -1268,7 +1268,8 @@ namespace IronRuby.Builtins {
                     return GetFileType(handle) == FILE_TYPE_CHAR;
 
                 default:
-                    return isatty(fd) == 1;
+                    // STD_*_HANDLE are Win32 pseudo-handles; POSIX wants the descriptor itself
+                    return isatty((int)console.Value) == 1;
             }
         }
 

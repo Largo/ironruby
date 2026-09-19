@@ -944,14 +944,51 @@ namespace IronRuby.Compiler.Ast {
         /// statement is transformed, so that statements nested in it come second.
         /// </summary>
         private MSA.Expression TraceLine(Statements/*!*/ statements, int index) {
+            if (IsTransparentStatement(statements[index])) {
+                return null;
+            }
+            return TraceLine(statements.GetStartLine(index));
+        }
+
+        /// <summary>
+        /// The :line hook for a line, or null if the line has had its hook in the current scope.
+        /// </summary>
+        internal MSA.Expression TraceLine(int line) {
             var scope = _currentVariableScope;
-            int line = statements.GetStartLine(index);
             if (!_traceable || scope == null || line <= 0 || line == scope.LastTracedLine) {
                 return null;
             }
             scope.LastTracedLine = line;
-            return new TraceLineExpression(scope.RuntimeScopeVariable, SourcePath, line);
+
+            var coverage = Coverage;
+            if (coverage != null && coverage.IsCounted(line)) {
+                // normally marked already (CoverageState.LineCollector); this catches what it misses
+                coverage.MarkLine(line);
+            } else {
+                coverage = null;
+            }
+            return new TraceLineExpression(scope.RuntimeScopeVariable, SourcePath, line, coverage);
         }
+
+        internal void SetLastTracedLine(int line) {
+            if (_currentVariableScope != null) {
+                _currentVariableScope.LastTracedLine = line;
+            }
+        }
+
+        /// <summary>
+        /// A begin/end block around statements has no :line event of its own (as in MRI); the
+        /// first statement in it has.
+        /// </summary>
+        internal static bool IsTransparentStatement(Expression/*!*/ statement) {
+            var body = statement as Body;
+            return body != null && body.Statements.Count > 0;
+        }
+
+        /// <summary>
+        /// Where the :line hooks count for the Coverage library, if the code is measured.
+        /// </summary>
+        internal LineCoverage Coverage { get; set; }
 
         private static MSA.Expression/*!*/ Traced(MSA.Expression trace, MSA.Expression/*!*/ transformed) {
             return trace != null ? Ast.Block(trace, transformed) : transformed;

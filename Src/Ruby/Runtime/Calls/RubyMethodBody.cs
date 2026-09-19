@@ -38,15 +38,18 @@ namespace IronRuby.Runtime.Calls {
         private readonly MethodDeclaration/*!*/ _ast;
         private readonly MSA.SymbolDocumentInfo _document;
         private readonly RubyEncoding/*!*/ _encoding;
+        // the Coverage measurement the body was defined under: it is compiled only when first called
+        private readonly LineCoverage _coverage;
 
         private Delegate _delegate;
 
-        internal RubyMethodBody(MethodDeclaration/*!*/ ast, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding) {
+        internal RubyMethodBody(MethodDeclaration/*!*/ ast, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding, LineCoverage coverage) {
             Assert.NotNull(ast, encoding);
 
             _ast = ast;
             _document = document;
             _encoding = encoding;
+            _coverage = coverage;
         }
 
         /// <summary>
@@ -114,6 +117,7 @@ namespace IronRuby.Runtime.Calls {
         private Delegate/*!*/ Compile(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             // TODO: remove options
             AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
+            gen.Coverage = _coverage;
             MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule);
             return RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
         }

@@ -296,7 +296,7 @@ namespace IronRuby.Compiler.Ast {
             return Methods.DefineMethod.OpCall(
                 (_target != null) ? AstUtils.Box(_target.TransformRead(gen)) : AstUtils.Constant(null),
                 gen.CurrentScopeVariable,
-                Ast.Constant(new RubyMethodBody(this, gen.Document, gen.Encoding))
+                Ast.Constant(new RubyMethodBody(this, gen.Document, gen.Encoding, gen.Coverage))
             );
         }
     }

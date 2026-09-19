@@ -19,16 +19,25 @@ namespace IronRuby.Compiler.Ast {
     public partial class Walker {
         public void VisitOptionalList<T>(IEnumerable<T> list) where T : Node {
             if (list != null) {
-                foreach (var item in list) {
-                    item.Walk(this);
-                }
+                VisitList(list);
             }
         }
 
         public void VisitList<T>(IEnumerable<T>/*!*/ list) where T : Node {
+            var statements = list as Statements;
+            if (statements != null) {
+                VisitStatements(statements);
+            }
+
             foreach (var item in list) {
                 item.Walk(this);
             }
+        }
+
+        /// <summary>
+        /// Called for a statement list before its statements are walked.
+        /// </summary>
+        internal protected virtual void VisitStatements(Statements/*!*/ statements) {
         }
 
         public void Walk(Node/*!*/ node) {
