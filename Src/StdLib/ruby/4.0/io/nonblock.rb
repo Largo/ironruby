@@ -6,10 +6,10 @@
 # IO#GetNativeDescriptor answers -1 for a pipe and there is no flag to read. For
 # those the value is remembered instead, which is a weaker answer.
 #
-# A pipe is remembered too, even with a descriptor: MRI opens its pipes
-# non-blocking, so a pipe reports true until told otherwise, but the
-# descriptor itself stays blocking - the .NET stream reading it expects that,
-# and IO's own reads and writes wait either way.
+# A pipe answers what it was last told: MRI opens its pipes non-blocking, so
+# until #nonblock= says otherwise one reports true, though its descriptor here
+# was opened blocking - IO's own reads and writes wait either way. Setting the
+# flag still sets it on the descriptor, which is what #syswrite goes by.
 
 class IO
   # Linux values, the same ones IO#fcntl uses.
@@ -38,7 +38,7 @@ class IO
   end
 
   def nonblock=(value)
-    if !__nonblock_pipe__? && __nonblock_native__?
+    if __nonblock_native__?
       flags = fcntl(NONBLOCK_GET__, 0)
       flags = value ? (flags | NONBLOCK_FLAG__) : (flags & ~NONBLOCK_FLAG__)
       fcntl(NONBLOCK_SET__, flags)
