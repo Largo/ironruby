@@ -803,6 +803,7 @@ namespace IronRuby.Runtime {
                 } catch (Exception) {
                     dir = loadPath;
                 }
+                dir = ResolveDirectoryLinks(dir);
                 ResolvedFile file = ResolveFile(RubyUtils.CombinePaths(dir, path), extension, appendExtensions, sourceFileExtensions);
                 if (file != null) {
                     result.Add(file);
@@ -813,7 +814,50 @@ namespace IronRuby.Runtime {
                 return CurrentDirectoryFallback(path, extension, appendExtensions, sourceFileExtensions, searchCurrentDirectory);
             }
 
+            // MRI tries each extension over the whole $LOAD_PATH before the next one, so for a
+            // bare name a .rb file anywhere wins over a library found in an earlier directory.
+            if (appendExtensions && extension.Length == 0 && result.Count > 1 && result[0].SourceUnit == null) {
+                result = result.Where((f) => f.SourceUnit != null).Concat(result.Where((f) => f.SourceUnit == null)).ToList();
+            }
+
             return result;
+        }
+
+        /// <summary>
+        /// MRI takes the real path of a $LOAD_PATH entry (though not of the file found in it), so
+        /// a feature required through a symlinked directory is recorded under the directory it
+        /// links to. Anything that cannot be resolved is used as it is.
+        /// </summary>
+        private static string/*!*/ ResolveDirectoryLinks(string/*!*/ dir) {
+            if (dir.Length == 0 || dir[0] != '/' || Path.DirectorySeparatorChar != '/') {
+                return dir;
+            }
+            try {
+                string resolved = "";
+                foreach (string part in dir.Split('/')) {
+                    if (part.Length == 0 || part == ".") {
+                        continue;
+                    }
+                    if (part == "..") {
+                        return dir;
+                    }
+                    resolved += "/" + part;
+                    var info = new DirectoryInfo(resolved);
+                    if (!info.Exists) {
+                        return dir;
+                    }
+                    if (info.LinkTarget != null) {
+                        var target = info.ResolveLinkTarget(true);
+                        if (target == null) {
+                            return dir;
+                        }
+                        resolved = target.FullName.TrimEnd('/');
+                    }
+                }
+                return resolved.Length == 0 ? "/" : resolved;
+            } catch (Exception) {
+                return dir;
+            }
         }
 
         /// <summary>
@@ -1182,8 +1226,13 @@ namespace IronRuby.Runtime {
         /// Return true if any of the files has alraedy been loaded.
         /// </summary>
         private bool AlreadyLoaded(string/*!*/ path, IEnumerable<ResolvedFile>/*!*/ files, LoadFlags flags) {
+            // An extensionless entry in $" says nothing about a file that was found: MRI only
+            // counts "foo" as loaded when no foo.rb (or library) could be found at all.
+            IEnumerable<MutableString> requested = RubyUtils.GetExtension(path).Length == 0
+                ? Enumerable.Empty<MutableString>()
+                : new[] { _context.EncodePath(path) };
             return (flags & LoadFlags.LoadOnce) != 0 && AnyFileLoaded(
-                new[] { _context.EncodePath(path) }.Concat(files.Select((file) => _context.EncodePath(file.Path)))
+                requested.Concat(files.Select((file) => _context.EncodePath(file.Path)))
             );
         }
 

@@ -764,7 +764,8 @@ namespace IronRuby.Builtins {
                 }
 
                 MutableStringOps.SuccInPlace(current);
-                if (current.Length > end.Length || current.Length == 0) {
+                // lengths in bytes, as MRI (RSTRING_LEN) measures them
+                if (current.GetByteCount() > end.GetByteCount() || current.IsEmpty) {
                     return self;
                 }
             }

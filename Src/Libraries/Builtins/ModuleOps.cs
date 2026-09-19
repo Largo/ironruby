@@ -1618,6 +1618,17 @@ namespace IronRuby.Builtins {
                     }
                 });
             }
+
+            // A refinement's superclass is, in effect, the class it refines: what that class has
+            // is listed after the refinement's own methods.
+            if (inherited && self.IsRefinement) {
+                var seen = new HashSet<object>(result);
+                foreach (object name in GetMethods(self.RefinedModule, true, attributes, foreignMembers)) {
+                    if (seen.Add(name)) {
+                        result.Add(name);
+                    }
+                }
+            }
             return result;
         }
 

@@ -3572,16 +3572,78 @@ namespace IronRuby.Builtins {
         #region succ, succ!
 
         public static int GetIndexOfRightmostAlphaNumericCharacter(MutableString/*!*/ str, int index) {
-            for (int i = index; i >= 0; --i)
-                if (Char.IsLetterOrDigit(str.GetChar(i)))
+            bool unicode = str.Encoding.IsUnicodeEncoding;
+            for (int i = index; i >= 0; --i) {
+                char c = str.GetChar(i);
+                if (unicode ? IsSuccDigit(c) || IsSuccAlpha(c) : Char.IsLetterOrDigit(c))
                     return i;
+            }
 
             return -1;
+        }
+
+        private static bool IsSuccDigit(char c) {
+            return Char.IsDigit(c);
+        }
+
+        // Onigmo's ALPHA is Unicode's Alphabetic property: letters, letter numbers (Roman
+        // numerals) and most spacing vowel signs.
+        private static bool IsSuccAlpha(char c) {
+            switch (Char.GetUnicodeCategory(c)) {
+                case UnicodeCategory.LetterNumber:
+                case UnicodeCategory.SpacingCombiningMark:
+                    return c >= 0x80;
+                default:
+                    return Char.IsLetter(c);
+            }
+        }
+
+        /// <summary>
+        /// MRI's enc_succ_alnum_char for a character outside ASCII: the next code point of the
+        /// same kind (a letter or a digit) at most two steps up is the successor; otherwise the
+        /// character wraps round to the first of the run of its kind it sits in and carries
+        /// into the next alphanumeric character to the left (or, if there is none, puts that
+        /// first character - for a digit the one after it - in front). So U+09B9.succ is
+        /// U+09B6 U+09B6 and U+0669.succ is U+0661 U+0660, just as "z".succ is "aa" and
+        /// "9".succ is "10".
+        /// </summary>
+        private static bool TryIncrementNonAsciiAlphaNumericChar(MutableString/*!*/ str, int index) {
+            char c = str.GetChar(index);
+            bool digit = IsSuccDigit(c);
+            Func<char, bool> sameKind = digit ? (Func<char, bool>)IsSuccDigit : IsSuccAlpha;
+
+            for (int step = 1; step <= 2 && c + step <= Char.MaxValue; step++) {
+                char next = (char)(c + step);
+                if (!Char.IsSurrogate(next) && sameKind(next)) {
+                    str.SetChar(index, next);
+                    return true;
+                }
+            }
+
+            char first = c;
+            while (first > 0x80 && sameKind((char)(first - 1))) {
+                first--;
+            }
+            if (first == c) {
+                return false;
+            }
+
+            str.SetChar(index, first);
+            int nextIndex = GetIndexOfRightmostAlphaNumericCharacter(str, index - 1);
+            if (nextIndex == -1) {
+                str.Insert(index, digit ? (char)(first + 1) : first);
+            } else {
+                IncrementAlphaNumericChar(str, nextIndex);
+            }
+            return true;
         }
 
         // TODO: remove recursion
         public static void IncrementAlphaNumericChar(MutableString/*!*/ str, int index) {
             char c = str.GetChar(index);
+            if (c >= 0x80 && str.Encoding.IsUnicodeEncoding && TryIncrementNonAsciiAlphaNumericChar(str, index)) {
+                return;
+            }
             if (c == 'z' || c == 'Z' || c == '9') {
                 int nextIndex = GetIndexOfRightmostAlphaNumericCharacter(str, index - 1);
                 if (c == 'z') {

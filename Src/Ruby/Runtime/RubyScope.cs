@@ -1431,7 +1431,24 @@ var closureScope = scope as RubyClosureScope;
             _pendingWrapModule = null;
             module = module ?? context.CreateModule(null, null, null, null, null, null, null, ModuleRestrictions.None);
             RubyObject mainObject = new RubyObject(context.ObjectClass);
-            context.GetOrCreateMainSingleton(mainObject, new[] { module });
+
+            // MRI's self there is a clone of main extended with the wrap module, so the modules
+            // main has been extended with come after it.
+            RubyModule[] mixins = new[] { module };
+            object toplevelBinding;
+            if (context.ObjectClass.TryGetConstant(null, "TOPLEVEL_BINDING", out toplevelBinding) && toplevelBinding is Binding) {
+                RubyClass mainClass = context.GetImmediateClassOf(((Binding)toplevelBinding).SelfObject);
+                if (mainClass.IsSingletonClass) {
+                    var list = new List<RubyModule>(mixins);
+                    foreach (RubyModule mixin in mainClass.GetMixins()) {
+                        if (!list.Contains(mixin)) {
+                            list.Add(mixin);
+                        }
+                    }
+                    mixins = list.ToArray();
+                }
+            }
+            context.GetOrCreateMainSingleton(mainObject, mixins);
 
             RubyTopLevelScope scope = new RubyTopLevelScope(rubyGlobalScope, module, null, mainObject);
             scope.IsMain = false;

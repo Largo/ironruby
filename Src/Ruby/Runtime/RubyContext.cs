@@ -1998,7 +1998,7 @@ namespace IronRuby.Runtime {
             }
 
             RubyInstanceData result;
-            if (!RubyUtils.HasObjectState(obj)) {
+            if (!RubyUtils.HasObjectState(obj) && !(obj is BigInteger)) {
                 lock (ValueTypeInstanceDataLock) {
                     _valueTypeInstanceData.TryGetValue(obj, out result);
                 }
@@ -2037,8 +2037,10 @@ namespace IronRuby.Runtime {
                 return _nilInstanceData;
             }
 
+            // A Bignum is an object in MRI: two equal ones computed separately have different ids,
+            // so each boxed BigInteger gets its own data (held weakly) instead of one per value.
             RubyInstanceData result;
-            if (!RubyUtils.HasObjectState(obj)) {
+            if (!RubyUtils.HasObjectState(obj) && !(obj is BigInteger)) {
                 lock (ValueTypeInstanceDataLock) {
                     if (!_valueTypeInstanceData.TryGetValue(obj, out result)) {
                         _valueTypeInstanceData.Add(obj, result = new RubyInstanceData());
