@@ -1255,7 +1255,25 @@ namespace IronRuby.Builtins {
                 return ExpandPath(toPath, self, path, basedir == Missing.Value ? null : basedir);
             }
 
-            return EncodePathLike(self.Context, ResolvePath(self.Context, strPath, strBase, strict), pathStr);
+            string resolved = ResolvePath(self.Context, strPath, strBase, strict);
+
+            // MRI's realdirpath converts a non-ASCII result into the argument's encoding, and where
+            // that cannot be done leaves it in the file system encoding; realpath, which uses
+            // realpath(3), relabels it either way.
+            if (!strict && pathStr.Encoding != RubyEncoding.Binary && !IsAsciiString(resolved)) {
+                var converted = MutableString.Create(resolved, pathStr.Encoding);
+                return (converted.ContainsInvalidCharacters() ? self.Context.EncodePath(resolved) : converted).TaintBy(pathStr);
+            }
+            return EncodePathLike(self.Context, resolved, pathStr);
+        }
+
+        private static bool IsAsciiString(string/*!*/ str) {
+            foreach (char c in str) {
+                if (c > 0x7F) {
+                    return false;
+                }
+            }
+            return true;
         }
 
         #endregion
@@ -1343,14 +1361,10 @@ namespace IronRuby.Builtins {
         }
 
         private static void SplitTime(RubyTime/*!*/ time, out long seconds, out long nanoseconds) {
-            long ticks = time.TicksSinceEpoch;
-            seconds = ticks / TimeSpan.TicksPerSecond;
-            long rest = ticks % TimeSpan.TicksPerSecond;
-            if (rest < 0) {
-                seconds -= 1;
-                rest += TimeSpan.TicksPerSecond;
-            }
-            nanoseconds = rest * 100;
+            // whole seconds and nanoseconds rather than ticks, which overflow long long before
+            // the times a file system can store
+            seconds = time.Seconds;
+            nanoseconds = time.Nanoseconds;
         }
 #endif
         private static RubyTime MakeTime(RubyContext/*!*/ context, object obj) {
@@ -1381,7 +1395,20 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("stat", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static FileSystemInfo/*!*/ Stat(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
-            return RubyStatOps.Create(self.Context, Protocols.CastToPath(toPath, path));
+            MutableString strPath = Protocols.CastToPath(toPath, path);
+            string decoded = self.Context.DecodePath(strPath);
+            try {
+                return RubyStatOps.Create(self.Context, decoded);
+            } catch (Exception e) {
+                // MRI's message carries the path's own bytes, so a binary path that is not valid
+                // in any encoding still shows up in it (and the message stays binary).
+                string message = e.Message;
+                if (strPath.Encoding == RubyEncoding.Binary && !strPath.IsAscii() && message.EndsWith(decoded, StringComparison.Ordinal)) {
+                    var binary = MutableString.CreateBinary(System.Text.Encoding.ASCII.GetBytes(message.Substring(0, message.Length - decoded.Length)));
+                    RubyExceptionData.GetInstance(e).Message = binary.Append(strPath);
+                }
+                throw;
+            }
         }
 
         [RubyMethod("lstat", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
@@ -1623,8 +1650,10 @@ namespace IronRuby.Builtins {
             }
 
             internal static RubyTime/*!*/ MakeTime(long seconds, long nanoseconds) {
-                var utc = RubyTime.Epoch.AddSeconds(seconds).AddTicks(nanoseconds / 100);
-                return new RubyTime(RubyTime.ToLocalTime(utc));
+                // exact, as Time.at is: a file time can lie beyond DateTime's year 9999
+                var exact = ExactNum.FromInteger(seconds) +
+                    ExactNum.FromInteger(nanoseconds) / ExactNum.FromInteger(RubyTime.NanosecondsPerSecond);
+                return RubyTime.FromExactSeconds(exact, RubyTimeZoneKind.Local, ExactNum.Zero);
             }
 
             [RubyMethod("atime")]

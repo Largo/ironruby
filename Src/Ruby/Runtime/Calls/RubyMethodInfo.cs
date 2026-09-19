@@ -41,6 +41,10 @@ namespace IronRuby.Runtime.Calls {
         private readonly RubyMethodBody/*!*/ _body;
         private readonly RubyScope/*!*/ _declaringScope;
 
+        // The singleton copy Module#module_function makes: its frames are labelled "M.foo" where
+        // the instance method's are "M#foo", so it runs a compilation of its own.
+        private bool _isModuleFunctionCopy;
+
         public string/*!*/ DefinitionName { get { return _body.Name; } }
         public Parameters/*!*/ Parameters { get { return _body.Ast.Parameters; } }
         public MSA.SymbolDocumentInfo Document { get { return _body.Document; } }
@@ -59,7 +63,11 @@ namespace IronRuby.Runtime.Calls {
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {
-            return new RubyMethodInfo(_body, _declaringScope, module, flags);
+            return new RubyMethodInfo(_body, _declaringScope, module, flags) { _isModuleFunctionCopy = _isModuleFunctionCopy };
+        }
+
+        internal RubyMethodInfo/*!*/ CopyAsModuleFunction(RubyMemberFlags flags, RubyModule/*!*/ singletonClass) {
+            return new RubyMethodInfo(_body, _declaringScope, singletonClass, flags) { _isModuleFunctionCopy = true };
         }
 
         /// <summary>
@@ -181,7 +189,9 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal Delegate/*!*/ GetDelegate() {
-            return _body.GetDelegate(_declaringScope, DeclaringModule);
+            return _isModuleFunctionCopy
+                ? _body.GetModuleFunctionDelegate(_declaringScope, DeclaringModule)
+                : _body.GetDelegate(_declaringScope, DeclaringModule);
         }
 
         #region Dynamic Sites

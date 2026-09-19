@@ -178,7 +178,12 @@ module Kernel
 
   def require_relative(path)
     caller_path = caller.first.split(/:\d/, 2).first
-    require File.expand_path(path, File.dirname(caller_path))
+    # Relative to where the file really is: through a symlink, the link's target, and for a
+    # file run by a relative path, where it was before any chdir.
+    if !File.file?(caller_path) || File.symlink?(caller_path)
+      location = __source_location_of__(caller_path)
+    end
+    require File.expand_path(path, File.dirname(location || caller_path))
   end unless private_method_defined?(:require_relative)
 
   # Like #require, this is both a private instance method and a public singleton
@@ -1852,6 +1857,9 @@ module Kernel
     # names itself "(eval)" or the like, and MRI answers nil for those rather than pointing at
     # wherever the process happens to be.
     return nil if file.nil? || file.empty? || file.start_with?("(")
+    # A file run by a relative path is still where it was after a chdir.
+    location = __source_location_of__(file)
+    return File.dirname(location) if location && !File.file?(file)
     # An eval told a file name that is not a real file answers that name's directory as given.
     return File.dirname(file) unless File.file?(file)
     File.dirname(File.expand_path(file))
@@ -5596,8 +5604,10 @@ class Dir
     result
   end unless method_defined?(:entries)
 
+  # MRI changes to the open directory itself (fchdir), not to its path, where there are
+  # descriptors to do it with.
   def chdir(&block)
-    Dir.chdir(path, &block)
+    File::ALT_SEPARATOR ? Dir.chdir(path, &block) : Dir.fchdir(fileno, &block)
   end unless method_defined?(:chdir)
 end
 
@@ -9361,7 +9371,8 @@ module Process
       when :millisecond then (seconds * 1_000).to_i
       when :microsecond then (seconds * 1_000_000).to_i
       when :nanosecond then (seconds * 1_000_000_000).to_i
-      else seconds
+      when nil then seconds
+      else ::Kernel.raise(::ArgumentError, "unexpected unit: #{unit}")
       end
     end
   end
@@ -9402,7 +9413,8 @@ module Process
       when :millisecond then (seconds * 1_000).to_i
       when :microsecond then (seconds * 1_000_000).to_i
       when :nanosecond then (seconds * 1_000_000_000).to_i
-      else seconds
+      when nil then seconds
+      else ::Kernel.raise(::ArgumentError, "unexpected unit: #{unit}")
       end
     end
     module_function :clock_getres
@@ -10049,7 +10061,8 @@ module Process
 
   unless respond_to?(:getpriority)
     def getpriority(which, who)
-      __check__(__getpriority__(which.to_int, who.to_int))
+      result = __getpriority__(which.to_int, who.to_int)
+      result <= -1000 ? __check__(result + 1000) : result
     end
     module_function :getpriority
 
@@ -10246,6 +10259,15 @@ module Kernel
   module_function :`
 end
 
+# MRI's default SIGINT disposition raises Interrupt on the main thread; left to the
+# platform the signal just ends the process. Installing Ruby's default does that.
+if ::File::ALT_SEPARATOR.nil? && defined?(::Signal.trap)
+  begin
+    ::Signal.trap("INT", "DEFAULT")
+  rescue ::StandardError, ::NotImplementedError
+  end
+end
+
 class SignalException
   # MRI's #initialize names a signal, by number or by name, rather than taking a
   # message: a number may be given a message alongside it, a name may not, and
@@ -10306,6 +10328,11 @@ class Interrupt
 
   private def __signal_exception_super__(message)
     ::Exception.instance_method(:initialize).bind(self).call(message)
+  end
+
+  # also for one the runtime raised for a SIGINT without going through #initialize
+  def signo
+    defined?(@signo) ? @signo : ::Signal.list["INT"]
   end
 end
 
@@ -12329,6 +12356,10 @@ class Thread
       # frame - code eval'd under a made-up file name, or a <internal:...> frame.
       def absolute_path
         return nil if @path.nil? || @path.start_with?("(") || @path.start_with?("<")
+        # where the file was when it ran: it may have been reached through a relative path
+        # before a chdir, or through a symlink that is gone now
+        location = __source_location_of__(@path)
+        return (File.realpath(location) rescue location) if location
         File.realpath(@path) rescue nil
       end
 

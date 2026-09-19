@@ -2577,6 +2577,11 @@ namespace IronRuby.Runtime {
         }
 
         [Emitted]
+        public static Exception/*!*/ MakeUninitializedClassInstantiatedError() {
+            return RubyExceptions.CreateTypeError("can't instantiate uninitialized class");
+        }
+
+        [Emitted]
         public static Exception/*!*/ MakeAbstractMethodCalledError(RuntimeMethodHandle/*!*/ method) {
             return new NotImplementedException(String.Format("Abstract method `{0}' not implemented", MethodInfo.GetMethodFromHandle(method)));
         }

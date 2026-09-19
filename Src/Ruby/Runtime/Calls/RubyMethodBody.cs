@@ -114,6 +114,23 @@ namespace IronRuby.Runtime.Calls {
             return _delegate;
         }
 
+        private Delegate _moduleFunctionDelegate;
+
+        /// <summary>
+        /// The body compiled for the singleton copy Module#module_function makes, which differs
+        /// from the instance method only in the label its frames carry.
+        /// </summary>
+        internal Delegate/*!*/ GetModuleFunctionDelegate(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            if (_moduleFunctionDelegate == null) {
+                lock (this) {
+                    if (_moduleFunctionDelegate == null) {
+                        _moduleFunctionDelegate = Compile(declaringScope, declaringModule);
+                    }
+                }
+            }
+            return _moduleFunctionDelegate;
+        }
+
         private Delegate/*!*/ Compile(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
             // TODO: remove options
             AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);

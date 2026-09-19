@@ -3372,7 +3372,37 @@ namespace IronRuby.Runtime {
         /// </summary>
         public bool MainScriptFailedToParse { get; private set; }
 
+        // The path each source file was run under, mapped to where it really was at that moment.
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, string>/*!*/ _sourceFileLocations =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, string>(StringComparer.Ordinal);
+
+        /// <summary>
+        /// Remembers the absolute, symlink-free location of a source file as it starts to run. MRI
+        /// fixes it then: a relative main script is still found after Dir.chdir, and a file loaded
+        /// through a symlink after the link is gone (Thread::Backtrace::Location#absolute_path,
+        /// __dir__, require_relative).
+        /// </summary>
+        internal void RegisterSourceFileLocation(string path) {
+            if (String.IsNullOrEmpty(path) || path.StartsWith("(", StringComparison.Ordinal)) {
+                return;
+            }
+            try {
+                string fullPath = Platform.GetFullPath(path);
+                FileSystemInfo target = File.ResolveLinkTarget(fullPath, true);
+                _sourceFileLocations[path] = (target != null) ? target.FullName : fullPath;
+            } catch (Exception) {
+                // not a file on disk; nothing to remember
+            }
+        }
+
+        /// <summary>The location RegisterSourceFileLocation remembered for a path, or null.</summary>
+        public string TryGetSourceFileLocation(string/*!*/ path) {
+            string result;
+            return _sourceFileLocations.TryGetValue(path, out result) ? result : null;
+        }
+
         public override int ExecuteProgram(SourceUnit/*!*/ program) {
+            RegisterSourceFileLocation(program.Path);
             try {
                 RubyCompilerOptions options = new RubyCompilerOptions(_options) {
                     FactoryKind = TopScopeFactoryKind.Main

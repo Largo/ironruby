@@ -707,6 +707,7 @@ namespace IronRuby.Runtime {
             
             // TODO: check file timestamp
             string fullPath = Platform.GetFullPath(sourceUnit.Path);
+            _context.RegisterSourceFileLocation(sourceUnit.Path);
 
 #if FEATURE_FILESYSTEM
             CompiledFile compiledFile;

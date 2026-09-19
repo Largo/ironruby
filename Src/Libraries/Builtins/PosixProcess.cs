@@ -57,14 +57,15 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "issetugid")]
         private static extern int SysIsSetUgid();
 
-        [DllImport("libc", SetLastError = true, EntryPoint = "setuid")]
-        private static extern int SysSetUid(int uid);
+        [DllImport("libc", SetLastError = true, EntryPoint = "setresuid")]
+        private static extern int SysSetResUid(int ruid, int euid, int suid);
+
+        [DllImport("libc", SetLastError = true, EntryPoint = "setresgid")]
+        private static extern int SysSetResGid(int rgid, int egid, int sgid);
 
         [DllImport("libc", SetLastError = true, EntryPoint = "seteuid")]
         private static extern int SysSetEuid(int uid);
 
-        [DllImport("libc", SetLastError = true, EntryPoint = "setgid")]
-        private static extern int SysSetGid(int gid);
 
         [DllImport("libc", SetLastError = true, EntryPoint = "setegid")]
         private static extern int SysSetEgid(int gid);
@@ -158,12 +159,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("__getpriority__", RubyMethodAttributes.PublicSingleton)]
         public static int GetPriority(RubyModule/*!*/ self, [DefaultProtocol]int which, [DefaultProtocol]int who) {
-            // getpriority legitimately returns -1, so errno has to be cleared first; the prelude
-            // asks for the value and only treats a result below -20 as an error.
+            // getpriority legitimately returns -1, so errno has to be cleared first. A priority
+            // can be anything from -20 to 19, so a failure is reported as -1000 - errno, which
+            // the prelude tells apart from a priority.
             Marshal.SetLastSystemError(0);
             int result = SysGetPriority(which, who);
             if (result == -1 && Marshal.GetLastWin32Error() != 0) {
-                return Failure();
+                return Failure() - 1000;
             }
             return result;
         }
@@ -186,7 +188,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("__setuid__", RubyMethodAttributes.PublicSingleton)]
         public static int SetUid(RubyModule/*!*/ self, [DefaultProtocol]int uid) {
-            return (SysSetUid(uid) != 0) ? Failure() : 0;
+            // MRI's Process.uid= changes the real id alone - setresuid(uid, -1, -1) - which is also
+            // what a process whose effective id has already been given up is allowed to do.
+            return (SysSetResUid(uid, -1, -1) != 0) ? Failure() : 0;
         }
 
         [RubyMethod("__seteuid__", RubyMethodAttributes.PublicSingleton)]
@@ -196,7 +200,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("__setgid__", RubyMethodAttributes.PublicSingleton)]
         public static int SetGid(RubyModule/*!*/ self, [DefaultProtocol]int gid) {
-            return (SysSetGid(gid) != 0) ? Failure() : 0;
+            return (SysSetResGid(gid, -1, -1) != 0) ? Failure() : 0;
         }
 
         [RubyMethod("__setegid__", RubyMethodAttributes.PublicSingleton)]

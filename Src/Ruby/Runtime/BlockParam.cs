@@ -223,7 +223,7 @@ namespace IronRuby.Runtime {
             // proc whose home frame is gone (e.g. Proc#call on an orphaned block), or one running
             // on another thread than the call it would break out of (Thread.new { break }):
             if (_proc.Converter == null || _threadId != Environment.CurrentManagedThreadId) {
-                throw RubyExceptions.CreateLocalJumpError("break from proc-closure");
+                throw new LocalJumpError("break from proc-closure", "break", returnValue);
             }
 
             // unwind to proc converter:

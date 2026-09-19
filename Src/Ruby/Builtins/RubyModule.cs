@@ -1981,7 +1981,10 @@ namespace IronRuby.Builtins {
             // CLR members: Detaches the member from its underlying type (by creating a copy).
             // TODO: check for CLR instance members, it should be an error to call module_function on them:
             var singletonClass = GetOrCreateSingletonClass();
-            singletonClass.SetMethodNoEventNoLock(callerContext, name, method.Copy(RubyMemberFlags.Public, singletonClass));
+            var rubyMethod = method as RubyMethodInfo;
+            singletonClass.SetMethodNoEventNoLock(callerContext, name, rubyMethod != null
+                ? rubyMethod.CopyAsModuleFunction(RubyMemberFlags.Public, singletonClass)
+                : method.Copy(RubyMemberFlags.Public, singletonClass));
         }
 
         // thread-safe:

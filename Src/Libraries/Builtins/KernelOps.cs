@@ -616,6 +616,16 @@ namespace IronRuby.Builtins {
         /// so it needs the argument handling - including `cause:`, which MRI resolves in the
         /// *calling* context - without the throw. Private, and not part of MRI's Kernel.
         /// </summary>
+        /// <summary>
+        /// Where a source file that has run was when it started - see
+        /// RubyContext.RegisterSourceFileLocation - or nil. Private, and not part of MRI's Kernel.
+        /// </summary>
+        [RubyMethod("__source_location_of__", RubyMethodAttributes.PrivateInstance)]
+        public static MutableString GetSourceFileLocation(RubyContext/*!*/ context, object self, [NotNull]MutableString/*!*/ path) {
+            string result = context.TryGetSourceFileLocation(context.DecodePath(path));
+            return (result != null) ? context.EncodePath(result) : null;
+        }
+
         [RubyMethod("__build_exception__", RubyMethodAttributes.PrivateInstance)]
         public static Exception/*!*/ BuildException(RespondToStorage/*!*/ respondToStorage, UnaryOpStorage/*!*/ storage0, BinaryOpStorage/*!*/ storage1,
             CallSiteStorage<Action<CallSite, Exception, object>>/*!*/ setBackTraceStorage,
@@ -668,6 +678,13 @@ namespace IronRuby.Builtins {
             }
 
             SetCause(context, exception, hasCause, cause);
+
+            // An exception with no backtrace - new, or cleared by set_backtrace(nil) - gets one from
+            // where it is raised now. The interpreter keeps the frames of the first throw on the
+            // exception and would otherwise report those again.
+            if (RubyExceptionData.GetInstance(exception).Backtrace == null) {
+                exception.SetData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo), null);
+            }
             return exception;
         }
 

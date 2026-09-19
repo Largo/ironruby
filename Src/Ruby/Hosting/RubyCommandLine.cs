@@ -194,13 +194,24 @@ namespace IronRuby.Hosting {
             // it would have if the signal had never been turned into an exception. Reporting
             // it instead would tell the parent "exited with 1" where it is watching for
             // "killed by SIGTERM", which is what every Process::Status predicate is about.
-            if (RaiseAsSignal(e)) {
+            // The at_exit handlers still run first, and an Interrupt is reported as well.
+            var context = (RubyContext)Language;
+            int signal = GetSignalToRaise(e);
+            if (signal > 0) {
+                try {
+                    context.RunShutdownHandlers();
+                } catch (Exception) {
+                    // the handlers report their own failures
+                }
+                if (signal == SignalInterrupt) {
+                    Console.Write(Engine.GetService<ExceptionOperations>().FormatException(e), Style.Error);
+                }
+                RaiseSignal(signal);
                 return;
             }
 
             // MRI runs the at_exit handlers first and reports the exception after them - except
             // for a script that does not parse, which is reported as it is parsed.
-            var context = (RubyContext)Language;
             if (!(e is SystemExit) && !context.MainScriptFailedToParse) {
                 try {
                     context.RunShutdownHandlers();
@@ -213,9 +224,12 @@ namespace IronRuby.Hosting {
             Console.Write(Engine.GetService<ExceptionOperations>().FormatException(e), Style.Error);
         }
 
-        private bool RaiseAsSignal(Exception/*!*/ e) {
+        private const int SignalInterrupt = 2;
+
+        /// <summary>The number of the signal an uncaught SignalException stands for, or 0.</summary>
+        private int GetSignalToRaise(Exception/*!*/ e) {
             if (Path.DirectorySeparatorChar != '/') {
-                return false;
+                return 0;
             }
 
             var context = (RubyContext)Language;
@@ -230,24 +244,24 @@ namespace IronRuby.Hosting {
                 }
             }
             if (!isSignal) {
-                return false;
+                return 0;
             }
 
             object number;
             try {
                 number = Engine.Operations.InvokeMember(e, "signo");
             } catch (Exception) {
-                return false;
+                return 0;
             }
-            if (!(number is int) || (int)number <= 0) {
-                return false;
-            }
+            return (number is int && (int)number > 0) ? (int)number : 0;
+        }
 
+        private void RaiseSignal(int signal) {
+            var context = (RubyContext)Language;
             Flush(context.StandardOutput);
             Flush(context.StandardErrorOutput);
-            SysSignal((int)number, IntPtr.Zero);   // SIG_DFL
-            SysRaise((int)number);
-            return true;
+            SysSignal(signal, IntPtr.Zero);   // SIG_DFL
+            SysRaise(signal);
         }
 
         private void Flush(object io) {
