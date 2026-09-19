@@ -21,8 +21,42 @@ namespace IronRuby.StandardLibrary.FileControl {
     [RubyModule("Fcntl")]
     public class Fcntl {
 
+        // The commands are the Linux ones: IO#fcntl hands them to fcntl(2) as they are.
         [RubyConstant]
-        public const int F_SETFL = 0x01;
+        public const int F_DUPFD = 0;
+
+        [RubyConstant]
+        public const int F_GETFD = 1;
+
+        [RubyConstant]
+        public const int F_SETFD = 2;
+
+        [RubyConstant]
+        public const int F_GETFL = 3;
+
+        [RubyConstant]
+        public const int F_SETFL = 4;
+
+        [RubyConstant]
+        public const int F_GETLK = 5;
+
+        [RubyConstant]
+        public const int F_SETLK = 6;
+
+        [RubyConstant]
+        public const int F_SETLKW = 7;
+
+        [RubyConstant]
+        public const int FD_CLOEXEC = 1;
+
+        [RubyConstant]
+        public const int F_RDLCK = 0;
+
+        [RubyConstant]
+        public const int F_WRLCK = 1;
+
+        [RubyConstant]
+        public const int F_UNLCK = 2;
 
         [RubyConstant]
         public const int O_CREAT = 0x0100;

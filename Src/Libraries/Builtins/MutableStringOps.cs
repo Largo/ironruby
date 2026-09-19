@@ -1097,6 +1097,9 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ ReplaceCharacter(MutableString/*!*/ self,
             [DefaultProtocol]int index, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
+            // The index counts characters: content left as bytes by a byte operation (#bytesize,
+            // #getbyte, ...) is switched back first, or a multibyte character would be split.
+            self.PrepareForCharacterRead();
             index = index < 0 ? index + self.Length : index;
             // Appending at the very end is allowed, which is the only way "" can be assigned to.
             if (index < 0 || index > self.Length) {
@@ -1125,6 +1128,7 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateIndexError("negative length {0}", charsToOverwrite);
             }
 
+            self.PrepareForCharacterRead();
             if (System.Math.Abs(start) > self.Length) {
                 throw RubyExceptions.CreateIndexError("index {0} out of string", start);
             }

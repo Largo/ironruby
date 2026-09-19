@@ -3477,7 +3477,7 @@ namespace IronRuby.Builtins {
         private static void LoadIO_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "copy_stream", 0x61, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Int32, System.Int32, System.Object>(IronRuby.Builtins.RubyIOOps.CopyStream)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyIOOps.CopyStream)
             );
             
             DefineRuleGenerator(module, "for_fd", 0x61, IronRuby.Builtins.RubyIOOps.ForFileDescriptor());
@@ -13230,7 +13230,18 @@ namespace IronRuby.StandardLibrary.FileControl {
         }
         
         private static void LoadFcntl_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetConstant(module, "F_DUPFD", IronRuby.StandardLibrary.FileControl.Fcntl.F_DUPFD);
+            SetConstant(module, "F_GETFD", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETFD);
+            SetConstant(module, "F_GETFL", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETFL);
+            SetConstant(module, "F_GETLK", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETLK);
+            SetConstant(module, "F_RDLCK", IronRuby.StandardLibrary.FileControl.Fcntl.F_RDLCK);
+            SetConstant(module, "F_SETFD", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETFD);
             SetConstant(module, "F_SETFL", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETFL);
+            SetConstant(module, "F_SETLK", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETLK);
+            SetConstant(module, "F_SETLKW", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETLKW);
+            SetConstant(module, "F_UNLCK", IronRuby.StandardLibrary.FileControl.Fcntl.F_UNLCK);
+            SetConstant(module, "F_WRLCK", IronRuby.StandardLibrary.FileControl.Fcntl.F_WRLCK);
+            SetConstant(module, "FD_CLOEXEC", IronRuby.StandardLibrary.FileControl.Fcntl.FD_CLOEXEC);
             SetConstant(module, "O_ACCMODE", IronRuby.StandardLibrary.FileControl.Fcntl.O_ACCMODE);
             SetConstant(module, "O_APPEND", IronRuby.StandardLibrary.FileControl.Fcntl.O_APPEND);
             SetConstant(module, "O_CREAT", IronRuby.StandardLibrary.FileControl.Fcntl.O_CREAT);
