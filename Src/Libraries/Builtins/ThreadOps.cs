@@ -638,11 +638,17 @@ namespace IronRuby.Builtins {
         #region raise, fail
 
 #if FEATURE_EXCEPTION_STATE
-        private static void RaiseAsyncException(Thread thread, Exception exception) {
+        private static CallSite<Func<CallSite, object, object>> _exceptionSite;
+
+        private static void RaiseAsyncException(RubyContext/*!*/ context, Thread thread, Exception exception) {
             RubyThreadStatus status = GetStatus(thread);
 
             // rethrow semantics, preserves the backtrace associated with the exception:
-            RubyUtils.RaiseAsyncException(thread, exception);
+            RubyUtils.RaiseAsyncException(thread, exception, e => {
+                // MRI raises exception.exception in the target thread
+                var site = RubyUtils.GetCallSite(ref _exceptionSite, context, "exception", 0);
+                return site.Target(site, e) as Exception;
+            });
 
             if (status == RubyThreadStatus.Sleeping) {
                 // Thread.Abort can interrupt a thread with ThreadState.WaitSleepJoin. However, Thread.Abort 
@@ -681,7 +687,7 @@ namespace IronRuby.Builtins {
                 throw e;
             }
 
-            RaiseAsyncException(self, e);
+            RaiseAsyncException(context, self, e);
 #else
             throw new NotImplementedError("Thread#raise not supported on this platform");
 #endif
@@ -984,7 +990,11 @@ namespace IronRuby.Builtins {
                     // interrupt reached a wait we do not wrap, translate it here.
                     Exception pending = RubyUtils.GetPendingAsyncException(Thread.CurrentThread);
                     if (pending != null) {
-                        e = pending;
+                        try {
+                            e = RubyUtils.FinishAsyncException(pending);
+                        } catch (Exception finishError) {
+                            e = finishError;
+                        }
                     }
                 }
 

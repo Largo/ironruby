@@ -214,6 +214,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("using", RubyMethodAttributes.PrivateInstance)]
         public static RubyModule/*!*/ Using(RubyScope/*!*/ scope, RubyModule/*!*/ self, object module) {
+            // MRI refuses it anywhere inside a method body, blocks and module bodies included
+            if (scope.GetInnerMostMethodScope() != null) {
+                throw RubyExceptions.CreateRuntimeError("Module#using is not permitted in methods");
+            }
             ActivateRefinements(scope, module);
             return self;
         }

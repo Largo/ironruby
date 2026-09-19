@@ -1498,6 +1498,32 @@ namespace IronRuby.Runtime {
             RaiseAsyncException(thread, new ThreadExitSignal());
         }
 
+        // What the target thread does to a parked exception before it throws it (see below).
+        private static readonly ConditionalWeakTable<Exception, Func<Exception, Exception>>/*!*/ _asyncExceptionFinishers =
+            new ConditionalWeakTable<Exception, Func<Exception, Exception>>();
+
+        /// <summary>
+        /// As RaiseAsyncException, and <paramref name="finisher"/> runs on the target thread just
+        /// before the exception is thrown there: Thread#raise calls #exception once in the caller
+        /// and once more in the target thread, which is where MRI raises it.
+        /// </summary>
+        public static void RaiseAsyncException(Thread thread, Exception e, Func<Exception, Exception> finisher) {
+            if (finisher != null && thread != Thread.CurrentThread) {
+                _asyncExceptionFinishers.AddOrUpdate(e, finisher);
+            }
+            RaiseAsyncException(thread, e);
+        }
+
+        /// <summary>The exception to throw for a parked one, on the thread it was parked for.</summary>
+        public static Exception/*!*/ FinishAsyncException(Exception/*!*/ e) {
+            Func<Exception, Exception> finisher;
+            if (_asyncExceptionFinishers.TryGetValue(e, out finisher)) {
+                _asyncExceptionFinishers.Remove(e);
+                return finisher(e) ?? e;
+            }
+            return e;
+        }
+
         // IronRuby runs every Fiber on its own CLR thread, but Ruby semantics say that all fibers of a
         // thread share that thread's identity for Mutex ownership and for deadlock detection. A fiber
         // thread records the thread that owns its fiber group here.
@@ -1646,7 +1672,7 @@ namespace IronRuby.Runtime {
             // and for the delivery at the end of the handle_interrupt block.
             e = GetPendingAsyncException(Thread.CurrentThread);
             if (e != null) {
-                throw e;
+                throw FinishAsyncException(e);
             }
         }
 
