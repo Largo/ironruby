@@ -1464,7 +1464,16 @@ namespace IronRuby.Builtins {
             bool isRubyInitializer = initializer.IsRubyMember && !isLibraryMethod;
             bool isLibraryInitializer = isLibraryMethod && !initializer.DeclaringModule.IsObjectClass && !initializer.DeclaringModule.IsBasicObjectClass;
 
-            if (isRubyInitializer || isLibraryInitializer && _isRubyClass) {
+            // Object#initialize and BasicObject#initialize take no arguments. A plain Ruby object built
+            // with arguments goes through them - allocate, then call - so that it is MRI's "wrong
+            // number of arguments" rather than arguments the CLR constructor quietly drops. (A CLR
+            // type's constructors do take arguments, and keep the construction path below.)
+            bool objectInitializerWithArguments = isLibraryMethod && !isLibraryInitializer
+                && (_isRubyClass || IsObjectClass || IsBasicObjectClass) && _structInfo == null
+                && (type == typeof(object) || typeof(RubyObject).IsAssignableFrom(type) || typeof(BasicObject).IsAssignableFrom(type))
+                && (args.SimpleArgumentCount > 0 || args.Signature.HasSplattedArgument || args.Signature.HasRhsArgument);
+
+            if (isRubyInitializer || isLibraryInitializer && _isRubyClass || objectInitializerWithArguments) {
                 // allocate and initialize:
                 bool allocatorFound = BuildAllocatorCall(metaBuilder, args, () => AstUtils.Constant(Name));
                 if (metaBuilder.Error) {
@@ -1479,7 +1488,7 @@ namespace IronRuby.Builtins {
                     return;
                 }
 
-                if (!initializer.IsEmpty) {
+                if (!initializer.IsEmpty || objectInitializerWithArguments) {
                     BuildOverriddenInitializerCall(metaBuilder, args, initializer);
                 }
             } else {

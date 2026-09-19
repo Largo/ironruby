@@ -589,8 +589,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "initialize", 0x5a, 
-                0x80000000U, 
-                new Func<System.Object, System.Object[], System.Object>(IronRuby.Builtins.BasicObjectOps.Reinitialize)
+                0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.BasicObjectOps.Reinitialize)
             );
             
             DefineLibraryMethod(module, "instance_eval", 0x51, 
@@ -6653,8 +6653,8 @@ namespace IronRuby.Builtins {
         
         private static void LoadObject_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "initialize", 0x5a, 
-                0x80000000U, 
-                new Func<System.Object, System.Object[], System.Object>(IronRuby.Builtins.ObjectOps.Reinitialize)
+                0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.ObjectOps.Reinitialize)
             );
             
         }
