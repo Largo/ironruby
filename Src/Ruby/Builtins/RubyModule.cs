@@ -826,7 +826,9 @@ namespace IronRuby.Builtins {
             if (module._methods != null) {
                 _methods = new Dictionary<string, RubyMemberInfo>(module._methods.Count);
                 foreach (var method in module._methods) {
-                    _methods[method.Key] = method.Value.Copy(method.Value.Flags, this);
+                    // the undefined/hidden markers are shared singletons, not copied (Integer.dup copies undef'd .new):
+                    _methods[method.Key] = (method.Value.IsUndefined || method.Value.IsHidden || method.Value.IsInteropMember) ?
+                        method.Value : method.Value.Copy(method.Value.Flags, this);
                 }
             } else {
                 _methods = null;
@@ -984,6 +986,33 @@ namespace IronRuby.Builtins {
             ForEachRecursivelyDependentClass(visitor);
 
             Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5} rules={3,-5}", Name, reason, affectedModules, affectedRules), "UPDATED");
+        }
+
+        /// <summary>
+        /// Invalidates the rules bound to this module and to every module that depends on it, visiting
+        /// each once. (MethodsUpdated walks every path of the dependency graph, which from BasicObject
+        /// is far too many.)
+        /// </summary>
+        internal void AllDependentMethodsUpdated(string/*!*/ reason) {
+            Context.RequiresClassHierarchyLock();
+
+            var visited = new HashSet<RubyModule>(ReferenceEqualityComparer<RubyModule>.Instance);
+            var stack = new Stack<RubyModule>();
+            stack.Push(this);
+            while (stack.Count > 0) {
+                var module = stack.Pop();
+                if (!visited.Add(module)) {
+                    continue;
+                }
+                module.IncrementMethodVersion();
+                if (module._dependentClasses != null) {
+                    foreach (var cls in module._dependentClasses) {
+                        stack.Push(cls);
+                    }
+                }
+            }
+
+            Utils.Log(String.Format("{0,-50} {1,-30} affected={2,-5}", Name, reason, visited.Count), "UPDATED");
         }
 
         /// <summary>

@@ -147,6 +147,31 @@ namespace IronRuby.Runtime.Calls {
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {
             BuildCallNoFlow(metaBuilder, args, name, MethodBases, CallConvention, ImplicitProtocolConversions);
+
+            // Rules are rebound when c_call tracing is switched on or off, so a rule bound without it costs nothing.
+            if (TracePoint.CCallTracing && !metaBuilder.Error && metaBuilder.Result != null) {
+                metaBuilder.Result = AddCallTracing(metaBuilder.Result, args, name);
+            }
+        }
+
+        private Expression/*!*/ AddCallTracing(Expression/*!*/ call, CallArguments/*!*/ args, string/*!*/ name) {
+            Expression scope = AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope));
+            Expression target = AstUtils.Convert(args.TargetExpression, typeof(object));
+            Expression method = AstUtils.Constant(this, typeof(RubyMemberInfo));
+            Expression methodName = AstUtils.Constant(name);
+            Expression before = Methods.TraceLibraryCall.OpCall(scope, target, method, methodName);
+
+            if (call.Type == typeof(void)) {
+                return Ast.Block(before, call, Methods.TraceLibraryReturn.OpCall(scope, target, method, methodName, AstUtils.Constant(null)));
+            }
+
+            var result = Ast.Variable(call.Type, "#result");
+            return Ast.Block(new[] { result },
+                before,
+                Ast.Assign(result, call),
+                Methods.TraceLibraryReturn.OpCall(scope, target, method, methodName, AstUtils.Convert(result, typeof(object))),
+                result
+            );
         }
     }
 }

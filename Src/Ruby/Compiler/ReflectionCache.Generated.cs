@@ -350,6 +350,12 @@ namespace IronRuby.Compiler {
         private static MethodInfo _IsClrNonSingletonRuleValid;
         public static MethodInfo/*!*/ IsClrSingletonRuleValid { get { return _IsClrSingletonRuleValid ?? (_IsClrSingletonRuleValid = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, System.Int32, System.Boolean>(RubyOps.IsClrSingletonRuleValid)); } }
         private static MethodInfo _IsClrSingletonRuleValid;
+        public static MethodInfo/*!*/ IsAdoptedClrRuleValid { get { return _IsAdoptedClrRuleValid ?? (_IsAdoptedClrRuleValid = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyClass, System.Int32, System.Boolean>(RubyOps.IsAdoptedClrRuleValid)); } }
+        private static MethodInfo _IsAdoptedClrRuleValid;
+        public static MethodInfo/*!*/ TraceLibraryCall { get { return _TraceLibraryCall ?? (_TraceLibraryCall = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.RubyMemberInfo, System.String>(RubyOps.TraceLibraryCall)); } }
+        private static MethodInfo _TraceLibraryCall;
+        public static MethodInfo/*!*/ TraceLibraryReturn { get { return _TraceLibraryReturn ?? (_TraceLibraryReturn = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.Calls.RubyMemberInfo, System.String, System.Object>(RubyOps.TraceLibraryReturn)); } }
+        private static MethodInfo _TraceLibraryReturn;
         public static MethodInfo/*!*/ IsDefinedClassVariable { get { return _IsDefinedClassVariable ?? (_IsDefinedClassVariable = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.String, System.Boolean>(RubyOps.IsDefinedClassVariable)); } }
         private static MethodInfo _IsDefinedClassVariable;
         public static MethodInfo/*!*/ IsDefinedExpressionQualifiedConstant { get { return _IsDefinedExpressionQualifiedConstant ?? (_IsDefinedExpressionQualifiedConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, IronRuby.Runtime.ExpressionQualifiedIsDefinedConstantSiteCache, System.String[], System.Boolean>(RubyOps.IsDefinedExpressionQualifiedConstant)); } }

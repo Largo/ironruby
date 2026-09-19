@@ -2852,6 +2852,9 @@ unless defined?(Fiber)
     def __finish__(msg)
       @alive = false
       @status = :terminated
+      # The program has ended and this fiber was killed with its thread: the
+      # fiber that resumed it is suspended, and stays that way (as in MRI).
+      return if ::Thread.__terminating__
       target = @prev
       if target
         @prev = nil

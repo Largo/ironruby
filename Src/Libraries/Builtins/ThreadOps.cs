@@ -21,6 +21,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -175,6 +176,12 @@ namespace IronRuby.Builtins {
 
             /// <summary>"file:line" of the Thread.new call, which MRI puts in Thread#inspect.</summary>
             internal string Location { get; set; }
+
+            /// <summary>
+            /// Set while a thread of a Thread subclass is between allocation and the Thread#initialize
+            /// (called by the subclass's #initialize through super) that starts it.
+            /// </summary>
+            internal ThreadStarter Starter { get; set; }
 
             // Thread#[] is fiber-local in MRI (and, since every fiber is its own CLR thread here, the
             // dictionary above already is); Thread#thread_variable_get is thread-local, so it needs
@@ -876,11 +883,35 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("new", RubyMethodAttributes.PublicSingleton)]
-        public static Thread/*!*/ CreateThread(RubyContext/*!*/ context, BlockParam startRoutine, object self, params object[]/*!*/ args) {
-            if (startRoutine == null) {
-                throw new ThreadError("must be called with a block");
+        public static Thread/*!*/ CreateThread(CallSiteStorage<Func<CallSite, object, Proc, RubyArray, object>>/*!*/ storage,
+            BlockParam startRoutine, object self, params object[]/*!*/ args) {
+
+            RubyContext context = storage.Context;
+            RubyClass cls = self as RubyClass;
+            if (cls == null || !cls.IsRubyClass) {
+                // Thread itself: its #initialize is the one that starts the thread, so skip the call.
+                if (startRoutine == null) {
+                    throw new ThreadError("must be called with a block");
+                }
+                return StartThread(context, null, startRoutine, args);
             }
-            return StartThread(context, startRoutine, args);
+
+            // A Thread subclass: its #initialize decides the block (calling super with one), and the
+            // thread starts in Thread#initialize.
+            ThreadStarter starter;
+            Thread result = AllocateThread(context, cls, out starter);
+            RubyThreadInfo info = RubyThreadInfo.FromThread(result);
+            info.Starter = starter;
+
+            var initialize = storage.GetCallSite("initialize",
+                new RubyCallSignature(0, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock));
+            initialize.Target(initialize, result, startRoutine != null ? startRoutine.Proc : null, RubyOps.MakeArrayN(args));
+
+            if (info.Starter != null) {
+                info.Starter = null;
+                throw new ThreadError(String.Format("uninitialized thread - check '{0}#initialize'", cls.GetDisplayName(context, false)));
+            }
+            return result;
         }
 
         // Thread.start and Thread.fork bypass #initialize; without a block they fail the way
@@ -891,18 +922,47 @@ namespace IronRuby.Builtins {
             if (startRoutine == null) {
                 throw RubyExceptions.CreateArgumentError("tried to create Proc object without a block");
             }
-            return StartThread(context, startRoutine, args);
+            RubyClass cls = self as RubyClass;
+            return StartThread(context, (cls != null && cls.IsRubyClass) ? cls : null, startRoutine, args);
+        }
+
+        internal sealed class ThreadStarter {
+            internal BlockParam StartRoutine;
+            internal object[] Args;
+            internal Thread Creator;
+        }
+
+        private static Thread/*!*/ StartThread(RubyContext/*!*/ context, RubyClass subclass, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
+            ThreadStarter starter;
+            Thread result = AllocateThread(context, subclass, out starter);
+            Start(result, starter, startRoutine, args);
+            return result;
+        }
+
+        private static void Start(Thread/*!*/ thread, ThreadStarter/*!*/ starter, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
+            startRoutine.IsThreadRoot = true;
+            starter.StartRoutine = startRoutine;
+            starter.Args = args;
+            thread.Start();
         }
 
         /// <summary>
-        /// A Ruby subclass of Thread cannot have instances: System.Threading.Thread is sealed, so
-        /// there is no CLR type to allocate for one. Every thread created here is a plain Thread.
+        /// Creates the CLR thread for a Ruby thread, ready to start once <paramref name="starter"/> has
+        /// been given its block. System.Threading.Thread is sealed, so a thread of a Ruby subclass of
+        /// Thread is a plain CLR thread whose Ruby class is recorded by RubyContext.AdoptClrObject.
         /// </summary>
-        private static Thread/*!*/ StartThread(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args) {
+        private static Thread/*!*/ AllocateThread(RubyContext/*!*/ context, RubyClass subclass, out ThreadStarter/*!*/ starter) {
             RubyThreadInfo creator = RubyThreadInfo.FromThread(Thread.CurrentThread);
             ThreadGroup group = creator.Group;
-            startRoutine.IsThreadRoot = true;
-            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, startRoutine, args, group)));
+            ThreadStarter s = starter = new ThreadStarter();
+            if (context.ThreadTerminator == null) {
+                context.ThreadTerminator = () => TerminateAllThreads(context);
+            }
+            s.Creator = Thread.CurrentThread;
+            Thread result = new Thread(new ThreadStart(() => RubyThreadStart(context, s.StartRoutine, s.Args, group, s.Creator)));
+            if (subclass != null) {
+                context.AdoptClrObject(result, subclass);
+            }
 
             // Everything the thread answers about itself before it has run a single instruction -
             // #inspect, #priority, #report_on_exception - has to be in place before Start().
@@ -922,8 +982,6 @@ namespace IronRuby.Builtins {
 
             // Ruby exits when the main thread exits. So all other threads need to be marked as background threads
             result.IsBackground = true;
-
-            result.Start();
             return result;
         }
 
@@ -962,7 +1020,21 @@ namespace IronRuby.Builtins {
             }
         }
 
-        private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args, ThreadGroup group) {
+        private static void WaitForCreatorToBlock(Thread creator) {
+            if (creator == null) {
+                return;
+            }
+            var watch = System.Diagnostics.Stopwatch.StartNew();
+            while (creator.IsAlive && (creator.ThreadState & System.Threading.ThreadState.WaitSleepJoin) == 0 && watch.ElapsedMilliseconds < 100) {
+                // not Thread.Sleep: this thread has to look running (Thread#status) while it waits
+                if (!Thread.Yield()) {
+                    Thread.SpinWait(100);
+                }
+            }
+        }
+
+        private static void RubyThreadStart(RubyContext/*!*/ context, BlockParam/*!*/ startRoutine, object[]/*!*/ args, ThreadGroup group,
+            Thread creator) {
             RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
             info.CreatedFromRuby = true;
 
@@ -972,6 +1044,12 @@ namespace IronRuby.Builtins {
                 // Thread#kill / Thread#raise may have been called before the thread got a chance to run.
                 RubyUtils.CheckAsyncException();
 
+                if ((TracePoint.ActiveEvents & (int)(TraceEvents.ThreadBegin | TraceEvents.ThreadEnd)) != 0) {
+                    // Under MRI's GVL a new thread runs once its creator blocks (or its time slice ends), so
+                    // a :thread_begin/:thread_end hook sees whatever the creator did with Thread.new's result -
+                    // typically stored it in a variable the hook compares Thread.current with. Wait for that.
+                    WaitForCreatorToBlock(creator);
+                }
                 if ((TracePoint.ActiveEvents & (int)TraceEvents.ThreadBegin) != 0) {
                     TracePoint.OnThread(TraceEvents.ThreadBegin, context, Thread.CurrentThread);
                 }
@@ -1235,6 +1313,21 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static Thread/*!*/ Reinitialize(RubyContext/*!*/ context, BlockParam block, Thread/*!*/ self, params object[]/*!*/ args) {
+            // A thread of a Thread subclass, allocated by Thread.new and waiting for its block:
+            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
+            ThreadStarter starter = info.Starter;
+            if (starter != null) {
+                if (block == null) {
+                    throw new ThreadError("must be called with a block");
+                }
+                info.Starter = null;
+                Start(self, starter, block, args);
+                return self;
+            }
+
+            if (info.Location != null) {
+                throw new ThreadError("already initialized thread - " + info.Location);
+            }
             throw new ThreadError("already initialized thread");
         }
 
@@ -1341,6 +1434,72 @@ namespace IronRuby.Builtins {
         public static object SetFiberOwner(object self, [NotNull]Thread/*!*/ owner) {
             RubyUtils.SetFiberOwnerThread(owner);
             return owner;
+        }
+
+        private static volatile bool _terminating;
+
+        /// <summary>
+        /// True once the program has ended and the remaining threads are being killed. The Fiber
+        /// implementation asks, so that a killed fiber does not hand control back to the fiber that
+        /// resumed it: that fiber is suspended, and in MRI nothing of it runs again.
+        /// </summary>
+        [RubyMethod("__terminating__", RubyMethodAttributes.PublicSingleton)]
+        public static bool IsTerminating(object self) {
+            return _terminating;
+        }
+
+        /// <summary>
+        /// MRI kills every other thread when the program ends (after the at_exit handlers), and waits
+        /// for them. What runs is the ensure clauses of each thread's current fiber; a suspended
+        /// fiber is abandoned. Every fiber here is a CLR thread of its own, so "kill the thread" means
+        /// kill the CLR thread of the fiber that is running, and leave the others parked.
+        /// </summary>
+        private static void TerminateAllThreads(RubyContext/*!*/ context) {
+            _terminating = true;
+
+            RubySymbol currentFiberKey = context.CreateAsciiSymbol("__ir_fiber_current__");
+            RubySymbol resumed = context.CreateAsciiSymbol("resumed");
+            List<Thread> killed = new List<Thread>();
+            List<Thread> busy = new List<Thread>();
+
+            foreach (RubyThreadInfo info in RubyThreadInfo.Threads) {
+                Thread thread = info.Thread;
+                if (thread == Thread.CurrentThread || thread == context.MainThread || !info.CreatedFromRuby || !thread.IsAlive) {
+                    continue;
+                }
+
+                object fiber = info[currentFiberKey];
+                object status;
+                if (fiber != null && context.TryGetInstanceVariable(fiber, "@status", out status) && !ReferenceEquals(status, resumed)) {
+                    // a suspended fiber (or a thread whose root fiber is suspended)
+                    continue;
+                }
+
+                // The kill is delivered at the thread's next blocking point, and a thread blocked in a
+                // managed wait (sleep, Queue#pop, Mutex, ConditionVariable) is woken for it. One that is
+                // computing, or blocked in a system call, may never get there: give it a moment only.
+                bool waiting = (thread.ThreadState & ThreadState.WaitSleepJoin) != 0;
+                try {
+                    Kill(thread);
+                    (waiting ? killed : busy).Add(thread);
+                } catch (Exception) {
+                    // the thread finished in the meantime
+                }
+            }
+
+            // MRI waits as long as it takes; don't let a thread stuck in an ensure clause hang the exit.
+            JoinAll(killed, TimeSpan.FromSeconds(5));
+            JoinAll(busy, TimeSpan.FromMilliseconds(100));
+        }
+
+        private static void JoinAll(List<Thread>/*!*/ threads, TimeSpan timeout) {
+            DateTime deadline = DateTime.UtcNow + timeout;
+            foreach (Thread thread in threads) {
+                TimeSpan left = deadline - DateTime.UtcNow;
+                if (left <= TimeSpan.Zero || !thread.Join(left)) {
+                    return;
+                }
+            }
         }
 
         [RubyMethod("stop?", RubyMethodAttributes.PublicInstance)]

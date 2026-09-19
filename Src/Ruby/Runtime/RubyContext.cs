@@ -1593,7 +1593,46 @@ namespace IronRuby.Runtime {
         /// </summary>
         public RubyClass/*!*/ GetClassOf(object obj) {
             ContractUtils.Ensures(!ContractUtils.Result<RubyClass>().IsSingletonClass);
-            return TryGetClassOfRubyObject(obj) ?? GetOrCreateClass(obj.GetType());
+            return TryGetClassOfRubyObject(obj) ?? (_hasAdoptedClrObjects ? TryGetClassOfAdoptedClrObject(obj) : null)
+                ?? GetOrCreateClass(obj.GetType());
+        }
+
+        private volatile bool _hasAdoptedClrObjects;
+
+        private RubyClass TryGetClassOfAdoptedClrObject(object/*!*/ obj) {
+            RubyInstanceData data;
+            RubyClass immediate;
+            if (RubyUtils.HasObjectState(obj) && TryGetClrTypeInstanceData(obj, out data) && (immediate = data.ImmediateClass) != null) {
+                immediate = immediate.GetNonSingletonClass();
+                return immediate.IsRubyClass ? immediate : null;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Makes <paramref name="cls"/>, a Ruby subclass of the class of <paramref name="obj"/>, the class of
+        /// <paramref name="obj"/>. This is how a sealed CLR type (System.Threading.Thread) gets instances of its
+        /// Ruby subclasses: there is no CLR type to derive, so the object stays a plain instance of the CLR type
+        /// and its Ruby class is recorded in its instance data, where a singleton class would be.
+        /// Must be called before the object is visible to Ruby code.
+        /// </summary>
+        public void AdoptClrObject(object/*!*/ obj, RubyClass/*!*/ cls) {
+            ContractUtils.RequiresNotNull(obj, "obj");
+            ContractUtils.RequiresNotNull(cls, "cls");
+            ContractUtils.Requires(!(obj is IRubyObject) && RubyUtils.HasObjectState(obj), "obj");
+
+            RubyClass clrClass = GetOrCreateClass(obj.GetType());
+            ContractUtils.Requires(cls.IsRubyClass && !cls.IsSingletonClass && cls.IsSubclassOf(clrClass), "cls");
+
+            using (ClassHierarchyLocker()) {
+                if (!clrClass.HasAdoptedInstances) {
+                    clrClass.HasAdoptedInstances = true;
+                    // rules bound so far don't check for adopted objects:
+                    clrClass.MethodsUpdated("AdoptClrObject");
+                }
+                _hasAdoptedClrObjects = true;
+                GetInstanceData(obj).ImmediateClass = cls;
+            }
         }
 
         private RubyClass TryGetClassOfRubyObject(object obj) {
@@ -2026,7 +2065,9 @@ namespace IronRuby.Runtime {
         public void DropClrInstanceSingleton(object/*!*/ obj) {
             RubyInstanceData data;
             if (!(obj is IRubyObject) && TryGetClrTypeInstanceData(obj, out data) && data.InstanceSingleton != null) {
-                data.ImmediateClass = null;
+                // an adopted object (AdoptClrObject) keeps its Ruby class:
+                RubyClass super = data.InstanceSingleton.SuperClass;
+                data.ImmediateClass = (super.IsRubyClass && !super.IsSingletonClass) ? super : null;
             }
         }
 
@@ -3628,8 +3669,25 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// Kills the threads still running when the program ends (the Thread library sets it once it
+        /// has started one). Runs after the at_exit handlers, as MRI's rb_thread_terminate_all does.
+        /// </summary>
+        public Action ThreadTerminator { get; set; }
+
         private void ExecuteShutdownHandlers() {
             RunShutdownHandlers();
+
+            var terminator = ThreadTerminator;
+            if (terminator != null) {
+                ThreadTerminator = null;
+                try {
+                    terminator();
+                } catch (Exception) {
+                    // the program is over; a thread that won't die just stays behind
+                }
+            }
+
             RunExitFinalizers();
 
             if (_shutdownSystemExit != null) {
@@ -3804,6 +3862,28 @@ namespace IronRuby.Runtime {
                     syntaxError.File, syntaxError.Line, syntaxError.Column, syntaxError.LineSourceCode);
             }
 
+            StringBuilder sb = new StringBuilder();
+            AppendExceptionReport(sb, exception);
+
+            // MRI follows the report with the exception's causes, each reported the same way:
+            var shown = new HashSet<Exception>(ReferenceEqualityComparer<Exception>.Instance) { exception };
+            Exception cause = exception;
+            while ((cause = RubyExceptionData.GetInstance(cause).Cause) != null && shown.Add(cause)) {
+                AppendExceptionReport(sb, cause);
+            }
+
+            // display the raw CLR exception & strack trace if requested
+            if (Options.ShowClrExceptions) {
+                sb.AppendLine().AppendLine();
+                sb.AppendLine("CLR exception:");
+                sb.Append(base.FormatException(exception));
+                sb.AppendLine();
+            }
+
+            return sb.ToString();
+        }
+
+        private void AppendExceptionReport(StringBuilder/*!*/ sb, Exception/*!*/ exception) {
             var exceptionClass = GetClassOf(exception);
             RubyExceptionData data = RubyExceptionData.GetInstance(exception);
             // The message is written as it is: MRI does not escape control characters or
@@ -3816,7 +3896,6 @@ namespace IronRuby.Runtime {
 
             RubyArray backtrace = data.Backtrace;
 
-            StringBuilder sb = new StringBuilder();
             if (backtrace != null && backtrace.Count > 0) {
                 sb.AppendFormat("{0}: {1} ({2})", Protocols.ToClrStringNoThrow(this, backtrace[0]), message, exceptionClass.Name);
                 sb.AppendLine();
@@ -3837,16 +3916,6 @@ namespace IronRuby.Runtime {
             } else {
                 sb.AppendFormat("unknown: {0} ({1})", message, exceptionClass.Name).AppendLine();
             }
-
-            // display the raw CLR exception & strack trace if requested
-            if (Options.ShowClrExceptions) {
-                sb.AppendLine().AppendLine();
-                sb.AppendLine("CLR exception:");
-                sb.Append(base.FormatException(exception));
-                sb.AppendLine();
-            }
-
-            return sb.ToString();
         }
 
         internal static string/*!*/ FormatErrorMessage(string/*!*/ message, string prefix, string file, int line, int column, string lineSource) {

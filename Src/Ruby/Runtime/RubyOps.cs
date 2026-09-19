@@ -189,7 +189,7 @@ namespace IronRuby.Runtime {
                 }
             }
 
-            if ((TracePoint.ActiveEvents & (int)TraceEvents.Call) != 0) {
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.Call | TraceEvents.CCall)) != 0) {
                 TracePoint.OnMethodCall(scope);
             }
             return scope;
@@ -2885,7 +2885,30 @@ namespace IronRuby.Runtime {
 
             return versionHandle.Method == expectedVersion
                 // TODO: optimize this (we can have a hashtable of singletons per class: Weak(object) => Struct { ImmediateClass, InstanceVariables, Flags }):
-                && !(context.TryGetClrTypeInstanceData(target, out data) && (immediate = data.ImmediateClass) != null && immediate.IsSingletonClass);
+                && !(context.TryGetClrTypeInstanceData(target, out data) && (immediate = data.ImmediateClass) != null
+                    && (immediate.IsSingletonClass || immediate.IsRubyClass));
+        }
+
+        // :c_call / :c_return around a library method call; only in rules bound while TracePoint.CCallTracing
+        [Emitted]
+        public static void TraceLibraryCall(RubyScope scope, object self, RubyMemberInfo/*!*/ method, string/*!*/ name) {
+            TracePoint.OnLibraryCall(TraceEvents.CCall, scope, self, method, name, null);
+        }
+
+        [Emitted]
+        public static void TraceLibraryReturn(RubyScope scope, object self, RubyMemberInfo/*!*/ method, string/*!*/ name, object value) {
+            TracePoint.OnLibraryCall(TraceEvents.CReturn, scope, self, method, name, value);
+        }
+
+        /// <summary>
+        /// A rule for an object of a sealed CLR type whose class is a Ruby subclass of that type (see
+        /// RubyContext.AdoptClrObject) holds for objects with exactly that immediate class.
+        /// </summary>
+        [Emitted]
+        public static bool IsAdoptedClrRuleValid(RubyContext/*!*/ context, object/*!*/ target, RubyClass/*!*/ expectedClass, int expectedVersion) {
+            RubyInstanceData data;
+            return context.TryGetClrTypeInstanceData(target, out data) && ReferenceEquals(data.ImmediateClass, expectedClass)
+                && expectedClass.Version.Method == expectedVersion;
         }
 
         // super call condition

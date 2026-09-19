@@ -205,6 +205,9 @@ namespace IronRuby.Runtime {
         }
 
         private static string/*!*/ FormatFrame(string file, int line, string methodName) {
+            // an eval with a starting line below 1 (see RubyUtils.EncodeEvalLineOffset):
+            line += RubyUtils.DecodeEvalLineOffset(ref file);
+
             if (String.IsNullOrEmpty(methodName)) {
                 return String.Format("{0}:{1}", file, line);
             } else {

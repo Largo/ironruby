@@ -9845,6 +9845,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Threading.Thread, System.Object>(IronRuby.Builtins.ThreadOps.SetFiberOwner)
             );
             
+            DefineLibraryMethod(module, "__terminating__", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, System.Boolean>(IronRuby.Builtins.ThreadOps.IsTerminating)
+            );
+            
             DefineLibraryMethod(module, "abort_on_exception", 0x61, 
                 0x00000000U, 
                 new Func<System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GlobalAbortOnException)
@@ -9913,7 +9918,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "new", 0x61, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.CreateThread)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, IronRuby.Builtins.RubyArray, System.Object>>, IronRuby.Runtime.BlockParam, System.Object, System.Object[], System.Threading.Thread>(IronRuby.Builtins.ThreadOps.CreateThread)
             );
             
             DefineLibraryMethod(module, "pass", 0x61, 
