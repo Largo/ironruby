@@ -3898,6 +3898,22 @@ namespace IronRuby.Runtime {
             return GetSourceReader(stream, defaultEncoding);
         }
 
+        /// <summary>
+        /// A file is UTF-8 unless it says otherwise, and so is a binary or ASCII string given to
+        /// eval. A string in any other encoding is eval'd as the characters it holds in that
+        /// encoding - reading its bytes as UTF-8 failed outright for most Shift_JIS or EUC-JP text.
+        /// </summary>
+        private static Encoding/*!*/ SourceDefaultEncoding(Encoding/*!*/ defaultEncoding) {
+            switch (defaultEncoding.CodePage) {
+                case RubyEncoding.CodePageBinary:
+                case RubyEncoding.CodePageAscii:
+                case RubyEncoding.CodePageUTF8:
+                    return RubyEncoding.UTF8.StrictEncoding;
+            }
+            var encoding = RubyEncoding.GetRubyEncoding(defaultEncoding);
+            return encoding.IsAsciiIdentity ? encoding.StrictEncoding : RubyEncoding.UTF8.StrictEncoding;
+        }
+
         private SourceCodeReader/*!*/ GetSourceReader(Stream/*!*/ stream, Encoding/*!*/ defaultEncoding) {
             long initialPosition = stream.Position;
             var reader = new StreamReader(stream, BinaryEncoding.Instance, true);
@@ -3931,7 +3947,7 @@ namespace IronRuby.Runtime {
             // Ruby 2.0 made UTF-8 the default source encoding; before that it was
             // US-ASCII and a magic comment was required for anything else. A magic
             // comment or a BOM still wins.
-            var encoding = rubyPreambleEncoding ?? preambleEncoding ?? RubyEncoding.UTF8.StrictEncoding;
+            var encoding = rubyPreambleEncoding ?? preambleEncoding ?? SourceDefaultEncoding(defaultEncoding);
             return new SourceCodeReader(new StreamReader(stream, encoding, false), encoding);
         }
 

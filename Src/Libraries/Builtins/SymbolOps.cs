@@ -53,8 +53,12 @@ namespace IronRuby.Builtins {
 
             // A symbol whose bytes cannot be written out as they stand is quoted whatever its
             // name looks like: :"foo" for a UTF-16 symbol, :"foo\xA4" for a binary one. MRI's
-            // rule here is the encoding's, not the name's - a UTF-8 :привет stays bare.
-            if (!self.String.IsAscii() && self.String.Encoding != RubyEncoding.UTF8) {
+            // rule here is the encoding's, not the name's - a UTF-8 :привет stays bare, as long
+            // as UTF-8 is the encoding inspect results are shown in (default_internal, or else
+            // default_external); a Windows-31J symbol is bare when that is Windows-31J.
+            RubyEncoding display = context.DefaultInternalEncoding ?? context.DefaultExternalEncoding;
+            if (!self.String.IsAscii() && (self.String.Encoding != display || !self.String.Encoding.IsAsciiIdentity ||
+                self.String.Encoding == RubyEncoding.Binary)) {
                 result = MutableStringOps.Inspect(context, self.String);
                 result.Insert(0, ':');
                 return result;

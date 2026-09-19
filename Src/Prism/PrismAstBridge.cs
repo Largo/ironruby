@@ -86,8 +86,18 @@ namespace IronRuby.Prism {
             // what it reports, because it decides which bytes prism is given in the first place.
             RubyEncoding sourceEncoding = ResolveEncoding(DeclaredEncodingName(code), sourceUnit);
 
+            // An eval'd string in a multibyte encoding other than UTF-8 is parsed as the bytes it
+            // holds, and prism has to be told which encoding they are in.
+            string encodingName = null;
+            if (evalSourceEncoding != null && DeclaredEncodingName(code) == null && evalSourceEncoding.IsAsciiIdentity &&
+                evalSourceEncoding != RubyEncoding.UTF8 && evalSourceEncoding != RubyEncoding.Binary &&
+                evalSourceEncoding != RubyEncoding.Ascii) {
+                sourceEncoding = evalSourceEncoding;
+                encodingName = evalSourceEncoding.Name;
+            }
+
             PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames,
-                frozenStringLiteral, sourceEncoding.Encoding);
+                frozenStringLiteral, sourceEncoding.Encoding, encodingName);
 
             // An eval'd string without a magic comment is in the string's own encoding, which its
             // literals and __ENCODING__ then carry (MRI), rather than in UTF-8 as a file would be.
