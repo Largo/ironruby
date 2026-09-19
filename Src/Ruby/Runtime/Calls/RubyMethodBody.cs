@@ -82,12 +82,14 @@ namespace IronRuby.Runtime.Calls {
         private List<KeyValuePair<RubyModule[], Delegate>> _lexicalVariants;
 
         internal Delegate GetDelegate(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
-            if (_delegate == null) {
+            Delegate primary = _delegate;
+            if (primary == null) {
                 lock (this) {
-                    if (_delegate == null) {
+                    primary = _delegate;
+                    if (primary == null) {
                         _singletonLexicalModules = GetObjectSingletonLexicalModules(declaringScope);
                         _delegateModule = declaringModule;
-                        _delegate = Compile(declaringScope, declaringModule);
+                        _delegate = primary = Compile(declaringScope, declaringModule);
                     }
                 }
             }
@@ -132,10 +134,48 @@ namespace IronRuby.Runtime.Calls {
                 }
             }
 
-            return _delegate;
+            return primary;
         }
 
         private Delegate _moduleFunctionDelegate;
+
+        // The refinements that were active where the body was last defined for a module, which is
+        // what the method sees - not what its declaring scope has activated since.  The declaring
+        // scope is baked into the compiled body and shared by every method defined in that scope, so
+        // it cannot carry this; the box the compiled body hands each RubyMethodScope does.  Keyed like
+        // the compilations are, by declaring module.
+        private ConditionalWeakTable<RubyModule, StrongBox<RefinementActivation>> _definitionRefinements;
+
+        // A compilation made while nothing had been refined carries no box: its scopes see no
+        // refinements, which is right for a `def' that ran before any refinement existed.
+        private bool _compiledWithoutDefinitionRefinements;
+
+        /// <summary>
+        /// Records the refinements active at a `def' of this body for <paramref name="declaringModule"/>.
+        /// </summary>
+        internal void SetDefinitionRefinements(RubyModule/*!*/ declaringModule, RefinementActivation/*!*/ refinements) {
+            lock (this) {
+                if (_compiledWithoutDefinitionRefinements && !refinements.IsEmpty) {
+                    // The same `def' ran again after a refinement came into existence: drop the
+                    // compilations that cannot see it (callers re-bind: the def replaces the method).
+                    _compiledWithoutDefinitionRefinements = false;
+                    _delegate = null;
+                    _delegateModule = null;
+                    _moduleVariants = null;
+                    _singletonLexicalModules = null;
+                    _lexicalVariants = null;
+                    _moduleFunctionDelegate = null;
+                }
+                GetDefinitionRefinementsNoLock(declaringModule).Value = refinements;
+            }
+        }
+
+        private StrongBox<RefinementActivation>/*!*/ GetDefinitionRefinementsNoLock(RubyModule/*!*/ declaringModule) {
+            if (_definitionRefinements == null) {
+                _definitionRefinements = new ConditionalWeakTable<RubyModule, StrongBox<RefinementActivation>>();
+            }
+            return _definitionRefinements.GetValue(declaringModule, (_) => new StrongBox<RefinementActivation>());
+        }
 
         /// <summary>
         /// The body compiled for the singleton copy Module#module_function makes, which differs
@@ -156,7 +196,18 @@ namespace IronRuby.Runtime.Calls {
             // TODO: remove options
             AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
             gen.Coverage = _coverage;
-            MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule);
+
+            // Only programs that refine anything pay for the definition-time refinement record.
+            StrongBox<RefinementActivation> definitionRefinements = null;
+            if (declaringScope.RubyContext.HasRefinements) {
+                lock (this) {
+                    definitionRefinements = GetDefinitionRefinementsNoLock(declaringModule);
+                }
+            } else {
+                _compiledWithoutDefinitionRefinements = true;
+            }
+
+            MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule, definitionRefinements);
             return RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
         }
 

@@ -502,10 +502,18 @@ namespace IronRuby.Builtins {
         /// Appends this module's (and its includes') refinement of <paramref name="refinedModule"/>, if any.
         /// </summary>
         internal void GetActiveRefinementsOf(RubyModule/*!*/ refinedModule, List<RubyModule/*!*/>/*!*/ result) {
+            GetActiveRefinementsOf(refinedModule, result, null);
+        }
+
+        /// <summary>
+        /// Like the overload above, but only the refinements in <paramref name="snapshot"/> - the ones a
+        /// `using' of this module found when it ran - unless that is null.
+        /// </summary>
+        internal void GetActiveRefinementsOf(RubyModule/*!*/ refinedModule, List<RubyModule/*!*/>/*!*/ result, HashSet<RubyModule> snapshot) {
             ForEachAncestor(false, (m) => {
                 RubyModule refinement;
                 if (m._refinements != null && m._refinements.TryGetValue(refinedModule, out refinement)) {
-                    if (!result.Contains(refinement)) {
+                    if (!result.Contains(refinement) && (snapshot == null || snapshot.Contains(refinement))) {
                         result.Add(refinement);
                     }
                 }
