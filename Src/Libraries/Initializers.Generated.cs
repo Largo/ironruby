@@ -11496,7 +11496,8 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             IronRuby.Builtins.RubyModule def5 = DefineModule("OpenSSL::KDF", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.KDF), 0x00000008, null, LoadOpenSSL__KDF_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             #endif
             #if FEATURE_CRYPTOGRAPHY
-            IronRuby.Builtins.RubyClass def7 = DefineClass("OpenSSL::OpenSSLError", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.OpenSSLError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def7 = DefineClass("OpenSSL::OpenSSLError", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.OpenSSLError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(OpenSslLibraryInitializer.ExceptionFactory__OpenSSL__OpenSSLError));
             #endif
             #if FEATURE_CRYPTOGRAPHY
             IronRuby.Builtins.RubyModule def8 = DefineModule("OpenSSL::PKey", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.PKey), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
@@ -11528,10 +11529,12 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             IronRuby.Builtins.RubyClass def15 = DefineClass("OpenSSL::X509::Name", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Name), 0x00000008, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             #endif
             #if FEATURE_CRYPTOGRAPHY
-            IronRuby.Builtins.RubyClass def6 = DefineClass("OpenSSL::KDFError", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.KDFError), 0x00000008, def7, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def6 = DefineClass("OpenSSL::KDFError", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.KDFError), 0x00000008, def7, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(OpenSslLibraryInitializer.ExceptionFactory__OpenSSL__KDFError));
             #endif
             #if FEATURE_CRYPTOGRAPHY
-            IronRuby.Builtins.RubyClass def12 = DefineClass("OpenSSL::SSL::SSLError", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.SSLError), 0x00000008, def7, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def12 = DefineClass("OpenSSL::SSL::SSLError", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.SSLError), 0x00000008, def7, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(OpenSslLibraryInitializer.ExceptionFactory__OpenSSL__SSL__SSLError));
             #endif
             #if FEATURE_CRYPTOGRAPHY
             SetConstant(def1, "BN", def2);
@@ -11792,6 +11795,24 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         }
         #endif
         
+        #if FEATURE_CRYPTOGRAPHY
+        public static System.Exception/*!*/ ExceptionFactory__OpenSSL__KDFError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.OpenSsl.OpenSsl.KDFError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        #endif
+        #if FEATURE_CRYPTOGRAPHY
+        public static System.Exception/*!*/ ExceptionFactory__OpenSSL__OpenSSLError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.OpenSsl.OpenSsl.OpenSSLError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        #endif
+        #if FEATURE_CRYPTOGRAPHY
+        public static System.Exception/*!*/ ExceptionFactory__OpenSSL__SSL__SSLError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.SSLError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        #endif
     }
 }
 
