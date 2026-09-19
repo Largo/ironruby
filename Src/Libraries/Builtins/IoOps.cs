@@ -2229,7 +2229,14 @@ namespace IronRuby.Builtins {
         public static object CopyStream(
             ConversionStorage<MutableString>/*!*/ toPath, ConversionStorage<int>/*!*/ toInt, RespondToStorage/*!*/ respondTo,
             BinaryOpStorage/*!*/ writeStorage, CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ readStorage,
-            RubyClass/*!*/ self, object src, object dst, [DefaultParameterValue(-1)]int count, [DefaultParameterValue(-1)]int src_offset) {
+            CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ readPartialStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage,
+            RubyClass/*!*/ self, object src, object dst, [DefaultParameterValue(null)]object copyLength, [DefaultParameterValue(null)]object srcOffset) {
+
+            // Both are Integers by #to_int, nil standing for "all of it" / "where the source is",
+            // and both are converted before either end is touched.
+            int count = (copyLength != null) ? Protocols.CastToFixnum(toInt, copyLength) : -1;
+            int src_offset = (srcOffset != null) ? Protocols.CastToFixnum(toInt, srcOffset) : -1;
 
             if (count < -1) {
                 throw RubyExceptions.CreateArgumentError("count should be >= -1");
@@ -2239,20 +2246,22 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("src_offset should be >= -1");
             }
 
-            RubyIO srcIO = src as RubyIO;
-            RubyIO dstIO = dst as RubyIO;
+            var context = toPath.Context;
             Stream srcStream = null, dstStream = null;
             // only a stream opened here from a path is closed here; an IO passed in stays open
             bool ownsSrc = false, ownsDst = false;
-            var context = toPath.Context;
             CallSite<Func<CallSite, object, object, object>> writeSite = null;
             CallSite<Func<CallSite, object, object, object, object>> readSite = null;
+            bool readPartial = false;
+            long restorePosition = -1;
 
             try {
-                // Each side on its own: an IO is read or written as that IO - a File is not reopened by
-                // its path, which used to truncate and overwrite a file opened only for reading - and
-                // anything else is a path or an object with #read / #write.
+                // Each side on its own: an IO (or what #to_io gives, as for a Tempfile) is read or
+                // written as that IO - a File is not reopened by its path, which used to truncate and
+                // overwrite a file opened only for reading - and anything else is a path or an object
+                // with #readpartial / #read / #write.
                 var toPathSite = toPath.GetSite(TryConvertToPathAction.Make(toPath.Context));
+                RubyIO srcIO = TryToIO(respondTo, toIoStorage, context, src);
                 if (srcIO != null) {
                     srcStream = srcIO.GetReadableStream();
                 } else {
@@ -2260,11 +2269,16 @@ namespace IronRuby.Builtins {
                     if (srcPath != null) {
                         srcStream = self.Context.Platform.OpenInputFileStream(context.DecodePath(srcPath), FileMode.Open, FileAccess.Read, FileShare.Read);
                         ownsSrc = true;
+                    } else if (Protocols.RespondTo(respondTo, src, "readpartial")) {
+                        // MRI prefers #readpartial, which signals the end with EOFError
+                        readSite = readPartialStorage.GetCallSite("readpartial", 2);
+                        readPartial = true;
                     } else {
                         readSite = readStorage.GetCallSite("read", 2);
                     }
                 }
 
+                RubyIO dstIO = TryToIO(respondTo, toIoStorage, context, dst);
                 if (dstIO != null) {
                     dstStream = dstIO.GetWritableStream();
                 } else {
@@ -2282,7 +2296,14 @@ namespace IronRuby.Builtins {
                     if (srcStream == null) {
                         throw RubyExceptions.CreateArgumentError("cannot specify src_offset for non-IO");
                     }
-                    srcStream.Seek(src_offset, SeekOrigin.Current);
+                    if (!srcStream.CanSeek) {
+                        throw new Errno.InvalidSeekError("pread");
+                    }
+                    // MRI preads from the offset: the source IO's own position is left where it was.
+                    if (!ownsSrc) {
+                        restorePosition = srcStream.Position;
+                    }
+                    srcStream.Seek(src_offset, SeekOrigin.Begin);
                 }
 
                 MutableString userBuffer = null;
@@ -2291,7 +2312,7 @@ namespace IronRuby.Builtins {
                 long bytesCopied = 0;
                 long remaining = (count < 0) ? Int64.MaxValue : count;
                 int minBufferSize = 16 * 1024;
-                
+
                 if (srcStream != null) {
                     buffer = new byte[Math.Min(minBufferSize, remaining)];
                 }
@@ -2303,15 +2324,24 @@ namespace IronRuby.Builtins {
                         userBuffer = null;
                         bytesRead = srcStream.Read(buffer, 0, chunkSize);
                     } else {
-                        // MRI copies what src.read(len, buf) put in buf; read answers nil at the end of the stream
+                        // MRI copies what src.read(len, buf) put in buf; read answers nil at the end of
+                        // the stream, readpartial raises EOFError
                         userBuffer = MutableString.CreateBinary();
-                        object chunk = readSite.Target(readSite, src, chunkSize, userBuffer);
+                        object chunk;
+                        try {
+                            chunk = readSite.Target(readSite, src, chunkSize, userBuffer);
+                        } catch (EOFError) {
+                            if (!readPartial) {
+                                throw;
+                            }
+                            break;
+                        }
                         if (chunk == null) {
                             break;
                         }
                         bytesRead = userBuffer.GetByteCount();
                     }
-                    
+
                     if (bytesRead <= 0) {
                         break;
                     }
@@ -2336,6 +2366,9 @@ namespace IronRuby.Builtins {
                 return Protocols.Normalize(bytesCopied);
 
             } finally {
+                if (restorePosition != -1) {
+                    srcStream.Seek(restorePosition, SeekOrigin.Begin);
+                }
                 if (ownsSrc) {
                     srcStream.Dispose();
                 }
