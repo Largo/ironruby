@@ -1601,21 +1601,6 @@ namespace IronRuby.Builtins {
 
         // 1.9: public_send
 
-        [RubyMethod("tap")]
-        public static object Tap(RubyScope/*!*/ scope, BlockParam block, object/*!*/ self) {
-            if (block == null) {
-                // #tap yields, so without a block it is a jump with nowhere to go, not a missing
-                // argument: MRI raises LocalJumpError rather than complaining about the Proc.
-                throw RubyExceptions.NoBlockGiven();
-            }
-
-            object blockResult;
-            if (block.Yield(self, out blockResult)) {
-                return blockResult;
-            }
-            return self;
-        }
-
         #endregion
 
         #region clr_member, method, public_method

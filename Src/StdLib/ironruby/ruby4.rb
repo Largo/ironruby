@@ -89,6 +89,13 @@ module Kernel
     yield self
   end unless method_defined?(:yield_self)
   alias_method :then, :yield_self unless method_defined?(:then)
+
+  # Written in Ruby, as MRI's is (<internal:kernel>): its frame is reported with its caller's
+  # location, and it has a source_location.
+  def tap
+    yield(self)
+    self
+  end
 end
 
 class Object
@@ -3444,7 +3451,8 @@ module Kernel
         # trailing ":in `method'" that MRI's uplevel prefix does not.
         # As RubyGems' own Kernel#warn does, frames of its #require don't count: a warning
         # from a required file names the line that required it, not custom_require.rb.
-        frames = caller(1) || []
+        # Frames of <internal: code (an eval that names itself so) don't count either.
+        frames = (caller(1) || []).reject { |frame| frame.start_with?("<internal:") }
         index = 0
         index += 1 while frames[index] && frames[index].include?("/rubygems/custom_require.rb:")
         uplevel.times do
@@ -6338,7 +6346,7 @@ unless defined?(Pathname)
   autoload :Pathname, File.expand_path("../ruby/1.9.1/pathname.rb", File.dirname(__FILE__))
   module Kernel
     def Pathname(path)
-      ::Pathname
+      ::Object.const_get(:Pathname) # loads pathname.rb, which redefines this method
       Pathname(path)
     end
     module_function :Pathname

@@ -4980,11 +4980,6 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, System.Object[], System.Object>(IronRuby.Builtins.KernelOps.Syscall)
             );
             
-            DefineLibraryMethod(module, "tap", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Tap)
-            );
-            
             #if FEATURE_FILESYSTEM
             DefineLibraryMethod(module, "test", 0x52, 
                 0x00000004U, 0x00020000U, 0x00000004U, 0x00020000U, 
