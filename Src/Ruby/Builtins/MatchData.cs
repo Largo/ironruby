@@ -62,8 +62,27 @@ namespace IronRuby.Builtins {
         /// </summary>
         public RubyEncoding/*!*/ Encoding { get { return _originalString.Encoding; } }
 
+        /// <summary>
+        /// The number of Ruby groups, group 0 included. The transformed pattern may also have
+        /// hidden groups (RegexpTransformer.HiddenGroupBase); those are numbered last, far above
+        /// the Ruby groups, so the numbers from Groups.Count down that are not Ruby groups are
+        /// ones no group has (an empty name) or hidden ones.
+        /// </summary>
         public int GroupCount { 
-            get { return _match.Groups.Count; } 
+            get {
+                var groups = _match.Groups;
+                int count = groups.Count;
+                while (count > 1 && IsHiddenGroup(groups[count - 1])) {
+                    count--;
+                }
+                return count;
+            } 
+        }
+
+        private static bool IsHiddenGroup(Group/*!*/ group) {
+            int number;
+            return group.Name.Length == 0 || Int32.TryParse(group.Name, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out number)
+                && RegexpTransformer.IsHiddenGroupNumber(number);
         }
 
         public int Index {
@@ -367,7 +386,7 @@ namespace IronRuby.Builtins {
         }
 
         public void RequireExistingGroup(int index) {
-            if (index >= _match.Groups.Count || index < 0) {
+            if (index >= GroupCount || index < 0) {
                 throw RubyExceptions.CreateIndexError("index {0} out of matches", index);
             }
         }

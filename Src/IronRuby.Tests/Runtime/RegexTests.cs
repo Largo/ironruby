@@ -214,6 +214,11 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"(x) (y) \k<1> \k'2'", @"(x) (y) \k<1> \k<2>");
             // once a pattern has a named group its plain groups do not capture (Onigmo)
             TestCorrectPatternTranslation(@"(x) (?'name') \k<name> \k'name'", @"(?:x) (?'name') \k<name> \k<name>");
+            // a backreference inside the group it refers to never matches (Onigmo resets the group)
+            TestCorrectPatternTranslation(@"(a\1?){2}", @"(a(?!)?){2}");
+
+            // subexpression calls: the called group is copied under its own number, nested groups too
+            TestCorrectPatternTranslation(@"((a)b)\g<1>", @"((a)b)(?<1>(?<2>a)b)");
 
             // error: TestCorrectPatternTranslation("(?<a)b>c)", "(?<a)b>c)");
         }
