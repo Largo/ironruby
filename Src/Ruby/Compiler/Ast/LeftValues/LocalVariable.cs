@@ -54,8 +54,10 @@ namespace IronRuby.Compiler.Ast {
             get { return _closureIndex; }
         }
 
+        // A method body can be compiled more than once (once per lexical module chain through
+        // `class << obj`); the walk is the same each time, so a variable gets the same slot again.
         internal void SetClosureIndex(int index) {
-            Debug.Assert(_closureIndex == -1);
+            Debug.Assert(_closureIndex == -1 || _closureIndex == index);
             _closureIndex = index;
         }
 

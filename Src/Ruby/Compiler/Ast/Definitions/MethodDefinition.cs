@@ -62,7 +62,9 @@ namespace IronRuby.Compiler.Ast {
         /// MRI's use_block: the method declares a block parameter, yields, or calls super passing
         /// its block on. A block given to a method without it may be ignored, which MRI warns about.
         /// </summary>
-        public bool UsesBlock { get; set; }
+        // Only the prism front end works this out; a method from anywhere else (the legacy parser)
+        // is assumed to use its block, so it is never warned about or given the block-less fast path.
+        public bool UsesBlock { get; set; } = true;
 
         public MethodDefinition(LexicalScope/*!*/ definedScope, Expression target, string/*!*/ name, Parameters parameters, Body/*!*/ body, 
             SourceSpan location)

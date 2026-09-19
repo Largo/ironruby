@@ -416,8 +416,8 @@ end
         /// singleton class of an object has the object's class. It used to answer the object's
         /// *metaclass* at every level, which is what this test recorded.
         ///
-        /// The deeper levels still differ from MRI, which builds a meta tower
-        /// (#&lt;Class:#&lt;Class:Object&gt;&gt; and so on) where IronRuby stops at a dummy singleton.
+        /// The deeper levels build MRI's meta tower too (#&lt;Class:#&lt;Class:Object&gt;&gt; and so
+        /// on); every superclass below is what CRuby 4.0 answers.
         /// </summary>
         public void DummySingletons1() {
             Engine.Execute(SingletonHelpers);
@@ -437,21 +437,21 @@ end
 "), @"
 C                                                  Object
 #<Class:C>                                         #<Class:Object>
-#<Class:#<Class:C>>                                #<Class:Class>
-#<Class:#<Class:#<Class:C>>>                       #<Class:Class>
-#<Class:#<Class:#<Class:#<Class:C>>>>              #<Class:Class>
+#<Class:#<Class:C>>                                #<Class:#<Class:Object>>
+#<Class:#<Class:#<Class:C>>>                       #<Class:#<Class:#<Class:Object>>>
+#<Class:#<Class:#<Class:#<Class:C>>>>              #<Class:#<Class:#<Class:#<Class:Object>>>>
 
 undefined method `superclass' for module M
 #<Class:M>                                         Module
 #<Class:#<Class:M>>                                #<Class:Module>
-#<Class:#<Class:#<Class:M>>>                       #<Class:Module>
-#<Class:#<Class:#<Class:#<Class:M>>>>              #<Class:Module>
+#<Class:#<Class:#<Class:M>>>                       #<Class:#<Class:Module>>
+#<Class:#<Class:#<Class:#<Class:M>>>>              #<Class:#<Class:#<Class:Module>>>
 
 undefined method `superclass' for module #<MM:0x*>
 #<Class:#<MM:0x*>>                           MM
 #<Class:#<Class:#<MM:0x*>>>                  #<Class:MM>
-#<Class:#<Class:#<Class:#<MM:0x*>>>>         #<Class:MM>
-#<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>> #<Class:MM>
+#<Class:#<Class:#<Class:#<MM:0x*>>>>         #<Class:#<Class:MM>>
+#<Class:#<Class:#<Class:#<Class:#<MM:0x*>>>>> #<Class:#<Class:#<Class:MM>>>
 ", OutputFlags.Match);
         }
 
@@ -484,11 +484,11 @@ end
 ", @"
 MM                             MetaModule
 #<Class:MM>                    S(MetaModule)
-#<Class:#<Class:MM>>           S(MetaModule)
+#<Class:#<Class:MM>>           S(Class)
 
 M                              Module
 #<Class:M>                     S(Module)
-#<Class:#<Class:M>>            S(Module)
+#<Class:#<Class:M>>            S(Class)
 
 Module                         S(Module)
 #<Class:Module>                S(Class)

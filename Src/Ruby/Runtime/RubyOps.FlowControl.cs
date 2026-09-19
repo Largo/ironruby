@@ -233,7 +233,8 @@ namespace IronRuby.Runtime {
                 }
 
                 RuntimeFlowControl owner = proc.LocalScope.FlowControlScope;
-                if (CanReturnTo(proc.LocalScope, owner)) {
+                // unlike a return written in the block itself, one in an eval cannot end the file
+                if (!(owner is RubyTopLevelScope) && CanReturnTo(proc.LocalScope, owner)) {
                     throw new MethodUnwinder(owner, returnValue);
                 }
 

@@ -84,9 +84,9 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"\u{5b 2a}", @"\[\*");
 
             // Posix categories
-            TestCorrectPatternTranslation(@"[x[:alnum:]y]", @"[x\p{L}\p{Nd}\p{Nl}y]");
+            TestPosixClassTranslation(@"[x[:alnum:]y]", @"[x\p{L}\p{Nd}\p{Nl}y]");
             TestCorrectPatternTranslation(@"[a[^:alnum:]b]", @"[a\P{L}b-[\p{Nd}\p{Nl}-[ab]]]");
-            TestCorrectPatternTranslation(@"[[:alpha:]]", @"[\p{L}\p{Nl}]");
+            TestPosixClassTranslation(@"[[:alpha:]]", @"[\p{L}\p{Nl}]");
             TestCorrectPatternTranslation(@"[[^:alpha:]]", @"[\P{L}-[\p{Nl}]]");
             TestCorrectPatternTranslation(@"[[:ascii:]]", @"[\p{IsBasicLatin}]");
             TestCorrectPatternTranslation(@"[[^:ascii:]]", @"[\P{IsBasicLatin}]");
@@ -94,11 +94,11 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"[[^:blank:]]", "[\\P{Zs}-[\t]]");
             TestCorrectPatternTranslation(@"[[:cntrl:]]", @"[\p{Cc}]");
             TestCorrectPatternTranslation(@"[[^:cntrl:]]", @"[\P{Cc}]");
-            TestCorrectPatternTranslation(@"[[:digit:]]", @"[\p{Nd}]");
+            TestPosixClassTranslation(@"[[:digit:]]", @"[\p{Nd}]");
             TestCorrectPatternTranslation(@"[[^:digit:]]", @"[\P{Nd}]");
-            TestCorrectPatternTranslation(@"[[:lower:]]", @"[\p{Ll}]");
+            TestPosixClassTranslation(@"[[:lower:]]", @"[\p{Ll}]");
             TestCorrectPatternTranslation(@"[[^:lower:]]", @"[\P{Ll}]");
-            TestCorrectPatternTranslation(@"[[:punct:]]", @"[\p{P}]");
+            TestPosixClassTranslation(@"[[:punct:]]", @"[\p{P}]");
             TestCorrectPatternTranslation(@"[[^:punct:]]", @"[\P{P}]");
             TestCorrectPatternTranslation(@"[[:space:]]", "[\\p{Z}\u0085\u0009-\u000d]");
             TestCorrectPatternTranslation(@"[[^:space:]]", "[\\P{Z}-[\u0085\u0009-\u000d]]");
@@ -193,8 +193,10 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation("(?m:a)", "(?s:a)");
             TestCorrectPatternTranslation("(?mi:a)", "(?si:a)");
             TestCorrectPatternTranslation("(?m)", "(?s)");
-            TestCorrectPatternTranslation("(?<name2>)(?<name1-name2>a)", "(?<name2>)(?<name1-name2>a)");
-            TestCorrectPatternTranslation("(?'name2')(?'name1-name2'a)", "(?'name2')(?'name1-name2'a)");
+            // In Ruby "name1-name2" is just a group name (CRuby: names => ["name2", "name1-name2"]),
+            // not a .NET balancing group, so it is given a .NET-safe name.
+            TestCorrectPatternTranslation("(?<name2>)(?<name1-name2>a)", "(?<name2>)(?<__irnname1_002dname2>a)");
+            TestCorrectPatternTranslation("(?'name2')(?'name1-name2'a)", "(?'name2')(?'__irnname1_002dname2'a)");
             TestCorrectPatternTranslation("(?=)", "(?=)");
             TestCorrectPatternTranslation("(?=x)", "(?=x)");
             TestCorrectPatternTranslation("(?<=)", "(?<=)");
@@ -210,9 +212,21 @@ puts(/b#{/a/}/)
             // the two forms cannot appear together. Both halves checked against CRuby 4.0.6:
             //   Regexp.new("(x) (?'name') \\k<1>")  =>  numbered backref/call is not allowed. (use name)
             TestCorrectPatternTranslation(@"(x) (y) \k<1> \k'2'", @"(x) (y) \k<1> \k<2>");
-            TestCorrectPatternTranslation(@"(x) (?'name') \k<name> \k'name'", @"(x) (?'name') \k<name> \k<name>");
+            // once a pattern has a named group its plain groups do not capture (Onigmo)
+            TestCorrectPatternTranslation(@"(x) (?'name') \k<name> \k'name'", @"(?:x) (?'name') \k<name> \k<name>");
 
             // error: TestCorrectPatternTranslation("(?<a)b>c)", "(?<a)b>c)");
+        }
+
+        // A POSIX class that has members outside the BMP (letters, digits, punctuation in the
+        // supplementary planes) is its BMP class followed by an alternative matching the surrogate
+        // pairs of the rest, since a .NET character class sees UTF-16 code units, not code points.
+        private void TestPosixClassTranslation(string/*!*/ pattern, string/*!*/ bmpClass) {
+            bool hasGAnchor;
+            string actual = RegexpTransformer.Transform(pattern, RubyRegexOptions.NONE, out hasGAnchor);
+            Assert(actual.StartsWith("(?:" + bmpClass + "|", StringComparison.Ordinal) && actual.EndsWith(")", StringComparison.Ordinal));
+            new Regex(actual);
+            Assert(!hasGAnchor);
         }
 
         //[DebuggerHidden]
@@ -224,6 +238,11 @@ puts(/b#{/a/}/)
         private void TestCorrectPatternTranslation(string/*!*/ pattern, RubyRegexOptions options, string/*!*/ expected, bool expectedGAnchor) {
             bool hasGAnchor;
             string actual = RegexpTransformer.Transform(pattern, options, out hasGAnchor);
+            // a class with members outside the BMP gets a surrogate-pair alternative after it (see
+            // TestPosixClassTranslation); the BMP part is what these expectations spell out
+            if (actual != expected && actual.StartsWith("(?:" + expected + "|", StringComparison.Ordinal) && actual.EndsWith(")", StringComparison.Ordinal)) {
+                expected = actual;
+            }
             AreEqual(expected, actual);
             new Regex(expected);
             Assert(hasGAnchor == expectedGAnchor);

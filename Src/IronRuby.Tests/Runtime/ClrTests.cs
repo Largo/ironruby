@@ -899,7 +899,7 @@ A.new.f4 rescue puts '!f4'
 
 puts A.new.f5
 puts B.new.f5
-class A; def f5; 'Ruby f5'; end; end
+class IronRubyTests::ExtensionMethods2::A; def f5; 'Ruby f5'; end; end
 puts A.new.f5
 puts B.new.f5                           # f5 is an extension on all types (TODO)
 
@@ -3482,7 +3482,9 @@ class ArrayList
   puts self.object_id == System::Collections::ArrayList.object_id
 end
 ");
-            }, "true");
+            // As in CRuby, `class X` at the top level does not reopen an X that is only reachable
+            // through an included module: it defines a new Object::X. Reopen by full name instead.
+            }, "false");
         }
 
         /// <summary>
@@ -3494,7 +3496,7 @@ end
 require 'mscorlib'
 include System::Collections
 
-class ArrayList
+class System::Collections::ArrayList
   alias :old_add :Add
   def foo x
     old_add x

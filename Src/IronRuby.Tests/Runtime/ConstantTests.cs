@@ -168,8 +168,10 @@ end
 puts $x1.object_id == $x2.object_id
 puts $y1.object_id != $y2.object_id
 ");
+            // A class body at Object's level does not reopen a class that is only reachable through a
+            // module Object includes: it defines a new Object::CM (as CRuby 4.0 does).
             }, @"
-true
+false
 true
 ");
         }

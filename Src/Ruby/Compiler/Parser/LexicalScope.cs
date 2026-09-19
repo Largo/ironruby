@@ -151,9 +151,13 @@ namespace IronRuby.Compiler {
         #region Transformation
 
         internal int AllocateClosureSlotsForLocals(int closureIndex) {
+            // Slots below closureIndex belong to parameters, already assigned. A local with a slot at
+            // or above it was allocated here by an earlier compilation of the same body, and counts.
+            int start = closureIndex;
             int localCount = 0;
             foreach (var local in this) {
-                if (local.Value.ClosureIndex == -1) {
+                int existing = local.Value.ClosureIndex;
+                if (existing == -1 || existing >= start) {
                     local.Value.SetClosureIndex(closureIndex++);
                     localCount++;
                 }

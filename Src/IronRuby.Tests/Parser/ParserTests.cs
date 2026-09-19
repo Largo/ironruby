@@ -516,7 +516,7 @@ namespace IronRuby.Tests {
             Assert(!Tokenizer.IsConstantName("_"));
             Assert(!Tokenizer.IsConstantName("0"));
             Assert(!Tokenizer.IsConstantName("c"));
-            Assert(!Tokenizer.IsConstantName("Σ"));
+            Assert(Tokenizer.IsConstantName("Σ"));            // an uppercase letter, so a constant (as in CRuby)
             Assert(Tokenizer.IsConstantName("CΣ"));
 
             Assert(Tokenizer.IsMethodName("C"));

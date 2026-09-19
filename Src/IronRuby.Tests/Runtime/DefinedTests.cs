@@ -266,9 +266,12 @@ class variable
 
         public void DefinedOperator_ClassVariables2() {
             AssertOutput(delegate() {
+                // class variables at the top level are a RuntimeError (MRI 3.0+)
                 CompilerTest(@"
-@@x = 1
-puts defined? @@x
+class C
+  @@x = 1
+  puts defined? @@x
+end
 ");
             }, @"
 class variable
