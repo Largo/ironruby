@@ -1425,7 +1425,99 @@ class BasicSocket
   def getsockopt(level, optname)
     lvl = Socket.__ir_level_arg(__ir_afamily, level)
     opt = Socket.__ir_optname_arg(lvl, optname)
-    Socket::Option.new(__ir_afamily, lvl, opt, __ir_raw_getsockopt(lvl, opt))
+    Socket::Option.new(__ir_afamily, lvl, opt, __ir_getsockopt_data(lvl, opt))
+  end
+
+  # Socket's SOL_SOCKET constants carry winsock's numbers (for .NET's
+  # SocketOptionName); these are Linux's for the same options.
+  IR_LINUX_SOL_SOCKET__ = 1 # :nodoc:
+  IR_LINUX_SO_PEERCRED__ = 17 # :nodoc:
+  IR_LINUX_SOCKET_OPTIONS__ = { # :nodoc:
+    Socket::SO_DEBUG => 1, Socket::SO_REUSEADDR => 2, Socket::SO_TYPE => 3,
+    Socket::SO_ERROR => 4, Socket::SO_DONTROUTE => 5, Socket::SO_BROADCAST => 6,
+    Socket::SO_SNDBUF => 7, Socket::SO_RCVBUF => 8, Socket::SO_KEEPALIVE => 9,
+    Socket::SO_OOBINLINE => 10, Socket::SO_LINGER => 13, Socket::SO_RCVLOWAT => 18,
+    Socket::SO_SNDLOWAT => 19, Socket::SO_RCVTIMEO => 20, Socket::SO_SNDTIMEO => 21,
+    Socket::SO_ACCEPTCONN => 30,
+  }.freeze
+
+  # Socket options go through .NET, which (a) maps SO_REUSEADDR to SO_REUSEPORT
+  # on Unix, (b) refuses options its enums lack (UDP_CORK, anything on an
+  # AF_UNIX socket) with EOPNOTSUPP where the kernel would answer or say
+  # ENOPROTOOPT. So where libc is reachable, SOL_SOCKET options go straight to
+  # setsockopt(2)/getsockopt(2), and any other option .NET refuses is retried
+  # there with its number as given.
+  def __ir_libc_sockopt_target(lvl, opt) # :nodoc:
+    if lvl == Socket::SOL_SOCKET
+      [IR_LINUX_SOL_SOCKET__, IR_LINUX_SOCKET_OPTIONS__.fetch(opt, opt)]
+    else
+      [lvl, opt]
+    end
+  end
+  private :__ir_libc_sockopt_target
+
+  def __ir_dotnet_refused?(error) # :nodoc:
+    return false unless error.kind_of?(SocketError)
+    name = IronRubySocketErrors__::BY_CODE[Socket.__ir_socket_error_code(error)]
+    %i[EOPNOTSUPP ENOTSUP ENOPROTOOPT EPROTONOSUPPORT].include?(name)
+  end
+  private :__ir_dotnet_refused?
+
+  def __ir_libc_getsockopt(lvl, opt) # :nodoc:
+    result = __ir_raw_libc_getsockopt(*__ir_libc_sockopt_target(lvl, opt))
+    return nil if result.nil?
+    errno, data = result
+    raise SystemCallError.new("getsockopt(2)", errno) unless errno == 0
+    data
+  end
+  private :__ir_libc_getsockopt
+
+  def __ir_libc_setsockopt(lvl, opt, data) # :nodoc:
+    errno = __ir_raw_libc_setsockopt(*__ir_libc_sockopt_target(lvl, opt), data)
+    return nil if errno.nil?
+    raise SystemCallError.new("setsockopt(2)", errno) unless errno == 0
+    0
+  end
+  private :__ir_libc_setsockopt
+
+  def __ir_getsockopt_data(lvl, opt) # :nodoc:
+    if lvl == Socket::SOL_SOCKET
+      data = __ir_libc_getsockopt(lvl, opt)
+      return data unless data.nil?
+    end
+    begin
+      __ir_raw_getsockopt(lvl, opt)
+    rescue SocketError => error
+      raise unless __ir_dotnet_refused?(error)
+      __ir_libc_getsockopt(lvl, opt) or raise
+    end
+  end
+  private :__ir_getsockopt_data
+
+  def __ir_setsockopt_data(lvl, opt, value) # :nodoc:
+    value = String.try_convert(value) || value unless value.kind_of?(Integer)
+    if lvl == Socket::SOL_SOCKET
+      data = value.kind_of?(Integer) ? [value].pack("i") : value
+      return 0 unless __ir_libc_setsockopt(lvl, opt, data).nil?
+    end
+    begin
+      __ir_raw_setsockopt(lvl, opt, value)
+    rescue SocketError => error
+      raise unless __ir_dotnet_refused?(error)
+      data = value.kind_of?(Integer) ? [value].pack("i") : value
+      __ir_libc_setsockopt(lvl, opt, data) or raise
+    end
+  end
+  private :__ir_setsockopt_data
+
+  # MRI undefines it again on IPSocket; on Linux it is SO_PEERCRED.
+  def getpeereid
+    data = __ir_raw_libc_getsockopt(IR_LINUX_SOL_SOCKET__, IR_LINUX_SO_PEERCRED__)
+    raise NotImplementedError, "getpeereid() function is unimplemented on this machine" if data.nil?
+    errno, cred = data
+    raise SystemCallError.new("getsockopt(SO_PEERCRED)", errno) unless errno == 0
+    _pid, uid, gid = cred.unpack("lLL")
+    [uid, gid]
   end
 
   def setsockopt(level, optname = nil, value = nil)
@@ -1447,7 +1539,7 @@ class BasicSocket
       raise TypeError, "no implicit conversion of nil into Integer" if value.nil?
     end
     value = [value ? 1 : 0].pack("i") if value == true || value == false
-    __ir_raw_setsockopt(lvl, opt, value)
+    __ir_setsockopt_data(lvl, opt, value)
     0
   end
 
@@ -1735,6 +1827,9 @@ end
 class IPSocket
   alias_method :__ir_raw_addr, :addr
   alias_method :__ir_raw_peeraddr, :peeraddr
+
+  # MRI: BasicSocket#getpeereid is for Unix-domain sockets only.
+  undef_method :getpeereid
 
   # CRuby takes an optional reverse_lookup override; without it the tuple's
   # third element follows BasicSocket.do_not_reverse_lookup.
@@ -2157,7 +2252,7 @@ end
 
 IronRubySocketErrors__.wrap(BasicSocket,
                             :recv, :send, :getsockname, :getpeername,
-                            :setsockopt, :getsockopt, :shutdown,
+                            :setsockopt, :getsockopt, :getpeereid, :shutdown,
                             :close_read, :close_write,
                             :read, :write, :sysread, :syswrite, :readpartial,
                             :gets, :readline, :readlines, :print, :puts, :<<, :flush,

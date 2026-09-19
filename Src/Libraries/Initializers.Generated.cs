@@ -10906,6 +10906,16 @@ namespace IronRuby.StandardLibrary.Sockets {
         
         #if FEATURE_SYNC_SOCKETS
         private static void LoadBasicSocket_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__ir_raw_libc_getsockopt", 0x11, 
+                0x00030000U, 
+                new Func<IronRuby.StandardLibrary.Sockets.RubyBasicSocket, System.Int32, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.LibcGetSocketOption)
+            );
+            
+            DefineLibraryMethod(module, "__ir_raw_libc_setsockopt", 0x11, 
+                0x00030008U, 
+                new Func<IronRuby.StandardLibrary.Sockets.RubyBasicSocket, System.Int32, System.Int32, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.LibcSetSocketOption)
+            );
+            
             DefineLibraryMethod(module, "__ir_raw_recvmsg", 0x11, 
                 0x000e0000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.RubyBasicSocket, System.Int32, System.Int32, System.Int32, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.ReceiveMessage)

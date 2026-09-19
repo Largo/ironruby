@@ -115,7 +115,11 @@ namespace IronRuby.StandardLibrary.Sockets {
                 // Unix (Windows' SO_REUSEADDR means what Unix calls SO_REUSEPORT), and setting
                 // *that* lets a second TCPServer bind a port another one is already listening
                 // on -- so "raises Errno::EADDRINUSE when address is already in use" breaks.
-                // Doing it properly needs a libc setsockopt, see the note in BasicSocket.cs.
+                // Where libc is reachable, set the real SO_REUSEADDR (Linux: SOL_SOCKET 1,
+                // SO_REUSEADDR 2); failing that is harmless, the bind just behaves as before.
+                if (PosixMessages.HasSocketOptions) {
+                    PosixMessages.SetSocketOption((int)socket.Handle, 1, 2, BitConverter.GetBytes(1));
+                }
                 socket.Bind(new IPEndPoint(listeningInterface, ConvertToPortNum(stringCast, fixnumCast, port)));
                 socket.Listen(128);
             } catch (SocketException e) {

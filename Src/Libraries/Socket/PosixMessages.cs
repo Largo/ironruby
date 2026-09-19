@@ -119,6 +119,46 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         #endregion
 
+        #region getsockopt, setsockopt
+
+        [DllImport("libc", EntryPoint = "getsockopt", SetLastError = true)]
+        private static extern int sys_getsockopt(int fd, int level, int optname, byte[] value, ref int length);
+
+        [DllImport("libc", EntryPoint = "setsockopt", SetLastError = true)]
+        private static extern int sys_setsockopt(int fd, int level, int optname, byte[] value, int length);
+
+        /// <summary>
+        /// Whether socket options can go to libc. The platform numbers the Ruby layer translates
+        /// to are Linux's, so this is Linux only.
+        /// </summary>
+        internal static readonly bool HasSocketOptions = RuntimeInformation.IsOSPlatform(OSPlatform.Linux);
+
+        /// <summary>
+        /// getsockopt(2) with platform level/optname numbers. Answers the errno (0 on success)
+        /// and the option bytes.
+        /// </summary>
+        internal static int GetSocketOption(int descriptor, int level, int optname, out byte[] value) {
+            byte[] buffer = new byte[256];
+            int length = buffer.Length;
+            value = null;
+            if (sys_getsockopt(descriptor, level, optname, buffer, ref length) != 0) {
+                return Marshal.GetLastWin32Error();
+            }
+            value = new byte[Math.Max(0, Math.Min(length, buffer.Length))];
+            Array.Copy(buffer, value, value.Length);
+            return 0;
+        }
+
+        /// <summary>setsockopt(2) with platform level/optname numbers. Answers the errno, 0 on success.</summary>
+        internal static int SetSocketOption(int descriptor, int level, int optname, byte[]/*!*/ value) {
+            if (sys_setsockopt(descriptor, level, optname, value, value.Length) != 0) {
+                return Marshal.GetLastWin32Error();
+            }
+            return 0;
+        }
+
+        #endregion
+
         #region sendmsg
 
         /// <summary>
