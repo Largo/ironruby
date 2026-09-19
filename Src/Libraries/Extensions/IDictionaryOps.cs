@@ -256,16 +256,35 @@ namespace IronRuby.Builtins {
                 object[] keys = new object[self.Count];
                 self.Keys.CopyTo(keys, 0);
 
+                bool yieldPair = IsPairYieldOptimizable(block);
+
                 // TODO: what are all the scenarios where the block can mutate the hash? can it remove keys? if so, what happens?
                 for (int i = 0; i < keys.Length; i++) {
                     object result;
-                    if (block.Yield(MakeArray(keys[i], self[keys[i]]), out result)) {
+                    if (yieldPair
+                        ? block.Yield(CustomStringDictionary.ObjToNull(keys[i]), self[keys[i]], out result)
+                        : block.Yield(MakeArray(keys[i], self[keys[i]]), out result)) {
                         return result;
                     }
                 }
             }
 
             return self;
+        }
+
+        /// <summary>
+        /// MRI's rb_block_pair_yield_optimizable: a non-lambda block that needs at least two
+        /// arguments gets key and value as two values rather than as one pair. For a Ruby block
+        /// that is the same thing (the pair would be splatted), but it lets Enumerable#map hand a
+        /// Hash's key and value on to a two-argument Method: {1 => 2}.map(&method(:m)).
+        /// </summary>
+        private static bool IsPairYieldOptimizable(BlockParam/*!*/ block) {
+            var proc = block.Proc;
+            if (proc.Kind == ProcKind.Lambda || proc.Dispatcher.ParameterSignature != null) {
+                return false;
+            }
+            int arity = proc.Dispatcher.Arity;
+            return (arity >= 0 ? arity : -arity - 1) > 1;
         }
         
         [RubyMethod("each_key")]

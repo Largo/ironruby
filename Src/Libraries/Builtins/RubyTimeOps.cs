@@ -633,7 +633,7 @@ namespace IronRuby.Builtins {
         /// Builds a Time from broken-down components interpreted in the given zone.
         /// </summary>
         private static RubyTime/*!*/ AssembleTime(RubyContext/*!*/ context, int year, int month, int day, int hour, int minute,
-            ExactNum second, RubyTimeZoneKind kind, ExactNum offset, object zoneObject, bool allowOverflow) {
+            ExactNum second, RubyTimeZoneKind kind, ExactNum offset, object zoneObject, bool allowOverflow, bool preferDst = false) {
 
             // MRI uses a component-specific message for values just outside the valid band
             // and the generic "argument out of range" for anything further out.
@@ -687,7 +687,7 @@ namespace IronRuby.Builtins {
                     break;
 
                 default: {
-                        long zoneOffset = RubyTime._CurrentTimeZone.GetOffsetForWallClock(wallSeconds);
+                        long zoneOffset = RubyTime._CurrentTimeZone.GetOffsetForWallClock(wallSeconds, preferDst);
                         utcExact = wallExact - ExactNum.FromInteger(zoneOffset);
                         break;
                     }
@@ -805,18 +805,21 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("local", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("mktime", RubyMethodAttributes.PublicSingleton)]
-        public static RubyTime/*!*/ CreateLocalTime(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]params object[]/*!*/ components) {
+        public static RubyTime/*!*/ CreateLocalTime(RubyContext/*!*/ context, RubyClass/*!*/ self, params object[]/*!*/ components) {
             return Subclass(context, self, CreateBrokenDownTime(context, self, components, RubyTimeZoneKind.Local));
         }
 
         [RubyMethod("utc", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("gm", RubyMethodAttributes.PublicSingleton)]
-        public static RubyTime/*!*/ CreateGmtTime(RubyContext/*!*/ context, RubyClass/*!*/ self, [NotNull]params object[]/*!*/ components) {
+        public static RubyTime/*!*/ CreateGmtTime(RubyContext/*!*/ context, RubyClass/*!*/ self, params object[]/*!*/ components) {
             return Subclass(context, self, CreateBrokenDownTime(context, self, components, RubyTimeZoneKind.Utc));
         }
 
         private static RubyTime/*!*/ CreateBrokenDownTime(RubyContext/*!*/ context, RubyClass owner, object[]/*!*/ components, RubyTimeZoneKind kind) {
+            // the isdst of the Time#to_a form picks the daylight saving reading of an hour that occurs twice
+            bool preferDst = false;
             if (components.Length == 10) {
+                preferDst = components[8] != null && RubyOps.IsTrue(components[8]);
                 // 10 arguments in the order output by Time#to_a are permitted.
                 // The last 4 are ignored. The first 6 need to be used in the reverse order.
                 object[] newComponents = new object[6];
@@ -843,7 +846,7 @@ namespace IronRuby.Builtins {
                 second = ExactNum.FromInteger(second.Floor()) + usec / ExactNum.FromInteger(RubyTime.MicrosecondsPerSecond);
             }
 
-            return AssembleTime(context, year, month, day, hour, minute, second, kind, ExactNum.Zero, null, false);
+            return AssembleTime(context, year, month, day, hour, minute, second, kind, ExactNum.Zero, null, false, preferDst);
         }
 
         private static int GetComponent(RubyContext/*!*/ context, object[]/*!*/ components, int index, int defValue) {

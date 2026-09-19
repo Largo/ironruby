@@ -21,6 +21,7 @@ using MSA = Microsoft.Scripting.Ast;
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using IronRuby.Compiler;
 using IronRuby.Compiler.Ast;
@@ -40,6 +41,8 @@ namespace IronRuby.Runtime.Calls {
         private readonly RubyEncoding/*!*/ _encoding;
 
         private Delegate _delegate;
+        private RubyModule _delegateModule;
+        private ConditionalWeakTable<RubyModule, Delegate> _moduleVariants;
 
         internal RubyMethodBody(MethodDeclaration/*!*/ ast, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding) {
             Assert.NotNull(ast, encoding);
@@ -80,8 +83,26 @@ namespace IronRuby.Runtime.Calls {
                 lock (this) {
                     if (_delegate == null) {
                         _singletonLexicalModules = GetObjectSingletonLexicalModules(declaringScope);
+                        _delegateModule = declaringModule;
                         _delegate = Compile(declaringScope, declaringModule);
                     }
+                }
+            }
+
+            // The declaring module is baked in as well, and `super' looks up from it. A `def' run
+            // for more than one module - `Class.new { def initialize; super; end }' made twice,
+            // class_eval in a loop - gets a compilation per module.
+            if (declaringModule != _delegateModule && _singletonLexicalModules == null) {
+                lock (this) {
+                    if (_moduleVariants == null) {
+                        _moduleVariants = new ConditionalWeakTable<RubyModule, Delegate>();
+                    }
+                    Delegate result;
+                    if (!_moduleVariants.TryGetValue(declaringModule, out result)) {
+                        result = Compile(declaringScope, declaringModule);
+                        _moduleVariants.Add(declaringModule, result);
+                    }
+                    return result;
                 }
             }
 

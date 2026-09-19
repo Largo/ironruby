@@ -464,6 +464,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MakeWrongNumberOfArgumentsError;
         public static MethodInfo/*!*/ MakeWrongNumberOfArgumentsErrorN { get { return _MakeWrongNumberOfArgumentsErrorN ?? (_MakeWrongNumberOfArgumentsErrorN = CallInstruction.CacheFunc<System.Int32, System.String, System.ArgumentException>(RubyOps.MakeWrongNumberOfArgumentsErrorN)); } }
         private static MethodInfo _MakeWrongNumberOfArgumentsErrorN;
+        public static MethodInfo/*!*/ MarkAliasCall { get { return _MarkAliasCall ?? (_MarkAliasCall = CallInstruction.CacheFunc<System.Object, System.String, System.String, System.Object>(RubyOps.MarkAliasCall)); } }
+        private static MethodInfo _MarkAliasCall;
         public static MethodInfo/*!*/ MarkException { get { return _MarkException ?? (_MarkException = CallInstruction.CacheFunc<System.Exception, System.Exception>(RubyOps.MarkException)); } }
         private static MethodInfo _MarkException;
         public static MethodInfo/*!*/ MatchLastInputLine { get { return _MatchLastInputLine ?? (_MatchLastInputLine = CallInstruction.CacheFunc<IronRuby.Builtins.RubyRegex, IronRuby.Runtime.RubyScope, System.Boolean>(RubyOps.MatchLastInputLine)); } }

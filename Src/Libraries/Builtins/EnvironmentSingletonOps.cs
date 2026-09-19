@@ -30,7 +30,22 @@ namespace IronRuby.Builtins {
     [RubySingleton, Includes(typeof(Enumerable))]
     public static class EnvironmentSingletonOps {
         private static MutableString/*!*/ FrozenString(RubyContext/*!*/ context, object value) {
-            return MutableString.Create((string)value ?? "", context.GetPathEncoding()).Freeze();
+            string str = (string)value ?? "";
+
+            // MRI transcodes from the locale encoding to Encoding.default_internal when that is
+            // set, and keeps the locale encoding for what the internal one cannot represent.
+            RubyEncoding encoding = context.DefaultInternalEncoding;
+            if (encoding != null && encoding != RubyEncoding.Binary) {
+                try {
+                    encoding.StrictEncoding.GetByteCount(str);
+                } catch (System.Text.EncoderFallbackException) {
+                    encoding = null;
+                }
+            } else {
+                encoding = null;
+            }
+
+            return MutableString.Create(str, encoding ?? context.GetPathEncoding()).Freeze();
         }
 
         private static void SetEnvironmentVariable(RubyContext/*!*/ context, string/*!*/ name, string value) {

@@ -510,7 +510,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("===")]
         public static bool CaseCompare(ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope, RubyRegex/*!*/ self, object obj) {
             MutableString str = RegexpOperand(stringTryCast, obj);
-            return str != null && Match(scope, self, str) != null;
+            if (str == null) {
+                // MRI's rb_reg_eqq clears $~ for an operand that is not a String.
+                scope.GetInnerMostClosureScope().CurrentMatch = null;
+                return false;
+            }
+            return Match(scope, self, str) != null;
         }
 
         /// <summary>

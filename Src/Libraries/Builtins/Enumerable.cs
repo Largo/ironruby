@@ -82,6 +82,17 @@ namespace IronRuby.Builtins {
             });
         }
 
+        /// <summary>
+        /// A <see cref="SplattingBlock(RubyContext, Func{BlockParam, RubyArray, object})"/> that reports the given arity.
+        /// </summary>
+        internal static Proc/*!*/ SplattingBlock(RubyContext/*!*/ context, Func<BlockParam, RubyArray, object>/*!*/ body, int arity) {
+            return Proc.Create(context, 0, BlockDispatcher.MakeAttributes(BlockSignatureAttributes.HasUnsplatParameter, arity),
+                (Func<BlockParam, object, object[], RubyArray, object>)delegate(BlockParam/*!*/ selfBlock, object _, object[] __, RubyArray/*!*/ args) {
+                    return body(selfBlock, args);
+                }
+            );
+        }
+
         #region all?, any?, none?
 
         [RubyMethod("all?")]
@@ -153,7 +164,9 @@ namespace IronRuby.Builtins {
 
             // #map keeps nothing but what the block returns, so the yielded values go to the
             // block exactly as they were yielded - no packing (`yield 1, 2` reaches `{ |a| }` as 1).
-            Each(each, self, SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
+            // MRI's collect_i block takes on the arity of the given block, which #each can see -
+            // Hash#each yields key and value separately to a block that needs two.
+            var block = SplattingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, RubyArray/*!*/ args) {
                 object blockResult;
                 if (collector.YieldSplat(args, out blockResult)) {
                     result = blockResult;
@@ -161,7 +174,9 @@ namespace IronRuby.Builtins {
                 }
                 resultArray.Add(blockResult);
                 return null;
-            }));
+            }, ProcOps.GetArity(collector.Proc));
+
+            Each(each, self, block);
             return result;
         }
 
@@ -360,15 +375,37 @@ namespace IronRuby.Builtins {
         #region grep
 
         [RubyMethod("grep")]
-        public static object Grep(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals, 
+        public static object Grep(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals,
+            ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope,
             BlockParam action, object self, object pattern) {
+            return Grep(each, caseEquals, stringTryCast, scope, action, self, pattern, true);
+        }
+
+        [RubyMethod("grep_v")]
+        public static object GrepV(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals,
+            ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope,
+            BlockParam action, object self, object pattern) {
+            return Grep(each, caseEquals, stringTryCast, scope, action, self, pattern, false);
+        }
+
+        private static object Grep(CallSiteStorage<EachSite>/*!*/ each, BinaryOpStorage/*!*/ caseEquals,
+            ConversionStorage<MutableString>/*!*/ stringTryCast, RubyScope/*!*/ scope,
+            BlockParam action, object self, object pattern, bool accepting) {
 
             RubyArray resultArray = new RubyArray();
             object result = resultArray;
             var site = caseEquals.GetCallSite("===");
 
+            // With a block, MRI's Regexp#=== stores each match (or nil) as the caller's $~, which
+            // the block shares; without one it matches without touching $~.
+            RubyRegex regex = (action != null) ? pattern as RubyRegex : null;
+
             Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
-                if (RubyOps.IsTrue(site.Target(site, pattern, item))) {
+                bool matches = (regex != null)
+                    ? RegexpOps.CaseCompare(stringTryCast, scope, regex, item)
+                    : RubyOps.IsTrue(site.Target(site, pattern, item));
+
+                if (matches == accepting) {
                     if (action != null && action.Yield(item, out item)) {
                         result = item;
                         return selfBlock.PropagateFlow(action, item);

@@ -334,11 +334,18 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("method_id")]
-        [RubyMethod("callee_id")]
         public static RubySymbol GetMethodId(TracePoint/*!*/ self) {
             var info = GetEvent(self);
             TracePoint.ResolveMethod(info);
             return info.MethodName != null ? self.Context.EncodeIdentifier(info.MethodName) : null;
+        }
+
+        [RubyMethod("callee_id")]
+        public static RubySymbol GetCalleeId(TracePoint/*!*/ self) {
+            var info = GetEvent(self);
+            TracePoint.ResolveMethod(info);
+            string name = info.CalleeName ?? info.MethodName;
+            return name != null ? self.Context.EncodeIdentifier(name) : null;
         }
 
         [RubyMethod("defined_class")]

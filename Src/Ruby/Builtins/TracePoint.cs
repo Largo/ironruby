@@ -61,6 +61,7 @@ namespace IronRuby.Builtins {
 
         // Set for :call/:return (the method the scope belongs to); computed from the scope otherwise.
         public string MethodName;
+        public string CalleeName;
         public RubyModule DefinedClass;
         public RubyMemberInfo Method;
         public bool MethodResolved;
@@ -246,13 +247,14 @@ namespace IronRuby.Builtins {
                     case ScopeKind.Method:
                         var methodScope = (RubyMethodScope)scope;
                         info.MethodName = methodScope.DefinitionName;
+                        info.CalleeName = methodScope.CalleeName;
                         info.DefinedClass = methodScope.DeclaringModule;
                         info.Method = FindMethod(methodScope.DeclaringModule, methodScope.DefinitionName);
                         return;
 
                     case ScopeKind.BlockMethod:
                         var method = ((RubyBlockScope)scope).BlockFlowControl.Proc.Method;
-                        info.MethodName = method.DefinitionName;
+                        info.MethodName = info.CalleeName = method.DefinitionName;
                         info.DefinedClass = method.DeclaringModule;
                         info.Method = method;
                         return;

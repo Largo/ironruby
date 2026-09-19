@@ -575,10 +575,18 @@ namespace IronRuby.Runtime {
         /// body reports the name it was given.
         /// </summary>
         public string GetCurrentMethodName() {
+            return GetCurrentMethodName(false);
+        }
+
+        /// <summary>
+        /// With <paramref name="callee"/> the name the method was called by (differs through an alias).
+        /// </summary>
+        public string GetCurrentMethodName(bool callee) {
             for (RubyScope scope = this; scope != null; scope = scope.Parent) {
                 switch (scope.Kind) {
                     case ScopeKind.Method:
-                        return ((RubyMethodScope)scope).DefinitionName;
+                        var methodScope = (RubyMethodScope)scope;
+                        return callee ? methodScope.CalleeName : methodScope.DefinitionName;
 
                     case ScopeKind.BlockMethod:
                         return ((RubyBlockScope)scope).BlockFlowControl.Proc.Method.DefinitionName;
@@ -1016,6 +1024,17 @@ var closureScope = scope as RubyClosureScope;
 
         internal string/*!*/ DefinitionName {
             get { return _definitionName; }
+        }
+
+        // Set when the method was called through an alias; see RubyOps.MarkAliasCall.
+        private string _calleeName;
+
+        /// <summary>
+        /// The name the method was called by - what Kernel#__callee__ answers.
+        /// </summary>
+        internal string/*!*/ CalleeName {
+            get { return _calleeName ?? _definitionName; }
+            set { _calleeName = value; }
         }
 
         /// <summary>
