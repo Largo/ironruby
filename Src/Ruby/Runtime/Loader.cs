@@ -185,14 +185,13 @@ namespace IronRuby.Runtime {
                 }
             } else {
 #if DEBUG
-                // For developer use, add Src/StdLib
-                string devStdLib = "../../Src/StdLib";
-                if (Directory.Exists(devStdLib))
-                    path = devStdLib;
-#else
-                path = "../Lib";
+                // For developer use, add the Src/StdLib of the source tree the binaries were built in
+                path = FindSourceTreeStandardLibrary();
 #endif
-                isFullPath = false;
+                if (path == null) {
+                    path = "../Lib";
+                }
+                isFullPath = Platform.IsAbsolutePath(path);
             }
 
             if (!isFullPath) {
@@ -216,11 +215,44 @@ namespace IronRuby.Runtime {
             }
 
             path = path.Replace('\\', '/');
-            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ironruby")));
+
+            // As in MRI the site directory (RbConfig's sitelibdir) comes first, and every default
+            // entry carries @gem_prelude_index (itself), which is how RubyGems tells them from the
+            // -I ones before them.
+            int firstDefault = loadPaths.Count;
             loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/site_ruby/" + _context.StandardLibraryVersion)));
+            loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ironruby")));
+            string rubyLib4 = RubyUtils.CombinePaths(path, "ruby/4.0");
+            if (Directory.Exists(rubyLib4)) {
+                loadPaths.Add(_context.EncodePath(rubyLib4));
+            }
             loadPaths.Add(_context.EncodePath(RubyUtils.CombinePaths(path, "ruby/" + _context.StandardLibraryVersion)));
+
+            for (int i = firstDefault; i < loadPaths.Count; i++) {
+                var entry = (MutableString)loadPaths[i];
+                _context.SetInstanceVariable(entry, "@gem_prelude_index", entry);
+                entry.Freeze();
+            }
 #endif
             }
+
+#if DEBUG
+        // bin/Debug/net8.0 of a project under Src/: the nearest ancestor with a StdLib/ironruby directory
+        private static string FindSourceTreeStandardLibrary() {
+            try {
+                var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
+                for (int i = 0; i < 6 && dir != null; i++, dir = dir.Parent) {
+                    string candidate = Path.Combine(dir.FullName, "StdLib");
+                    if (Directory.Exists(Path.Combine(candidate, "ironruby"))) {
+                        return candidate;
+                    }
+                }
+            } catch (Exception) {
+                // no access
+            }
+            return null;
+        }
+#endif
 
         private void AddAbsoluteLibraryPaths(RubyArray/*!*/ result, string applicationBaseDir, ICollection<string>/*!*/ paths) {
             foreach (var path in paths) {
