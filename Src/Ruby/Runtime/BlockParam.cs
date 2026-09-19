@@ -115,6 +115,10 @@ namespace IronRuby.Runtime {
         private ProcKind _sourceProcKind;
 
         internal BlockCallerKind CallerKind { get { return _callerKind; } }
+
+        // True while a lambda called through Proc#call (or as a define_method body) is running, so
+        // a return in a block nested in it can unwind to that call.
+        internal bool IsActiveLambdaCall;
         internal ProcKind SourceProcKind { get { return _sourceProcKind; } }
         internal BlockReturnReason ReturnReason { get { return _returnReason; } set { _returnReason = value; } }
         internal RuntimeFlowControl TargetFrame { get { return _targetFrame; } }
@@ -312,7 +316,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static BlockParam/*!*/ CreateBfcForProcCall(Proc/*!*/ proc) {
             Assert.NotNull(proc);
-            return new BlockParam(proc, BlockCallerKind.Call, false);
+            return new BlockParam(proc, BlockCallerKind.Call, false) { IsActiveLambdaCall = proc.Kind == ProcKind.Lambda };
         }
         
         [Emitted]

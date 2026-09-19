@@ -197,20 +197,30 @@ namespace IronRuby.Builtins {
             CallArguments/*!*/ args             // user arguments passed to the proc
         ) {
             var bfcVariable = metaBuilder.GetTemporary(typeof(BlockParam), "#bfc");
+            var resultVariable = metaBuilder.GetTemporary(typeof(object), "#result");
+            ParameterExpression unwinder;
 
             metaBuilder.Result = Ast.Block(
                 Ast.Assign(bfcVariable, Methods.CreateBfcForProcCall.OpCall(AstUtils.Convert(procExpression, typeof(Proc)))),
-                Methods.MethodProcCall.OpCall(bfcVariable, 
-                    AstFactory.YieldExpression(
-                        args.RubyContext,
-                        args.GetSimpleArgumentExpressions(),
-                        args.GetSplattedArgumentExpression(),
-                        args.GetRhsArgumentExpression(),
-                        args.GetBlockExpression(),
-                        bfcVariable,
-                        selfExpression
-                    )
-                )
+                AstUtils.Try(
+                    Ast.Assign(resultVariable, Methods.MethodProcCall.OpCall(bfcVariable, 
+                        AstFactory.YieldExpression(
+                            args.RubyContext,
+                            args.GetSimpleArgumentExpressions(),
+                            args.GetSplattedArgumentExpression(),
+                            args.GetRhsArgumentExpression(),
+                            args.GetBlockExpression(),
+                            bfcVariable,
+                            selfExpression
+                        )
+                    ))
+                ).Filter(unwinder = Ast.Parameter(typeof(Exception), "#u"), Methods.IsLambdaUnwinderTarget.OpCall(bfcVariable, unwinder),
+                    // a return in a block nested in the lambda:
+                    Ast.Assign(resultVariable, Methods.GetLambdaUnwinderReturnValue.OpCall(unwinder))
+                ).Finally(
+                    Methods.LeaveProcCall.OpCall(bfcVariable)
+                ),
+                resultVariable
             );
         }
 
@@ -222,33 +232,62 @@ namespace IronRuby.Builtins {
 
         public object Call(Proc procArg) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
-            return RubyOps.MethodProcCall(blockParam, RubyOps.Yield0(procArg, _self, blockParam));
+            try {
+                return RubyOps.MethodProcCall(blockParam, RubyOps.Yield0(procArg, _self, blockParam));
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
         }
 
         public object Call(Proc procArg, object arg1) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
+            try {
+                // lambda calls are weird:
+                var result = (_kind == ProcKind.Lambda) ?
+                    RubyOps.YieldNoAutoSplat1(arg1, procArg, _self, blockParam) :
+                    RubyOps.Yield1(arg1, procArg, _self, blockParam);
 
-            // lambda calls are weird:
-            var result = (_kind == ProcKind.Lambda) ?
-                RubyOps.YieldNoAutoSplat1(arg1, procArg, _self, blockParam) :
-                RubyOps.Yield1(arg1, procArg, _self, blockParam);
-
-            return RubyOps.MethodProcCall(blockParam, result);
+                return RubyOps.MethodProcCall(blockParam, result);
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
         }
 
         public object Call(Proc procArg, object arg1, object arg2) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
-            return RubyOps.MethodProcCall(blockParam, RubyOps.Yield2(arg1, arg2, procArg, _self, blockParam));
+            try {
+                return RubyOps.MethodProcCall(blockParam, RubyOps.Yield2(arg1, arg2, procArg, _self, blockParam));
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
         }
 
         public object Call(Proc procArg, object arg1, object arg2, object arg3) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
-            return RubyOps.MethodProcCall(blockParam, RubyOps.Yield3(arg1, arg2, arg3, procArg, _self, blockParam));
+            try {
+                return RubyOps.MethodProcCall(blockParam, RubyOps.Yield3(arg1, arg2, arg3, procArg, _self, blockParam));
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
         }
 
         public object Call(Proc procArg, object arg1, object arg2, object arg3, object arg4) {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
-            return RubyOps.MethodProcCall(blockParam, RubyOps.Yield4(arg1, arg2, arg3, arg4, procArg, _self, blockParam));
+            try {
+                return RubyOps.MethodProcCall(blockParam, RubyOps.Yield4(arg1, arg2, arg3, arg4, procArg, _self, blockParam));
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
         }
 
         public object Call(Proc procArg, params object[]/*!*/ args) {
@@ -261,13 +300,25 @@ namespace IronRuby.Builtins {
             }
 
             var blockParam = RubyOps.CreateBfcForProcCall(this);
-            return RubyOps.MethodProcCall(blockParam, RubyOps.YieldN(args, procArg, _self, blockParam));
+            try {
+                return RubyOps.MethodProcCall(blockParam, RubyOps.YieldN(args, procArg, _self, blockParam));
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
         }
 
         public object CallN(Proc procArg, object[]/*!*/ args) {
             Debug.Assert(args.Length > 4);
             var blockParam = RubyOps.CreateBfcForProcCall(this);
-            return RubyOps.MethodProcCall(blockParam, RubyOps.YieldN(args, procArg, _self, blockParam));
+            try {
+                return RubyOps.MethodProcCall(blockParam, RubyOps.YieldN(args, procArg, _self, blockParam));
+            } catch (LambdaUnwinder unwinder) when (unwinder.Target == blockParam) {
+                return unwinder.ReturnValue;
+            } finally {
+                blockParam.IsActiveLambdaCall = false;
+            }
         }
 
         #endregion

@@ -370,6 +370,12 @@ namespace IronRuby.Compiler {
         private static MethodInfo _TrySplatToAryValidator;
         public static MethodInfo/*!*/ IsTopLevelReturn { get { return _IsTopLevelReturn ?? (_IsTopLevelReturn = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.IsTopLevelReturn)); } }
         private static MethodInfo _IsTopLevelReturn;
+        public static MethodInfo/*!*/ IsLambdaUnwinderTarget { get { return _IsLambdaUnwinderTarget ?? (_IsLambdaUnwinderTarget = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, System.Exception, System.Boolean>(RubyOps.IsLambdaUnwinderTarget)); } }
+        private static MethodInfo _IsLambdaUnwinderTarget;
+        public static MethodInfo/*!*/ GetLambdaUnwinderReturnValue { get { return _GetLambdaUnwinderReturnValue ?? (_GetLambdaUnwinderReturnValue = CallInstruction.CacheFunc<System.Exception, System.Object>(RubyOps.GetLambdaUnwinderReturnValue)); } }
+        private static MethodInfo _GetLambdaUnwinderReturnValue;
+        public static MethodInfo/*!*/ LeaveProcCall { get { return _LeaveProcCall ?? (_LeaveProcCall = CallInstruction.CacheAction<IronRuby.Runtime.BlockParam>(RubyOps.LeaveProcCall)); } }
+        private static MethodInfo _LeaveProcCall;
         public static MethodInfo/*!*/ IsMethodUnwinderTargetFrame { get { return _IsMethodUnwinderTargetFrame ?? (_IsMethodUnwinderTargetFrame = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Exception, System.Boolean>(RubyOps.IsMethodUnwinderTargetFrame)); } }
         private static MethodInfo _IsMethodUnwinderTargetFrame;
         public static MethodInfo/*!*/ IsObjectFrozen { get { return _IsObjectFrozen ?? (_IsObjectFrozen = CallInstruction.CacheFunc<IronRuby.Runtime.RubyInstanceData, System.Boolean>(RubyOps.IsObjectFrozen)); } }

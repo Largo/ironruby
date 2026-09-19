@@ -207,6 +207,8 @@ namespace IronRuby.Runtime {
                 return returnValue;
             }
 
+            ReturnToEnclosingLambda(proc.LocalScope, returnValue);
+
             RuntimeFlowControl owner = proc.LocalScope.FlowControlScope;
             if (CanReturnTo(proc.LocalScope, owner)) {
                 blockFlowControl.ReturnReason = BlockReturnReason.Return;
@@ -232,6 +234,8 @@ namespace IronRuby.Runtime {
                     throw new BlockUnwinder(returnValue, false);
                 }
 
+                ReturnToEnclosingLambda(proc.LocalScope, returnValue);
+
                 RuntimeFlowControl owner = proc.LocalScope.FlowControlScope;
                 // unlike a return written in the block itself, one in an eval cannot end the file
                 if (!(owner is RubyTopLevelScope) && CanReturnTo(proc.LocalScope, owner)) {
@@ -243,6 +247,43 @@ namespace IronRuby.Runtime {
                 // return from the current method:
                 throw new MethodUnwinder(scope.FlowControlScope, returnValue);
             }
+        }
+
+        /// <summary>
+        /// A return in a (non-lambda) block defined in <paramref name="scope"/> leaves the innermost
+        /// lambda the block is lexically nested in, if any, rather than the method: throws to that
+        /// lambda's call while it runs, and raises LocalJumpError once the call has finished.
+        /// A lambda that was yielded to rather than called keeps the old behaviour.
+        /// </summary>
+        private static void ReturnToEnclosingLambda(RubyScope/*!*/ scope, object returnValue) {
+            for (var blockScope = scope as RubyBlockScope; blockScope != null; blockScope = blockScope.Parent as RubyBlockScope) {
+                BlockParam call = blockScope.BlockFlowControl;
+                if (call.Proc.Kind == ProcKind.Lambda) {
+                    if (call.IsActiveLambdaCall) {
+                        throw new LambdaUnwinder(call, returnValue);
+                    }
+                    if (call.CallerKind == BlockCallerKind.Call) {
+                        throw new LocalJumpError("unexpected return", "return", returnValue);
+                    }
+                    return;
+                }
+            }
+        }
+
+        [Emitted]
+        public static bool IsLambdaUnwinderTarget(BlockParam/*!*/ call, Exception/*!*/ exception) {
+            var unwinder = exception as LambdaUnwinder;
+            return unwinder != null && unwinder.Target == call;
+        }
+
+        [Emitted]
+        public static object GetLambdaUnwinderReturnValue(Exception/*!*/ exception) {
+            return ((LambdaUnwinder)exception).ReturnValue;
+        }
+
+        [Emitted]
+        public static void LeaveProcCall(BlockParam/*!*/ call) {
+            call.IsActiveLambdaCall = false;
         }
 
         /// <summary>
