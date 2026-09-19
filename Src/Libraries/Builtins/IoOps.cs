@@ -371,7 +371,22 @@ namespace IronRuby.Builtins {
             if (source != null) {
                 return Reopen(self, source);
             }
-            return Reopen(toPath, self, path, mode != null ? IOInfo.Parse(self.Context, mode) : new IOInfo(self.Mode));
+            return Reopen(toPath, self, path, mode != null ? IOInfo.Parse(self.Context, mode) : new IOInfo(ReopenMode(self.Mode)));
+        }
+
+        /// <summary>
+        /// Reopened by path alone, a stream keeps its access mode, and MRI opens the file the way
+        /// that mode would: written to only, it is created and truncated (even $stdout, whose own
+        /// mode never said so), appended to, it is created; read-write, it has to be there.
+        /// </summary>
+        private static IOMode ReopenMode(IOMode mode) {
+            if ((mode & IOMode.ReadWriteMask) == IOMode.WriteOnly) {
+                mode |= IOMode.CreateIfNotExists;
+                if ((mode & IOMode.WriteAppends) == 0) {
+                    mode |= IOMode.Truncate;
+                }
+            }
+            return mode;
         }
 
         [RubyMethod("reopen")]
@@ -395,6 +410,32 @@ namespace IronRuby.Builtins {
                 io.Reset(newStream, info.Mode);
                 return io;
             }
+
+            // A standard output stream is the descriptor a child process inherits, so, as with MRI's
+            // dup2, the file has to become that descriptor rather than only the stream Ruby
+            // writes through - or system and exec afterwards still reach the terminal.
+            int native = io.KernelDescriptor;
+            if (native == 1 || native == 2) {
+                var opened = new RubyIO(io.Context, newStream, info.Mode);
+                bool redirected;
+                try {
+                    Stream ignored;
+                    redirected = opened.KernelDescriptor >= 0 && RubyIO.TryRedirectDescriptor(io, opened, out ignored);
+                } finally {
+                    opened.Close();
+                }
+                if (redirected) {
+                    io.Mode = info.Mode;
+                    if (info.HasEncoding) {
+                        io.SetEncodings(info.ExternalEncoding, info.InternalEncoding);
+                    }
+                    return io;
+                }
+                // Not a descriptor that can be pointed elsewhere: Ruby's own stream is replaced
+                // instead, by a new one - the first went with the IO that was wrapped around it.
+                newStream = RubyFile.OpenFileStream(io.Context, path.ToString(path.Encoding.Encoding), info.Mode);
+            }
+
             io.Context.SetStream(io.GetFileDescriptor(), newStream);
             io.SetStream(newStream);
             io.Mode = info.Mode;
@@ -1068,7 +1109,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fcntl")]
         public static int FileControl(RubyIO/*!*/ self, [DefaultProtocol]int commandId, [Optional]MutableString arg) {
-            return self.FileControl(commandId, (arg != null) ? arg.ConvertToBytes() : null);
+            // No argument is MRI's 0, which is what a command like F_GETFD or F_GETFL takes.
+            if (arg == null) {
+                return self.FileControl(commandId, 0);
+            }
+            return self.FileControl(commandId, arg.ConvertToBytes());
         }
 
         [RubyMethod("fcntl")]

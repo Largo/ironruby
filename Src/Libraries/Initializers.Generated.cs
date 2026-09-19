@@ -13219,7 +13219,18 @@ namespace IronRuby.StandardLibrary.FileControl {
         }
         
         private static void LoadFcntl_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetConstant(module, "F_DUPFD", IronRuby.StandardLibrary.FileControl.Fcntl.F_DUPFD);
+            SetConstant(module, "F_GETFD", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETFD);
+            SetConstant(module, "F_GETFL", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETFL);
+            SetConstant(module, "F_GETLK", IronRuby.StandardLibrary.FileControl.Fcntl.F_GETLK);
+            SetConstant(module, "F_RDLCK", IronRuby.StandardLibrary.FileControl.Fcntl.F_RDLCK);
+            SetConstant(module, "F_SETFD", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETFD);
             SetConstant(module, "F_SETFL", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETFL);
+            SetConstant(module, "F_SETLK", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETLK);
+            SetConstant(module, "F_SETLKW", IronRuby.StandardLibrary.FileControl.Fcntl.F_SETLKW);
+            SetConstant(module, "F_UNLCK", IronRuby.StandardLibrary.FileControl.Fcntl.F_UNLCK);
+            SetConstant(module, "F_WRLCK", IronRuby.StandardLibrary.FileControl.Fcntl.F_WRLCK);
+            SetConstant(module, "FD_CLOEXEC", IronRuby.StandardLibrary.FileControl.Fcntl.FD_CLOEXEC);
             SetConstant(module, "O_ACCMODE", IronRuby.StandardLibrary.FileControl.Fcntl.O_ACCMODE);
             SetConstant(module, "O_APPEND", IronRuby.StandardLibrary.FileControl.Fcntl.O_APPEND);
             SetConstant(module, "O_CREAT", IronRuby.StandardLibrary.FileControl.Fcntl.O_CREAT);

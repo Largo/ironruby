@@ -131,8 +131,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             throw new NotSupportedException();
         }
 
-        // The Linux fcntl(2) command numbers, which is what io/nonblock.rb and IO#fcntl use;
-        // Fcntl::F_SETFL in this tree is a made-up 1.
+        // The Linux fcntl(2) command numbers, which is what io/nonblock.rb, IO#fcntl and Fcntl use.
         private const int LinuxGetFileFlags = 3;
         private const int LinuxSetFileFlags = 4;
         private const int LinuxNonBlock = 0x800;
@@ -146,7 +145,6 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         public override int FileControl(int commandId, int arg) {
             switch (commandId) {
-                case Fcntl.F_SETFL:
                 case LinuxSetFileFlags:
                     return SetFileControlFlags(arg);
                 case LinuxGetFileFlags:
