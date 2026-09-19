@@ -1214,7 +1214,7 @@ namespace IronRuby.Runtime {
         // eval("...", b, file, line) with a line below 1: a SourceLocation (and the CLR's debug info)
         // can't start there, so the code is compiled from line 1 and the difference travels in the
         // document's file name, after this marker, to be taken back out wherever a line is reported.
-        private const char EvalLineOffsetMarker = '';
+        private const char EvalLineOffsetMarker = '\u0001';
 
         internal static string/*!*/ EncodeEvalLineOffset(string/*!*/ path, int lineOffset) {
             return path + EvalLineOffsetMarker + lineOffset.ToString(System.Globalization.CultureInfo.InvariantCulture);
@@ -1226,11 +1226,14 @@ namespace IronRuby.Runtime {
         /// </summary>
         public static int DecodeEvalLineOffset(ref string path) {
             int marker;
-            if (path == null || (marker = path.IndexOf(EvalLineOffsetMarker)) < 0) {
+            if (path == null || (marker = path.LastIndexOf(EvalLineOffsetMarker)) < 0) {
                 return 0;
             }
+            // only a marker followed by nothing but the offset counts: a real name may contain \u0001
             int offset;
-            Int32.TryParse(path.Substring(marker + 1), System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out offset);
+            if (!Int32.TryParse(path.Substring(marker + 1), System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out offset)) {
+                return 0;
+            }
             path = path.Substring(0, marker);
             return offset;
         }
