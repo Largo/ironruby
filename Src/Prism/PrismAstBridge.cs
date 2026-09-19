@@ -96,8 +96,11 @@ namespace IronRuby.Prism {
                 encodingName = evalSourceEncoding.Name;
             }
 
+            // A UTF-8 source may hold bytes that are not UTF-8, read in as escapes (see
+            // RubyContext.GetSourceReader); the escaping encoding gives prism those bytes back.
             PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames,
-                frozenStringLiteral, sourceEncoding.Encoding, encodingName);
+                frozenStringLiteral, sourceEncoding == RubyEncoding.UTF8 ? sourceEncoding.EscapingEncoding : sourceEncoding.Encoding,
+                encodingName);
 
             // An eval'd string without a magic comment is in the string's own encoding, which its
             // literals and __ENCODING__ then carry (MRI), rather than in UTF-8 as a file would be.

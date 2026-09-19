@@ -3924,6 +3924,15 @@ namespace IronRuby.Runtime {
             Encoding preambleEncoding = (reader.CurrentEncoding != BinaryEncoding.Instance) ? reader.CurrentEncoding : null;
             Encoding rubyPreambleEncoding = null;
 
+            // Ruby knows only the UTF-8 BOM. A UTF-16 or UTF-32 one is two or four bytes that are
+            // not UTF-8, and the file is a syntax error ("invalid multibyte char") rather than a
+            // file in that encoding.
+            if (preambleEncoding != null && preambleEncoding.CodePage != RubyEncoding.CodePageUTF8) {
+                preambleEncoding = null;
+                stream.Seek(initialPosition, SeekOrigin.Begin);
+                reader = new StreamReader(stream, BinaryEncoding.Instance, false);
+            }
+
             // header:
             string encodingName;
             if (Tokenizer.TryParseEncodingHeader(reader, out encodingName)) {
@@ -3948,6 +3957,22 @@ namespace IronRuby.Runtime {
             // US-ASCII and a magic comment was required for anything else. A magic
             // comment or a BOM still wins.
             var encoding = rubyPreambleEncoding ?? preambleEncoding ?? SourceDefaultEncoding(defaultEncoding);
+            if (encoding == RubyEncoding.UTF8.StrictEncoding) {
+                // Bytes that are not UTF-8 are prism's to report, as the syntax error MRI gives for
+                // them, so they have to survive being read: they are decoded to the escapes
+                // RubyEncoding.EscapingEncoding turns back into the same bytes, which is what the
+                // parser is handed. Decoding them strictly threw a bare DecoderFallbackException.
+                var bytes = new MemoryStream();
+                stream.CopyTo(bytes);
+                var data = bytes.ToArray();
+                string text;
+                try {
+                    text = encoding.GetString(data);
+                } catch (DecoderFallbackException) {
+                    text = RubyEncoding.UTF8.EscapingEncoding.GetString(data);
+                }
+                return new SourceCodeReader(new StringReader(text), encoding);
+            }
             return new SourceCodeReader(new StreamReader(stream, encoding, false), encoding);
         }
 
