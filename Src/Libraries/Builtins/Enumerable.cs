@@ -367,8 +367,23 @@ namespace IronRuby.Builtins {
             object result = resultArray;
             var site = caseEquals.GetCallSite("===");
 
+            // With a block MRI calls pattern === item from the caller's frame, so a Regexp pattern
+            // leaves $~ (and $1...) set for the block. A C# call site has no scope of its own.
+            RubyRegex regex = (action != null && pattern != null && pattern.GetType() == typeof(RubyRegex)) ? (RubyRegex)pattern : null;
+
             Each(each, self, PackingBlock(each.Context, delegate(BlockParam/*!*/ selfBlock, object item) {
-                if (RubyOps.IsTrue(site.Target(site, pattern, item))) {
+                bool matches;
+                MutableString str;
+                if (regex != null && ((str = item as MutableString) != null || item is RubySymbol || item == null)) {
+                    if (item is RubySymbol) {
+                        str = ((RubySymbol)item).String;
+                    }
+                    matches = RubyRegex.SetCurrentMatchData(action.Proc.LocalScope, regex, str) != null;
+                } else {
+                    matches = RubyOps.IsTrue(site.Target(site, pattern, item));
+                }
+
+                if (matches) {
                     if (action != null && action.Yield(item, out item)) {
                         result = item;
                         return selfBlock.PropagateFlow(action, item);
