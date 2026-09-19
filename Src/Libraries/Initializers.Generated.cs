@@ -230,7 +230,7 @@ namespace IronRuby.Builtins {
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__IOError));
             DefineGlobalClass("LoadError", typeof(IronRuby.Builtins.LoadError), 0x00000007, def65, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__LoadError));
-            DefineGlobalClass("LocalJumpError", typeof(IronRuby.Builtins.LocalJumpError), 0x00000007, def59, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            DefineGlobalClass("LocalJumpError", typeof(IronRuby.Builtins.LocalJumpError), 0x00000007, def59, LoadLocalJumpError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
             new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(BuiltinsLibraryInitializer.ExceptionFactory__LocalJumpError));
             IronRuby.Builtins.RubyClass def73 = DefineGlobalClass("NameError", typeof(System.MemberAccessException), 0x00000007, def59, LoadNameError_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Builtins.RubyClass, System.Object[], System.MemberAccessException>(IronRuby.Builtins.NameErrorOps.Factory)
@@ -444,7 +444,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "include", 0x51, 
                 0x80000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyClass>(IronRuby.Builtins.MainSingletonOps.Include)
+                new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.Include)
             );
             
             DefineLibraryMethod(module, "initialize", 0x52, 
@@ -458,13 +458,13 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "private", 0x51, 
-                0x80020004U, 
-                new Func<IronRuby.Runtime.RubyScope, System.Object, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.SetPrivateVisibility)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.RubyScope, System.Object, System.Object[], System.Object>(IronRuby.Builtins.MainSingletonOps.SetPrivateVisibility)
             );
             
             DefineLibraryMethod(module, "public", 0x51, 
-                0x80020004U, 
-                new Func<IronRuby.Runtime.RubyScope, System.Object, System.String[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.SetPublicVisibility)
+                0x80000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.String>, IronRuby.Runtime.RubyScope, System.Object, System.Object[], System.Object>(IronRuby.Builtins.MainSingletonOps.SetPublicVisibility)
             );
             
             DefineLibraryMethod(module, "to_s", 0x51, 
@@ -4474,6 +4474,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetCurrentMethodName)
             );
             
+            DefineLibraryMethod(module, "__source_location_of__", 0x52, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.GetSourceFileLocation)
+            );
+            
             DefineLibraryMethod(module, "!~", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.NotMatch)
@@ -5335,6 +5340,19 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "warn", 0x61, 
                 0x00000000U, 
                 new Action<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Object, System.Object>(IronRuby.Builtins.KernelOps.ReportWarning)
+            );
+            
+        }
+        
+        private static void LoadLocalJumpError_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "exit_value", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.LocalJumpError, System.Object>(IronRuby.Builtins.LocalJumpErrorOps.GetExitValue)
+            );
+            
+            DefineLibraryMethod(module, "reason", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.LocalJumpError, IronRuby.Builtins.RubySymbol>(IronRuby.Builtins.LocalJumpErrorOps.GetReason)
             );
             
         }
