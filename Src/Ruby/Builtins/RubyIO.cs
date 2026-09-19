@@ -807,6 +807,16 @@ namespace IronRuby.Builtins {
             if (fd < 0) {
                 throw new NotSupportedException();
             }
+            return NativeFileControl(fd, commandId, arg);
+        }
+
+        /// <summary>
+        /// fcntl(2) on a raw descriptor, for streams (sockets) whose descriptor is not a file's.
+        /// </summary>
+        protected static int NativeFileControl(int fd, int commandId, int arg) {
+            if (!_hasFileControl || fd < 0) {
+                throw new NotSupportedException();
+            }
             int result = sys_fcntl(fd, commandId, arg);
             if (result < 0) {
                 throw RubyExceptions.CreateEBADF();

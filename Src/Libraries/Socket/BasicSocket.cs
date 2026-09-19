@@ -152,7 +152,8 @@ namespace IronRuby.StandardLibrary.Sockets {
                     // back.  Not Socket.Blocking: that is the internal wait-or-not switch.
                     return _nonBlocking ? LinuxNonBlock : 0;
             }
-            throw new NotSupportedException();
+            // Anything else (F_GETFD/F_SETFD for FD_CLOEXEC, ...) goes to the real descriptor.
+            return NativeFileControl((int)Socket.Handle, commandId, arg);
         }
 
         public override int FileControl(int commandId, byte[] arg) {

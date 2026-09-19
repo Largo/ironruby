@@ -1261,10 +1261,20 @@ namespace IronRuby.Builtins {
             // that cannot be done leaves it in the file system encoding; realpath, which uses
             // realpath(3), relabels it either way.
             if (!strict && pathStr.Encoding != RubyEncoding.Binary && !IsAsciiString(resolved)) {
-                var converted = MutableString.Create(resolved, pathStr.Encoding);
-                return (converted.ContainsInvalidCharacters() ? self.Context.EncodePath(resolved) : converted).TaintBy(pathStr);
+                return (CanEncode(resolved, pathStr.Encoding)
+                    ? MutableString.Create(resolved, pathStr.Encoding)
+                    : self.Context.EncodePath(resolved)).TaintBy(pathStr);
             }
             return EncodePathLike(self.Context, resolved, pathStr);
+        }
+
+        private static bool CanEncode(string/*!*/ str, RubyEncoding/*!*/ encoding) {
+            try {
+                encoding.StrictEncoding.GetByteCount(str);
+                return true;
+            } catch (EncoderFallbackException) {
+                return false;
+            }
         }
 
         private static bool IsAsciiString(string/*!*/ str) {
