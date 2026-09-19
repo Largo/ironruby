@@ -3802,7 +3802,9 @@ class String
       converted || ::Kernel.raise(::TypeError,
         "no implicit conversion of #{o.nil? ? 'nil' : o.class} into String")
     end
-    replace(others.join + self)
+    # MRI's rb_str_update(str, 0, 0, ...), as #insert: shifting the content in place instead of
+    # building a copy and #replace-ing self with it.
+    insert(0, others.size == 1 ? others[0] : others.join(""))
   end unless method_defined?(:prepend)
 
   def casecmp?(other)

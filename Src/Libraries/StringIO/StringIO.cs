@@ -959,8 +959,12 @@ namespace IronRuby.StandardLibrary.StringIO {
                     }
                 }
             } else {
-                position = content.IndexOf(separator, oldPosition);
-                position = (position != -1) ? position + separator.Length : length;
+                // Positions are byte offsets, so the separator is looked for as bytes too: searching
+                // for it as a string switched a non-ASCII content to characters, giving a character
+                // index (and a copy of the whole content on every call).
+                byte[] separatorBytes = separator.ToByteArray();
+                position = content.IndexOf(separatorBytes, oldPosition);
+                position = (position != -1) ? position + separatorBytes.Length : length;
             }
 
             // The limit counts bytes from where the line started and wins when it is the shorter

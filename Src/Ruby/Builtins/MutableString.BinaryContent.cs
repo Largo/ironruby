@@ -164,6 +164,23 @@ namespace IronRuby.Builtins {
                     return CountUnicodeUnits(unit, _owner._encoding.IsBigEndianUnicode);
                 }
 
+                // Valid UTF-8 is counted where it is: switching to characters costs a copy, and a
+                // caller alternating #length and #bytesize would switch back and forth every time.
+                // Every character is one UTF-16 unit except those of four bytes, which are two.
+                if (_owner._encoding == RubyEncoding.UTF8) {
+                    var span = new ReadOnlySpan<byte>(_data, 0, _count);
+                    if (System.Text.Unicode.Utf8.IsValid(span)) {
+                        int result = System.Text.Encoding.UTF8.GetCharCount(span);
+                        int i = 0;
+                        int j;
+                        while ((j = span.Slice(i).IndexOfAnyInRange((byte)0xF0, (byte)0xF7)) >= 0) {
+                            result--;
+                            i += j + 1;
+                        }
+                        return result;
+                    }
+                }
+
                 // This used to decode by hand so that a *run* of undecodable bytes could be counted
                 // as one character. MRI counts each such byte separately - "a\xE3\x81c" is four
                 // characters in UTF-8, not three - and the escaping decoder produces exactly one

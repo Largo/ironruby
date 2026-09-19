@@ -16,7 +16,10 @@
 #if FEATURE_ENCODING
 
 using System;
+using System.Buffers;
+using System.Diagnostics;
 using System.Text;
+using System.Text.Unicode;
 using IronRuby.Builtins;
 
 namespace IronRuby.Runtime {
@@ -82,7 +85,61 @@ namespace IronRuby.Runtime {
             return 0;
         }
 
+        private bool IsUtf8 {
+            get { return _inner.CodePage == 65001; }
+        }
+
+        /// <summary>
+        /// UTF-8 has a validator and a decoder that report where invalid data is instead of throwing,
+        /// so a string with invalid bytes costs a linear walk rather than an exception or several
+        /// per character (the generic path below), which made e.g. #length on such a string crawl.
+        /// Same result as the generic path: each byte that doesn't start a whole character is escaped
+        /// on its own - a maximal invalid subsequence never contains the start of a valid character.
+        /// </summary>
+        private static int DecodeUtf8Escaping(ReadOnlySpan<byte> src, char[] chars, int charIndex) {
+            if (chars == null) {
+                // counting: decode into scratch space (a byte never makes more than one UTF-16 unit)
+                char[] scratch = ArrayPool<char>.Shared.Rent(Math.Max(src.Length, 1));
+                try {
+                    return DecodeUtf8Escaping(src, new Span<char>(scratch, 0, src.Length));
+                } finally {
+                    ArrayPool<char>.Shared.Return(scratch);
+                }
+            }
+            return DecodeUtf8Escaping(src, new Span<char>(chars, charIndex, chars.Length - charIndex));
+        }
+
+        private static int DecodeUtf8Escaping(ReadOnlySpan<byte> src, Span<char> dst) {
+            int j = 0;
+            while (true) {
+                int read, written;
+                var status = Utf8.ToUtf16(src, dst.Slice(j), out read, out written, false, true);
+                j += written;
+                src = src.Slice(read);
+                if (status != OperationStatus.InvalidData) {
+                    Debug.Assert(status == OperationStatus.Done);
+                    return j;
+                }
+
+                Rune rune;
+                int consumed;
+                Rune.DecodeFromUtf8(src, out rune, out consumed);
+                if (consumed <= 0) {
+                    consumed = 1;
+                }
+                for (int k = 0; k < consumed; k++) {
+                    dst[j++] = (char)(EscapeBase + src[k]);
+                }
+                src = src.Slice(consumed);
+            }
+        }
+
         public override int GetCharCount(byte[]/*!*/ bytes, int index, int count) {
+            if (IsUtf8) {
+                var span = new ReadOnlySpan<byte>(bytes, index, count);
+                return Utf8.IsValid(span) ? _inner.GetCharCount(bytes, index, count) : DecodeUtf8Escaping(span, null, 0);
+            }
+
             // The overwhelmingly common case is a string whose bytes are valid, and that costs one
             // call. Only a string that is not valid pays for the walk below.
             try {
@@ -108,6 +165,11 @@ namespace IronRuby.Runtime {
         }
 
         public override int GetChars(byte[]/*!*/ bytes, int byteIndex, int byteCount, char[]/*!*/ chars, int charIndex) {
+            if (IsUtf8) {
+                var span = new ReadOnlySpan<byte>(bytes, byteIndex, byteCount);
+                return Utf8.IsValid(span) ? _inner.GetChars(bytes, byteIndex, byteCount, chars, charIndex) : DecodeUtf8Escaping(span, chars, charIndex);
+            }
+
             try {
                 return _inner.GetChars(bytes, byteIndex, byteCount, chars, charIndex);
             } catch (DecoderFallbackException) {
@@ -130,6 +192,11 @@ namespace IronRuby.Runtime {
         }
 
         public override string/*!*/ GetString(byte[]/*!*/ bytes, int index, int count) {
+            if (IsUtf8 && !Utf8.IsValid(new ReadOnlySpan<byte>(bytes, index, count))) {
+                var escaped = new char[GetCharCount(bytes, index, count)];
+                return new string(escaped, 0, GetChars(bytes, index, count, escaped, 0));
+            }
+
             try {
                 return _inner.GetString(bytes, index, count);
             } catch (DecoderFallbackException) {
@@ -184,9 +251,20 @@ namespace IronRuby.Runtime {
             return 3;
         }
 
+        /// <summary>Index of the first surrogate in chars[index, limit), or limit (vectorized).</summary>
+        private static int NextSurrogate(char[]/*!*/ chars, int index, int limit) {
+            int k = new ReadOnlySpan<char>(chars, index, limit - index).IndexOfAnyInRange((char)0xD800, (char)0xDFFF);
+            return k < 0 ? limit : index + k;
+        }
+
         private static bool ContainsUnpaired(char[]/*!*/ chars, int index, int count) {
+            // vectorized pre-check: most text has no surrogates at all
+            if (new ReadOnlySpan<char>(chars, index, count).IndexOfAnyInRange((char)0xD800, (char)0xDFFF) < 0) {
+                return false;
+            }
+
             int limit = index + count;
-            for (int i = index; i < limit; i++) {
+            for (int i = index; (i = NextSurrogate(chars, i, limit)) < limit; i++) {
                 if (IsUnpaired(chars, i, limit)) {
                     return true;
                 }
@@ -202,7 +280,7 @@ namespace IronRuby.Runtime {
             int result = 0;
             int runStart = index;
             int limit = index + count;
-            for (int i = index; i < limit; i++) {
+            for (int i = index; (i = NextSurrogate(chars, i, limit)) < limit; i++) {
                 if (IsUnpaired(chars, i, limit)) {
                     if (i > runStart) {
                         result += _inner.GetByteCount(chars, runStart, i - runStart);
@@ -225,7 +303,7 @@ namespace IronRuby.Runtime {
             int written = 0;
             int runStart = charIndex;
             int limit = charIndex + charCount;
-            for (int i = charIndex; i < limit; i++) {
+            for (int i = charIndex; (i = NextSurrogate(chars, i, limit)) < limit; i++) {
                 if (IsUnpaired(chars, i, limit)) {
                     if (i > runStart) {
                         written += _inner.GetBytes(chars, runStart, i - runStart, bytes, byteIndex + written);

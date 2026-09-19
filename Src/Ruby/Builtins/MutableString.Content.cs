@@ -55,31 +55,20 @@ namespace IronRuby.Builtins {
             }
 
             internal static uint UpdateAsciiAndSurrogatesFlags(string/*!*/ str, uint flags) {
-                int sum = 0;
-                for (int i = 0; i < str.Length; i++) {
-                    int c = str[i];
-                    if (Tokenizer.IsSurrogate(c)) {
-                        return flags & ~(MutableString.SurrogatesUnknownFlag | MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag | MutableString.NoSurrogatesFlag);
-                    }
-                    sum |= c;
-                }
-
-                return (sum < 0x80)
-                  ? flags & ~(MutableString.SurrogatesUnknownFlag | MutableString.AsciiUnknownFlag) | MutableString.IsAsciiFlag | MutableString.NoSurrogatesFlag
-                  : flags & ~(MutableString.SurrogatesUnknownFlag | MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag) | MutableString.NoSurrogatesFlag;
+                return UpdateAsciiAndSurrogatesFlags(str.AsSpan(), flags);
             }
 
             internal static uint UpdateAsciiAndSurrogatesFlags(char[]/*!*/ str, int itemCount, uint flags) {
-                int sum = 0;
-                for (int i = 0; i < itemCount; i++) {
-                    int c = str[i];
-                    if (Tokenizer.IsSurrogate(c)) {
-                        return flags & ~(MutableString.SurrogatesUnknownFlag | MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag | MutableString.NoSurrogatesFlag);
-                    }
-                    sum |= c;
+                return UpdateAsciiAndSurrogatesFlags(new ReadOnlySpan<char>(str, 0, itemCount), flags);
+            }
+
+            // Vectorized: these scans run whenever the cached flags are out of date (after most mutations).
+            private static uint UpdateAsciiAndSurrogatesFlags(ReadOnlySpan<char> str, uint flags) {
+                if (str.IndexOfAnyInRange('\uD800', '\uDFFF') >= 0) {
+                    return flags & ~(MutableString.SurrogatesUnknownFlag | MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag | MutableString.NoSurrogatesFlag);
                 }
 
-                return (sum < 0x80)
+                return System.Text.Ascii.IsValid(str)
                   ? flags & ~(MutableString.SurrogatesUnknownFlag | MutableString.AsciiUnknownFlag) | MutableString.IsAsciiFlag | MutableString.NoSurrogatesFlag
                   : flags & ~(MutableString.SurrogatesUnknownFlag | MutableString.AsciiUnknownFlag | MutableString.IsAsciiFlag) | MutableString.NoSurrogatesFlag;
             }
