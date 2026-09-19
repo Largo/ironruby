@@ -15,6 +15,5 @@ shim elsewhere on the load path cannot shadow them):
 
 Added from the gems MRI 4.0 ships (lib/ copied verbatim):
   logger.rb, logger/ - logger 1.7.0 (a bundled gem since 3.5)
-
-Added from the gems MRI 4.0 ships, continued:
-  csv.rb, csv/ - csv 3.3.5 (a bundled gem since 3.4)
+  csv.rb, csv/       - csv 3.3.5 (a bundled gem since 3.4)
+  getoptlong.rb      - getoptlong 0.2.1 (a bundled gem since 3.4)
