@@ -112,6 +112,14 @@ namespace IronRuby.Builtins {
             int? descriptor = toIntSite.Target(toIntSite, descriptorOrPath);
             if (descriptor.HasValue) {
                 RubyIOOps.Reinitialize(self, descriptor.Value, info);
+
+                // File.new(fd, path: "...") names the descriptor; File#path answers it.
+                object path;
+                if (options != null && options.TryGetValue(context.CreateAsciiSymbol("path"), out path) && path != null) {
+                    MutableString strPath = Protocols.CastToString(toStr, path);
+                    self.Path = context.DecodePath(strPath);
+                    self.PathEncoding = strPath.Encoding;
+                }
             } else {
                 Reinitialize(self, Protocols.CastToPath(toPath, descriptorOrPath), info, permissions);
             }
