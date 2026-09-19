@@ -10522,34 +10522,9 @@ module Kernel
 end
 
 module ObjectSpace
-  # A real weak map needs runtime support; this keeps strong references, which
-  # is safe (entries merely outlive what MRI would collect) but not weak.
-  class WeakMap
-    include Enumerable
-
-    def initialize
-      @table = {}
-    end
-
-    def [](key); @table[key.object_id] && @table[key.object_id][1]; end
-    def []=(key, value); @table[key.object_id] = [key, value]; end
-    def key?(key); @table.key?(key.object_id); end
-    alias_method :member?, :key?
-    alias_method :include?, :key?
-    def each; @table.each_value { |(k, v)| yield(k, v) }; self; end
-    def keys; @table.values.map { |(k, _)| k }; end
-    def values; @table.values.map { |(_, v)| v }; end
-    def size; @table.size; end
-    alias_method :length, :size
-    def delete(key); entry = @table.delete(key.object_id); entry && entry[1]; end
-    def each_key; @table.each_value { |(k, _)| yield k }; self; end
-    def each_value; @table.each_value { |(_, v)| yield v }; self; end
-    alias_method :each_pair, :each
-  end unless const_defined?(:WeakMap)
-
   # 3.2's map with weakly-held keys compared by equality rather than identity.
-  # Same caveat as WeakMap: the references here are strong, so entries outlive
-  # what MRI would collect, which is safe but not weak.
+  # The references here are strong, so entries outlive what MRI would collect,
+  # which is safe but not weak. (WeakMap is the C# RubyWeakMap, and is weak.)
   class WeakKeyMap
     def initialize
       @table = {}
