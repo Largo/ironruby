@@ -97,7 +97,15 @@ namespace IronRuby.Compiler.Ast {
         internal static MSA.Expression/*!*/ MakeConversion(AstGenerator/*!*/ gen, Expression/*!*/ expression) {
             // an interpolation in a heredoc can be lines below the statement: a backtrace from it
             // names its own line
-            var conversion = AstUtils.LightDynamic(ConvertToSAction.Make(gen.Context), typeof(MutableString), expression.TransformRead(gen));
+            // a to_s a refinement supplies is not visible to the conversion site - see RubyOps.TryConvertToSWithRefinements
+            var value = Ast.Variable(typeof(object), "#interpolated");
+            var conversion = Ast.Block(new[] { value },
+                Ast.Assign(value, AstUtils.Box(expression.TransformRead(gen))),
+                Ast.Coalesce(
+                    Methods.TryConvertToSWithRefinements.OpCall(gen.CurrentScopeVariable, value),
+                    AstUtils.LightDynamic(ConvertToSAction.Make(gen.Context), typeof(MutableString), value)
+                )
+            );
             return expression.Location.IsValid ? gen.AddDebugInfo(conversion, expression.Location) : conversion;
         }
 

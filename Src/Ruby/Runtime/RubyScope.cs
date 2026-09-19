@@ -110,6 +110,8 @@ namespace IronRuby.Runtime {
 
         // Refinements activated by `using' in this scope, in activation order; null until `using' runs here.
         private List<RubyModule> _usedModules;
+        // Parallel to _usedModules: what each `using' saw of the module's refinements (null = all, live).
+        private List<HashSet<RubyModule>> _usedModuleSnapshots;
 
         // Memoized effective activation table for this scope (own + everything lexically enclosing),
         // stamped with RubyContext.RefinementVersion so that a `using' anywhere forces a recompute.
@@ -496,13 +498,35 @@ namespace IronRuby.Runtime {
         /// defining scope), which is the same chain Module.nesting walks.
         /// </summary>
         public void ActivateRefinements(RubyModule/*!*/ module) {
+            ActivateRefinements(module, false);
+        }
+
+        /// <param name="snapshot">
+        /// True for `using': only the refinements <paramref name="module"/> has now are activated (methods
+        /// added to them later still count).  False for the implicit activation of a refinement's own
+        /// module, which follows the module as it grows.
+        /// </param>
+        public void ActivateRefinements(RubyModule/*!*/ module, bool snapshot) {
+            HashSet<RubyModule> refinements = null;
+            if (snapshot) {
+                var list = new List<RubyModule>();
+                module.GetAllRefinements(list);
+                refinements = new HashSet<RubyModule>(list);
+            }
+
             if (_usedModules == null) {
                 _usedModules = new List<RubyModule>();
+                _usedModuleSnapshots = new List<HashSet<RubyModule>>();
             } else {
                 // re-activating moves it to the front of this scope's precedence order
-                _usedModules.Remove(module);
+                int index = _usedModules.IndexOf(module);
+                if (index >= 0) {
+                    _usedModules.RemoveAt(index);
+                    _usedModuleSnapshots.RemoveAt(index);
+                }
             }
             _usedModules.Add(module);
+            _usedModuleSnapshots.Add(refinements);
 
             // Invalidate every memoized table and, through the rule guards built on them, every cached
             // call site that could be affected.
@@ -529,12 +553,26 @@ namespace IronRuby.Runtime {
             RefinementActivation outer;
             var blockScope = this as RubyBlockScope;
             RefinementActivation blockOverride = (blockScope != null) ? blockScope.BlockFlowControl.Proc.RefinementOverride : null;
+            var methodScope = this as RubyMethodScope;
             if (blockOverride != null) {
                 outer = blockOverride;
+            } else if (methodScope != null) {
+                // A method sees the refinements that were active where and when it was defined, not
+                // those its declaring scope has since acquired: `using' after a `def' does not reach
+                // into it.  The declaring scope is shared by every method defined in it, so the
+                // definition-time state comes from the compiled body instead - see
+                // RubyMethodBody.SetDefinitionRefinements.  A body compiled with no record was
+                // defined before anything was refined at all.
+                var recorded = methodScope.DefinitionRefinements;
+                if (recorded == null) {
+                    outer = RefinementActivation.Empty;
+                } else {
+                    outer = recorded.Value ?? ((_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty);
+                }
             } else {
                 outer = (_parent != null) ? _parent.GetActiveRefinements() : RefinementActivation.Empty;
             }
-            RefinementActivation result = (_usedModules != null) ? RefinementActivation.Create(outer, _usedModules) : outer;
+            RefinementActivation result = (_usedModules != null) ? RefinementActivation.Create(outer, _usedModules, _usedModuleSnapshots) : outer;
 
             _refinements = result;
             _refinementsVersion = version;
@@ -1053,6 +1091,13 @@ var closureScope = scope as RubyClosureScope;
         public Proc BlockParameter {
             get { return _blockParameter; }
         }
+
+        /// <summary>
+        /// The refinements active where the method was defined, stored by the compiled body right after
+        /// it creates this scope; null for a body compiled before anything was refined.  Public because
+        /// the method body assigns it directly.
+        /// </summary>
+        public StrongBox<RefinementActivation> DefinitionRefinements;
 
         internal RubyMethodScope(MutableTuple locals, string/*!*/[]/*!*/ variableNames, int visibleParameterCountAndSignatureFlags,
             RubyScope/*!*/ parent, RubyModule/*!*/ declaringModule, string/*!*/ definitionName,

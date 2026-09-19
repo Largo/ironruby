@@ -37,7 +37,7 @@ namespace IronRuby.Runtime {
     /// RubyCallAction.Resolve, which emits `GetActiveRefinements(scope) == &lt;this instance&gt;'.
     /// </summary>
     public sealed class RefinementActivation {
-        public static readonly RefinementActivation/*!*/ Empty = new RefinementActivation(null, null);
+        public static readonly RefinementActivation/*!*/ Empty = new RefinementActivation(null, null, null);
 
         private readonly RefinementActivation _outer;
 
@@ -45,22 +45,33 @@ namespace IronRuby.Runtime {
         // Null for Empty.
         private readonly RubyModule[] _usedModules;
 
-        private RefinementActivation(RefinementActivation outer, RubyModule[] usedModules) {
+        // Parallel to _usedModules: the refinements `using' found in the module when it ran, or null
+        // for an activation that follows the module as it grows (a refine block and the methods defined
+        // in it see every refinement their module declares, later ones included).  CRuby's `using'
+        // copies the module's { refined class -> refinement } table into the cref, so a refinement of a
+        // class the module had not refined yet is not picked up, while methods added to an already
+        // copied refinement are - it is the same module.
+        private readonly HashSet<RubyModule>[] _snapshots;
+
+        private RefinementActivation(RefinementActivation outer, RubyModule[] usedModules, HashSet<RubyModule>[] snapshots) {
             _outer = outer;
             _usedModules = usedModules;
+            _snapshots = snapshots;
         }
 
         internal static RefinementActivation/*!*/ CreateSingle(RefinementActivation/*!*/ outer, RubyModule/*!*/ usedModule) {
             Assert.NotNull(outer, usedModule);
-            return new RefinementActivation(outer, new RubyModule[] { usedModule });
+            return new RefinementActivation(outer, new RubyModule[] { usedModule }, new HashSet<RubyModule>[1]);
         }
 
-        internal static RefinementActivation/*!*/ Create(RefinementActivation/*!*/ outer, List<RubyModule/*!*/>/*!*/ usedModules) {
-            Assert.NotNull(outer, usedModules);
+        internal static RefinementActivation/*!*/ Create(RefinementActivation/*!*/ outer, List<RubyModule/*!*/>/*!*/ usedModules,
+            List<HashSet<RubyModule>>/*!*/ snapshots) {
+            Assert.NotNull(outer, usedModules, snapshots);
+            Debug.Assert(usedModules.Count == snapshots.Count);
             if (usedModules.Count == 0) {
                 return outer;
             }
-            return new RefinementActivation(outer, usedModules.ToArray());
+            return new RefinementActivation(outer, usedModules.ToArray(), snapshots.ToArray());
         }
 
         public bool IsEmpty {
@@ -97,7 +108,7 @@ namespace IronRuby.Runtime {
                 }
                 // later `using' wins over an earlier one in the same scope:
                 for (int i = a._usedModules.Length - 1; i >= 0; i--) {
-                    a._usedModules[i].GetActiveRefinementsOf(refinedModule, result);
+                    a._usedModules[i].GetActiveRefinementsOf(refinedModule, result, a._snapshots[i]);
                 }
             }
         }
@@ -108,9 +119,30 @@ namespace IronRuby.Runtime {
         public void GetUsedRefinements(List<RubyModule/*!*/>/*!*/ result) {
             var mods = new List<RubyModule>();
             GetUsedModules(mods);
+            var all = new List<RubyModule>();
             foreach (RubyModule m in mods) {
-                m.GetAllRefinements(result);
+                all.Clear();
+                m.GetAllRefinements(all);
+                foreach (RubyModule r in all) {
+                    if (!result.Contains(r) && IsVisible(m, r)) {
+                        result.Add(r);
+                    }
+                }
             }
+        }
+
+        // False if every `using' of module m visible here predates refinement r.
+        private bool IsVisible(RubyModule/*!*/ m, RubyModule/*!*/ r) {
+            for (RefinementActivation a = this; a != null; a = a._outer) {
+                if (a._usedModules != null) {
+                    for (int i = 0; i < a._usedModules.Length; i++) {
+                        if (a._usedModules[i] == m && (a._snapshots[i] == null || a._snapshots[i].Contains(r))) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
         }
     }
 }

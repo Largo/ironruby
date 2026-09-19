@@ -234,7 +234,7 @@ namespace IronRuby.Builtins {
             }
 
             // `using' is a no-op for a module that refines nothing, exactly as in CRuby.
-            scope.ActivateRefinements(refiner);
+            scope.ActivateRefinements(refiner, true);
         }
 
         [RubyMethod("refinements")]

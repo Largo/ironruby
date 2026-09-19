@@ -318,6 +318,64 @@ namespace IronRuby.Runtime {
             return scope.GetActiveRefinements();
         }
 
+        // The implicit calls a conversion site makes carry no scope, so they cannot see refinements.
+        // The two below run ahead of such a site where MRI honours the refinements of the lexical
+        // position - "#{x}" and &x - and answer null (use the site) unless one is actually in play.
+        // Until something has been refined they cost a field read.
+
+        /// <summary>
+        /// "#{x}" where a refinement of x's class defines #to_s.
+        /// </summary>
+        [Emitted]
+        public static MutableString TryConvertToSWithRefinements(RubyScope/*!*/ scope, object value) {
+            var context = scope.RubyContext;
+            if (!context.HasRefinements || value is MutableString) {
+                return null;
+            }
+            if (!IsRefinedHere(scope, value, "to_s")) {
+                return null;
+            }
+            var site = context.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object>>(
+                "to_s", new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
+            );
+            return ToSDefaultConversion(context, value, site.Target(site, scope, value));
+        }
+
+        /// <summary>
+        /// A block argument (&x) in a scope where refinements are active: a Symbol's proc calls the method
+        /// with the refinements of this place (MRI's refinement-aware symbol proc), and a refined #to_proc
+        /// is the one that converts.
+        /// </summary>
+        [Emitted]
+        public static Proc TryConvertBlockWithRefinements(RubyScope/*!*/ scope, object value) {
+            var context = scope.RubyContext;
+            if (!context.HasRefinements || value == null || value is Proc) {
+                return null;
+            }
+            if (scope.GetActiveRefinements().IsEmpty) {
+                return null;
+            }
+            if (!IsRefinedHere(scope, value, Symbols.ToProc)) {
+                var symbol = value as RubySymbol;
+                // Symbol#to_proc, but with the calls it makes bound to this scope:
+                return (symbol != null) ? Proc.CreateMethodInvoker(scope, symbol.ToString()) : null;
+            }
+            var site = context.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object>>(
+                Symbols.ToProc, new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
+            );
+            return ToProcValidator(context.GetClassName(value), site.Target(site, scope, value));
+        }
+
+        // True if a refinement active in scope supplies value's method of that name.
+        private static bool IsRefinedHere(RubyScope/*!*/ scope, object value, string/*!*/ name) {
+            var context = scope.RubyContext;
+            if (scope.GetActiveRefinements().IsEmpty) {
+                return false;
+            }
+            var method = context.ResolveMethodWithRefinements(value, name, VisibilityContext.AllVisible, scope);
+            return method.Found && method.Info.DeclaringModule.IsRefinement;
+        }
+
         #endregion
 
         #region Context
@@ -756,12 +814,19 @@ namespace IronRuby.Runtime {
             }
 
             if (instanceOwner != null) {
+                var definitionScope = DefinitionScope(scope, instanceOwner);
+                if (scope.RubyContext.HasRefinements) {
+                    body.SetDefinitionRefinements(instanceOwner, definitionScope.GetActiveRefinements());
+                }
                 SetMethod(scope.RubyContext, instanceMethod =
-                    new RubyMethodInfo(body, DefinitionScope(scope, instanceOwner), instanceOwner, instanceFlags)
+                    new RubyMethodInfo(body, definitionScope, instanceOwner, instanceFlags)
                 );
             }
 
             if (singletonOwner != null) {
+                if (scope.RubyContext.HasRefinements) {
+                    body.SetDefinitionRefinements(singletonOwner, scope.GetActiveRefinements());
+                }
                 SetMethod(scope.RubyContext, singletonMethod =
                     new RubyMethodInfo(body, scope, singletonOwner, singletonFlags)
                 );

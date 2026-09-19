@@ -292,6 +292,10 @@ namespace IronRuby.Compiler {
         private static MethodInfo _GetQualifiedConstant;
         public static MethodInfo/*!*/ GetActiveRefinements { get { return _GetActiveRefinements ?? (_GetActiveRefinements = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, IronRuby.Runtime.RefinementActivation>(RubyOps.GetActiveRefinements)); } }
         private static MethodInfo _GetActiveRefinements;
+        public static MethodInfo/*!*/ TryConvertToSWithRefinements { get { return _TryConvertToSWithRefinements ?? (_TryConvertToSWithRefinements = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.MutableString>(RubyOps.TryConvertToSWithRefinements)); } }
+        private static MethodInfo _TryConvertToSWithRefinements;
+        public static MethodInfo/*!*/ TryConvertBlockWithRefinements { get { return _TryConvertBlockWithRefinements ?? (_TryConvertBlockWithRefinements = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.Proc>(RubyOps.TryConvertBlockWithRefinements)); } }
+        private static MethodInfo _TryConvertBlockWithRefinements;
         public static MethodInfo/*!*/ GetSelfClassVersionHandle { get { return _GetSelfClassVersionHandle ?? (_GetSelfClassVersionHandle = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, IronRuby.Runtime.Calls.VersionHandle>(RubyOps.GetSelfClassVersionHandle)); } }
         private static MethodInfo _GetSelfClassVersionHandle;
         public static MethodInfo/*!*/ GetSuperCallTarget { get { return _GetSuperCallTarget ?? (_GetSuperCallTarget = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Int32, System.Object>(RubyOps.GetSuperCallTarget)); } }

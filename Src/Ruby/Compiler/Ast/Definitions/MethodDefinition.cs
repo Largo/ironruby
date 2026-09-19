@@ -154,7 +154,8 @@ namespace IronRuby.Compiler.Ast {
             return (declaringModule.Name != null) ? declaringModule.Name + "#" + name : name;
         }
 
-        internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+        internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule,
+            StrongBox<RefinementActivation> definitionRefinements) {
             string frameLabel = QualifyFrameLabel(_name, declaringModule);
             string encodedName = RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode);
 
@@ -218,7 +219,15 @@ namespace IronRuby.Compiler.Ast {
 
             MSA.ParameterExpression unwinder;
             
+            // see RubyScope.GetActiveRefinements:
+            MSA.Expression recordRefinements = (definitionRefinements != null)
+                ? (MSA.Expression)Ast.Assign(
+                    Ast.Field(scopeVariable, typeof(RubyMethodScope).GetField("DefinitionRefinements")),
+                    Ast.Constant(definitionRefinements, typeof(StrongBox<RefinementActivation>)))
+                : AstUtils.Empty();
+
             MSA.Expression body = AstUtils.Try(
+                recordRefinements,
                 profileStart,
                 _parameters.TransformOptionalsInitialization(gen),
                 traceCall,
