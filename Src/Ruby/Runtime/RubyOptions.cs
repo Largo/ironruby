@@ -35,6 +35,7 @@ namespace IronRuby.Runtime {
         private readonly bool _autoSplit;
         private readonly bool _chopLines;
         private readonly string _inputRecordSeparator;
+        private readonly bool _noInputRecordSeparator;
         private readonly string _inplaceMode;
         private readonly string _fieldSeparator;
         private readonly bool _scriptSwitches;
@@ -159,6 +160,11 @@ namespace IronRuby.Runtime {
             get { return _inputRecordSeparator; }
         }
 
+        /// <summary>-0 with a value of 0400 or more: $/ is nil and a read takes the whole input.</summary>
+        public bool NoInputRecordSeparator {
+            get { return _noInputRecordSeparator; }
+        }
+
         /// <summary>
         /// The backup extension given by -i, or null when the option was not used. The empty
         /// string means in-place editing with no backup kept, which is not the same as null.
@@ -258,6 +264,7 @@ namespace IronRuby.Runtime {
             _autoSplit = GetOption(options, "AutoSplit", false);
             _chopLines = GetOption(options, "ChopLines", false);
             _inputRecordSeparator = GetOption<string>(options, "InputRecordSeparator", null);
+            _noInputRecordSeparator = GetOption(options, "NoInputRecordSeparator", false);
             _inplaceMode = GetOption<string>(options, "InplaceMode", null);
             _fieldSeparator = GetOption<string>(options, "FieldSeparator", null);
             _scriptSwitches = GetOption(options, "ScriptSwitches", false);

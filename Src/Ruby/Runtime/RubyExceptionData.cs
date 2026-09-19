@@ -98,6 +98,18 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// Like CreateBacktrace, but frames of core methods written in Ruby keep their own file and line
+        /// instead of being reported at their caller's (TracePoint needs to see where a call really is).
+        /// </summary>
+        internal static RubyArray/*!*/ CreateRawBacktrace(RubyContext/*!*/ context) {
+#if FEATURE_STACK_TRACE
+            return new RubyStackTraceBuilder(context, 0, true).RubyTrace;
+#else
+            return new RubyArray();
+#endif
+        }
+
+        /// <summary>
         /// The backtrace of a thread other than the calling one, or null if that thread has no Ruby
         /// stack to speak of - it has not started, it has finished, or it has never run Ruby code.
         /// </summary>

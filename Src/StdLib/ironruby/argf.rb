@@ -132,7 +132,9 @@ ARGF_CLASS = Class.new do
 
   def __ir_gets__(*args)
     return nil unless prepare_read
-    line = @current.gets(*args)
+    # chomp: arrives here as a trailing positional Hash (through the C# alias); IO#gets takes
+    # no Hash positionally, so hand it back as keywords
+    line = args.last.is_a?(Hash) ? @current.gets(*args[0...-1], **args.last) : @current.gets(*args)
     count_line(line)
   end
 

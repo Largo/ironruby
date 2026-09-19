@@ -1179,7 +1179,7 @@ namespace IronRuby.Builtins {
             try {
                 self.Flush();
             } catch (IOException e) {
-                throw TranslateStreamError(e);
+                throw TranslateWriteError(e, self);
             }
             return self;
         }
@@ -1491,14 +1491,18 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("write")]
         public static int Write(RubyIO/*!*/ self, [NotNull]MutableString/*!*/ val) {
+            return Write(self, val, true);
+        }
+
+        private static int Write(RubyIO/*!*/ self, MutableString/*!*/ val, bool signalOnPipeError) {
             try {
                 int bytesWritten = val.IsEmpty ? 0 : self.WriteBytes(val, 0, val.GetByteCount());
-                if (self.AutoFlush) {
+                if (self.AutoFlush || !signalOnPipeError) {
                     self.Flush();
                 }
                 return bytesWritten;
             } catch (IOException e) {
-                throw TranslateStreamError(e);
+                throw signalOnPipeError ? TranslateWriteError(e, self) : TranslateStreamError(e);
             }
         }
 
@@ -1535,9 +1539,8 @@ namespace IronRuby.Builtins {
                 return written;
             }
 
-            int bytes = Write(self, val);
-            self.Flush();
-            return bytes;
+            // syswrite raises Errno::EPIPE even on STDOUT (MRI signals only for buffered writes)
+            return Write(self, val, false);
         }
 
         [RubyMethod("syswrite")]
@@ -1604,6 +1607,29 @@ namespace IronRuby.Builtins {
         /// The errno DescriptorStream reports back as the Ruby exception for it. Only EPIPE is
         /// worth naming: MRI raises Errno::EPIPE rather than dying of SIGPIPE.
         /// </summary>
+        /// <summary>
+        /// A buffered write (or flush) to STDOUT or STDERR that finds the reader gone raises
+        /// SignalException SIGPIPE, not Errno::EPIPE, so that the process dies of SIGPIPE quietly
+        /// the way MRI's does (its FMODE_SIGNAL_ON_EPIPE). syswrite still raises Errno::EPIPE.
+        /// </summary>
+        private static Exception/*!*/ TranslateWriteError(IOException/*!*/ e, RubyIO/*!*/ io) {
+            if (e.HResult == DescriptorStream.EPIPE) {
+                int fd;
+                try {
+                    fd = io.KernelDescriptor;
+                } catch (Exception) {
+                    fd = -1;
+                }
+                if (fd == 1 || fd == 2) {
+                    var signal = new SignalException("SIGPIPE");
+                    io.Context.SetInstanceVariable(signal, "@signo", 13);
+                    io.Context.SetInstanceVariable(signal, "@signm", MutableString.CreateAscii("SIGPIPE"));
+                    return signal;
+                }
+            }
+            return TranslateStreamError(e);
+        }
+
         private static Exception/*!*/ TranslateStreamError(IOException/*!*/ e) {
             return e.HResult == DescriptorStream.EPIPE ? new Errno.PipeError() : (Exception)e;
         }

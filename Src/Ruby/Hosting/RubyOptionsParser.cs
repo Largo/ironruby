@@ -463,7 +463,8 @@ namespace IronRuby.Hosting {
                 return;
             }
 
-            // -0 alone means paragraph-less "\0", -0<octal> names the byte, as in -072 for ':'.
+            // -0 alone means "\0", -0<octal> names the byte, as in -072 for ':'; as in MRI a value of
+            // 0 given in digits (-00) is paragraph mode ("") and one of 0400 or more (-0777) is nil.
             if (arg.StartsWith("-0", StringComparison.Ordinal)) {
                 int separator = 0;
                 for (int i = 2; i < arg.Length; i++) {
@@ -472,7 +473,11 @@ namespace IronRuby.Hosting {
                     }
                     separator = separator * 8 + (arg[i] - '0');
                 }
-                LanguageSetup.Options["InputRecordSeparator"] = ((char)separator).ToString();
+                if (separator >= 0x100) {
+                    LanguageSetup.Options["NoInputRecordSeparator"] = true;
+                } else {
+                    LanguageSetup.Options["InputRecordSeparator"] = (separator == 0 && arg.Length > 2) ? "" : ((char)separator).ToString();
+                }
                 return;
             }
 

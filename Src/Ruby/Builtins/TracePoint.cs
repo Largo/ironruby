@@ -323,7 +323,7 @@ namespace IronRuby.Builtins {
                 info.Path = null;
                 _inLibraryCallEvent = true;
                 try {
-                    RubyArray trace = RubyExceptionData.CreateBacktrace(info.Context, 0);
+                    RubyArray trace = RubyExceptionData.CreateRawBacktrace(info.Context);
                     if (trace != null && trace.Count > 1 && IsCoreLibraryPath(ParseFrame(trace[0], out info.Line))) {
                         info.Path = ParseFrame(trace[1], out info.Line);
                     }
@@ -555,7 +555,7 @@ namespace IronRuby.Builtins {
         // compiler; the innermost Ruby frame of the backtrace is where MRI reports them.
         private static void SetCallerLocation(TraceEventInfo/*!*/ info) {
             try {
-                RubyArray trace = RubyExceptionData.CreateBacktrace(info.Context, 0);
+                RubyArray trace = RubyExceptionData.CreateRawBacktrace(info.Context);
                 if (trace == null || trace.Count == 0) {
                     return;
                 }

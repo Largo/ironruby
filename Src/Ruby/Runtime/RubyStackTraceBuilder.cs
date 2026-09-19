@@ -41,6 +41,9 @@ namespace IronRuby.Runtime {
         private readonly List<string>/*!*/ _deferredMethodNames = new List<string>();
         private bool _lastDeferredIsLibrary;
         private readonly RubyContext/*!*/ _context;
+        // TracePoint's c_call location needs the frame that really made the call, which inside a
+        // core method written in Ruby is that method's own, not its caller's.
+        private bool _keepInternalFrames;
 
         private RubyStackTraceBuilder(RubyContext/*!*/ context) {
             _context = context;
@@ -67,7 +70,12 @@ namespace IronRuby.Runtime {
         }
 
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames)
+            : this(context, skipFrames, false) {
+        }
+
+        internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames, bool keepInternalFrames)
             : this(context) {
+            _keepInternalFrames = keepInternalFrames;
             var trace = GetClrStackTrace(null);
 
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?
@@ -207,7 +215,7 @@ namespace IronRuby.Runtime {
                         continue;
                     }
 
-                    if (IsInternalFile(file)) {
+                    if (!_keepInternalFrames && IsInternalFile(file)) {
                         if (IsInternalMethodFrame(methodName)) {
                             _deferredMethodNames.Add(methodName);
                             _lastDeferredIsLibrary = false;

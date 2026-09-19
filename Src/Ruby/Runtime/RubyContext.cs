@@ -567,7 +567,8 @@ namespace IronRuby.Runtime {
             _childProcessExitStatus = null;
             // -0<octal> names the record separator; -l then copies it to $\ so that puts and
             // print put back what the loop chomped off.
-            _inputSeparator = MutableString.CreateAscii(_options.InputRecordSeparator ?? "\n").Freeze();
+            _inputSeparator = _options.NoInputRecordSeparator ? null
+                : CreateInputSeparator(_options.InputRecordSeparator ?? "\n").Freeze();
             _outputSeparator = _options.ChopLines ? _inputSeparator : null;
             // -F names $; - as a Regexp, the way MRI compiles it.
             _stringSeparator = _options.FieldSeparator != null
@@ -3956,6 +3957,13 @@ namespace IronRuby.Runtime {
         #endregion
 
         #region Language Context Overrides
+
+        // -0<octal> names a single byte, which may be above 0x7F
+        private static MutableString/*!*/ CreateInputSeparator(string/*!*/ separator) {
+            return (separator.Length == 1 && separator[0] > 0x7F)
+                ? MutableString.CreateBinary(new[] { (byte)separator[0] })
+                : MutableString.CreateAscii(separator);
+        }
 
         public override TService GetService<TService>(params object[] args) {
             if (typeof(TService) == typeof(RubyService)) {
