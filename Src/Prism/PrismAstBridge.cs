@@ -21,6 +21,7 @@ namespace IronRuby.Prism {
     public sealed class PrismAstBridge {
         private readonly string/*!*/ _source;
         private readonly string _path;
+        private readonly int _lineOffset;
         private readonly List<int>/*!*/ _lineStarts;
 
         // The line the first line of this source is reported as. 1 for a file; whatever
@@ -47,6 +48,8 @@ namespace IronRuby.Prism {
 
         private PrismAstBridge(string/*!*/ source, string path, RubyEncoding/*!*/ encoding) {
             _source = source;
+            // an eval with a starting line below 1 carries the difference in its file name
+            _lineOffset = RubyUtils.DecodeEvalLineOffset(ref path);
             _path = path;
             _encoding = encoding;
             _lineStarts = new List<int> { 0 };
@@ -787,7 +790,7 @@ namespace IronRuby.Prism {
                 case Pm.SourceFileNode sourceFile:
                     return new StringLiteral(_path ?? LiteralText(sourceFile.Filepath), _encoding, span);
                 case Pm.SourceLineNode _:
-                    return Literal.Integer(span.Start.Line, span);
+                    return Literal.Integer(span.Start.Line + _lineOffset, span);
                 case Pm.SourceEncodingNode _:
                     return new EncodingExpression(span);
 

@@ -1185,6 +1185,30 @@ namespace IronRuby.Runtime {
             };
         }
 
+        // eval("...", b, file, line) with a line below 1: a SourceLocation (and the CLR's debug info)
+        // can't start there, so the code is compiled from line 1 and the difference travels in the
+        // document's file name, after this marker, to be taken back out wherever a line is reported.
+        private const char EvalLineOffsetMarker = '';
+
+        internal static string/*!*/ EncodeEvalLineOffset(string/*!*/ path, int lineOffset) {
+            return path + EvalLineOffsetMarker + lineOffset.ToString(System.Globalization.CultureInfo.InvariantCulture);
+        }
+
+        /// <summary>
+        /// Removes the line offset of an eval with a line below 1 from a document file name (see
+        /// EncodeEvalLineOffset) and returns it; 0 for any other name.
+        /// </summary>
+        public static int DecodeEvalLineOffset(ref string path) {
+            int marker;
+            if (path == null || (marker = path.IndexOf(EvalLineOffsetMarker)) < 0) {
+                return 0;
+            }
+            int offset;
+            Int32.TryParse(path.Substring(marker + 1), System.Globalization.NumberStyles.AllowLeadingSign, System.Globalization.CultureInfo.InvariantCulture, out offset);
+            path = path.Substring(0, marker);
+            return offset;
+        }
+
         private static SourceUnit/*!*/ CreateRubySourceUnit(RubyContext/*!*/ context, MutableString/*!*/ code, string path) {
             return context.CreateSourceUnit(new BinaryContentProvider(code.ToByteArray()), path, code.Encoding.Encoding, SourceCodeKind.File);
         }
@@ -1221,8 +1245,8 @@ namespace IronRuby.Runtime {
             // we want to create a new top-level local scope:
             var options = CreateCompilerOptionsForEval(targetScope, methodScope, module != null, line);
             options.EvalSourceEncoding = code.Encoding;
-            var source = CreateRubySourceUnit(context, code,
-                file != null ? file.ConvertToString() : DefaultEvalFileName(context));
+            string path = file != null ? file.ConvertToString() : DefaultEvalFileName(context);
+            var source = CreateRubySourceUnit(context, code, (line <= 0) ? EncodeEvalLineOffset(path, line - 1) : path);
 
             Expression<EvalEntryPointDelegate> lambda;
             try {
@@ -1240,9 +1264,11 @@ namespace IronRuby.Runtime {
                     // line was compiled from 1 and is put back here: eval with a line of -100
                     // reports its first line as -100, which is what MRI does.
                     int reportedLine = (line <= 0) ? e.Line - 1 + line : e.Line;
+                    string errorFile = e.File;
+                    DecodeEvalLineOffset(ref errorFile);
                     throw new SyntaxError(
-                        String.Format("{0}:{1}: {2}", e.File, reportedLine, e.Message),
-                        e.File, reportedLine, e.Column, e.LineSourceCode
+                        String.Format("{0}:{1}: {2}", errorFile, reportedLine, e.Message),
+                        errorFile, reportedLine, e.Column, e.LineSourceCode
                     );
                 }
                 throw;

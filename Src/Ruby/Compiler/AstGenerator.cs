@@ -112,7 +112,14 @@ namespace IronRuby.Compiler.Ast {
         }
 
         public string SourcePath {
-            get { return _document != null ? _document.FileName : "(eval)"; }
+            get {
+                if (_document == null) {
+                    return "(eval)";
+                }
+                string path = _document.FileName;
+                RubyUtils.DecodeEvalLineOffset(ref path);
+                return path;
+            }
         }
 
         public MSA.SymbolDocumentInfo Document {
