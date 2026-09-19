@@ -13123,9 +13123,19 @@ class Exception
       nil
     end
 
+    # --backtrace-limit=N keeps N "from" lines and counts the rest - when there are at
+    # least two of them to leave out (MRI's print_backtrace)
+    limit = ::Thread::Backtrace.limit
+    skipped = 0
+    if order == :top && limit >= 0 && rest.size > limit + 1
+      skipped = rest.size - limit
+      rest = rest[0, limit]
+    end
+
     if order == :top
       out << (head ? "#{head}: #{detailed}\n" : "#{detailed}\n")
       rest.each { |line| out << "\tfrom #{line}\n" }
+      out << "\t ... #{skipped} levels...\n" if skipped > 0
       __append_full_message__(out, cause, highlight, order, options, nil) if cause
     else
       __append_full_message__(out, cause, highlight, order, options, nil) if cause
