@@ -556,6 +556,13 @@ namespace IronRuby.Builtins {
             return Process.GetCurrentProcess().Id;
         }
 
+        [RubyMethod("setproctitle", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ SetProcessTitle(RubyContext/*!*/ context, RubyModule/*!*/ self,
+            [DefaultProtocol, NotNull]MutableString/*!*/ title) {
+            context.SetNativeProcessTitle(title);
+            return title;
+        }
+
         [RubyMethod("ppid", RubyMethodAttributes.PublicSingleton)]
         public static int GetParentPid(RubyModule/*!*/ self) {
             return SysGetPpid();

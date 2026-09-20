@@ -1174,7 +1174,7 @@ namespace IronRuby.Builtins {
                         // private constants are left out, and do not hide an ancestor's public one (as in MRI):
                         if (!visited.ContainsKey(name) && !module.IsPrivateConstant(name)) {
                             if (Tokenizer.IsConstantName(name)) {
-                                result.Add(self.Context.StringifyIdentifier(name));
+                                result.Add(self.Context.CreateSymbol(name, module.GetConstantEncoding(name)));
                             }
                             visited.Add(name, true);
                         }
@@ -1186,7 +1186,7 @@ namespace IronRuby.Builtins {
                 using (self.Context.ClassHierarchyLocker()) {
                     self.EnumerateConstants((module, name, value) => {
                         if (Tokenizer.IsConstantName(name) && !module.IsPrivateConstant(name)) {
-                            result.Add(self.Context.StringifyIdentifier(name));
+                            result.Add(self.Context.CreateSymbol(name, module.GetConstantEncoding(name)));
                         }
                         return false;
                     });

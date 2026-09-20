@@ -807,7 +807,14 @@ namespace IronRuby.Builtins {
             if (fd < 0) {
                 throw new NotSupportedException();
             }
-            return NativeFileControl(fd, commandId, arg);
+            int result = NativeFileControl(fd, commandId, arg);
+            // IronRuby's File::APPEND is the IOMode bit used by the public numeric-mode API,
+            // while Unix uses a different native O_APPEND value. Expose the Ruby flag that was
+            // used to open/reopen the IO alongside the native status flags.
+            if (commandId == F_GETFL && (_mode & IOMode.WriteAppends) != 0) {
+                result |= (int)IOMode.WriteAppends;
+            }
+            return result;
         }
 
         /// <summary>

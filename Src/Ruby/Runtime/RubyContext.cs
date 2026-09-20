@@ -123,6 +123,14 @@ namespace IronRuby.Runtime {
         public MutableString CommandLineProgramPath { get; set; }
 
         /// <summary>
+        /// Changes the operating-system process title without changing Ruby's $0. Process.setproctitle
+        /// has that contract, while assigning $0 changes both values.
+        /// </summary>
+        public void SetNativeProcessTitle(MutableString/*!*/ title) {
+            SpecialGlobalVariableInfo.SetProcessTitle(title.ToByteArray());
+        }
+
+        /// <summary>
         /// $? of type Process::Status
         /// </summary>
         [ThreadStatic]
@@ -1605,7 +1613,9 @@ namespace IronRuby.Runtime {
             RubyClass immediate;
             if (RubyUtils.HasObjectState(obj) && TryGetClrTypeInstanceData(obj, out data) && (immediate = data.ImmediateClass) != null) {
                 immediate = immediate.GetNonSingletonClass();
-                return immediate.IsRubyClass ? immediate : null;
+                // Usually this is a Ruby subclass adopted by a sealed CLR object. IO#reopen is
+                // the other case: MRI can change a File into the built-in IO class in place.
+                return immediate;
             }
             return null;
         }
@@ -2069,6 +2079,26 @@ namespace IronRuby.Runtime {
                 // an adopted object (AdoptClrObject) keeps its Ruby class:
                 RubyClass super = data.InstanceSingleton.SuperClass;
                 data.ImmediateClass = (super.IsRubyClass && !super.IsSingletonClass) ? super : null;
+            }
+        }
+
+        /// <summary>
+        /// Replaces the Ruby class associated with a CLR-backed object. IO#reopen uses this to
+        /// give the receiver the source IO's class, as MRI does, while retaining its object id.
+        /// </summary>
+        public void ReplaceClrObjectClass(object/*!*/ obj, RubyClass/*!*/ cls) {
+            ContractUtils.RequiresNotNull(obj, "obj");
+            ContractUtils.RequiresNotNull(cls, "cls");
+            ContractUtils.Requires(!(obj is IRubyObject) && RubyUtils.HasObjectState(obj), "obj");
+
+            RubyClass clrClass = GetOrCreateClass(obj.GetType());
+            using (ClassHierarchyLocker()) {
+                if (!clrClass.HasAdoptedInstances) {
+                    clrClass.HasAdoptedInstances = true;
+                    clrClass.MethodsUpdated("ReplaceClrObjectClass");
+                }
+                _hasAdoptedClrObjects = true;
+                GetInstanceData(obj).ImmediateClass = cls;
             }
         }
 

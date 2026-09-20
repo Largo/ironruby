@@ -111,22 +111,32 @@ namespace IronRuby.Prism {
 
             // The magic comment has to be read before prism is called rather than taken from
             // what it reports, because it decides which bytes prism is given in the first place.
-            RubyEncoding sourceEncoding = ResolveEncoding(DeclaredEncodingName(code), sourceUnit);
+            string declaredEncodingName = DeclaredEncodingName(code);
+            RubyEncoding sourceEncoding = ResolveEncoding(declaredEncodingName, sourceUnit);
 
             // An eval'd string in a multibyte encoding other than UTF-8 is parsed as the bytes it
             // holds, and prism has to be told which encoding they are in.
             string encodingName = null;
-            if (evalSourceEncoding != null && DeclaredEncodingName(code) == null && evalSourceEncoding.IsAsciiIdentity &&
-                evalSourceEncoding != RubyEncoding.UTF8 && evalSourceEncoding != RubyEncoding.Binary &&
-                evalSourceEncoding != RubyEncoding.Ascii) {
-                sourceEncoding = evalSourceEncoding;
-                encodingName = evalSourceEncoding.Name;
+            if (evalSourceEncoding != null && declaredEncodingName == null) {
+                // A binary MutableString still arrives here as the Unicode characters decoded
+                // from its bytes. Re-encode those as UTF-8 to recover the original byte sequence,
+                // but tell prism to interpret that sequence as ASCII-8BIT. Using BinaryEncoding
+                // itself would reject every character above U+00FF before prism sees it.
+                if (evalSourceEncoding == RubyEncoding.Binary) {
+                    sourceEncoding = RubyEncoding.UTF8;
+                    encodingName = evalSourceEncoding.Name;
+                } else {
+                    sourceEncoding = evalSourceEncoding;
+                    if (evalSourceEncoding != RubyEncoding.UTF8) {
+                        encodingName = evalSourceEncoding.Name;
+                    }
+                }
             }
 
             // -K names the encoding of the main program - the script or -e, not what it requires -
             // unless a magic comment says otherwise.
             RubyEncoding kcode = context != null ? context.RubyOptions.DefaultEncoding : null;
-            if (kcode != null && kcode != RubyEncoding.UTF8 && !isEval && DeclaredEncodingName(code) == null &&
+            if (kcode != null && kcode != RubyEncoding.UTF8 && !isEval && declaredEncodingName == null &&
                 sourceUnit.Path != null && sourceUnit.Path == context.RubyOptions.MainFile) {
                 sourceEncoding = kcode;
                 encodingName = kcode.Name;
@@ -136,12 +146,12 @@ namespace IronRuby.Prism {
             // RubyContext.GetSourceReader); the escaping encoding gives prism those bytes back.
             PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames,
                 frozenStringLiteral, sourceEncoding == RubyEncoding.UTF8 ? sourceEncoding.EscapingEncoding : sourceEncoding.Encoding,
-                encodingName, commandLine, mainScript);
+                encodingName, commandLine, mainScript, evalSourceEncoding != null && declaredEncodingName == null);
 
             // An eval'd string without a magic comment is in the string's own encoding, which its
             // literals and __ENCODING__ then carry (MRI), rather than in UTF-8 as a file would be.
             RubyEncoding literalEncoding = ResolveEncoding(result.EncodingName, sourceUnit);
-            if (evalSourceEncoding != null && DeclaredEncodingName(code) == null) {
+            if (evalSourceEncoding != null && declaredEncodingName == null) {
                 literalEncoding = evalSourceEncoding;
             }
 
@@ -196,7 +206,7 @@ namespace IronRuby.Prism {
                     end = code.Length;
                 }
 
-                string text = code.Substring(start, end - start);
+                string text = code.Substring(start, end - start).TrimStart(' ', '\t', '\f');
                 if (!text.StartsWith("#", StringComparison.Ordinal)) {
                     return null;
                 }
@@ -254,6 +264,18 @@ namespace IronRuby.Prism {
 
         private SourceSpan Span(Pm.PmLocation location) {
             return new SourceSpan(Location(location.Start), Location(location.Start + location.Length));
+        }
+
+        private string/*!*/ IdentifierText(string/*!*/ name) {
+            if (_encoding != RubyEncoding.Binary) {
+                return name;
+            }
+            byte[] bytes = System.Text.Encoding.UTF8.GetBytes(name);
+            var chars = new char[bytes.Length];
+            for (int i = 0; i < bytes.Length; i++) {
+                chars[i] = (char)bytes[i];
+            }
+            return new string(chars);
         }
 
         private SourceLocation Location(int index) {
@@ -552,21 +574,21 @@ namespace IronRuby.Prism {
                         new ClassVariable(cvarAnd.Name, span), Expr(cvarAnd.Value), "&&", span);
 
                 case Pm.ConstantReadNode constRead:
-                    return new ConstantVariable(constRead.Name, span);
+                    return new ConstantVariable(IdentifierText(constRead.Name), span);
                 case Pm.ConstantPathNode constPath:
                     return ConstantPath(constPath, span);
                 case Pm.ConstantWriteNode constWrite:
                     return new SimpleAssignmentExpression(
-                        new ConstantVariable(constWrite.Name, span), Expr(constWrite.Value), null, span);
+                        new ConstantVariable(IdentifierText(constWrite.Name), span), Expr(constWrite.Value), null, span);
                 case Pm.ConstantOperatorWriteNode constOp:
                     return new SimpleAssignmentExpression(
-                        new ConstantVariable(constOp.Name, span), Expr(constOp.Value), constOp.BinaryOperator, span);
+                        new ConstantVariable(IdentifierText(constOp.Name), span), Expr(constOp.Value), constOp.BinaryOperator, span);
                 case Pm.ConstantOrWriteNode constOr:
                     return new SimpleAssignmentExpression(
-                        new ConstantVariable(constOr.Name, span), Expr(constOr.Value), "||", span);
+                        new ConstantVariable(IdentifierText(constOr.Name), span), Expr(constOr.Value), "||", span);
                 case Pm.ConstantAndWriteNode constAnd:
                     return new SimpleAssignmentExpression(
-                        new ConstantVariable(constAnd.Name, span), Expr(constAnd.Value), "&&", span);
+                        new ConstantVariable(IdentifierText(constAnd.Name), span), Expr(constAnd.Value), "&&", span);
                 case Pm.ConstantPathWriteNode constPathWrite:
                     return new SimpleAssignmentExpression(
                         ConstantPath(constPathWrite.Target, Span(constPathWrite.Target)), Expr(constPathWrite.Value), null, span);
@@ -1008,12 +1030,12 @@ namespace IronRuby.Prism {
         private ConstantVariable/*!*/ ConstantPath(Pm.PmNode/*!*/ node, SourceSpan span) {
             switch (node) {
                 case Pm.ConstantReadNode read:
-                    return new ConstantVariable(read.Name, span);
+                    return new ConstantVariable(IdentifierText(read.Name), span);
                 case Pm.ConstantPathNode path when path.Name != null:
                     // null parent = ::Foo, explicitly bound to Object
-                    return new ConstantVariable(path.Parent != null ? Expr(path.Parent) : null, path.Name, span);
+                    return new ConstantVariable(path.Parent != null ? Expr(path.Parent) : null, IdentifierText(path.Name), span);
                 case Pm.ConstantPathTargetNode target when target.Name != null:
-                    return new ConstantVariable(target.Parent != null ? Expr(target.Parent) : null, target.Name, span);
+                    return new ConstantVariable(target.Parent != null ? Expr(target.Parent) : null, IdentifierText(target.Name), span);
                 default:
                     throw Unsupported(node);
             }
@@ -1448,7 +1470,7 @@ namespace IronRuby.Prism {
                 case Pm.ClassVariableTargetNode cvar:
                     return new ClassVariable(cvar.Name, span);
                 case Pm.ConstantTargetNode constant:
-                    return new ConstantVariable(constant.Name, span);
+                    return new ConstantVariable(IdentifierText(constant.Name), span);
                 case Pm.ConstantPathTargetNode constantPath:
                     return ConstantPath(constantPath, span);
                 case Pm.IndexTargetNode index:

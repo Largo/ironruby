@@ -278,6 +278,7 @@ namespace IronRuby.Builtins {
         private MemberTableState _constantsState = MemberTableState.Uninitialized;
         private Action<RubyModule> _constantsInitializer;
         private Dictionary<string, ConstantStorage> _constants;
+        private Dictionary<string, RubyEncoding> _constantEncodings;
 
         // names this module declared private with Module#private_constant; null until one is
         // (guarded by the class hierarchy lock, like _constants)
@@ -810,6 +811,8 @@ namespace IronRuby.Builtins {
             }
 
             _constants = (module._constants != null) ? new Dictionary<string, ConstantStorage>(module._constants) : null;
+            _constantEncodings = (module._constantEncodings != null) ?
+                new Dictionary<string, RubyEncoding>(module._constantEncodings) : null;
             _constantLocations = (module._constantLocations != null) ?
                 new Dictionary<string, KeyValuePair<string, int>>(module._constantLocations) : null;
 
@@ -1580,6 +1583,21 @@ namespace IronRuby.Builtins {
             }
         }
 
+        public void SetConstantEncoding(string/*!*/ name, RubyEncoding/*!*/ encoding) {
+            using (Context.ClassHierarchyLocker()) {
+                if (_constantEncodings == null) {
+                    _constantEncodings = new Dictionary<string, RubyEncoding>();
+                }
+                _constantEncodings[name] = encoding;
+            }
+        }
+
+        public RubyEncoding/*!*/ GetConstantEncoding(string/*!*/ name) {
+            RubyEncoding encoding;
+            return _constantEncodings != null && _constantEncodings.TryGetValue(name, out encoding)
+                ? encoding : RubyEncoding.UTF8;
+        }
+
         private void SetConstantLocationNoLock(string/*!*/ name, string/*!*/ sourcePath, int sourceLine) {
             ConstantStorage existing;
             AutoloadedConstant autoloaded;
@@ -2005,6 +2023,9 @@ namespace IronRuby.Builtins {
 
             if (result) {
                 RemoveConstantLocationNoLock(name);
+                if (_constantEncodings != null) {
+                    _constantEncodings.Remove(name);
+                }
             }
 
             return result;

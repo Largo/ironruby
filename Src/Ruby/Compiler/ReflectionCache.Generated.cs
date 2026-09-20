@@ -536,7 +536,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SetCurrentException;
         public static MethodInfo/*!*/ SetDataConstant { get { return _SetDataConstant ?? (_SetDataConstant = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.String, System.Int32>(RubyOps.SetDataConstant)); } }
         private static MethodInfo _SetDataConstant;
-        public static MethodInfo/*!*/ SetGlobalConstant { get { return _SetGlobalConstant ?? (_SetGlobalConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, System.Object>(RubyOps.SetGlobalConstant)); } }
+        public static MethodInfo/*!*/ SetGlobalConstant { get { return _SetGlobalConstant ?? (_SetGlobalConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, IronRuby.Builtins.RubyEncoding, System.Object>(RubyOps.SetGlobalConstant)); } }
         private static MethodInfo _SetGlobalConstant;
         public static MethodInfo/*!*/ SetGlobalVariable { get { return _SetGlobalVariable ?? (_SetGlobalVariable = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetGlobalVariable)); } }
         private static MethodInfo _SetGlobalVariable;
@@ -550,9 +550,9 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SetObjectTaint;
         public static MethodInfo/*!*/ SetObjectTrustiness { get { return _SetObjectTrustiness ?? (_SetObjectTrustiness = GetMethod(typeof(RubyOps), "SetObjectTrustiness")); } }
         private static MethodInfo _SetObjectTrustiness;
-        public static MethodInfo/*!*/ SetQualifiedConstant { get { return _SetQualifiedConstant ?? (_SetQualifiedConstant = CallInstruction.CacheFunc<System.Object, System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, System.Object>(RubyOps.SetQualifiedConstant)); } }
+        public static MethodInfo/*!*/ SetQualifiedConstant { get { return _SetQualifiedConstant ?? (_SetQualifiedConstant = CallInstruction.CacheFunc<System.Object, System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, IronRuby.Builtins.RubyEncoding, System.Object>(RubyOps.SetQualifiedConstant)); } }
         private static MethodInfo _SetQualifiedConstant;
-        public static MethodInfo/*!*/ SetUnqualifiedConstant { get { return _SetUnqualifiedConstant ?? (_SetUnqualifiedConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, System.Object>(RubyOps.SetUnqualifiedConstant)); } }
+        public static MethodInfo/*!*/ SetUnqualifiedConstant { get { return _SetUnqualifiedConstant ?? (_SetUnqualifiedConstant = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.String, System.Int32, IronRuby.Builtins.RubyEncoding, System.Object>(RubyOps.SetUnqualifiedConstant)); } }
         private static MethodInfo _SetUnqualifiedConstant;
         public static MethodInfo/*!*/ Splat { get { return _Splat ?? (_Splat = CallInstruction.CacheFunc<System.Collections.IList, System.Object>(RubyOps.Splat)); } }
         private static MethodInfo _Splat;

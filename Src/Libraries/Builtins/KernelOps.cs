@@ -1909,7 +1909,7 @@ namespace IronRuby.Builtins {
             }
 
             double ms = seconds * 1000;
-            return ThreadOps.DoSleep(ms > Int32.MaxValue ? Timeout.Infinite : (int)ms);
+            return ms > Int32.MaxValue ? ThreadOps.DoSleep(Timeout.Infinite) : ThreadOps.DoSleep(ms);
         }
 #endif
 

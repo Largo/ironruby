@@ -79,6 +79,8 @@ namespace IronRuby.Builtins {
 
         private const short POLLIN = 0x001;
         private const short POLLOUT = 0x004;
+        private const short POLLERR = 0x008;
+        private const short POLLHUP = 0x010;
         private const int EINTR = 4;
         private const int EAGAIN = 11;   // == EWOULDBLOCK on Linux
         public const int EPIPE = 32;
@@ -127,7 +129,18 @@ namespace IronRuby.Builtins {
         }
 
         public override void Flush() {
-            // write(2) has already handed everything to the kernel.
+            // write(2) has already handed everything to the kernel, but stdio-style flush still
+            // reports a reader that disappeared after the last buffered write. poll exposes that
+            // state without writing an extra byte.
+            if (_writable && !_closed) {
+                var fds = new PollFd[1];
+                fds[0].fd = _descriptor;
+                fds[0].events = POLLOUT;
+                int ready = sys_poll(fds, 1, 0);
+                if (ready > 0 && (fds[0].revents & (POLLERR | POLLHUP)) != 0) {
+                    throw new IOException("write failed", EPIPE);
+                }
+            }
         }
 
         public override int Read(byte[] buffer, int offset, int count) {

@@ -1518,21 +1518,23 @@ namespace IronRuby.Runtime {
 
 
         [Emitted] // ConstantVariable:
-        public static object SetGlobalConstant(object value, RubyScope/*!*/ scope, string/*!*/ name, string sourcePath, int sourceLine) {
-            RubyUtils.SetConstant(scope.RubyContext.ObjectClass, name, value, sourcePath, sourceLine);
+        public static object SetGlobalConstant(object value, RubyScope/*!*/ scope, string/*!*/ name, string sourcePath, int sourceLine,
+            RubyEncoding/*!*/ encoding) {
+            RubyUtils.SetConstant(scope.RubyContext.ObjectClass, name, value, sourcePath, sourceLine, encoding);
             return value;
         }
 
         [Emitted] // ConstantVariable:
-        public static object SetUnqualifiedConstant(object value, RubyScope/*!*/ scope, string/*!*/ name, string sourcePath, int sourceLine) {
-            RubyUtils.SetConstant(scope.GetInnerMostModuleForConstantLookup(), name, value, sourcePath, sourceLine);
+        public static object SetUnqualifiedConstant(object value, RubyScope/*!*/ scope, string/*!*/ name, string sourcePath, int sourceLine,
+            RubyEncoding/*!*/ encoding) {
+            RubyUtils.SetConstant(scope.GetInnerMostModuleForConstantLookup(), name, value, sourcePath, sourceLine, encoding);
             return value;
         }
 
         [Emitted] // ConstantVariable:
         public static object SetQualifiedConstant(object value, object target, RubyScope/*!*/ scope, string/*!*/ name,
-            string sourcePath, int sourceLine) {
-            RubyUtils.SetConstant(RubyUtils.GetModuleFromObject(scope, target), name, value, sourcePath, sourceLine);
+            string sourcePath, int sourceLine, RubyEncoding/*!*/ encoding) {
+            RubyUtils.SetConstant(RubyUtils.GetModuleFromObject(scope, target), name, value, sourcePath, sourceLine, encoding);
             return value;
         }
 

@@ -151,8 +151,8 @@ namespace IronRuby.Compiler.Ast {
             var qualifier = gen.CurrentScope.DefineHiddenVariable("#qualifier", typeof(object));
             return Ast.Block(
                 Ast.Assign(qualifier, AstUtils.Box(targetValue)),
-                Methods.SetQualifiedConstant.OpCall(AstUtils.Box(rightValue), qualifier, gen.CurrentScopeVariable,
-                    TransformName(gen), gen.SourcePathConstant, AstUtils.Constant(Location.Start.Line))
+                Ast.Call(Methods.SetQualifiedConstant, AstUtils.Box(rightValue), qualifier, gen.CurrentScopeVariable,
+                    TransformName(gen), gen.SourcePathConstant, AstUtils.Constant(Location.Start.Line), Ast.Constant(gen.Encoding))
             );
         }
 
@@ -299,17 +299,17 @@ namespace IronRuby.Compiler.Ast {
 
             switch (TransformQualifier(gen, out transformedQualifier)) {
                 case StaticScopeKind.Global:
-                    return Methods.SetGlobalConstant.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine);
+                    return Methods.SetGlobalConstant.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine, Ast.Constant(gen.Encoding));
 
                 case StaticScopeKind.EnclosingModule:
-                    return Methods.SetUnqualifiedConstant.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine);
+                    return Methods.SetUnqualifiedConstant.OpCall(AstUtils.Box(rightValue), gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine, Ast.Constant(gen.Encoding));
 
                 case StaticScopeKind.Explicit:
                     // `qualifier::NAME = rhs` evaluates the qualifier first
                     var qualifier = gen.CurrentScope.DefineHiddenVariable("#qualifier", typeof(object));
                     return Ast.Block(
                         Ast.Assign(qualifier, AstUtils.Box(transformedQualifier)),
-                        Methods.SetQualifiedConstant.OpCall(AstUtils.Box(rightValue), qualifier, gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine)
+                        Ast.Call(Methods.SetQualifiedConstant, AstUtils.Box(rightValue), qualifier, gen.CurrentScopeVariable, transformedName, sourcePath, sourceLine, Ast.Constant(gen.Encoding))
                     );
             }
 

@@ -2783,6 +2783,7 @@ unless defined?(Fiber)
 
     def __await__
       msg = @mailbox.pop
+      Thread.__set_fiber_owner__(@root_fiber.__thread__)
       @status = :resumed
       msg
     end
@@ -9490,10 +9491,10 @@ module Process
       ORIGINAL_ARGV0
     end
     module_function :argv0
+  end
 
+  unless respond_to?(:setproctitle)
     def setproctitle(title)
-      # There is no portable way to rewrite the process title from .NET; MRI returns
-      # the string it was given either way.
       title.to_s
     end
     module_function :setproctitle

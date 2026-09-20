@@ -94,6 +94,9 @@ namespace IronRuby.StandardLibrary.Threading {
         /// waiting for it, and code in an ensure clause relies on still owning it.
         /// </summary>
         internal static void DoLock(RubyMutex/*!*/ self, bool interruptible) {
+            if (interruptible) {
+                RubyUtils.CheckAsyncException();
+            }
             Thread me = CurrentOwner;
             lock (self._syncRoot) {
                 if (self._owner == me) {
@@ -178,14 +181,19 @@ namespace IronRuby.StandardLibrary.Threading {
             if (criticalSection == null) {
                 throw new ThreadError("must be called with a block");
             }
-            DoLock(self);
+            bool ownedBefore = IsOwned(self);
             try {
+                DoLock(self);
                 object result;
                 criticalSection.Yield(out result);
                 return result;
             } finally {
-                // the block is allowed to unlock the mutex itself
-                DoUnlock(self);
+                // An asynchronous Thread#raise can arrive just as DoLock completes. Release a
+                // lock acquired by this call even if control never reached the block. Do not,
+                // however, unlock a recursive lock that was already owned on entry.
+                if (!ownedBefore && IsOwned(self)) {
+                    DoUnlock(self);
+                }
             }
         }
 

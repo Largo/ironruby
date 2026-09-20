@@ -7135,6 +7135,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.Builtins.RubyProcess.GetParentPid)
             );
             
+            DefineLibraryMethod(module, "setproctitle", 0x61, 
+                0x00020004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyProcess.SetProcessTitle)
+            );
+            
             DefineLibraryMethod(module, "times", 0x61, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyStruct>(IronRuby.Builtins.RubyProcess.GetTimes)

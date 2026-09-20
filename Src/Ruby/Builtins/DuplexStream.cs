@@ -40,7 +40,13 @@ namespace IronRuby.Builtins {
                     _reader.Dispose();
                 }
                 if (_writer != null) {
-                    _writer.Dispose();
+                    try {
+                        _writer.Dispose();
+                    } catch (IOException) {
+                        // Closing the writable half of a bidirectional popen after the child has
+                        // exited commonly observes EPIPE. Any pending Ruby write was flushed by
+                        // IO#close before disposal and reported there; disposal itself is silent.
+                    }
                 }
             }
 

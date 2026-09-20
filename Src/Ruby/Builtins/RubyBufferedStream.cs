@@ -190,7 +190,6 @@ namespace IronRuby.Builtins {
 
         public override void Write(byte[]/*!*/ buffer, int offset, int count) {
             FlushRead();
-
             _stream.Write(buffer, offset, count);
             _writePending = true;
         }

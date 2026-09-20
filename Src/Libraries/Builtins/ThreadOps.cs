@@ -166,6 +166,8 @@ namespace IronRuby.Builtins {
             internal bool ExitRequested { get; set; }
             internal MutableString Name { get; set; }
             internal bool ReportOnException { get; set; }
+            internal bool IsSleeping { get { return _isSleeping; } }
+            internal volatile Thread ActiveFiberThread;
 
             /// <summary>
             /// MRI's Thread#priority is a small integer clamped to -3..3 that outlives the thread;
@@ -424,7 +426,17 @@ namespace IronRuby.Builtins {
             if (!self.IsAlive) {
                 return null;
             }
-            return RubyExceptionData.CreateBacktrace(context, self);
+            RubyArray trace = RubyExceptionData.CreateBacktrace(context, self);
+            RubyThreadInfo info = RubyThreadInfo.FromThread(self);
+            if (trace != null && trace.Count > 0 && info.IsSleeping) {
+                string caller = trace[0].ToString();
+                int label = caller.LastIndexOf(":in ", StringComparison.Ordinal);
+                if (label >= 0) {
+                    caller = caller.Substring(0, label);
+                }
+                trace.Insert(0, MutableString.CreateMutable(caller + ":in 'Kernel#sleep'", RubyEncoding.UTF8));
+            }
+            return trace;
         }
 
         [RubyMethod("group")]
@@ -648,6 +660,10 @@ namespace IronRuby.Builtins {
         private static CallSite<Func<CallSite, object, object>> _exceptionSite;
 
         private static void RaiseAsyncException(RubyContext/*!*/ context, Thread thread, Exception exception) {
+            Thread activeFiber = RubyThreadInfo.FromThread(thread).ActiveFiberThread;
+            if (activeFiber != null && activeFiber.IsAlive) {
+                thread = activeFiber;
+            }
             RubyThreadStatus status = GetStatus(thread);
 
             // rethrow semantics, preserves the backtrace associated with the exception:
@@ -1210,6 +1226,29 @@ namespace IronRuby.Builtins {
             return (int)Math.Round((Environment.TickCount64 - start) / 1000.0);
         }
 
+        /// <summary>
+        /// Kernel#sleep with a fractional-millisecond timeout. WaitHandle truncates its timeout to
+        /// whole milliseconds, so preserve the remainder with a short interruptible spin instead
+        /// of turning every sub-millisecond sleep into sleep(0).
+        /// </summary>
+        internal static int DoSleep(double milliseconds) {
+            RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+            RubyThreadInfo info = RubyThreadInfo.FromThread(Thread.CurrentThread);
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+
+            int wholeMilliseconds = (int)Math.Floor(milliseconds);
+            bool wasWoken = info.Sleep(wholeMilliseconds);
+            while (!wasWoken && timer.Elapsed.TotalMilliseconds < milliseconds) {
+                wasWoken = info.Sleep(0);
+                if (!wasWoken) {
+                    Thread.SpinWait(32);
+                }
+            }
+
+            RubyUtils.CheckAsyncException();
+            return (int)Math.Round(timer.Elapsed.TotalSeconds);
+        }
+
         /// <summary>Kernel#sleep(n) exposed to the threading library (Mutex#sleep).</summary>
         public static int SleepForLibrary(int milliseconds) {
             return DoSleep(milliseconds);
@@ -1433,6 +1472,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("__set_fiber_owner__", RubyMethodAttributes.PublicSingleton)]
         public static object SetFiberOwner(object self, [NotNull]Thread/*!*/ owner) {
             RubyUtils.SetFiberOwnerThread(owner);
+            RubyThreadInfo.FromThread(owner).ActiveFiberThread = Thread.CurrentThread;
             return owner;
         }
 

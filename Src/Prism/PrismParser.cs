@@ -50,11 +50,18 @@ namespace IronRuby.Prism {
         /// </summary>
         public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
             int frozenStringLiteral, Encoding/*!*/ sourceEncoding, string encodingName, byte commandLine, bool mainScript) {
+            return Parse(source, path, startLine, outerLocals, frozenStringLiteral, sourceEncoding, encodingName,
+                commandLine, mainScript, false);
+        }
+
+        public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
+            int frozenStringLiteral, Encoding/*!*/ sourceEncoding, string encodingName, byte commandLine, bool mainScript,
+            bool encodingLocked) {
 
             byte[] sourceBytes = sourceEncoding.GetBytes(source);
             PrismParseResult result = PrismLoader.LoadParse(
                 ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName,
-                    commandLine, mainScript)));
+                    commandLine, mainScript, encodingLocked)));
             result.DataOffset = ComputeDataOffset(result.DataLocation, sourceBytes);
             return result;
         }
@@ -126,6 +133,11 @@ namespace IronRuby.Prism {
 
         internal static byte[]/*!*/ BuildOptionsData(string path, int startLine, IList<string> outerLocals, int frozenStringLiteral,
             string encodingName, byte commandLine, bool mainScript) {
+            return BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName, commandLine, mainScript, false);
+        }
+
+        internal static byte[]/*!*/ BuildOptionsData(string path, int startLine, IList<string> outerLocals, int frozenStringLiteral,
+            string encodingName, byte commandLine, bool mainScript, bool encodingLocked) {
             using (var stream = new MemoryStream())
             using (var writer = new BinaryWriter(stream)) {
                 byte[] pathBytes = Encoding.UTF8.GetBytes(path ?? "");
@@ -144,7 +156,7 @@ namespace IronRuby.Prism {
                 writer.Write((sbyte)frozenStringLiteral);
                 writer.Write(commandLine);  // command line flags
                 writer.Write((byte)0);      // syntax version (latest)
-                writer.Write((byte)0);      // encoding locked
+                writer.Write((byte)(encodingLocked ? 1 : 0)); // encoding locked
                 writer.Write((byte)(mainScript ? 1 : 0));  // main script
                 writer.Write((byte)0);      // partial script
                 writer.Write((byte)0);      // freeze

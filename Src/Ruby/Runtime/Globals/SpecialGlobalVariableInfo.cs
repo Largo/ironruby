@@ -304,7 +304,7 @@ namespace IronRuby.Runtime {
         /// overwrites the argument area that /proc/PID/cmdline (and so ps) shows, padded with NULs
         /// and cut to that area's size. Best effort - nothing happens where that isn't possible.
         /// </summary>
-        private static void SetProcessTitle(byte[]/*!*/ title) {
+        internal static void SetProcessTitle(byte[]/*!*/ title) {
             if (!System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Linux)) {
                 return;
             }

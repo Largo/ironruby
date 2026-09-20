@@ -352,7 +352,7 @@ namespace IronRuby.Builtins {
         // A reopened IO answers the other one's path, as MRI copies it with the descriptor.
         // MRI also gives it the other one's class, which leaves its singleton class behind.
         private static void CopyPath(RubyIO/*!*/ self, RubyIO/*!*/ source) {
-            self.Context.DropClrInstanceSingleton(self);
+            self.Context.ReplaceClrObjectClass(self, self.Context.GetClassOf(source));
 
             var file = self as RubyFile;
             var sourceFile = source as RubyFile;
@@ -1071,7 +1071,17 @@ namespace IronRuby.Builtins {
                 self.CloseKeepingDescriptor();
                 return;
             }
-            self.Close();
+            Exception flushError = null;
+            try {
+                self.Flush();
+            } catch (IOException e) {
+                flushError = TranslateWriteError(e, self);
+            } finally {
+                self.Close();
+            }
+            if (flushError != null) {
+                throw flushError;
+            }
         }
 
         // TODO:
@@ -1299,7 +1309,13 @@ namespace IronRuby.Builtins {
         public static bool IsAtty(RubyIO/*!*/ self) {
             ConsoleStreamType? console = self.ConsoleStreamType;
             if (console == null) {
-                return self.GetStream().BaseStream == Stream.Null;
+                self.RequireOpen();
+                if (Environment.OSVersion.Platform == PlatformID.Unix ||
+                    Environment.OSVersion.Platform == PlatformID.MacOSX) {
+                    int descriptor = self.KernelDescriptor;
+                    return descriptor >= 0 && isatty(descriptor) == 1;
+                }
+                return false;
             }
 
             int fd = GetStdHandleFd(console.Value);

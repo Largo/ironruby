@@ -804,9 +804,15 @@ namespace IronRuby.Runtime {
         }
 
         public static void SetConstant(RubyModule/*!*/ owner, string/*!*/ name, object value, string sourcePath, int sourceLine) {
+            SetConstant(owner, name, value, sourcePath, sourceLine, RubyEncoding.UTF8);
+        }
+
+        public static void SetConstant(RubyModule/*!*/ owner, string/*!*/ name, object value, string sourcePath, int sourceLine,
+            RubyEncoding/*!*/ encoding) {
             Assert.NotNull(owner, name);
 
             owner.SetConstantLocation(name, sourcePath, sourceLine);
+            owner.SetConstantEncoding(name, encoding);
 
             if (owner.SetConstantChecked(name, value)) {
                 // MRI names the owner unless it is Object: "already initialized constant M::X",
@@ -1550,7 +1556,22 @@ namespace IronRuby.Runtime {
         }
 
         public static void ExitThread(Thread/*!*/ thread) {
-            RaiseAsyncException(thread, new ThreadExitSignal());
+            if (thread == Thread.CurrentThread) {
+                throw new ThreadExitSignal();
+            }
+
+            // Do not let a following Thread#kill erase a Thread#raise that is already waiting to
+            // be delivered. MRI finishes unwinding the raised exception (and reports it) first.
+            lock (_pendingAsyncExceptions) {
+                if (!_pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId)) {
+                    _pendingAsyncExceptions[thread.ManagedThreadId] = new ThreadExitSignal();
+                }
+            }
+            try {
+                thread.Interrupt();
+            } catch (PlatformNotSupportedException) {
+            } catch (ThreadStateException) {
+            }
         }
 
         // What the target thread does to a parked exception before it throws it (see below).
