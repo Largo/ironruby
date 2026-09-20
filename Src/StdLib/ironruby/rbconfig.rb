@@ -93,6 +93,17 @@ module RbConfig
   CONFIG["vendorlibdir"] = vendorlibdir = "#{vendordir}/#{stdlib_version}"
   CONFIG["vendorarchdir"] = vendorlibdir.dup
 
+  # The Unicode character data version this distribution ships: the bundled
+  # Ruby 4.0 standard library (unicode_normalize tables etc.) is generated
+  # from Unicode 17.0.0, as in CRuby 4.0.
+  CONFIG["UNICODE_VERSION"] = "17.0.0"
+  CONFIG["UNICODE_EMOJI_VERSION"] = "17.0"
+
+  # Binutils, resolved via PATH as in an MRI mingw/gcc build. IronRuby has no
+  # C-extension build chain of its own; these name the platform's tools.
+  CONFIG["AR"] = "ar"
+  CONFIG["STRIP"] = "strip"
+
   CONFIG["SHELL"] = windows ? (ENV["COMSPEC"] || "cmd.exe").dup : "/bin/sh"
   CONFIG["NULLCMD"] = windows ? "rem" : ":"
   CONFIG["DLEXT"] = "so"
