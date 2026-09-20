@@ -1073,7 +1073,13 @@ namespace IronRuby.Builtins {
             }
             Exception flushError = null;
             try {
-                self.Flush();
+                // Writes currently go straight to the descriptor, so WritePending is only the
+                // state MRI uses for buffering warnings. Do not probe a pipe merely because it
+                // was written: that manufactures EPIPE after its reader has consumed the data.
+                // A failed explicit #flush is different; MRI retries it from #close.
+                if (self.GetStream().WriteFlushFailed) {
+                    self.Flush();
+                }
             } catch (IOException e) {
                 flushError = TranslateWriteError(e, self);
             } finally {
@@ -1542,7 +1548,6 @@ namespace IronRuby.Builtins {
             var pipe = self.GetStream().BaseStream as DescriptorStream;
             int count = val.GetByteCount();
             if (pipe != null && count > 0) {
-                self.Flush();
                 int written;
                 try {
                     written = pipe.WriteOnce(val.ToByteArray(), 0, count);
@@ -1601,7 +1606,6 @@ namespace IronRuby.Builtins {
                 return all;
             }
 
-            io.Flush();
             int count = val.GetByteCount();
             if (count == 0) {
                 return 0;

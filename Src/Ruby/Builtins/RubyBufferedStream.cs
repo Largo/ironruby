@@ -48,6 +48,7 @@ namespace IronRuby.Builtins {
         // underlying stream, but MRI would still hold them in its write buffer, and that is what
         // IO#syswrite and IO#sysseek warn about.
         private bool _writePending;
+        private bool _writeFlushFailed;
 
         private const byte CR = (byte)'\r';
         private const byte LF = (byte)'\n';
@@ -71,6 +72,10 @@ namespace IronRuby.Builtins {
 
         public bool WritePending {
             get { return _writePending; }
+        }
+
+        public bool WriteFlushFailed {
+            get { return _writeFlushFailed; }
         }
 
         public Stream/*!*/ BaseStream {
@@ -623,8 +628,14 @@ namespace IronRuby.Builtins {
 
         public override void Flush() {
             FlushRead();
-            _stream.Flush();
-            _writePending = false;
+            try {
+                _stream.Flush();
+                _writePending = false;
+                _writeFlushFailed = false;
+            } catch {
+                _writeFlushFailed = true;
+                throw;
+            }
         }
 
         public override long Length {

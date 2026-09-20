@@ -448,6 +448,16 @@ namespace IronRuby.Builtins {
             _stream = null;
         }
 
+        /// <summary>
+        /// Transfers this IO's stream to a composite owner without closing or flushing it.
+        /// The descriptor table entry is removed by the caller before this is used.
+        /// </summary>
+        public void DetachStream() {
+            _mode = _mode.Close();
+            _fileDescriptor = -1;
+            _stream = null;
+        }
+
         public void CloseWriter() {
             var duplex = GetStream().BaseStream as DuplexStream;
 

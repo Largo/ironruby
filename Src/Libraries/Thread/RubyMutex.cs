@@ -100,7 +100,14 @@ namespace IronRuby.StandardLibrary.Threading {
             Thread me = CurrentOwner;
             lock (self._syncRoot) {
                 if (self._owner == me) {
-                    throw new ThreadError("deadlock; recursive locking");
+                    // A fiber is a CLR thread here. If an asynchronous Thread#raise terminated
+                    // the fiber in the narrow hand-off around #synchronize, reclaim its lock;
+                    // a suspended (and therefore still alive) sibling fiber must still deadlock.
+                    if (self._ownerFiber != null && !self._ownerFiber.IsAlive) {
+                        self.Release();
+                    } else {
+                        throw new ThreadError("deadlock; recursive locking");
+                    }
                 }
                 while (self._owner != null) {
                     try {

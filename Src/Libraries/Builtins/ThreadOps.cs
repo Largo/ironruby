@@ -596,6 +596,7 @@ namespace IronRuby.Builtins {
             }
 
             RubyUtils.ExitThread(self);
+            info.Run();
             return self;
         }
 
@@ -664,6 +665,7 @@ namespace IronRuby.Builtins {
             if (activeFiber != null && activeFiber.IsAlive) {
                 thread = activeFiber;
             }
+            RubyThreadInfo info = RubyThreadInfo.FromThread(thread);
             RubyThreadStatus status = GetStatus(thread);
 
             // rethrow semantics, preserves the backtrace associated with the exception:
@@ -672,6 +674,9 @@ namespace IronRuby.Builtins {
                 var site = RubyUtils.GetCallSite(ref _exceptionSite, context, "exception", 0);
                 return site.Target(site, e) as Exception;
             });
+            // Kernel#sleep and Thread.stop use the Ruby run signal. This is race-safe even when
+            // the target has announced sleep but has not entered WaitOne yet.
+            info.Run();
 
             if (status == RubyThreadStatus.Sleeping) {
                 // Thread.Abort can interrupt a thread with ThreadState.WaitSleepJoin. However, Thread.Abort 

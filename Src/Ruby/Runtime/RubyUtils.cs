@@ -1548,7 +1548,9 @@ namespace IronRuby.Runtime {
             }
 
             try {
-                thread.Interrupt();
+                if ((thread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0) {
+                    thread.Interrupt();
+                }
             } catch (PlatformNotSupportedException) {
                 // nothing else we can do; the exception stays parked until the thread reaches a safe point
             } catch (ThreadStateException) {
@@ -1568,7 +1570,12 @@ namespace IronRuby.Runtime {
                 }
             }
             try {
-                thread.Interrupt();
+                // Interrupting a running CLR thread queues ThreadInterruptedException for its
+                // next managed wait, where it can bypass Ruby ensure blocks. Running Ruby code
+                // observes the parked exception at safe points; only a blocked thread needs a nudge.
+                if ((thread.ThreadState & System.Threading.ThreadState.WaitSleepJoin) != 0) {
+                    thread.Interrupt();
+                }
             } catch (PlatformNotSupportedException) {
             } catch (ThreadStateException) {
             }

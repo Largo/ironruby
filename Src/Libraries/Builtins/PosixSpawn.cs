@@ -568,13 +568,25 @@ namespace IronRuby.Builtins {
         public static RubyIO/*!*/ DuplexIO(RubyContext/*!*/ context, RubyModule/*!*/ self,
             [NotNull]RubyIO/*!*/ reader, [NotNull]RubyIO/*!*/ writer) {
 
-            var input = context.GetStream(reader.GetFileDescriptor());
-            var output = context.GetStream(writer.GetFileDescriptor());
+            int readerFd = reader.GetFileDescriptor();
+            int writerFd = writer.GetFileDescriptor();
+            var input = context.GetStream(readerFd);
+            var output = context.GetStream(writerFd);
             // Autoflush: the other end of this pipe is a process waiting to be spoken to, so
             // a write that sits in a buffer is a deadlock rather than a saving.
             var sink = new StreamWriter(output);
             sink.AutoFlush = true;
-            return new RubyIO(context, new StreamReader(input), sink, IOMode.ReadWrite);
+            var source = new StreamReader(input);
+
+            // The duplex IO takes ownership of both streams. Leaving the two temporary pipe IOs
+            // in the descriptor table leaks entries that still name disposed streams; once the
+            // kernel reuses those descriptor numbers, later popen/spawn calls receive synthetic
+            // descriptors and cannot pass them to children.
+            context.RemoveFileDescriptor(readerFd);
+            context.RemoveFileDescriptor(writerFd);
+            reader.DetachStream();
+            writer.DetachStream();
+            return new RubyIO(context, source, sink, IOMode.ReadWrite);
         }
 
         #endregion
