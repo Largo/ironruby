@@ -154,19 +154,159 @@ module OpenSSL
     end
   end
 
-  # There is no cipher implementation behind this: every algorithm is
-  # unsupported, which is what MRI reports for a name OpenSSL does not know.
-  # The class exists so that code which names OpenSSL::Cipher::CipherError
-  # (in a rescue clause, say) loads.
+  # The block ciphers the CLR offers, on System.Security.Cryptography.  AES in
+  # CBC, ECB and CFB is what .NET still implements as a symmetric algorithm, so
+  # that is what is supported here; any other name is "unsupported cipher
+  # algorithm", which is what MRI reports for a name OpenSSL does not know.
+  # RubyGems needs AES-256-CBC (Gem::Security::KEY_CIPHER) to load at all.
   class Cipher
     class CipherError < OpenSSLError; end
 
+    Kernel.load_assembly 'System.Security.Cryptography'
+    Crypto__ = ::System::Security::Cryptography # :nodoc:
+
+    MODES__ = { # :nodoc:
+      "CBC" => Crypto__::CipherMode.CBC,
+      "ECB" => Crypto__::CipherMode.ECB,
+      "CFB" => Crypto__::CipherMode.CFB,
+    }.freeze
+
+    KEY_SIZES__ = [128, 192, 256].freeze # :nodoc:
+
     def self.ciphers
-      []
+      names = []
+      KEY_SIZES__.each do |bits|
+        MODES__.each_key do |mode|
+          names << "AES-#{bits}-#{mode}"
+          names << "aes-#{bits}-#{mode.downcase}"
+        end
+      end
+      names
     end
 
+    attr_reader :name
+
     def initialize(name)
-      raise CipherError, "unsupported cipher algorithm: #{name}"
+      name = name.to_s
+      unless /\A(?:AES|aes)-(128|192|256)-([A-Za-z]+)\z/ =~ name
+        raise CipherError, "unsupported cipher algorithm: #{name}"
+      end
+
+      bits = $1.to_i
+      mode = MODES__[$2.upcase]
+      raise CipherError, "unsupported cipher algorithm: #{name}" unless mode
+
+      @name = name
+      @algorithm = Crypto__::Aes.create
+      @algorithm.key_size = bits
+      @algorithm.mode = mode
+      @algorithm.padding = Crypto__::PaddingMode.PKCS7
+      @encrypt = true
+      @key = nil
+      @iv = nil
+      reset
+    end
+
+    def key_len
+      @algorithm.key_size / 8
+    end
+
+    def iv_len
+      @algorithm.block_size / 8
+    end
+
+    def block_size
+      @algorithm.block_size / 8
+    end
+
+    def padding=(value)
+      @algorithm.padding = (value.to_i == 0 ? Crypto__::PaddingMode.None : Crypto__::PaddingMode.PKCS7)
+      value
+    end
+
+    def encrypt
+      @encrypt = true
+      reset
+      self
+    end
+
+    def decrypt
+      @encrypt = false
+      reset
+      self
+    end
+
+    def key=(key)
+      key = key.to_s.b
+      raise ArgumentError, "key must be #{key_len} bytes" if key.bytesize != key_len
+      @key = key
+      reset
+      key
+    end
+
+    def iv=(iv)
+      iv = iv.to_s.b
+      raise ArgumentError, "iv must be #{iv_len} bytes" if iv.bytesize != iv_len
+      @iv = iv
+      reset
+      iv
+    end
+
+    def random_key
+      @algorithm.generate_key
+      self.key = IronRubyOpenSSL__.bytes(@algorithm.key)
+    end
+
+    def random_iv
+      @algorithm.generate_iv
+      self.iv = IronRubyOpenSSL__.bytes(@algorithm.iv)
+    end
+
+    def reset
+      @transform = nil
+      @pending = "".b
+      self
+    end
+
+    def update(data)
+      transform = transform__
+      @pending << data.to_s.b
+
+      # TransformBlock neither adds nor strips padding - that is
+      # TransformFinalBlock's job - so always hold a whole block back.
+      block = block_size
+      count = (@pending.bytesize / block) * block
+      count -= block if count == @pending.bytesize && count > 0
+      return "".b if count == 0
+
+      output = ::System::Array[::System::Byte].new(count + block)
+      written = transform.transform_block(@pending, 0, count, output, 0)
+      @pending = @pending.byteslice(count, @pending.bytesize - count)
+      IronRubyOpenSSL__.bytes(output)[0, written].to_s.b
+    end
+
+    def final
+      transform = transform__
+      result = IronRubyOpenSSL__.bytes(transform.transform_final_block(@pending, 0, @pending.bytesize))
+      reset
+      result
+    rescue ::System::Security::Cryptography::CryptographicException => error
+      reset
+      raise CipherError, error.message
+    end
+
+    private
+
+    def transform__
+      @transform ||= begin
+        raise CipherError, "key not set" unless @key
+        iv = @iv || ("\0".b * iv_len)
+        if @encrypt
+          @algorithm.create_encryptor(@key, iv)
+        else
+          @algorithm.create_decryptor(@key, iv)
+        end
+      end
     end
   end
 
@@ -459,6 +599,15 @@ module IronRubyOpenSSL__ # :nodoc: all
   # A CLR byte[] as a binary Ruby String.
   def self.bytes(array)
     array.to_a.map { |b| b.to_i }.pack("C*")
+  end
+
+  # A binary Ruby String as a CLR byte[].  A Ruby String converts implicitly to
+  # both byte[] and String, so passing one to an overload set that has of each -
+  # X509Certificate2.new is the one that matters - is an AmbiguousMatchException.
+  # Going through Convert.FromBase64String settles it and does the copying in
+  # native code.
+  def self.clr_bytes(str)
+    ::System::Convert.from_base64_string([str.b].pack("m0").to_clr_string)
   end
 
   # An OpenSSL::X509::Name as an X500DistinguishedName.  Name#to_s(RFC2253) is
@@ -782,7 +931,7 @@ module OpenSSL
           body = der[/-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----/m, 1]
           der = body.to_s.unpack1("m")
         end
-        @clr = IronRubyOpenSSL__::X509::X509Certificate2.new(der)
+        @clr = IronRubyOpenSSL__::X509::X509Certificate2.new(IronRubyOpenSSL__.clr_bytes(der))
         @serial = @clr.SerialNumber.to_s.to_i(16)
         @version = @clr.Version - 1
         @subject = Name.parse_openssl(@clr.Subject.to_s)
