@@ -35,7 +35,11 @@ over the same locals tuple (so there is no state to materialize). This is what r
 loops in a block that is only ever entered once - the shape no invocation-counting JIT
 can see.
 
-`while_loop` 0.78x, `cmp_branch` 0.38x, `float_arith` 0.26x, `mandelbrot` 0.44x of CRuby.
+`while_loop` 0.78x, `cmp_branch` 0.38x, `float_arith` 0.26x, `mandelbrot` 0.44x of CRuby,
+and `int_arith` 0.57x once the lattice learned Int64 (see below).
+
+A type-guard failure rebuilds the copy over the types the locals hold now, so a loop whose
+accumulator grows out of Int32 is re-specialized rather than abandoned.
 
 Note: outlining a loop *without* specializing it is worth nothing - IronRuby's compiled
 tier is no faster than its interpreter here, because the cost is the dynamic call site on
