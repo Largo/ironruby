@@ -6,6 +6,14 @@ module JSON
   # Convenience wrappers the C# module does not need to provide itself.
   def self.pretty_unparse(obj); pretty_generate(obj); end
   def self.unparse(obj); generate(obj); end
+
+  # MRI declares these with module_function, so "include JSON" hands them on as
+  # private instance methods - which is how JSON's own test suite calls parse().
+  # The C# side can only declare singleton methods, so the instance half is here.
+  %i[parse load generate dump pretty_generate unparse pretty_unparse].each do |name|
+    define_method(name) { |*args, &block| JSON.send(name, *args, &block) }
+    private name
+  end
 end
 
 class Object

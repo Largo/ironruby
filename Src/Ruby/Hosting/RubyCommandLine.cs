@@ -84,8 +84,11 @@ namespace IronRuby.Hosting {
 
             // `ruby` with no -e and no script argument reads the program from stdin when
             // stdin is redirected. Only a real terminal gets the interactive loop — and
-            // the banner that goes with it.
-            if (Options.Command == null && Options.FileName == null && System.Console.IsInputRedirected) {
+            // the banner that goes with it. A script argument of "-" says to read stdin
+            // outright, whether or not it is redirected, and is how the CRuby test suite
+            // runs a program in a child process; ARGV is what follows it.
+            if (Options.Command == null &&
+                (Options.FileName == "-" || (Options.FileName == null && System.Console.IsInputRedirected))) {
                 // The program is read as bytes: a magic comment may say they are not UTF-8, and
                 // decoding them before the parser has seen it mangles them.
                 var program = new MemoryStream();

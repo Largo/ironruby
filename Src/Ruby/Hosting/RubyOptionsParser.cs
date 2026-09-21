@@ -739,7 +739,10 @@ namespace IronRuby.Hosting {
         }
 
         private void SetupOptionsForMainFile() {
-            LanguageSetup.Options["MainFile"] = RubyUtils.CanonicalizePath(ConsoleOptions.FileName);
+            // "-" is stdin, not a path: MRI leaves $0 spelled exactly that way.
+            LanguageSetup.Options["MainFile"] = ConsoleOptions.FileName == "-"
+                ? "-"
+                : RubyUtils.CanonicalizePath(ConsoleOptions.FileName);
             LanguageSetup.Options["Arguments"] = PopRemainingArgs();;
         }
 
