@@ -13910,3 +13910,10 @@ class Binding
 end
 
 require "argf"
+
+# monitor is a builtin in CRuby 4.0: Monitor and MonitorMixin are there before
+# anything requires them, and gems reach for ::Monitor without a require of their
+# own (concurrent-ruby does). Autoloaded rather than required, so that a program
+# that never touches it does not pay for it at startup.
+Object.autoload :Monitor, "monitor"
+Object.autoload :MonitorMixin, "monitor"
