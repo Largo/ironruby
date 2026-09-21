@@ -1,9 +1,11 @@
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Coverage'
 
-# MRI's ext/coverage. Only line coverage is measured (lines, oneshot_lines, eval):
-# it counts at the TracePoint :line hooks of code compiled while the measurement is
-# set up. Branch and method coverage are not implemented - supported? says so, and
-# a result leaves them out.
+# MRI's ext/coverage. Line coverage (lines, oneshot_lines, eval) counts at the
+# TracePoint :line hooks of code compiled while the measurement is set up; method
+# coverage records each `def' run while it is set up and counts the calls in the
+# method's prologue. Branch coverage is not implemented - supported?(:branches) says
+# so - but a result asked for it reports an empty set of branches per file rather
+# than leaving the key out, which is what MRI's shape wants.
 module Coverage
   # CoverageModes in the runtime
   LINES = 0x1
@@ -70,7 +72,7 @@ module Coverage
       raise RuntimeError, "coverage measurement is not enabled" if @state == :idle
 
       result = {}
-      __peek__.each do |path, lines, oneshot_lines|
+      __peek__.each do |path, lines, oneshot_lines, methods|
         if @mode == 0
           result[path] = lines.freeze
         else
@@ -79,6 +81,11 @@ module Coverage
             file[:oneshot_lines] = oneshot_lines.freeze
           elsif @mode & LINES != 0
             file[:lines] = lines.freeze
+          end
+          # not measured; the key is still reported, as MRI's shape has it
+          file[:branches] = {}.freeze if @mode & BRANCHES != 0
+          if @mode & METHODS != 0
+            file[:methods] = methods.each_with_object({}) { |m, h| h[m[0, 6].freeze] = m[6] }.freeze
           end
           result[path] = file
         end
@@ -123,7 +130,7 @@ module Coverage
 
     def supported?(mode)
       raise TypeError, "wrong argument type #{__type_name__(mode)} (expected Symbol)" unless mode.is_a?(Symbol)
-      mode == :lines || mode == :oneshot_lines || mode == :eval
+      mode == :lines || mode == :oneshot_lines || mode == :eval || mode == :methods
     end
 
     private

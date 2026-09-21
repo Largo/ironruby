@@ -235,6 +235,11 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static void TraceLineEvent(RubyScope scope, string path, int line) {
+            // objspace's allocation tracing forces this event on and takes the allocation site of
+            // every object created by the statement from here.
+            if (ObjectTracking.IsTracingAllocations) {
+                ObjectTracking.SetCurrentLine(scope, path, line);
+            }
             TracePoint.OnLine(scope, path, line);
         }
 
@@ -838,6 +843,15 @@ namespace IronRuby.Runtime {
 
             // the method's scope saves the result => singleton module-function uses instance-method
             var method = instanceMethod ?? singletonMethod;
+
+            // :methods coverage records the definition, so that a method that is never called is
+            // still reported (with 0); the body's prologue does the counting.
+            var coverage = body.Coverage;
+            if (coverage != null && (coverage.State.Modes & CoverageModes.Methods) != 0) {
+                var location = body.Ast.Location;
+                coverage.AddMethod(body, method.DeclaringModule, body.Name,
+                    location.Start.Line, location.Start.Column - 1, location.End.Line, location.End.Column - 1);
+            }
 
             method.DeclaringModule.MethodAdded(body.Name);
 

@@ -79,6 +79,13 @@ namespace IronRuby.Builtins {
         /// </summary>
         public static int ActiveEvents;
 
+        /// <summary>
+        /// Events the runtime itself wants delivered although no TracePoint asked for them: the
+        /// objspace library's allocation tracing takes the location of each allocation from the
+        /// :line hooks (see <see cref="IronRuby.Runtime.ObjectTracking"/>).
+        /// </summary>
+        private static int _forcedEvents;
+
         private static readonly object _lock = new object();
         private static TracePoint[] _enabledTracePoints = new TracePoint[0];
 
@@ -150,8 +157,29 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// Switches <paramref name="events"/> on or off for the runtime's own sake. Only used for
+        /// events that need no per-TracePoint setup (:line); the hooks then run with no TracePoint
+        /// to deliver to, which costs a walk of an empty list.
+        /// </summary>
+        public static void ForceEvents(TraceEvents events, bool enable) {
+            lock (_lock) {
+                if (enable) {
+                    _forcedEvents |= (int)events;
+                } else {
+                    _forcedEvents &= ~(int)events;
+                }
+
+                int active = _forcedEvents;
+                foreach (var tp in _enabledTracePoints) {
+                    active |= (int)tp._events;
+                }
+                ActiveEvents = active;
+            }
+        }
+
         private void UpdateActiveEvents() {
-            int events = 0;
+            int events = _forcedEvents;
             foreach (var tp in _enabledTracePoints) {
                 events |= (int)tp._events;
             }
@@ -229,7 +257,7 @@ namespace IronRuby.Builtins {
 
         // The files of the core library written in Ruby. In MRI that code is C and produces no
         // events of its own, so neither does it here.
-        private static readonly string[] _coreLibraryFiles = { "ruby4.rb", "argf.rb", "enumerator.rb", "set.rb", "thread.rb" };
+        private static readonly string[] _coreLibraryFiles = { "ruby4.rb", "argf.rb", "enumerator.rb", "set.rb", "thread.rb", "objspace.rb" };
 
         public static bool IsCoreLibraryPath(string path) {
             if (path == null) {

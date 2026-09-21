@@ -37,8 +37,10 @@ namespace IronRuby.StandardLibrary.Coverage {
         }
 
         /// <summary>
-        /// [[path, lines, oneshot_lines], ...] in the order the files were first measured;
-        /// lines holds a count or nil per line of the file.
+        /// [[path, lines, oneshot_lines, methods], ...] in the order the files were first measured;
+        /// lines holds a count or nil per line of the file, methods one
+        /// [class, name, start line, start column, end line, end column, calls] per method defined
+        /// in the file while it was measured.
         /// </summary>
         [RubyMethod("__peek__", RubyMethodAttributes.PrivateSingleton)]
         public static RubyArray/*!*/ Peek(RubyModule/*!*/ self) {
@@ -59,7 +61,20 @@ namespace IronRuby.StandardLibrary.Coverage {
                     oneshot.Add(line);
                 }
 
-                result.Add(RubyOps.MakeArray3(self.Context.EncodePath(file.Path), lines, oneshot));
+                var methods = new RubyArray();
+                foreach (var method in file.GetMethods()) {
+                    var entry = new RubyArray(7);
+                    entry.Add(method.Owner);
+                    entry.Add(self.Context.CreateSymbol(method.Name, self.Context.GetIdentifierEncoding()));
+                    entry.Add(method.StartLine);
+                    entry.Add(method.StartColumn);
+                    entry.Add(method.EndLine);
+                    entry.Add(method.EndColumn);
+                    entry.Add(method.Counts[0]);
+                    methods.Add(entry);
+                }
+
+                result.Add(RubyOps.MakeArray4(self.Context.EncodePath(file.Path), lines, oneshot, methods));
             }
             return result;
         }

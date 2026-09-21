@@ -43,6 +43,15 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         internal object SyncRoot { get { return _queue; } }
+
+        /// <summary>
+        /// A snapshot of the queued values, for ObjectSpace.reachable_objects_from.
+        /// </summary>
+        internal object[]/*!*/ GetContents() {
+            lock (_queue) {
+                return _queue.ToArray();
+            }
+        }
         internal bool Closed { get { return _closed; } }
 
         protected void CheckOpen() {
