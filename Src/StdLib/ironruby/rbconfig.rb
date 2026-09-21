@@ -97,7 +97,14 @@ module RbConfig
   # Ruby 4.0 standard library (unicode_normalize tables etc.) is generated
   # from Unicode 17.0.0, as in CRuby 4.0.
   CONFIG["UNICODE_VERSION"] = "17.0.0"
-  CONFIG["UNICODE_EMOJI_VERSION"] = "17.0"
+
+  # UNICODE_EMOJI_VERSION is deliberately absent. In MRI it dates the emoji data
+  # compiled into Onigmo, and a gem that sees it reads it as "\p{Emoji} and friends
+  # work, and mean this version" - unicode-emoji switches to exactly those patterns.
+  # The CLR regex engine has no emoji properties at all (and could not express most
+  # of them in a character class: they are largely outside the BMP, which a .NET
+  # character class cannot address), so claiming a version breaks those gems where
+  # saying nothing makes them fall back to their own tables.
 
   # Binutils, resolved via PATH as in an MRI mingw/gcc build. IronRuby has no
   # C-extension build chain of its own; these name the platform's tools.
