@@ -769,6 +769,14 @@ namespace IronRuby.Runtime {
             sourcePath = null;
             sourceLine = 0;
 
+            // Fast path: the interpreter's frame chain already knows where we are; a CLR stack walk
+            // with file info costs ~1ms and this is called once per Module#const_set.
+            if (RubyStackTraceBuilder.TryGetInterpretedFrameLocation(out sourcePath, out sourceLine)) {
+                return true;
+            }
+            sourcePath = null;
+            sourceLine = 0;
+
             RubyArray trace;
             try {
                 trace = RubyExceptionData.CreateBacktrace(context, 0);

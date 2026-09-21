@@ -383,6 +383,14 @@ namespace IronRuby.Runtime {
         public static int ConvertCompareResult(ComparisonStorage/*!*/ comparisonStorage, object/*!*/ result) {
             Debug.Assert(result != null);
 
+            // MRI's rb_cmpint(): an Integer result is used as it is, without asking it how it
+            // compares to 0. That saves two dynamic calls per comparison, which is most of the
+            // cost of #sort, #min, #max and #sort_by on an ordinary array.
+            if (result is int) {
+                int i = (int)result;
+                return i > 0 ? 1 : (i < 0 ? -1 : 0);
+            }
+
             var greaterThanSite = comparisonStorage.GreaterThanSite;
             if (RubyOps.IsTrue(greaterThanSite.Target(greaterThanSite, result, 0))) {
                 return 1;

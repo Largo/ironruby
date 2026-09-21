@@ -7752,7 +7752,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "bytes", 0x51, 
                 0x00000000U, 0x00000001U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.MutableStringOps.EachByte), 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.GetBytes), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.EachByte)
             );
             
@@ -7799,7 +7799,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "chars", 0x51, 
                 0x00000000U, 0x00000001U, 
-                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.MutableStringOps.EachChar), 
+                new Func<IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.MutableStringOps.GetChars), 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.MutableString, System.Object>(IronRuby.Builtins.MutableStringOps.EachChar)
             );
             
@@ -9054,6 +9054,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.EachIndex)
             );
             
+            DefineLibraryMethod(module, "each_with_object", 0x51, 
+                0x00000000U, 0x00000001U, 
+                new Func<System.Collections.IList, System.Object, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.IListOps.GetEachWithObjectEnumerator), 
+                new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object, System.Object>(IronRuby.Builtins.IListOps.EachWithObject)
+            );
+            
             DefineLibraryMethod(module, "empty?", 0x51, 
                 0x00000000U, 
                 new Func<System.Collections.IList, System.Boolean>(IronRuby.Builtins.IListOps.Empty)
@@ -9169,6 +9175,18 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.CollectInPlace)
             );
             
+            DefineLibraryMethod(module, "max", 0x51, 
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.GetMaximum), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object, System.Object>(IronRuby.Builtins.IListOps.GetMaximum)
+            );
+            
+            DefineLibraryMethod(module, "min", 0x51, 
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.GetMinimum), 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object, System.Object>(IronRuby.Builtins.IListOps.GetMinimum)
+            );
+            
             DefineLibraryMethod(module, "nitems", 0x51, 
                 0x00000000U, 
                 new Func<System.Collections.IList, System.Int32>(IronRuby.Builtins.IListOps.NumberOfNonNilItems)
@@ -9278,6 +9296,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Sort)
             );
             
+            DefineLibraryMethod(module, "sort_by", 0x51, 
+                0x00000000U, 0x00000002U, 
+                new Func<System.Collections.IList, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.IListOps.GetSortByEnumerator), 
+                new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.SortBy)
+            );
+            
             DefineLibraryMethod(module, "sort!", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.ComparisonStorage, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.SortInPlace)
@@ -9323,6 +9347,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "values_at", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.UnaryOpStorage, System.Collections.IList, System.Object[], IronRuby.Builtins.RubyArray>(IronRuby.Builtins.IListOps.ValuesAt)
+            );
+            
+            DefineLibraryMethod(module, "zip", 0x51, 
+                0x80020004U, 
+                new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Collections.IList[], System.Object>(IronRuby.Builtins.IListOps.Zip)
             );
             
         }
