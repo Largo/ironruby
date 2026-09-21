@@ -8,6 +8,34 @@ brought back to life: it **builds and runs on .NET 8**, and it parses Ruby with
 Ruby 1.9 grammar it shipped with in 2011.
 
 ```console
+$ ./irb.sh
+irb(main):001> RUBY_DESCRIPTION
+=> "IronRuby 1.2.0-dev (4.0.0) on .NET 8.0.31 [x86_64-linux]"
+irb(main):002> def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
+=> :fib
+irb(main):003> (1..10).map { fib(_1) }
+=> [1, 1, 2, 3, 5, 8, 13, 21, 34, 55]
+irb(main):004> require "io/console"; IO.console.winsize
+=> [44, 80]
+irb(main):005> Point = Struct.new(:x, :y)
+=> Point
+irb(main):006> case Point.new(3, 4)
+irb(main):007*   in [Integer => x, Integer => y]
+irb(main):008*     Math.hypot(x, y)
+irb(main):009*   end
+=> 5.0
+irb(main):010> 1 / 0
+(irb):10:in 'Integer#/': Attempted to divide by zero. (ZeroDivisionError)
+        from (irb):10:in '<main>'
+```
+
+That is **irb 1.16.0 and reline 0.6.3**, the same ones CRuby 4.0 ships — with syntax
+highlighting, auto-indent, Tab completion, history and `ls`/`show_source` — running on
+IronRuby. `io/console` is a C extension in CRuby, so IronRuby implements it over termios.
+
+Scripts run the same way:
+
+```console
 $ ./ir.sh script.rb          # prism front end, vendored stdlib, JIT and OSR on
 ```
 
@@ -34,6 +62,7 @@ users&.filter_map { it.name if it.active? }
 | Big integers | `Microsoft.Scripting.Math` | `System.Numerics` |
 | Integer | Int32, then BigInteger | Int32 → **Int64** → BigInteger |
 | Execution | DLR interpreter, then IL | + a **method JIT and OSR** that specialize on observed types |
+| REPL | irb from 2011 | **irb 1.16.0 + reline**, on a termios `io/console` |
 
 ## The prism front end
 
@@ -71,7 +100,7 @@ Measured with [ruby/spec](https://github.com/ruby/spec) at CRuby 4.0.6, `Util/pa
 | `spec/language` | 2934 | **0** |
 | `spec/command_line` | 175 | **0** |
 | `spec/security` | 34 | **0** |
-| `spec/library` | 6398 | **1** (`Binding#irb`) |
+| `spec/library` | 6398 | **0** |
 | `spec/core` | 23136 | **21** — 20 of them `ObjectSpace.each_object`, which needs `-X:ObjectSpace` |
 | IronRuby's own C# test suite | ~1470 | 19 known |
 
@@ -84,7 +113,8 @@ extensions. A compatibility prelude
 ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
 natively — `Process.clock_gettime`, `Random`, `ObjectSpace::WeakMap`, `ruby2_keywords`,
 pattern-matching support classes and core methods from Ruby 2.x-4.x. `Ripper` is implemented
-on prism, the way CRuby 4.0 implements it.
+on prism, the way CRuby 4.0 implements it, and `io/console` over termios, so the current
+**irb** and **reline** run unmodified.
 
 What is left is mostly what .NET cannot do: `fork`, a controlling TTY, `setproctitle`,
 C-extension APIs (`fiddle`, `mkmf` compiling), and heap walking (`ObjectSpace.each_object`
