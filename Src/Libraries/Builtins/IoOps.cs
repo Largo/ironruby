@@ -291,6 +291,17 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static RubyIO TryToIO(RespondToStorage/*!*/ respondToStorage,
             CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, RubyContext/*!*/ context, object obj) {
+            return TryToIO(respondToStorage, toIoStorage, context, obj, true);
+        }
+
+        /// <summary>
+        /// With strict false, an object whose #to_io does not give a real IO - Zlib::GzipReader
+        /// wrapping a StringIO or a Gem::Package::TarReader::Entry, say - is simply "not an IO"
+        /// rather than a TypeError. That is what MRI's copy_stream does: it falls back to the
+        /// duck-typed #readpartial / #read path instead of refusing the object.
+        /// </summary>
+        private static RubyIO TryToIO(RespondToStorage/*!*/ respondToStorage,
+            CallSiteStorage<Func<CallSite, object, object>>/*!*/ toIoStorage, RubyContext/*!*/ context, object obj, bool strict) {
 
             var io = obj as RubyIO;
             if (io != null) {
@@ -303,7 +314,7 @@ namespace IronRuby.Builtins {
             var site = toIoStorage.GetCallSite("to_io", 0);
             object converted = site.Target(site, obj);
             io = converted as RubyIO;
-            if (io == null) {
+            if (io == null && strict) {
                 throw RubyExceptions.CreateTypeError("can't convert {0} to IO ({0}#to_io gives {1})",
                     context.GetClassDisplayName(obj), context.GetClassDisplayName(converted));
             }
@@ -1527,8 +1538,15 @@ namespace IronRuby.Builtins {
         }
 
         private static int Write(RubyIO/*!*/ self, MutableString/*!*/ val, bool signalOnPipeError) {
+            // MRI's write of an empty string makes no syscall at all and answers 0, even on a
+            // pipe whose reader is gone. Flushing here instead manufactures EPIPE - which is
+            // what Open3.capture3 ("git --version", no stdin data) used to hit on its i.write "".
+            if (val.IsEmpty) {
+                return 0;
+            }
+
             try {
-                int bytesWritten = val.IsEmpty ? 0 : self.WriteBytes(val, 0, val.GetByteCount());
+                int bytesWritten = self.WriteBytes(val, 0, val.GetByteCount());
                 if (self.AutoFlush || !signalOnPipeError) {
                     self.Flush();
                 }
@@ -2362,7 +2380,7 @@ namespace IronRuby.Builtins {
                 // overwrite a file opened only for reading - and anything else is a path or an object
                 // with #readpartial / #read / #write.
                 var toPathSite = toPath.GetSite(TryConvertToPathAction.Make(toPath.Context));
-                RubyIO srcIO = TryToIO(respondTo, toIoStorage, context, src);
+                RubyIO srcIO = TryToIO(respondTo, toIoStorage, context, src, false);
                 if (srcIO != null) {
                     srcStream = srcIO.GetReadableStream();
                 } else {
@@ -2379,7 +2397,7 @@ namespace IronRuby.Builtins {
                     }
                 }
 
-                RubyIO dstIO = TryToIO(respondTo, toIoStorage, context, dst);
+                RubyIO dstIO = TryToIO(respondTo, toIoStorage, context, dst, false);
                 if (dstIO != null) {
                     dstStream = dstIO.GetWritableStream();
                 } else {

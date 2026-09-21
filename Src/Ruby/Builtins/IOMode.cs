@@ -132,6 +132,13 @@ namespace IronRuby.Builtins {
         }
 
         public static RubyEncoding TryParseEncoding(RubyContext/*!*/ context, string/*!*/ str) {
+            // "r:UTF-8:-" - an empty internal encoding, or the "-" MRI spells it with, means
+            // "no transcoding", not an unknown encoding.  RubyGems opens every gemspec that
+            // way (Gem.open_file(file, "r:UTF-8:-")), so warning here is both wrong and loud.
+            if (str.Length == 0 || str == "-") {
+                return null;
+            }
+
             try {
                 return context.GetRubyEncoding(str);
             } catch (ArgumentException) {
