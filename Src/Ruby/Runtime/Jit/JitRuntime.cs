@@ -10,6 +10,7 @@
 using System;
 using System.Reflection;
 using IronRuby.Builtins;
+using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Runtime.Jit {
     /// <summary>
@@ -63,9 +64,19 @@ namespace IronRuby.Runtime.Jit {
         }
 
         // ---- integer arithmetic with overflow deopt -------------------------------------
-        // Fixnum is Int32 in IronRuby; overflowing into Bignum is a type change the specialized
-        // code has no representation for, so it deopts. Computing in long makes the check one
-        // compare rather than a call into the Bignum path.
+        // An Integer is an Int32 while it fits in one, an Int64 while it fits in that, and a
+        // BigInteger beyond. The specialized code carries the first two unboxed, so all of its
+        // integer arithmetic happens in long: two ints can be added, subtracted or multiplied
+        // in 64 bits with no check at all, and only an operation with a long operand needs one.
+        //
+        // Overflow out of Int64 deopts rather than producing a BigInteger. Producing one would
+        // make the static type of every arithmetic result `object', which is to say no
+        // specialization at all; the deopt is one predictable branch per operation and happens
+        // at most once per specialized region.
+
+        // The int-in, int-out shapes. `a + b' on two ints is a long, but where it is stored
+        // straight back into an int local the whole thing is one operation with one check, and
+        // the compiler fuses it back into these rather than widen and narrow around a check.
 
         public static int AddInt(int a, int b) {
             long r = (long)a + b;
@@ -104,6 +115,75 @@ namespace IronRuby.Runtime.Jit {
             return m;
         }
 
+        public static long AddLong(long a, long b) {
+            long r = unchecked(a + b);
+            // Signed overflow iff both operands differ in sign from the result.
+            if (((a ^ r) & (b ^ r)) < 0) { throw Deopt(); }
+            return r;
+        }
+
+        public static long SubLong(long a, long b) {
+            long r = unchecked(a - b);
+            // Signed overflow iff the operands differ in sign and the result differs from a.
+            if (((a ^ b) & (a ^ r)) < 0) { throw Deopt(); }
+            return r;
+        }
+
+        public static long MulLong(long a, long b) {
+            long low;
+            long high = Math.BigMul(a, b, out low);
+            // The 128-bit product fits in 64 bits iff the high half is the sign extension.
+            if (high != (low >> 63)) { throw Deopt(); }
+            return low;
+        }
+
+        /// <summary>Ruby Integer#/ is floor division and raises on a zero divisor.</summary>
+        public static long DivLong(long a, long b) {
+            if (b == 0 || (a == Int64.MinValue && b == -1)) { throw Deopt(); }
+            long q = a / b;
+            if ((a % b != 0) && ((a < 0) != (b < 0))) { q--; }
+            return q;
+        }
+
+        /// <summary>Ruby Integer#% takes the sign of the divisor.</summary>
+        public static long ModLong(long a, long b) {
+            if (b == 0 || (a == Int64.MinValue && b == -1)) { throw Deopt(); }
+            long m = a % b;
+            if (m != 0 && ((m < 0) != (b < 0))) { m += b; }
+            return m;
+        }
+
+        /// <summary>
+        /// The one representation rule, as the specialized code sees it: a value that fits in an
+        /// Int32 IS an Int32, boxed from the small-integer cache. Every long that leaves the
+        /// specialized region - a return value, a store back into a locals tuple, an ivar write -
+        /// goes through here, which is what keeps #hash, #eql?, #equal? and Hash keys right for a
+        /// value the JIT produced. Mirrors ClrInteger.Narrow, which lives in the other assembly.
+        /// </summary>
+        public static object/*!*/ NarrowLong(long v) {
+            return (v >= Int32.MinValue && v <= Int32.MaxValue)
+                ? ScriptingRuntimeHelpers.Int32ToObject((Int32)v) : (object)v;
+        }
+
+        /// <summary>Is this boxed value one the unboxed long representation can carry?</summary>
+        public static bool IsIntegral(object value) {
+            return value is int || value is long;
+        }
+
+        public static long ToLong(object value) {
+            return (value is int) ? (long)(int)value : (long)value;
+        }
+
+        /// <summary>
+        /// A long flowing into a slot the specialization typed as int - an int local, an int
+        /// parameter of a self-call. It only fits when the value fits, and if it does not the
+        /// Ruby value has genuinely grown past Int32: deopt and let the generic body carry it.
+        /// </summary>
+        public static int DemoteToInt(long v) {
+            if (v < Int32.MinValue || v > Int32.MaxValue) { throw Deopt(); }
+            return (int)v;
+        }
+
         public static double DivDouble(double a, double b) {
             return a / b;
         }
@@ -140,6 +220,17 @@ namespace IronRuby.Runtime.Jit {
         public static object OsrGuardFailed(string/*!*/ what) {
             if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   guard failed: {0}", what); }
             return Osr.OsrLoopSite.Retry;
+        }
+
+        /// <summary>
+        /// A local does not hold the CLR type the copy was built for. That is a different answer
+        /// from a plain guard failure: the usual reason is that an accumulator grew out of Int32
+        /// and is now a long, so a copy built over the types it holds *now* would run. The site
+        /// rebuilds one, a bounded number of times.
+        /// </summary>
+        public static object OsrTypeGuardFailed(string/*!*/ what) {
+            if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   type guard failed: {0}", what); }
+            return Osr.OsrLoopSite.Retype;
         }
 
         /// <summary>A loop read a local it has not written in this run: it holds nil.</summary>

@@ -12,11 +12,19 @@ runtime unoptimized for the .NET JIT. `ir.sh` honours `IR_CONFIG=Release`.
 
 ## -X:JIT - method JIT
 
-Type-specializes a hot method body: unboxed int/double locals and CLR arithmetic, no
+Type-specializes a hot method body: unboxed int/long/double locals and CLR arithmetic, no
 RubyMethodScope, direct self-calls for recursion. Guards on one global method-table
 version (covers redefinition, override, singleton, prepend, include, alias); refinements
-disable it; Fixnum overflow and division by zero deopt to the generic body, so a body that
-can deopt and has a side effect is never specialized.
+disable it; overflow out of Int64 and division by zero deopt to the generic body, so a body
+that can deopt and has a side effect is never specialized.
+
+An Integer is carried as a CLR `int` or `long` following the runtime's own rule - Int32 if
+the value fits in one, otherwise Int64 - and every value that leaves the specialized region
+goes back through that funnel, so a value the JIT produced is `eql?`, hashes and Marshals
+exactly like the same value produced anywhere else. `int op int` that overflows produces a
+long rather than deopting (two Int32s never overflow a 64-bit operation, so that case needs
+no check at all); only the step out of Int64 deopts, because a BigInteger result would make
+the static type of every arithmetic result `object`, which is no specialization at all.
 
 `fib` 8.7x faster, `ackermann` 8.6x - both at or past CRuby; the call family ~2x.
 
@@ -40,10 +48,16 @@ shows no new failures, but they are young. Enable explicitly:
 
     ./ir.sh -X:JIT -X:OSR script.rb
 
+A loop whose locals change representation under it - an accumulator crossing 2^31 - deopts
+once, and the site then builds a second copy over the types the locals hold *now* rather
+than handing the loop back for good. That is what makes `int_arith` move: 3.61x of CRuby
+before, 0.57x after.
+
 ## Known limits
 
-- `int_arith` does not move under either: IronRuby's Fixnum is `System.Int32`, so a sum
-  past 2^31 becomes a BigInteger, where CRuby's fixnum is 63-bit.
 - `times`/`each`/`upto` loops are blocks, not `while` loops, so -X:OSR does not see them.
+- A *method* that deopts is not re-specialized the way a loop is: its entry stays installed
+  and every later call whose argument types no longer match falls through to the generic
+  body. Only -X:OSR rebuilds.
 - `raise_rescue` (~150x) and `fiber_switch` (~237x) are unrelated to both: exception
   backtrace construction, and a real CLR thread per Fiber.

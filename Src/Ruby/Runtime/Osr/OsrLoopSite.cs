@@ -44,6 +44,24 @@ namespace IronRuby.Runtime.Osr {
         /// </summary>
         public static readonly object/*!*/ Retry = new object();
 
+        /// <summary>
+        /// What a compiled copy answers when a local does not hold the CLR type it was built
+        /// for. Almost always that is an accumulator that has grown out of Int32 and is now an
+        /// Int64, so a copy built over the types the locals hold *now* would run: the site
+        /// throws this one away and builds another, a bounded number of times.
+        /// </summary>
+        public static readonly object/*!*/ Retype = new object();
+
+        /// <summary>
+        /// Back edges the generic loop runs before it asks again, after a copy handed it back.
+        /// Long enough that a loop deopting every iteration costs its eight rounds and no more,
+        /// short enough that the tail of a loop whose accumulator just widened is not lost.
+        /// </summary>
+        private const long ReArm = 64;
+
+        /// <summary>Copies one loop may be rebuilt for, after the types under it moved.</summary>
+        private const int MaxRetypes = 3;
+
         /// <summary>IR_OSR_VERBOSE=1 traces which loops get specialized and what that cost.</summary>
         public static readonly bool Verbose = Environment.GetEnvironmentVariable("IR_OSR_VERBOSE") == "1";
 
@@ -91,6 +109,7 @@ namespace IronRuby.Runtime.Osr {
         private volatile Func<object[], object> _typed;
         private bool _tried;
         private int _deopts;
+        private int _retypes;
 
         public OsrLoopSite(string/*!*/ name) {
             _name = name;
@@ -111,17 +130,43 @@ namespace IronRuby.Runtime.Osr {
 
             if (typed != null) {
                 object result = typed(tuples);
+                if (ReferenceEquals(result, Retype)) {
+                    // A local is not the CLR type this copy was built for. The usual cause is an
+                    // Integer that outgrew an Int32 and is now an Int64: build another copy over
+                    // what the locals hold now, and the rest of the loop runs specialized on the
+                    // wider representation instead of falling back to the generic body for good.
+                    Deopts++;
+                    if (++_retypes > MaxRetypes) { Retire(); } else { Rebuild(); }
+                    return Retry;
+                }
                 if (!ReferenceEquals(result, Retry)) { return result; }
 
-                // The copy gave the loop back: a Fixnum overflowed, a guard did not hold, or
-                // the locals are not the types it was built for. A few of those and the loop is
-                // better off where it is.
+                // The copy gave the loop back: an Integer overflowed out of Int64, a guard did
+                // not hold, or a division would have raised. A few of those and the loop is
+                // better off where it is; until then the generic body runs a short stretch and
+                // the back edge asks again, which is how an iteration that widened a local gets
+                // to be seen at all.
                 Deopts++;
-                if (++_deopts >= 8) { Retire(); }
+                if (++_deopts >= 8) { Retire(); } else { ReArmCountdown(); }
             } else {
                 Retire();
             }
             return Retry;
+        }
+
+        /// <summary>Let the back edge fire again after a short stretch of the generic loop.</summary>
+        private void ReArmCountdown() {
+            Counting = false;
+            Countdown = ReArm;
+        }
+
+        /// <summary>Throw the compiled copy away so the next entry builds one over current types.</summary>
+        private void Rebuild() {
+            lock (_lock) {
+                _typed = null;
+                _tried = false;
+            }
+            ReArmCountdown();
         }
 
         /// <summary>Stop counting, for good: this loop will not be replaced.</summary>

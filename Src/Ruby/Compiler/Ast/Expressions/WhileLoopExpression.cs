@@ -149,13 +149,20 @@ namespace IronRuby.Compiler.Ast {
                 ),
                 Ast.Block(
                     Ast.Assign(osrResult, Ast.Call(Ast.Constant(osrSite, typeof(OsrLoopSite)), OsrLoopSite.RunMethod, osrArguments)),
-                    AstUtils.IfThen(
+                    AstUtils.If(
                         Ast.Not(Ast.ReferenceEqual(osrResult, Ast.Constant(OsrLoopSite.Retry, typeof(object)))),
-                        Ast.Block(
-                            Ast.Assign(resultVariable, osrResult),
-                            Ast.Break(breakLabel),
-                            AstUtils.Empty()
-                        )
+                        Ast.Assign(resultVariable, osrResult),
+                        Ast.Break(breakLabel),
+                        AstUtils.Empty()
+                    ).Else(
+                        // The copy handed the loop back. Take the site's budget again rather
+                        // than run out the rest of this entry generically: without this the
+                        // back edge fires exactly once per entry, so a loop that deopts in its
+                        // first thousandth - an accumulator crossing 2^31, say - is never looked
+                        // at again, and the specialization is worth nothing on exactly the shape
+                        // it was meant for.
+                        Ast.Assign(osrCountdown, Ast.Field(Ast.Constant(osrSite, typeof(OsrLoopSite)), OsrLoopSite.CountdownField)),
+                        AstUtils.Empty()
                     ),
                     AstUtils.Empty()
                 )

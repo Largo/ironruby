@@ -20,7 +20,8 @@
  *   - The receiver's immediate class is pinned whenever the specialized body contains a
  *     direct self-call, so that call cannot be a call to an override.
  *   - Argument types are re-checked on entry; a miss falls through to the generic body.
- *   - Fixnum overflow and division by zero raise JitDeoptException, caught at the entry,
+ *   - Integer overflow out of Int64, a narrowing back to Int32 that does not fit, and
+ *     division by zero raise JitDeoptException, caught at the entry,
  *     which re-runs the generic body from the top. JitCompiler only produces code that
  *     can deopt for a body with no observable effect, so the restart is invisible.
  *
@@ -52,7 +53,7 @@ namespace IronRuby.Runtime.Jit {
 
         // profiling feedback
         private int _calls;
-        private readonly int[]/*!*/ _argKind;       // 0 = unseen, 1 = int, 2 = double, 3 = other/mixed
+        private readonly int[]/*!*/ _argKind;       // 0 = unseen, 1 = int, 2 = double, 3 = other/mixed, 4 = long
         private RubyClass _receiverClass;
         private bool _polymorphicReceiver;
         private volatile bool _givenUp;
@@ -74,8 +75,15 @@ namespace IronRuby.Runtime.Jit {
             if (_givenUp) { return; }
 
             for (int i = 0; i < _arity; i++) {
-                int k = (args[i] is int) ? 1 : (args[i] is double) ? 2 : 3;
-                if (_argKind[i] == 0) { _argKind[i] = k; } else if (_argKind[i] != k) { _argKind[i] = 3; }
+                int k = (args[i] is int) ? 1 : (args[i] is double) ? 2 : (args[i] is long) ? 4 : 3;
+                if (_argKind[i] == 0) {
+                    _argKind[i] = k;
+                } else if (_argKind[i] != k) {
+                    // int and long are one Ruby class seen in two representations, so a
+                    // parameter that has been both is still an Integer: carry it as a long.
+                    bool bothIntegral = (k == 1 || k == 4) && (_argKind[i] == 1 || _argKind[i] == 4);
+                    _argKind[i] = bothIntegral ? 4 : 3;
+                }
             }
 
             RubyClass cls = JitRuntime.ClassOf(_context, self);
@@ -110,6 +118,7 @@ namespace IronRuby.Runtime.Jit {
                 switch (_argKind[i]) {
                     case 1: types[i] = JT.Int; break;
                     case 2: types[i] = JT.Dbl; break;
+                    case 4: types[i] = JT.Lng; break;
                     default: types[i] = JT.Obj; break;
                 }
             }
@@ -172,6 +181,9 @@ namespace IronRuby.Runtime.Jit {
                 switch (code.ParameterTypes[i]) {
                     case JT.Int: test = Ast.AndAlso(test, Ast.TypeIs(args[i], typeof(int))); break;
                     case JT.Dbl: test = Ast.AndAlso(test, Ast.TypeIs(args[i], typeof(double))); break;
+                    // An Integer parameter carried as a long accepts either representation: a
+                    // value in Int32 range arrives as an Int32 and only a larger one as an Int64.
+                    case JT.Lng: test = Ast.AndAlso(test, Ast.Call(JitRuntime.M("IsIntegral"), args[i])); break;
                 }
             }
 
@@ -181,12 +193,17 @@ namespace IronRuby.Runtime.Jit {
                 switch (code.ParameterTypes[i]) {
                     case JT.Int: typedArgs[i + 1] = Ast.Unbox(args[i], typeof(int)); break;
                     case JT.Dbl: typedArgs[i + 1] = Ast.Unbox(args[i], typeof(double)); break;
+                    case JT.Lng: typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), args[i]); break;
                     default: typedArgs[i + 1] = args[i]; break;
                 }
             }
 
             MSA.Expression fast = Ast.Invoke(Ast.Constant(typed, typed.GetType()), typedArgs);
-            if (fast.Type != typeof(object)) {
+            if (code.ReturnType == JT.Lng) {
+                // The one place a specialized method's value becomes a Ruby object: it leaves
+                // through the representation funnel, so a result that fits in an Int32 is one.
+                fast = Ast.Call(JitRuntime.M("NarrowLong"), fast);
+            } else if (fast.Type != typeof(object)) {
                 fast = Ast.Convert(fast, typeof(object));
             }
 

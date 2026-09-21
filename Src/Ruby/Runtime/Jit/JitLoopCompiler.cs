@@ -11,12 +11,17 @@
  * collect.
  *
  * So when a loop turns hot, this asks JitCompiler for a typed body, with the scope's locals
- * bound to CLR int/double/bool locals loaded from the tuple on entry and stored back on the
- * way out. Inside, a Fixnum add is an add.
+ * bound to CLR int/long/double/bool locals loaded from the tuple on entry and stored back on
+ * the way out. Inside, an Integer add is an add. A long goes back into the tuple through the
+ * representation funnel, so a value that fits in an Int32 arrives as one.
  *
- * Deoptimization is what keeps that honest. The body signals one (JitDeoptException) when a
- * Fixnum overflows, when a division would raise, or when anything else it assumed stops
- * holding. The loop keeps a copy of its locals as they were at the top of the current
+ * Deoptimization is what keeps that honest. The body signals one (JitDeoptException) when an
+ * Integer overflows out of Int64, when one that grew past Int32 has to go back into an int
+ * local, when a division would raise, or when anything else it assumed stops holding. In the
+ * second of those the loop is usually better off with a *new* copy rather than none, which is
+ * what OsrLoopSite's Retype answer is for.
+ *
+ * The loop keeps a copy of its locals as they were at the top of the current
  * iteration; a deopt restores those and returns the Retry sentinel, so the loop is handed
  * back at an iteration boundary and the generic copy carries on from there. JitCompiler only
  * produces a body whose iterations are unobservable part way through, which is what makes
@@ -55,6 +60,11 @@ namespace IronRuby.Runtime.Jit {
     }
 
     internal static class JitLoopCompiler {
+        /// <summary>The boxed form a slot's value goes home as.</summary>
+        private static MSA.Expression/*!*/ Box(MSA.Expression/*!*/ value, bool isLong) {
+            return isLong ? Ast.Call(JitRuntime.M("NarrowLong"), value) : (MSA.Expression)Ast.Convert(value, typeof(object));
+        }
+
         /// <summary>
         /// Builds a typed entry for a loop, or returns null when the loop is not the shape
         /// this can specialize. <paramref name="args"/> are the locals tuples the site passes,
@@ -106,7 +116,7 @@ namespace IronRuby.Runtime.Jit {
                 }
 
                 JT type;
-                bool writeFirst = (hint == JT.Int || hint == JT.Dbl);
+                bool writeFirst = (hint == JT.Int || hint == JT.Lng || hint == JT.Dbl);
                 if (writeFirst) {
                     // The loop met this local as the target of an assignment, so the type it
                     // will hold is the one being stored into it, whatever it holds right now.
@@ -117,6 +127,10 @@ namespace IronRuby.Runtime.Jit {
                     type = hint;
                 } else if (current is int) {
                     type = JT.Int;
+                } else if (current is long) {
+                    // An accumulator that has already outgrown an Int32. It is carried unboxed
+                    // in a CLR long and narrows back on the way out.
+                    type = JT.Lng;
                 } else if (current is double) {
                     type = JT.Dbl;
                 } else {
@@ -124,7 +138,7 @@ namespace IronRuby.Runtime.Jit {
                     return null;
                 }
 
-                Type clr = (type == JT.Int) ? typeof(int) : typeof(double);
+                Type clr = (type == JT.Int) ? typeof(int) : (type == JT.Lng) ? typeof(long) : typeof(double);
                 return new JitLoopSlot {
                     Type = type,
                     Variable = Ast.Parameter(clr, local.Name),
@@ -169,8 +183,21 @@ namespace IronRuby.Runtime.Jit {
                 locals.Add(slot.Variable);
                 locals.Add(slot.Snapshot);
                 Type clr = slot.Variable.Type;
-                MSA.Expression store = Ast.Assign(slot.Accessor, Ast.Convert(slot.Variable, typeof(object)));
-                MSA.Expression storeSnap = Ast.Assign(slot.Accessor, Ast.Convert(slot.Snapshot, typeof(object)));
+
+                // A long goes home through the representation funnel - a value that fits in an
+                // Int32 must arrive back in the tuple as one - and comes in from either an Int32
+                // or an Int64, since both are the same Ruby Integer and only the magnitude says
+                // which one a given value is.
+                bool isLong = (slot.Type == JT.Lng);
+                MSA.Expression holds = isLong
+                    ? Ast.Call(JitRuntime.M("IsIntegral"), probe)
+                    : (MSA.Expression)Ast.TypeIs(probe, clr);
+                MSA.Expression read = isLong
+                    ? Ast.Call(JitRuntime.M("ToLong"), probe)
+                    : (MSA.Expression)Ast.Unbox(probe, clr);
+
+                MSA.Expression store = Ast.Assign(slot.Accessor, Box(slot.Variable, isLong));
+                MSA.Expression storeSnap = Ast.Assign(slot.Accessor, Box(slot.Snapshot, isLong));
                 if (slot.Assigned != null) {
                     locals.Add(slot.Assigned);
                     locals.Add(slot.AssignedSnapshot);
@@ -178,8 +205,8 @@ namespace IronRuby.Runtime.Jit {
                     // because a previous run left it there - and otherwise start the slot out
                     // as unwritten rather than refuse the whole loop.
                     prologue.Add(Ast.Assign(probe, slot.Accessor));
-                    prologue.Add(Ast.Assign(slot.Assigned, Ast.TypeIs(probe, clr)));
-                    prologue.Add(Ast.IfThen(slot.Assigned, Ast.Assign(slot.Variable, Ast.Unbox(probe, clr))));
+                    prologue.Add(Ast.Assign(slot.Assigned, holds));
+                    prologue.Add(Ast.IfThen(slot.Assigned, Ast.Assign(slot.Variable, read)));
                     prologue.Add(Ast.Assign(slot.Snapshot, slot.Variable));
                     prologue.Add(Ast.Assign(slot.AssignedSnapshot, slot.Assigned));
                     store = Ast.IfThen(slot.Assigned, store);
@@ -187,10 +214,10 @@ namespace IronRuby.Runtime.Jit {
                 } else {
                     prologue.Add(Ast.Assign(probe, slot.Accessor));
                     prologue.Add(Ast.IfThen(
-                        Ast.Not(Ast.TypeIs(probe, clr)),
-                        Ast.Return(exit, Ast.Call(JitRuntime.M("OsrGuardFailed"), Ast.Constant(slot.Variable.Name)))
+                        Ast.Not(holds),
+                        Ast.Return(exit, Ast.Call(JitRuntime.M("OsrTypeGuardFailed"), Ast.Constant(slot.Variable.Name)))
                     ));
-                    prologue.Add(Ast.Assign(slot.Variable, Ast.Unbox(probe, clr)));
+                    prologue.Add(Ast.Assign(slot.Variable, read));
                     prologue.Add(Ast.Assign(slot.Snapshot, slot.Variable));
                 }
                 storeCurrent.Add(store);

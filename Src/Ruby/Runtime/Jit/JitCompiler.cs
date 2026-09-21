@@ -3,8 +3,8 @@
  * -X:JIT - an experimental ZJIT-style method JIT for IronRuby.
  *
  * Takes a Ruby method AST plus the types the profiling tier observed for its
- * parameters, and builds a *typed* LambdaExpression: Fixnum and Float values live in
- * CLR int/double locals rather than boxed objects, no RubyMethodScope or MutableTuple
+ * parameters, and builds a *typed* LambdaExpression: Integer and Float values live in
+ * CLR int/long/double locals rather than boxed objects, no RubyMethodScope or MutableTuple
  * is allocated, a call to the method itself becomes a direct call to the specialized
  * entry, and there are no dynamic call sites at all.
  *
@@ -28,7 +28,10 @@ namespace IronRuby.Runtime.Jit {
     /// <summary>The type lattice. Deliberately tiny: this is a prototype.</summary>
     internal enum JT {
         None = 0,   // no value yet
-        Int,        // CLR int, a Fixnum
+        Int,        // CLR int, an Integer that fits in an Int32
+        Lng,        // CLR long, an Integer that fits in an Int64 but not an Int32 - and, inside
+                    // the specialized region, any integer at all: integer arithmetic happens in
+                    // long, and a result narrows back to Int only where it has to.
         Dbl,        // CLR double, a Float
         Bool,       // CLR bool, TrueClass/FalseClass
         Obj,        // boxed - anything, moved around but never operated on
@@ -260,6 +263,7 @@ namespace IronRuby.Runtime.Jit {
         private static Type/*!*/ ClrType(JT t) {
             switch (t) {
                 case JT.Int: return typeof(int);
+                case JT.Lng: return typeof(long);
                 case JT.Dbl: return typeof(double);
                 case JT.Bool: return typeof(bool);
                 default: return typeof(object);
@@ -457,6 +461,7 @@ namespace IronRuby.Runtime.Jit {
         private MSA.Expression/*!*/ EmitLiteral(Literal/*!*/ literal, out JT type) {
             object v = literal.Value;
             if (v is int) { type = JT.Int; return Ast.Constant((int)v, typeof(int)); }
+            if (v is long) { type = JT.Lng; return Ast.Constant((long)v, typeof(long)); }
             if (v is double) { type = JT.Dbl; return Ast.Constant((double)v, typeof(double)); }
             if (v is bool) { type = JT.Bool; return Ast.Constant((bool)v, typeof(bool)); }
             if (v == null) { type = JT.Obj; return Ast.Constant(null, typeof(object)); }
@@ -514,7 +519,14 @@ namespace IronRuby.Runtime.Jit {
             }
 
             if (known) {
-                if (lt != rhsType) { throw JitBailout.Instance; }
+                if (lt != rhsType) {
+                    // Int and Lng are two representations of one Ruby class, so a store across
+                    // them is a widening or a narrowing, not a type change. Anything else would
+                    // change the value's class, which one typed slot cannot express.
+                    if (!IsInteger(lt) || !IsInteger(rhsType)) { throw JitBailout.Instance; }
+                    rhs = Coerce(rhs, rhsType, lt);
+                    rhsType = lt;
+                }
             } else {
                 p = Declare(target.Name, rhsType);
             }
@@ -620,15 +632,28 @@ namespace IronRuby.Runtime.Jit {
 
         private static JT Unify(JT a, JT b) {
             if (a == b) { return a; }
-            if (a == JT.Int && b == JT.Dbl) { return JT.Dbl; }
-            if (a == JT.Dbl && b == JT.Int) { return JT.Dbl; }
+            if (IsNumeric(a) && IsNumeric(b)) {
+                // int < long < double: the wider of the two wins.
+                return (a == JT.Dbl || b == JT.Dbl) ? JT.Dbl : JT.Lng;
+            }
             return JT.Obj;
         }
 
-        private static MSA.Expression/*!*/ Coerce(MSA.Expression/*!*/ e, JT from, JT to) {
+        private MSA.Expression/*!*/ Coerce(MSA.Expression/*!*/ e, JT from, JT to) {
             if (from == to) { return e; }
-            if (to == JT.Dbl && from == JT.Int) { return Ast.Convert(e, typeof(double)); }
+            if (to == JT.Dbl && (from == JT.Int || from == JT.Lng)) { return Ast.Convert(e, typeof(double)); }
+            if (to == JT.Lng && from == JT.Int) { return Ast.Convert(e, typeof(long)); }
+            if (to == JT.Int && from == JT.Lng) {
+                // Only where the value has to be an int again: an int local, an int parameter of
+                // the direct self-call. Out of range means the Ruby value really did outgrow an
+                // Int32, and the generic body takes it from there.
+                _canDeopt = true;
+                return FuseIntOp(e) ?? Ast.Call(JitRuntime.M("DemoteToInt"), e);
+            }
             if (to == JT.Obj) {
+                // A long leaves through the representation funnel: a value that fits in an Int32
+                // IS an Int32, which is what #hash, #eql? and Hash keys are defined on.
+                if (from == JT.Lng) { return Ast.Call(JitRuntime.M("NarrowLong"), e); }
                 // Fixnum is a boxed int, Float a boxed double, true/false boxed bools.
                 return Ast.Convert(e, typeof(object));
             }
@@ -645,6 +670,7 @@ namespace IronRuby.Runtime.Jit {
             switch (t) {
                 case JT.Bool: return e;
                 case JT.Int:
+                case JT.Lng:
                 case JT.Dbl: return Ast.Block(e, Ast.Constant(true));
                 default: throw JitBailout.Instance;
             }
@@ -689,28 +715,124 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private static bool IsNumeric(JT t) {
-            return t == JT.Int || t == JT.Dbl;
+            return t == JT.Int || t == JT.Lng || t == JT.Dbl;
+        }
+
+        /// <summary>The two representations of a Ruby Integer the specialized code carries.</summary>
+        private static bool IsInteger(JT t) {
+            return t == JT.Int || t == JT.Lng;
+        }
+
+        /// <summary>
+        /// `x = a op b' where a, b and x are all ints. Computing in long and narrowing back is
+        /// correct but is a widening, an operation and a range check where one int operation with
+        /// one check will do - and that shape is most of every int loop, so it is worth spotting:
+        /// an int-typed operand pair under a narrowing back to int fuses into the int helper it
+        /// came from. The two deopt on exactly the same values.
+        /// </summary>
+        private static MSA.Expression FuseIntOp(MSA.Expression/*!*/ e) {
+            var bin = e as MSA.BinaryExpression;
+            if (bin != null) {
+                string name;
+                switch (bin.NodeType) {
+                    case MSA.ExpressionType.Add: name = "AddInt"; break;
+                    case MSA.ExpressionType.Subtract: name = "SubInt"; break;
+                    case MSA.ExpressionType.Multiply: name = "MulInt"; break;
+                    default: return null;
+                }
+                var l = Narrowed(bin.Left);
+                var r = Narrowed(bin.Right);
+                return (l != null && r != null) ? Ast.Call(JitRuntime.M(name), l, r) : null;
+            }
+            var call = e as MSA.MethodCallExpression;
+            if (call != null && call.Object == null && call.Arguments.Count == 2) {
+                string name = (call.Method.Name == "DivLong") ? "DivInt"
+                    : (call.Method.Name == "ModLong") ? "ModInt" : null;
+                if (name == null) { return null; }
+                var l = Narrowed(call.Arguments[0]);
+                var r = Narrowed(call.Arguments[1]);
+                return (l != null && r != null) ? Ast.Call(JitRuntime.M(name), l, r) : null;
+            }
+            return null;
+        }
+
+        /// <summary>The int this long operand was widened from, if it was one.</summary>
+        private static MSA.Expression Narrowed(MSA.Expression/*!*/ e) {
+            var unary = e as MSA.UnaryExpression;
+            if (unary != null && unary.NodeType == MSA.ExpressionType.Convert
+                && unary.Type == typeof(long) && unary.Operand.Type == typeof(int)) {
+                return unary.Operand;
+            }
+            var constant = e as MSA.ConstantExpression;
+            if (constant != null && constant.Type == typeof(long)) {
+                long v = (long)constant.Value;
+                if (v >= Int32.MinValue && v <= Int32.MaxValue) { return Ast.Constant((int)v, typeof(int)); }
+            }
+            return null;
         }
 
         private MSA.Expression/*!*/ EmitBinary(string/*!*/ op, MSA.Expression/*!*/ l, JT lt, MSA.Expression/*!*/ r, JT rt, out JT type) {
             JT operand = Unify(lt, rt);
             if (operand == JT.Obj) { throw JitBailout.Instance; }
-            l = Coerce(l, lt, operand);
-            r = Coerce(r, rt, operand);
 
-            bool isInt = (operand == JT.Int);
+            if (operand == JT.Dbl) {
+                l = Coerce(l, lt, JT.Dbl);
+                r = Coerce(r, rt, JT.Dbl);
+                switch (op) {
+                    case "+": type = JT.Dbl; return Ast.Add(l, r);
+                    case "-": type = JT.Dbl; return Ast.Subtract(l, r);
+                    case "*": type = JT.Dbl; return Ast.Multiply(l, r);
+                    case "/": type = JT.Dbl; return Ast.Call(JitRuntime.M("DivDouble"), l, r);
+                    case "%": type = JT.Dbl; return Ast.Call(JitRuntime.M("ModDouble"), l, r);
+                    default: return EmitCompare(op, l, r, out type);
+                }
+            }
+
+            // Integers. `operand' is Int exactly when both sides are, and that is the one case
+            // in which the CLR operation cannot overflow a long and so needs no check at all:
+            // two Int32s added, subtracted or multiplied in 64 bits always fit. So `int op int'
+            // that overflows produces a long rather than deopting, which is what the runtime
+            // does too - it is only the step out of Int64 that has nowhere typed left to go.
+            bool bothInt = (operand == JT.Int);
             switch (op) {
-                case "+": type = operand; if (isInt) { _canDeopt = true; return Ast.Call(JitRuntime.M("AddInt"), l, r); } return Ast.Add(l, r);
-                case "-": type = operand; if (isInt) { _canDeopt = true; return Ast.Call(JitRuntime.M("SubInt"), l, r); } return Ast.Subtract(l, r);
-                case "*": type = operand; if (isInt) { _canDeopt = true; return Ast.Call(JitRuntime.M("MulInt"), l, r); } return Ast.Multiply(l, r);
-                case "/": type = operand; if (isInt) { _canDeopt = true; return Ast.Call(JitRuntime.M("DivInt"), l, r); } return Ast.Call(JitRuntime.M("DivDouble"), l, r);
-                case "%": type = operand; if (isInt) { _canDeopt = true; return Ast.Call(JitRuntime.M("ModInt"), l, r); } return Ast.Call(JitRuntime.M("ModDouble"), l, r);
-                case "<": type = JT.Bool; return Ast.LessThan(l, r);
-                case ">": type = JT.Bool; return Ast.GreaterThan(l, r);
-                case "<=": type = JT.Bool; return Ast.LessThanOrEqual(l, r);
-                case ">=": type = JT.Bool; return Ast.GreaterThanOrEqual(l, r);
-                case "==": type = JT.Bool; return Ast.Equal(l, r);
-                case "!=": type = JT.Bool; return Ast.NotEqual(l, r);
+                case "<": case ">": case "<=": case ">=": case "==": case "!=":
+                    // A comparison never overflows, so two ints are compared as ints and a mixed
+                    // pair widens to long. Both are exact.
+                    return EmitCompare(op, Coerce(l, lt, operand), Coerce(r, rt, operand), out type);
+
+                case "&": case "|": case "^": {
+                    // Bitwise operations on integers stay within the range of their operands.
+                    type = operand;
+                    var bl = Coerce(l, lt, operand);
+                    var br = Coerce(r, rt, operand);
+                    if (op == "&") { return Ast.And(bl, br); }
+                    if (op == "|") { return Ast.Or(bl, br); }
+                    return Ast.ExclusiveOr(bl, br);
+                }
+            }
+
+            l = Coerce(l, lt, JT.Lng);
+            r = Coerce(r, rt, JT.Lng);
+            type = JT.Lng;
+            switch (op) {
+                case "+": if (bothInt) { return Ast.Add(l, r); } _canDeopt = true; return Ast.Call(JitRuntime.M("AddLong"), l, r);
+                case "-": if (bothInt) { return Ast.Subtract(l, r); } _canDeopt = true; return Ast.Call(JitRuntime.M("SubLong"), l, r);
+                case "*": if (bothInt) { return Ast.Multiply(l, r); } _canDeopt = true; return Ast.Call(JitRuntime.M("MulLong"), l, r);
+                case "/": _canDeopt = true; return Ast.Call(JitRuntime.M("DivLong"), l, r);
+                case "%": _canDeopt = true; return Ast.Call(JitRuntime.M("ModLong"), l, r);
+                default: throw JitBailout.Instance;
+            }
+        }
+
+        private static MSA.Expression/*!*/ EmitCompare(string/*!*/ op, MSA.Expression/*!*/ l, MSA.Expression/*!*/ r, out JT type) {
+            type = JT.Bool;
+            switch (op) {
+                case "<": return Ast.LessThan(l, r);
+                case ">": return Ast.GreaterThan(l, r);
+                case "<=": return Ast.LessThanOrEqual(l, r);
+                case ">=": return Ast.GreaterThanOrEqual(l, r);
+                case "==": return Ast.Equal(l, r);
+                case "!=": return Ast.NotEqual(l, r);
                 default: throw JitBailout.Instance;
             }
         }
