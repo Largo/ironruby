@@ -1043,10 +1043,9 @@ class Array
     result
   end
 
-  # Array has its own #max, #min and #sum in MRI rather than inheriting Enumerable's,
-  # and code in the wild checks which one it gets. The bodies are Enumerable's.
-  def max(*args, &block) = super
-  def min(*args, &block) = super
+  # Array has its own #sum in MRI rather than inheriting Enumerable's, and code in the
+  # wild checks which one it gets. The body is Enumerable's. (#max and #min are Array's
+  # own in C#, see IListOps: Enumerable's go through #each and a Proc per element.)
   def sum(*args, &block) = super
 
   def intersect?(other)
@@ -7560,24 +7559,14 @@ class String
     (offset > 0 ? self[offset, bytesize - offset] : self).unpack(format).first
   end unless method_defined?(:unpack1)
 
+  # #chars and #bytes build the Array in C# (MutableStringOps); only #lines is still
+  # an Enumerator there.
   unless "a".lines.is_a?(Array)
     alias_method :lines_enumerator, :lines
-    alias_method :chars_enumerator, :chars
-    alias_method :bytes_enumerator, :bytes
 
     def lines(*args, &block)
       return lines_enumerator(*args, &block) if block
       lines_enumerator(*args).to_a
-    end
-
-    def chars(&block)
-      return chars_enumerator(&block) if block
-      chars_enumerator.to_a
-    end
-
-    def bytes(&block)
-      return bytes_enumerator(&block) if block
-      bytes_enumerator.to_a
     end
   end
 end
@@ -12975,8 +12964,17 @@ class Struct
 
   def initialize(*args)
     # self.class.members, not members: a struct may have a member called "members"
-    names = self.class.members
-    keyword_init = self.class.respond_to?(:keyword_init?) ? self.class.keyword_init? : nil
+    klass = self.class
+    names = klass.members
+    keyword_init = klass.respond_to?(:keyword_init?) ? klass.keyword_init? : nil
+
+    # The overwhelmingly common call: one positional value per member, none of them a
+    # Hash that could be keywords. Everything below is about the forms that are not
+    # that, and doing none of it is what makes Struct.new(1, 2) cheap.
+    if keyword_init.nil? && args.size == names.size && !args.last.is_a?(Hash)
+      return __struct_initialize__(*args)
+    end
+
     args.pop if args.size > 0 && args.last.is_a?(Hash) && args.last.empty? && !keyword_init
 
     # Since 3.2 a struct built without keyword_init: takes keywords as well as

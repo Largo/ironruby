@@ -138,7 +138,8 @@ namespace IronRuby.Runtime {
         internal void CaptureExceptionTrace(RubyScope/*!*/ scope) {
             if (_backtrace == null) {
 #if FEATURE_STACK_TRACE
-                StackTrace catchSiteTrace = RubyStackTraceBuilder.GetClrStackTrace(null);
+                StackTrace catchSiteTrace = RubyStackTraceBuilder.GetClrStackTrace(null,
+                    scope.RubyContext.DomainManager.Configuration.DebugMode);
                 _backtrace = new RubyStackTraceBuilder(scope.RubyContext, _exception, catchSiteTrace, scope.InterpretedFrame != null).RubyTrace;
 #else
                 _backtrace = new RubyArray();

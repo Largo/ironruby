@@ -919,6 +919,22 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("compact")]
         public static IList/*!*/ Compact(UnaryOpStorage/*!*/ allocateStorage, IList/*!*/ self) {
+            var array = self as RubyArray;
+            if (array != null) {
+                // The common case: no interface dispatch, no enumerator, and the result is
+                // allocated at its final size in one go.
+                int count = array.Count;
+                var compacted = new RubyArray(count);
+                for (int i = 0; i < count; i++) {
+                    object item = array[i];
+                    if (item != null) {
+                        compacted.Add(item);
+                    }
+                }
+                allocateStorage.Context.TaintObjectBy(compacted, self);
+                return compacted;
+            }
+
             IList result = CreateResultArray(allocateStorage, self);
 
             foreach (object item in self) {
@@ -2474,6 +2490,210 @@ namespace IronRuby.Builtins {
             }
 
             return enumerator.Each(null, block);
+        }
+
+        #endregion
+
+        #region min, max, sort_by, each_with_object, zip
+
+        // MRI gives Array its own #min, #max, #sort_by, #each_with_object and #zip rather than
+        // letting it inherit Enumerable's. Enumerable's are written against #each, so every
+        // element costs a Proc invocation, a BlockParam and an argument-packing array; walking
+        // the list directly is what makes these two orders of magnitude faster.
+
+        [RubyMethod("min")]
+        public static object GetMinimum(ComparisonStorage/*!*/ comparisonStorage, BlockParam comparer, IList/*!*/ self) {
+            return GetExtreme(comparisonStorage, comparer, self, -1);
+        }
+
+        [RubyMethod("min")]
+        public static object GetMinimum(ConversionStorage<int>/*!*/ fixnumCast, ComparisonStorage/*!*/ comparisonStorage,
+            BlockParam comparer, IList/*!*/ self, object count) {
+            return GetExtremes(fixnumCast, comparisonStorage, comparer, self, count, -1);
+        }
+
+        [RubyMethod("max")]
+        public static object GetMaximum(ComparisonStorage/*!*/ comparisonStorage, BlockParam comparer, IList/*!*/ self) {
+            return GetExtreme(comparisonStorage, comparer, self, +1);
+        }
+
+        [RubyMethod("max")]
+        public static object GetMaximum(ConversionStorage<int>/*!*/ fixnumCast, ComparisonStorage/*!*/ comparisonStorage,
+            BlockParam comparer, IList/*!*/ self, object count) {
+            return GetExtremes(fixnumCast, comparisonStorage, comparer, self, count, +1);
+        }
+
+        private static object GetExtreme(ComparisonStorage/*!*/ comparisonStorage, BlockParam comparer, IList/*!*/ self,
+            int comparisonValue) {
+
+            if (self.Count == 0) {
+                return null;
+            }
+
+            object result = self[0];
+            for (int i = 1; i < self.Count; i++) {
+                object item = self[i];
+                int compareResult;
+                if (comparer != null) {
+                    object blockResult;
+                    if (comparer.Yield(item, result, out blockResult)) {
+                        return blockResult;
+                    }
+                    if (blockResult == null) {
+                        throw RubyExceptions.MakeComparisonError(comparisonStorage.Context, item, result);
+                    }
+                    compareResult = Protocols.ConvertCompareResult(comparisonStorage, blockResult);
+                } else {
+                    compareResult = Protocols.Compare(comparisonStorage, item, result);
+                }
+
+                if (compareResult == comparisonValue) {
+                    result = item;
+                }
+            }
+            return result;
+        }
+
+        // min(n) / max(n): the n smallest (largest) elements, as an Array, smallest (largest) first.
+        private static object GetExtremes(ConversionStorage<int>/*!*/ fixnumCast, ComparisonStorage/*!*/ comparisonStorage,
+            BlockParam comparer, IList/*!*/ self, object count, int comparisonValue) {
+
+            if (count == null) {
+                return GetExtreme(comparisonStorage, comparer, self, comparisonValue);
+            }
+
+            int n = Protocols.CastToFixnum(fixnumCast, count);
+            if (n < 0) {
+                throw RubyExceptions.CreateArgumentError("negative size ({0})", n);
+            }
+
+            StrongBox<object> breakResult;
+            RubyArray sorted = ArrayOps.SortInPlace(comparisonStorage, comparer, ToArray(self), out breakResult);
+            if (breakResult != null) {
+                return breakResult.Value;
+            }
+
+            if (n > sorted.Count) {
+                n = sorted.Count;
+            }
+            var result = new RubyArray(n);
+            for (int i = 0; i < n; i++) {
+                result.Add(sorted[comparisonValue > 0 ? sorted.Count - 1 - i : i]);
+            }
+            return result;
+        }
+
+        [RubyMethod("sort_by")]
+        public static Enumerator/*!*/ GetSortByEnumerator(IList/*!*/ self) {
+            return new Enumerator(self, "sort_by") { SizeSource = self, SizeOp = "same" };
+        }
+
+        [RubyMethod("sort_by")]
+        public static object SortBy(ComparisonStorage/*!*/ comparisonStorage, [NotNull]BlockParam/*!*/ keySelector, IList/*!*/ self) {
+            int count = self.Count;
+            var items = new object[count];
+            var keys = new object[count];
+
+            for (int i = 0; i < count; i++) {
+                object item = self[i];
+                items[i] = item;
+
+                object key;
+                if (keySelector.Yield(item, out key)) {
+                    return key;
+                }
+                keys[i] = key;
+            }
+
+            MergeSortByKey(keys, items, new object[count], new object[count], 0, count, comparisonStorage);
+
+            var result = new RubyArray(count);
+            for (int i = 0; i < count; i++) {
+                result.Add(items[i]);
+            }
+            return result;
+        }
+
+        /// <summary>
+        /// Stable merge sort of <paramref name="items"/> by the parallel <paramref name="keys"/>.
+        /// Stable, so equal keys keep their input order - which is what MRI's #sort_by does, and
+        /// what its #min_by(n)/#max_by(n) rely on.
+        /// </summary>
+        private static void MergeSortByKey(object[]/*!*/ keys, object[]/*!*/ items, object[]/*!*/ keyBuffer, object[]/*!*/ itemBuffer,
+            int start, int length, ComparisonStorage/*!*/ comparisonStorage) {
+
+            if (length < 2) {
+                return;
+            }
+
+            int half = length / 2;
+            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start, half, comparisonStorage);
+            MergeSortByKey(keys, items, keyBuffer, itemBuffer, start + half, length - half, comparisonStorage);
+
+            int left = start, right = start + half, target = start;
+            int leftEnd = start + half, rightEnd = start + length;
+            while (left < leftEnd && right < rightEnd) {
+                if (Protocols.Compare(comparisonStorage, keys[right], keys[left]) < 0) {
+                    keyBuffer[target] = keys[right];
+                    itemBuffer[target++] = items[right++];
+                } else {
+                    keyBuffer[target] = keys[left];
+                    itemBuffer[target++] = items[left++];
+                }
+            }
+            while (left < leftEnd) {
+                keyBuffer[target] = keys[left];
+                itemBuffer[target++] = items[left++];
+            }
+            while (right < rightEnd) {
+                keyBuffer[target] = keys[right];
+                itemBuffer[target++] = items[right++];
+            }
+
+            Array.Copy(keyBuffer, start, keys, start, length);
+            Array.Copy(itemBuffer, start, items, start, length);
+        }
+
+        [RubyMethod("each_with_object")]
+        public static Enumerator/*!*/ GetEachWithObjectEnumerator(IList/*!*/ self, object memo) {
+            return new Enumerator(self, "each_with_object", memo) { SizeSource = self, SizeOp = "same" };
+        }
+
+        [RubyMethod("each_with_object")]
+        public static object EachWithObject([NotNull]BlockParam/*!*/ block, IList/*!*/ self, object memo) {
+            for (int i = 0; i < self.Count; i++) {
+                object result;
+                if (block.Yield(self[i], memo, out result)) {
+                    return result;
+                }
+            }
+            return memo;
+        }
+
+        [RubyMethod("zip")]
+        public static object Zip(BlockParam block, IList/*!*/ self, [DefaultProtocol, NotNullItems]params IList/*!*/[]/*!*/ others) {
+            int count = self.Count;
+            RubyArray results = (block == null) ? new RubyArray(count) : null;
+
+            for (int i = 0; i < count; i++) {
+                var tuple = new RubyArray(others.Length + 1);
+                tuple.Add(self[i]);
+                for (int j = 0; j < others.Length; j++) {
+                    IList other = others[j];
+                    tuple.Add(i < other.Count ? other[i] : null);
+                }
+
+                if (block != null) {
+                    object blockResult;
+                    if (block.Yield(tuple, out blockResult)) {
+                        return blockResult;
+                    }
+                } else {
+                    results.Add(tuple);
+                }
+            }
+
+            return results;
         }
 
         #endregion

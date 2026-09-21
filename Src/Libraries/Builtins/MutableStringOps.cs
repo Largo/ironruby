@@ -1776,13 +1776,36 @@ namespace IronRuby.Builtins {
 
         #region each_byte/bytes, chars, chr, each_codepoint/codepoints, each_line/lines
 
-        [RubyMethod("bytes")]
         [RubyMethod("each_byte")]
         public static Enumerator/*!*/ EachByte(MutableString/*!*/ self) {
             // It counts bytes, so its #size is the byte count. Without saying so the enumerator
             // falls back on the string's own #size, which is characters - the same number only
             // while the string is ASCII.
             return new Enumerator(self, "each_byte") { SizeSource = self, SizeOp = "bytesize" };
+        }
+
+        /// <summary>
+        /// #bytes and #chars answer an Array directly rather than an Enumerator that is then
+        /// drained by #to_a: the enumerator costs a fiber-free but still generic yield per element.
+        /// </summary>
+        [RubyMethod("bytes")]
+        public static RubyArray/*!*/ GetBytes(MutableString/*!*/ self) {
+            int count = self.GetByteCount();
+            var result = new RubyArray(count);
+            for (int i = 0; i < count; i++) {
+                result.Add(ScriptingRuntimeHelpers.Int32ToObject((int)self.GetByte(i)));
+            }
+            return result;
+        }
+
+        [RubyMethod("chars")]
+        public static RubyArray/*!*/ GetChars(MutableString/*!*/ self) {
+            var result = new RubyArray();
+            var enumerator = self.GetCharacters();
+            while (enumerator.MoveNext()) {
+                result.Add(enumerator.Current.ToMutableString(self.Encoding));
+            }
+            return result;
         }
 
         [RubyMethod("bytes")]
@@ -1800,7 +1823,6 @@ namespace IronRuby.Builtins {
             return self;
         }
 
-        [RubyMethod("chars")]
         [RubyMethod("each_char")]
         public static Enumerator/*!*/ EachChar(MutableString/*!*/ self) {
             return new Enumerator(self, "each_char");

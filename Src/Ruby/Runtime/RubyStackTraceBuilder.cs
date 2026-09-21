@@ -32,6 +32,7 @@ namespace IronRuby.Runtime {
 #if FEATURE_STACK_TRACE
         private readonly RubyArray/*!*/ _trace;
         private readonly bool _hasFileAccessPermission;
+        private readonly bool _needsClrFileInfo;
         private readonly bool _exceptionDetail;
         private readonly RubyEncoding/*!*/ _encoding;
         private IList<InterpretedFrameInfo> _interpretedFrames;
@@ -47,7 +48,8 @@ namespace IronRuby.Runtime {
 
         private RubyStackTraceBuilder(RubyContext/*!*/ context) {
             _context = context;
-            _hasFileAccessPermission = DetectFileAccessPermissions();
+            _needsClrFileInfo = NeedsClrFileInfo(context);
+            _hasFileAccessPermission = _needsClrFileInfo && DetectFileAccessPermissions();
             _exceptionDetail = context.Options.ExceptionDetail;
             _encoding = context.GetPathEncoding();
             _trace = new RubyArray();
@@ -56,7 +58,7 @@ namespace IronRuby.Runtime {
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) 
             : this(context) {
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
-            StackTrace throwSiteTrace = GetClrStackTrace(exception);
+            StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
             _interpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
 
             AddBacktrace(throwSiteTrace.GetFrames(), 0, false);
@@ -76,7 +78,7 @@ namespace IronRuby.Runtime {
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames, bool keepInternalFrames)
             : this(context) {
             _keepInternalFrames = keepInternalFrames;
-            var trace = GetClrStackTrace(null);
+            var trace = GetClrStackTrace(null, _needsClrFileInfo);
 
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?
                 new List<InterpretedFrameInfo>(InterpretedFrame.CurrentFrame.Value.GetStackTraceDebugInfo()) :
@@ -142,9 +144,75 @@ namespace IronRuby.Runtime {
 
         private const int MaxThreadBacktraceDepth = 10000;
 
+        /// <summary>
+        /// The file and line of the innermost Ruby frame, taken from the interpreter's own frame
+        /// chain rather than from a CLR stack walk. This is what backtrace[0] reports, but without
+        /// the cost of `new StackTrace(true)` (~1ms: it reads the PDBs of every frame on the CLR
+        /// stack), which matters for the callers that only want a location - Module#const_set and
+        /// Module#autoload, which the core library runs hundreds of times at startup.
+        ///
+        /// Returns false when there is no interpreted frame to read, in which case the caller falls
+        /// back to the stack walk.
+        /// </summary>
+        internal static bool TryGetInterpretedFrameLocation(out string file, out int line) {
+            file = null;
+            line = 0;
+#if FEATURE_STACK_TRACE
+            var frame = InterpretedFrame.CurrentFrame.Value;
+            for (int depth = 0; frame != null && depth < MaxThreadBacktraceDepth; depth++, frame = frame.Parent) {
+                string methodName = frame.Name;
+                if (methodName == InterpretedCallSiteName) {
+                    continue;
+                }
+
+                string frameFile;
+                int frameLine;
+                var debugInfo = frame.GetDebugInfo(frame.InstructionIndex);
+                if (debugInfo != null) {
+                    frameFile = debugInfo.FileName;
+                    frameLine = debugInfo.StartLine;
+                } else {
+                    frameFile = null;
+                    frameLine = 0;
+                }
+
+                if (!TryParseRubyMethodName(ref methodName, ref frameFile, ref frameLine)) {
+                    continue;
+                }
+
+                // A frame of the Ruby half of the core library is reported at its caller's location,
+                // so it is not the answer either - keep walking out.
+                if (IsInternalFile(frameFile)) {
+                    continue;
+                }
+
+                if (frameFile == null) {
+                    return false;
+                }
+
+                file = frameFile;
+                line = frameLine;
+                return true;
+            }
+#endif
+            return false;
+        }
+
+        /// <summary>
+        /// Whether a CLR stack walk has to read file and line info out of the PDBs. Only a debug-mode
+        /// run has any use for it: a Ruby frame carries its own file and line (in the interpreter's
+        /// debug info, or encoded in the method name), and the frames that would answer from a PDB are
+        /// IronRuby's own, which never reach the Ruby backtrace. Asking for it costs on the order of a
+        /// millisecond per stack walk - i.e. per raise - since the CLR then loads and reads the PDB of
+        /// every assembly on the stack.
+        /// </summary>
+        private static bool NeedsClrFileInfo(RubyContext/*!*/ context) {
+            return context.DomainManager.Configuration.DebugMode;
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
-        internal static StackTrace GetClrStackTrace(Exception exception) {
-            return exception != null ? new StackTrace(exception, true) : new StackTrace(true);
+        internal static StackTrace GetClrStackTrace(Exception exception, bool needFileInfo) {
+            return exception != null ? new StackTrace(exception, needFileInfo) : new StackTrace(needFileInfo);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)] // CF

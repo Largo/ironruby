@@ -112,6 +112,15 @@ namespace IronRuby.Builtins {
         private enum CaseOp { Upper, Lower, Swap, Title }
 
         private static string/*!*/ Map(string/*!*/ str, CaseMappingOptions options, CaseOp op) {
+            // Most strings are all ASCII, and over ASCII the Unicode mappings are the ASCII ones
+            // (full case folding included). The general path below costs a binary search over the
+            // special-casing tables and a Rune round trip per code point, which is an order of
+            // magnitude more. :turkic is the one option that moves an ASCII letter out of ASCII
+            // (i <-> Idot, I <-> dotless i), so it stays on the general path.
+            if ((options & CaseMappingOptions.Turkic) == 0 && IsAsciiOnly(str)) {
+                return op == CaseOp.Title ? CapitalizeAscii(str) : MapAscii(str, op == CaseOp.Upper, op == CaseOp.Swap);
+            }
+
             StringBuilder result = null;
             int i = 0;
             while (i < str.Length) {
@@ -277,6 +286,15 @@ namespace IronRuby.Builtins {
         #endregion
 
         #region helpers
+
+        private static bool IsAsciiOnly(string/*!*/ str) {
+            for (int i = 0; i < str.Length; i++) {
+                if (str[i] >= 0x80) {
+                    return false;
+                }
+            }
+            return true;
+        }
 
         private static int CodePointAt(string/*!*/ str, int index, out int width) {
             char c = str[index];
