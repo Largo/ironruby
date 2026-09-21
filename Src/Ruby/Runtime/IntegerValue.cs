@@ -38,6 +38,8 @@ namespace IronRuby.Runtime {
                 return Equals((IntegerValue)obj);
             } else if (obj is int) {
                 return Equals(new IntegerValue((int)obj));
+            } else if (obj is long) {
+                return Equals(new IntegerValue((BigInteger)(long)obj));
             } else if (obj is BigInteger) {
                 return Equals(new IntegerValue((BigInteger)obj));
             }
@@ -90,7 +92,9 @@ namespace IronRuby.Runtime {
         }
 
         public object/*!*/ ToObject() {
-            return _bignum.HasValue ? (object)_bignum.Value : ScriptingRuntimeHelpers.Int32ToObject(_fixnum);
+            // Normalized on the way out: a bignum that fits in an Int32 or an Int64 must come back
+            // as one, or two equal Integers would end up with different representations.
+            return _bignum.HasValue ? Protocols.Normalize(_bignum.Value) : ScriptingRuntimeHelpers.Int32ToObject(_fixnum);
         }
 
         public int ToInt32() {

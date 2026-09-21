@@ -994,6 +994,10 @@ namespace IronRuby.Builtins {
                 result = (int)value;
                 return true;
             }
+            if (value is long) {
+                result = (long)value;
+                return true;
+            }
             if (value is BigInteger) {
                 result = (BigInteger)value;
                 return true;

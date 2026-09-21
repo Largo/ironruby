@@ -49,7 +49,9 @@ namespace IronRuby.Tests {
 
         [Options(NoRuntime = true)]
         public void GcdLcm1() {
-            BigInteger _4611686016279904256 = ParseBigInt("4611686016279904256");
+            // Everything here fits in an Int64, which is now the representation for an Integer
+            // that has outgrown Int32; BigInteger starts past 2**63.
+            const long _4611686016279904256 = 4611686016279904256L;
 
             Assert((int)Integer.Gcd(-1, -1) == 1 && (int)Integer.Lcm(-1, -1) == 1);
             Assert((int)Integer.Gcd(0, -1)  == 1 && (int)Integer.Lcm(0, -1)  == 0);
@@ -58,13 +60,13 @@ namespace IronRuby.Tests {
             Assert((int)Integer.Gcd((BigInteger)0, 0) == 0 && (int)Integer.Lcm((BigInteger)0, 0) == 0);
 
             Assert((int)Integer.Gcd(Int32.MaxValue, Int32.MinValue) == 1);
-            Assert((BigInteger)Integer.Lcm(Int32.MaxValue, Int32.MinValue) == _4611686016279904256);
+            Assert((long)Integer.Lcm(Int32.MaxValue, Int32.MinValue) == _4611686016279904256);
 
             Assert((int)Integer.Gcd(Int32.MinValue, Int32.MaxValue) == 1);
-            Assert((BigInteger)Integer.Lcm(Int32.MinValue, Int32.MaxValue) == _4611686016279904256);
+            Assert((long)Integer.Lcm(Int32.MinValue, Int32.MaxValue) == _4611686016279904256);
 
-            Assert((BigInteger)Integer.Gcd(Int32.MinValue, Int32.MinValue) == -(BigInteger)Int32.MinValue);
-            Assert((BigInteger)Integer.Lcm(Int32.MinValue, Int32.MinValue) == -(BigInteger)Int32.MinValue);
+            Assert((long)Integer.Gcd(Int32.MinValue, Int32.MinValue) == -(long)Int32.MinValue);
+            Assert((long)Integer.Lcm(Int32.MinValue, Int32.MinValue) == -(long)Int32.MinValue);
 
             Assert((int)Integer.Gcd(Int32.MaxValue, Int32.MaxValue) == Int32.MaxValue);
             Assert((int)Integer.Lcm(Int32.MaxValue, Int32.MaxValue) == Int32.MaxValue);
@@ -73,7 +75,7 @@ namespace IronRuby.Tests {
             Assert((int)Integer.Lcm(Int32.MaxValue, -1) == Int32.MaxValue);
 
             Assert((int)Integer.Gcd(Int32.MinValue, -1) == 1);
-            Assert((BigInteger)Integer.Lcm(Int32.MinValue, -1) == -(BigInteger)Int32.MinValue);
+            Assert((long)Integer.Lcm(Int32.MinValue, -1) == -(long)Int32.MinValue);
         }
     }
 }

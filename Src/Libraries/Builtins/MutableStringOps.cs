@@ -633,7 +633,7 @@ namespace IronRuby.Builtins {
 
             var pieces = new object[others.Length];
             for (int i = 0; i < others.Length; i++) {
-                if (others[i] is int || others[i] is BigInteger) {
+                if (others[i] is int || others[i] is long || others[i] is BigInteger) {
                     pieces[i] = others[i];
                 } else {
                     // A copy, so that "s.concat(s, s)" sees the original both times.
@@ -644,6 +644,8 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < pieces.Length; i++) {
                 if (pieces[i] is int) {
                     Append(self, (int)pieces[i]);
+                } else if (pieces[i] is long) {
+                    Append(self, (BigInteger)(long)pieces[i]);
                 } else if (pieces[i] is BigInteger) {
                     Append(self, (BigInteger)pieces[i]);
                 } else {

@@ -224,6 +224,10 @@ namespace IronRuby.Runtime.Conversions {
                     }
                 } else if (fromType == typeof(double) && toType == typeof(int)) {
                     return Methods.ConvertDoubleToFixnum.OpCall(expr);
+                } else if (fromType == typeof(long) && toType == typeof(int)) {
+                    // A boxed long is an Integer too big for an Int32, so narrowing it is the same
+                    // out-of-range condition a bignum hits - a RangeError, not an OverflowException.
+                    return Methods.ConvertInt64ToFixnum.OpCall(expr);
                 }
 
                 return Ast.ConvertChecked(expr, toType);

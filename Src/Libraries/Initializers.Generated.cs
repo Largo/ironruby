@@ -3018,8 +3018,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "hash", 0x51, 
-                0x00000000U, 0x00000001U, 
+                0x00000000U, 0x00000000U, 0x00000001U, 
                 new Func<System.Int32, System.Int32>(IronRuby.Builtins.Integer.Hash), 
+                new Func<System.Int64, System.Int32>(IronRuby.Builtins.Integer.Hash), 
                 new Func<System.Numerics.BigInteger, System.Int32>(IronRuby.Builtins.Integer.Hash)
             );
             
@@ -3832,20 +3833,26 @@ namespace IronRuby.Builtins {
         
         private static void LoadIronRuby__Clr__Integer_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "-", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
                 new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
-                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Subtract)
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Subtract), 
+                new Func<System.Int64, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
+                new Func<System.Int64, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
+                new Func<System.Int32, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
+                new Func<System.Int64, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Subtract), 
+                new Func<System.Int64, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Subtract)
             );
             
             DefineLibraryMethod(module, "-@", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Negate), 
-                new Func<System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Minus)
+                new Func<System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Minus), 
+                new Func<System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Minus)
             );
             
             DefineLibraryMethod(module, "[]", 0x51, 
@@ -3857,14 +3864,19 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "*", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
-                new Func<System.Int32, System.Numerics.BigInteger, System.Numerics.BigInteger>(IronRuby.Builtins.ClrInteger.Multiply), 
-                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Multiply)
+                new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Multiply), 
+                new Func<System.Int64, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
+                new Func<System.Int64, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
+                new Func<System.Int32, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
+                new Func<System.Int64, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Multiply), 
+                new Func<System.Int64, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Multiply)
             );
             
             DefineLibraryMethod(module, "**", 0x51, 
@@ -3878,12 +3890,15 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "/", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.DivideOp), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
-                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide)
+                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
+                new Func<System.Int64, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
+                new Func<System.Int64, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
+                new Func<System.Int32, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Divide)
             );
             
             DefineLibraryMethod(module, "&", 0x51, 
@@ -3897,13 +3912,16 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "%", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ModuloOp), 
                 new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Modulo), 
-                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Modulo)
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<System.Int64, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<System.Int64, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<System.Int32, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Modulo)
             );
             
             DefineLibraryMethod(module, "^", 0x51, 
@@ -3917,23 +3935,31 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "+", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000002U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
                 new Func<System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
-                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Add)
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Add), 
+                new Func<System.Int64, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
+                new Func<System.Int64, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
+                new Func<System.Int32, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
+                new Func<System.Int64, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Add), 
+                new Func<System.Int64, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Add)
             );
             
             DefineLibraryMethod(module, "<", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThan), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThan), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThan), 
                 new Func<System.Int32, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThan), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThan)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThan), 
+                new Func<System.Int64, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThan), 
+                new Func<System.Int64, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThan), 
+                new Func<System.Int32, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThan)
             );
             
             DefineLibraryMethod(module, "<<", 0x51, 
@@ -3946,58 +3972,76 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "<=", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThanOrEqual), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThanOrEqual), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThanOrEqual), 
                 new Func<System.Int32, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThanOrEqual), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThanOrEqual)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThanOrEqual), 
+                new Func<System.Int64, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThanOrEqual), 
+                new Func<System.Int64, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThanOrEqual), 
+                new Func<System.Int32, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.LessThanOrEqual)
             );
             
             DefineLibraryMethod(module, "<=>", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Int32>(IronRuby.Builtins.ClrInteger.Compare), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Compare), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Compare), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Numerics.BigInteger, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Compare), 
                 new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Compare), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Compare)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Compare), 
+                new Func<System.Int64, System.Int64, System.Int32>(IronRuby.Builtins.ClrInteger.Compare), 
+                new Func<System.Int64, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Compare), 
+                new Func<System.Int32, System.Int64, System.Int32>(IronRuby.Builtins.ClrInteger.Compare)
             );
             
             DefineLibraryMethod(module, "==", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
                 new Func<System.Int32, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal)
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<System.Int64, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<System.Int64, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<System.Int32, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal)
             );
             
             DefineLibraryMethod(module, "===", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
                 new Func<System.Int32, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal)
+                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<System.Int64, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<System.Int64, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal), 
+                new Func<System.Int32, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.Equal)
             );
             
             DefineLibraryMethod(module, ">", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan), 
                 new Func<System.Int32, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan), 
+                new Func<System.Int64, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan), 
+                new Func<System.Int64, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan), 
+                new Func<System.Int32, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThan)
             );
             
             DefineLibraryMethod(module, ">=", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThanOrEqual), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThanOrEqual), 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThanOrEqual), 
                 new Func<System.Int32, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThanOrEqual), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThanOrEqual)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThanOrEqual), 
+                new Func<System.Int64, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThanOrEqual), 
+                new Func<System.Int64, System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThanOrEqual), 
+                new Func<System.Int32, System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.GreaterThanOrEqual)
             );
             
             DefineLibraryMethod(module, ">>", 0x51, 
@@ -4026,9 +4070,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "abs", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Abs), 
-                new Func<System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Abs)
+                new Func<System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Abs), 
+                new Func<System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Abs)
             );
             
             DefineLibraryMethod(module, "coerce", 0x51, 
@@ -4038,21 +4083,27 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "div", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Div), 
-                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide)
+                new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
+                new Func<System.Int64, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
+                new Func<System.Int64, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Divide), 
+                new Func<System.Int32, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Divide)
             );
             
             DefineLibraryMethod(module, "divmod", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
                 new Func<System.Numerics.BigInteger, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
                 new Func<System.Numerics.BigInteger, System.Double, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.DivMod), 
-                new Func<System.Int32, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod)
+                new Func<System.Int32, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
+                new Func<System.Int64, System.Int64, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
+                new Func<System.Int64, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod), 
+                new Func<System.Int32, System.Int64, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ClrInteger.DivMod)
             );
             
             DefineLibraryMethod(module, "fdiv", 0x51, 
@@ -4075,29 +4126,34 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "magnitude", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Abs), 
-                new Func<System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Abs)
+                new Func<System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Abs), 
+                new Func<System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Abs)
             );
             
             DefineLibraryMethod(module, "modulo", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.ModuloOp), 
                 new Func<System.Int32, System.Int32, System.Int32>(IronRuby.Builtins.ClrInteger.Modulo), 
-                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Modulo)
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<System.Int64, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<System.Int64, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Modulo), 
+                new Func<System.Int32, System.Int64, System.Object>(IronRuby.Builtins.ClrInteger.Modulo)
             );
             
             DefineLibraryMethod(module, "quo", 0x51, 
-                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000002U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
                 new Func<System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Quotient), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Quotient), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Quotient), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Quotient), 
                 new Func<System.Int32, System.Int32, System.Double>(IronRuby.Builtins.ClrInteger.Quotient), 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Int32, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Quotient)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Int32, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Quotient), 
+                new Func<System.Int64, System.Int64, System.Double>(IronRuby.Builtins.ClrInteger.Quotient)
             );
             
             DefineLibraryMethod(module, "remainder", 0x51, 
@@ -4109,9 +4165,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "to_f", 0x51, 
-                0x00000000U, 0x00000000U, 
+                0x00000000U, 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Double>(IronRuby.Builtins.ClrInteger.ToFloat), 
-                new Func<System.Int32, System.Double>(IronRuby.Builtins.ClrInteger.ToFloat)
+                new Func<System.Int32, System.Double>(IronRuby.Builtins.ClrInteger.ToFloat), 
+                new Func<System.Int64, System.Double>(IronRuby.Builtins.ClrInteger.ToFloat)
             );
             
             DefineLibraryMethod(module, "to_s", 0x51, 
@@ -4122,9 +4179,10 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "zero?", 0x51, 
-                0x00000000U, 0x00000001U, 
+                0x00000000U, 0x00000001U, 0x00000000U, 
                 new Func<System.Int32, System.Boolean>(IronRuby.Builtins.ClrInteger.IsZero), 
-                new Func<System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.IsZero)
+                new Func<System.Numerics.BigInteger, System.Boolean>(IronRuby.Builtins.ClrInteger.IsZero), 
+                new Func<System.Int64, System.Boolean>(IronRuby.Builtins.ClrInteger.IsZero)
             );
             
         }

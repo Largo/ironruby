@@ -71,10 +71,10 @@ namespace IronRuby.Builtins {
         public static object CreateArray(ConversionStorage<Union<IList, int>>/*!*/ toAryToInt,
             BlockParam block, RubyClass/*!*/ self, [NotNull]object/*!*/ arrayOrSize) {
 
-            if (arrayOrSize is BigInteger) {
+            if (arrayOrSize is BigInteger || arrayOrSize is long) {
                 // A size too large for an Int32 is a size no array can have, and MRI says so as a
                 // size error rather than as a number that will not fit in a machine word.
-                return new RubyArray().AddMultiple(CheckArraySize((BigInteger)arrayOrSize), null);
+                return new RubyArray().AddMultiple(CheckArraySize(ToBigInteger(arrayOrSize)), null);
             }
 
             var site = toAryToInt.GetSite(CompositeConversionAction.Make(toAryToInt.Context, CompositeConversion.ToAryToInt));
@@ -98,8 +98,8 @@ namespace IronRuby.Builtins {
 
             var context = toAryToInt.Context;
 
-            if (arrayOrSize is BigInteger) {
-                return ReinitializeByRepeatedValue(context, self, (BigInteger)arrayOrSize, null);
+            if (arrayOrSize is BigInteger || arrayOrSize is long) {
+                return ReinitializeByRepeatedValue(context, self, ToBigInteger(arrayOrSize), null);
             }
 
             var site = toAryToInt.GetSite(CompositeConversionAction.Make(context, CompositeConversion.ToAryToInt));
@@ -168,6 +168,11 @@ namespace IronRuby.Builtins {
             self.AddMultiple(size, value);
 
             return self;
+        }
+
+        /// <summary>An Integer size as a BigInteger, whichever CLR type happens to carry it.</summary>
+        private static BigInteger ToBigInteger(object/*!*/ size) {
+            return size is long ? new BigInteger((long)size) : (BigInteger)size;
         }
 
         private static void CheckArraySize(int size) {

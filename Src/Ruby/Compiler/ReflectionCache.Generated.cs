@@ -64,6 +64,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ConvertBignumToFixnum;
         public static MethodInfo/*!*/ ConvertBignumToFloat { get { return _ConvertBignumToFloat ?? (_ConvertBignumToFloat = CallInstruction.CacheFunc<System.Numerics.BigInteger, System.Double>(RubyOps.ConvertBignumToFloat)); } }
         private static MethodInfo _ConvertBignumToFloat;
+        public static MethodInfo/*!*/ ConvertInt64ToFixnum { get { return _ConvertInt64ToFixnum ?? (_ConvertInt64ToFixnum = CallInstruction.CacheFunc<System.Int64, System.Int32>(RubyOps.ConvertInt64ToFixnum)); } }
+        private static MethodInfo _ConvertInt64ToFixnum;
         public static MethodInfo/*!*/ ConvertDoubleToFixnum { get { return _ConvertDoubleToFixnum ?? (_ConvertDoubleToFixnum = CallInstruction.CacheFunc<System.Double, System.Int32>(RubyOps.ConvertDoubleToFixnum)); } }
         private static MethodInfo _ConvertDoubleToFixnum;
         public static MethodInfo/*!*/ ConvertMutableStringToClrString { get { return _ConvertMutableStringToClrString ?? (_ConvertMutableStringToClrString = CallInstruction.CacheFunc<IronRuby.Builtins.MutableString, System.String>(RubyOps.ConvertMutableStringToClrString)); } }

@@ -1143,7 +1143,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("hash")]
         public static int Hash(BigInteger/*!*/ self) {
-            return self.GetHashCode();
+            return RubyUtils.GetIntegerHashCode(self);
         }
 
         #endregion

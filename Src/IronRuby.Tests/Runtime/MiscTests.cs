@@ -380,15 +380,16 @@ puts 2.1560
         }
 
         public void NumericOps1() {
-            // overflow tests:
-            Assert((BigInteger)ClrInteger.Minus(Int32.MinValue) == -(BigInteger)Int32.MinValue);
-            Assert((BigInteger)ClrInteger.Abs(Int32.MinValue) == -(BigInteger)Int32.MinValue);
+            // Overflow tests. What overflows an Int32 is now an Int64, not a BigInteger - only a
+            // value too wide for a long reaches BigInteger.
+            Assert((long)ClrInteger.Minus(Int32.MinValue) == -(long)Int32.MinValue);
+            Assert((long)ClrInteger.Abs(Int32.MinValue) == -(long)Int32.MinValue);
 
-            Assert((BigInteger)ClrInteger.Divide(Int32.MinValue, -1) == -(BigInteger)Int32.MinValue);
+            Assert((long)ClrInteger.Divide(Int32.MinValue, -1) == -(long)Int32.MinValue);
             Assert(ClrInteger.Modulo(Int32.MinValue, -1) == 0);
 
             var dm = ClrInteger.DivMod(Int32.MinValue, -1);
-            Assert((BigInteger)dm[0] == -(BigInteger)Int32.MinValue);
+            Assert((long)dm[0] == -(long)Int32.MinValue);
             Assert((int)dm[1] == 0);
 
             Assert((int)ClrInteger.LeftShift(1, Int32.MinValue) == 0);

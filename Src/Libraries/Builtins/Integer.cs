@@ -53,8 +53,13 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("hash")]
+        public static int Hash(long self) {
+            return RubyUtils.GetIntegerHashCode(self);
+        }
+
+        [RubyMethod("hash")]
         public static int Hash([NotNull]BigInteger/*!*/ self) {
-            return self.GetHashCode();
+            return RubyUtils.GetIntegerHashCode(self);
         }
 
         #endregion
@@ -164,6 +169,9 @@ namespace IronRuby.Builtins {
         private static BigInteger ToBigInteger(object/*!*/ self) {
             if (self is int) {
                 return new BigInteger((int)self);
+            }
+            if (self is long) {
+                return new BigInteger((long)self);
             }
             if (self is BigInteger) {
                 return (BigInteger)self;
@@ -817,11 +825,15 @@ namespace IronRuby.Builtins {
         public static object TryUnaryMinus(object obj) {
             if (obj is int) {
                 int i = (int)obj;
-                return (i != Int32.MinValue) ? ScriptingRuntimeHelpers.Int32ToObject(-i) : -new BigInteger(i);
+                return (i != Int32.MinValue) ? ScriptingRuntimeHelpers.Int32ToObject(-i) : ClrInteger.Narrow(-(long)i);
+            }
+
+            if (obj is long l) {
+                return ClrInteger.NegateWide(l);
             }
 
             if (obj is BigInteger bignum) {
-                return -bignum;
+                return Protocols.Normalize(-bignum);
             }
 
             return null;

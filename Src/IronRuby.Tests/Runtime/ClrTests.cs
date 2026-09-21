@@ -2994,7 +2994,9 @@ init
         /// </summary>
         public void ClrPrimitiveNumericTypes1() {
             TestOutput(@"
-[System::Byte, System::SByte, System::UInt16, System::Int16, System::UInt32, System::Int64, System::UInt64, System::Single].each_with_index do |t,i|
+# System::Int64 is not in this list: Int64 is one of the CLR types the Integer class itself
+# extends (alongside Int32 and BigInteger), so it has no separate Ruby class to probe.
+[System::Byte, System::SByte, System::UInt16, System::Int16, System::UInt32, System::UInt64, System::Single].each_with_index do |t,i|
   p t.ancestors
   p t.new(i).class
   p x = t.new(i) + 1, x.class   
@@ -3027,19 +3029,14 @@ System::UInt32
 5
 Integer
 4
-[System::Int64, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
-System::Int64
-6
-Integer
-8
 [System::UInt64, Integer, Numeric, Comparable, Object, Kernel, BasicObject]
 System::UInt64
-7
+6
 Integer
 8
 [System::Single, Precision, Numeric, Comparable, Object, Kernel, BasicObject]
 System::Single
-8.0
+7.0
 Float
 no size method
 ");
@@ -3400,7 +3397,7 @@ p(*Inst.numerics(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
 4 (UInt16)
 5
 6 (UInt32)
-7 (Int64)
+7
 8 (UInt64)
 9
 (10+0j)
@@ -3436,7 +3433,7 @@ p(*Inst.numerics(c, c, c, c, c, c, c, c, c))
 1 (UInt16)
 1
 1 (UInt32)
-1 (Int64)
+1
 1 (UInt64)
 1
 ");

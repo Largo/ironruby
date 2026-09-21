@@ -133,6 +133,8 @@ namespace IronRuby.Builtins {
                 seconds = (double)value;
             } else if (value is int) {
                 seconds = (int)value;
+            } else if (value is long) {
+                seconds = (long)value;
             } else if (value is BigInteger) {
                 seconds = Protocols.ConvertToDouble(context, (BigInteger)value);
             } else {

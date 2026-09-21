@@ -668,6 +668,8 @@ namespace IronRuby.Builtins {
                 seconds = (int)timeout;
             } else if (timeout is double) {
                 seconds = (double)timeout;
+            } else if (timeout is long) {
+                seconds = (long)timeout;
             } else if (timeout is BigInteger) {
                 seconds = (double)(BigInteger)timeout;
             } else {
@@ -1163,6 +1165,8 @@ namespace IronRuby.Builtins {
                 value = (arg is bool && (bool)arg) ? 1 : 0;
             } else if (arg is int) {
                 value = (int)arg;
+            } else if (arg is long) {
+                value = (long)arg;
             } else if (arg is BigInteger) {
                 value = (long)(BigInteger)arg;
             } else {

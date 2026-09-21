@@ -36,11 +36,16 @@ namespace IronRuby.Builtins {
         public static readonly object MinusOne = ScriptingRuntimeHelpers.Int32ToObject(-1);
 
         internal static object/*!*/ MinusMinValue() {
-            return -(BigInteger)Int32.MinValue;
+            return -(long)Int32.MinValue;
         }
 
+        /// <summary>
+        /// The canonical boxed form of an integral value: an Int32 when it fits in one, otherwise
+        /// the Int64 itself. Nothing in the range of a long is ever handed out as a BigInteger, so
+        /// each value has exactly one representation and #hash / #eql? need no cross-type care.
+        /// </summary>
         public static object/*!*/ Narrow(long value) {
-            return (value >= Int32.MinValue && value <= Int32.MaxValue) ? (object)(Int32)value : (BigInteger)value;
+            return (value >= Int32.MinValue && value <= Int32.MaxValue) ? ScriptingRuntimeHelpers.Int32ToObject((Int32)value) : (object)value;
         }
 
         #region Bitwise Operators
@@ -75,7 +80,7 @@ namespace IronRuby.Builtins {
                 
             // If 'self' has more than '31 - other' significant digits it will overflow:
             if (shift >= 31 || (self & ~((1 << (31 - shift)) - 1)) != 0) {
-                return ((BigInteger)self) << shift;
+                return Protocols.Normalize(((BigInteger)self) << shift);
             }
 
             return self << shift;
@@ -329,8 +334,8 @@ namespace IronRuby.Builtins {
         /// Returns either Fixnum or Bignum if the result is too large for Fixnum.
         /// </returns>
         [RubyMethod("*")]
-        public static BigInteger/*!*/ Multiply(int self, [NotNull]BigInteger/*!*/ other) {
-            return BigInteger.Multiply(self, other);
+        public static object/*!*/ Multiply(int self, [NotNull]BigInteger/*!*/ other) {
+            return Protocols.Normalize(BigInteger.Multiply(self, other));
         }
 
         /// <summary>
@@ -393,7 +398,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("+")]
         public static object/*!*/ Add(int self, [NotNull]BigInteger/*!*/ other) {
-            return (BigInteger)self + other;
+            return Protocols.Normalize((BigInteger)self + other);
         }
 
         /// <summary>
