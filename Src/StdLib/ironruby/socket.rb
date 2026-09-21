@@ -1348,6 +1348,25 @@ class IO
   end
 
   class TimeoutError < IOError; end unless const_defined?(:TimeoutError, false)
+
+  # IO#timeout (3.2): the deadline a blocking operation on this IO waits for
+  # before it gives up with IO::TimeoutError.  Only Socket#connect consults it
+  # here -- the read and write paths go through .NET streams that take no
+  # deadline -- so it is defined next to the socket code that honours it.
+  def timeout
+    defined?(@__ir_timeout) ? @__ir_timeout : nil
+  end unless method_defined?(:timeout)
+
+  def timeout=(value)
+    if value.nil?
+      @__ir_timeout = nil
+    else
+      seconds = Float(value)
+      raise ArgumentError, "timeout must not be negative" if seconds < 0
+      @__ir_timeout = value
+    end
+    value
+  end unless method_defined?(:timeout=)
 end
 
 # Symbol/String arguments.  CRuby accepts :INET / "INET" / :AF_INET wherever it
@@ -1613,6 +1632,7 @@ class Socket
       raise
     end
   end
+
 end
 
 class TCPServer
@@ -1924,8 +1944,33 @@ class Socket
     __ir_raw_bind(Addrinfo === sockaddr ? sockaddr.to_sockaddr : sockaddr)
   end
 
+  def self.__ir_connect_target(sockaddr) # :nodoc:
+    port, host = Socket.unpack_sockaddr_in(sockaddr)
+    "#{host}:#{port}"
+  rescue StandardError
+    "socket"
+  end
+
+  # connect(2) honours IO#timeout: CRuby starts the connect non-blocking, waits
+  # for the socket to become writable and reports a wait that runs out as
+  # IO::TimeoutError rather than parking on the kernel's own connect timeout.
   def connect(sockaddr)
-    __ir_raw_connect(Addrinfo === sockaddr ? sockaddr.to_sockaddr : sockaddr)
+    sockaddr = sockaddr.to_sockaddr if Addrinfo === sockaddr
+    seconds = timeout
+    return __ir_raw_connect(sockaddr) if seconds.nil?
+
+    result = connect_nonblock(sockaddr, exception: false)
+    return result unless result == :wait_writable
+
+    unless wait_writable(seconds)
+      raise IO::TimeoutError, "user specified timeout for #{Socket.__ir_connect_target(sockaddr)}"
+    end
+
+    begin
+      __ir_raw_connect(sockaddr)
+    rescue Errno::EISCONN
+      0
+    end
   end
 
   def connect_nonblock(sockaddr, exception: true)

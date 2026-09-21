@@ -11698,18 +11698,12 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             IronRuby.Builtins.RubyModule def13 = DefineModule("OpenSSL::X509", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             #endif
             #if FEATURE_CRYPTOGRAPHY
-            IronRuby.Builtins.RubyClass def14 = DefineClass("OpenSSL::X509::Certificate", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate), 0x00000008, classRef0, LoadOpenSSL__X509__Certificate_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.CreateCertificate), 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.CreateCertificate)
-            );
-            #endif
-            #if FEATURE_CRYPTOGRAPHY
-            IronRuby.Builtins.RubyClass def16 = DefineClass("OpenSSL::X509::CertificateError", typeof(System.Security.Cryptography.CryptographicException), 0x00000000, classRef2, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            IronRuby.Builtins.RubyClass def15 = DefineClass("OpenSSL::X509::CertificateError", typeof(System.Security.Cryptography.CryptographicException), 0x00000000, classRef2, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Security.Cryptography.CryptographicException>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.CryptographicExceptionOps.Create)
             );
             #endif
             #if FEATURE_CRYPTOGRAPHY
-            IronRuby.Builtins.RubyClass def15 = DefineClass("OpenSSL::X509::Name", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Name), 0x00000008, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def14 = DefineClass("OpenSSL::X509::Name", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Name), 0x00000008, classRef0, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             #endif
             #if FEATURE_CRYPTOGRAPHY
             IronRuby.Builtins.RubyClass def6 = DefineClass("OpenSSL::KDFError", typeof(IronRuby.StandardLibrary.OpenSsl.OpenSsl.KDFError), 0x00000008, def7, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
@@ -11750,13 +11744,10 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             SetConstant(def1, "X509", def13);
             #endif
             #if FEATURE_CRYPTOGRAPHY
-            SetConstant(def13, "Certificate", def14);
+            SetConstant(def13, "CertificateError", def15);
             #endif
             #if FEATURE_CRYPTOGRAPHY
-            SetConstant(def13, "CertificateError", def16);
-            #endif
-            #if FEATURE_CRYPTOGRAPHY
-            SetConstant(def13, "Name", def15);
+            SetConstant(def13, "Name", def14);
             #endif
             #if FEATURE_CRYPTOGRAPHY
             SetConstant(def1, "KDFError", def6);
@@ -11928,51 +11919,6 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             DefineLibraryMethod(module, "seed", 0x21, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.RandomModule.Seed)
-            );
-            
-        }
-        #endif
-        
-        #if FEATURE_CRYPTOGRAPHY
-        private static void LoadOpenSSL__X509__Certificate_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "initialize", 0x12, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.Initialize)
-            );
-            
-            DefineLibraryMethod(module, "inspect", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.ToString)
-            );
-            
-            DefineLibraryMethod(module, "issuer", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.Issuer)
-            );
-            
-            DefineLibraryMethod(module, "public_key", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.PublicKey)
-            );
-            
-            DefineLibraryMethod(module, "serial", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate, System.Int32>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.Serial)
-            );
-            
-            DefineLibraryMethod(module, "subject", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.Subject)
-            );
-            
-            DefineLibraryMethod(module, "to_s", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.ToString)
-            );
-            
-            DefineLibraryMethod(module, "version", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate, System.Int32>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.X509.Certificate.Version)
             );
             
         }

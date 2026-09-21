@@ -353,6 +353,14 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// accept(2): a listening socket is never "connected", so it needs the wait unconditionally.
         /// </summary>
         internal static TResult BlockingAccept<TResult>(Socket/*!*/ socket, Func<TResult>/*!*/ operation) {
+            return BlockingAccept(socket, null, operation);
+        }
+
+        /// <summary>
+        /// As above, naming the Ruby method for Thread#backtrace: a thread parked in accept(2) is
+        /// inside a native call, which has no Ruby frame of its own, and MRI shows one.
+        /// </summary>
+        internal static TResult BlockingAccept<TResult>(Socket/*!*/ socket, string label, Func<TResult>/*!*/ operation) {
             if (!socket.IsBound) {
                 // .NET answers accept(2) on an unbound or unlistened socket with an
                 // InvalidOperationException, which surfaces in Ruby as TypeError; the kernel,
@@ -360,16 +368,24 @@ namespace IronRuby.StandardLibrary.Sockets {
                 throw new InvalidError();
             }
             try {
-                return BlockingCore(socket, SelectMode.SelectRead, operation);
+                return BlockingCore(socket, SelectMode.SelectRead, operation, label);
             } catch (InvalidOperationException) {
                 throw new InvalidError();
             }
         }
 
         private static TResult BlockingCore<TResult>(Socket socket, SelectMode mode, Func<TResult>/*!*/ operation) {
+            return BlockingCore(socket, mode, operation, null);
+        }
+
+        private static TResult BlockingCore<TResult>(Socket socket, SelectMode mode, Func<TResult>/*!*/ operation, string label) {
             ThreadOps.RubyThreadInfo info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
             bool wasBlocked = info.Blocked;
+            string wasLabel = info.BlockedLabel;
             info.Blocked = true;
+            if (label != null) {
+                info.BlockedLabel = label;
+            }
             try {
                 // Only a socket left in blocking mode can park here; the *_nonblock family has
                 // already cleared Socket.Blocking and must not wait at all.
@@ -381,6 +397,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 return operation();
             } finally {
                 info.Blocked = wasBlocked;
+                info.BlockedLabel = wasLabel;
             }
         }
 

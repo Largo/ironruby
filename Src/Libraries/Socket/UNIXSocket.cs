@@ -262,7 +262,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         private Socket/*!*/ Accept() {
-            return BlockingAccept(Socket, () => Socket.Accept());
+            return BlockingAccept(Socket, "UNIXServer#accept", () => Socket.Accept());
         }
 
         [RubyMethod("accept")]

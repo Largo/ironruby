@@ -444,3 +444,449 @@ module OpenSSL
     OpenSSL.fixed_length_secure_compare(hashed_a, hashed_b) && a == b
   end
 end
+
+# The certificate half of OpenSSL, on System.Security.Cryptography.X509Certificates:
+# CertificateRequest builds and signs, X509Chain verifies.  The C# library defines
+# only the error classes and X509::Name's placeholder; everything that needs the
+# .NET certificate API is here, where the CLR types can be driven directly.
+module IronRubyOpenSSL__ # :nodoc: all
+  Kernel.load_assembly 'System.Security.Cryptography'
+
+  X509 = ::System::Security::Cryptography::X509Certificates
+  Crypto = ::System::Security::Cryptography
+  EPOCH = ::System::DateTime.new(1970, 1, 1, 0, 0, 0, ::System::DateTimeKind.Utc)
+
+  # A CLR byte[] as a binary Ruby String.
+  def self.bytes(array)
+    array.to_a.map { |b| b.to_i }.pack("C*")
+  end
+
+  # An OpenSSL::X509::Name as an X500DistinguishedName.  Name#to_s(RFC2253) is
+  # already the escaped, most-significant-last form the CLR parser reads; the
+  # explicit to_clr_string picks the String overload of a constructor that also
+  # takes a byte[], which a Ruby String converts to as well.
+  def self.dn(name)
+    unless name.kind_of?(::OpenSSL::X509::Name)
+      raise TypeError, "wrong argument type #{name.class} (expected OpenSSL::X509::Name)"
+    end
+    X509::X500DistinguishedName.new(name.to_s(::OpenSSL::X509::Name::RFC2253).to_clr_string)
+  end
+
+  def self.hash_algorithm(digest)
+    name = digest.respond_to?(:name) ? digest.name : digest.to_s
+    case name.upcase
+    when "SHA1" then Crypto::HashAlgorithmName.SHA1
+    when "SHA256" then Crypto::HashAlgorithmName.SHA256
+    when "SHA384" then Crypto::HashAlgorithmName.SHA384
+    when "SHA512" then Crypto::HashAlgorithmName.SHA512
+    else
+      raise ::OpenSSL::X509::CertificateError, "unsupported signature digest: #{name}"
+    end
+  end
+
+  def self.time(value, what)
+    raise ::OpenSSL::X509::CertificateError, "#{what} is not set" if value.nil?
+    seconds = value.kind_of?(::Time) ? value.to_f : Kernel.Float(value)
+    ::System::DateTimeOffset.new(EPOCH.AddSeconds(seconds), ::System::TimeSpan.Zero)
+  end
+
+  # A serial number as the big-endian, unsigned byte string CertificateRequest#Create
+  # wants.  MRI takes any non-negative Integer; zero still needs one byte.
+  def self.serial_bytes(serial)
+    value = Kernel.Integer(serial)
+    raise ::OpenSSL::X509::CertificateError, "negative serial number" if value < 0
+    hex = value.to_s(16)
+    hex = "0" + hex if hex.length.odd?
+    [hex].pack("H*")
+  end
+end
+
+module OpenSSL
+  module PKey
+    class PKeyError < OpenSSLError; end unless const_defined?(:PKeyError, false)
+    class RSAError < PKeyError; end unless const_defined?(:RSAError, false)
+
+    # Only what a certificate needs: generate a key pair, hand out the public
+    # half and let the X509 code reach the CLR object.  Encoding (to_pem, to_der,
+    # reading a key back) and the encrypt/decrypt primitives are not implemented.
+    class RSA
+      def initialize(size = nil, pass = nil)
+        case size
+        when nil
+          @key = IronRubyOpenSSL__::Crypto::RSA.Create(2048)
+        when Integer
+          @key = IronRubyOpenSSL__::Crypto::RSA.Create(size)
+        else
+          raise RSAError, "OpenSSL::PKey::RSA.new(#{size.class}) is not supported"
+        end
+        @private = true
+      end
+
+      def self.generate(size, exponent = nil)
+        new(size)
+      end
+
+      def __clr_key # :nodoc:
+        @key
+      end
+
+      def __replace(key, is_private) # :nodoc:
+        @key = key
+        @private = is_private
+        self
+      end
+
+      def public_key
+        copy = IronRubyOpenSSL__::Crypto::RSA.Create
+        copy.ImportParameters(@key.ExportParameters(false))
+        RSA.allocate.__replace(copy, false)
+      end
+
+      def private?
+        @private
+      end
+
+      def public?
+        true
+      end
+
+      def inspect
+        "#<#{self.class}:0x%08x>" % (object_id << 1)
+      end
+    end
+  end
+
+  module X509
+    class ExtensionError < OpenSSLError; end unless const_defined?(:ExtensionError, false)
+    class StoreError < OpenSSLError; end unless const_defined?(:StoreError, false)
+
+    # A certificate extension.  The value is kept as the OpenSSL configuration
+    # string it was created from; the DER lives in the CLR extension object.
+    class Extension
+      def initialize(clr, oid, value, critical) # :nodoc:
+        @clr = clr
+        @oid = oid
+        @value = value
+        @critical = critical
+      end
+
+      attr_reader :oid, :value
+
+      def __clr # :nodoc:
+        @clr
+      end
+
+      def critical?
+        @critical
+      end
+
+      def to_s
+        @value
+      end
+
+      def inspect
+        "#<#{self.class} oid=#{@oid.inspect}, value=#{@value.inspect}, critical=#{@critical}>"
+      end
+    end
+
+    # MRI's ExtensionFactory turns an "oid = value" pair from an OpenSSL config
+    # file into DER, resolving "hash" and "keyid" against the two certificates it
+    # was handed.  The CLR has a class per extension rather than a config parser,
+    # so the handful of names certificates actually use are mapped by hand and
+    # anything else is refused rather than silently encoded wrong.
+    class ExtensionFactory
+      attr_accessor :issuer_certificate, :subject_certificate,
+                    :subject_request, :crl, :config
+
+      def initialize(issuer_certificate = nil, subject_certificate = nil,
+                     subject_request = nil, crl = nil)
+        @issuer_certificate = issuer_certificate
+        @subject_certificate = subject_certificate
+        @subject_request = subject_request
+        @crl = crl
+      end
+
+      def create_extension(*args)
+        if args.size == 1 && args[0].kind_of?(Array)
+          oid, value, critical = args[0]
+        elsif args.size == 1
+          oid, value = args[0].to_str.split("=", 2)
+          oid = oid.strip
+          value = value.to_s.strip
+          if value.start_with?("critical,")
+            critical = true
+            value = value[9..-1].strip
+          end
+        else
+          oid, value, critical = args
+        end
+        critical = !!critical
+        Extension.new(__clr_extension(oid.to_s, value.to_s, critical), oid.to_s, value.to_s, critical)
+      end
+
+      def create_ext(*args)
+        create_extension(*args)
+      end
+
+      KEY_USAGE = { # :nodoc:
+        "digitalsignature" => "DigitalSignature",
+        "nonrepudiation" => "NonRepudiation",
+        "keyencipherment" => "KeyEncipherment",
+        "dataencipherment" => "DataEncipherment",
+        "keyagreement" => "KeyAgreement",
+        "keycertsign" => "KeyCertSign",
+        "crlsign" => "CrlSign",
+        "encipheronly" => "EncipherOnly",
+        "decipheronly" => "DecipherOnly",
+      }.freeze
+
+      private
+
+      def __public_key_of(certificate, what)
+        unless certificate.respond_to?(:public_key) && certificate.public_key
+          raise ExtensionError, "a #{what} certificate with a public key is required"
+        end
+        IronRubyOpenSSL__::X509::PublicKey.new(certificate.public_key.__clr_key)
+      end
+
+      def __subject_key_identifier(certificate, what, critical)
+        IronRubyOpenSSL__::X509::X509SubjectKeyIdentifierExtension.new(
+          __public_key_of(certificate, what), critical)
+      end
+
+      def __clr_extension(oid, value, critical)
+        case oid
+        when "basicConstraints"
+          ca = false
+          path_length = 0
+          has_path_length = false
+          value.split(",").each do |part|
+            key, val = part.strip.split(":", 2)
+            case key
+            when "CA" then ca = val.to_s.upcase == "TRUE"
+            when "pathlen" then path_length = val.to_i; has_path_length = true
+            end
+          end
+          IronRubyOpenSSL__::X509::X509BasicConstraintsExtension.new(ca, has_path_length, path_length, critical)
+        when "keyUsage"
+          flags = IronRubyOpenSSL__::X509::X509KeyUsageFlags.None
+          value.split(",").each do |name|
+            member = KEY_USAGE[name.strip.downcase] or
+              raise ExtensionError, "unknown key usage: #{name.strip}"
+            flags |= IronRubyOpenSSL__::X509::X509KeyUsageFlags.send(member)
+          end
+          IronRubyOpenSSL__::X509::X509KeyUsageExtension.new(flags, critical)
+        when "subjectKeyIdentifier"
+          unless value == "hash"
+            raise ExtensionError, "only subjectKeyIdentifier=hash is supported"
+          end
+          __subject_key_identifier(@subject_certificate, "subject", critical)
+        when "authorityKeyIdentifier"
+          unless value.split(",").all? { |part| part.strip.start_with?("keyid") }
+            raise ExtensionError, "only authorityKeyIdentifier=keyid is supported"
+          end
+          ski = __subject_key_identifier(@issuer_certificate, "issuer", false)
+          IronRubyOpenSSL__::X509::X509AuthorityKeyIdentifierExtension.CreateFromSubjectKeyIdentifier(ski)
+        else
+          raise ExtensionError, "unsupported certificate extension: #{oid}"
+        end
+      end
+    end
+
+    # A certificate, built field by field the way MRI's is and turned into DER by
+    # CertificateRequest at #sign time.  Everything before the signature is held
+    # in Ruby; afterwards the signed X509Certificate2 is what #to_der, #to_pem and
+    # Store#verify work from.
+    class Certificate
+      def initialize(data = nil)
+        @version = 0
+        @serial = 0
+        @subject = Name.new
+        @issuer = Name.new
+        @public_key = nil
+        @not_before = nil
+        @not_after = nil
+        @extensions = []
+        @clr = nil
+        __load(data) unless data.nil?
+      end
+
+      attr_accessor :version, :serial, :subject, :issuer, :public_key,
+                    :not_before, :not_after
+
+      def __clr # :nodoc:
+        @clr
+      end
+
+      def extensions
+        @extensions.dup
+      end
+
+      def extensions=(list)
+        @extensions = list.to_a.dup
+      end
+
+      def add_extension(extension)
+        @extensions << extension
+        extension
+      end
+
+      def signed?
+        !@clr.nil?
+      end
+
+      # CertificateRequest signs with the issuer's key: the subject's public key
+      # goes into the request, the issuer's name and a signature generator over
+      # the signing key into Create.
+      def sign(key, digest)
+        unless key.kind_of?(OpenSSL::PKey::RSA)
+          raise CertificateError, "only OpenSSL::PKey::RSA keys can sign here"
+        end
+        subject_key = @public_key || key.public_key
+        request = IronRubyOpenSSL__::X509::CertificateRequest.new(
+          IronRubyOpenSSL__.dn(@subject),
+          subject_key.__clr_key,
+          IronRubyOpenSSL__.hash_algorithm(digest),
+          IronRubyOpenSSL__::Crypto::RSASignaturePadding.Pkcs1)
+        @extensions.each { |extension| request.CertificateExtensions.Add(extension.__clr) }
+        generator = IronRubyOpenSSL__::X509::X509SignatureGenerator.CreateForRSA(
+          key.__clr_key, IronRubyOpenSSL__::Crypto::RSASignaturePadding.Pkcs1)
+        @clr = request.Create(IronRubyOpenSSL__.dn(@issuer), generator,
+                              IronRubyOpenSSL__.time(@not_before, "not_before"),
+                              IronRubyOpenSSL__.time(@not_after, "not_after"),
+                              IronRubyOpenSSL__.serial_bytes(@serial))
+        self
+      end
+
+      def to_der
+        raise CertificateError, "certificate is not signed" if @clr.nil?
+        IronRubyOpenSSL__.bytes(@clr.RawData)
+      end
+
+      def to_pem
+        body = [to_der].pack("m0").scan(/.{1,64}/).join("\n")
+        "-----BEGIN CERTIFICATE-----\n#{body}\n-----END CERTIFICATE-----\n"
+      end
+      alias_method :to_s, :to_pem
+
+      def inspect
+        "#<#{self.class} subject=#{@subject}, issuer=#{@issuer}, serial=#{@serial}, " \
+          "not_before=#{@not_before.inspect}, not_after=#{@not_after.inspect}>"
+      end
+
+      private
+
+      def __load(data)
+        der = data.to_str
+        if der.include?("-----BEGIN CERTIFICATE-----")
+          body = der[/-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----/m, 1]
+          der = body.to_s.unpack1("m")
+        end
+        @clr = IronRubyOpenSSL__::X509::X509Certificate2.new(der)
+        @serial = @clr.SerialNumber.to_s.to_i(16)
+        @version = @clr.Version - 1
+        @subject = Name.parse_openssl(@clr.Subject.to_s)
+        @issuer = Name.parse_openssl(@clr.Issuer.to_s)
+        @not_before = ::Time.parse(@clr.NotBefore.ToString("o").to_s) rescue nil
+        @not_after = ::Time.parse(@clr.NotAfter.ToString("o").to_s) rescue nil
+        self
+      rescue ::System::Security::Cryptography::CryptographicException => error
+        raise CertificateError, error.message
+      end
+    end
+
+    # X509_STORE: a bag of certificates to build and check a chain against.
+    # X509Chain does the building; the trust anchors are the self-signed
+    # certificates in the bag, which is how OpenSSL's store behaves for the
+    # chains these are used for -- a certificate whose issuer is also in the
+    # store is verified through that issuer, not trusted on its own, so an
+    # expired issuer still fails the certificate it signed.
+    class Store
+      attr_accessor :verify_callback, :time, :flags, :purpose, :trust
+      attr_reader :error, :error_string, :chain
+
+      def initialize
+        @certificates = []
+        @error = nil
+        @error_string = nil
+        @chain = nil
+      end
+
+      def add_cert(certificate)
+        unless certificate.kind_of?(Certificate)
+          raise TypeError, "wrong argument type #{certificate.class} (expected OpenSSL::X509::Certificate)"
+        end
+        @certificates << certificate
+        self
+      end
+
+      def add_file(path)
+        ::File.read(path).scan(/-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----/m).each do |pem|
+          add_cert(Certificate.new(pem))
+        end
+        self
+      end
+
+      def add_path(path)
+        ::Dir[::File.join(path, "*")].each { |file| add_file(file) if ::File.file?(file) }
+        self
+      end
+
+      def set_default_paths
+        self
+      end
+
+      def verify(certificate, chain = nil)
+        clr = certificate.__clr
+        if clr.nil?
+          @chain = nil
+          @error = 20
+          @error_string = "unable to get local issuer certificate"
+          return false
+        end
+
+        builder = IronRubyOpenSSL__::X509::X509Chain.new
+        policy = builder.ChainPolicy
+        policy.RevocationMode = IronRubyOpenSSL__::X509::X509RevocationMode.NoCheck
+        policy.TrustMode = IronRubyOpenSSL__::X509::X509ChainTrustMode.CustomRootTrust
+        policy.VerificationTime = IronRubyOpenSSL__.time(@time, "time") unless @time.nil?
+        (@certificates + Array(chain)).each do |other|
+          next if other.__clr.nil?
+          policy.ExtraStore.Add(other.__clr)
+          policy.CustomTrustStore.Add(other.__clr) if other.subject.eql?(other.issuer)
+        end
+
+        result = builder.Build(clr)
+        @chain = result ? [certificate] : nil
+        if result
+          @error = 0
+          @error_string = "ok"
+        else
+          @error, @error_string = __first_error(builder)
+        end
+        result
+      end
+
+      private
+
+      # X509Chain reports a set of flags; MRI reports the X509_V_ERR_* code of the
+      # first problem OpenSSL hit.  Only the codes these flags correspond to are
+      # mapped, in roughly the order OpenSSL would notice them.
+      def __first_error(builder)
+        builder.ChainStatus.to_a.each do |status|
+          case status.Status.to_s
+          when "NotTimeValid", "CtlNotTimeValid"
+            return [10, "certificate has expired"]
+          when "NotSignatureValid"
+            return [7, "certificate signature failure"]
+          when "UntrustedRoot", "ExplicitDistrust"
+            return [19, "self signed certificate in certificate chain"]
+          when "InvalidBasicConstraints"
+            return [24, "invalid CA certificate"]
+          end
+        end
+        [20, "unable to get local issuer certificate"]
+      end
+    end
+  end
+end

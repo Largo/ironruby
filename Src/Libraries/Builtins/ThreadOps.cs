@@ -167,6 +167,15 @@ namespace IronRuby.Builtins {
             internal MutableString Name { get; set; }
             internal bool ReportOnException { get; set; }
             internal bool IsSleeping { get { return _isSleeping; } }
+
+            /// <summary>
+            /// The Ruby name of the native blocking call the thread is parked in
+            /// ("TCPServer#accept"), or null. A thread sitting in a native call has no CLR
+            /// frame that maps back to a Ruby method, so Thread#backtrace would otherwise stop
+            /// at the call site; MRI shows the method itself on top. Written only by the thread
+            /// it describes, read by any thread.
+            /// </summary>
+            internal volatile string BlockedLabel;
             internal volatile Thread ActiveFiberThread;
 
             /// <summary>
@@ -428,13 +437,14 @@ namespace IronRuby.Builtins {
             }
             RubyArray trace = RubyExceptionData.CreateBacktrace(context, self);
             RubyThreadInfo info = RubyThreadInfo.FromThread(self);
-            if (trace != null && trace.Count > 0 && info.IsSleeping) {
+            string blockedIn = info.IsSleeping ? "Kernel#sleep" : info.BlockedLabel;
+            if (trace != null && trace.Count > 0 && blockedIn != null) {
                 string caller = trace[0].ToString();
                 int label = caller.LastIndexOf(":in ", StringComparison.Ordinal);
                 if (label >= 0) {
                     caller = caller.Substring(0, label);
                 }
-                trace.Insert(0, MutableString.CreateMutable(caller + ":in 'Kernel#sleep'", RubyEncoding.UTF8));
+                trace.Insert(0, MutableString.CreateMutable(caller + ":in '" + blockedIn + "'", RubyEncoding.UTF8));
             }
             return trace;
         }

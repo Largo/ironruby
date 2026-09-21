@@ -272,7 +272,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         [RubyMethod("accept")]
         public static RubyArray/*!*/ Accept(RubyContext/*!*/ context, RubySocket/*!*/ self) {
             RubyArray result = new RubyArray(2);
-            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, () => self.Socket.Accept()));
+            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, "Socket#accept", () => self.Socket.Accept()));
             result.Add(s);
             // CRuby's second element is an Addrinfo, which socket.rb builds from the packed
             // sockaddr.  This used to be SocketAddress.ToString(), a CLR debug rendering.
@@ -349,7 +349,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyArray result = new RubyArray(2);
             // TODO: Do we need some kind of strong reference to the socket
             // here to stop the RubySocket from being garbage collected?
-            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, () => self.Socket.Accept()));
+            RubySocket s = new RubySocket(context, BlockingAccept(self.Socket, "Socket#sysaccept", () => self.Socket.Accept()));
             result.Add(s.GetFileDescriptor());
             // As for #accept: the packed sockaddr, which socket.rb turns into an Addrinfo.
             result.Add(GetPeerName(s));
