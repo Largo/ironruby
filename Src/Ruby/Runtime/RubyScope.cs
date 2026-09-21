@@ -1367,7 +1367,16 @@ var closureScope = scope as RubyClosureScope;
         public RubyGlobalScope/*!*/ RubyGlobalScope {
             get {
                 if (_globalScope == null) {
-                    throw new InvalidOperationException("Empty scope has no global scope.");
+                    // This is the context's empty scope: the stand-in used by call sites that carry no
+                    // Ruby frame - a Method object invoked as a block (flat_map(&method(:const_get))),
+                    // or a library method called from C#. A library method asking it for a global scope
+                    // wants the one of the program that is running (autoload, loaded features), so hand
+                    // that over instead of failing the call.
+                    var main = _context.MainGlobalScope;
+                    if (main == null) {
+                        throw new InvalidOperationException("Empty scope has no global scope.");
+                    }
+                    return main;
                 }
                 return _globalScope; 
             }
@@ -1430,6 +1439,7 @@ var closureScope = scope as RubyClosureScope;
             RubyTopLevelScope scope = new RubyTopLevelScope(rubyGlobalScope, null, null, rubyGlobalScope.MainObject);
             scope.IsMain = isMain;
             if (isMain) {
+                context.MainGlobalScope = rubyGlobalScope;
                 scope.SetDebugName("top-main");
                 context.ObjectClass.SetConstant("TOPLEVEL_BINDING", new Binding(scope) { SourcePath = "<main>", SourceLine = 0 });
                 if (context.RubyOptions.RequirePaths != null) {

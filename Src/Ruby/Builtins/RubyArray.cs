@@ -15,6 +15,8 @@
 
 using System;
 using System.Collections;
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Collections.Generic;
 using System.Diagnostics;
 using IronRuby.Runtime;
@@ -217,10 +219,25 @@ namespace IronRuby.Builtins {
                 var hashSite = hashStorage.GetCallSite("hash");
                 var toIntSite = fixnumCast.GetSite(ConvertToFixnumAction.Make(fixnumCast.Context));
                 foreach (object item in self) {
-                    hash = (hash << 1) ^ toIntSite.Target(toIntSite, hashSite.Target(hashSite, item));
+                    hash = (hash << 1) ^ ToHashCode(toIntSite, hashSite.Target(hashSite, item));
                 }
             }
             return hash;
+        }
+
+        /// <summary>
+        /// Folds what #hash answered into a Fixnum. Ruby only promises an Integer there, and one
+        /// wider than a Fixnum is perfectly legal - MRI's own hashes are 64 bit - so a Bignum is
+        /// reduced the way Bignum#hash reduces one rather than refused as out of range.
+        /// </summary>
+        internal static int ToHashCode(CallSite<Func<CallSite, object, int>>/*!*/ toIntSite, object hashValue) {
+            if (hashValue is int) {
+                return (int)hashValue;
+            }
+            if (hashValue is BigInteger) {
+                return RubyUtils.GetIntegerHashCode((BigInteger)hashValue);
+            }
+            return toIntSite.Target(toIntSite, hashValue);
         }
 
         [MultiRuntimeAware]
