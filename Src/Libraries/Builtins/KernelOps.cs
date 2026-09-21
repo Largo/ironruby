@@ -2229,7 +2229,7 @@ namespace IronRuby.Builtins {
                 if (fileName.Length > 1 && fileName[1] == '-') {
                     throw new NotImplementedError("forking a process is not supported");
                 }
-                return RubyIOOps.OpenPipe(context, path.GetSlice(1), (IOMode)mode);
+                return RubyIOOps.OpenPipe(context, path.GetSlice(1), mode);
 #else
                 throw new NotSupportedException("open cannot create a subprocess");
 #endif
@@ -2284,13 +2284,13 @@ namespace IronRuby.Builtins {
             int mode,
             [DefaultProtocol, DefaultParameterValue(RubyFileOps.ReadWriteMode)]int permission) {
 
-            RubyIO pipe = CheckOpenPipe(context, path, (IOMode)mode);
+            RubyIO pipe = CheckOpenPipe(context, path, IOModeNative.ToIOMode(mode));
             if (pipe != null) {
                 return pipe;
             }
 
             string fileName = path.ConvertToString();
-            RubyIO file = new RubyFile(context, fileName, (IOMode)mode);
+            RubyIO file = new RubyFile(context, fileName, IOModeNative.ToIOMode(mode));
 
             SetPermission(context, fileName, permission);
 

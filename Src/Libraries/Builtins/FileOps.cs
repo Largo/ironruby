@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -89,7 +89,7 @@ namespace IronRuby.Builtins {
             IOInfo info = new IOInfo();
             if (optionsOrMode != Missing.Value && optionsOrMode != null) {
                 int? m = toIntSite.Target(toIntSite, optionsOrMode);
-                info = m.HasValue ? new IOInfo((IOMode)m) : IOInfo.Parse(context, Protocols.CastToString(toStr, optionsOrMode));
+                info = m.HasValue ? new IOInfo(IOModeNative.ToIOMode(m.Value)) : IOInfo.Parse(context, Protocols.CastToString(toStr, optionsOrMode));
             }
 
             int permissions = 0;
@@ -223,13 +223,13 @@ namespace IronRuby.Builtins {
         [RubyModule("Constants")]
         public static class Constants {
             [RubyConstant]
-            public readonly static int APPEND = (int)IOMode.WriteAppends;
+            public readonly static int APPEND = IOModeNative.Append;
             [RubyConstant]
-            public readonly static int BINARY = (int)IOMode.PreserveEndOfLines;
+            public readonly static int BINARY = IOModeNative.Binary;
             [RubyConstant]
-            public readonly static int CREAT = (int)IOMode.CreateIfNotExists;
+            public readonly static int CREAT = IOModeNative.CreateIfNotExists;
             [RubyConstant]
-            public readonly static int EXCL = (int)IOMode.ErrorIfExists;
+            public readonly static int EXCL = IOModeNative.ErrorIfExists;
             [RubyConstant]
             public readonly static int FNM_CASEFOLD = 0x08;
             [RubyConstant]
@@ -254,21 +254,21 @@ namespace IronRuby.Builtins {
             [RubyConstant]
             public readonly static int LOCK_UN = 0x08;
             [RubyConstant]
-            public readonly static int NONBLOCK = (int)IOMode.NonBlocking;
+            public readonly static int NONBLOCK = IOModeNative.NonBlocking;
             [RubyConstant]
-            public readonly static int NOCTTY = (int)IOMode.NoControllingTerminal;
+            public readonly static int NOCTTY = IOModeNative.NoControllingTerminal;
             [RubyConstant]
-            public readonly static int SYNC = (int)IOMode.Synchronized;
+            public readonly static int SYNC = IOModeNative.Synchronized;
             [RubyConstant]
-            public readonly static int SHARE_DELETE = (int)IOMode.ShareDelete;
+            public readonly static int SHARE_DELETE = IOModeNative.ShareDelete;
             [RubyConstant]
-            public readonly static int RDONLY = (int)IOMode.ReadOnly;
+            public readonly static int RDONLY = 0;
             [RubyConstant]
-            public readonly static int RDWR = (int)IOMode.ReadWrite;
+            public readonly static int RDWR = 2;
             [RubyConstant]
-            public readonly static int TRUNC = (int)IOMode.Truncate;
+            public readonly static int TRUNC = IOModeNative.Truncate;
             [RubyConstant]
-            public readonly static int WRONLY = (int)IOMode.WriteOnly;
+            public readonly static int WRONLY = 1;
         }
 
         #endregion

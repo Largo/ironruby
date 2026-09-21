@@ -1974,6 +1974,9 @@ class << IO
     end
     external, internal = args.reject { |a| a.respond_to?(:to_hash) }
     read.set_encoding(external, internal) if external
+    # MRI hands back a write end that is already sync, so a write reaches the reader
+    # without a flush. The read end is an ordinary buffered stream.
+    write.sync = true
 
     return [read, write] unless block_given?
     begin
@@ -2085,6 +2088,9 @@ class << IO
 
     io.instance_variable_set(:@__popen_pid__, pid)
     io.extend(IO::PopenChild)
+    # As for IO.pipe, MRI's popen IO is sync: what is written goes to the child rather
+    # than sitting in a buffer until the IO is closed.
+    io.sync = true
 
     return io unless block
 

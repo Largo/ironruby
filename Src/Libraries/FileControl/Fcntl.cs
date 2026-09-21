@@ -58,20 +58,29 @@ namespace IronRuby.StandardLibrary.FileControl {
         [RubyConstant]
         public const int F_UNLCK = 2;
 
+        // The open(2) status flags, the platform's own values - fcntl(2) reads them back and
+        // F_SETFL sets them, so they are the same numbers File::Constants uses.
         [RubyConstant]
-        public const int O_CREAT = 0x0100;
+        public readonly static int O_CREAT = IOModeNative.CreateIfNotExists;
 
         [RubyConstant]
-        public const int O_EXCL = 0x0400;
+        public readonly static int O_EXCL = IOModeNative.ErrorIfExists;
 
         [RubyConstant]
-        public const int O_TRUNC = 0x0200;
+        public readonly static int O_TRUNC = IOModeNative.Truncate;
 
         [RubyConstant]
-        public const int O_APPEND = 0x0008;
+        public readonly static int O_APPEND = IOModeNative.Append;
 
         [RubyConstant]
-        public const int O_NONBLOCK = 0x01;
+        public readonly static int O_NONBLOCK = IOModeNative.NonBlocking;
+
+        [RubyConstant]
+        public readonly static int O_NOCTTY = IOModeNative.NoControllingTerminal;
+
+        // MRI's Fcntl spells O_NONBLOCK twice, under its older name as well.
+        [RubyConstant]
+        public readonly static int O_NDELAY = IOModeNative.NonBlocking;
 
         [RubyConstant]
         public const int O_RDONLY = 0x0000;

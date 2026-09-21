@@ -213,7 +213,7 @@ namespace IronRuby.Builtins {
             // :flags is OR'd into whatever the mode argument already said.
             if (options.TryGetValue(context.CreateAsciiSymbol("flags"), out optionValue)) {
                 int extra = Protocols.CastToFixnum(new ConversionStorage<int>(context), optionValue);
-                result = new IOInfo(result.Mode | (IOMode)extra, result.ExternalEncoding, result.InternalEncoding, result._textOrBinarySpecified);
+                result = new IOInfo(result.Mode | IOModeNative.ToIOMode(extra), result.ExternalEncoding, result.InternalEncoding, result._textOrBinarySpecified);
             }
 
             return result;
@@ -277,6 +277,71 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("encoding specified twice");
             }
             return new IOInfo(_mode, encoding, null, _textOrBinarySpecified);
+        }
+    }
+
+    /// <summary>
+    /// The open(2) flag values the platform itself uses, which is what File::APPEND and the
+    /// Fcntl::O_* constants have to be: Ruby hands them to fcntl(2) and reads them back from
+    /// it, so a private numbering would report the wrong thing (and, passed to F_SETFL, set
+    /// the wrong bit). IOMode stays IronRuby's own representation - it has to, since Unix has
+    /// no O_BINARY and Windows no O_NONBLOCK - and these two methods translate.
+    /// </summary>
+    public static class IOModeNative {
+        private static readonly bool Unix = System.IO.Path.DirectorySeparatorChar == '/';
+
+        // Linux bits/fcntl-linux.h on the left, the MSVCRT _O_* macros on the right.
+        // Zero means the platform has no such flag: Linux has no O_BINARY and no
+        // O_SHARE_DELETE, and MRI's File::BINARY and File::SHARE_DELETE are 0 there too.
+        public static readonly int Append = Unix ? 1024 : 0x0008;
+        public static readonly int NonBlocking = Unix ? 2048 : 0x0004;
+        public static readonly int NoControllingTerminal = Unix ? 256 : 0x0010;
+        public static readonly int Synchronized = Unix ? 1052672 : 0x0020;
+        public static readonly int ShareDelete = Unix ? 0 : 0x0040;
+        public static readonly int CreateIfNotExists = Unix ? 64 : 0x0100;
+        public static readonly int Truncate = Unix ? 512 : 0x0200;
+        public static readonly int ErrorIfExists = Unix ? 128 : 0x0400;
+        public static readonly int Binary = Unix ? 0 : 0x8000;
+
+        // O_ACCMODE, and the same three values on both platforms.
+        public static readonly int AccessMask = (int)IOMode.ReadWriteMask;
+
+        private static bool Has(int flags, int flag) {
+            return flag != 0 && (flags & flag) == flag;
+        }
+
+        /// <summary>
+        /// The IOMode a numeric mode from Ruby - File.open(path, File::WRONLY | File::CREAT) -
+        /// stands for. Flags IronRuby has no representation for (O_NOFOLLOW, O_DIRECT, ...) are
+        /// dropped rather than refused, which is how the ones it already ignores behave.
+        /// </summary>
+        public static IOMode ToIOMode(int flags) {
+            IOMode result = (IOMode)(flags & AccessMask);
+            if (Has(flags, Append)) result |= IOMode.WriteAppends;
+            if (Has(flags, NonBlocking)) result |= IOMode.NonBlocking;
+            if (Has(flags, NoControllingTerminal)) result |= IOMode.NoControllingTerminal;
+            if (Has(flags, Synchronized)) result |= IOMode.Synchronized;
+            if (Has(flags, ShareDelete)) result |= IOMode.ShareDelete;
+            if (Has(flags, CreateIfNotExists)) result |= IOMode.CreateIfNotExists;
+            if (Has(flags, Truncate)) result |= IOMode.Truncate;
+            if (Has(flags, ErrorIfExists)) result |= IOMode.ErrorIfExists;
+            if (Has(flags, Binary)) result |= IOMode.PreserveEndOfLines;
+            return result;
+        }
+
+        /// <summary>The inverse: the platform flags an IOMode stands for.</summary>
+        public static int ToNativeFlags(IOMode mode) {
+            int result = (int)mode & AccessMask;
+            if ((mode & IOMode.WriteAppends) != 0) result |= Append;
+            if ((mode & IOMode.NonBlocking) != 0) result |= NonBlocking;
+            if ((mode & IOMode.NoControllingTerminal) != 0) result |= NoControllingTerminal;
+            if ((mode & IOMode.Synchronized) != 0) result |= Synchronized;
+            if ((mode & IOMode.ShareDelete) != 0) result |= ShareDelete;
+            if ((mode & IOMode.CreateIfNotExists) != 0) result |= CreateIfNotExists;
+            if ((mode & IOMode.Truncate) != 0) result |= Truncate;
+            if ((mode & IOMode.ErrorIfExists) != 0) result |= ErrorIfExists;
+            if ((mode & IOMode.PreserveEndOfLines) != 0) result |= Binary;
+            return result;
         }
     }
 

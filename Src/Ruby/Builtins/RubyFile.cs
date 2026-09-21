@@ -43,6 +43,8 @@ namespace IronRuby.Builtins {
             Path = null;
         }
 
+        private const int ENXIO = 6;
+
         public static Stream/*!*/ OpenFileStream(RubyContext/*!*/ context, string/*!*/ path, IOMode mode) {
             ContractUtils.RequiresNotNull(path, "path");
             FileAccess access = mode.ToFileAccess();
@@ -88,12 +90,18 @@ namespace IronRuby.Builtins {
                 } catch (PathTooLongException e) {
                     throw RubyExceptions.CreateENOENT(e.Message, e);
 #endif
-                } catch (IOException) {
+                } catch (IOException e) {
                     if ((mode & IOMode.ErrorIfExists) != 0) {
                         throw RubyExceptions.CreateEEXIST(path);
-                    } else {
-                        throw;
                     }
+                    // On Unix the CLR puts the raw errno in HResult (Interop.GetExceptionForIoErrno);
+                    // on Windows HResult is an HRESULT and is negative. ENXIO is what open(2) answers
+                    // for /dev/tty without a controlling terminal, and MRI raises Errno::ENXIO there -
+                    // a bare IOException would have surfaced as IOError.
+                    if (e.HResult == ENXIO && System.IO.Path.DirectorySeparatorChar == '/') {
+                        throw RubyExceptions.CreateENXIO(path);
+                    }
+                    throw;
                 } catch (UnauthorizedAccessException) {
                     // .NET reports opening a directory as an access violation; MRI
                     // distinguishes it, so only a genuine one stays EACCES (which is

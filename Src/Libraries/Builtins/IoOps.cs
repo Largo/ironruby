@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -165,7 +165,7 @@ namespace IronRuby.Builtins {
             // supply one.
             if (optionsOrMode != Missing.Value && optionsOrMode != null) {
                 int? m = toIntSite.Target(toIntSite, optionsOrMode);
-                info = m.HasValue ? new IOInfo((IOMode)m) : IOInfo.Parse(context, Protocols.CastToString(toStr, optionsOrMode));
+                info = m.HasValue ? new IOInfo(IOModeNative.ToIOMode(m.Value)) : IOInfo.Parse(context, Protocols.CastToString(toStr, optionsOrMode));
             }
 
             if (options != null) {
@@ -398,7 +398,7 @@ namespace IronRuby.Builtins {
             if (source != null) {
                 return Reopen(self, source);
             }
-            return Reopen(toPath, self, path, new IOInfo((IOMode)mode));
+            return Reopen(toPath, self, path, new IOInfo(IOModeNative.ToIOMode(mode)));
         }
 
         private static RubyIO/*!*/ Reopen(ConversionStorage<MutableString>/*!*/ toPath, RubyIO/*!*/ io, object pathObj, IOInfo info) {

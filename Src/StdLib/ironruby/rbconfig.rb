@@ -104,6 +104,11 @@ module RbConfig
   CONFIG["AR"] = "ar"
   CONFIG["STRIP"] = "strip"
 
+  # IronRuby is not built by an autoconf configure script; mkmf only ever
+  # shellsplits this, so an empty argument list is the honest answer.
+  CONFIG["configure_args"] = ""
+  CONFIG["CROSS_COMPILING"] = "no"
+
   CONFIG["SHELL"] = windows ? (ENV["COMSPEC"] || "cmd.exe").dup : "/bin/sh"
   CONFIG["NULLCMD"] = windows ? "rem" : ":"
   CONFIG["DLEXT"] = "so"
@@ -111,6 +116,50 @@ module RbConfig
   # The standard extensions (etc, socket, zlib, ...) are built in rather than loaded from
   # shared objects, as in an MRI built with --with-static-linked-ext.
   CONFIG["EXTSTATIC"] = "static"
+
+  # Where a distribution keeps the headers a C extension compiles against.
+  # IronRuby has none: an extension here is a .NET assembly.  mkmf still refuses
+  # to load unless rubyhdrdir names a directory holding ruby/ruby.h - it aborts
+  # before defining MakeMakefile at all - so these name the header this tree
+  # ships, which is a single #error saying so (Src/StdLib/include/ruby/ruby.h).
+  hdrdir = "#{libdir}/include"
+  CONFIG["rubyhdrdir"] = hdrdir
+  CONFIG["rubyarchhdrdir"] = "#{hdrdir}/#{arch}"
+  CONFIG["sitehdrdir"] = "#{hdrdir}/site_ruby"
+  CONFIG["vendorhdrdir"] = "#{hdrdir}/vendor_ruby"
+  CONFIG["topdir"] = File.dirname(__FILE__)
+  CONFIG["build_os"] = CONFIG["host_os"].dup
+
+  # The C toolchain mkmf drives.  There is none: every one of these is what MRI
+  # fills in from its own build, and IronRuby was not built by a C compiler.
+  # They are here because mkmf reads them while it loads and would otherwise
+  # fail on nil; empty is the truthful value, and it makes every compile mkmf
+  # attempts fail rather than appear to succeed.
+  %w[
+    ADDITIONAL_DLDFLAGS ARCH_FLAG ASSEMBLE_C ASSEMBLE_CXX BUILD_FILE_SEPARATOR
+    CC_WRAPPER CFLAGS CLEANFILES COMMON_HEADERS COMMON_LIBS COMMON_MACROS
+    COMPILE_C COMPILE_CXX COMPILE_RULES COUTFLAG CPPFLAGS CPPOUTFILE CSRCFLAG
+    CXXFLAGS CXX_EXT DISTCLEANDIRS DISTCLEANFILES DLDFLAGS DLDLIBS EXPORT_PREFIX
+    GCC LDFLAGS LIBARG LIBPATHFLAG LIBRUBYARG LIBRUBYARG_SHARED
+    LIBRUBYARG_STATIC LIBS LINK_SO MAIN_DOES_NOTHING OUTFLAG RPATHFLAG
+    RULE_SUBST TRY_LINK TRY_LINK_CXX UNIVERSAL_INTS warnflags
+  ].each { |key| CONFIG[key] = "" }
+
+  # Naming conventions rather than tools, so these have an answer even here.
+  CONFIG["OBJEXT"] = windows ? "obj" : "o"
+  CONFIG["LIBEXT"] = windows ? "lib" : "a"
+  CONFIG["ASMEXT"] = "S"
+  # There is no static libruby either; it must differ from LIBRUBY, which is how
+  # mkmf decides whether the runtime is linked in.
+  CONFIG["LIBRUBY_A"] = ""
+
+  # In MRI this is the configuration as it went into the Makefile, with the
+  # $(var) references still unexpanded; CONFIG is the expanded copy. IronRuby
+  # never writes a Makefile, so nothing here holds a reference to expand and
+  # the two hashes have the same contents - but they must not be the same
+  # object, and mkmf mutates the values it is handed.
+  MAKEFILE_CONFIG = {}
+  CONFIG.each { |k, v| MAKEFILE_CONFIG[k] = v.dup }
 
   def RbConfig::expand(val, config = CONFIG)
     newval = val.gsub(/\$\$|\$\(([^()]+)\)|\$\{([^{}]+)\}/) do
@@ -136,3 +185,5 @@ module RbConfig
     File.join(RbConfig::CONFIG["bindir"], RbConfig::CONFIG["ruby_install_name"] + RbConfig::CONFIG["EXEEXT"])
   end
 end
+# Non-nil if configured for cross compiling.
+CROSS_COMPILING = nil unless defined? CROSS_COMPILING

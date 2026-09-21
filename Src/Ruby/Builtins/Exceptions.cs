@@ -486,6 +486,26 @@ namespace IronRuby.Builtins {
 #endif
     }
 
+    /// <summary>
+    /// Backs Errno::ENXIO. .NET reports open(2)'s ENXIO - no controlling terminal for
+    /// /dev/tty, a FIFO opened for writing with no reader - as a bare IOException, which
+    /// would otherwise surface as IOError. Registered in Errno.cs.
+    /// </summary>
+    [Serializable]
+    public class NoSuchDeviceOrAddressError : ExternalException {
+        private const string/*!*/ M = "No such device or address";
+
+        public NoSuchDeviceOrAddressError() : this(null, null) { }
+        public NoSuchDeviceOrAddressError(string message) : this(message, null) { }
+        public NoSuchDeviceOrAddressError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
+        public NoSuchDeviceOrAddressError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
+
+#if FEATURE_SERIALIZATION
+        protected NoSuchDeviceOrAddressError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+            : base(info, context) { }
+#endif
+    }
+
     [Serializable]
     public class InvalidError : ExternalException {
         private const string/*!*/ M = "Invalid argument";

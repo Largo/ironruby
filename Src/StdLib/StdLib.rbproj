@@ -1,4 +1,4 @@
-<?xml version="1.0" encoding="utf-8"?>
+﻿<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003" ToolsVersion="4.0">
   <PropertyGroup>
     <ExcludeDlrReferences>true</ExcludeDlrReferences>
@@ -27,6 +27,10 @@
     </Content>
     <Content Include="ruby\**\*.*"
 	     Exclude="$(ExcludedPackages)">
+       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="include\**\*.*"
+             Exclude="$(ExcludedPackages)">
        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
   </ItemGroup>
