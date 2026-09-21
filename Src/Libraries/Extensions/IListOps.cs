@@ -2590,21 +2590,25 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("sort_by")]
         public static object SortBy(ComparisonStorage/*!*/ comparisonStorage, [NotNull]BlockParam/*!*/ keySelector, IList/*!*/ self) {
-            int count = self.Count;
-            var items = new object[count];
-            var keys = new object[count];
+            // self.Count is re-read on every step: MRI keeps iterating into elements the block
+            // appends to the receiver (spec/core/array/shared/iterable_and_tolerating_size_increasing).
+            var itemList = new List<object>(self.Count);
+            var keyList = new List<object>(self.Count);
 
-            for (int i = 0; i < count; i++) {
+            for (int i = 0; i < self.Count; i++) {
                 object item = self[i];
-                items[i] = item;
+                itemList.Add(item);
 
                 object key;
                 if (keySelector.Yield(item, out key)) {
                     return key;
                 }
-                keys[i] = key;
+                keyList.Add(key);
             }
 
+            int count = itemList.Count;
+            object[] items = itemList.ToArray();
+            object[] keys = keyList.ToArray();
             MergeSortByKey(keys, items, new object[count], new object[count], 0, count, comparisonStorage);
 
             var result = new RubyArray(count);
