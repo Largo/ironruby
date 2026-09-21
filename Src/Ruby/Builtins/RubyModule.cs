@@ -1409,7 +1409,10 @@ namespace IronRuby.Builtins {
                 var context = autoloadScope.Context;
                 object main = autoloadScope.MainObject;
                 var method = context.ResolveMethod(main, "require", VisibilityContext.AllVisible).Info;
-                if (method == null || method.DeclaringModule == context.KernelModule) {
+                // It has to be the builtin itself that is skipped, not everything Kernel declares:
+                // Zeitwerk reopens Kernel and defines its own #require there, and it is that method
+                // an autoload of a directory (an implicit namespace) relies on being called.
+                if (method == null || method is RubyLibraryMethodInfo) {
                     return context.Loader.LoadFile(autoloadScope.Scope, null, _path, LoadFlags.Require);
                 }
 

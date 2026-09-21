@@ -462,7 +462,18 @@ namespace IronRuby.Builtins {
             }
 
             public override int IndexIn(Content/*!*/ str, int start, int count) {
-                return str.IndexOf(_data, start, count);
+                // The buffer is a capacity, not a length: searching for the whole of it would look
+                // for the unused tail as well, and a needle built by growing one - String#pack, say -
+                // would never be found.
+                return str.IndexOf(ExactData(), start, count);
+            }
+
+            /// <summary>
+            /// The bytes of the string, without the unused tail of the buffer. No copy is made when
+            /// the buffer happens to be exactly full.
+            /// </summary>
+            private byte[]/*!*/ ExactData() {
+                return _count == _data.Length ? _data : ToByteArray();
             }
 
             #endregion
@@ -492,7 +503,7 @@ namespace IronRuby.Builtins {
             }
 
             public override int LastIndexIn(Content/*!*/ str, int start, int count) {
-                return str.LastIndexOf(_data, start, count);
+                return str.LastIndexOf(ExactData(), start, count);
             }
 
             #endregion

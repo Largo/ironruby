@@ -110,6 +110,7 @@ namespace IronRuby.Runtime {
         private readonly TopNamespaceTracker _namespaces;
         private readonly Loader/*!*/ _loader;
         private readonly Scope/*!*/ _globalScope;
+        private RubyGlobalScope _mainGlobalScope;
         private readonly RubyMetaBinderFactory/*!*/ _metaBinderFactory;
         private readonly RubyBinder _binder;
         private DynamicDelegateCreator _delegateCreator;
@@ -477,6 +478,16 @@ namespace IronRuby.Runtime {
 
         public Scope/*!*/ TopGlobalScope {
             get { return _globalScope; }
+        }
+
+        /// <summary>
+        /// The global scope of the program that is running - the main script's, or the first one
+        /// created if the runtime is hosted. It is the fallback for call sites that carry no Ruby
+        /// frame and therefore run against <see cref="EmptyScope"/>. Null until one exists.
+        /// </summary>
+        internal RubyGlobalScope MainGlobalScope {
+            get { return _mainGlobalScope; }
+            set { _mainGlobalScope = value; }
         }
 
         internal RubyMetaBinderFactory/*!*/ MetaBinderFactory {
@@ -3539,6 +3550,11 @@ namespace IronRuby.Runtime {
             RubyClass mainSingleton = GetOrCreateMainSingleton(mainObject, null);
 
             RubyGlobalScope result = new RubyGlobalScope(this, globalScope, mainObject, createHosted);
+            // Remember the first one as the fallback for frameless call sites (see MainGlobalScope);
+            // the main script's scope replaces it in RubyTopLevelScope.CreateTopLevelScope.
+            if (_mainGlobalScope == null) {
+                _mainGlobalScope = result;
+            }
             if (bindGlobals) {
                 mainSingleton.SetMethodNoEvent(this, Symbols.MethodMissing, new RubyScopeMethodMissingInfo(RubyMemberFlags.Private, mainSingleton));
                 mainSingleton.SetGlobalScope(result);

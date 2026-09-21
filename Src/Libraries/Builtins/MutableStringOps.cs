@@ -802,16 +802,13 @@ namespace IronRuby.Builtins {
         public static MutableString RemoveSubstringInPlace(ConversionStorage<int>/*!*/ fixnumCast, 
             MutableString/*!*/ self, [NotNull]Range/*!*/ range) {
             self.RequireNotFrozen();
-            int begin = Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = Protocols.CastToFixnum(fixnumCast, range.End);
-
-            if (!InInclusiveRangeNormalized(self, ref begin)) {
+            // Through NormalizeSubstringRange so that a beginless or endless range means the start
+            // resp. the end of the string, as it does for #slice: `str.slice!(0..)` clears it.
+            int begin, count;
+            if (!NormalizeSubstringRange(fixnumCast, range, self.Length, out begin, out count)) {
                 return null;
             }
 
-            end = IListOps.NormalizeIndex(self.Length, end);
-
-            int count = range.ExcludeEnd ? end - begin : end - begin + 1;
             return count < 0 ? self.CreateDerived() : RemoveSubstringInPlace(self, begin, count);
         }
 

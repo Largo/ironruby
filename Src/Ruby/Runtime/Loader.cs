@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -711,6 +711,14 @@ namespace IronRuby.Runtime {
                         Assembly assembly = Platform.LoadAssemblyFromPath(file.Path);
                         DomainManager.LoadAssembly(assembly);
                         loaded = assembly;
+                    } catch (BadImageFormatException) when (IsNativeExtensionPath(file.Path)) {
+                        // A gem's compiled CRuby extension. It is not a CLR assembly and never will
+                        // be, so say that rather than report a malformed one: "Bad IL format" sends
+                        // people looking for a corrupt file.
+                        throw RubyExceptions.CreateLoadError(
+                            "cannot load such file -- " + file.Path +
+                            " (a C extension; IronRuby has no C extension host)"
+                        );
                     } catch (Exception e) {
                         throw RubyExceptions.CreateLoadError(e);
                     }
@@ -731,6 +739,18 @@ namespace IronRuby.Runtime {
             }
 
             return true;
+        }
+
+        /// <summary>
+        /// True for the file name of a compiled CRuby extension (what a gem's extconf.rb builds).
+        /// </summary>
+        private static bool IsNativeExtensionPath(string path) {
+            if (path == null) {
+                return false;
+            }
+            return path.EndsWith(".so", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".dylib", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith(".bundle", StringComparison.OrdinalIgnoreCase);
         }
 
         private ScriptCode/*!*/ CompileRubySource(SourceUnit/*!*/ sourceUnit, LoadFlags flags) {

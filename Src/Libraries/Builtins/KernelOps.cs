@@ -317,15 +317,31 @@ namespace IronRuby.Builtins {
             return Protocols.ConvertToString(tosConversion, obj);
         }
 
+        // Kernel#Complex and Kernel#Rational below load complex18.rb/rational18.rb and re-dispatch,
+        // expecting the file to have replaced them. It does so for the instance method only, so a
+        // call on a receiver that still resolves to the stub (e.g. Kernel.Complex, the singleton)
+        // would come straight back here and recurse until the stack ran out. The guard turns that
+        // into an error rather than a crash.
+        [ThreadStatic]
+        private static bool _inNumericStub;
+
         [RubyMethod("Complex", RubyMethodAttributes.PrivateInstance, Compatibility = RubyCompatibility.Ruby19)]
         [RubyMethod("Complex", RubyMethodAttributes.PublicSingleton, Compatibility = RubyCompatibility.Ruby19)]
         public static object ToComplex(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toComplex, 
             RubyScope/*!*/ scope, object self, object real, [DefaultParameterValue(null)]object imaginary) {
             
+            if (_inNumericStub) {
+                throw RubyExceptions.CreateNotImplementedError("Complex is not defined for this receiver");
+            }
             // TODO: hack: redefines this method
             scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, MutableString.CreateAscii("complex18.rb"), LoadFlags.Require);
             var site = toComplex.GetCallSite("Complex", 2);
-            return site.Target(site, self, real, imaginary);
+            _inNumericStub = true;
+            try {
+                return site.Target(site, self, real, imaginary);
+            } finally {
+                _inNumericStub = false;
+            }
         }
 
         [RubyMethod("Rational", RubyMethodAttributes.PrivateInstance, Compatibility = RubyCompatibility.Ruby19)]
@@ -333,10 +349,18 @@ namespace IronRuby.Builtins {
         public static object/*!*/ ToRational(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ toRational, 
             RubyScope/*!*/ scope, object self, object numerator, [DefaultParameterValue(null)]object denominator) {
 
+            if (_inNumericStub) {
+                throw RubyExceptions.CreateNotImplementedError("Rational is not defined for this receiver");
+            }
             // TODO: hack: redefines this method
             scope.RubyContext.Loader.LoadFile(scope.GlobalScope.Scope, self, MutableString.CreateAscii("rational18.rb"), LoadFlags.Require);
             var site = toRational.GetCallSite("Rational", 2);
-            return site.Target(site, self, numerator, denominator);
+            _inNumericStub = true;
+            try {
+                return site.Target(site, self, numerator, denominator);
+            } finally {
+                _inNumericStub = false;
+            }
         }
 
         #endregion

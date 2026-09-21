@@ -46,12 +46,15 @@ module Kernel
   end
 
   # 32-bit avalanche, so that combining the per-element hashes cannot cancel equal
-  # values out.
+  # values out. The result is brought back into signed 32-bit range: a Fixnum here
+  # is 32 bits wide, and a #hash that answered 0x80000000..0xFFFFFFFF would hand
+  # every consumer of it a Bignum.
   private def __ir_mix32__(value)
     value &= 0xFFFFFFFF
     value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
     value = ((value ^ (value >> 16)) * 0x45D9F3B) & 0xFFFFFFFF
-    value ^ (value >> 16)
+    value ^= value >> 16
+    value >= 0x80000000 ? value - 0x100000000 : value
   end
 end
 
@@ -13907,3 +13910,10 @@ class Binding
 end
 
 require "argf"
+
+# monitor is a builtin in CRuby 4.0: Monitor and MonitorMixin are there before
+# anything requires them, and gems reach for ::Monitor without a require of their
+# own (concurrent-ruby does). Autoloaded rather than required, so that a program
+# that never touches it does not pay for it at startup.
+Object.autoload :Monitor, "monitor"
+Object.autoload :MonitorMixin, "monitor"
