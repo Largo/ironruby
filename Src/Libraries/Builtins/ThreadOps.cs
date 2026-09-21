@@ -277,7 +277,10 @@ namespace IronRuby.Builtins {
                     } catch (ThreadInterruptedException) {
                         // Thread#kill / Thread#raise nudged us: deliver the parked exception. If there is none
                         // the interrupt was spurious and the sleep simply ends (MRI's sleep is also allowed to
-                        // return early).
+                        // return early). Both wake us - Run() sets the signal and RaiseAsyncException
+                        // interrupts - so drop the signal the interrupt left latched, or the next sleep
+                        // would return at once.
+                        _runSignal.Reset();
                         RubyUtils.TranslateThreadInterrupt();
                     }
                 } finally {
@@ -294,6 +297,7 @@ namespace IronRuby.Builtins {
                     try {
                         return _runSignal.WaitOne(milliseconds);
                     } catch (ThreadInterruptedException) {
+                        _runSignal.Reset();
                         RubyUtils.TranslateThreadInterrupt();
                         return false;
                     }
