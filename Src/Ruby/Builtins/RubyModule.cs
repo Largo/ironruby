@@ -90,6 +90,15 @@ namespace IronRuby.Builtins {
 
         // interlocked
         internal static int _globalMethodVersion = 0;
+
+        /// <summary>
+        /// Read by JIT-compiled code as its one global guard: every method table change anywhere
+        /// bumps it, so a specialization that snapshots it is invalidated by any def, undef,
+        /// alias, include, extend or singleton-method definition.
+        /// </summary>
+        public static int GlobalMethodVersion {
+            get { return System.Threading.Volatile.Read(ref _globalMethodVersion); }
+        }
         internal static int _globalModuleId = 0;
 
         private enum State {

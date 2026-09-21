@@ -332,6 +332,10 @@ namespace IronRuby.Runtime {
             }
             _refinedModules.Add(refinedModule, true);
 
+            // The method JIT resolves calls statically and has no notion of an activated
+            // refinement, so the first `refine' switches every specialization off for good.
+            IronRuby.Runtime.Jit.JitRuntime.Disable();
+
             // Every call site that targets this module or a descendant of it must re-bind, because from
             // now on its rule needs the refinement guard.  This mirrors what RubyClass.PrependsUpdated
             // does for a prepend: the MRO the site cached is no longer the whole story.
