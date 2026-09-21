@@ -782,7 +782,12 @@ module OpenSSL
           body = der[/-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----/m, 1]
           der = body.to_s.unpack1("m")
         end
-        @clr = IronRubyOpenSSL__::X509::X509Certificate2.new(der)
+        # X509Certificate2 has both a new(byte[]) and a new(string) overload, and a Ruby
+        # String converts to either, so the binder has no way to choose between them. DER
+        # is bytes; saying so outright is also what keeps a high byte from being re-encoded.
+        bytes = ::System::Array[::System::Byte].new(der.bytesize)
+        der.each_byte.with_index { |b, i| bytes[i] = b }
+        @clr = IronRubyOpenSSL__::X509::X509Certificate2.new(bytes)
         @serial = @clr.SerialNumber.to_s.to_i(16)
         @version = @clr.Version - 1
         @subject = Name.parse_openssl(@clr.Subject.to_s)

@@ -127,7 +127,9 @@ class Date
       end
 
       def method_missing(t, *args, &block)
-	t = t.to_s
+	# Symbol#to_s hands back a chilled string, and chomp! mutating it is a deprecation
+	# warning per call - thousands of them while parsing dates. dup takes the chill off.
+	t = t.to_s.dup
 	set = t.chomp!('=')
 	t = t.intern
 	if set

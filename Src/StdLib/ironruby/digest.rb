@@ -94,3 +94,45 @@ module Digest
     end
   end
 end
+
+module Digest
+  # Digest() has to require the library for a class that is not loaded yet, and two
+  # threads must not race into the same require.  MRI keeps the mutex here.
+  REQUIRE_MUTEX = Thread::Mutex.new
+
+  # The C# library defines MD5, SHA1 and the SHA2 family up front, so const_missing
+  # only ever runs for something that still lives in a file (or does not exist).
+  def self.const_missing(name)
+    lib = case name
+          when :SHA256, :SHA384, :SHA512 then 'digest/sha2'
+          else File.join('digest', name.to_s.downcase)
+          end
+
+    begin
+      require lib
+    rescue LoadError
+      raise LoadError, "library not found for class Digest::#{name} -- #{lib}", caller(1)
+    end
+    unless Digest.const_defined?(name)
+      raise NameError, "uninitialized constant Digest::#{name}", caller(1)
+    end
+    Digest.const_get(name)
+  end
+end
+
+# Digest("SHA256") -> Digest::SHA256, loading the library on demand.  MRI goes
+# through const_missing even when the constant is already there, so that an
+# autoload cannot hand back a half-initialised class; the LoadError rescue is what
+# makes constants that do not come from a digest/* file still resolve.
+def Digest(name)
+  const = name.to_sym
+  Digest::REQUIRE_MUTEX.synchronize {
+    Digest.const_missing(const)
+  }
+rescue LoadError
+  if Digest.const_defined?(const)
+    Digest.const_get(const)
+  else
+    raise
+  end
+end
