@@ -56,7 +56,7 @@ namespace IronRuby.Runtime {
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) 
             : this(context) {
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
-            StackTrace throwSiteTrace = GetClrStackTrace(exception);
+            StackTrace throwSiteTrace = GetClrStackTrace(context, exception);
             _interpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
 
             AddBacktrace(throwSiteTrace.GetFrames(), 0, false);
@@ -76,7 +76,7 @@ namespace IronRuby.Runtime {
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames, bool keepInternalFrames)
             : this(context) {
             _keepInternalFrames = keepInternalFrames;
-            var trace = GetClrStackTrace(null);
+            var trace = GetClrStackTrace(context, null);
 
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?
                 new List<InterpretedFrameInfo>(InterpretedFrame.CurrentFrame.Value.GetStackTraceDebugInfo()) :
@@ -142,9 +142,27 @@ namespace IronRuby.Runtime {
 
         private const int MaxThreadBacktraceDepth = 10000;
 
+        /// <summary>
+        /// Whether a CLR stack trace has to resolve file names and line numbers from symbols.
+        ///
+        /// A Ruby frame never needs them: its file and line are encoded into the name of the
+        /// generated method (see EncodeMethodName), and an interpreted frame carries its own debug
+        /// info.  Asking for them makes .NET open and parse the PDB of every assembly on the stack,
+        /// which is by far the most expensive part of raising an exception - so only the modes that
+        /// actually report CLR frames (-X:ExceptionDetail, -X:Debug) pay for it.
+        /// </summary>
+        private static bool NeedsFileInfo(RubyContext/*!*/ context) {
+            return context.Options.ExceptionDetail || context.DomainManager.Configuration.DebugMode;
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
-        internal static StackTrace GetClrStackTrace(Exception exception) {
-            return exception != null ? new StackTrace(exception, true) : new StackTrace(true);
+        internal static StackTrace GetClrStackTrace(RubyContext/*!*/ context, Exception exception) {
+            return GetClrStackTrace(exception, NeedsFileInfo(context));
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)] // CF
+        private static StackTrace GetClrStackTrace(Exception exception, bool needFileInfo) {
+            return exception != null ? new StackTrace(exception, needFileInfo) : new StackTrace(needFileInfo);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
