@@ -216,7 +216,16 @@ namespace IronRuby.Runtime.Calls {
             }
 
             MSA.LambdaExpression lambda = _ast.TransformBody(gen, declaringScope, declaringModule, definitionRefinements);
-            return RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
+            var result = RubyScriptCode.CompileLambda(lambda, declaringScope.RubyContext);
+
+            // -X:JIT: hand the generic body to the method JIT, which may put a profiling
+            // trampoline of the same delegate type in front of it. Off by default, and this is
+            // the only place the rest of the runtime knows about it.
+            var context = declaringScope.RubyContext;
+            if (context.RubyOptions.Jit) {
+                result = IronRuby.Runtime.Jit.JitStub.Wrap(result, _ast, context, declaringModule);
+            }
+            return result;
         }
 
         private static RubyModule/*!*/[]/*!*/ GetLexicalModules(RubyScope/*!*/ scope) {

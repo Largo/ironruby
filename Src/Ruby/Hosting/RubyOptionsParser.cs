@@ -690,6 +690,10 @@ namespace IronRuby.Hosting {
                         case "ObjectSpace":
                             LanguageSetup.Options["ObjectSpace"] = ScriptingRuntimeHelpers.True;
                             return;
+
+                        case "JIT":
+                            LanguageSetup.Options["JIT"] = ScriptingRuntimeHelpers.True;
+                            return;
                     }
 
                     // -X:StdLib=dir[:dir...] names the standard library directories. They go on
@@ -882,6 +886,7 @@ namespace IronRuby.Hosting {
                 
                 { "-X:ExceptionDetail",          "enable ExceptionDetail mode" },
                 { "-X:ObjectSpace",              "let ObjectSpace.each_object find objects, not just modules (slows down Object#new)" },
+                { "-X:JIT",                      "enable the experimental method JIT (type-specialized method bodies)" },
                 { "-X:NoAdaptiveCompilation",    "disable adaptive compilation - all code will be compiled" },
                 { "-X:CompilationThreshold",     "the number of iterations before the interpreter starts compiling" },
                 { "-X:PassExceptions",           "do not catch exceptions that are unhandled by script code" },

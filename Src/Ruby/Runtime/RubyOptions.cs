@@ -58,6 +58,7 @@ namespace IronRuby.Runtime {
         private readonly bool _hasSearchPaths;
         private readonly bool _noAssemblyResolveHook;
         private readonly bool _objectSpace;
+        private readonly bool _jit;
 
 #if DEBUG
         public static bool UseThreadAbortForSyncRaise;
@@ -224,6 +225,14 @@ namespace IronRuby.Runtime {
             get { return _objectSpace; }
         }
 
+        /// <summary>
+        /// -X:JIT - the experimental ZJIT-style method JIT. Off by default; when off nothing in
+        /// the compiler or the runtime looks at it beyond this one flag at method compile time.
+        /// </summary>
+        public bool Jit {
+            get { return _jit; }
+        }
+
         public string StandardLibraryPath {
             get { return _standardLibraryPath; }
         }
@@ -284,6 +293,7 @@ namespace IronRuby.Runtime {
             _profile = GetOption(options, "Profile", false);
             _noAssemblyResolveHook = GetOption(options, "NoAssemblyResolveHook", false);
             _objectSpace = GetOption(options, "ObjectSpace", false);
+            _jit = GetOption(options, "JIT", false);
             _requirePaths = GetStringCollectionOption(options, "RequiredPaths", ';', ',');
             _hasSearchPaths = GetOption<object>(options, "SearchPaths", null) != null;
             _standardLibraryPath = GetOption(options, "StandardLibrary", (string)null);
