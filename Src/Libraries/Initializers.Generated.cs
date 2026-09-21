@@ -34,6 +34,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Date.DateLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Syslog.SyslogLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Coverage.CoverageLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Ripper.RipperLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -14666,6 +14667,35 @@ namespace IronRuby.StandardLibrary.Coverage {
             DefineLibraryMethod(module, "__setup__", 0x22, 
                 0x00000000U, 
                 new Action<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.StandardLibrary.Coverage.CoverageOps.Setup)
+            );
+            
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Ripper {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class RipperLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.Object));
+            
+            
+            DefineGlobalClass("Ripper", typeof(IronRuby.StandardLibrary.Ripper.RipperOps), 0x00000008, classRef0, null, LoadRipper_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+        }
+        
+        private static void LoadRipper_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__lex__", 0x21, 
+                0x00010002U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Ripper.RipperOps.Lex)
+            );
+            
+            DefineLibraryMethod(module, "__parse__", 0x21, 
+                0x00010002U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.Ripper.RipperOps.Parse)
             );
             
         }

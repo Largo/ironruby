@@ -10,8 +10,11 @@ Architecture (the JRuby approach):
 1. `generate.rb` reads prism's `config.yml` and emits
    `Generated/PrismNodes.Generated.cs` (152 typed node classes + flag
    consts) and `Generated/PrismLoader.Generated.cs` (the per-node switch
-   of the binary deserializer). Re-run it when upgrading prism; the
-   loader validates the serialization version at runtime.
+   of the binary deserializer), plus `Generated/PrismMeta.Generated.cs`
+   (the serialized token-type table and per-node field names, used by
+   consumers that walk the tree generically - see `Src/Libraries/Ripper`).
+   Re-run it when upgrading prism; the loader validates the serialization
+   version at runtime.
 2. `PrismLoader.cs` implements the primitives of prism's binary
    serialization (varuint/varsint, constant pool, integers, locations)
    per prism's `docs/serialization.md`.
@@ -27,6 +30,12 @@ Architecture (the JRuby approach):
    `2r`/`2i` become `Rational`/`Complex` calls.
 5. Syntax errors from prism are reported through the DLR `ErrorSink`
    like the legacy parser's.
+6. `PrismLex.cs` decodes `pm_serialize_lex` - prism's token stream with
+   the MRI lexer state each token left behind. Ripper is built on it
+   (`Src/Libraries/Ripper/RipperOps.cs`, `Src/StdLib/ironruby/ripper.rb`).
+
+Note the assembly reference runs `IronRuby.Libraries` -> `IronRuby.Prism`,
+not the other way round, so that the Ripper library can call in here.
 
 ## Status
 

@@ -86,6 +86,14 @@ namespace IronRuby.Prism {
             return offset;
         }
 
+        /// <summary>
+        /// Parses raw source bytes with no scope, path or command-line options - what a
+        /// tool that only wants prism's own tree (Ripper) needs.
+        /// </summary>
+        public static PrismParseResult/*!*/ ParseBytes(byte[]/*!*/ sourceBytes) {
+            return PrismLoader.LoadParse(ParseSerializedBytes(sourceBytes, BuildOptionsData(null, 1, null)));
+        }
+
         public static byte[]/*!*/ ParseSerialized(string/*!*/ source) {
             return ParseSerialized(source, null);
         }
