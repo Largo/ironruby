@@ -3141,6 +3141,13 @@ namespace IronRuby.Runtime {
                 return (int)obj;
             }
 
+            if (obj is long wide) {
+                if (wide >= Int32.MinValue && wide <= Int32.MaxValue) {
+                    return (int)wide;
+                }
+                throw RubyExceptions.CreateRangeError("bignum too big to convert into {0}", targetType);
+            }
+
             if (obj is BigInteger bignum) {
                 int fixnum;
                 if (bignum.AsInt32(out fixnum)) {
@@ -3183,6 +3190,10 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt32((int)obj);
             }
 
+            if (obj is long wide) {
+                return Converter.ToUInt32((BigInteger)wide);
+            }
+
             if (obj is BigInteger bignum) {
                 return Converter.ToUInt32(bignum);
             }
@@ -3194,6 +3205,10 @@ namespace IronRuby.Runtime {
         public static Int64 ToInt64Validator(string/*!*/ className, object obj) {
             if (obj is int) {
                 return (int)obj;
+            }
+
+            if (obj is long wide) {
+                return wide;
             }
 
             if (obj is BigInteger bignum) {
@@ -3209,6 +3224,10 @@ namespace IronRuby.Runtime {
                 return Converter.ToUInt64((int)obj);
             }
 
+            if (obj is long wide) {
+                return Converter.ToUInt64((BigInteger)wide);
+            }
+
             if (obj is BigInteger bignum) {
                 return Converter.ToUInt64(bignum);
             }
@@ -3222,6 +3241,10 @@ namespace IronRuby.Runtime {
                 return (int)obj;
             }
 
+            if (obj is long wide) {
+                return wide;
+            }
+
             if (obj is BigInteger bignum) {
                 return bignum;
             }
@@ -3233,6 +3256,10 @@ namespace IronRuby.Runtime {
         public static IntegerValue ToIntegerValidator(string/*!*/ className, object obj) {
             if (obj is int) {
                 return new IntegerValue((int)obj);
+            }
+
+            if (obj is long wide) {
+                return new IntegerValue((BigInteger)wide);
             }
 
             if (obj is BigInteger bignum) {
@@ -3541,6 +3568,16 @@ namespace IronRuby.Runtime {
             if (bignum.AsInt32(out fixnum)) {
                 return fixnum;
             }
+            throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
+        }
+
+        [Emitted] // Converter.ExplicitConvert
+        public static int ConvertInt64ToFixnum(long value) {
+            if (value >= Int32.MinValue && value <= Int32.MaxValue) {
+                return (int)value;
+            }
+            // Same wording as the BigInteger case: which of the two CLR types happens to carry
+            // the value is an implementation detail Ruby code must not be able to see.
             throw RubyExceptions.CreateRangeError("bignum too big to convert into 'long'");
         }
 

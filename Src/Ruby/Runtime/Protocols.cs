@@ -54,6 +54,10 @@ namespace IronRuby.Runtime {
             if (x.AsInt32(out result)) {
                 return ScriptingRuntimeHelpers.Int32ToObject(result);
             }
+            long wide;
+            if (x.AsInt64(out wide)) {
+                return wide;
+            }
             return x;
         }
 
@@ -61,7 +65,7 @@ namespace IronRuby.Runtime {
             if (x >= Int32.MinValue && x <= Int32.MaxValue) {
                 return ScriptingRuntimeHelpers.Int32ToObject((int)x);
             } else {
-                return new BigInteger(x);
+                return x;
             }
         }
 
@@ -69,6 +73,8 @@ namespace IronRuby.Runtime {
         public static object Normalize(ulong x) {
             if (x <= Int32.MaxValue) {
                 return ScriptingRuntimeHelpers.Int32ToObject((int)x);
+            } else if (x <= Int64.MaxValue) {
+                return (long)x;
             } else {
                 return new BigInteger(x);
             }
@@ -79,7 +85,7 @@ namespace IronRuby.Runtime {
             if (x <= Int32.MaxValue) {
                 return ScriptingRuntimeHelpers.Int32ToObject((int)x);
             } else {
-                return new BigInteger(x);
+                return (long)x;
             }
         }
 
@@ -87,15 +93,18 @@ namespace IronRuby.Runtime {
             if (x >= Int32.MinValue && x <= Int32.MaxValue) {
                 return ScriptingRuntimeHelpers.Int32ToObject(Decimal.ToInt32(x));
             }
+            if (x >= Int64.MinValue && x <= Int64.MaxValue) {
+                return Decimal.ToInt64(x);
+            }
             return new BigInteger(x);
         }
 
         public static object Normalize(object x) {
-            int result;
             if (x is BigInteger) {
-                if (((BigInteger)x).AsInt32(out result)) {
-                    return ScriptingRuntimeHelpers.Int32ToObject(result);
-                }
+                return Normalize((BigInteger)x);
+            }
+            if (x is long) {
+                return Normalize((long)x);
             }
             return x;
         }
@@ -453,8 +462,12 @@ namespace IronRuby.Runtime {
 
             // MRI calls %(number) on the resulting object if it is not Fixnum and takes internal hash code of the result.
             // It seems to be an implementation detail that we don't need to follow exactly.
+            if (hashResult is long) {
+                return RubyUtils.GetIntegerHashCode((long)hashResult);
+            }
+
             if (hashResult is BigInteger) {
-                return hashResult.GetHashCode();
+                return RubyUtils.GetIntegerHashCode((BigInteger)hashResult);
             }
 
             return hashResult == null ? RubyUtils.NilObjectId : ReferenceEqualityComparer<object>.Instance.GetHashCode(hashResult);
@@ -561,7 +574,7 @@ namespace IronRuby.Runtime {
         }
 
         private static bool IsIntegerValue(object value) {
-            return value is int || value is BigInteger;
+            return value is int || value is long || value is BigInteger;
         }
 
         private static bool TryCoerceAndApply(

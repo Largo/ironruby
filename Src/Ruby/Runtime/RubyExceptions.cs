@@ -232,7 +232,7 @@ namespace IronRuby.Runtime {
         /// Integer" but "String can't be coerced into Integer".
         /// </summary>
         private static string/*!*/ CoercionOperandName(RubyContext/*!*/ context, object value) {
-            if (value == null || value is bool || value is int || value is double ||
+            if (value == null || value is bool || value is int || value is long || value is double ||
                 value is BigInteger || value is RubySymbol) {
                 return context.Inspect(value).ToString();
             }
@@ -339,7 +339,7 @@ namespace IronRuby.Runtime {
             //   [1,:b].max => "comparison of Integer with :b failed"
             string selfClass = MessageTypeName(context.GetClassOf(self).Name);
             string otherClass;
-            if (other == null || other is bool || other is int || other is BigInteger || other is double || other is RubySymbol) {
+            if (other == null || other is bool || other is int || other is long || other is BigInteger || other is double || other is RubySymbol) {
                 try {
                     otherClass = context.Inspect(other).ToString();
                 } catch (Exception) {

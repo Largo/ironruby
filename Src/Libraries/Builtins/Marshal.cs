@@ -699,6 +699,10 @@ namespace IronRuby.Builtins {
                     if (value < -(1 << 30) || value >= (1 << 30)) {
                         obj = (BigInteger)value;
                     }
+                } else if (obj is long) {
+                    // Marshal has only the two integer records, and a long is always outside the
+                    // fixnum one, so it goes out as a bignum - byte for byte what MRI writes.
+                    obj = (BigInteger)(long)obj;
                 }
 
                 RubySymbol sym;
@@ -1577,7 +1581,11 @@ namespace IronRuby.Builtins {
                                 freezable = false;
                                 break;
                             case 'l':
-                                obj = ReadBignum();
+                                // An Integer travels as a bignum record whenever it is too wide for
+                                // MRI's 31-bit fixnum record, which covers most of the values this
+                                // runtime carries as a long. Normalize so the loaded value has the
+                                // canonical representation for its magnitude.
+                                obj = Protocols.Normalize(ReadBignum());
                                 freezable = false;
                                 break;
                             case '"':

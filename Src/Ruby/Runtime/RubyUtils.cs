@@ -69,6 +69,28 @@ namespace IronRuby.Runtime {
             return MixHash(unchecked((uint)value));
         }
 
+        /// <summary>
+        /// The hash of an Integer, from its value rather than from the CLR type carrying it, so
+        /// that the Int32 / Int64 / BigInteger representations of one value can never disagree.
+        /// The narrowing funnels mean two of them cannot hold the same value at once, but a long
+        /// arriving straight from a CLR method never passed through one, and #hash has to be right
+        /// for it anyway.
+        /// </summary>
+        public static int GetIntegerHashCode(long value) {
+            if (value >= Int32.MinValue && value <= Int32.MaxValue) {
+                return GetFixnumHashCode((int)value);
+            }
+            return MixHash(unchecked((uint)value ^ (uint)(value >> 32)) + 0x7feb352d);
+        }
+
+        public static int GetIntegerHashCode(BigInteger value) {
+            long small;
+            if (value.AsInt64(out small)) {
+                return GetIntegerHashCode(small);
+            }
+            return value.GetHashCode();
+        }
+
         public static int GetFloatHashCode(double value) {
             // 0.0 and -0.0 are eql? and must hash alike, which Double.GetHashCode already ensures
             return MixHash(unchecked((uint)value.GetHashCode() + 0x9e3779b9));

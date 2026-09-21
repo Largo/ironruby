@@ -374,6 +374,7 @@ namespace IronRuby.Runtime {
         private RubyClass/*!*/ _exceptionClass;
         private RubyClass _standardErrorClass;
         private RubyClass _comObjectClass;
+        private RubyClass _integerClass;
 
         private Action<RubyModule>/*!*/ _mainSingletonTrait;
 
@@ -388,6 +389,7 @@ namespace IronRuby.Runtime {
         public RubyClass/*!*/ FalseClass { get { return _falseClass; } set { _falseClass = value; } }
         public RubyClass ExceptionClass { get { return _exceptionClass; } set { _exceptionClass = value; } }
         public RubyClass StandardErrorClass { get { return _standardErrorClass; } set { _standardErrorClass = value; } }
+        public RubyClass IntegerClass { get { return _integerClass; } }
         
         internal RubyClass ComObjectClass {
             get {
@@ -623,6 +625,15 @@ namespace IronRuby.Runtime {
                     RubyClass integerClass;
                     if (TryGetClassNoLock(typeof(int), out integerClass)) {
                         AddModuleToCacheNoLock(typeof(BigInteger), integerClass);
+                        // System.Int64 is the third representation: it carries every value that
+                        // does not fit in an Int32 but still fits in CRuby's 63-bit Fixnum range
+                        // (and a little beyond).  It is aliased the same way, so a long answers
+                        // Integer too.  This overwrites the System::Int64 class the Int64Ops
+                        // library registered; that class object is still reachable through the
+                        // System::Int64 constant for CLR interop, it just no longer claims
+                        // instances.
+                        ReplaceModuleInCacheNoLock(typeof(long), integerClass);
+                        _integerClass = integerClass;
                     }
                 }
             }
@@ -981,6 +992,16 @@ namespace IronRuby.Runtime {
         internal void AddModuleToCacheNoLock(Type/*!*/ type, RubyModule/*!*/ module) {
             Assert.NotNull(type, module);
             _moduleCache.Add(type, module);
+        }
+
+        /// <summary>
+        /// Points a CLR type at a RubyModule that is already the module of another type, replacing
+        /// whatever was registered for it. Used to give Int64 the Integer class it shares with
+        /// Int32 and BigInteger, after the Int64Ops library has registered its own.
+        /// </summary>
+        internal void ReplaceModuleInCacheNoLock(Type/*!*/ type, RubyModule/*!*/ module) {
+            Assert.NotNull(type, module);
+            _moduleCache[type] = module;
         }
 
         internal void AddNamespaceToCacheNoLock(NamespaceTracker/*!*/ namespaceTracker, RubyModule/*!*/ module) {

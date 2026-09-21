@@ -563,6 +563,9 @@ namespace IronRuby.Builtins {
             if (value is int) {
                 return new BigInteger((int)value);
             }
+            if (value is long) {
+                return new BigInteger((long)value);
+            }
             if (value is BigInteger) {
                 return (BigInteger)value;
             }
@@ -578,7 +581,7 @@ namespace IronRuby.Builtins {
             }
             if (str != null) {
                 object parsed = KernelOps.ToInteger(null, str);
-                return (parsed is BigInteger) ? (BigInteger)parsed : (BigInteger)(int)parsed;
+                return (parsed is BigInteger) ? (BigInteger)parsed : (parsed is long ? (BigInteger)(long)parsed : (BigInteger)(int)parsed);
             }
 
             IntegerValue integer = _siteStorage.ConvertToInteger(value);
@@ -950,7 +953,7 @@ namespace IronRuby.Builtins {
             // a double first, so 10**39 prints all forty of its digits. The other float
             // conversions do go through the double - "%.25g" of that same Integer shows the
             // nearest double - so only "%f" takes this path.
-            if (type == 'f' && (_opts.Value is int || _opts.Value is BigInteger)) {
+            if (type == 'f' && (_opts.Value is int || _opts.Value is long || _opts.Value is BigInteger)) {
                 AppendExactInteger();
                 return;
             }
@@ -1061,7 +1064,7 @@ namespace IronRuby.Builtins {
             // Ruby uses rb_check_string_type (i.e. to_str) and falls back to NUM2INT.
             // Symbols must not take the string path - they have no to_str in Ruby 1.9+.
             if (str == null && _siteStorage != null && value != null &&
-                !(value is int) && !(value is BigInteger) && !(value is double) && !(value is RubySymbol)) {
+                !(value is int) && !(value is long) && !(value is BigInteger) && !(value is double) && !(value is RubySymbol)) {
                 try {
                     str = _siteStorage.TryConvertToStr(value);
                 } catch (InvalidOperationException e) {
