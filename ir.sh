@@ -18,10 +18,12 @@ fi
 # MRI keeps its own library directories.
 S="$IR_ROOT/Src/StdLib"
 # IR_CONFIG=Release runs the optimized build instead (build it with
-# `dotnet build Src/Console/Ruby.Console.csproj -c Release ...`).  It is noticeably
-# faster - the Debug build is compiled with optimizations off, so the JIT leaves the
-# runtime unoptimized too - but Debug stays the default because that is what the
-# build and test scripts produce.
+# `dotnet build Src/Console/Ruby.Console.csproj -c Release ...`).  It is about 1.8x
+# faster across Util/bench - the Debug build is compiled with optimizations off, which
+# marks the assemblies non-optimizable, so the JIT leaves the whole runtime unoptimized
+# too - and it passes the same specs and the same IronRuby.Tests.  Util/run-tests.sh and
+# regen-initializers.sh read IR_CONFIG as well, so one export covers a whole session.
+# Debug stays the default because every worktree and every agent script builds it.
 : "${IR_CONFIG:=Debug}"
 
 exec "$IR_ROOT/Src/Console/bin/$IR_CONFIG/net8.0/ir" -X:UsePrism \

@@ -184,10 +184,10 @@ namespace IronRuby.Runtime {
                     return;
                 }
             } else {
-#if DEBUG
-                // For developer use, add the Src/StdLib of the source tree the binaries were built in
+                // For developer use, add the Src/StdLib of the source tree the binaries were built in.
+                // Not #if DEBUG: a Release build of the same tree has to find the same library, or its
+                // default $LOAD_PATH points at a bin/Release/Lib that was never produced.
                 path = FindSourceTreeStandardLibrary();
-#endif
                 if (path == null) {
                     path = "../Lib";
                 }
@@ -236,8 +236,8 @@ namespace IronRuby.Runtime {
 #endif
             }
 
-#if DEBUG
-        // bin/Debug/net8.0 of a project under Src/: the nearest ancestor with a StdLib/ironruby directory
+        // bin/<config>/net8.0 of a project under Src/: the nearest ancestor with a StdLib/ironruby directory.
+        // Returns null outside a source tree (a deployed layout), where the "../Lib" fallback is right.
         private static string FindSourceTreeStandardLibrary() {
             try {
                 var dir = new DirectoryInfo(AppDomain.CurrentDomain.BaseDirectory);
@@ -252,7 +252,6 @@ namespace IronRuby.Runtime {
             }
             return null;
         }
-#endif
 
         private void AddAbsoluteLibraryPaths(RubyArray/*!*/ result, string applicationBaseDir, ICollection<string>/*!*/ paths) {
             foreach (var path in paths) {

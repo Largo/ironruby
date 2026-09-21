@@ -12,6 +12,13 @@
 #
 # Usage:  ./regen-initializers.sh
 #         DLR_SOURCE_DIR=/path/to/dlr/src/core ./regen-initializers.sh
+#         IR_CONFIG=Release ./regen-initializers.sh
+#
+# IR_CONFIG picks the configuration the intermediate assemblies are built in - it only
+# decides which bin/<config> tree this script churns, since what the generator writes is
+# reflected from the [RubyMethod]/[RubyClass] attributes and is the same either way.  Use
+# the configuration you are otherwise building, so this does not leave a second, stale one
+# behind (and, for Release, so the build it repairs on the way out is the one you run).
 #
 # If you add a new library namespace, add it to LIBS below *and* to the list in
 # Src/ClassInitGenerator/README.md.  Omitting an existing namespace silently
@@ -34,6 +41,7 @@ if ps -eo comm=,args= | awk -v bin="$BIN" '$1 == "ir" && /mspec-run/ && index($2
 fi
 export DOTNET_ROOT=${DOTNET_ROOT:-/usr/local/dotnet}
 DOTNET="$DOTNET_ROOT/dotnet"
+: "${IR_CONFIG:=Debug}"
 DLR=${DLR_SOURCE_DIR:-../dlr/src/core}
 GEN=Src/Libraries/Initializers.Generated.cs
 LIBS="IronRuby.Builtins;IronRuby.StandardLibrary.Threading;IronRuby.StandardLibrary.Sockets;IronRuby.StandardLibrary.OpenSsl;IronRuby.StandardLibrary.Digest;IronRuby.StandardLibrary.Zlib;IronRuby.StandardLibrary.StringIO;IronRuby.StandardLibrary.StringScanner;IronRuby.StandardLibrary.Enumerator;IronRuby.StandardLibrary.FunctionControl;IronRuby.StandardLibrary.FileControl;IronRuby.StandardLibrary.BigDecimal;IronRuby.StandardLibrary.Iconv;IronRuby.StandardLibrary.ParseTree;IronRuby.StandardLibrary.Open3;IronRuby.StandardLibrary.Win32API;IronRuby.StandardLibrary.Json;IronRuby.StandardLibrary.Date;IronRuby.StandardLibrary.Syslog;IronRuby.StandardLibrary.Coverage"
@@ -64,7 +72,7 @@ PY
 # build FAILS, because the error lines match the pattern too. That let a broken
 # build through to the generator, which then reflected over a stale
 # IronRuby.Libraries.dll and silently regenerated the *previous* registrations.
-if ! BUILD_LOG=$($DOTNET build Src/ClassInitGenerator/ClassInitGenerator.csproj -p:DlrSourceDir="$DLR" 2>&1); then
+if ! BUILD_LOG=$($DOTNET build Src/ClassInitGenerator/ClassInitGenerator.csproj -c "$IR_CONFIG" -p:DlrSourceDir="$DLR" 2>&1); then
   echo "$BUILD_LOG" | grep -E 'error' | sort -u
   cp /tmp/Initializers.Generated.bak.cs "$GEN"
   echo "generator build failed; $GEN restored" >&2
@@ -72,7 +80,7 @@ if ! BUILD_LOG=$($DOTNET build Src/ClassInitGenerator/ClassInitGenerator.csproj 
 fi
 echo "$BUILD_LOG" | grep -E 'Build succeeded'
 
-D=Src/ClassInitGenerator/bin/Debug/net8.0
+D=Src/ClassInitGenerator/bin/$IR_CONFIG/net8.0
 $DOTNET $D/ClassInitGenerator.dll $D/IronRuby.Libraries.dll "/libraries:$LIBS" /out:/tmp/Initializers.Generated.new.cs > /dev/null
 # the checked-in file uses CRLF
 python3 -c "
