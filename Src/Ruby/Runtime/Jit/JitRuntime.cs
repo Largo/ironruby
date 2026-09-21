@@ -136,6 +136,17 @@ namespace IronRuby.Runtime.Jit {
             return !Disabled && RubyModule.GlobalMethodVersion == snapshot;
         }
 
+        /// <summary>An entry guard of an outlined loop did not hold; hand the loop back.</summary>
+        public static object OsrGuardFailed(string/*!*/ what) {
+            if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   guard failed: {0}", what); }
+            return Osr.OsrLoopSite.Retry;
+        }
+
+        /// <summary>A loop read a local it has not written in this run: it holds nil.</summary>
+        public static Exception/*!*/ OsrUnsetSlot() {
+            return Deopt();
+        }
+
         public static RubyClass/*!*/ ClassOf(RubyContext/*!*/ context, object self) {
             IRubyObject obj = self as IRubyObject;
             return obj != null ? obj.ImmediateClass : context.GetImmediateClassOf(self);

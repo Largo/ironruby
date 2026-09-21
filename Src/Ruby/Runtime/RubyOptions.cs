@@ -59,6 +59,7 @@ namespace IronRuby.Runtime {
         private readonly bool _noAssemblyResolveHook;
         private readonly bool _objectSpace;
         private readonly bool _jit;
+        private readonly bool _osr;
 
 #if DEBUG
         public static bool UseThreadAbortForSyncRaise;
@@ -233,6 +234,16 @@ namespace IronRuby.Runtime {
             get { return _jit; }
         }
 
+        /// <summary>
+        /// -X:OSR - on-stack replacement for loops: a loop that has taken enough back edges
+        /// is left for a type-specialized copy of itself, which reads the scope's locals out
+        /// of the tuple they already live in and carries on at the next iteration. Off by
+        /// default; when off the loop transform does not even emit the counter.
+        /// </summary>
+        public bool Osr {
+            get { return _osr; }
+        }
+
         public string StandardLibraryPath {
             get { return _standardLibraryPath; }
         }
@@ -294,6 +305,7 @@ namespace IronRuby.Runtime {
             _noAssemblyResolveHook = GetOption(options, "NoAssemblyResolveHook", false);
             _objectSpace = GetOption(options, "ObjectSpace", false);
             _jit = GetOption(options, "JIT", false);
+            _osr = GetOption(options, "OSR", false);
             _requirePaths = GetStringCollectionOption(options, "RequiredPaths", ';', ',');
             _hasSearchPaths = GetOption<object>(options, "SearchPaths", null) != null;
             _standardLibraryPath = GetOption(options, "StandardLibrary", (string)null);

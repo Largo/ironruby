@@ -107,6 +107,20 @@ namespace IronRuby.Compiler.Ast {
             get { return _traceable; }
         }
 
+        /// <summary>
+        /// -X:OSR - whether a loop may count its own back edges and swap itself for a
+        /// type-specialized copy once it is hot. Off unless asked for, and off wherever the
+        /// loop has to keep running the tree it was built from: TracePoint and coverage want
+        /// an event per line, a saved assembly cannot carry the site, and eval'd code is
+        /// never around long enough to be worth a compilation.
+        /// </summary>
+        public bool CanReplaceLoops {
+            get {
+                return _context.RubyOptions.Osr && !_traceEnabled && !_savingToDisk
+                    && !_compilerOptions.IsEval && Coverage == null;
+            }
+        }
+
         public bool SavingToDisk {
             get { return _savingToDisk; }
         }

@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using IronRuby.Compiler.Ast;
+using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Jit {
     using MSA = System.Linq.Expressions;
@@ -51,7 +52,7 @@ namespace IronRuby.Runtime.Jit {
     internal sealed class JitCompiler {
         private const int MaxNodes = 400;
 
-        private readonly MethodDeclaration/*!*/ _ast;
+        private readonly MethodDeclaration _ast;
         private readonly RubyContext/*!*/ _context;
         private readonly int _scopeDepth;
 
@@ -99,6 +100,113 @@ namespace IronRuby.Runtime.Jit {
                 _vars[0].Add(lv.Name, p);
                 _types[0].Add(lv.Name, paramTypes[i]);
             }
+        }
+
+        // ---- loop mode -------------------------------------------------------------------
+        // -X:OSR points the same emitter at a `while' loop rather than a method body. The
+        // difference is where the locals live: in a method they are parameters and CLR locals,
+        // in a loop they are slots of the enclosing scope's MutableTuple, bound on demand as
+        // the emitter meets them and loaded into typed CLR locals by the entry JitLoopCompiler
+        // builds around this. Everything between those two edges is the same code.
+        private readonly WhileLoopExpression _loop;
+        private readonly Func<LocalVariable, JT, JitLoopSlot> _bindSlot;
+        private readonly List<JitLoopSlot> _slots;
+        private MSA.LabelTarget _breakLabel, _continueLabel;
+
+        private JitCompiler(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context, int scopeDepth,
+            Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot) {
+            _ast = null;
+            _loop = loop;
+            _context = context;
+            _scopeDepth = scopeDepth;
+            _bindSlot = bindSlot;
+            _slots = new List<JitLoopSlot>();
+            _paramTypes = new JT[0];
+            _paramNames = new string[0];
+            _self = Ast.Parameter(typeof(object), "#self");
+            PushScope();
+        }
+
+        /// <summary>
+        /// Emits a typed body for one `while' loop. The slots it bound - the scope locals it
+        /// touched, and the type each of them held when the loop turned hot - come back in
+        /// <paramref name="slots"/>; the caller loads and stores them.
+        /// </summary>
+        internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
+            int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, out List<JitLoopSlot> slots, out bool canDeopt) {
+
+            slots = null;
+            canDeopt = false;
+            var c = new JitCompiler(loop, context, scopeDepth, bindSlot);
+            MSA.Expression body;
+            try {
+                JT type;
+                body = c.EmitWhile(loop, out type);
+            } catch (JitBailout) {
+                return null;
+            }
+            // A deopt restores the locals to what they were at the top of the iteration and
+            // hands the loop back, so the iteration is re-run: it must not have been observable.
+            if (c._canDeopt && !c._pure) { return null; }
+            slots = c._slots;
+            canDeopt = c._canDeopt;
+            return body;
+        }
+
+        /// <summary>The key a local is looked up under: names repeat across lexical depths.</summary>
+        private string/*!*/ Key(LocalVariable/*!*/ local) {
+            return (_loop == null) ? local.Name : local.Name + "@" + local.DefinitionLexicalDepth;
+        }
+
+        /// <summary>
+        /// In loop mode a local the emitter has not met yet is bound to its tuple slot, typed
+        /// by the value it holds right now - which is the only profile a loop that is already
+        /// running needs.
+        /// </summary>
+        private bool BindLoopLocal(LocalVariable/*!*/ local, JT hint, out MSA.ParameterExpression p, out JT type) {
+            var slot = _bindSlot(local, hint);
+            if (slot == null) { p = null; type = JT.None; throw JitBailout.Instance; }
+            _slots.Add(slot);
+            _slotByVariable.Add(slot.Variable, slot);
+            _vars[0].Add(Key(local), slot.Variable);
+            _types[0].Add(Key(local), slot.Type);
+            p = slot.Variable;
+            type = slot.Type;
+            return true;
+        }
+
+        private readonly Dictionary<MSA.ParameterExpression, JitLoopSlot> _slotByVariable =
+            new Dictionary<MSA.ParameterExpression, JitLoopSlot>();
+
+        /// <summary>
+        /// The load of a slot the loop writes before it reads - a temporary of its own. What
+        /// the slot held when the loop turned hot says nothing about what it holds on a later
+        /// entry (the scope may be brand new, and the slot nil), so such a slot has no type
+        /// guard; instead a flag says whether this run has written it. Reading it before that
+        /// means the Ruby code is reading nil, which the typed body has no value for: deopt,
+        /// and let the loop itself raise whatever it raises.
+        /// </summary>
+        private MSA.Expression/*!*/ LoadLoopSlot(MSA.ParameterExpression/*!*/ p) {
+            JitLoopSlot slot;
+            if (_loop != null && _slotByVariable.TryGetValue(p, out slot) && slot.Assigned != null) {
+                _canDeopt = true;
+                return Ast.Block(p.Type,
+                    Ast.IfThen(Ast.Not(slot.Assigned), Ast.Throw(Ast.Call(JitRuntime.M("OsrUnsetSlot")))),
+                    p
+                );
+            }
+            return p;
+        }
+
+        /// <summary>The store into such a slot, which is what puts its flag up.</summary>
+        private MSA.Expression/*!*/ StoreLoopSlot(MSA.ParameterExpression/*!*/ p, MSA.Expression/*!*/ rhs) {
+            JitLoopSlot slot;
+            if (_slotByVariable.TryGetValue(p, out slot) && slot.Assigned != null) {
+                // The flag goes up after the right hand side has run, not before: `x += 1'
+                // reads x, and that read has to still see the slot as unwritten.
+                return Ast.Block(p.Type, Ast.Assign(p, rhs), Ast.Assign(slot.Assigned, Ast.Constant(true)), p);
+            }
+            return Ast.Assign(p, rhs);
         }
 
         private void PushScope() {
@@ -320,6 +428,21 @@ namespace IronRuby.Runtime.Jit {
             var loop = node as WhileLoopExpression;
             if (loop != null) { return EmitWhile(loop, out type); }
 
+            if (_loop != null && _breakLabel != null) {
+                var brk = node as BreakStatement;
+                if (brk != null) {
+                    if (brk.Arguments != null) { throw JitBailout.Instance; }
+                    type = JT.Obj;
+                    return Ast.Block(typeof(object), Ast.Break(_breakLabel), Ast.Constant(null, typeof(object)));
+                }
+                var nxt = node as NextStatement;
+                if (nxt != null) {
+                    if (nxt.Arguments != null) { throw JitBailout.Instance; }
+                    type = JT.Obj;
+                    return Ast.Block(typeof(object), Ast.Continue(_continueLabel), Ast.Constant(null, typeof(object)));
+                }
+            }
+
             var body = node as Body;
             if (body != null) {
                 if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
@@ -341,13 +464,17 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private MSA.Expression/*!*/ EmitLocalRead(LocalVariable/*!*/ local, out JT type) {
-            if (local.DefinitionLexicalDepth != _scopeDepth) { throw JitBailout.Instance; }
+            if (_loop == null && local.DefinitionLexicalDepth != _scopeDepth) { throw JitBailout.Instance; }
             MSA.ParameterExpression p;
-            if (!TryLookup(local.Name, out p, out type)) {
+            if (!TryLookup(Key(local), out p, out type)) {
+                if (_loop != null) {
+                    BindLoopLocal(local, JT.None, out p, out type);
+                    return LoadLoopSlot(p);
+                }
                 // A local read before any assignment is nil in Ruby; not modelled.
                 throw JitBailout.Instance;
             }
-            return p;
+            return (_loop != null) ? LoadLoopSlot(p) : p;
         }
 
         private MSA.Expression/*!*/ EmitAssignment(SimpleAssignmentExpression/*!*/ node, out JT type) {
@@ -365,20 +492,25 @@ namespace IronRuby.Runtime.Jit {
             }
 
             var target = node.Left as LocalVariable;
-            if (target == null || target.DefinitionLexicalDepth != _scopeDepth) { throw JitBailout.Instance; }
+            if (target == null || (_loop == null && target.DefinitionLexicalDepth != _scopeDepth)) { throw JitBailout.Instance; }
 
             JT rhsType;
             var rhs = Emit(node.Right, out rhsType);
 
             MSA.ParameterExpression p;
             JT lt;
-            bool known = TryLookup(target.Name, out p, out lt);
+            bool known = TryLookup(Key(target), out p, out lt);
+            if (!known && _loop != null) {
+                // The slot exists in the tuple whether or not the loop has read it yet, and it
+                // is written back on the way out, so it has to be bound rather than declared.
+                known = BindLoopLocal(target, rhsType, out p, out lt);
+            }
 
             if (op != null) {
                 // `x op= v'  ->  `x = x op v'
                 if (!known) { throw JitBailout.Instance; }
                 if (!IsNumeric(lt) || !IsNumeric(rhsType)) { throw JitBailout.Instance; }
-                rhs = EmitBinary(op, p, lt, rhs, rhsType, out rhsType);
+                rhs = EmitBinary(op, (_loop != null) ? LoadLoopSlot(p) : p, lt, rhs, rhsType, out rhsType);
             }
 
             if (known) {
@@ -387,7 +519,7 @@ namespace IronRuby.Runtime.Jit {
                 p = Declare(target.Name, rhsType);
             }
             type = rhsType;
-            return Ast.Assign(p, rhs);
+            return (_loop != null) ? StoreLoopSlot(p, rhs) : (MSA.Expression)Ast.Assign(p, rhs);
         }
 
         private MSA.Expression/*!*/ EmitIf(IfExpression/*!*/ node, out JT type) {
@@ -429,15 +561,48 @@ namespace IronRuby.Runtime.Jit {
         private MSA.Expression/*!*/ EmitWhile(WhileLoopExpression/*!*/ node, out JT type) {
             if (node.IsPostTest) { throw JitBailout.Instance; }
             var exit = Ast.Label("#while-exit");
+            var cont = Ast.Label("#while-continue");
+            var savedBreak = _breakLabel;
+            var savedContinue = _continueLabel;
+            _breakLabel = exit;
+            _continueLabel = cont;
             var test = EmitCondition(node.Condition);
             if (!node.IsWhileLoop) { test = Ast.Not(test); }
             JT ignored;
             var body = EmitRegion(node.Statements, out ignored);
+            _breakLabel = savedBreak;
+            _continueLabel = savedContinue;
             type = JT.Obj;
+
+            // The outlined loop keeps a copy of its locals as they were at the top of the
+            // iteration. A deopt part way through one restores them, so the loop is handed back
+            // at an iteration boundary and the generic copy re-runs the iteration from there.
+            MSA.Expression snapshot = (node == _loop) ? EmitSnapshot() : null;
+
+            var iteration = (snapshot != null)
+                ? Ast.Block(snapshot, Ast.IfThen(Ast.Not(test), Ast.Break(exit)), body)
+                : Ast.Block(Ast.IfThen(Ast.Not(test), Ast.Break(exit)), body);
+
             return Ast.Block(typeof(object),
-                Ast.Loop(Ast.Block(Ast.IfThen(Ast.Not(test), Ast.Break(exit)), body), exit),
+                Ast.Loop(iteration, exit, cont),
                 Ast.Constant(null, typeof(object))
             );
+        }
+
+        /// <summary>
+        /// `snap_x = x' for every slot bound so far. Emitted lazily, after the body, because
+        /// the body is what binds them; the DLR block it produces runs before the test.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitSnapshot() {
+            if (_slots.Count == 0) { return AstUtils.Empty(); }
+            var copies = new List<MSA.Expression>(_slots.Count);
+            foreach (var slot in _slots) {
+                copies.Add(Ast.Assign(slot.Snapshot, slot.Variable));
+                if (slot.Assigned != null) {
+                    copies.Add(Ast.Assign(slot.AssignedSnapshot, slot.Assigned));
+                }
+            }
+            return Ast.Block(copies);
         }
 
         private MSA.Expression/*!*/ EmitIfLike(RExpr/*!*/ c, RExpr/*!*/ t, RExpr/*!*/ f, out JT type) {
@@ -494,7 +659,7 @@ namespace IronRuby.Runtime.Jit {
 
             // Self-recursion: `fib(n - 1)' inside `def fib'. Sound because the entry stub pins
             // the receiver class and the global method version, so no override can slip in.
-            if (node.Target == null && !node.IsVariableCall && node.MethodName == _ast.Name && argc == _paramNames.Length) {
+            if (_ast != null && node.Target == null && !node.IsVariableCall && node.MethodName == _ast.Name && argc == _paramNames.Length) {
                 var callArgs = new MSA.Expression[argc + 1];
                 callArgs[0] = _self;
                 for (int i = 0; i < argc; i++) {

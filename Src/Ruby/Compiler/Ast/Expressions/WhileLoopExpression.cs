@@ -25,6 +25,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Osr;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = MSA.Expression;
@@ -78,8 +79,25 @@ namespace IronRuby.Compiler.Ast {
             MSA.Expression resultVariable = gen.CurrentScope.DefineHiddenVariable("#loop-result", typeof(object));
             MSA.Expression redoVariable = gen.CurrentScope.DefineHiddenVariable("#skip-condition", typeof(bool));
             MSA.ParameterExpression unwinder;
-            
+
             bool isInnerLoop = gen.CurrentLoop != null;
+
+            // -X:OSR: the loop counts its own back edges, and when it has taken enough of them
+            // it asks its site for a type-specialized copy of itself and finishes there. The
+            // locals it would carry over are in the enclosing scope's tuple already, so there
+            // is nothing to materialize: the copy is handed the same tuples and picks up at the
+            // top of the next iteration.
+            bool osr = gen.CanReplaceLoops;
+            MSA.Expression osrCountdown = null, osrResult = null;
+            OsrLoopSite osrSite = null;
+            if (osr) {
+                osrCountdown = gen.CurrentScope.DefineHiddenVariable("#osr-n", typeof(long));
+                osrResult = gen.CurrentScope.DefineHiddenVariable("#osr-result", typeof(object));
+                osrSite = new OsrLoopSite(gen.SourcePath + ":" + Location.Start.Line);
+                osrSite.LoopAst = this;
+                osrSite.Context = gen.Context;
+                osrSite.ScopeDepth = gen.CurrentScope.LexicalDepth;
+            }
 
             MSA.LabelTarget breakLabel = Ast.Label();
             MSA.LabelTarget continueLabel = Ast.Label();
@@ -98,12 +116,58 @@ namespace IronRuby.Compiler.Ast {
                 conditionNegativeStmt = AstUtils.Empty();
             }
 
+            // The tuples the specialized copy addresses the loop's locals through: this scope's
+            // own, and one per outer scope the body reached into. Read after the body has been
+            // transformed, which is what creates the closure variables.
+            MSA.Expression osrArguments = null;
+            if (osr) {
+                var tupleArgIndex = new Dictionary<int, int>();
+                var tupleArguments = new List<MSA.Expression>();
+                foreach (var entry in gen.CurrentScope.TupleVariablesByDepth) {
+                    if (!tupleArgIndex.ContainsKey(entry.Key)) {
+                        tupleArgIndex.Add(entry.Key, tupleArguments.Count);
+                        tupleArguments.Add(AstUtils.Box(entry.Value));
+                    }
+                }
+                osrSite.TupleArgIndex = tupleArgIndex;
+                osrArguments = Ast.NewArrayInit(typeof(object), tupleArguments);
+            }
+
+            // The back-edge test, at the top of every iteration: two compares and a decrement of
+            // a local. Once the site has given up, its countdown is Int64.MaxValue and the test
+            // costs exactly that and nothing more, for the whole life of the program.
+            //
+            // A pending redo must not trip it: the specialized copy starts at the condition, and
+            // a redo is precisely the state in which the condition has to be skipped.
+            MSA.Expression backEdge = osr ? (MSA.Expression)AstUtils.IfThen(
+                Ast.AndAlso(
+                    Ast.AndAlso(
+                        Ast.GreaterThan(osrCountdown, AstUtils.Constant(0L)),
+                        Ast.Not(redoVariable)
+                    ),
+                    Ast.Equal(Ast.Assign(osrCountdown, Ast.Add(osrCountdown, AstUtils.Constant(-1L))), AstUtils.Constant(0L))
+                ),
+                Ast.Block(
+                    Ast.Assign(osrResult, Ast.Call(Ast.Constant(osrSite, typeof(OsrLoopSite)), OsrLoopSite.RunMethod, osrArguments)),
+                    AstUtils.IfThen(
+                        Ast.Not(Ast.ReferenceEqual(osrResult, Ast.Constant(OsrLoopSite.Retry, typeof(object)))),
+                        Ast.Block(
+                            Ast.Assign(resultVariable, osrResult),
+                            Ast.Break(breakLabel),
+                            AstUtils.Empty()
+                        )
+                    ),
+                    AstUtils.Empty()
+                )
+            ) : AstUtils.Empty();
+
             // make the loop first:
             MSA.Expression loop = new AstBlock {
                 gen.ClearDebugInfo(),
                 Ast.Assign(redoVariable, AstUtils.Constant(_isPostTest)),
 
                 AstFactory.Infinite(breakLabel, continueLabel,
+                    backEdge,
                     AstUtils.Try(
 
                         AstUtils.If(redoVariable, 
@@ -144,7 +208,25 @@ namespace IronRuby.Compiler.Ast {
                 );
             }
 
-            return Ast.Block(loop, resultVariable);
+            if (!osr) {
+                return Ast.Block(loop, resultVariable);
+            }
+
+            // The budget this entry gets, and, on the way out, what it did not spend - so that a
+            // loop entered many times for a few iterations each still adds up to a compilation.
+            var site = Ast.Constant(osrSite, typeof(OsrLoopSite));
+            return Ast.Block(
+                Ast.Assign(osrCountdown, Ast.Field(site, OsrLoopSite.CountdownField)),
+                loop,
+                AstUtils.IfThen(
+                    Ast.AndAlso(
+                        Ast.Field(site, OsrLoopSite.CountingField),
+                        Ast.LessThan(osrCountdown, Ast.Field(site, OsrLoopSite.CountdownField))
+                    ),
+                    Ast.Assign(Ast.Field(site, OsrLoopSite.CountdownField), osrCountdown)
+                ),
+                resultVariable
+            );
         }
 
         internal override MSA.Expression/*!*/ Transform(AstGenerator/*!*/ gen) {

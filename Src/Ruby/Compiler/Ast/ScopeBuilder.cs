@@ -89,6 +89,27 @@ namespace IronRuby.Compiler.Ast {
             return RubyOps.MakeObjectTupleType(LiftedVisibleVariableCount);            
         }
 
+        /// <summary>
+        /// The tuple variable that holds each lexical depth's locals, for the depths this
+        /// scope has already reached for: its own #locals, and one #closureN per outer scope
+        /// something in it has read. -X:OSR hands these to an outlined loop so that it can
+        /// address the locals directly.
+        /// </summary>
+        internal IEnumerable<KeyValuePair<int, MSA.ParameterExpression>>/*!*/ TupleVariablesByDepth {
+            get {
+                yield return new KeyValuePair<int, MSA.ParameterExpression>(_lexicalScope.Depth, _localsTuple);
+                if (_closures != null) {
+                    for (int i = 0; i < _closures.Count; i++) {
+                        yield return new KeyValuePair<int, MSA.ParameterExpression>(_lexicalScope.Depth - i - 1, _closures[i]);
+                    }
+                }
+            }
+        }
+
+        internal int LexicalDepth {
+            get { return _lexicalScope.Depth; }
+        }
+
         internal ScopeBuilder Parent {
             get { return _parent; }
         }
