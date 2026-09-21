@@ -76,7 +76,8 @@ namespace IronRuby.Builtins {
         }
 
         public override int Read(byte[]/*!*/ buffer, int offset, int count) {
-            return _io.InputStream.Read(buffer, offset, count);
+            var raw = GetUnbufferedInput();
+            return (raw ?? _io.InputStream).Read(buffer, offset, count);
         }
 
         public override long Seek(long offset, SeekOrigin origin) {
@@ -91,6 +92,42 @@ namespace IronRuby.Builtins {
             bool output = _consoleType == ConsoleStreamType.Output;
             Stream stream = output ? _io.OutputStream : _io.ErrorStream;
             (GetUnbufferedStream(stream, output) ?? stream).Write(buffer, offset, count);
+        }
+
+        private static Stream _rawInput;
+        private static bool _rawInputChecked;
+
+        /// <summary>
+        /// On Unix .NET reconfigures the terminal around every read from its own standard input
+        /// stream - it turns ICANON and ECHO back on, because that is the mode Console.ReadLine
+        /// wants - so a descriptor that io/console has just put into raw mode is cooked again by
+        /// the first read, and a reader waiting for one keystroke waits for a whole line instead.
+        /// That is the difference between irb's line editor working and hanging on its first
+        /// cursor-position query.  Reading the descriptor directly leaves the terminal alone, and
+        /// returns what is there rather than filling a 4K buffer first.
+        ///
+        /// Only for a real terminal: with standard input redirected (a pipe, a file, the spec
+        /// runner) .NET does not touch any terminal and its own stream stays in use.
+        /// </summary>
+        private static Stream GetUnbufferedInput() {
+            if (_rawInputChecked) {
+                return _rawInput;
+            }
+
+            _rawInputChecked = true;
+            if (Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX) {
+                return null;
+            }
+
+            try {
+                if (Console.IsInputRedirected) {
+                    return null;
+                }
+                _rawInput = new DescriptorStream(0, true, false, false);
+            } catch (Exception) {
+                _rawInput = null;
+            }
+            return _rawInput;
         }
 
         private static Stream _rawOutput, _rawError;

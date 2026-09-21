@@ -2623,6 +2623,74 @@ namespace IronRuby.Builtins {
         //    Tagalog, Tagbanwa, Tai_Le, Tamil, Telugu, Thaana, Thai, Tibetan,
         //    Tifinagh, Ugaritic, Yi
         //
+        /// <summary>
+        /// Onigmo matches a property name ignoring case, underscores, hyphens and spaces, and
+        /// knows the long Unicode names ("Letter") beside the two-letter ones ("L"); the CLR
+        /// knows only the exact two-letter forms.  Names not listed here are handed on as they
+        /// were written - the block names ("IsGreek") and the script names are matched further
+        /// down, and an unknown one has to reach the CLR to be reported as unknown.
+        /// </summary>
+        private static string/*!*/ NormalizeCharacterCategoryName(string/*!*/ name) {
+            var key = new StringBuilder(name.Length);
+            foreach (char c in name) {
+                if (c != '_' && c != '-' && c != ' ') {
+                    key.Append(Char.ToLowerInvariant(c));
+                }
+            }
+
+            string canonical;
+            return _characterCategoryAliases.TryGetValue(key.ToString(), out canonical) ? canonical : name;
+        }
+
+        private static readonly Dictionary<string, string> _characterCategoryAliases =
+            new Dictionary<string, string>() {
+                // POSIX classes, which Ruby also spells in any case
+                { "alnum", "Alnum" }, { "alpha", "Alpha" }, { "blank", "Blank" }, { "cntrl", "Cntrl" },
+                { "digit", "Digit" }, { "graph", "Graph" }, { "lower", "Lower" }, { "print", "Print" },
+                { "punct", "Punct" }, { "space", "Space" }, { "upper", "Upper" }, { "xdigit", "XDigit" },
+                { "ascii", "ASCII" }, { "word", "Word" }, { "any", "Any" }, { "assigned", "Assigned" },
+
+                // general categories: the short name in any case, and the long name
+                { "l", "L" }, { "letter", "L" },
+                { "lc", "Lc" }, { "casedletter", "Lc" },
+                { "lu", "Lu" }, { "uppercaseletter", "Lu" },
+                { "ll", "Ll" }, { "lowercaseletter", "Ll" },
+                { "lt", "Lt" }, { "titlecaseletter", "Lt" },
+                { "lm", "Lm" }, { "modifierletter", "Lm" },
+                { "lo", "Lo" }, { "otherletter", "Lo" },
+                { "m", "M" }, { "mark", "M" }, { "combiningmark", "M" },
+                { "mn", "Mn" }, { "nonspacingmark", "Mn" },
+                { "mc", "Mc" }, { "spacingmark", "Mc" }, { "spacingcombiningmark", "Mc" },
+                { "me", "Me" }, { "enclosingmark", "Me" },
+                { "n", "N" }, { "number", "N" },
+                { "nd", "Nd" }, { "decimalnumber", "Nd" }, { "digitnumber", "Nd" },
+                { "nl", "Nl" }, { "letternumber", "Nl" },
+                { "no", "No" }, { "othernumber", "No" },
+                { "p", "P" }, { "punctuation", "P" },
+                { "pc", "Pc" }, { "connectorpunctuation", "Pc" },
+                { "pd", "Pd" }, { "dashpunctuation", "Pd" },
+                { "ps", "Ps" }, { "openpunctuation", "Ps" },
+                { "pe", "Pe" }, { "closepunctuation", "Pe" },
+                { "pi", "Pi" }, { "initialpunctuation", "Pi" },
+                { "pf", "Pf" }, { "finalpunctuation", "Pf" },
+                { "po", "Po" }, { "otherpunctuation", "Po" },
+                { "s", "S" }, { "symbol", "S" },
+                { "sm", "Sm" }, { "mathsymbol", "Sm" },
+                { "sc", "Sc" }, { "currencysymbol", "Sc" },
+                { "sk", "Sk" }, { "modifiersymbol", "Sk" },
+                { "so", "So" }, { "othersymbol", "So" },
+                { "z", "Z" }, { "separator", "Z" },
+                { "zs", "Zs" }, { "spaceseparator", "Zs" },
+                { "zl", "Zl" }, { "lineseparator", "Zl" },
+                { "zp", "Zp" }, { "paragraphseparator", "Zp" },
+                { "c", "C" }, { "other", "C" },
+                { "cc", "Cc" }, { "control", "Cc" },
+                { "cf", "Cf" }, { "format", "Cf" },
+                { "cs", "Cs" }, { "surrogate", "Cs" },
+                { "co", "Co" }, { "privateuse", "Co" },
+                { "cn", "Cn" }, { "unassigned", "Cn" },
+            };
+
         private CharacterSet/*!*/ ParseCharacterCategoryName(int escape) {
             bool positive = escape == 'p';
 
@@ -2649,7 +2717,7 @@ namespace IronRuby.Builtins {
                 throw MakeError("invalid Unicode property");
             }
             
-            string name = _rubyPattern.Substring(start, _index - start);
+            string name = NormalizeCharacterCategoryName(_rubyPattern.Substring(start, _index - start));
             Skip();
 
             var script = MakeScriptCharacterClass(name);
@@ -2687,6 +2755,16 @@ namespace IronRuby.Builtins {
                     positive = !positive;
                     name = "Cn";
                     goto default;
+
+                case "Lc":
+                case "Cased_Letter":
+                    // Onigmo's grouped general category; the CLR knows only the three
+                    // single categories it stands for. rdoc's Text module asks for it.
+                    if (positive) {
+                        return new CharacterSet(@"\p{Lu}\p{Ll}\p{Lt}");
+                    } else {
+                        return new CharacterSet(@"\P{Lu}", new CharacterSet(@"\p{Ll}\p{Lt}"));
+                    }
 
                 case "Arabic": 
                 case "Armenian": 

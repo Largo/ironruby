@@ -1422,14 +1422,25 @@ namespace IronRuby.Builtins {
             Debug.Assert(nested != null);
             Debug.Assert(nestedIndex != -1);
 
+            // A depth was asked for: the descent is bounded by it, and MRI does not look for a
+            // cycle at all - `a = [1, 2]; a << a; a.flatten(1)` splices one level and stops,
+            // where flattening all the way is the case that has to raise.
+            bool detectLoops = maxDepth < 0;
             if (maxDepth < 0) {
                 maxDepth = Int32.MaxValue;
             }
 
-            var worklist = new Stack<KeyValuePair<IList, int>>();
+            // Each work item carries the depth of its list, rather than the depth being read off
+            // the size of recursionPath: that set holds the lists being descended into for loop
+            // detection, and it neither shrinks when a list's items have all been yielded (only
+            // when its last work item is popped) nor grows before a list has been looked into.
+            // Taking its size for the depth made `[[1, 2], [3, 4]].flatten(1)` stop after the
+            // first nested list and answer [1, 2, [3, 4]].
+            var worklist = new Stack<(IList List, int Start, int Depth)>();
             var recursionPath = new HashSet<object>(ReferenceEqualityComparer<object>.Instance);
             recursionPath.Add(root);
             int start = 0;
+            int depth = 0;
 
             while (true) {
                 // "list" is the list being visited by the current work item (there might be more work items visiting the same list)
@@ -1437,15 +1448,15 @@ namespace IronRuby.Builtins {
 
                 if (nestedIndex >= 0) {
                     // push a work item that will process the items following the nested list:
-                    worklist.Push(new KeyValuePair<IList, int>(list, nestedIndex + 1));
-                    
+                    worklist.Push((list, nestedIndex + 1, depth));
+
                     // yield items preceding the nested list:
                     for (int i = start; i < nestedIndex; i++) {
                         yield return list[i];
                     }
 
                     // push a workitem for the nested list:
-                    worklist.Push(new KeyValuePair<IList, int>(nested, 0));
+                    worklist.Push((nested, 0, depth + 1));
                 } else {
                     // there is no nested list => yield all remaining items:
                     for (int i = start; i < list.Count; i++) {
@@ -1459,8 +1470,9 @@ namespace IronRuby.Builtins {
                 }
 
                 var workitem = worklist.Pop();
-                list = workitem.Key;
-                start = workitem.Value;
+                list = workitem.List;
+                start = workitem.Start;
+                depth = workitem.Depth;
 
                 // finishing nested list:
                 if (start == list.Count) {
@@ -1469,13 +1481,13 @@ namespace IronRuby.Builtins {
                 }
 
                 // starting nested list:
-                if (start == 0 && recursionPath.Contains(list)) {
+                if (detectLoops && start == 0 && recursionPath.Contains(list)) {
                     yield return loopDetected(list);
                     goto next;
                 }
 
                 // set the index to -1 if we would go deeper then we should:
-                nestedIndex = (recursionPath.Count < maxDepth) ? IndexOfList(tryToAry, list, start, out nested) : -1;
+                nestedIndex = (depth < maxDepth) ? IndexOfList(tryToAry, list, start, out nested) : -1;
 
                 // starting nested list:
                 if (start == 0 && nestedIndex != -1) {

@@ -105,11 +105,18 @@ namespace IronRuby.Builtins {
             if (_procDispatcher == null) {
                 // the block the proc is called with goes on to the method it wraps, so that
                 // `x.method(:foo).to_proc.call { ... }` reaches a `yield` inside #foo
-                var site = CallSite<Func<CallSite, object, Proc, object, object>>.Create(
+                // HasScope, and the scope taken from the proc being called: a method that reads
+                // the caller's scope - attr_reader and the other definers read the visibility
+                // from it - would otherwise see a default one and define private methods, so
+                // `%i(a b).each(&method(:attr_reader))` produced private readers where MRI's
+                // are public.  Reading it off the proc rather than closing over the scope this
+                // #to_proc ran under keeps the dispatcher below cacheable.
+                var site = CallSite<Func<CallSite, RubyScope, object, Proc, object, object>>.Create(
                     // TODO: use InvokeBinder
                     RubyCallAction.Make(
                         scope.RubyContext, "call",
-                        new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
+                        new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf |
+                            RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock)
                     )
                 );
 
@@ -117,7 +124,7 @@ namespace IronRuby.Builtins {
                     // block takes no parameters but unsplat => all actual arguments are added to unsplat:
                     Debug.Assert(args.Length == 0);
 
-                    return site.Target(site, this, procArg, unsplat);
+                    return site.Target(site, blockParam.Proc.LocalScope, this, procArg, unsplat);
                 });
 
                 // MRI's proc reports the location of the method it wraps, not of the to_proc call

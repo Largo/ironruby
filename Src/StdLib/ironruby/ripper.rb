@@ -237,7 +237,36 @@ class Ripper
     '__END__' => :on___end__,
   }.freeze
 
-  class Lexer < ::Ripper # :nodoc: internal use only
+  # MRI's Ripper::Lexer is a Ripper subclass; here Ripper is a CLR type and
+  # sealed, so Lexer stands on its own and drives Ripper._lex directly.  The
+  # only part of the inheritance anyone uses is that a Lexer can be created
+  # over a source and scanned, which works the same either way.
+  class Lexer # :nodoc: internal use only
+    def initialize(src, filename = '-', lineno = 1, **kw)
+      @src = src
+      @filename = filename
+      @lineno = lineno
+    end
+
+    attr_reader :src, :filename, :lineno
+
+    # Every token, error tokens included, in source order.
+    def scan
+      Ripper.send(:_lex, @src, @lineno)
+    end
+
+    def lex(**kw)
+      scan.map { |elem| elem.to_a }
+    end
+
+    def tokenize(**kw)
+      scan.map { |elem| elem.tok }
+    end
+
+    def parse(**kw)
+      scan
+    end
+
     class State
       attr_reader :to_int, :to_s
 

@@ -668,6 +668,15 @@ namespace IronRuby.Builtins {
             var varName = "@" + name;
             var attributesScope = scope.GetMethodAttributesDefinitionScope();
 
+            // The empty scope stands for "there is no Ruby frame here": it is what a conversion
+            // site hands a library method, which is how `attr_reader` is reached by
+            // `%i(a b).each(&method(:attr_reader))` - the &-conversion calls Method#to_proc
+            // through a site with no scope of its own.  Its attributes are private, because
+            // top-level `def` is, and taking them left reline's Reline::Core readers private
+            // where MRI's are public.  MRI reads the visibility only off a class or module
+            // body; anywhere else attr_reader defines public methods.
+            var visibility = attributesScope.IsEmpty ? RubyMethodVisibility.Public : attributesScope.Visibility;
+
             if (definedNames != null) {
                 var context = scope.RubyContext;
                 if (readable) {
@@ -679,12 +688,12 @@ namespace IronRuby.Builtins {
             }
 
             if (readable) {
-                var flags = (RubyMemberFlags)RubyUtils.GetSpecialMethodVisibility(attributesScope.Visibility, name);
+                var flags = (RubyMemberFlags)RubyUtils.GetSpecialMethodVisibility(visibility, name);
                 self.AddMethod(scope.RubyContext, name, new RubyAttributeReaderInfo(flags, self, varName));
             }
             
             if (writable) {
-                self.AddMethod(scope.RubyContext, name + "=", new RubyAttributeWriterInfo((RubyMemberFlags)attributesScope.Visibility, self, varName));
+                self.AddMethod(scope.RubyContext, name + "=", new RubyAttributeWriterInfo((RubyMemberFlags)visibility, self, varName));
             }
         }
 

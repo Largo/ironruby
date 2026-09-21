@@ -4,6 +4,11 @@
 obj/
 bin/
 /bin/
+# ... except the standard library's own bin, which is source: the executables
+# it ships (irb).  The directory has to be re-included before the files in it,
+# since git does not look inside an excluded directory.
+!/Src/StdLib/bin/
+!/Src/StdLib/bin/*
 /Stage
 /Package
 

@@ -35,6 +35,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Syslog.SyslogLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Coverage.CoverageLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Ripper.RipperLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Termios.TermiosLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -14754,6 +14755,99 @@ namespace IronRuby.StandardLibrary.Ripper {
             DefineLibraryMethod(module, "__parse__", 0x21, 
                 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.Ripper.RipperOps.Parse)
+            );
+            
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Termios {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class TermiosLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            
+            
+            DefineGlobalModule("Termios", typeof(IronRuby.StandardLibrary.Termios.TermiosOps), 0x00000008, null, LoadTermios_Class, LoadTermios_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
+        }
+        
+        private static void LoadTermios_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
+            SetConstant(module, "BRKINT", IronRuby.StandardLibrary.Termios.TermiosOps.BRKINT);
+            SetConstant(module, "CS8", IronRuby.StandardLibrary.Termios.TermiosOps.CS8);
+            SetConstant(module, "CSIZE", IronRuby.StandardLibrary.Termios.TermiosOps.CSIZE);
+            SetConstant(module, "ECHO", IronRuby.StandardLibrary.Termios.TermiosOps.ECHO);
+            SetConstant(module, "ECHOE", IronRuby.StandardLibrary.Termios.TermiosOps.ECHOE);
+            SetConstant(module, "ECHOK", IronRuby.StandardLibrary.Termios.TermiosOps.ECHOK);
+            SetConstant(module, "ECHONL", IronRuby.StandardLibrary.Termios.TermiosOps.ECHONL);
+            SetConstant(module, "ICANON", IronRuby.StandardLibrary.Termios.TermiosOps.ICANON);
+            SetConstant(module, "ICRNL", IronRuby.StandardLibrary.Termios.TermiosOps.ICRNL);
+            SetConstant(module, "IEXTEN", IronRuby.StandardLibrary.Termios.TermiosOps.IEXTEN);
+            SetConstant(module, "IGNBRK", IronRuby.StandardLibrary.Termios.TermiosOps.IGNBRK);
+            SetConstant(module, "IGNCR", IronRuby.StandardLibrary.Termios.TermiosOps.IGNCR);
+            SetConstant(module, "INLCR", IronRuby.StandardLibrary.Termios.TermiosOps.INLCR);
+            SetConstant(module, "ISIG", IronRuby.StandardLibrary.Termios.TermiosOps.ISIG);
+            SetConstant(module, "ISTRIP", IronRuby.StandardLibrary.Termios.TermiosOps.ISTRIP);
+            SetConstant(module, "IXON", IronRuby.StandardLibrary.Termios.TermiosOps.IXON);
+            SetConstant(module, "ONLCR", IronRuby.StandardLibrary.Termios.TermiosOps.ONLCR);
+            SetConstant(module, "OPOST", IronRuby.StandardLibrary.Termios.TermiosOps.OPOST);
+            SetConstant(module, "PARENB", IronRuby.StandardLibrary.Termios.TermiosOps.PARENB);
+            SetConstant(module, "PARMRK", IronRuby.StandardLibrary.Termios.TermiosOps.PARMRK);
+            SetConstant(module, "TCIFLUSH", IronRuby.StandardLibrary.Termios.TermiosOps.TCIFLUSH);
+            SetConstant(module, "TCIOFLUSH", IronRuby.StandardLibrary.Termios.TermiosOps.TCIOFLUSH);
+            SetConstant(module, "TCOFLUSH", IronRuby.StandardLibrary.Termios.TermiosOps.TCOFLUSH);
+            SetConstant(module, "VEOF", IronRuby.StandardLibrary.Termios.TermiosOps.VEOF);
+            SetConstant(module, "VERASE", IronRuby.StandardLibrary.Termios.TermiosOps.VERASE);
+            SetConstant(module, "VINTR", IronRuby.StandardLibrary.Termios.TermiosOps.VINTR);
+            SetConstant(module, "VKILL", IronRuby.StandardLibrary.Termios.TermiosOps.VKILL);
+            SetConstant(module, "VMIN", IronRuby.StandardLibrary.Termios.TermiosOps.VMIN);
+            SetConstant(module, "VQUIT", IronRuby.StandardLibrary.Termios.TermiosOps.VQUIT);
+            SetConstant(module, "VSUSP", IronRuby.StandardLibrary.Termios.TermiosOps.VSUSP);
+            SetConstant(module, "VTIME", IronRuby.StandardLibrary.Termios.TermiosOps.VTIME);
+            
+        }
+        
+        private static void LoadTermios_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "descriptor", 0x21, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Int32>(IronRuby.StandardLibrary.Termios.TermiosOps.Descriptor)
+            );
+            
+            DefineLibraryMethod(module, "set_winsize", 0x21, 
+                0x00060002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Int32, System.Int32, System.Boolean>(IronRuby.StandardLibrary.Termios.TermiosOps.SetWinSize)
+            );
+            
+            DefineLibraryMethod(module, "supported?", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Boolean>(IronRuby.StandardLibrary.Termios.TermiosOps.Supported)
+            );
+            
+            DefineLibraryMethod(module, "tcflush", 0x21, 
+                0x00020002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Int32, System.Boolean>(IronRuby.StandardLibrary.Termios.TermiosOps.TcFlush)
+            );
+            
+            DefineLibraryMethod(module, "tcgetattr", 0x21, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Object>(IronRuby.StandardLibrary.Termios.TermiosOps.TcGetAttr)
+            );
+            
+            DefineLibraryMethod(module, "tcsetattr", 0x21, 
+                0x00000006U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, IronRuby.Builtins.RubyArray, System.Boolean>(IronRuby.StandardLibrary.Termios.TermiosOps.TcSetAttr)
+            );
+            
+            DefineLibraryMethod(module, "tty?", 0x21, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Boolean>(IronRuby.StandardLibrary.Termios.TermiosOps.IsTty)
+            );
+            
+            DefineLibraryMethod(module, "winsize", 0x21, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Object>(IronRuby.StandardLibrary.Termios.TermiosOps.WinSize)
             );
             
         }

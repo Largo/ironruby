@@ -491,6 +491,25 @@ module Gem
   end
 
   ##
+  # The same, except that only the newest version of each gem is searched.
+  # RubyGems grew this in 1.8; rdoc calls it to find ri directories, and with
+  # no gems installed the two answers are the same anyway.
+
+  def self.find_latest_files(path)
+    find_files path
+  end
+
+  ##
+  # The hook RubyGems 1.8 runs after an install.  Nothing here installs gems,
+  # but plugins written against a modern RubyGems call it.
+
+  def self.done_installing(&hook)
+    @done_installing_hooks ||= []
+    @done_installing_hooks << hook if hook
+    @done_installing_hooks
+  end
+
+  ##
   # Finds the user's home directory.
 
   def self.find_home

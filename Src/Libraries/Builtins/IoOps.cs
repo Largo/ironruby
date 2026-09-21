@@ -843,7 +843,13 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            int descriptor = io.NativeDescriptor;
+            // KernelDescriptor rather than NativeDescriptor: the standard streams are console
+            // streams rather than FileStreams, so only the former knows they are descriptors 0,
+            // 1 and 2. Asking the wrong one leaves STDIN in the no-descriptor case below, where
+            // a readable mode is reported ready whether or not a byte is there - and a line
+            // editor that asks "is anything waiting?" before deciding a keystroke is the end of
+            // the line (reline does, to tell a paste from typing) is told yes for ever.
+            int descriptor = io.KernelDescriptor;
             if (descriptor < 0) {
                 // No descriptor and no pipe - a StringIO-like stream, where the mode is all there
                 // is to go on. MRI says a regular file is always ready, and this is as close as

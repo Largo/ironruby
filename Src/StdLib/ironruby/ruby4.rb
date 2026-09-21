@@ -13896,4 +13896,14 @@ module Kernel
   module_function :pp
 end unless Kernel.private_method_defined?(:pp) || Kernel.method_defined?(:pp)
 
+# MRI's prelude again: Binding#irb starts an IRB session on the binding.  The
+# library redefines this method when it loads, so the second call below is
+# irb's own.
+class Binding
+  def irb
+    require "irb"
+    irb
+  end
+end
+
 require "argf"

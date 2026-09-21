@@ -512,6 +512,36 @@ class Gem::Specification
   end
 
   ##
+  # The specs of the newest version of every installed gem.  RubyGems 1.3.7
+  # keeps this on Gem::SourceIndex; modern libraries (irb's completor, for
+  # one) ask Gem::Specification for it, so forward it here.
+
+  def self.latest_specs(prerelease = false)
+    Gem.source_index.latest_specs
+  end
+
+  ##
+  # Every installed gem's spec, newest version first.  Same story as
+  # .latest_specs.
+
+  def self.all
+    Gem.source_index.gems.values
+  end
+
+  ##
+  # RubyGems 1.8 made Gem::Specification itself enumerable over the installed
+  # specs; rdoc's ri paths iterate it.
+
+  class << self
+    include Enumerable
+
+    def each(&block)
+      return to_enum(:each) unless block
+      all.each(&block)
+    end
+  end
+
+  ##
   # Make sure the YAML specification is properly formatted with dashes
 
   def self.normalize_yaml_input(input)

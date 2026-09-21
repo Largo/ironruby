@@ -17,3 +17,16 @@ Added from the gems MRI 4.0 ships (lib/ copied verbatim):
   logger.rb, logger/ - logger 1.7.0 (a bundled gem since 3.5)
   csv.rb, csv/       - csv 3.3.5 (a bundled gem since 3.4)
   getoptlong.rb      - getoptlong 0.2.1 (a bundled gem since 3.4)
+  irb.rb, irb/       - irb 1.16.0 (default gem), with its LICENSE.txt
+  reline.rb, reline/ - reline 0.6.3, irb's line editor, with COPYING, BSDL and
+                       license_of_rb-readline
+  rdoc.rb, rdoc/     - rdoc 7.0.4, which irb's `show_doc` and its completion
+                       dialog load, with LICENSE.rdoc.  rdoc's own
+                       rubygems_plugin.rb is left out: it is a plugin for the
+                       RubyGems that installs gems, not part of the library,
+                       and the 1.3.7 RubyGems in the 1.9 tree cannot run it.
+
+io/console is NOT one of these.  MRI's is the io-console gem's C extension
+(console.so); IronRuby's own is Src/StdLib/ironruby/io/console.rb over the
+Termios library (Src/Libraries/Termios/Termios.cs), and it comes first on the
+load path.

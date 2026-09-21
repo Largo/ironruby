@@ -36,5 +36,12 @@ if [ ! -x "$IR_BIN" ]; then
   exit 127
 fi
 
+# -S searches RUBYPATH before PATH; Src/StdLib/bin holds the executables the
+# bundled library ships (irb), so `./ir.sh -S irb` runs IronRuby's own rather
+# than whatever binstub happens to be on PATH.  An existing RUBYPATH still wins
+# for anything not shipped here.
+RUBYPATH="$S/bin${RUBYPATH:+:$RUBYPATH}"
+export RUBYPATH
+
 exec "$IR_BIN" -X:UsePrism \
   "-X:StdLib=$S/ironruby:$S/ruby/4.0:$S/ruby/1.9.1" "$@"

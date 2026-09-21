@@ -21,15 +21,23 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="ironruby\**\*.*"
+    <!-- \**\* rather than \**\*.*: several files the library needs have no extension at
+         all - irb's lc\help-message, reline's COPYING and BSDL, the executables in bin -
+         and an .* pattern silently leaves every one of them out of the built layout. -->
+    <Content Include="ironruby\**\*"
              Exclude="$(ExcludedPackages)">
        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="ruby\**\*.*"
+    <Content Include="ruby\**\*"
 	     Exclude="$(ExcludedPackages)">
        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
-    <Content Include="include\**\*.*"
+    <Content Include="include\**\*"
+             Exclude="$(ExcludedPackages)">
+       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <!-- bin\irb, which ir.sh puts on RUBYPATH so that `ir -S irb` finds it. -->
+    <Content Include="bin\**\*"
              Exclude="$(ExcludedPackages)">
        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </Content>
