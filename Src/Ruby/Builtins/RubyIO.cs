@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -818,11 +818,11 @@ namespace IronRuby.Builtins {
                 throw new NotSupportedException();
             }
             int result = NativeFileControl(fd, commandId, arg);
-            // IronRuby's File::APPEND is the IOMode bit used by the public numeric-mode API,
-            // while Unix uses a different native O_APPEND value. Expose the Ruby flag that was
-            // used to open/reopen the IO alongside the native status flags.
+            // The descriptor's own O_APPEND is the answer wherever the kernel has one, but a
+            // stream IronRuby opened in append mode without telling the kernel (the CLR
+            // positions an appending FileStream itself) still reports the flag it holds.
             if (commandId == F_GETFL && (_mode & IOMode.WriteAppends) != 0) {
-                result |= (int)IOMode.WriteAppends;
+                result |= IOModeNative.Append;
             }
             return result;
         }

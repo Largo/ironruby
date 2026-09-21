@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * POSIX file-system primitives that .NET does not expose.
  *
@@ -29,6 +29,7 @@ namespace IronRuby.Builtins {
 
         internal const int EPERM = 1;
         internal const int ENOENT = 2;
+        internal const int ENXIO = 6;
         internal const int EBADF = 9;
         internal const int EWOULDBLOCK = 11;  // == EAGAIN on Linux
         internal const int EACCES = 13;
@@ -617,6 +618,7 @@ namespace IronRuby.Builtins {
                 case EACCES: return new UnauthorizedAccessException("Permission denied" + suffix);
                 case ENOTDIR: return new System.IO.DirectoryNotFoundException("Not a directory" + suffix);
                 case EISDIR: return IronRuby.Runtime.RubyExceptions.CreateEISDIR(path ?? "");
+                case ENXIO: return IronRuby.Runtime.RubyExceptions.CreateENXIO(path ?? "");
                 case EBADF: return IronRuby.Runtime.RubyExceptions.CreateEBADF();
                 case EXDEV: return new Errno.ImproperLinkError(path);
                 case EPERM: return new Errno.OperationNotPermittedError(path);

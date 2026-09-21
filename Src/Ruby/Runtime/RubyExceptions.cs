@@ -764,6 +764,10 @@ namespace IronRuby.Runtime {
             return new BadFileDescriptorError();
         }
 
+        public static Exception/*!*/ CreateENXIO(string/*!*/ path) {
+            return new NoSuchDeviceOrAddressError(path);
+        }
+
         public static Exception/*!*/ CreateEACCES() {
             return new UnauthorizedAccessException();
         }

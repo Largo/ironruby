@@ -1,4 +1,4 @@
-/* ****************************************************************************
+﻿/* ****************************************************************************
  *
  * Copyright (c) Microsoft Corporation. 
  *
@@ -152,6 +152,16 @@ namespace IronRuby.Builtins {
             [RubyConstructor]
             public static ExistError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
                 var result = new ExistError(RubyExceptions.MakeMessage(ref message, "File exists"));
+                RubyExceptionData.InitializeException(result, message);
+                return result;
+            }
+        }
+
+        [RubyClass("ENXIO", Extends = typeof(NoSuchDeviceOrAddressError), Inherits = typeof(ExternalException))]
+        public class NoSuchDeviceOrAddressErrorOps {
+            [RubyConstructor]
+            public static NoSuchDeviceOrAddressError/*!*/ Create(RubyClass/*!*/ self, [DefaultProtocol, DefaultParameterValue(null)]MutableString message) {
+                var result = new NoSuchDeviceOrAddressError(RubyExceptions.MakeMessage(ref message, "No such device or address"));
                 RubyExceptionData.InitializeException(result, message);
                 return result;
             }

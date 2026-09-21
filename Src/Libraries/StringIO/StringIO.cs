@@ -194,7 +194,7 @@ namespace IronRuby.StandardLibrary.StringIO {
                 var toIntSite = toInt.GetSite(TryConvertToFixnumAction.Make(context));
                 int? numeric = toIntSite.Target(toIntSite, mode);
                 if (numeric.HasValue) {
-                    info = new IOInfo((IOMode)numeric.Value);
+                    info = new IOInfo(IOModeNative.ToIOMode(numeric.Value));
                 } else {
                     MutableString text = Protocols.CastToString(toStr, mode);
                     info = IOInfo.Parse(context, text);
