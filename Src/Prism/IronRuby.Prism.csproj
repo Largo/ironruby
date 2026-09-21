@@ -8,7 +8,6 @@
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
-    <ProjectReference Include="..\Libraries\IronRuby.Libraries.csproj" />
   </ItemGroup>
   <ItemGroup>
     <!-- built from ../../../prism with `ruby templates/template.rb && make shared` -->
