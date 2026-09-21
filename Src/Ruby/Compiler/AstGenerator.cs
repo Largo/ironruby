@@ -1001,6 +1001,11 @@ namespace IronRuby.Compiler.Ast {
         /// </summary>
         internal LineCoverage Coverage { get; set; }
 
+        /// <summary>
+        /// The call counter of the method body being compiled, if :methods coverage measures it.
+        /// </summary>
+        internal MethodCoverage MethodCoverage { get; set; }
+
         private static MSA.Expression/*!*/ Traced(MSA.Expression trace, MSA.Expression/*!*/ transformed) {
             return trace != null ? Ast.Block(trace, transformed) : transformed;
         }

@@ -69,6 +69,11 @@ namespace IronRuby.Runtime.Calls {
 
         public MethodDeclaration Ast { get { return _ast; } }
 
+        /// <summary>
+        /// The Coverage measurement this `def' was compiled under, null if it is not measured.
+        /// </summary>
+        internal LineCoverage Coverage { get { return _coverage; } }
+
         // Set once the call of this method with a block it ignores has been warned about (or would
         // have been, had warnings been on): MRI warns once per method definition.
         internal bool UnusedBlockReported { get; set; }
@@ -196,6 +201,9 @@ namespace IronRuby.Runtime.Calls {
             // TODO: remove options
             AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
             gen.Coverage = _coverage;
+            if (_coverage != null && (_coverage.State.Modes & CoverageModes.Methods) != 0) {
+                gen.MethodCoverage = _coverage.FindMethod(this, declaringModule);
+            }
 
             // Only programs that refine anything pay for the definition-time refinement record.
             StrongBox<RefinementActivation> definitionRefinements = null;

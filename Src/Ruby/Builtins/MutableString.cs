@@ -144,6 +144,10 @@ namespace IronRuby.Builtins {
             Assert.NotNull(content, encoding);
             SetEncoding(encoding);
             SetContent(content);
+            // every other constructor comes through here; off unless the objspace library asked for it
+            if (ObjectTracking.Enabled) {
+                ObjectTracking.Track(this);
+            }
         }
 
         // creates a copy including the taint flag:

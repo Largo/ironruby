@@ -226,7 +226,17 @@ namespace IronRuby.Compiler.Ast {
                     Ast.Constant(definitionRefinements, typeof(StrongBox<RefinementActivation>)))
                 : AstUtils.Empty();
 
+            // :methods coverage: one call, counted where the frame is entered
+            MSA.Expression countCall;
+            var methodCoverage = gen.MethodCoverage;
+            if (methodCoverage != null) {
+                countCall = Ast.Call(AstUtils.Constant(methodCoverage), typeof(MethodCoverage).GetMethod("Count"));
+            } else {
+                countCall = AstUtils.Empty();
+            }
+
             MSA.Expression body = AstUtils.Try(
+                countCall,
                 recordRefinements,
                 profileStart,
                 _parameters.TransformOptionalsInitialization(gen),

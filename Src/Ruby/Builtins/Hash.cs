@@ -142,30 +142,44 @@ namespace IronRuby.Builtins {
 
         #region Construction
 
+        // Dictionary has no constructor of its own to chain through, so every constructor here
+        // records the new hash; off unless the objspace library asked for it.
+        private void Created() {
+            if (ObjectTracking.Enabled) {
+                ObjectTracking.Track(this);
+            }
+        }
+
         public Hash(RubyContext/*!*/ context)
             : base(context.EqualityComparer) {
+            Created();
         }
 
         public Hash(IEqualityComparer<object>/*!*/ comparer)
             : base(comparer) {
+            Created();
         }
 
         public Hash(EqualityComparer/*!*/ comparer, Proc defaultProc, object defaultValue)
             : base(comparer) {
             _defaultValue = defaultValue;
             _defaultProc = defaultProc;
+            Created();
         }
 
         public Hash(EqualityComparer/*!*/ comparer, int capacity)
             : base(capacity, comparer) {
+            Created();
         }
 
         public Hash(IDictionary<object, object>/*!*/ dictionary)
             : base(dictionary) {
+            Created();
         }
-        
-        public Hash(IDictionary<object, object>/*!*/ dictionary, EqualityComparer/*!*/ comparer) 
+
+        public Hash(IDictionary<object, object>/*!*/ dictionary, EqualityComparer/*!*/ comparer)
             : base(dictionary, comparer) {
+            Created();
         }
 
         public Hash(Hash/*!*/ hash)
@@ -173,6 +187,7 @@ namespace IronRuby.Builtins {
             _defaultProc = hash._defaultProc;
             _defaultValue = hash.DefaultValue;
             _comparesByIdentity = hash._comparesByIdentity;
+            Created();
         }
 
         /// <summary>

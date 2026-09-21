@@ -12,6 +12,7 @@
 
 using System;
 using System.Collections.Generic;
+using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
 using Microsoft.Scripting.Utils;
 
@@ -162,6 +163,48 @@ namespace IronRuby.Runtime {
         }
     }
 
+    /// <summary>
+    /// One method definition of a measured file, as :methods coverage reports it: MRI's key is
+    /// [class, name, start line, start column, end line, end column] and its value the number of
+    /// calls. Recorded when the `def' runs (so a method that is never called is still reported,
+    /// with 0), counted in the body's prologue.
+    /// </summary>
+    public sealed class MethodCoverage {
+        public readonly CoverageState/*!*/ State;
+        public readonly RubyModule/*!*/ Owner;
+        public readonly string/*!*/ Name;
+        public readonly int StartLine;
+        public readonly int StartColumn;
+        public readonly int EndLine;
+        public readonly int EndColumn;
+
+        /// <summary>
+        /// A one-element array so that compiled code can increment it in place, as for lines.
+        /// </summary>
+        public readonly int[]/*!*/ Counts = new int[1];
+
+        /// <summary>
+        /// One call, counted by the method body's prologue (see MethodDefinition.TransformBody).
+        /// </summary>
+        public void Count() {
+            if (State.Resumed) {
+                Counts[0]++;
+            }
+        }
+
+        internal MethodCoverage(CoverageState/*!*/ state, RubyModule/*!*/ owner, string/*!*/ name,
+            int startLine, int startColumn, int endLine, int endColumn) {
+            Assert.NotNull(state, owner, name);
+            State = state;
+            Owner = owner;
+            Name = name;
+            StartLine = startLine;
+            StartColumn = startColumn;
+            EndLine = endLine;
+            EndColumn = endColumn;
+        }
+    }
+
     public sealed class LineCoverage {
         private const int NotALine = -1;
 
@@ -176,6 +219,12 @@ namespace IronRuby.Runtime {
 
         // oneshot_lines: lines already handed out by a clearing Coverage.result
         private bool[] _reported;
+
+        // The methods defined in this file while it was measured, by the `def' they came from: one
+        // entry per module the same `def' was run for (Class.new { def m; end } in a loop).
+        private readonly Dictionary<object, List<MethodCoverage>>/*!*/ _methods =
+            new Dictionary<object, List<MethodCoverage>>(ReferenceEqualityComparer.Instance);
+        private readonly List<MethodCoverage>/*!*/ _methodOrder = new List<MethodCoverage>();
 
         internal LineCoverage(CoverageState/*!*/ state, string/*!*/ path, int lineCount) {
             Assert.NotNull(state, path);
@@ -222,7 +271,63 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        /// <summary>
+        /// Records a method definition, or answers the record a previous run of the same `def' for
+        /// the same module made. Only called when :methods coverage is measured.
+        /// </summary>
+        internal MethodCoverage/*!*/ AddMethod(object/*!*/ definition, RubyModule/*!*/ owner, string/*!*/ name,
+            int startLine, int startColumn, int endLine, int endColumn) {
+
+            lock (_methods) {
+                List<MethodCoverage> definitions;
+                if (!_methods.TryGetValue(definition, out definitions)) {
+                    _methods[definition] = definitions = new List<MethodCoverage>();
+                }
+                foreach (var existing in definitions) {
+                    if (ReferenceEquals(existing.Owner, owner)) {
+                        return existing;
+                    }
+                }
+
+                var result = new MethodCoverage(State, owner, name, startLine, startColumn, endLine, endColumn);
+                definitions.Add(result);
+                _methodOrder.Add(result);
+                return result;
+            }
+        }
+
+        /// <summary>
+        /// The counters the body compiled for <paramref name="owner"/> counts into, or null if the
+        /// `def' was not recorded (:methods coverage off, or the definition never ran). A body is
+        /// compiled once per module it is defined for, so the owner picks the record; a singleton
+        /// or module-function copy, whose module is not the one the definition recorded, falls
+        /// back to the first record of the same `def'.
+        /// </summary>
+        internal MethodCoverage FindMethod(object/*!*/ definition, RubyModule/*!*/ owner) {
+            lock (_methods) {
+                List<MethodCoverage> definitions;
+                if (!_methods.TryGetValue(definition, out definitions) || definitions.Count == 0) {
+                    return null;
+                }
+                foreach (var existing in definitions) {
+                    if (ReferenceEquals(existing.Owner, owner)) {
+                        return existing;
+                    }
+                }
+                return definitions[0];
+            }
+        }
+
+        public List<MethodCoverage>/*!*/ GetMethods() {
+            lock (_methods) {
+                return new List<MethodCoverage>(_methodOrder);
+            }
+        }
+
         internal void Clear() {
+            foreach (var method in GetMethods()) {
+                method.Counts[0] = 0;
+            }
             for (int i = 0; i < Counts.Length; i++) {
                 if (Counts[i] > 0) {
                     if ((State.Modes & CoverageModes.OneshotLines) != 0) {

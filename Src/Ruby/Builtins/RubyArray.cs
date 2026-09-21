@@ -66,6 +66,10 @@ namespace IronRuby.Builtins {
             _content = content;
             _count = count;
             ObjectInvariant();
+            // every other constructor comes through here; off unless the objspace library asked for it
+            if (ObjectTracking.Enabled) {
+                ObjectTracking.Track(this);
+            }
         }
 
         public RubyArray() 

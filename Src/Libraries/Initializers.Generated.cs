@@ -6690,6 +6690,56 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadObjectSpace_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__address_of__", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.GetAddress)
+            );
+            
+            DefineLibraryMethod(module, "__allocation_info__", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ObjectSpace.GetAllocationInfo)
+            );
+            
+            DefineLibraryMethod(module, "__memsize_of__", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.Builtins.ObjectSpace.GetMemorySize)
+            );
+            
+            DefineLibraryMethod(module, "__memsize_of_all__", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>(IronRuby.Builtins.ObjectSpace.GetMemorySizeOfAll)
+            );
+            
+            DefineLibraryMethod(module, "__reachable_objects_from__", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ObjectSpace.GetReachableObjectsFrom)
+            );
+            
+            DefineLibraryMethod(module, "__trace_clear__", 0x62, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ObjectSpace.ClearAllocationSites)
+            );
+            
+            DefineLibraryMethod(module, "__trace_start__", 0x62, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ObjectSpace.StartTracingAllocations)
+            );
+            
+            DefineLibraryMethod(module, "__trace_stop__", 0x62, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule>(IronRuby.Builtins.ObjectSpace.StopTracingAllocations)
+            );
+            
+            DefineLibraryMethod(module, "__track_objects__", 0x62, 
+                0x00000000U, 
+                new Action<IronRuby.Builtins.RubyModule, System.Boolean>(IronRuby.Builtins.ObjectSpace.TrackObjects)
+            );
+            
+            DefineLibraryMethod(module, "__tracked_objects__", 0x62, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ObjectSpace.GetTrackedObjects)
+            );
+            
             DefineLibraryMethod(module, "_id2ref", 0x61, 
                 0x00010000U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Runtime.IntegerValue, System.Object>(IronRuby.Builtins.ObjectSpace.IdToReference)

@@ -48,6 +48,9 @@ namespace IronRuby.Builtins {
             if (registry != null) {
                 registry.Add(this);
             }
+            if (ObjectTracking.Enabled) {
+                ObjectTracking.Track(this);
+            }
         }
 
         /// <summary>

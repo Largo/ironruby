@@ -319,5 +319,217 @@ namespace IronRuby.Builtins {
         public static void GarbageCollect(RubyModule/*!*/ self, [Optional]IDictionary<object, object> options) {
             GC.Collect();
         }
+
+        #region objspace library primitives
+
+        // What `require "objspace"` adds to ObjectSpace is Ruby (Src/StdLib/ironruby/objspace.rb);
+        // only what needs the runtime is here, private and under reserved names so that ObjectSpace
+        // looks untouched until the library is required.
+
+        /// <summary>
+        /// Starts or stops remembering objects as they are created, which is what dump_all and
+        /// memsize_of_all walk in place of MRI's heap. Switched on by `require "objspace"`.
+        /// </summary>
+        [RubyMethod("__track_objects__", RubyMethodAttributes.PrivateSingleton)]
+        public static void TrackObjects(RubyModule/*!*/ self, bool enable) {
+            ObjectTracking.TrackObjects(enable);
+        }
+
+        /// <summary>
+        /// The objects ObjectSpace knows of: every module and class, whatever the allocation
+        /// tracking has recorded, and what each_object can see with -X:ObjectSpace.
+        /// </summary>
+        [RubyMethod("__tracked_objects__", RubyMethodAttributes.PrivateSingleton)]
+        public static RubyArray/*!*/ GetTrackedObjects(RubyModule/*!*/ self) {
+            var result = new RubyArray();
+            foreach (object obj in EnumerateKnownObjects(self.Context)) {
+                result.Add(obj);
+            }
+            return result;
+        }
+
+        private static IEnumerable<object>/*!*/ EnumerateKnownObjects(RubyContext/*!*/ context) {
+            var seen = new HashSet<object>(ReferenceEqualityComparer.Instance);
+            foreach (object obj in context.GetObjectSpaceModules()) {
+                var module = obj as RubyModule;
+                if (module != null && IsHidden(module)) {
+                    continue;
+                }
+                if (seen.Add(obj)) {
+                    yield return obj;
+                }
+            }
+
+            foreach (object obj in ObjectTracking.GetTrackedObjects()) {
+                if (seen.Add(obj)) {
+                    yield return obj;
+                }
+            }
+
+            var objects = context.GetObjectSpaceObjects();
+            if (objects != null) {
+                foreach (object obj in objects) {
+                    if (seen.Add(obj)) {
+                        yield return obj;
+                    }
+                }
+            }
+        }
+
+        [RubyMethod("__memsize_of__", RubyMethodAttributes.PrivateSingleton)]
+        public static object/*!*/ GetMemorySize(RubyModule/*!*/ self, object obj) {
+            return ClrInteger.Narrow(MemorySize(self.Context, obj));
+        }
+
+        [RubyMethod("__memsize_of_all__", RubyMethodAttributes.PrivateSingleton)]
+        public static object/*!*/ GetMemorySizeOfAll(RubyModule/*!*/ self, [Optional]RubyModule theModule) {
+            var context = self.Context;
+            long total = 0;
+            foreach (object obj in EnumerateKnownObjects(context)) {
+                if (theModule == null || context.IsKindOf(obj, theModule)) {
+                    total += MemorySize(context, obj);
+                }
+            }
+            return ClrInteger.Narrow(total);
+        }
+
+        // MRI reports what the object occupies in its heap; there is no such number on .NET, so
+        // this estimates it the same way: an object header of one slot, plus what the payload
+        // needs beyond what fits in the slot. The size is only meant to be compared with the size
+        // of another object of the same kind, which is all the objspace specs ask of it.
+        private const int SlotSize = 40;
+
+        private static long MemorySize(RubyContext/*!*/ context, object obj) {
+            // an immediate is its own value - it occupies no slot
+            if (obj == null || obj is bool || obj is int || obj is RubySymbol) {
+                return 0;
+            }
+
+            var str = obj as MutableString;
+            if (str != null) {
+                int count;
+                try {
+                    count = str.GetByteCount();
+                } catch (Exception) {
+                    count = str.GetCharCount() * 2;
+                }
+                // a short string lives in the slot (MRI embeds up to 23 bytes)
+                return SlotSize + (count > 23 ? count + 1 : 0);
+            }
+
+            var array = obj as RubyArray;
+            if (array != null) {
+                return SlotSize + (array.Count > 3 ? (long)array.Count * IntPtr.Size : 0);
+            }
+
+            var hash = obj as Hash;
+            if (hash != null) {
+                return SlotSize + (long)hash.Count * 5 * IntPtr.Size;
+            }
+
+            long size = SlotSize;
+            var module = obj as RubyModule;
+            if (module != null) {
+                // a module carries its method and constant tables
+                size += 3 * SlotSize;
+            }
+
+            size += (long)context.GetInstanceVariableNames(obj).Length * IntPtr.Size;
+            return size;
+        }
+
+        /// <summary>
+        /// The objects directly reachable from <paramref name="obj"/>: its class, its instance
+        /// variables, and whatever a container holds. Null for an immediate, as in MRI. Unlike
+        /// MRI's this does not see what a CLR object keeps in its fields, beyond the containers
+        /// known here.
+        /// </summary>
+        [RubyMethod("__reachable_objects_from__", RubyMethodAttributes.PrivateSingleton)]
+        public static RubyArray GetReachableObjectsFrom(RubyModule/*!*/ self, object obj) {
+            var context = self.Context;
+            if (obj == null || obj is bool || obj is int || obj is RubySymbol) {
+                return null;
+            }
+
+            var found = new List<object>();
+            found.Add(context.GetClassOf(obj));
+
+            var array = obj as RubyArray;
+            if (array != null) {
+                found.AddRange(array);
+            }
+
+            var hash = obj as Hash;
+            if (hash != null) {
+                foreach (var entry in hash) {
+                    found.Add(entry.Key);
+                    found.Add(entry.Value);
+                }
+            }
+
+            var queue = obj as IronRuby.StandardLibrary.Threading.RubyQueue;
+            if (queue != null) {
+                found.AddRange(queue.GetContents());
+            }
+
+            foreach (string name in context.GetInstanceVariableNames(obj)) {
+                object value;
+                if (context.TryGetInstanceVariable(obj, name, out value)) {
+                    found.Add(value);
+                }
+            }
+
+            // MRI leaves out what has no heap slot of its own
+            var result = new RubyArray(found.Count);
+            foreach (object item in found) {
+                if (item != null && !(item is bool) && !(item is int) && !(item is RubySymbol)) {
+                    result.Add(item);
+                }
+            }
+            return result;
+        }
+
+        [RubyMethod("__address_of__", RubyMethodAttributes.PrivateSingleton)]
+        public static object/*!*/ GetAddress(RubyModule/*!*/ self, object obj) {
+            return ClrInteger.Narrow(RubyUtils.GetObjectId(self.Context, obj));
+        }
+
+        [RubyMethod("__trace_start__", RubyMethodAttributes.PrivateSingleton)]
+        public static void StartTracingAllocations(RubyModule/*!*/ self) {
+            ObjectTracking.StartTracingAllocations();
+        }
+
+        [RubyMethod("__trace_stop__", RubyMethodAttributes.PrivateSingleton)]
+        public static void StopTracingAllocations(RubyModule/*!*/ self) {
+            ObjectTracking.StopTracingAllocations();
+        }
+
+        [RubyMethod("__trace_clear__", RubyMethodAttributes.PrivateSingleton)]
+        public static void ClearAllocationSites(RubyModule/*!*/ self) {
+            ObjectTracking.ClearAllocationSites();
+        }
+
+        /// <summary>
+        /// [sourcefile, sourceline, class_path, method_id, generation] of the object's allocation,
+        /// or nil if it was not created while allocations were traced.
+        /// </summary>
+        [RubyMethod("__allocation_info__", RubyMethodAttributes.PrivateSingleton)]
+        public static RubyArray GetAllocationInfo(RubyModule/*!*/ self, object obj) {
+            var site = ObjectTracking.GetAllocationSite(obj);
+            if (site == null) {
+                return null;
+            }
+
+            var context = self.Context;
+            var result = new RubyArray(5);
+            result.Add(site.Path != null ? context.EncodePath(site.Path) : null);
+            result.Add(ScriptingRuntimeHelpers.Int32ToObject(site.Line));
+            result.Add(site.ClassPath != null ? MutableString.CreateMutable(site.ClassPath, context.GetIdentifierEncoding()) : null);
+            result.Add(site.MethodName != null ? context.CreateSymbol(site.MethodName, context.GetIdentifierEncoding()) : null);
+            result.Add(ScriptingRuntimeHelpers.Int32ToObject(site.Generation));
+            return result;
+        }
+
+        #endregion
     }
 }
