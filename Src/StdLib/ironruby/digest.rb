@@ -21,6 +21,27 @@ load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Digest'
 # Digest::Instance, which MRI also defines in Ruby terms.
 
 module Digest
+  # MRI's Digest::const_missing requires digest/<name> and turns a failure into a
+  # LoadError naming the class, which is what callers rescue -- PStore picks its
+  # checksum algorithm by trying Digest("SHA512"), Digest("SHA384"), ... until
+  # one of them does not raise LoadError.  The C# half raises NotImplementedError
+  # from its own const_missing, so this replaces it.
+  def self.const_missing(name)
+    library = case name
+              when :SHA256, :SHA384, :SHA512 then "digest/sha2"
+              else File.join("digest", name.to_s.downcase)
+              end
+    begin
+      require library
+    rescue LoadError
+      raise LoadError, "library not found for class Digest::#{name} -- #{library}"
+    end
+    unless const_defined?(name)
+      raise NameError, "uninitialized constant Digest::#{name}"
+    end
+    const_get(name)
+  end
+
   module Instance
     # Abstract in MRI; Digest::Base overrides both with the C# implementation.
     # They exist here so that Digest::Instance itself answers to them, and so the
@@ -93,4 +114,16 @@ module Digest
       new(*args).base64digest(str)
     end
   end
+end
+
+module Kernel
+  # Digest("SHA256") -> Digest::SHA256.  A private method on every object, the
+  # way MRI's digest.rb defines it; it is how code picks a digest class by name
+  # and how it finds out (LoadError) that a name is not available.
+  def Digest(name)
+    const = name.to_sym
+    Digest.const_missing(const) unless Digest.const_defined?(const)
+    Digest.const_get(const)
+  end
+  private :Digest
 end

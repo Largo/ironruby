@@ -22,8 +22,10 @@ module OpenSSL
     VERIFY_FAIL_IF_NO_PEER_CERT = 2
     VERIFY_CLIENT_ONCE = 4
 
-    # There is no TLS implementation behind this; the class exists so that code
-    # which only configures a context (net/ftp, net/http) loads and runs.
+    # The settings an SSLSocket is made with.  Only #verify_mode is acted on
+    # (see openssl/ssl.rb): the TLS behind SSLSocket is .NET's SslStream, which
+    # takes its trust anchors, protocol versions and cipher list from the
+    # platform rather than from a context object.
     class SSLContext
       SESSION_CACHE_OFF = 0x0000
       SESSION_CACHE_CLIENT = 0x0001
@@ -73,10 +75,23 @@ module OpenSSL
   class Digest
     # CRuby defines OpenSSL::Digest::SHA256 and friends in C (ossl_digest.c);
     # each is a subclass that pins the algorithm name.
-    class DigestError < OpenSSLError; end
+    class DigestError < OpenSSLError; end unless const_defined?(:DigestError, false)
 
-    # SHA224 and RIPEMD160 are deliberately absent: .NET has no implementation.
-    %w[MD5 SHA1 SHA256 SHA384 SHA512].each do |algorithm|
+    # RIPEMD160, BLAKE2 and the SHA512/t truncations are deliberately absent:
+    # .NET has no implementation and none of them is a few lines of Ruby.
+    # SHA3-224 is absent because .NET bound only the other three SHA-3 sizes.
+    # Whether the platform's crypto backend has SHA-3 is a runtime question, so
+    # the constants are those the C# half actually accepts.
+    names = %w[MD5 SHA1 SHA224 SHA256 SHA384 SHA512 SHA3-256 SHA3-384 SHA3-512].select do |name|
+      begin
+        Digest.new(name)
+        true
+      rescue OpenSSLError
+        false
+      end
+    end
+
+    names.each do |algorithm|
       subclass = Class.new(Digest) do
         define_method(:initialize) do |data = nil|
           if data.nil?
@@ -97,7 +112,9 @@ module OpenSSL
         Digest.base64digest(algorithm, data)
       end
 
-      const_set(algorithm, subclass)
+      # OpenSSL spells the SHA-3 algorithms with a hyphen; a constant cannot have
+      # one, so the class is OpenSSL::Digest::SHA3_256 and #name is "SHA3-256".
+      const_set(algorithm.tr("-", "_"), subclass)
     end
   end
 
@@ -154,19 +171,71 @@ module OpenSSL
     end
   end
 
-  # There is no cipher implementation behind this: every algorithm is
-  # unsupported, which is what MRI reports for a name OpenSSL does not know.
-  # The class exists so that code which names OpenSSL::Cipher::CipherError
-  # (in a rescue clause, say) loads.
-  class Cipher
-    class CipherError < OpenSSLError; end
+  # HMAC (RFC 2104) over OpenSSL::Digest.  The construction is written out rather
+  # than handed to IncrementalHash.CreateHMAC so that every digest OpenSSL::Digest
+  # offers has an HMAC -- .NET's HMAC classes stop at SHA-2, and SHA-224 has no
+  # .NET hash at all.
+  class HMAC
+    class HMACError < OpenSSLError; end
 
-    def self.ciphers
-      []
+    def initialize(key, digest)
+      @digest_name = Digest.new(digest).name
+      key = String.try_convert(key) or
+        raise TypeError, "no implicit conversion of #{key.class} into String"
+      block_length = Digest.new(@digest_name).block_length
+      key = Digest.digest(@digest_name, key) if key.bytesize > block_length
+      key = key.b + ("\x00".b * (block_length - key.bytesize))
+      @inner_pad = key.each_byte.map { |b| (b ^ 0x36).chr }.join.b
+      @outer_pad = key.each_byte.map { |b| (b ^ 0x5C).chr }.join.b
+      reset
     end
 
-    def initialize(name)
-      raise CipherError, "unsupported cipher algorithm: #{name}"
+    def update(data)
+      @inner.update(String.try_convert(data) ||
+                    (raise TypeError, "no implicit conversion of #{data.class} into String"))
+      self
+    end
+    alias_method :<<, :update
+
+    def reset
+      @inner = Digest.new(@digest_name)
+      @inner.update(@inner_pad)
+      self
+    end
+
+    def digest
+      outer = Digest.new(@digest_name)
+      outer.update(@outer_pad)
+      outer.update(@inner.digest)
+      outer.digest
+    end
+
+    def hexdigest
+      digest.unpack1("H*")
+    end
+    alias_method :to_s, :hexdigest
+    alias_method :inspect, :hexdigest
+
+    def base64digest
+      [digest].pack("m0")
+    end
+
+    def ==(other)
+      other.is_a?(HMAC) && OpenSSL.fixed_length_secure_compare(digest, other.digest)
+    end
+
+    class << self
+      def digest(digest, key, data)
+        new(key, digest).update(data).digest
+      end
+
+      def hexdigest(digest, key, data)
+        new(key, digest).update(data).hexdigest
+      end
+
+      def base64digest(digest, key, data)
+        new(key, digest).update(data).base64digest
+      end
     end
   end
 
@@ -461,6 +530,22 @@ module IronRubyOpenSSL__ # :nodoc: all
     array.to_a.map { |b| b.to_i }.pack("C*")
   end
 
+  # A Ruby String as a CLR byte[].  A Ruby String converts to both byte[] and
+  # String, so an overload set that has one of each -- X509Certificate2's
+  # constructor, say -- is ambiguous until the array is built explicitly.
+  def self.clr_bytes(string)
+    bytes = string.bytes
+    array = ::System::Array.of(::System::Byte).new(bytes.size)
+    bytes.each_with_index { |byte, index| array[index] = byte }
+    array
+  end
+
+  # A CLR String as a Ruby String.  The .NET PEM writers hand back one of these
+  # and it has to be a real Ruby String before anything indexes or matches it.
+  def self.string(value)
+    value.to_s
+  end
+
   # An OpenSSL::X509::Name as an X500DistinguishedName.  Name#to_s(RFC2253) is
   # already the escaped, most-significant-last form the CLR parser reads; the
   # explicit to_clr_string picks the String overload of a constructor that also
@@ -502,60 +587,6 @@ module IronRubyOpenSSL__ # :nodoc: all
 end
 
 module OpenSSL
-  module PKey
-    class PKeyError < OpenSSLError; end unless const_defined?(:PKeyError, false)
-    class RSAError < PKeyError; end unless const_defined?(:RSAError, false)
-
-    # Only what a certificate needs: generate a key pair, hand out the public
-    # half and let the X509 code reach the CLR object.  Encoding (to_pem, to_der,
-    # reading a key back) and the encrypt/decrypt primitives are not implemented.
-    class RSA
-      def initialize(size = nil, pass = nil)
-        case size
-        when nil
-          @key = IronRubyOpenSSL__::Crypto::RSA.Create(2048)
-        when Integer
-          @key = IronRubyOpenSSL__::Crypto::RSA.Create(size)
-        else
-          raise RSAError, "OpenSSL::PKey::RSA.new(#{size.class}) is not supported"
-        end
-        @private = true
-      end
-
-      def self.generate(size, exponent = nil)
-        new(size)
-      end
-
-      def __clr_key # :nodoc:
-        @key
-      end
-
-      def __replace(key, is_private) # :nodoc:
-        @key = key
-        @private = is_private
-        self
-      end
-
-      def public_key
-        copy = IronRubyOpenSSL__::Crypto::RSA.Create
-        copy.ImportParameters(@key.ExportParameters(false))
-        RSA.allocate.__replace(copy, false)
-      end
-
-      def private?
-        @private
-      end
-
-      def public?
-        true
-      end
-
-      def inspect
-        "#<#{self.class}:0x%08x>" % (object_id << 1)
-      end
-    end
-  end
-
   module X509
     class ExtensionError < OpenSSLError; end unless const_defined?(:ExtensionError, false)
     class StoreError < OpenSSLError; end unless const_defined?(:StoreError, false)
@@ -739,18 +770,29 @@ module OpenSSL
       # goes into the request, the issuer's name and a signature generator over
       # the signing key into Create.
       def sign(key, digest)
-        unless key.kind_of?(OpenSSL::PKey::RSA)
-          raise CertificateError, "only OpenSSL::PKey::RSA keys can sign here"
+        hash = IronRubyOpenSSL__.hash_algorithm(digest)
+        case key
+        when OpenSSL::PKey::RSA
+          request = IronRubyOpenSSL__::X509::CertificateRequest.new(
+            IronRubyOpenSSL__.dn(@subject),
+            (@public_key || key.public_key).__clr_key,
+            hash,
+            IronRubyOpenSSL__::Crypto::RSASignaturePadding.Pkcs1)
+          generator = IronRubyOpenSSL__::X509::X509SignatureGenerator.CreateForRSA(
+            key.__clr_key, IronRubyOpenSSL__::Crypto::RSASignaturePadding.Pkcs1)
+        when OpenSSL::PKey::EC
+          # The subject's public key is the ECDsa object itself: CertificateRequest
+          # takes a key, not a key pair, and only reads the public half of it.
+          request = IronRubyOpenSSL__::X509::CertificateRequest.new(
+            IronRubyOpenSSL__.dn(@subject),
+            (@public_key || key).__clr_key,
+            hash)
+          generator = IronRubyOpenSSL__::X509::X509SignatureGenerator.CreateForECDsa(key.__clr_key)
+        else
+          raise CertificateError,
+                "only OpenSSL::PKey::RSA and OpenSSL::PKey::EC keys can sign here"
         end
-        subject_key = @public_key || key.public_key
-        request = IronRubyOpenSSL__::X509::CertificateRequest.new(
-          IronRubyOpenSSL__.dn(@subject),
-          subject_key.__clr_key,
-          IronRubyOpenSSL__.hash_algorithm(digest),
-          IronRubyOpenSSL__::Crypto::RSASignaturePadding.Pkcs1)
         @extensions.each { |extension| request.CertificateExtensions.Add(extension.__clr) }
-        generator = IronRubyOpenSSL__::X509::X509SignatureGenerator.CreateForRSA(
-          key.__clr_key, IronRubyOpenSSL__::Crypto::RSASignaturePadding.Pkcs1)
         @clr = request.Create(IronRubyOpenSSL__.dn(@issuer), generator,
                               IronRubyOpenSSL__.time(@not_before, "not_before"),
                               IronRubyOpenSSL__.time(@not_after, "not_after"),
@@ -782,7 +824,7 @@ module OpenSSL
           body = der[/-----BEGIN CERTIFICATE-----(.*?)-----END CERTIFICATE-----/m, 1]
           der = body.to_s.unpack1("m")
         end
-        @clr = IronRubyOpenSSL__::X509::X509Certificate2.new(der)
+        @clr = IronRubyOpenSSL__::X509::X509Certificate2.new(IronRubyOpenSSL__.clr_bytes(der))
         @serial = @clr.SerialNumber.to_s.to_i(16)
         @version = @clr.Version - 1
         @subject = Name.parse_openssl(@clr.Subject.to_s)
@@ -890,3 +932,17 @@ module OpenSSL
     end
   end
 end
+
+module OpenSSL
+  # MRI's name for HMAC's error class is OpenSSL::HMACError.
+  HMACError = HMAC::HMACError unless const_defined?(:HMACError, false)
+end
+
+# The rest of OpenSSL, each part on the piece of System.Security.Cryptography
+# that corresponds to it.  They are separate files because each is a self
+# contained translation of one of libcrypto's object models.
+require 'openssl/bn'
+require 'openssl/asn1'
+require 'openssl/cipher'
+require 'openssl/pkey'
+require 'openssl/ssl'

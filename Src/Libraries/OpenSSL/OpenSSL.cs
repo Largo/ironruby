@@ -19,6 +19,11 @@ using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Security.Cryptography.X509Certificates;
+using System.IO;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Authentication;
+using IronRuby.StandardLibrary.Sockets;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -54,11 +59,26 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         /// </summary>
         [RubyClass("Digest")]
         public class Digest {
+            // MRI's class for "this is not a digest OpenSSL knows"; code rescues it
+            // by name, so it has to be this class and not its OpenSSLError parent.
+            [RubyException("DigestError"), Serializable]
+            public class DigestError : OpenSSLError {
+                public DigestError() : this(null, null) { }
+                public DigestError(string message) : this(message, null) { }
+                public DigestError(string message, Exception inner) : base(message ?? "DigestError", inner) { }
+                public DigestError(MutableString message) : base(message.ConvertToString()) { RubyExceptionData.InitializeException(this, message); }
+
+#if FEATURE_SERIALIZATION
+                protected DigestError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
+                    : base(info, context) { }
+#endif
+            }
+
             private string/*!*/ _name = "SHA1";
-            private Crypto.IncrementalHash _hash;
+            private IncrementalDigest _hash;
 
             public Digest() {
-                _hash = Crypto.IncrementalHash.CreateHash(Crypto.HashAlgorithmName.SHA1);
+                _hash = CreateIncremental("SHA1");
             }
 
             internal string/*!*/ AlgorithmName {
@@ -74,9 +94,18 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     case "MD5": return "MD5";
                     case "SHA":
                     case "SHA1": return "SHA1";
+                    case "SHA224": return "SHA224";
                     case "SHA256": return "SHA256";
                     case "SHA384": return "SHA384";
                     case "SHA512": return "SHA512";
+                    // SHA-3 arrived in .NET 8; it is only there when the platform's
+                    // crypto backend has it (OpenSSL 3 does, Windows CNG before 25H2
+                    // does not), so an unsupported build reports the name as unknown.
+                    // .NET has no SHA3-224: it only bound the three sizes that pair
+                    // with its signature and HMAC algorithms.
+                    case "SHA3256": return Crypto.SHA3_256.IsSupported ? "SHA3-256" : null;
+                    case "SHA3384": return Crypto.SHA3_256.IsSupported ? "SHA3-384" : null;
+                    case "SHA3512": return Crypto.SHA3_256.IsSupported ? "SHA3-512" : null;
                     default: return null;
                 }
             }
@@ -87,6 +116,9 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     case "SHA1": return Crypto.HashAlgorithmName.SHA1;
                     case "SHA256": return Crypto.HashAlgorithmName.SHA256;
                     case "SHA384": return Crypto.HashAlgorithmName.SHA384;
+                    case "SHA3-256": return Crypto.HashAlgorithmName.SHA3_256;
+                    case "SHA3-384": return Crypto.HashAlgorithmName.SHA3_384;
+                    case "SHA3-512": return Crypto.HashAlgorithmName.SHA3_512;
                     default: return Crypto.HashAlgorithmName.SHA512;
                 }
             }
@@ -95,14 +127,37 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 switch (canonicalName) {
                     case "MD5": return 16;
                     case "SHA1": return 20;
+                    case "SHA224": return 28;
                     case "SHA256": return 32;
                     case "SHA384": return 48;
+                    case "SHA3-256": return 32;
+                    case "SHA3-384": return 48;
                     default: return 64;
                 }
             }
 
             internal static int BlockLengthOf(string/*!*/ canonicalName) {
-                return (canonicalName == "SHA384" || canonicalName == "SHA512") ? 128 : 64;
+                switch (canonicalName) {
+                    case "SHA384":
+                    case "SHA512": return 128;
+                    // Keccak's rate: 1600 bits of state less twice the capacity.
+                    case "SHA3-256": return 136;
+                    case "SHA3-384": return 104;
+                    case "SHA3-512": return 72;
+                    default: return 64;
+                }
+            }
+
+            /// <summary>
+            /// A fresh running digest for the algorithm.  .NET has no SHA-224 and no way
+            /// to hand SHA-256 a different initial state, which is all SHA-224 is, so
+            /// that one is computed here (Sha224.cs) instead of mapped onto .NET.
+            /// </summary>
+            internal static IncrementalDigest/*!*/ CreateIncremental(string/*!*/ canonicalName) {
+                if (canonicalName == "SHA224") {
+                    return new Sha224();
+                }
+                return new NetDigest(Crypto.IncrementalHash.CreateHash(ToHashAlgorithmName(canonicalName)));
             }
 
             private static string/*!*/ ResolveName(RubyContext/*!*/ context, object algorithm) {
@@ -110,7 +165,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 if (str != null) {
                     string canonical = CanonicalizeName(str.ConvertToString());
                     if (canonical == null) {
-                        throw new OpenSSLError(MutableString.CreateMutable(
+                        throw new DigestError(MutableString.CreateMutable(
                             "Unsupported digest algorithm (" + str.ConvertToString() + ").", RubyEncoding.UTF8
                         ));
                     }
@@ -137,7 +192,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             public static Digest/*!*/ Initialize(RubyContext/*!*/ context, Digest/*!*/ self, object algorithm,
                 [DefaultProtocol, Optional]MutableString data) {
                 self._name = ResolveName(context, algorithm);
-                self._hash = Crypto.IncrementalHash.CreateHash(ToHashAlgorithmName(self._name));
+                self._hash = CreateIncremental(self._name);
 
                 if (data != null) {
                     Update(self, data);
@@ -148,14 +203,14 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             [RubyMethod("reset")]
             public static Digest/*!*/ Reset(Digest/*!*/ self) {
                 // IncrementalHash resets itself when the current hash is retrieved
-                self._hash.GetHashAndReset();
+                self._hash.Reset();
                 return self;
             }
 
             [RubyMethod("update")]
             [RubyMethod("<<")]
             public static Digest/*!*/ Update(Digest/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
-                self._hash.AppendData(data.ConvertToBytes());
+                self._hash.Append(data.ConvertToBytes());
                 return self;
             }
 
@@ -180,7 +235,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             /// finish-and-reset, so the accumulated bytes are replayed afterwards.
             /// </summary>
             internal static byte[]/*!*/ Finish(Digest/*!*/ self) {
-                return self._hash.GetCurrentHash();
+                return self._hash.Peek();
             }
 
             [RubyMethod("digest")]
@@ -223,9 +278,9 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             }
 
             internal static byte[]/*!*/ ComputeHash(string/*!*/ canonicalName, byte[]/*!*/ data) {
-                using (var hash = Crypto.IncrementalHash.CreateHash(ToHashAlgorithmName(canonicalName))) {
-                    hash.AppendData(data);
-                    return hash.GetHashAndReset();
+                using (var hash = CreateIncremental(canonicalName)) {
+                    hash.Append(data);
+                    return hash.Peek();
                 }
             }
 
@@ -484,33 +539,9 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             }
         }
 
-        [RubyModule("PKey")]
-        public static class PKey {
-
-            [RubyClass("RSA")]
-            public class RSA {
-                // RSA.new([size | encoded_key] [, pass]) -> rsa
-                // new(2048) -> rsa 
-                // new(File.read("rsa.pem")) -> rsa
-                // new(File.read("rsa.pem"), "mypassword") -> rsa
-                // initialize
-                // generate(size [, exponent]) -> rsa
-                // public? -> true (The return value is always true since every private key is also a public key)
-                // private? -> true | false
-                // to_pem -> aString
-                // to_pem(cipher, pass) -> aString
-                // to_der -> aString
-                // public_encrypt(string [, padding]) -> aString
-                // public_decrypt(string [, padding]) -> aString
-                // private_encrypt(string [, padding]) -> aString
-                // private_decrypt(string [, padding]) -> aString
-                // params -> hash
-                // to_text -> aString
-                // public_key -> aRSA
-                // inspect
-                // to_s
-            }
-        }
+        // OpenSSL::PKey is written in Ruby (Src/StdLib/ironruby/openssl/pkey.rb): the
+        // keys are System.Security.Cryptography's RSA, DSA and ECDsa, and the classes
+        // there define #initialize, which a C# stub of the same name would take over.
 
         // MRI's OpenSSL exceptions are plain StandardErrors: the message is exactly what was given,
         // not the "<base> - <message>" form of SystemCallError.
@@ -529,6 +560,156 @@ namespace IronRuby.StandardLibrary.OpenSsl {
 
         [RubyModule("SSL")]
         public static class SSL {
+#if FEATURE_SYNC_SOCKETS
+        /// <summary>
+        /// One TLS connection.  Not an MRI class: OpenSSL::SSL::SSLSocket is the
+        /// Ruby class in openssl/ssl.rb and this is what it does its reading and
+        /// writing through.
+        /// </summary>
+        [RubyClass("Transport__")]
+        public class Transport {
+            private Socket _socket;
+            private SslStream _ssl;
+            private bool _verify;
+            private string _hostname;
+
+            [RubyConstructor]
+            public static Transport/*!*/ Create(RubyClass/*!*/ self, [NotNull]object/*!*/ io) {
+                var socket = io as RubyBasicSocket;
+                if (socket == null) {
+                    throw RubyExceptions.CreateTypeError("SSLSocket needs a socket to run on");
+                }
+                var result = new Transport();
+                result._socket = socket.Socket;
+                // The Ruby socket layer leaves Socket.Blocking false and does its own
+                // polling; SslStream drives the socket itself and needs it blocking.
+                result._socket.Blocking = true;
+                return result;
+            }
+
+            private bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
+                return !_verify || errors == SslPolicyErrors.None;
+            }
+
+            /// <summary>
+            /// The client handshake.  hostname is the SNI name and the name the
+            /// certificate is checked against; verify false accepts any certificate,
+            /// which is what OpenSSL::SSL::VERIFY_NONE means.
+            /// </summary>
+            [RubyMethod("connect")]
+            public static Transport/*!*/ Connect(Transport/*!*/ self,
+                [DefaultProtocol]MutableString hostname, bool verify) {
+
+                self._verify = verify;
+                self._hostname = hostname == null ? "" : hostname.ConvertToString();
+                try {
+                    self._ssl = new SslStream(new NetworkStream(self._socket, false), false,
+                        new RemoteCertificateValidationCallback(self.Validate));
+                    self._ssl.AuthenticateAsClient(self._hostname);
+                } catch (Exception error) {
+                    throw new SSLError(Unwrap(error).Message);
+                }
+                return self;
+            }
+
+            // An SslStream failure arrives wrapped in an AuthenticationException whose
+            // inner exception says what actually went wrong.
+            private static Exception/*!*/ Unwrap(Exception/*!*/ error) {
+                return (error is AuthenticationException || error is IOException) && error.InnerException != null
+                    ? error.InnerException : error;
+            }
+
+            private SslStream/*!*/ Stream {
+                get {
+                    if (_ssl == null) {
+                        throw new SSLError("SSL session is not started yet");
+                    }
+                    return _ssl;
+                }
+            }
+
+            /// <summary>Up to length bytes, or nil at end of stream.</summary>
+            [RubyMethod("read")]
+            public static MutableString Read(Transport/*!*/ self, [DefaultProtocol]int length) {
+                byte[] buffer = new byte[length];
+                int read;
+                try {
+                    read = self.Stream.Read(buffer, 0, length);
+                } catch (IOException error) {
+                    throw new SSLError(Unwrap(error).Message);
+                }
+                if (read == 0) {
+                    return null;
+                }
+                Array.Resize(ref buffer, read);
+                return MutableString.CreateBinary(buffer);
+            }
+
+            [RubyMethod("write")]
+            public static int Write(Transport/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
+                byte[] bytes = data.ConvertToBytes();
+                try {
+                    self.Stream.Write(bytes, 0, bytes.Length);
+                    self.Stream.Flush();
+                } catch (IOException error) {
+                    throw new SSLError(Unwrap(error).Message);
+                }
+                return bytes.Length;
+            }
+
+            [RubyMethod("close")]
+            public static void Close(Transport/*!*/ self) {
+                if (self._ssl != null) {
+                    try {
+                        self._ssl.Dispose();
+                    } catch (Exception) {
+                        // closing a connection the peer already dropped is not an error
+                    }
+                    self._ssl = null;
+                }
+            }
+
+            /// <summary>The peer's certificate as DER, or nil before the handshake.</summary>
+            [RubyMethod("peer_cert")]
+            public static MutableString PeerCertificate(Transport/*!*/ self) {
+                if (self._ssl == null || self._ssl.RemoteCertificate == null) {
+                    return null;
+                }
+                return MutableString.CreateBinary(self._ssl.RemoteCertificate.Export(X509ContentType.Cert));
+            }
+
+            /// <summary>"TLSv1.3", the spelling OpenSSL::SSL::SSLSocket#ssl_version uses.</summary>
+            [RubyMethod("protocol")]
+            public static MutableString/*!*/ Protocol(Transport/*!*/ self) {
+                if (self._ssl == null) {
+                    return null;
+                }
+                switch (self._ssl.SslProtocol) {
+                    case SslProtocols.Tls: return MutableString.CreateAscii("TLSv1");
+                    case SslProtocols.Tls11: return MutableString.CreateAscii("TLSv1.1");
+                    case SslProtocols.Tls12: return MutableString.CreateAscii("TLSv1.2");
+                    case SslProtocols.Tls13: return MutableString.CreateAscii("TLSv1.3");
+                    default: return MutableString.CreateAscii(self._ssl.SslProtocol.ToString());
+                }
+            }
+
+            /// <summary>The negotiated cipher suite, e.g. "TLS_AES_256_GCM_SHA384".</summary>
+            [RubyMethod("cipher")]
+            public static MutableString Cipher(Transport/*!*/ self) {
+                if (self._ssl == null) {
+                    return null;
+                }
+                return MutableString.CreateAscii(self._ssl.NegotiatedCipherSuite.ToString());
+            }
+
+            /// <summary>Bytes already decrypted and waiting, which IO.select cannot see.</summary>
+            [RubyMethod("pending")]
+            public static int Pending(Transport/*!*/ self) {
+                return self._ssl == null ? 0 : (self._ssl.CanRead && self._socket.Available > 0 ? self._socket.Available : 0);
+            }
+        }
+#endif
+
             [RubyException("SSLError"), Serializable]
             public class SSLError : OpenSSLError {
                 public SSLError() : this(null, null) { }
