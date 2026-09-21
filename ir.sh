@@ -17,5 +17,12 @@ fi
 # -X:StdLib puts them on $LOAD_PATH after -I, RUBYOPT's -I and RUBYLIB, where
 # MRI keeps its own library directories.
 S="$IR_ROOT/Src/StdLib"
-exec "$IR_ROOT/Src/Console/bin/Debug/net8.0/ir" -X:UsePrism \
+# IR_CONFIG=Release runs the optimized build instead (build it with
+# `dotnet build Src/Console/Ruby.Console.csproj -c Release ...`).  It is noticeably
+# faster - the Debug build is compiled with optimizations off, so the JIT leaves the
+# runtime unoptimized too - but Debug stays the default because that is what the
+# build and test scripts produce.
+: "${IR_CONFIG:=Debug}"
+
+exec "$IR_ROOT/Src/Console/bin/$IR_CONFIG/net8.0/ir" -X:UsePrism \
   "-X:StdLib=$S/ironruby:$S/ruby/4.0:$S/ruby/1.9.1" "$@"

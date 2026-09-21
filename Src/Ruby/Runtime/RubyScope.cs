@@ -1123,8 +1123,15 @@ var closureScope = scope as RubyClosureScope;
             _blockParameter = blockParameter;
 
             InitializeRfc(blockParameter);
-            SetDebugName("method " + definitionName + ((blockParameter != null) ? "&" : null));
         }
+
+#if DEBUG
+        // The debug name is built on demand: composing it in the constructor put a string
+        // concatenation and an allocation on every single method call.
+        public override string ToString() {
+            return "method " + _definitionName + ((_blockParameter != null) ? "&" : null);
+        }
+#endif
 
         public string/*!*/[]/*!*/ GetVisibleParameterNames() {
             int firstVisibleParameter = HasBlockParameter ? 1 : 0;

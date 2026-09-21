@@ -2598,10 +2598,12 @@ namespace IronRuby.Runtime {
             // $! still holds it here - we are about to overwrite it below. Kernel#raise has
             // already decided the cause for the exceptions it throws, and TrySetCause leaves
             // those (and any re-raise of an already-raised exception) alone.
-            RubyExceptionData.GetInstance(exception).TrySetCause(scope.RubyContext.CurrentException);
+            // One lookup, not two: the data lives in Exception.Data, whose store is a linear scan.
+            var data = RubyExceptionData.GetInstance(exception);
+            data.TrySetCause(scope.RubyContext.CurrentException);
 
             scope.RubyContext.CurrentException = exception;
-            RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
+            data.CaptureExceptionTrace(scope);
             return true;
         }
 

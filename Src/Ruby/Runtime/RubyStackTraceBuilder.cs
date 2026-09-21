@@ -207,7 +207,8 @@ namespace IronRuby.Runtime {
         /// every assembly on the stack.
         /// </summary>
         private static bool NeedsClrFileInfo(RubyContext/*!*/ context) {
-            return context.DomainManager.Configuration.DebugMode;
+            // only the modes that report CLR frames pay for symbol resolution
+            return context.Options.ExceptionDetail || context.DomainManager.Configuration.DebugMode;
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
