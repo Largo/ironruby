@@ -270,6 +270,10 @@ namespace IronRuby.Builtins {
             /// lock which can be signalled from another thread.
             /// </summary>
             internal void Sleep() {
+                // A Thread#kill/#raise that landed just before we got here parked its exception but
+                // could not interrupt us - we were not waiting yet. Deliver it instead of sleeping
+                // on, which would never end.
+                RubyUtils.CheckAsyncException();
                 try {
                     _isSleeping = true;
                     try {
@@ -292,6 +296,7 @@ namespace IronRuby.Builtins {
             /// Same as Sleep() but with a timeout; returns true if the full timeout elapsed.
             /// </summary>
             internal bool Sleep(int milliseconds) {
+                RubyUtils.CheckAsyncException();
                 try {
                     _isSleeping = true;
                     try {
