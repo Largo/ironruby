@@ -45,12 +45,13 @@ Note: outlining a loop *without* specializing it is worth nothing - IronRuby's c
 tier is no faster than its interpreter here, because the cost is the dynamic call site on
 every operator, not interpretation.
 
-## Both are off by default
+## Both are on by default
 
-The full sweep (core library language command_line security) passes with both enabled and
-shows no new failures, but they are young. Enable explicitly:
+The full sweep (core library language command_line security) gives identical results with
+them on and off, and IronRuby's C# test suite is unchanged, so they are the default. Turn
+them off to compare, or if you suspect one of them:
 
-    ./ir.sh -X:JIT -X:OSR script.rb
+    ./ir.sh -X:NoJIT -X:NoOSR script.rb
 
 A loop whose locals change representation under it - an accumulator crossing 2^31 - deopts
 once, and the site then builds a second copy over the types the locals hold *now* rather

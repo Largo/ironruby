@@ -695,8 +695,16 @@ namespace IronRuby.Hosting {
                             LanguageSetup.Options["JIT"] = ScriptingRuntimeHelpers.True;
                             return;
 
+                        case "NoJIT":
+                            LanguageSetup.Options["JIT"] = ScriptingRuntimeHelpers.False;
+                            return;
+
                         case "OSR":
                             LanguageSetup.Options["OSR"] = ScriptingRuntimeHelpers.True;
+                            return;
+
+                        case "NoOSR":
+                            LanguageSetup.Options["OSR"] = ScriptingRuntimeHelpers.False;
                             return;
                     }
 
@@ -890,8 +898,8 @@ namespace IronRuby.Hosting {
                 
                 { "-X:ExceptionDetail",          "enable ExceptionDetail mode" },
                 { "-X:ObjectSpace",              "let ObjectSpace.each_object find objects, not just modules (slows down Object#new)" },
-                { "-X:JIT",                      "enable the experimental method JIT (type-specialized method bodies)" },
-                { "-X:OSR",                      "enable on-stack replacement: compile a loop while it is running" },
+                { "-X:NoJIT",                    "disable the method JIT (type-specialized method bodies), which is on by default" },
+                { "-X:NoOSR",                    "disable on-stack replacement (specializing a loop while it runs), on by default" },
                 { "-X:NoAdaptiveCompilation",    "disable adaptive compilation - all code will be compiled" },
                 { "-X:CompilationThreshold",     "the number of iterations before the interpreter starts compiling" },
                 { "-X:PassExceptions",           "do not catch exceptions that are unhandled by script code" },

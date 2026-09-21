@@ -8,7 +8,7 @@ brought back to life: it **builds and runs on .NET 8**, and it parses Ruby with
 Ruby 1.9 grammar it shipped with in 2011.
 
 ```console
-$ ir -X:UsePrism -ISrc/StdLib/ironruby -ISrc/StdLib/ruby/1.9.1 script.rb
+$ ./ir.sh script.rb          # prism front end, vendored stdlib, JIT and OSR on
 ```
 
 ```ruby
@@ -32,6 +32,8 @@ users&.filter_map { it.name if it.active? }
 | Parser | hand-ported 1.9 grammar (~13k lines) | **prism** — the parser CRuby uses |
 | `RUBY_VERSION` | `1.9.2` | `4.0.0` |
 | Big integers | `Microsoft.Scripting.Math` | `System.Numerics` |
+| Integer | Int32, then BigInteger | Int32 → **Int64** → BigInteger |
+| Execution | DLR interpreter, then IL | + a **method JIT and OSR** that specialize on observed types |
 
 ## The prism front end
 
@@ -62,28 +64,60 @@ See [`Src/Prism/README.md`](Src/Prism/README.md) for the details and the known g
 
 ## Status
 
-| suite | result |
-|---|---|
-| [ruby/spec](https://github.com/ruby/spec) `spec/language` (via mspec) | **2117 / 2682 pass (78.9%)** |
-| IronRuby's own C# test suite | ~1470 pass, 22 known failures |
-| Parsing the bundled standard libraries | **154 / 154** (Ruby 4.0) and **571 / 571** (1.9) |
-| Loading the Ruby 4.0 libraries | **24 / 24** |
+Measured with [ruby/spec](https://github.com/ruby/spec) at CRuby 4.0.6, `Util/parallel-sweep.sh`:
 
-`spec/core` and `spec/library` have been measured for the first time and are in
-much rougher shape than the syntax suite — roughly 540 of 3417 core examples
-passing across the 22 directories measured so far. That is where the work is now.
+| suite | examples | failing |
+|---|---|---|
+| `spec/language` | 2934 | **0** |
+| `spec/command_line` | 175 | **0** |
+| `spec/security` | 34 | **0** |
+| `spec/library` | 6398 | **1** (`Binding#irb`) |
+| `spec/core` | 23136 | **21** — 20 of them `ObjectSpace.each_object`, which needs `-X:ObjectSpace` |
+| IronRuby's own C# test suite | ~1470 | 19 known |
+
+CRuby 4.0.6 is the oracle: where a spec and IronRuby disagree, the behaviour is checked
+against `ruby` and IronRuby is changed, not the spec.
 
 The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0` and comes first on the
 load path; the 1.9 tree sits behind it for the libraries 4.0 gemified or implements as C
 extensions. A compatibility prelude
 ([`Src/StdLib/ironruby/ruby4.rb`](Src/StdLib/ironruby/ruby4.rb)) supplies what MRI provides
 natively — `Process.clock_gettime`, `Random`, `ObjectSpace::WeakMap`, `ruby2_keywords`,
-pattern-matching support classes and core methods from Ruby 2.x-4.x.
-The syntax is current; the runtime and library are where the remaining work is. The largest
-single gap: the block dispatcher has no notion of **optional block parameters**, so
-`->(x = 1) {}` reaches its body with `x` unset rather than defaulted (arity is right, and a
-supplied argument binds correctly). After that: `defined?` edge cases, predefined globals,
-and magic-comment encodings.
+pattern-matching support classes and core methods from Ruby 2.x-4.x. `Ripper` is implemented
+on prism, the way CRuby 4.0 implements it.
+
+What is left is mostly what .NET cannot do: `fork`, a controlling TTY, `setproctitle`,
+C-extension APIs (`fiddle`, `mkmf` compiling), and heap walking (`ObjectSpace.each_object`
+is opt-in behind `-X:ObjectSpace`, as JRuby's is behind `-X+O`).
+
+## Performance
+
+Two compilers specialize on the types a program actually uses. Both are **on by default**
+(`-X:NoJIT`, `-X:NoOSR` turn them off), and both fall back to the generic path rather than
+guess:
+
+- **Method JIT** — a hot method body is replaced by a copy with unboxed `int`/`long`/`double`
+  locals, CLR arithmetic, no per-call scope, and direct calls for self-recursion. One integer
+  compare of a global method-table version guards redefinition, override, singleton methods,
+  `prepend`, `include` and `alias`; refinements switch it off; overflow and division by zero
+  deopt to the generic body.
+- **OSR** — a loop that has taken enough back edges is replaced *while it runs* by a
+  type-specialized copy over the same locals tuple, so there is no state to materialize. This
+  is what reaches a hot loop inside a block that is only ever entered once, which no
+  invocation-counting JIT can see. If the types change, the copy is rebuilt.
+
+`Util/bench/run.sh` (50 benchmarks, Release, ratio to CRuby 4.0.6 — lower is better):
+
+| | ratio |
+|---|---|
+| `float_arith`, `cmp_branch`, `int_arith`, `mandelbrot`, `fib`, `while_loop` | **0.27 – 0.74** (faster than CRuby) |
+| calls, ivars, string and array work | 2 – 4 |
+| geomean over all 50 | **3.25** |
+| `raise_rescue`, `fiber_switch` | 150+ (backtrace construction; a CLR thread per Fiber) |
+
+Build with `-c Release` and run with `IR_CONFIG=Release ./ir.sh`: the optimized build is
+~1.8x faster than the default Debug build across the whole suite. See
+[`Util/bench/README.md`](Util/bench/README.md).
 
 ## Building
 
@@ -102,6 +136,9 @@ Running the conformance suite:
 ```console
 $ git clone https://github.com/ruby/spec && git clone https://github.com/ruby/mspec
 $ RUBY_EXE=./ir.sh ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
+$ Util/parallel-sweep.sh out            # all five suites, 8 at a time, ~6 minutes
+$ Util/run-tests.sh                     # IronRuby's own C# tests
+$ Util/bench/run.sh                     # benchmarks against CRuby
 ```
 
 ## License

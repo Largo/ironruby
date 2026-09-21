@@ -227,18 +227,20 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// -X:JIT - the experimental ZJIT-style method JIT. Off by default; when off nothing in
-        /// the compiler or the runtime looks at it beyond this one flag at method compile time.
+        /// The ZJIT-style method JIT: a hot method body is replaced by a copy specialized to the
+        /// types it has actually been called with. On by default; -X:NoJIT turns it off, and when
+        /// off nothing in the compiler or the runtime looks at it beyond this one flag at method
+        /// compile time.
         /// </summary>
         public bool Jit {
             get { return _jit; }
         }
 
         /// <summary>
-        /// -X:OSR - on-stack replacement for loops: a loop that has taken enough back edges
-        /// is left for a type-specialized copy of itself, which reads the scope's locals out
-        /// of the tuple they already live in and carries on at the next iteration. Off by
-        /// default; when off the loop transform does not even emit the counter.
+        /// On-stack replacement for loops: a loop that has taken enough back edges is left for a
+        /// type-specialized copy of itself, which reads the scope's locals out of the tuple they
+        /// already live in and carries on at the next iteration. On by default; -X:NoOSR turns it
+        /// off, and when off the loop transform does not even emit the counter.
         /// </summary>
         public bool Osr {
             get { return _osr; }
@@ -304,8 +306,8 @@ namespace IronRuby.Runtime {
             _profile = GetOption(options, "Profile", false);
             _noAssemblyResolveHook = GetOption(options, "NoAssemblyResolveHook", false);
             _objectSpace = GetOption(options, "ObjectSpace", false);
-            _jit = GetOption(options, "JIT", false);
-            _osr = GetOption(options, "OSR", false);
+            _jit = GetOption(options, "JIT", true);
+            _osr = GetOption(options, "OSR", true);
             _requirePaths = GetStringCollectionOption(options, "RequiredPaths", ';', ',');
             _hasSearchPaths = GetOption<object>(options, "SearchPaths", null) != null;
             _standardLibraryPath = GetOption(options, "StandardLibrary", (string)null);
