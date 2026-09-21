@@ -26,5 +26,15 @@ S="$IR_ROOT/Src/StdLib"
 # Debug stays the default because every worktree and every agent script builds it.
 : "${IR_CONFIG:=Debug}"
 
-exec "$IR_ROOT/Src/Console/bin/$IR_CONFIG/net8.0/ir" -X:UsePrism \
+IR_BIN="$IR_ROOT/Src/Console/bin/$IR_CONFIG/net8.0/ir"
+# Say which configuration is missing rather than let the shell's "not found" - which a
+# filtered spec log swallows - be the only clue. Getting IR_CONFIG=Release past a tree
+# that has only ever been built Debug is the whole reason this check is here.
+if [ ! -x "$IR_BIN" ]; then
+  echo "ir.sh: no $IR_CONFIG build at $IR_BIN" >&2
+  echo "ir.sh: build it with: dotnet build Src/Console/Ruby.Console.csproj -c $IR_CONFIG -p:DlrSourceDir=..." >&2
+  exit 127
+fi
+
+exec "$IR_BIN" -X:UsePrism \
   "-X:StdLib=$S/ironruby:$S/ruby/4.0:$S/ruby/1.9.1" "$@"
