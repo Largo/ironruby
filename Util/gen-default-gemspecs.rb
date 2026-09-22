@@ -90,6 +90,14 @@ GEMS = {
               ["prism", "prism/"], check: "Prism::VERSION"],
   "sqlite3" => ["2.9.6", "SQLite3, on the native library Microsoft.Data.Sqlite carries",
                 ["sqlite3", "sqlite3/"], check: "SQLite3::VERSION"],
+  # Not a default gem anywhere else: nokogiri is a C extension over libxml2 and
+  # gumbo, and neither compiles here.  It is listed because it is a hard
+  # dependency of rails-html-sanitizer -> loofah -> actionview and of
+  # rails-dom-testing -> actionpack, so without a gemspec saying it is present
+  # `gem install actionview` stops at a C compiler.  The version is the nokogiri
+  # API level implemented, not a nokogiri release.
+  "nokogiri" => ["1.18.0", "HTML5, HTML4 and XML parsing, on AngleSharp",
+                 ["nokogiri", "nokogiri/"], check: "Nokogiri::VERSION"],
 
   # --- vendored from the CRuby release in Src/StdLib/ruby/4.0 --------------
   "bundler" => ["4.0.16", "The best way to manage a Ruby application's gems",
@@ -110,6 +118,13 @@ GEMS = {
   "forwardable" => ["1.4.0", "Provides delegation of specified methods to a designated object",
                     ["forwardable", "forwardable/"]],
   "ipaddr" => ["1.2.8", "A class to manipulate an IP address", ["ipaddr"]],
+  # railties depends on irb, and irb on reline.  Without these two, installing
+  # railties resolves irb against rubygems.org, which drags in rdoc 8 and then
+  # rbs - a C extension - for a library IronRuby already ships and already runs
+  # as `ir -S irb`.
+  "irb" => ["1.16.0", "Interactive Ruby", ["irb", "irb/"], require: false, bin: ["irb"]],
+  "reline" => ["0.6.3", "GNU Readline and Editline, in pure Ruby",
+               ["reline", "reline/"], require: false],
   "net-http" => ["0.9.1", "HTTP client api for Ruby", ["net/http", "net/https", "net/http/"],
                  require: "net/http"],
   "net-protocol" => ["0.2.2", "The abstract interface for net-* client",

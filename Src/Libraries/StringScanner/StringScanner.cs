@@ -172,8 +172,13 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         /// <summary>
         /// How many bytes the character at the scan pointer occupies. A MutableString built
-        /// from bytes slices by byte, so the width has to come from the encoding itself: feed
-        /// the decoder one more byte at a time until it is willing to produce a character.
+        /// from bytes slices by byte, so the width has to come from the encoding itself: offer
+        /// it one more byte at a time until the strict encoding accepts them as a character.
+        ///
+        /// The strict encoding is the one that matters here. RubyEncoding.Encoding is lenient
+        /// by design - it has to be, so that a string whose bytes are invalid in its own
+        /// encoding still survives - and answers a replacement character for the first byte of
+        /// a multi-byte sequence, which would make every character one byte wide.
         /// </summary>
         private int CharWidthAtPosition() {
             int available = ByteLength - _position;
@@ -183,15 +188,19 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
             // No encoding Ruby knows needs more than this for one character.
             byte[] bytes = _scanString.GetBinarySlice(_position, Math.Min(available, 8));
-            var encoding = _scanString.Encoding.Encoding;
-            var chars = new char[8];
+            if (bytes == null || bytes.Length == 0) {
+                return 1;
+            }
+            var encoding = _scanString.Encoding.StrictEncoding;
             for (int count = 1; count <= bytes.Length; count++) {
-                int bytesUsed, charsUsed;
-                bool completed;
-                encoding.GetDecoder().Convert(bytes, 0, count, chars, 0, chars.Length, false,
-                    out bytesUsed, out charsUsed, out completed);
-                if (charsUsed > 0) {
-                    return bytesUsed;
+                try {
+                    if (encoding.GetCharCount(bytes, 0, count) > 0) {
+                        return count;
+                    }
+                } catch (DecoderFallbackException) {
+                    // Not a character yet - or not one at all, in which case the loop runs out
+                    // and the byte stands for itself, which is what MRI does with a broken
+                    // string too.
                 }
             }
             return 1;

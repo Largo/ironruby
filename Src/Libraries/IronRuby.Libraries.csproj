@@ -18,6 +18,11 @@
          SQLitePCLRaw, whose bundle_e_sqlite3 carries a native SQLite for
          linux-x64/win-x64 under runtimes/<rid>/native. -->
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+    <!-- The HTML5 parser behind Nokogiri::HTML5 / Nokogiri::HTML4 (Src/Libraries/Nokogiri).
+         AngleSharp implements the WHATWG tokenizer and tree-construction algorithm, which is
+         what nokogiri's gumbo does; nothing in the .NET base class library parses tag soup. -->
+    <PackageReference Include="AngleSharp" Version="1.5.0" />
+    <PackageReference Include="AngleSharp.Xml" Version="1.2.0" />
   </ItemGroup>
   <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
