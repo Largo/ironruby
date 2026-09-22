@@ -37,6 +37,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Ripper.RipperLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Termios.TermiosLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Prism.PrismLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3LibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nokogiri.NokogiriLibraryInitializer))]
 
 namespace IronRuby.Builtins {
@@ -4760,11 +4761,6 @@ namespace IronRuby.Builtins {
                 0x00000001U, 0x00000000U, 
                 new Func<IronRuby.Runtime.IRubyObject, System.Int32>(IronRuby.Builtins.KernelOps.Hash), 
                 new Func<System.Object, System.Int32>(IronRuby.Builtins.KernelOps.Hash)
-            );
-            
-            DefineLibraryMethod(module, "id", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.KernelOps.GetId)
             );
             
             DefineLibraryMethod(module, "initialize_clone", 0x52, 
@@ -14973,6 +14969,460 @@ namespace IronRuby.StandardLibrary.Prism {
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.Version)
             );
             
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Sqlite3 {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class Sqlite3LibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
+            IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(System.SystemException));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("SQLite3", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3), 0x00000008, null, LoadSQLite3_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def8 = DefineClass("SQLite3::Database", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database), 0x00000008, classRef0, LoadSQLite3__Database_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def27 = DefineClass("SQLite3::Exception", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.SqliteException), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__Exception));
+            IronRuby.Builtins.RubyClass def28 = DefineClass("SQLite3::Statement", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement), 0x00000008, classRef0, LoadSQLite3__Statement_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("SQLite3::AbortException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.AbortException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__AbortException));
+            IronRuby.Builtins.RubyClass def3 = DefineClass("SQLite3::AuthorizationException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.AuthorizationException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__AuthorizationException));
+            IronRuby.Builtins.RubyClass def4 = DefineClass("SQLite3::BusyException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.BusyException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__BusyException));
+            IronRuby.Builtins.RubyClass def5 = DefineClass("SQLite3::CantOpenException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.CantOpenException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__CantOpenException));
+            IronRuby.Builtins.RubyClass def6 = DefineClass("SQLite3::ConstraintException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.ConstraintException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__ConstraintException));
+            IronRuby.Builtins.RubyClass def7 = DefineClass("SQLite3::CorruptException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.CorruptException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__CorruptException));
+            IronRuby.Builtins.RubyClass def9 = DefineClass("SQLite3::EmptyException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.EmptyException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__EmptyException));
+            IronRuby.Builtins.RubyClass def10 = DefineClass("SQLite3::FormatException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.FormatException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__FormatException));
+            IronRuby.Builtins.RubyClass def11 = DefineClass("SQLite3::FullException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.FullException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__FullException));
+            IronRuby.Builtins.RubyClass def12 = DefineClass("SQLite3::InternalException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.InternalException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__InternalException));
+            IronRuby.Builtins.RubyClass def13 = DefineClass("SQLite3::InterruptException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.InterruptException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__InterruptException));
+            IronRuby.Builtins.RubyClass def14 = DefineClass("SQLite3::IOException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.IOException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__IOException));
+            IronRuby.Builtins.RubyClass def15 = DefineClass("SQLite3::LockedException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.LockedException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__LockedException));
+            IronRuby.Builtins.RubyClass def16 = DefineClass("SQLite3::MemoryException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.MemoryException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__MemoryException));
+            IronRuby.Builtins.RubyClass def17 = DefineClass("SQLite3::MismatchException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.MismatchException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__MismatchException));
+            IronRuby.Builtins.RubyClass def18 = DefineClass("SQLite3::MisuseException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.MisuseException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__MisuseException));
+            IronRuby.Builtins.RubyClass def19 = DefineClass("SQLite3::NotADatabaseException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.NotADatabaseException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__NotADatabaseException));
+            IronRuby.Builtins.RubyClass def20 = DefineClass("SQLite3::NotFoundException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.NotFoundException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__NotFoundException));
+            IronRuby.Builtins.RubyClass def21 = DefineClass("SQLite3::PermissionException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.PermissionException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__PermissionException));
+            IronRuby.Builtins.RubyClass def22 = DefineClass("SQLite3::ProtocolException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.ProtocolException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__ProtocolException));
+            IronRuby.Builtins.RubyClass def23 = DefineClass("SQLite3::RangeException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.RangeException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__RangeException));
+            IronRuby.Builtins.RubyClass def24 = DefineClass("SQLite3::ReadOnlyException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.ReadOnlyException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__ReadOnlyException));
+            IronRuby.Builtins.RubyClass def25 = DefineClass("SQLite3::SchemaChangedException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.SchemaChangedException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__SchemaChangedException));
+            IronRuby.Builtins.RubyClass def26 = DefineClass("SQLite3::SQLException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.SQLException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__SQLException));
+            IronRuby.Builtins.RubyClass def29 = DefineClass("SQLite3::TooBigException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.TooBigException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__TooBigException));
+            IronRuby.Builtins.RubyClass def30 = DefineClass("SQLite3::UnsupportedException", typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3.UnsupportedException), 0x00000008, def27, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Sqlite3LibraryInitializer.ExceptionFactory__SQLite3__UnsupportedException));
+            SetConstant(def1, "Database", def8);
+            SetConstant(def1, "Exception", def27);
+            SetConstant(def1, "Statement", def28);
+            SetConstant(def1, "AbortException", def2);
+            SetConstant(def1, "AuthorizationException", def3);
+            SetConstant(def1, "BusyException", def4);
+            SetConstant(def1, "CantOpenException", def5);
+            SetConstant(def1, "ConstraintException", def6);
+            SetConstant(def1, "CorruptException", def7);
+            SetConstant(def1, "EmptyException", def9);
+            SetConstant(def1, "FormatException", def10);
+            SetConstant(def1, "FullException", def11);
+            SetConstant(def1, "InternalException", def12);
+            SetConstant(def1, "InterruptException", def13);
+            SetConstant(def1, "IOException", def14);
+            SetConstant(def1, "LockedException", def15);
+            SetConstant(def1, "MemoryException", def16);
+            SetConstant(def1, "MismatchException", def17);
+            SetConstant(def1, "MisuseException", def18);
+            SetConstant(def1, "NotADatabaseException", def19);
+            SetConstant(def1, "NotFoundException", def20);
+            SetConstant(def1, "PermissionException", def21);
+            SetConstant(def1, "ProtocolException", def22);
+            SetConstant(def1, "RangeException", def23);
+            SetConstant(def1, "ReadOnlyException", def24);
+            SetConstant(def1, "SchemaChangedException", def25);
+            SetConstant(def1, "SQLException", def26);
+            SetConstant(def1, "TooBigException", def29);
+            SetConstant(def1, "UnsupportedException", def30);
+        }
+        
+        private static void LoadSQLite3_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "libversion", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.LibVersion)
+            );
+            
+            DefineLibraryMethod(module, "sqlcipher?", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Boolean>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.IsSqlCipher)
+            );
+            
+            DefineLibraryMethod(module, "sqlite_version_string", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.SqliteVersionString)
+            );
+            
+            DefineLibraryMethod(module, "status", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Int32, System.Object, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Status)
+            );
+            
+            DefineLibraryMethod(module, "threadsafe", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Threadsafe)
+            );
+            
+        }
+        
+        private static void LoadSQLite3__Database_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "busy_handler", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Object, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.BusyHandler)
+            );
+            
+            DefineLibraryMethod(module, "busy_timeout=", 0x11, 
+                0x00010000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Int32, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.SetBusyTimeout)
+            );
+            
+            DefineLibraryMethod(module, "changes", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Int32>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.Changes)
+            );
+            
+            DefineLibraryMethod(module, "close", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.Close)
+            );
+            
+            DefineLibraryMethod(module, "closed?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Boolean>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.IsClosed)
+            );
+            
+            DefineLibraryMethod(module, "collation", 0x11, 
+                0x00020004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, System.Object, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.Collation)
+            );
+            
+            DefineLibraryMethod(module, "complete?", 0x11, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.IsComplete)
+            );
+            
+            DefineLibraryMethod(module, "db_filename", 0x12, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.FileName)
+            );
+            
+            DefineLibraryMethod(module, "define_aggregate_function", 0x12, 
+                0x0003003aU, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc, IronRuby.Builtins.Proc, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.DefineAggregateFunction)
+            );
+            
+            DefineLibraryMethod(module, "define_function", 0x11, 
+                0x00020004U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.DefineFunction)
+            );
+            
+            DefineLibraryMethod(module, "define_function_with_flags", 0x11, 
+                0x00060004U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, System.Int32, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.DefineFunctionWithFlags)
+            );
+            
+            DefineLibraryMethod(module, "disable_quirk_mode", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Boolean>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.DisableQuirkMode)
+            );
+            
+            DefineLibraryMethod(module, "enable_load_extension", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Object, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.EnableLoadExtension)
+            );
+            
+            DefineLibraryMethod(module, "errcode", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Int32>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.ErrorCode)
+            );
+            
+            DefineLibraryMethod(module, "errmsg", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.ErrorMessage)
+            );
+            
+            DefineLibraryMethod(module, "exec_batch", 0x12, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, System.Object, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.ExecBatch)
+            );
+            
+            DefineLibraryMethod(module, "extended_result_codes=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Object, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.SetExtendedResultCodes)
+            );
+            
+            DefineLibraryMethod(module, "interrupt", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.Interrupt)
+            );
+            
+            DefineLibraryMethod(module, "last_insert_row_id", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.LastInsertRowId)
+            );
+            
+            DefineLibraryMethod(module, "load_extension_internal", 0x12, 
+                0x00000002U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.LoadExtensionInternal)
+            );
+            
+            DefineLibraryMethod(module, "open_v2", 0x12, 
+                0x00060002U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.OpenV2)
+            );
+            
+            DefineLibraryMethod(module, "readonly_internal", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Boolean>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.IsReadOnly)
+            );
+            
+            DefineLibraryMethod(module, "total_changes", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Int32>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.TotalChanges)
+            );
+            
+            DefineLibraryMethod(module, "transaction_active?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, System.Boolean>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database.IsTransactionActive)
+            );
+            
+        }
+        
+        private static void LoadSQLite3__Statement_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "bind_param", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Object, System.Object, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.BindParam)
+            );
+            
+            DefineLibraryMethod(module, "bind_parameter_count", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Int32>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.BindParameterCount)
+            );
+            
+            DefineLibraryMethod(module, "clear_bindings!", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.ClearBindings)
+            );
+            
+            DefineLibraryMethod(module, "close", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.Close)
+            );
+            
+            DefineLibraryMethod(module, "closed?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Boolean>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.IsClosed)
+            );
+            
+            DefineLibraryMethod(module, "column_count", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Int32>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.ColumnCount)
+            );
+            
+            DefineLibraryMethod(module, "column_decltype", 0x11, 
+                0x00010000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Int32, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.ColumnDeclaredType)
+            );
+            
+            DefineLibraryMethod(module, "column_name", 0x11, 
+                0x00010000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Int32, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.ColumnName)
+            );
+            
+            DefineLibraryMethod(module, "database_name", 0x11, 
+                0x00010000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Int32, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.DatabaseName)
+            );
+            
+            DefineLibraryMethod(module, "done?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Boolean>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.IsDone)
+            );
+            
+            DefineLibraryMethod(module, "memused", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Int32>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.MemUsed)
+            );
+            
+            DefineLibraryMethod(module, "named_params", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.NamedParams)
+            );
+            
+            DefineLibraryMethod(module, "prepare", 0x12, 
+                0x00000006U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Database, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.Prepare)
+            );
+            
+            DefineLibraryMethod(module, "reset!", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.Reset)
+            );
+            
+            DefineLibraryMethod(module, "sql", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.Sql)
+            );
+            
+            DefineLibraryMethod(module, "stat_for", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Object, System.Int32>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.StatFor)
+            );
+            
+            DefineLibraryMethod(module, "stats_as_hash", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.StatsAsHash)
+            );
+            
+            DefineLibraryMethod(module, "step", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement, System.Object>(IronRuby.StandardLibrary.Sqlite3.Sqlite3.Statement.Step)
+            );
+            
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__AbortException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.AbortException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__AuthorizationException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.AuthorizationException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__BusyException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.BusyException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__CantOpenException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.CantOpenException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__ConstraintException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.ConstraintException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__CorruptException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.CorruptException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__EmptyException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.EmptyException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__FormatException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.FormatException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__FullException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.FullException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__InternalException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.InternalException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__InterruptException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.InterruptException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__IOException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.IOException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__LockedException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.LockedException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__MemoryException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.MemoryException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__MismatchException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.MismatchException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__MisuseException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.MisuseException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__NotADatabaseException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.NotADatabaseException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__NotFoundException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.NotFoundException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__PermissionException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.PermissionException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__ProtocolException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.ProtocolException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__RangeException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.RangeException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__ReadOnlyException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.ReadOnlyException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__SchemaChangedException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.SchemaChangedException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__SQLException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.SQLException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__Exception(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.SqliteException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__TooBigException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.TooBigException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__SQLite3__UnsupportedException(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Sqlite3.Sqlite3.UnsupportedException(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
     }
