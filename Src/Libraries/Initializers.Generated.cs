@@ -30,6 +30,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.ParseTree.ParseTreeLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Open3.Open3LibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Win32API.Win32APILibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Fiddle.FiddleLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Json.JsonLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Date.DateLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Syslog.SyslogLibraryInitializer))]
@@ -14083,6 +14084,61 @@ namespace IronRuby.StandardLibrary.Win32API {
                 0x000f001eU, 0x0016003cU, 
                 new Func<IronRuby.StandardLibrary.Win32API.Win32API, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Win32API.Win32API>(IronRuby.StandardLibrary.Win32API.Win32API.Reinitialize), 
                 new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.Win32API.Win32API, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Collections.IList, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Win32API.Win32API>(IronRuby.StandardLibrary.Win32API.Win32API.Reinitialize)
+            );
+            
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Fiddle {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class FiddleLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Fiddle", typeof(IronRuby.StandardLibrary.Fiddle.Fiddle), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def2 = DefineModule("Fiddle::Native", typeof(IronRuby.StandardLibrary.Fiddle.Fiddle.Native), 0x00000008, null, LoadFiddle__Native_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            SetConstant(def1, "Native", def2);
+        }
+        
+        private static void LoadFiddle__Native_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "free", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.Fiddle.Native.Free)
+            );
+            
+            DefineLibraryMethod(module, "invoke", 0x21, 
+                0x00000014U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Collections.IList, System.Object, System.Collections.IList, System.Object>(IronRuby.StandardLibrary.Fiddle.Fiddle.Native.Invoke)
+            );
+            
+            DefineLibraryMethod(module, "malloc", 0x21, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.Fiddle.Native.Malloc)
+            );
+            
+            DefineLibraryMethod(module, "read", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Fiddle.Fiddle.Native.Read)
+            );
+            
+            DefineLibraryMethod(module, "realloc", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.Fiddle.Native.Realloc)
+            );
+            
+            DefineLibraryMethod(module, "strlen", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.Fiddle.Native.Strlen)
+            );
+            
+            DefineLibraryMethod(module, "write", 0x21, 
+                0x00000004U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Fiddle.Fiddle.Native.Write)
             );
             
         }
