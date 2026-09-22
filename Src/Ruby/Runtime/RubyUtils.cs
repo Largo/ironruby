@@ -1777,6 +1777,14 @@ namespace IronRuby.Runtime {
                 safePoint();
             }
 
+            // Object finalizers are parked by the CLR's finalizer thread and run here, for the
+            // same reason: a Ruby finalizer is arbitrary Ruby code, and running it off the main
+            // thread races every unsynchronized table the main thread is using.
+            Action finalizers = FinalizerHandler;
+            if (finalizers != null) {
+                finalizers();
+            }
+
             Exception e = PeekPendingAsyncException(Thread.CurrentThread);
             if (e == null) {
                 return;
@@ -1801,6 +1809,13 @@ namespace IronRuby.Runtime {
         /// by the Signal library; a null check is all this costs on every other safe point.
         /// </summary>
         public static Action SafePointHandler;
+
+        /// <summary>
+        /// The other half of that work: Ruby finalizers the CLR's finalizer thread has parked for
+        /// the main thread. Set once by ObjectSpace.define_finalizer, in another assembly; a
+        /// program that defines no finalizer never pays more than the null check.
+        /// </summary>
+        public static Action FinalizerHandler;
 
         /// <summary>
         /// Called from a catch (ThreadInterruptedException) around a blocking wait: if the interrupt was our

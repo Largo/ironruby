@@ -846,7 +846,15 @@ namespace IronRuby.Builtins {
                 _methods = null;
             }
 
-            _classVariables = (module._classVariables != null) ? new Dictionary<string, object>(module._classVariables) : null;
+            var sourceClassVariables = module._classVariables;
+            if (sourceClassVariables != null) {
+                // under the source's own table lock: another thread may be assigning to it
+                lock (sourceClassVariables) {
+                    _classVariables = new Dictionary<string, object>(sourceClassVariables);
+                }
+            } else {
+                _classVariables = null;
+            }
             _mixins = ArrayUtils.Copy(module._mixins);
             _prepends = ArrayUtils.Copy(module._prepends);
 
@@ -2806,7 +2814,18 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region Class variables (TODO: thread-safety)
+        #region Class variables
+
+        // The class-variable table is its own lock. It has to be: a class variable is written by
+        // plain Ruby code (@@x = v) from any thread, while the lookup walks the ancestors under the
+        // class-hierarchy lock - so the two cannot share one lock without the writer taking a
+        // process-wide lock on every assignment. A Dictionary<,> written by two threads at once
+        // does not merely lose an entry, it corrupts its buckets and throws for the rest of the
+        // process; RubyGems hits this, because its Happy-Eyeballs connect leaves threads running
+        // while Gem::Specification assigns its class variables.
+        //
+        // The table lock is always the innermost one - nothing here takes the class-hierarchy lock
+        // while holding it - so the order the two are acquired in is fixed and cannot deadlock.
 
         public void ForEachClassVariable(bool inherited, Func<RubyModule, string, object, bool>/*!*/ action) {
             Context.RequiresClassHierarchyLock();
@@ -2823,16 +2842,31 @@ namespace IronRuby.Builtins {
             InitializeClassVariableTable();
 
             Mutate();
-            _classVariables[name] = value;
+            var table = _classVariables;
+            lock (table) {
+                table[name] = value;
+            }
         }
 
         public bool TryGetClassVariable(string/*!*/ name, out object value) {
             value = null;
-            return _classVariables != null && _classVariables.TryGetValue(name, out value);
+            var table = _classVariables;
+            if (table == null) {
+                return false;
+            }
+            lock (table) {
+                return table.TryGetValue(name, out value);
+            }
         }
 
         public bool RemoveClassVariable(string/*!*/ name) {
-            return _classVariables != null && _classVariables.Remove(name);
+            var table = _classVariables;
+            if (table == null) {
+                return false;
+            }
+            lock (table) {
+                return table.Remove(name);
+            }
         }
 
         public RubyModule TryResolveClassVariable(string/*!*/ name, out object value) {
@@ -2846,7 +2880,7 @@ namespace IronRuby.Builtins {
             using (Context.ClassHierarchyLocker()) {
                 ForEachAncestor(delegate(RubyModule/*!*/ module) {
                     object moduleValue;
-                    if (module._classVariables != null && module._classVariables.TryGetValue(name, out moduleValue)) {
+                    if (module.TryGetClassVariable(name, out moduleValue)) {
                         if (front == null) {
                             front = module;
                         }
@@ -2867,8 +2901,16 @@ namespace IronRuby.Builtins {
         }
 
         public bool EnumerateClassVariables(Func<RubyModule, string, object, bool>/*!*/ action) {
-            if (_classVariables != null) {
-                foreach (KeyValuePair<string, object> variable in _classVariables) {
+            var table = _classVariables;
+            if (table != null) {
+                KeyValuePair<string, object>[] variables;
+                // A snapshot: the action is Ruby code, and running it while holding the table lock
+                // would let it deadlock against its own assignment to a class variable.
+                lock (table) {
+                    variables = new KeyValuePair<string, object>[table.Count];
+                    ((ICollection<KeyValuePair<string, object>>)table).CopyTo(variables, 0);
+                }
+                foreach (KeyValuePair<string, object> variable in variables) {
                     if (action(this, variable.Key, variable.Value)) return true;
                 }
             }

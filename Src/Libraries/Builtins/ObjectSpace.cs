@@ -64,12 +64,23 @@ namespace IronRuby.Builtins {
             }
 
             ~FinalizerInvoker() {
-                Run();
+                // Not Run(): see the comment on _pending. The CLR finalizer thread only parks the
+                // work, which resurrects this object into the queue until the main thread runs it.
+                Park(this);
             }
 
             public void RunAtExit() {
                 Run();
                 GC.SuppressFinalize(this);
+            }
+
+            /// <summary>Runs the finalizers on the caller's thread. Only the main thread calls it.</summary>
+            internal void RunOnMainThread() {
+                Run();
+            }
+
+            internal RubyContext/*!*/ Context {
+                get { return _context; }
             }
 
             public void Cancel() {
@@ -96,6 +107,78 @@ namespace IronRuby.Builtins {
                     }
                 }
             }
+        }
+
+        /// <summary>
+        /// Finalizers waiting for the main thread.
+        ///
+        /// A Ruby finalizer is arbitrary Ruby code, and the CLR runs ~FinalizerInvoker on its own
+        /// finalizer thread. Running the Ruby there means it mutates the very tables the main
+        /// thread is in the middle of using, with no lock between them: a Ruby Hash *is* a
+        /// Dictionary&lt;object,object&gt;, so two threads writing one leaves a corrupted dictionary
+        /// that throws "Operations that change non-concurrent collections must have exclusive
+        /// access" for the rest of the process. Tempfile's own finalizer does exactly this - it
+        /// deletes from a Hash the main thread writes to - which made `gem install` fail at random
+        /// with every later gemspec reported as corrupt.
+        ///
+        /// MRI does not have the problem: it runs finalizers on the main thread at an interrupt
+        /// check. PosixSignals already parks POSIX signals here for the same reason, and this is
+        /// the same mechanism - park the work, let the main thread pick it up at a safe point
+        /// (a blocking call, Thread.pass, Kernel#sleep) or at GC.start, and run whatever is left
+        /// at exit.
+        /// </summary>
+        private static readonly Queue<FinalizerInvoker>/*!*/ _pending = new Queue<FinalizerInvoker>();
+
+        /// <summary>Guards against a finalizer whose own safe point would re-enter the drain.</summary>
+        [ThreadStatic]
+        private static bool _draining;
+
+        private static void Park(FinalizerInvoker/*!*/ invoker) {
+            lock (_pending) {
+                _pending.Enqueue(invoker);
+            }
+        }
+
+        /// <summary>
+        /// A safe point on the main thread: runs the finalizers the CLR's finalizer thread parked.
+        /// Installed into RubyUtils.FinalizerHandler the first time a finalizer is defined.
+        /// </summary>
+        internal static void RunPendingFinalizers() {
+            if (_draining) {
+                return;
+            }
+
+            _draining = true;
+            try {
+                while (true) {
+                    FinalizerInvoker invoker;
+                    lock (_pending) {
+                        if (_pending.Count == 0) {
+                            return;
+                        }
+                        invoker = _pending.Peek();
+                        // Only the thread the finalizer's own context calls "main" runs it, so that
+                        // a worker thread's safe point does not pick up another context's work.
+                        if (invoker.Context.MainThread != Thread.CurrentThread) {
+                            return;
+                        }
+                        _pending.Dequeue();
+                    }
+                    invoker.RunOnMainThread();
+                }
+            } finally {
+                _draining = false;
+            }
+        }
+
+        /// <summary>
+        /// GC.start runs finalizers in MRI, so it drains here too - after waiting for the CLR to
+        /// hand the collected objects' invokers over.
+        /// </summary>
+        internal static void CollectAndRunFinalizers() {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            RunPendingFinalizers();
         }
 
         /// <summary>
@@ -128,6 +211,8 @@ namespace IronRuby.Builtins {
             if (ReferencesObject(finalizer, obj)) {
                 context.ReportWarning("finalizer references object to be finalized");
             }
+
+            RubyUtils.FinalizerHandler = RunPendingFinalizers;
 
             FinalizerInvoker invoker;
             object existing;

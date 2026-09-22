@@ -634,7 +634,7 @@ namespace IronRuby.Builtins {
                 return match.GetNamedGroupValue(name);
             }
 
-            return match.GetGroupValue(Protocols.CastToFixnum(fixnumCast, groupIndex));
+            return match.GetNthGroupValue(Protocols.CastToFixnum(fixnumCast, groupIndex));
         }
 
         private static string GroupName(object groupIndex) {

@@ -303,6 +303,21 @@ namespace IronRuby.Builtins {
             return _match.Success ? _originalString.GetSlice(Index, Length).TaintBy(this) : null;
         }
 
+        /// <summary>
+        /// A single Integer subscript - MatchData#[n] and Regexp.last_match(n) - counts a negative
+        /// index back from the last group, and unlike the two-argument and Range forms it never
+        /// reaches group 0: MRI answers nil as soon as the index walks past group 1.
+        /// </summary>
+        public MutableString GetNthGroupValue(int index) {
+            if (index < 0) {
+                index += GroupCount;
+                if (index < 1) {
+                    return null;
+                }
+            }
+            return GetGroupValue(index);
+        }
+
         public MutableString GetGroupValue(int index) {
             // we don't need to check index range, Groups indexer returns an unsuccessful group if out of range:
             return GroupSuccess(index) ? _originalString.GetSlice(GetGroupStart(index), GetGroupLength(index)).TaintBy(this) : null;

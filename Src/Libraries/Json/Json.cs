@@ -48,16 +48,60 @@ namespace IronRuby.StandardLibrary.Json {
         [RubyMethod("generate", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("dump", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ Generate(RubyContext/*!*/ context, object self, object obj) {
+            return Generate(context, self, obj, null);
+        }
+
+        /// <summary>
+        /// The json gem's generate/dump take a second argument: a generator state, given either as
+        /// a JSON::State or - much more commonly - as a Hash of the same options. Libraries that
+        /// wrap the gem pass it as a matter of course (multi_json hands over its whole options
+        /// hash), so refusing the arity makes them unusable. Of the state, what changes the output
+        /// here is :indent; the rest is accepted and ignored.
+        /// </summary>
+        [RubyMethod("generate", RubyMethodAttributes.PublicSingleton)]
+        [RubyMethod("dump", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ Generate(RubyContext/*!*/ context, object self, object obj, object state) {
             var builder = new StringBuilder();
-            WriteValue(context, builder, obj, null, 0);
+            WriteValue(context, builder, obj, IndentOf(state, null), 0);
             return MutableString.Create(builder.ToString(), RubyEncoding.UTF8);
         }
 
         [RubyMethod("pretty_generate", RubyMethodAttributes.PublicSingleton)]
         public static MutableString/*!*/ PrettyGenerate(RubyContext/*!*/ context, object self, object obj) {
+            return PrettyGenerate(context, self, obj, null);
+        }
+
+        [RubyMethod("pretty_generate", RubyMethodAttributes.PublicSingleton)]
+        public static MutableString/*!*/ PrettyGenerate(RubyContext/*!*/ context, object self, object obj, object state) {
             var builder = new StringBuilder();
-            WriteValue(context, builder, obj, "  ", 0);
+            WriteValue(context, builder, obj, IndentOf(state, "  "), 0);
             return MutableString.Create(builder.ToString(), RubyEncoding.UTF8);
+        }
+
+        /// <summary>
+        /// The :indent of a generator-state hash, or <paramref name="fallback"/> when the state says
+        /// nothing. An empty indent is the gem's way of asking for compact output.
+        /// </summary>
+        private static string IndentOf(object state, string fallback) {
+            var hash = state as Hash;
+            if (hash == null) {
+                return fallback;
+            }
+
+            foreach (var entry in hash) {
+                var symbol = entry.Key as RubySymbol;
+                var name = symbol != null ? symbol.ToString() : (entry.Key as MutableString)?.ToString();
+                if (name != "indent") {
+                    continue;
+                }
+                var indent = entry.Value as MutableString;
+                if (indent == null) {
+                    return fallback;
+                }
+                string text = indent.ConvertToString();
+                return text.Length == 0 ? null : text;
+            }
+            return fallback;
         }
 
         private static void WriteValue(RubyContext/*!*/ context, StringBuilder/*!*/ builder, object obj, string indent, int depth) {
