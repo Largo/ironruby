@@ -154,10 +154,20 @@ namespace IronRuby.Runtime.Jit {
 
             int version = RubyModule.GlobalMethodVersion;
 
-            Delegate typed = code.Lambda.Compile();
-            code.SelfCell.Value = typed;
+            // The typed body only has to exist as a delegate of its own when it calls itself: the
+            // direct self-call goes through SelfCell. Otherwise the entry invokes the lambda
+            // itself, which the expression compiler inlines, so a specialized call is the
+            // trampoline hop and the entry and nothing more.
+            MSA.Expression callee;
+            if (code.EmittedSelfCall) {
+                Delegate typed = code.Lambda.Compile();
+                code.SelfCell.Value = typed;
+                callee = Ast.Constant(typed, typed.GetType());
+            } else {
+                callee = code.Lambda;
+            }
 
-            var entry = BuildEntry(code, typed, version, needsClassGuard ? _receiverClass : null);
+            var entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null);
             Install(entry.Compile());
 
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
@@ -182,7 +192,7 @@ namespace IronRuby.Runtime.Jit {
 
         // ---- entry lambda ------------------------------------------------------------------
 
-        private MSA.LambdaExpression/*!*/ BuildEntry(JitCode/*!*/ code, Delegate/*!*/ typed, int version, RubyClass pinnedClass) {
+        private MSA.LambdaExpression/*!*/ BuildEntry(JitCode/*!*/ code, MSA.Expression/*!*/ callee, int version, RubyClass pinnedClass) {
             var self = Ast.Parameter(typeof(object), "self");
             var blk = Ast.Parameter(typeof(Proc), "block");
             var args = new MSA.ParameterExpression[_arity];
@@ -217,7 +227,7 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            MSA.Expression fast = Ast.Invoke(Ast.Constant(typed, typed.GetType()), typedArgs);
+            MSA.Expression fast = Ast.Invoke(callee, typedArgs);
             if (code.ReturnType == JT.Lng) {
                 // The one place a specialized method's value becomes a Ruby object: it leaves
                 // through the representation funnel, so a result that fits in an Int32 is one.
