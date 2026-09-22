@@ -139,6 +139,12 @@ GEMS = {
   # unchanged and requires "msgpack/msgpack", which is IronRuby's loader.
   "msgpack" => ["1.8.5", "MessagePack serialization; the C extension ported to C#",
                 ["msgpack", "msgpack/"], check: "MessagePack::VERSION", pinned: true],
+  # oj: the :strict, :null, :compat and :rails modes, Oj.mimic_JSON and
+  # Oj::Rails are C# (Src/Libraries/Oj); :object, :custom, :wab, Oj::Doc,
+  # Oj::StringWriter/StreamWriter, Oj::Parser and Saj/Scp raise
+  # NotImplementedError.  lib/oj is vendored unchanged.
+  "oj" => ["3.17.6", "Oj's :strict, :null, :compat and :rails modes and mimic_JSON, in C#",
+           ["oj", "oj/"], check: "Oj::VERSION", pinned: true],
   # Ruby 4.0 removed the CGI class from the standard library and kept only the
   # escaping half, cgi/escape - which is a C extension there and is vendored in
   # Ruby here.  The `cgi` gem that brings the class back is that same C

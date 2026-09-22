@@ -42,6 +42,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Fiddle.FiddleLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.WebSocketDriver.WebSocketDriverLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.MessagePack.MessagePackLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Oj.OjLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -16624,6 +16625,287 @@ namespace IronRuby.StandardLibrary.MessagePack {
         
         public static System.Exception/*!*/ ExceptionFactory__MessagePack__UnpackError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Oj {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class OjLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Oj", typeof(IronRuby.StandardLibrary.Oj.OjOps), 0x00000008, null, LoadOj_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def2 = DefineModule("Oj::Rails", typeof(IronRuby.StandardLibrary.Oj.OjOps.RailsOps), 0x00000008, null, LoadOj__Rails_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def3 = DefineClass("Oj::Rails::Encoder", typeof(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder), 0x00000008, classRef0, LoadOj__Rails__Encoder_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder.Create)
+            );
+            SetConstant(def1, "Rails", def2);
+            SetConstant(def2, "Encoder", def3);
+        }
+        
+        private static void LoadOj_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__mimic_create_id", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.MimicCreateId)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_dump", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.MimicDump)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_dump_load", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.MimicDumpLoad)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_generate", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.Generate)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_load", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.MimicLoad)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_object_to_json", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.MimicObjectToJson)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_parse", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.MimicParse)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_pretty_generate", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.PrettyGenerate)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_recurse_proc", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.MimicRecurseProc)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_set_create_id", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.MimicSetCreateId)
+            );
+            
+            DefineLibraryMethod(module, "__mimic_state", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.MimicState)
+            );
+            
+            DefineLibraryMethod(module, "__set_json_error_classes", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.SetJsonErrorClasses)
+            );
+            
+            DefineLibraryMethod(module, "__set_mimic_defaults", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.SetMimicDefaults)
+            );
+            
+            DefineLibraryMethod(module, "__set_state_class", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.SetStateClass)
+            );
+            
+            DefineLibraryMethod(module, "add_to_json", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.AddToJson)
+            );
+            
+            DefineLibraryMethod(module, "compat_load", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.CompatLoad)
+            );
+            
+            DefineLibraryMethod(module, "debug_odd", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.MemReport)
+            );
+            
+            DefineLibraryMethod(module, "default_options", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.Oj.OjOps.GetDefaultOptions)
+            );
+            
+            DefineLibraryMethod(module, "default_options=", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.SetDefaultOptions)
+            );
+            
+            DefineLibraryMethod(module, "dump", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.Dump)
+            );
+            
+            DefineLibraryMethod(module, "fast_generate", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.Generate)
+            );
+            
+            DefineLibraryMethod(module, "generate", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.Generate)
+            );
+            
+            DefineLibraryMethod(module, "load", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.Load)
+            );
+            
+            DefineLibraryMethod(module, "load_file", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.LoadFile)
+            );
+            
+            DefineLibraryMethod(module, "mem_report", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.MemReport)
+            );
+            
+            DefineLibraryMethod(module, "object_load", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.ObjectLoad)
+            );
+            
+            DefineLibraryMethod(module, "register_odd", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RegisterOdd)
+            );
+            
+            DefineLibraryMethod(module, "register_odd_raw", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RegisterOdd)
+            );
+            
+            DefineLibraryMethod(module, "remove_to_json", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RemoveToJson)
+            );
+            
+            DefineLibraryMethod(module, "safe_load", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.SafeLoad)
+            );
+            
+            DefineLibraryMethod(module, "saj_parse", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.SajParse)
+            );
+            
+            DefineLibraryMethod(module, "sc_parse", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.ScParse)
+            );
+            
+            DefineLibraryMethod(module, "strict_load", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.StrictLoad)
+            );
+            
+            DefineLibraryMethod(module, "to_file", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.ToFile)
+            );
+            
+            DefineLibraryMethod(module, "to_json", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.ToJson)
+            );
+            
+            DefineLibraryMethod(module, "to_stream", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.ToStream)
+            );
+            
+            DefineLibraryMethod(module, "wab_load", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.WabLoad)
+            );
+            
+        }
+        
+        private static void LoadOj__Rails_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__escape_html", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Boolean>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.GetEscapeHtml)
+            );
+            
+            DefineLibraryMethod(module, "__set_escape_html", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.SetEscapeHtml)
+            );
+            
+            DefineLibraryMethod(module, "__set_time_precision", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.SetTimePrecision)
+            );
+            
+            DefineLibraryMethod(module, "__set_xml_time", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.SetXmlTime)
+            );
+            
+            DefineLibraryMethod(module, "__xml_time", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Boolean>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.GetXmlTime)
+            );
+            
+            DefineLibraryMethod(module, "deoptimize", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Deoptimize)
+            );
+            
+            DefineLibraryMethod(module, "encode", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encode)
+            );
+            
+            DefineLibraryMethod(module, "optimize", 0x21, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Optimize)
+            );
+            
+            DefineLibraryMethod(module, "optimized?", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Boolean>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.IsOptimized)
+            );
+            
+        }
+        
+        private static void LoadOj__Rails__Encoder_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "deoptimize", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder.Deoptimize)
+            );
+            
+            DefineLibraryMethod(module, "encode", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder.EncodeObj)
+            );
+            
+            DefineLibraryMethod(module, "optimize", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder, System.Object[], System.Object>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder.Optimize)
+            );
+            
+            DefineLibraryMethod(module, "optimized?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder, System.Object, System.Boolean>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder.IsOptimized)
+            );
+            
         }
         
     }
