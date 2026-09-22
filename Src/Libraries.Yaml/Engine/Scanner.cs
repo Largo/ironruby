@@ -335,9 +335,14 @@ namespace IronRuby.StandardLibrary.Yaml {
                         break;
 
                     case '>':
-                        if (!IsWhitespace(Peek(1))) {
-                            return FetchPlain();
-                        } else if (FlowLevel == 0) {
+                        // A block scalar header may carry a chomping indicator or an
+                        // explicit indentation digit - ">-", ">+", ">2" - so what follows
+                        // the ">" is not necessarily a space.  Requiring one sent ">-" to
+                        // FetchPlain, which read the whole folded scalar as a plain one:
+                        // RuboCop's default.yml is full of `Description: >-` blocks, and
+                        // the first colon in one made the parser report "mapping values
+                        // are not allowed here".  "|" has never had the guard.
+                        if (FlowLevel == 0) {
                             return FetchFolded();
                         }
                         break;

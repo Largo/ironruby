@@ -305,7 +305,10 @@ module Psych
       end
 
       def yaml(io = nil, options = {})
-        Psych.dump(to_ruby, io, options)
+        # The engine's dump takes no options, so they are accepted and dropped
+        # rather than passed on - the same thing that happens to an emitter
+        # option it does not understand.
+        io ? Psych.dump(to_ruby, io) : Psych.dump(to_ruby)
       end
       alias to_yaml yaml
 
@@ -452,6 +455,15 @@ module Psych
       end
 
       def stream?; true; end
+
+      # A stream emits its documents one after another, each with its own "---".
+      # Node#yaml would dump the Array #to_ruby answers instead, which is a
+      # different document altogether.
+      def yaml(io = nil, options = {})
+        out = children.map {|document| document.yaml(nil, options) }.join
+        io ? io.write(out) : out
+      end
+      alias to_yaml yaml
 
       def __build # :nodoc:
         children.map(&:to_ruby)
@@ -747,5 +759,16 @@ module Psych
     end
   end
 end
+
+# The pure-Ruby half of psych that IronRuby's engine does not replace: the
+# node-to-Ruby visitor and what it needs.  Loaded here rather than autoloaded so
+# that `require "psych"` answers the same constants CRuby's does.
+require 'psych/class_loader'
+require 'psych/scalar_scanner'
+require 'psych/coder'
+require 'psych/visitors/visitor'
+require 'psych/visitors/to_ruby'
+require 'psych/streaming'
+require 'psych/visitors/yaml_tree'
 
 require 'yaml/types'
