@@ -1095,18 +1095,21 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        // Object#type was Ruby 1.8's spelling of Object#class and was removed in 1.9, so it
+        // is gone here too.  It was not harmless in either direction:
+        //   - `obj.respond_to?(:type)` is a live test in real code.  HexaPDF asks it to tell
+        //     already-segmented text items from raw ones (TextLayouter#fit); with a Kernel#type
+        //     in the way it skipped segmentation and laid out nothing - an empty PDF, no error.
+        //   - it shadowed a real method of the same name: ActiveRecord's TimeZoneConverter#type
+        //     is a DelegateClass method, so a method_missing away, and Object#type answered the
+        //     class instead - every :time column cast wrongly, and railsbench's seeded rows
+        //     never saved.
         #region class, extend, instance_of?, is_a?, kind_of? (thread-safe)
 
         [RubyMethod("class")]
         public static RubyClass/*!*/ GetClass(RubyContext/*!*/ context, object self) {
             return context.GetClassOf(self);
         }
-
-        // Object#type, the 1.8 spelling of #class, is gone since 1.9 and must not be defined:
-        // `obj.respond_to?(:type)` is a live test in real code, and answering it for every object
-        // sends that code down the wrong path.  HexaPDF asks it to tell already-segmented text
-        // items from raw ones (TextLayouter#fit), and with a Kernel#type in the way it skipped
-        // segmentation and laid out nothing - an empty PDF rather than an error.
 
         // thread-safe:
         [RubyMethod("is_a?")]

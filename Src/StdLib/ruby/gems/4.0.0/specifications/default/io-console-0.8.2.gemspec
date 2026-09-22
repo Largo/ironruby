@@ -14,6 +14,7 @@ Gem::Specification.new do |s|
   s.summary = "Console size and raw mode".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
+  s.metadata = { "ironruby_pinned".freeze => "true".freeze }
   s.files = [
     "lib/io/console.rb".freeze,
     "lib/io/console/size.rb".freeze,

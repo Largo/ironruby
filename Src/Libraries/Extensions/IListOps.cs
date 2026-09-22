@@ -250,6 +250,13 @@ namespace IronRuby.Builtins {
         [RubyMethod("replace")]
         [RubyMethod("initialize_copy", RubyMethodAttributes.PrivateInstance)]
         public static IList/*!*/ Replace(IList/*!*/ self, [NotNull, DefaultProtocol]IList/*!*/ other) {
+            // ary.replace(ary) has to be a no-op, and clearing first would make it empty the
+            // array instead.  Rails runs into exactly this: Rails::Command#with_argv does
+            // ARGV.replace(argv) where argv *is* ARGV, so `rails db:migrate db:seed` lost
+            // every task after the first and railsbench served 404s from an unseeded database.
+            if (ReferenceEquals(self, other)) {
+                return self;
+            }
             self.Clear();
             AddRange(self, other);
             return self;
