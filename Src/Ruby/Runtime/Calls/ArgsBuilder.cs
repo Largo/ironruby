@@ -49,6 +49,7 @@ namespace IronRuby.Runtime.Calls {
 
         private int _actualArgumentCount;
         private CallArguments _callArguments;
+        private int _lastArgumentParameterIndex = -1;
 
         // splatted argument list length and storage:
         private int _listLength;
@@ -84,6 +85,19 @@ namespace IronRuby.Runtime.Calls {
 
         public int TrailingMandatoryCount {
             get { return _mandatoryParamCount - _leadingMandatoryParamCount; }
+        }
+
+        /// <summary>
+        /// Where the last of the call's actual arguments ended up, or -1 when it went into the
+        /// rest parameter (which has its own handling) or the call had no arguments. Only a
+        /// trailing hash can be the keyword arguments of a call, so this is the one parameter a
+        /// callee that declares no keywords has to unmark.
+        /// </summary>
+        public int LastArgumentParameterIndex {
+            get {
+                Debug.Assert(_actualArgumentCount != -1);
+                return _lastArgumentParameterIndex;
+            }
         }
 
         /// <param name="implicitParamCount">Parameters for which arguments are provided implicitly, i.e. not specified by user.</param>
@@ -187,14 +201,22 @@ namespace IronRuby.Runtime.Calls {
 
             bool isSplatted;
 
+            int lastArgument = _actualArgumentCount - 1;
+
             // leading mandatory:
             for (int i = 0; i < _leadingMandatoryParamCount; i++) {
                 _arguments[LeadingMandatoryIndex + i] = GetArgument(i, out isSplatted);
+                if (i == lastArgument) {
+                    _lastArgumentParameterIndex = LeadingMandatoryIndex + i;
+                }
             }
 
             // trailing mandatory:
             for (int i = 0; i < TrailingMandatoryCount; i++) {
                 _arguments[TrailingMandatoryIndex + i] = GetArgument(_actualArgumentCount - TrailingMandatoryCount + i, out isSplatted);
+                if (_actualArgumentCount - TrailingMandatoryCount + i == lastArgument) {
+                    _lastArgumentParameterIndex = TrailingMandatoryIndex + i;
+                }
             }
 
             int start = _leadingMandatoryParamCount;
@@ -202,7 +224,14 @@ namespace IronRuby.Runtime.Calls {
 
             // optional:
             for (int i = 0; i < _optionalParamCount; i++) {
-                _arguments[OptionalParameterIndex + i] = (start < end) ? GetArgument(start++, out isSplatted) : Ast.Field(null, Fields.DefaultArgument);
+                if (start < end) {
+                    if (start == lastArgument) {
+                        _lastArgumentParameterIndex = OptionalParameterIndex + i;
+                    }
+                    _arguments[OptionalParameterIndex + i] = GetArgument(start++, out isSplatted);
+                } else {
+                    _arguments[OptionalParameterIndex + i] = Ast.Field(null, Fields.DefaultArgument);
+                }
             }
 
             // unsplat:

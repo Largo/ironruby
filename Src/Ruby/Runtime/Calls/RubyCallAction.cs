@@ -120,6 +120,16 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
+            // Nor can it hold RubyMethodInfo.BuildCallNoFlow's unmarking of a keyword-arguments
+            // hash handed to a method that declares no keywords. A call site's syntax decides
+            // whether it passes keywords, so seeing one here means every call at this site
+            // passes one: hand the site to the rule builder instead of precompiling it.
+            for (int i = 0; i < args.Length; i++) {
+                if (RubyOps.IsKeywordArgumentsHash(args[i])) {
+                    return null;
+                }
+            }
+
             RubyScope scope;
             object target;
             if (Signature.HasScope) {

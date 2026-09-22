@@ -1692,6 +1692,28 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
+        /// The argument a parameter of a method that declares no keyword parameters is about to
+        /// be given. `f(a: 1)` there is a call that passes a positional Hash - Ruby 3 has no
+        /// keyword arguments without keyword parameters to receive them - and the callee may keep
+        /// that hash and pass it on for the rest of its life. So the mark comes off here, at the
+        /// one point where it is known to have done its job; leaving it on is how a hash stored
+        /// by `def set_filter(filter, decode_parms = nil)` and handed on later turns into the
+        /// keyword arguments of an unrelated call.
+        ///
+        /// The hash is always one the call site made for this call (see
+        /// <see cref="MakeKeywordArgumentsHash"/> and the copies the splat paths take), so it can
+        /// be cleared in place.
+        /// </summary>
+        [Emitted]
+        public static object ClearKeywordArguments(object obj) {
+            var hash = obj as Hash;
+            if (hash != null && hash.IsKeywordArguments) {
+                hash.IsKeywordArguments = false;
+            }
+            return obj;
+        }
+
+        /// <summary>
         /// The array a rest parameter is about to be given. A trailing hash that arrived as the
         /// keyword arguments of this call is not the keyword arguments of anything once it is
         /// sitting in an array, so the mark comes off - otherwise passing the array on would make
