@@ -13987,3 +13987,6 @@ Object.autoload :MonitorMixin, "monitor"
 # for it.  See Src/StdLib/ironruby/error_highlight.rb for what IronRuby's copy
 # can and cannot do.
 Object.autoload :ErrorHighlight, "error_highlight"
+
+# Gem compatibility patches (see the file for the policy on adding one).
+require "ironruby/gem_compat"
