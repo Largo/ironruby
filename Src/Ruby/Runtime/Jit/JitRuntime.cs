@@ -44,8 +44,27 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>
         /// Statistics, printed by -X:JITStats.
         /// </summary>
-        internal static int Specialized, Rejected, Deopts, Invalidations;
+        internal static int Specialized, Rejected, Deopts, Invalidations, ScreenRejected;
         internal static long CompileTicks;
+
+        /// <summary>
+        /// Which node kinds the static pre-screen turned methods away on. Only collected under
+        /// IR_JIT_VERBOSE: it is how a JitCompiler.Emit case the screen has not been told about
+        /// becomes visible - the newly supported node kind sits at the top of this histogram.
+        /// </summary>
+        private static readonly System.Collections.Generic.Dictionary<string, int> _screenReasons =
+            Verbose ? new System.Collections.Generic.Dictionary<string, int>() : null;
+
+        /// <summary>A method the pre-screen decided could never compile, so it was never wrapped.</summary>
+        internal static void RecordScreenRejection(string nodeKind) {
+            ScreenRejected++;
+            if (_screenReasons == null) { return; }
+            lock (_screenReasons) {
+                int n;
+                _screenReasons.TryGetValue(nodeKind ?? "?", out n);
+                _screenReasons[nodeKind ?? "?"] = n + 1;
+            }
+        }
 
         internal static void Disable() {
             Disabled = true;
@@ -57,10 +76,26 @@ namespace IronRuby.Runtime.Jit {
         internal static void HookStats() {
             if (!Verbose || System.Threading.Interlocked.Exchange(ref _statsHooked, 1) != 0) { return; }
             AppDomain.CurrentDomain.ProcessExit += (s, e) => {
-                Console.Error.WriteLine("[jit] specialized={0} rejected={1} deopts={2} invalidations={3} compile={4:F1}ms",
-                    Specialized, Rejected, Deopts, Invalidations,
+                Console.Error.WriteLine("[jit] specialized={0} rejected={1} screen-rejected={2} deopts={3} invalidations={4} compile={5:F1}ms",
+                    Specialized, Rejected, ScreenRejected, Deopts, Invalidations,
                     CompileTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+                PrintScreenReasons();
             };
+        }
+
+        /// <summary>
+        /// The pre-screen's histogram, most frequent first. A node kind JitCompiler.Emit has
+        /// since learned to compile showing up here is the screen having fallen behind it.
+        /// </summary>
+        private static void PrintScreenReasons() {
+            if (_screenReasons == null || _screenReasons.Count == 0) { return; }
+            var reasons = new System.Collections.Generic.List<System.Collections.Generic.KeyValuePair<string, int>>(_screenReasons);
+            reasons.Sort((a, b) => b.Value.CompareTo(a.Value));
+            var text = new System.Text.StringBuilder("[jit] screen rejected:");
+            for (int i = 0; i < reasons.Count && i < 8; i++) {
+                text.AppendFormat(" {0}={1}", reasons[i].Key, reasons[i].Value);
+            }
+            Console.Error.WriteLine(text.ToString());
         }
 
         // ---- integer arithmetic with overflow deopt -------------------------------------

@@ -110,7 +110,14 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private void GiveUp() {
             _givenUp = true;
+            // Every method that gets here passed JitScreen, so each one is either a genuinely
+            // type-dependent refusal or the screen and JitCompiler.Emit having drifted apart.
+            // Name it, so a count that creeps up can be traced to the construct responsible.
             JitRuntime.Rejected++;
+            if (JitRuntime.Verbose) {
+                Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen)",
+                    _declaringModule.Name ?? "main", _ast.Name, _arity);
+            }
             Install(_generic);
         }
 
@@ -261,6 +268,16 @@ namespace IronRuby.Runtime.Jit {
             }
             // Tracing and coverage need the real frame.
             if (context.RubyOptions.EnableTracing || context.RubyOptions.Profile) { return generic; }
+
+            // A body the compiler can never accept, whatever types it is called with, is not
+            // wrapped at all. Once wrapped, the trampoline is what the runtime caches and bakes
+            // into call site rules, so a method declined later still pays one extra indirect
+            // call on every call for the life of the process.
+            string rejectedBy;
+            if (!JitScreen.CanEverCompile(ast, out rejectedBy)) {
+                JitRuntime.RecordScreenRejection(rejectedBy);
+                return generic;
+            }
 
             JitStub stub;
             switch (arity) {

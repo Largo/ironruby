@@ -53,7 +53,7 @@ namespace IronRuby.Runtime.Jit {
     }
 
     internal sealed class JitCompiler {
-        private const int MaxNodes = 400;
+        internal const int MaxNodes = 400;
 
         private readonly MethodDeclaration _ast;
         private readonly RubyContext/*!*/ _context;
@@ -367,6 +367,13 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Block(ClrType(type), parts);
         }
 
+        /// <summary>
+        /// The node dispatch. ADDING A CASE HERE MEANS ADDING ONE TO <see cref="JitScreen"/> at
+        /// the bottom of this file: the screen decides, before a method is ever wrapped, whether
+        /// this method could accept its body, and a node kind it has not been told about is a
+        /// method the JIT quietly stops speeding up. IR_JIT_VERBOSE=1 prints the histogram of
+        /// node kinds the screen rejected, so the omission shows up there.
+        /// </summary>
         private MSA.Expression/*!*/ Emit(RExpr/*!*/ node, out JT type) {
             if (++_nodes > MaxNodes) { throw JitBailout.Instance; }
 
@@ -834,6 +841,249 @@ namespace IronRuby.Runtime.Jit {
                 case "==": return Ast.Equal(l, r);
                 case "!=": return Ast.NotEqual(l, r);
                 default: throw JitBailout.Instance;
+            }
+        }
+    }
+
+    /// <summary>
+    /// The static pre-screen, asked once per method before it is wrapped: *could* this body ever
+    /// compile?
+    ///
+    /// Why it exists. Without it the only answer comes from TryCompile, which cannot run until
+    /// the profiler has seen Threshold calls - and by then the trampoline is the delegate the
+    /// runtime cached in RubyMethodBody._delegate and baked into call site rules, so even a
+    /// perfect give-up leaves one permanent extra indirect call on a method the JIT never helps.
+    /// Most rejections are not about types at all: `def fib(n) ... return n ... end' is declined
+    /// only because Emit has no case for ReturnStatement, and no amount of profiling will change
+    /// that. Those methods are better off never being wrapped.
+    ///
+    /// The contract. This walk rejects only what JitCompiler.Emit refuses for reasons that are
+    /// visible in the syntax tree: a node kind it does not dispatch on, an operator EmitBinary
+    /// does not know, a rescue/else/ensure, a `do' block, a post-test while, a local from an
+    /// enclosing scope. Wherever Emit's answer depends on the *types* the profiler will observe -
+    /// "is this operand numeric", "is this condition a bool", "did the self-call's return type
+    /// settle" - the screen says yes. It is a pre-screen, not a decision: a false yes costs what
+    /// the old code always cost, a false no costs a specialization.
+    ///
+    /// KEEPING IT HONEST. It is directly below Emit because the two have to move together, and
+    /// each direction of drift is a statistic rather than silent slowness (IR_JIT_VERBOSE=1):
+    ///   - too permissive (the screen passes a body Emit then refuses): the method is wrapped,
+    ///     profiled and declined, which is JitRuntime.Rejected, and each one is named on stderr.
+    ///     With the screen in place that count should be near zero.
+    ///   - too strict (Emit grew a case the screen was not told about): the node kind appears in
+    ///     the "screen rejected" histogram printed on the way out, so a newly supported node kind
+    ///     sitting at the top of that histogram is the drift, visible without reading any code.
+    /// </summary>
+    internal sealed class JitScreen {
+        private readonly int _scopeDepth;
+        private readonly string/*!*/ _methodName;
+        private readonly int _arity;
+        private int _nodes;
+
+        /// <summary>The node kind that said no, for the histogram.</summary>
+        private string _rejectedBy;
+
+        private JitScreen(MethodDeclaration/*!*/ ast) {
+            _scopeDepth = ast.DefinedScope.Depth;
+            _methodName = ast.Name;
+            _arity = ast.Parameters.Mandatory.Length;
+        }
+
+        /// <summary>
+        /// False when no assignment of parameter types could ever make TryCompile succeed for
+        /// this body. <paramref name="rejectedBy"/> names the node kind that decided it.
+        /// </summary>
+        internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, out string rejectedBy) {
+            var s = new JitScreen(ast);
+            bool ok;
+            try {
+                ok = s.WalkBody(ast.Body);
+            } catch (Exception) {
+                // A screen that throws must not take the process down with it; it just means the
+                // method is not wrapped.
+                ok = false;
+                s._rejectedBy = "screen-error";
+            }
+            rejectedBy = s._rejectedBy;
+            return ok;
+        }
+
+        private bool No(object/*!*/ node) {
+            if (_rejectedBy == null) { _rejectedBy = node.GetType().Name; }
+            return false;
+        }
+
+        /// <summary>Mirrors JitCompiler.EmitBody.</summary>
+        private bool WalkBody(Body/*!*/ body) {
+            if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
+                return No(body);
+            }
+            return WalkStatements(body.Statements);
+        }
+
+        private bool WalkStatements(Statements statements) {
+            if (statements == null) { return true; }
+            foreach (var s in statements) {
+                if (!Walk(s)) { return false; }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Mirrors JitCompiler.EmitCondition, whose operand has to end up Bool or numeric. Only
+        /// the forms that are unconditionally JT.Obj can be ruled out here - `if @x', `while
+        /// self', `x ? a : b' on nil - and those are common enough to be worth ruling out.
+        /// </summary>
+        private bool WalkCondition(RExpr/*!*/ node) {
+            if (node is InstanceVariable || node is SelfReference) { return No(node); }
+            var literal = node as Literal;
+            if (literal != null && literal.Value == null) { return No(node); }
+            return Walk(node);
+        }
+
+        /// <summary>
+        /// Mirrors JitCompiler.Emit, case for case and in the same order. Read the two side by
+        /// side; that is the point of them being in one file.
+        /// </summary>
+        private bool Walk(RExpr/*!*/ node) {
+            // Emit gives up past MaxNodes. The screen's count is not exactly Emit's, so it only
+            // rules out a body that is too big by any counting - the walk stays bounded either way.
+            if (++_nodes > 2 * JitCompiler.MaxNodes) { return No(node); }
+
+            var literal = node as Literal;
+            if (literal != null) {
+                object v = literal.Value;
+                return (v is int || v is long || v is double || v is bool || v == null) || No(node);
+            }
+
+            var local = node as LocalVariable;
+            if (local != null) {
+                // A local from an enclosing scope is never read from a typed body. (Emit also
+                // bails on a read before any assignment, which is a flow property: say yes.)
+                return local.DefinitionLexicalDepth == _scopeDepth || No(node);
+            }
+
+            var assign = node as SimpleAssignmentExpression;
+            if (assign != null) {
+                string op = assign.Operation;
+                if (op == "&&" || op == "||") { return No(node); }
+                // `x op= v' becomes `x = x op v', so an operator EmitBinary does not know is out.
+                if (op != null && !IsBinaryOperator(op)) { return No(node); }
+
+                var ivarTarget = assign.Left as InstanceVariable;
+                if (ivarTarget != null) {
+                    return (op == null) ? Walk(assign.Right) : No(node);
+                }
+                var target = assign.Left as LocalVariable;
+                if (target == null || target.DefinitionLexicalDepth != _scopeDepth) { return No(node); }
+                return Walk(assign.Right);
+            }
+
+            var call = node as MethodCall;
+            if (call != null) { return WalkCall(call); }
+
+            var cond = node as ConditionalExpression;
+            if (cond != null) {
+                return WalkCondition(cond.Condition) && Walk(cond.TrueExpression) && Walk(cond.FalseExpression);
+            }
+
+            var ifExpr = node as IfExpression;
+            if (ifExpr != null) {
+                var clauses = ifExpr.ElseIfClauses;
+                if (clauses != null) {
+                    for (int i = 0; i < clauses.Count; i++) {
+                        var c = clauses[i];
+                        if (c.Condition == null) {
+                            // Only the last clause may be the `else'.
+                            if (i != clauses.Count - 1) { return No(c); }
+                        } else if (!WalkCondition(c.Condition)) {
+                            return false;
+                        }
+                        if (!WalkStatements(c.Statements)) { return false; }
+                    }
+                }
+                return WalkCondition(ifExpr.Condition) && WalkStatements(ifExpr.Body);
+            }
+
+            var unless = node as UnlessExpression;
+            if (unless != null) {
+                var els = unless.ElseClause;
+                if (els != null) {
+                    if (els.Condition != null) { return No(els); }
+                    if (!WalkStatements(els.Statements)) { return false; }
+                }
+                return WalkCondition(unless.Condition) && WalkStatements(unless.Statements);
+            }
+
+            var not = node as NotExpression;
+            if (not != null) { return WalkCondition(not.Expression); }
+
+            var and = node as AndExpression;
+            if (and != null) { return WalkCondition(and.Left) && WalkCondition(and.Right); }
+
+            var or = node as OrExpression;
+            if (or != null) { return WalkCondition(or.Left) && WalkCondition(or.Right); }
+
+            if (node is InstanceVariable || node is SelfReference) { return true; }
+
+            var loop = node as WhileLoopExpression;
+            if (loop != null) {
+                if (loop.IsPostTest) { return No(node); }
+                return WalkCondition(loop.Condition) && WalkStatements(loop.Statements);
+            }
+
+            // `return' / `return v'. Emit's ReturnStatement case lands in a parallel change; the
+            // screen already says yes so that the two merge into a working whole. Until then a
+            // method with a `return' is wrapped and declined, which is what it always was. A
+            // multi-value return builds an Array, which no typed body produces.
+            var ret = node as ReturnStatement;
+            if (ret != null) {
+                var retArgs = ret.Arguments;
+                if (retArgs == null || retArgs.Expressions.Length == 0) { return true; }
+                if (retArgs.Expressions.Length != 1) { return No(node); }
+                return Walk(retArgs.Expressions[0]);
+            }
+
+            // break/next are only emitted in loop mode, which a method body never is, so they
+            // fall through to the rejection below along with every other unknown node.
+
+            var body = node as Body;
+            if (body != null) { return WalkBody(body); }
+
+            return No(node);
+        }
+
+        /// <summary>Mirrors JitCompiler.EmitCall: a self-recursive call, or a binary operator.</summary>
+        private bool WalkCall(MethodCall/*!*/ node) {
+            if (node.Block != null) { return No(node); }
+            var args = node.Arguments;
+            int argc = (args == null) ? 0 : args.Expressions.Length;
+
+            if (node.Target == null) {
+                if (node.IsVariableCall || node.MethodName != _methodName || argc != _arity) { return No(node); }
+            } else if (argc != 1 || !IsBinaryOperator(node.MethodName)) {
+                // Emit only reaches EmitBinary for a one-argument call on a target, and only
+                // EmitBinary's own operators survive there whatever the operand types are.
+                return No(node);
+            } else if (!Walk(node.Target)) {
+                return false;
+            }
+
+            for (int i = 0; i < argc; i++) {
+                if (!Walk(args.Expressions[i])) { return false; }
+            }
+            return true;
+        }
+
+        /// <summary>The operators JitCompiler.EmitBinary and EmitCompare between them handle.</summary>
+        private static bool IsBinaryOperator(string/*!*/ op) {
+            switch (op) {
+                case "+": case "-": case "*": case "/": case "%":
+                case "<": case ">": case "<=": case ">=": case "==": case "!=":
+                case "&": case "|": case "^":
+                    return true;
+                default:
+                    return false;
             }
         }
     }
