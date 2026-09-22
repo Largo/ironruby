@@ -2160,47 +2160,7 @@ end
 # --------------------------------------------------------------------------
 
 class Module
-  # `mod.method_defined?(name, inherit = true)`. The bundled core only accepts
-  # one argument, so wrap it: inherit == true keeps the old behaviour, and
-  # inherit == false restricts the lookup to methods defined directly on `mod`
-  # (instance_methods(false) returns the public *and* protected ones, which is
-  # exactly the set method_defined? reports).
-  unless (begin; Module.method_defined?(:name, true); true; rescue ArgumentError; false; end)
-    alias_method :method_defined_without_inherit?, :method_defined?
-
-    def method_defined?(name, inherit = true)
-      return method_defined_without_inherit?(name) if inherit
-      instance_methods(false).include?(name.to_sym)
-    end
-  end
-
-  unless (begin; Module.public_method_defined?(:name, true); true; rescue ArgumentError; false; end)
-    alias_method :public_method_defined_without_inherit?, :public_method_defined?
-
-    def public_method_defined?(name, inherit = true)
-      return public_method_defined_without_inherit?(name) if inherit
-      public_instance_methods(false).include?(name.to_sym)
-    end
-  end
-
-  unless (begin; Module.private_method_defined?(:name, true); true; rescue ArgumentError; false; end)
-    alias_method :private_method_defined_without_inherit?, :private_method_defined?
-
-    def private_method_defined?(name, inherit = true)
-      return private_method_defined_without_inherit?(name) if inherit
-      private_instance_methods(false).include?(name.to_sym)
-    end
-  end
-
-  unless (begin; Module.protected_method_defined?(:name, true); true; rescue ArgumentError; false; end)
-    alias_method :protected_method_defined_without_inherit?, :protected_method_defined?
-
-    def protected_method_defined?(name, inherit = true)
-      return protected_method_defined_without_inherit?(name) if inherit
-      protected_instance_methods(false).include?(name.to_sym)
-    end
-  end
-
+  # (method_defined? and its public_/private_/protected_ forms take `inherit' natively.)
   unless (begin; Module.const_defined?(:Module, true); true; rescue ArgumentError; false; end)
     alias_method :const_defined_without_inherit?, :const_defined?
 

@@ -410,6 +410,10 @@ namespace IronRuby.Runtime {
         // TODO: Could we optimize this search? If so we could also free the per-module set if mm is removed.
         internal HashSet<string> MissingMethodsCachedInSites { get; set; }
 
+        // How many library method tables are being populated right now (guarded by ClassHierarchyLock):
+        // RubyModule's method-lookup cache is not filled meanwhile.
+        internal int MethodTableInitializationDepth;
+
         #endregion
 
         #region Properties
@@ -2856,9 +2860,18 @@ namespace IronRuby.Runtime {
         /// Returns an identifier encoded as MutableStrings (Ruby 1.8) or Symbols (Ruby 1.9).
         /// </summary>
         public object/*!*/ StringifyIdentifier(string/*!*/ identifier) {
-            // TODO:
-            return CreateSymbol(identifier, RubyEncoding.UTF8);
+            // Interning goes through a MutableString and the symbol table's lock; an identifier's symbol
+            // never changes and symbols are never collected, so remember it by the CLR string.
+            RubySymbol result;
+            if (!_identifierSymbols.TryGetValue(identifier, out result)) {
+                result = CreateSymbol(identifier, RubyEncoding.UTF8);
+                _identifierSymbols.TryAdd(identifier, result);
+            }
+            return result;
         }
+
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, RubySymbol>/*!*/ _identifierSymbols =
+            new System.Collections.Concurrent.ConcurrentDictionary<string, RubySymbol>(StringComparer.Ordinal);
         
         /// <summary>
         /// Returns an array of identifiers encoded as MutableStrings (Ruby 1.8) or Symbols (Ruby 1.9).

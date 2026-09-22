@@ -1645,44 +1645,51 @@ namespace IronRuby.Builtins {
 
         #region {private_|protected_|public_|}method_defined? (thread-safe)
 
-        // thread-safe:
-        [RubyMethod("method_defined?")]
-        public static bool MethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name) {
+        // The visibility a method_defined? query sees for the name, or None if it has no definition. It is
+        // the visibility at the name's entry point - the forwarder's, for a `public :m' re-exporting an
+        // inherited m - and, as in MRI (check_definition_visibility), a not-implemented method has none.
+        // inherit = false counts only a definition in the module itself, not in a prepended module.
+        private static RubyMethodVisibility GetDefinitionVisibility(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self,
+            object name, bool inherit) {
+
             // MRI raises TypeError for anything that is not a Symbol or a String; the
             // [DefaultProtocol]string binding quietly turned an Integer into its digits.
             string methodName = Protocols.CastToSymbol(stringCast, name);
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
-            return method != null && method.Visibility != RubyMethodVisibility.Private;
+            var method = inherit ? self.GetMethodLookup(methodName) : self.GetOwnMethodLookup(methodName);
+            if (!method.Found) {
+                return RubyMethodVisibility.None;
+            }
+            var libraryMethod = method.Info as RubyLibraryMethodInfo;
+            return (libraryMethod != null && libraryMethod.IsNotImplemented) ? RubyMethodVisibility.None : method.Visibility;
+        }
+
+        // thread-safe:
+        [RubyMethod("method_defined?")]
+        public static bool MethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name,
+            [DefaultParameterValue(true)]bool inherit) {
+            var visibility = GetDefinitionVisibility(stringCast, self, name, inherit);
+            return visibility == RubyMethodVisibility.Public || visibility == RubyMethodVisibility.Protected;
         }
 
         // thread-safe:
         [RubyMethod("private_method_defined?")]
-        public static bool PrivateMethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name) {
-            // MRI raises TypeError for anything that is not a Symbol or a String; the
-            // [DefaultProtocol]string binding quietly turned an Integer into its digits.
-            string methodName = Protocols.CastToSymbol(stringCast, name);
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
-            return method != null && method.Visibility == RubyMethodVisibility.Private;
+        public static bool PrivateMethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name,
+            [DefaultParameterValue(true)]bool inherit) {
+            return GetDefinitionVisibility(stringCast, self, name, inherit) == RubyMethodVisibility.Private;
         }
 
         // thread-safe:
         [RubyMethod("protected_method_defined?")]
-        public static bool ProtectedMethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name) {
-            // MRI raises TypeError for anything that is not a Symbol or a String; the
-            // [DefaultProtocol]string binding quietly turned an Integer into its digits.
-            string methodName = Protocols.CastToSymbol(stringCast, name);
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
-            return method != null && method.Visibility == RubyMethodVisibility.Protected;
+        public static bool ProtectedMethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name,
+            [DefaultParameterValue(true)]bool inherit) {
+            return GetDefinitionVisibility(stringCast, self, name, inherit) == RubyMethodVisibility.Protected;
         }
 
         // thread-safe:
         [RubyMethod("public_method_defined?")]
-        public static bool PublicMethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name) {
-            // MRI raises TypeError for anything that is not a Symbol or a String; the
-            // [DefaultProtocol]string binding quietly turned an Integer into its digits.
-            string methodName = Protocols.CastToSymbol(stringCast, name);
-            RubyMemberInfo method = self.ResolveMethod(methodName, VisibilityContext.AllVisible).Info;
-            return method != null && method.Visibility == RubyMethodVisibility.Public;
+        public static bool PublicMethodDefined(ConversionStorage<string>/*!*/ stringCast, RubyModule/*!*/ self, object name,
+            [DefaultParameterValue(true)]bool inherit) {
+            return GetDefinitionVisibility(stringCast, self, name, inherit) == RubyMethodVisibility.Public;
         }
 
         #endregion
