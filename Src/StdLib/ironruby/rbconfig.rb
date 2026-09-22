@@ -18,7 +18,10 @@
 # ****************************************************************************
 
 module RbConfig
-  ::Config = self # compatibility
+  # No `::Config = self` here. It was Ruby 1.8's spelling of RbConfig and MRI dropped it in
+  # 1.9.3; keeping it squats on a top-level name that applications use constantly - `class
+  # Config` in a gem's own code then fails with "Config is not a class", which is how Hashie's
+  # documented example breaks. Anything still asking for ::Config is asking for Ruby 1.8.
 
   # The directory holding ironruby/, ruby/<version>/ and ruby/site_ruby/: <prefix>/Lib
   # in an installed IronRuby, Src/StdLib in a source tree.

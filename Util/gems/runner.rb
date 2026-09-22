@@ -8,13 +8,24 @@
 require_relative 'catalog'
 
 if ARGV[0] == '--load-path'
-  entry = GemCatalog::ENTRIES[ARGV[1]] or abort "unknown gem: #{ARGV[1]}"
+  entry = GemCatalog.entry(ARGV[1]) or abort "unknown gem: #{ARGV[1]}"
   puts GemCatalog.load_path(ARGV[1], entry).map { |d| "-I#{d}" }.join(' ')
   exit
 end
 
+# The gem names in one tier, for run.sh.
+if ARGV[0] == '--list'
+  names = case ARGV[1]
+          when 'popular' then GemCatalog::POPULAR.keys
+          when 'stdlib'  then GemCatalog::ENTRIES.keys
+          else                GemCatalog::ALL.keys
+          end
+  puts names.join(' ')
+  exit
+end
+
 name = ARGV.shift or abort 'usage: runner.rb <gem-name>'
-entry = GemCatalog::ENTRIES[name] or abort "unknown gem: #{name}"
+entry = GemCatalog.entry(name) or abort "unknown gem: #{name}"
 
 GemCatalog.load_path(name, entry).reverse_each { |d| $LOAD_PATH.unshift(d) }
 
@@ -30,7 +41,7 @@ if entry[:require]
   end
 end
 
-files = load_state == 'ok' ? GemCatalog.test_files(entry) : []
+files = load_state == 'ok' ? GemCatalog.test_files(entry, name) : []
 
 # run.sh reads the suite kind: "unit" means a summary line follows, "spec" means
 # it has to drive mspec itself, and "none" means there is nothing to run.
@@ -38,16 +49,33 @@ kind = if !files.empty?
          'unit'
        elsif load_state == 'ok' && entry[:specs]
          'spec'
+       elsif load_state == 'ok' && GemCatalog.exercise_file(entry)
+         'exercise'
        else
          'none'
        end
 
-puts "##GEM##\t#{name}\t#{load_state}\t#{kind}\t#{entry[:specs]}\t#{note}"
+puts "##GEM##\t#{name}\t#{load_state}\t#{kind}\t#{entry[:specs] || entry[:exercise]}\t#{note}"
 $stdout.flush
 exit!(load_state == 'ok' ? 0 : 1) if files.empty?
 
 # --- run the suite ---------------------------------------------------------
-if entry[:framework] == :minitest
+if entry[:gem]
+  # A popular-tier gem that ships its own test/ in the .gem: run it in place,
+  # with the gem's lib/ and test/ on the path, under whichever framework it
+  # declares. Nothing from the CRuby source tree is involved.
+  dir = GemCatalog.installed_dir(name)
+  $LOAD_PATH.unshift(File.join(dir, 'test'), File.join(dir, 'lib'))
+  Dir.chdir(dir)
+  require(entry[:framework] == :minitest ? 'minitest/autorun' : 'test/unit')
+  files.each do |f|
+    begin
+      require File.expand_path(f)
+    rescue Exception => e
+      warn "load #{f}: #{e.class}: #{e.message}"
+    end
+  end
+elsif entry[:framework] == :minitest
   require 'minitest/autorun'
   $LOAD_PATH.unshift(File.join(File.dirname(File.dirname(files.first)), 'test'))
   files.each do |f|

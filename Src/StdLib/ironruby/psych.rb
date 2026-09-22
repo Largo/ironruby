@@ -281,7 +281,16 @@ module Psych
       end
 
       def to_ruby(symbolize_names: false, freeze: false, strict_integer: false)
-        Psych.__send__(:__finish, __build, symbolize_names, freeze)
+        # A tree built by TreeBuilder has no engine node behind it, so the aliases in it have to
+        # be resolved here: the anchors seen so far live in this table for the length of the
+        # outermost #to_ruby, which is also what makes a self-referential anchor work.
+        outermost = Thread.current[:__psych_anchors].nil?
+        Thread.current[:__psych_anchors] = {} if outermost
+        begin
+          Psych.__send__(:__finish, __build, symbolize_names, freeze)
+        ensure
+          Thread.current[:__psych_anchors] = nil if outermost
+        end
       end
       alias transform to_ruby
 
@@ -299,6 +308,13 @@ module Psych
 
       def __build # :nodoc:
         @__engine_node ? @__engine_node.transform : __build_detached
+      end
+
+      # Records +value+ under this node's anchor, for the aliases that refer back to it.
+      def __anchored(value) # :nodoc:
+        table = Thread.current[:__psych_anchors]
+        table[@anchor] = value if table && respond_to?(:anchor) && anchor
+        value
       end
     end
 
@@ -325,7 +341,7 @@ module Psych
       def scalar?; true; end
 
       def __build_detached # :nodoc:
-        quoted || tag ? value : Psych.unsafe_load(value)
+        __anchored(quoted || tag ? value : Psych.unsafe_load(value))
       end
     end
 
@@ -347,7 +363,9 @@ module Psych
       def sequence?; true; end
 
       def __build_detached # :nodoc:
-        children.map(&:to_ruby)
+        result = __anchored([])
+        children.each { |child| result << child.to_ruby }
+        result
       end
     end
 
@@ -369,7 +387,9 @@ module Psych
       def mapping?; true; end
 
       def __build_detached # :nodoc:
-        children.each_slice(2).to_h { |k, v| [k.to_ruby, v.to_ruby] }
+        result = __anchored({})
+        children.each_slice(2) { |k, v| result[k.to_ruby] = v.to_ruby }
+        result
       end
     end
 
@@ -382,6 +402,14 @@ module Psych
       end
 
       def alias?; true; end
+
+      def __build_detached # :nodoc:
+        table = Thread.current[:__psych_anchors]
+        unless table && table.key?(@anchor)
+          raise Psych::AnchorNotDefined, @anchor
+        end
+        table[@anchor]
+      end
     end
 
     class Document < Node
@@ -476,6 +504,289 @@ module Psych
 
     class << self
       private :__explicit_tag
+    end
+  end
+
+  # The event-driven half of Psych: a parser that hands a stream of events to a handler, and
+  # the handler that builds a node tree out of them. libyaml drives these itself; here the
+  # document tree comes first and the events are replayed off it, which is the same stream in
+  # the same order - what a handler cannot see this way is a detail the engine did not keep
+  # (a scalar's original quoting style, say), not an event.
+  #
+  # Written because real libraries subclass TreeBuilder rather than call Psych.parse:
+  # RuboCop::YAMLDuplicationChecker overrides #end_mapping to find duplicate keys, which is how
+  # every .rubocop.yml is loaded.
+  class Handler
+    # The set of Psych events, as the parser calls them. Each is a no-op here; a subclass
+    # overrides the ones it cares about.
+    def start_stream(encoding); end
+    def end_stream; end
+    def start_document(version, tag_directives, implicit); end
+    def end_document(implicit = false); end
+    def alias(anchor); end
+    def scalar(value, anchor, tag, plain, quoted, style); end
+    def start_sequence(anchor, tag, implicit, style); end
+    def end_sequence; end
+    def start_mapping(anchor, tag, implicit, style); end
+    def end_mapping; end
+    def empty; end
+    def streaming?; false; end
+
+    EVENTS = %i[
+      alias empty end_document end_mapping end_sequence end_stream scalar
+      start_document start_mapping start_sequence start_stream
+    ].freeze
+  end
+
+  # Builds a Psych::Nodes tree from the event stream. #root is the Nodes::Stream.
+  class TreeBuilder < Handler
+    attr_reader :root
+
+    def initialize
+      @stack = []
+      @last = nil
+      @root = nil
+    end
+
+    def start_stream(encoding)
+      @root = Nodes::Stream.new(encoding)
+      push(@root)
+    end
+
+    def end_stream
+      pop
+    end
+
+    def start_document(version, tag_directives, implicit)
+      push(Nodes::Document.new(version, tag_directives, implicit))
+    end
+
+    def end_document(implicit_end = !streaming?)
+      @last.implicit_end = implicit_end
+      pop
+    end
+
+    def start_sequence(anchor, tag, implicit, style)
+      push(Nodes::Sequence.new(anchor, tag, implicit, style))
+    end
+
+    def end_sequence
+      pop
+    end
+
+    def start_mapping(anchor, tag, implicit, style)
+      push(Nodes::Mapping.new(anchor, tag, implicit, style))
+    end
+
+    def end_mapping
+      pop
+    end
+
+    def alias(anchor)
+      set(Nodes::Alias.new(anchor))
+    end
+
+    def scalar(value, anchor, tag, plain, quoted, style)
+      set(Nodes::Scalar.new(value, anchor, tag, plain, quoted, style))
+    end
+
+    private
+
+    def push(node)
+      set(node)
+      @stack.push(node)
+      node
+    end
+
+    def pop
+      node = @stack.pop
+      @last = @stack.last
+      node
+    end
+
+    def set(node)
+      @stack.last.children << node unless @stack.empty?
+      @last = node
+      node
+    end
+  end
+
+  # The class whitelist a restricted load consults. IronRuby's engine resolves `!ruby/` tags
+  # itself and Nodes#to_ruby builds through it, so what this records is not yet enforced on
+  # the way back out: Restricted is here because callers construct one and hand it to
+  # ScalarScanner and Visitors::ToRuby, not because it makes an unsafe document safe.
+  # Psych.safe_load is the one that does check, over the parsed document (see __check_safe).
+  class ClassLoader
+    def initialize
+      @cache = {}
+    end
+
+    def load(klassname)
+      return nil if klassname.nil? || klassname.empty?
+      @cache[klassname] ||= resolve(klassname)
+    end
+
+    def symbolize(sym)
+      load('Symbol')
+      sym.to_sym
+    end
+
+    %w[Symbol Object Struct Exception Regexp Range Rational Complex Date DateTime Psych].each do |const|
+      define_method(const.downcase) { load(const) }
+    end
+
+    private
+
+    def resolve(klassname)
+      klassname.split('::').inject(Object) { |mod, name| mod.const_get(name) }
+    rescue NameError
+      raise Psych::DisallowedClass.new('load', klassname)
+    end
+
+    # Only the named classes and symbols may be loaded.
+    class Restricted < ClassLoader
+      def initialize(classes, symbols)
+        @classes = classes
+        @symbols = symbols
+        super()
+      end
+
+      def symbolize(sym)
+        return super if @symbols.empty?
+        return super if @symbols.include?(sym.to_s)
+        raise Psych::DisallowedClass.new('load', 'Symbol')
+      end
+
+      private
+
+      def resolve(klassname)
+        raise Psych::DisallowedClass.new('load', klassname) unless @classes.include?(klassname)
+        super
+      end
+    end
+  end
+
+  # Turns a plain scalar into the Ruby value its implicit tag stands for.
+  class ScalarScanner
+    attr_reader :class_loader
+
+    def initialize(class_loader = ClassLoader.new, strict_integer: false)
+      @class_loader = class_loader
+      @strict_integer = strict_integer
+    end
+
+    def tokenize(string)
+      return nil if string.nil? || string.empty?
+      Psych.unsafe_load(string)
+    rescue Psych::SyntaxError
+      string
+    end
+
+    def parse_time(string)
+      tokenize(string)
+    end
+
+    def parse_int(string)
+      Integer(string.gsub(',', ''))
+    end
+  end
+
+  # The visitor Psych's own loader is built from. Libraries reach for ToRuby directly when they
+  # have a node tree in hand already - RuboCop::ConfigLoader does, to avoid parsing twice.
+  module Visitors
+    class Visitor
+      def accept(target)
+        visit(target)
+      end
+
+      private
+
+      DISPATCH = {
+        Psych::Nodes::Scalar => :visit_Psych_Nodes_Scalar,
+        Psych::Nodes::Sequence => :visit_Psych_Nodes_Sequence,
+        Psych::Nodes::Mapping => :visit_Psych_Nodes_Mapping,
+        Psych::Nodes::Document => :visit_Psych_Nodes_Document,
+        Psych::Nodes::Stream => :visit_Psych_Nodes_Stream,
+        Psych::Nodes::Alias => :visit_Psych_Nodes_Alias
+      }.freeze
+
+      def visit(target)
+        method = DISPATCH[target.class] or
+          raise "Exception: cannot visit #{target.class}"
+        send(method, target)
+      end
+    end
+
+    # Builds the Ruby object a node tree stands for.
+    class ToRuby < Visitor
+      attr_reader :class_loader, :ss
+
+      def initialize(ss = ScalarScanner.new, class_loader = ClassLoader.new, symbolize_names: false, freeze: false)
+        @ss = ss
+        @class_loader = class_loader
+        @symbolize_names = symbolize_names
+        @freeze = freeze
+      end
+
+      def self.create(symbolize_names: false, freeze: false, strict_integer: false)
+        loader = ClassLoader.new
+        new(ScalarScanner.new(loader, strict_integer: strict_integer), loader,
+            symbolize_names: symbolize_names, freeze: freeze)
+      end
+
+      def accept(target)
+        target.to_ruby(symbolize_names: @symbolize_names, freeze: @freeze)
+      end
+    end
+  end
+
+  # Feeds a handler the events of a YAML stream.
+  class Parser
+    attr_reader :handler
+    attr_accessor :external_encoding
+
+    ANY = 0
+    UTF8 = 1
+    UTF16LE = 2
+    UTF16BE = 3
+
+    def initialize(handler = Handler.new)
+      @handler = handler
+      @external_encoding = ANY
+    end
+
+    # +path+ is only used to name the file in a Psych::SyntaxError.
+    def parse(yaml, path = nil)
+      stream = Psych.parse_stream(yaml, filename: path)
+      @handler.start_stream(Nodes::Stream::UTF8)
+      stream.children.each do |document|
+        @handler.start_document(document.version, document.tag_directives, document.implicit)
+        document.children.each { |child| emit(child) }
+        @handler.end_document(document.implicit_end)
+      end
+      @handler.end_stream
+      self
+    end
+
+    private
+
+    def emit(node)
+      case node
+      when Nodes::Scalar
+        @handler.scalar(node.value, node.anchor, node.tag, node.plain, node.quoted, node.style)
+      when Nodes::Alias
+        @handler.alias(node.anchor)
+      when Nodes::Sequence
+        @handler.start_sequence(node.anchor, node.tag, node.implicit, node.style)
+        node.children.each { |child| emit(child) }
+        @handler.end_sequence
+      when Nodes::Mapping
+        @handler.start_mapping(node.anchor, node.tag, node.implicit, node.style)
+        node.children.each { |child| emit(child) }
+        @handler.end_mapping
+      else
+        raise Psych::Exception, "cannot emit #{node.class}"
+      end
     end
   end
 end

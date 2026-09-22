@@ -39,7 +39,6 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Prism.PrismLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3LibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nokogiri.NokogiriLibraryInitializer))]
-[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Fiddle.FiddleLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -165,7 +164,7 @@ namespace IronRuby.Builtins {
             DefineGlobalClass("Range", typeof(IronRuby.Builtins.Range), 0x00000007, Context.ObjectClass, LoadRange_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def61}, 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Boolean, IronRuby.Builtins.Range>(IronRuby.Builtins.RangeOps.CreateRange)
             );
-            IronRuby.Builtins.RubyClass def54 = DefineGlobalClass("Regexp", typeof(IronRuby.Builtins.RubyRegex), 0x00000007, Context.ObjectClass, LoadRegexp_Instance, LoadRegexp_Class, LoadRegexp_Constants, new IronRuby.Builtins.RubyModule[] {def61}, 
+            IronRuby.Builtins.RubyClass def54 = DefineGlobalClass("Regexp", typeof(IronRuby.Builtins.RubyRegex), 0x00000007, Context.ObjectClass, LoadRegexp_Instance, LoadRegexp_Class, LoadRegexp_Constants, IronRuby.Builtins.RubyModule.EmptyArray, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.RegexpOps.Create), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyRegex, System.Int32, System.Object, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.RegexpOps.Create), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyRegex, System.Object, System.Object, IronRuby.Builtins.RubyRegex>(IronRuby.Builtins.RegexpOps.Create), 
@@ -453,8 +452,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "include", 0x51, 
-                0x80000000U, 
-                new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.Include)
+                0x80000010U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.Include)
             );
             
             DefineLibraryMethod(module, "initialize", 0x52, 
@@ -4571,7 +4570,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "!~", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.NotMatch)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.NotMatch)
             );
             
             DefineLibraryMethod(module, "<=>", 0x51, 
@@ -5092,6 +5091,11 @@ namespace IronRuby.Builtins {
             );
             
             #endif
+            DefineLibraryMethod(module, "type", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyClass>(IronRuby.Builtins.KernelOps.GetClassObsolete)
+            );
+            
             DefineLibraryMethod(module, "untrace_var", 0x52, 
                 0x00020004U, 0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.UntraceVariable), 
@@ -12920,9 +12924,11 @@ namespace IronRuby.StandardLibrary.StringIO {
             );
             
             DefineLibraryMethod(module, "read", 0x11, 
-                0x00000000U, 0x00020004U, 0x00030004U, 
+                new[] { 0x00000000U, 0x00020004U, 0x00000000U, 0x00010000U, 0x00030004U}, 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read), 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read), 
+                new Func<IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read), 
+                new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Int32, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read), 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read)
             );
             
@@ -14107,12 +14113,14 @@ namespace IronRuby.StandardLibrary.Json {
         
         private static void LoadJSON_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "dump", 0x21, 
-                0x00000000U, 
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate), 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
             );
             
             DefineLibraryMethod(module, "generate", 0x21, 
-                0x00000000U, 
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate), 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
             );
             
@@ -14127,7 +14135,8 @@ namespace IronRuby.StandardLibrary.Json {
             );
             
             DefineLibraryMethod(module, "pretty_generate", 0x21, 
-                0x00000000U, 
+                0x00000000U, 0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.PrettyGenerate), 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.PrettyGenerate)
             );
             
@@ -15609,517 +15618,6 @@ namespace IronRuby.StandardLibrary.Nokogiri {
                 new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.TextContent)
             );
             
-        }
-        
-    }
-}
-
-namespace IronRuby.StandardLibrary.Fiddle {
-    using System;
-    using Microsoft.Scripting.Utils;
-    using System.Runtime.InteropServices;
-    
-    public sealed class FiddleLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
-        protected override void LoadModules() {
-            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
-            IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(System.SystemException));
-            
-            
-            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Fiddle", typeof(IronRuby.StandardLibrary.Fiddle.FiddleOps), 0x00000008, LoadFiddle_Instance, LoadFiddle_Class, LoadFiddle_Constants, IronRuby.Builtins.RubyModule.EmptyArray);
-            IronRuby.Builtins.RubyClass def3 = DefineClass("Fiddle::Closure", typeof(IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure), 0x00000008, classRef0, LoadFiddle__Closure_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure.Create)
-            );
-            IronRuby.Builtins.RubyClass def5 = DefineClass("Fiddle::Error", typeof(IronRuby.StandardLibrary.Fiddle.FiddleOps.FiddleError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(FiddleLibraryInitializer.ExceptionFactory__Fiddle__Error));
-            IronRuby.Builtins.RubyClass def6 = DefineClass("Fiddle::Function", typeof(IronRuby.StandardLibrary.Fiddle.FiddleOps.Function), 0x00000008, classRef0, LoadFiddle__Function_Instance, null, LoadFiddle__Function_Constants, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Builtins.RubyClass, System.Object, System.Object, System.Object, System.Object, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Function>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Function.Create)
-            );
-            IronRuby.Builtins.RubyClass def7 = DefineClass("Fiddle::Handle", typeof(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle), 0x00000008, classRef0, LoadFiddle__Handle_Instance, LoadFiddle__Handle_Class, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.Create)
-            );
-            IronRuby.Builtins.RubyClass def8 = DefineClass("Fiddle::Pointer", typeof(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer), 0x00000008, classRef0, LoadFiddle__Pointer_Instance, LoadFiddle__Pointer_Class, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-                new Func<IronRuby.Builtins.RubyClass, System.Object, System.Int32, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Create)
-            );
-            IronRuby.Builtins.RubyClass def2 = DefineClass("Fiddle::ClearedReferenceError", typeof(IronRuby.StandardLibrary.Fiddle.FiddleOps.ClearedReferenceError), 0x00000008, def5, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(FiddleLibraryInitializer.ExceptionFactory__Fiddle__ClearedReferenceError));
-            IronRuby.Builtins.RubyClass def4 = DefineClass("Fiddle::DLError", typeof(IronRuby.StandardLibrary.Fiddle.FiddleOps.DLError), 0x00000008, def5, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
-            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(FiddleLibraryInitializer.ExceptionFactory__Fiddle__DLError));
-            SetConstant(def1, "Closure", def3);
-            SetConstant(def1, "Error", def5);
-            SetConstant(def1, "Function", def6);
-            SetConstant(def1, "Handle", def7);
-            SetConstant(def1, "Pointer", def8);
-            SetConstant(def1, "ClearedReferenceError", def2);
-            SetConstant(def1, "DLError", def4);
-        }
-        
-        private static void LoadFiddle_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
-            SetConstant(module, "ALIGN_BOOL", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_BOOL);
-            SetConstant(module, "ALIGN_CHAR", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_CHAR);
-            SetConstant(module, "ALIGN_DOUBLE", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_DOUBLE);
-            SetConstant(module, "ALIGN_FLOAT", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_FLOAT);
-            SetConstant(module, "ALIGN_INT", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_INT);
-            SetConstant(module, "ALIGN_INT16_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_INT16_T);
-            SetConstant(module, "ALIGN_INT32_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_INT32_T);
-            SetConstant(module, "ALIGN_INT64_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_INT64_T);
-            SetConstant(module, "ALIGN_INT8_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_INT8_T);
-            SetConstant(module, "ALIGN_INTPTR_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_INTPTR_T);
-            SetConstant(module, "ALIGN_LONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_LONG);
-            SetConstant(module, "ALIGN_LONG_LONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_LONG_LONG);
-            SetConstant(module, "ALIGN_PTRDIFF_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_PTRDIFF_T);
-            SetConstant(module, "ALIGN_SHORT", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_SHORT);
-            SetConstant(module, "ALIGN_SIZE_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_SIZE_T);
-            SetConstant(module, "ALIGN_SSIZE_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_SSIZE_T);
-            SetConstant(module, "ALIGN_UINTPTR_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_UINTPTR_T);
-            SetConstant(module, "ALIGN_VOIDP", IronRuby.StandardLibrary.Fiddle.FiddleOps.ALIGN_VOIDP);
-            SetConstant(module, "Qfalse", IronRuby.StandardLibrary.Fiddle.FiddleOps.Qfalse);
-            SetConstant(module, "Qnil", IronRuby.StandardLibrary.Fiddle.FiddleOps.Qnil);
-            SetConstant(module, "Qtrue", IronRuby.StandardLibrary.Fiddle.FiddleOps.Qtrue);
-            SetConstant(module, "Qundef", IronRuby.StandardLibrary.Fiddle.FiddleOps.Qundef);
-            SetConstant(module, "RTLD_GLOBAL", IronRuby.StandardLibrary.Fiddle.FiddleOps.RTLD_GLOBAL);
-            SetConstant(module, "RTLD_LAZY", IronRuby.StandardLibrary.Fiddle.FiddleOps.RTLD_LAZY);
-            SetConstant(module, "RTLD_NOW", IronRuby.StandardLibrary.Fiddle.FiddleOps.RTLD_NOW);
-            SetConstant(module, "RUBY_FREE", IronRuby.StandardLibrary.Fiddle.FiddleOps.RUBY_FREE);
-            SetConstant(module, "SIZEOF_BOOL", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_BOOL);
-            SetConstant(module, "SIZEOF_CHAR", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_CHAR);
-            SetConstant(module, "SIZEOF_CONST_STRING", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_CONST_STRING);
-            SetConstant(module, "SIZEOF_DOUBLE", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_DOUBLE);
-            SetConstant(module, "SIZEOF_FLOAT", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_FLOAT);
-            SetConstant(module, "SIZEOF_INT", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_INT);
-            SetConstant(module, "SIZEOF_INT16_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_INT16_T);
-            SetConstant(module, "SIZEOF_INT32_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_INT32_T);
-            SetConstant(module, "SIZEOF_INT64_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_INT64_T);
-            SetConstant(module, "SIZEOF_INT8_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_INT8_T);
-            SetConstant(module, "SIZEOF_INTPTR_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_INTPTR_T);
-            SetConstant(module, "SIZEOF_LONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_LONG);
-            SetConstant(module, "SIZEOF_LONG_LONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_LONG_LONG);
-            SetConstant(module, "SIZEOF_PTRDIFF_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_PTRDIFF_T);
-            SetConstant(module, "SIZEOF_SHORT", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_SHORT);
-            SetConstant(module, "SIZEOF_SIZE_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_SIZE_T);
-            SetConstant(module, "SIZEOF_SSIZE_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_SSIZE_T);
-            SetConstant(module, "SIZEOF_UCHAR", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_UCHAR);
-            SetConstant(module, "SIZEOF_UINT", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_UINT);
-            SetConstant(module, "SIZEOF_UINT16_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_UINT16_T);
-            SetConstant(module, "SIZEOF_UINT32_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_UINT32_T);
-            SetConstant(module, "SIZEOF_UINT64_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_UINT64_T);
-            SetConstant(module, "SIZEOF_UINT8_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_UINT8_T);
-            SetConstant(module, "SIZEOF_UINTPTR_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_UINTPTR_T);
-            SetConstant(module, "SIZEOF_ULONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_ULONG);
-            SetConstant(module, "SIZEOF_ULONG_LONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_ULONG_LONG);
-            SetConstant(module, "SIZEOF_USHORT", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_USHORT);
-            SetConstant(module, "SIZEOF_VOIDP", IronRuby.StandardLibrary.Fiddle.FiddleOps.SIZEOF_VOIDP);
-            SetConstant(module, "TYPE_BOOL", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_BOOL);
-            SetConstant(module, "TYPE_CHAR", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_CHAR);
-            SetConstant(module, "TYPE_CONST_STRING", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_CONST_STRING);
-            SetConstant(module, "TYPE_DOUBLE", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_DOUBLE);
-            SetConstant(module, "TYPE_FLOAT", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_FLOAT);
-            SetConstant(module, "TYPE_INT", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_INT);
-            SetConstant(module, "TYPE_INT16_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_INT16_T);
-            SetConstant(module, "TYPE_INT32_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_INT32_T);
-            SetConstant(module, "TYPE_INT64_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_INT64_T);
-            SetConstant(module, "TYPE_INT8_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_INT8_T);
-            SetConstant(module, "TYPE_INTPTR_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_INTPTR_T);
-            SetConstant(module, "TYPE_LONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_LONG);
-            SetConstant(module, "TYPE_LONG_LONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_LONG_LONG);
-            SetConstant(module, "TYPE_PTRDIFF_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_PTRDIFF_T);
-            SetConstant(module, "TYPE_SHORT", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_SHORT);
-            SetConstant(module, "TYPE_SIZE_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_SIZE_T);
-            SetConstant(module, "TYPE_SSIZE_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_SSIZE_T);
-            SetConstant(module, "TYPE_UCHAR", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_UCHAR);
-            SetConstant(module, "TYPE_UINT", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_UINT);
-            SetConstant(module, "TYPE_UINT16_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_UINT16_T);
-            SetConstant(module, "TYPE_UINT32_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_UINT32_T);
-            SetConstant(module, "TYPE_UINT64_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_UINT64_T);
-            SetConstant(module, "TYPE_UINT8_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_UINT8_T);
-            SetConstant(module, "TYPE_UINTPTR_T", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_UINTPTR_T);
-            SetConstant(module, "TYPE_ULONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_ULONG);
-            SetConstant(module, "TYPE_ULONG_LONG", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_ULONG_LONG);
-            SetConstant(module, "TYPE_USHORT", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_USHORT);
-            SetConstant(module, "TYPE_VARIADIC", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_VARIADIC);
-            SetConstant(module, "TYPE_VOID", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_VOID);
-            SetConstant(module, "TYPE_VOIDP", IronRuby.StandardLibrary.Fiddle.FiddleOps.TYPE_VOIDP);
-            SetConstant(module, "WINDOWS", IronRuby.StandardLibrary.Fiddle.FiddleOps.WINDOWS);
-            
-        }
-        
-        private static void LoadFiddle_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "dlopen", 0x12, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle>(IronRuby.StandardLibrary.Fiddle.FiddleOps.DlOpen)
-            );
-            
-            DefineLibraryMethod(module, "free", 0x12, 
-                0x00000000U, 
-                new Func<System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Free)
-            );
-            
-            DefineLibraryMethod(module, "malloc", 0x12, 
-                0x00010000U, 
-                new Func<System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Malloc)
-            );
-            
-            DefineLibraryMethod(module, "realloc", 0x12, 
-                0x00020000U, 
-                new Func<System.Object, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Realloc)
-            );
-            
-        }
-        
-        private static void LoadFiddle_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "dlopen", 0x21, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle>(IronRuby.StandardLibrary.Fiddle.FiddleOps.DlOpen)
-            );
-            
-            DefineLibraryMethod(module, "free", 0x21, 
-                0x00000000U, 
-                new Func<System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Free)
-            );
-            
-            DefineLibraryMethod(module, "last_error", 0x21, 
-                0x00000000U, 
-                new Func<System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.GetLastError)
-            );
-            
-            DefineLibraryMethod(module, "last_error=", 0x21, 
-                0x00000000U, 
-                new Func<System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.SetLastError)
-            );
-            
-            DefineLibraryMethod(module, "malloc", 0x21, 
-                0x00010000U, 
-                new Func<System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Malloc)
-            );
-            
-            DefineLibraryMethod(module, "realloc", 0x21, 
-                0x00020000U, 
-                new Func<System.Object, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Realloc)
-            );
-            
-            DefineLibraryMethod(module, "win32_last_error", 0x21, 
-                0x00000000U, 
-                new Func<System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.GetWin32LastError)
-            );
-            
-            DefineLibraryMethod(module, "win32_last_error=", 0x21, 
-                0x00000000U, 
-                new Func<System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.SetWin32LastError)
-            );
-            
-            DefineLibraryMethod(module, "win32_last_socket_error", 0x21, 
-                0x00000000U, 
-                new Func<System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.GetWin32LastSocketError)
-            );
-            
-            DefineLibraryMethod(module, "win32_last_socket_error=", 0x21, 
-                0x00000000U, 
-                new Func<System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.SetWin32LastSocketError)
-            );
-            
-        }
-        
-        private static void LoadFiddle__Closure_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "free", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure.FreeClosure)
-            );
-            
-            DefineLibraryMethod(module, "freed?", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure, System.Boolean>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure.IsFreed)
-            );
-            
-            DefineLibraryMethod(module, "initialize", 0x12, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure, System.Object, System.Object, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure.Reinitialize)
-            );
-            
-            DefineLibraryMethod(module, "to_i", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure.ToInteger)
-            );
-            
-            DefineLibraryMethod(module, "to_int", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Closure.ToInteger)
-            );
-            
-        }
-        
-        private static void LoadFiddle__Function_Constants(IronRuby.Builtins.RubyModule/*!*/ module) {
-            SetConstant(module, "DEFAULT", IronRuby.StandardLibrary.Fiddle.FiddleOps.Function.DEFAULT);
-            SetConstant(module, "STDCALL", IronRuby.StandardLibrary.Fiddle.FiddleOps.Function.STDCALL);
-            
-        }
-        
-        private static void LoadFiddle__Function_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "call", 0x11, 
-                0x80000000U, 
-                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Fiddle.FiddleOps.Function, System.Object[], System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Function.Call)
-            );
-            
-            DefineLibraryMethod(module, "initialize", 0x12, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Fiddle.FiddleOps.Function, System.Object, System.Object, System.Object, System.Object, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Function>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Function.Reinitialize)
-            );
-            
-        }
-        
-        private static void LoadFiddle__Handle_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "[]", 0x11, 
-                0x00010002U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.Symbol)
-            );
-            
-            DefineLibraryMethod(module, "close", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.Close)
-            );
-            
-            DefineLibraryMethod(module, "close_enabled?", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, System.Boolean>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.IsCloseEnabled)
-            );
-            
-            DefineLibraryMethod(module, "disable_close", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.DisableClose)
-            );
-            
-            DefineLibraryMethod(module, "disable_closed_handle_check", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.DisableClosedHandleCheck)
-            );
-            
-            DefineLibraryMethod(module, "enable_close", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.EnableClose)
-            );
-            
-            DefineLibraryMethod(module, "file_name", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.FileName)
-            );
-            
-            DefineLibraryMethod(module, "initialize", 0x12, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, System.Object, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.Initialize)
-            );
-            
-            DefineLibraryMethod(module, "sym", 0x11, 
-                0x00010002U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.Symbol)
-            );
-            
-            DefineLibraryMethod(module, "sym_defined?", 0x11, 
-                0x00010002U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.IsSymbolDefined)
-            );
-            
-            DefineLibraryMethod(module, "to_i", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.ToInteger)
-            );
-            
-            DefineLibraryMethod(module, "to_int", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.ToInteger)
-            );
-            
-            DefineLibraryMethod(module, "to_ptr", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.ToPointer)
-            );
-            
-        }
-        
-        private static void LoadFiddle__Handle_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "__make_next__", 0x21, 
-                0x00000000U, 
-                new Func<IronRuby.Builtins.RubyClass, IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Handle.MakeNext)
-            );
-            
-        }
-        
-        private static void LoadFiddle__Pointer_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "-", 0x11, 
-                0x00020000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Subtract)
-            );
-            
-            DefineLibraryMethod(module, "-@", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Reference)
-            );
-            
-            DefineLibraryMethod(module, "[]", 0x11, 
-                0x00010000U, 0x00030000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.GetByte), 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.GetBytes)
-            );
-            
-            DefineLibraryMethod(module, "[]=", 0x11, 
-                0x00030000U, 0x00030000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.SetByte), 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32, System.Int32, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.SetBytes)
-            );
-            
-            DefineLibraryMethod(module, "+", 0x11, 
-                0x00020000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Add)
-            );
-            
-            DefineLibraryMethod(module, "+@", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Dereference)
-            );
-            
-            DefineLibraryMethod(module, "<=>", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Compare)
-            );
-            
-            DefineLibraryMethod(module, "==", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object, System.Boolean>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Equal)
-            );
-            
-            DefineLibraryMethod(module, "call_free", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.CallFree)
-            );
-            
-            DefineLibraryMethod(module, "eql?", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object, System.Boolean>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Equal)
-            );
-            
-            DefineLibraryMethod(module, "free", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.GetFree)
-            );
-            
-            DefineLibraryMethod(module, "free=", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.SetFree)
-            );
-            
-            DefineLibraryMethod(module, "freed?", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Boolean>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.IsFreed)
-            );
-            
-            DefineLibraryMethod(module, "hash", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.GetHash)
-            );
-            
-            DefineLibraryMethod(module, "initialize", 0x12, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object, System.Int32, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Reinitialize)
-            );
-            
-            DefineLibraryMethod(module, "inspect", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Inspect)
-            );
-            
-            DefineLibraryMethod(module, "null?", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Boolean>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.IsNull)
-            );
-            
-            DefineLibraryMethod(module, "ptr", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Dereference)
-            );
-            
-            DefineLibraryMethod(module, "ref", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Reference)
-            );
-            
-            DefineLibraryMethod(module, "size", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.GetSize)
-            );
-            
-            DefineLibraryMethod(module, "size=", 0x11, 
-                0x00010000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.SetSize)
-            );
-            
-            DefineLibraryMethod(module, "to_i", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToInteger)
-            );
-            
-            DefineLibraryMethod(module, "to_int", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToInteger)
-            );
-            
-            DefineLibraryMethod(module, "to_s", 0x11, 
-                0x00000000U, 0x00010000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToS), 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToS)
-            );
-            
-            DefineLibraryMethod(module, "to_str", 0x11, 
-                0x00000000U, 0x00010000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToStr), 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToStr)
-            );
-            
-            DefineLibraryMethod(module, "to_value", 0x11, 
-                0x00000000U, 
-                new Func<IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToValue)
-            );
-            
-        }
-        
-        private static void LoadFiddle__Pointer_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
-            DefineLibraryMethod(module, "[]", 0x21, 
-                0x00000004U, 0x00000004U, 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToPtr), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToPtr), 
-                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToPtr)
-            );
-            
-            DefineLibraryMethod(module, "malloc", 0x21, 
-                0x00020000U, 
-                new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyClass, System.Int32, System.Object, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.Malloc)
-            );
-            
-            DefineLibraryMethod(module, "read", 0x21, 
-                0x00020000U, 
-                new Func<IronRuby.Builtins.RubyClass, System.Object, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ReadMemory)
-            );
-            
-            DefineLibraryMethod(module, "to_ptr", 0x21, 
-                0x00000004U, 0x00000004U, 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToPtr), 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyClass, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToPtr), 
-                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.UnaryOpStorage, IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.ToPtr)
-            );
-            
-            DefineLibraryMethod(module, "write", 0x21, 
-                0x00000004U, 
-                new Func<IronRuby.Builtins.RubyClass, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Fiddle.FiddleOps.Pointer.WriteMemory)
-            );
-            
-        }
-        
-        public static System.Exception/*!*/ ExceptionFactory__Fiddle__ClearedReferenceError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
-            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Fiddle.FiddleOps.ClearedReferenceError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
-        }
-        
-        public static System.Exception/*!*/ ExceptionFactory__Fiddle__DLError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
-            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Fiddle.FiddleOps.DLError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
-        }
-        
-        public static System.Exception/*!*/ ExceptionFactory__Fiddle__Error(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
-            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Fiddle.FiddleOps.FiddleError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
     }

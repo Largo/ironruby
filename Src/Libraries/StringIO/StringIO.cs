@@ -622,6 +622,12 @@ namespace IronRuby.StandardLibrary.StringIO {
             return Read(self, buffer, false);
         }
 
+        // read(nil, nil): an explicit nil buffer is the same as none (see read(n, nil) below).
+        [RubyMethod("read")]
+        public static MutableString/*!*/ Read(StringIO/*!*/ self, DynamicNull bytes, DynamicNull buffer) {
+            return Read(self, null, false);
+        }
+
         public static MutableString/*!*/ Read(StringIO/*!*/ self, MutableString buffer, bool eofError) {
             var content = self.GetReadableContent();
             int start = self._position;
@@ -641,6 +647,17 @@ namespace IronRuby.StandardLibrary.StringIO {
             }
 
             return buffer;
+        }
+
+        /// <summary>
+        /// read(n, nil). An explicit nil buffer is the same as none - MRI only refuses a buffer
+        /// that is neither. Libraries pass one through from their own optional argument without
+        /// looking: aws-sdk-core's Query::ParamList::IoWrapper#read is `@io.read(bytes, buffer)`,
+        /// which is how every signed AWS request with a body reaches this.
+        /// </summary>
+        [RubyMethod("read")]
+        public static MutableString Read(StringIO/*!*/ self, [DefaultProtocol]int count, DynamicNull buffer) {
+            return Read(self, count, (MutableString)null);
         }
 
         [RubyMethod("read")]

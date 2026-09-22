@@ -2,8 +2,22 @@
 # Requires each of CRuby's default and bundled gems under IronRuby and runs a
 # test suite for it, one process per gem, then prints a table.
 #
-#   Util/gems/run.sh                # every gem in the catalog
+#   Util/gems/run.sh                # the stdlib tier: default and bundled gems
 #   Util/gems/run.sh uri json       # just these
+#   Util/gems/run.sh popular        # the popular tier: rubygems.org's top list
+#   Util/gems/run.sh all            # both tiers
+#
+# The popular tier is not on disk. Install it first, into a GEM_HOME of your
+# own (the user gem dir is shared, and concurrent agents corrupt each other's):
+#
+#   export GEM_HOME="$PWD/.gems"
+#   Util/gems/install-popular.sh
+#   Util/gems/run.sh popular
+#
+# A popular gem that ships no test/ is measured by Util/gems/exercises/<gem>.rb,
+# a small but real use of the gem, run under IronRuby and under CRuby 4.0.6 and
+# diffed - CRuby is the oracle and byte-identical stdout is the pass. The FROM
+# column says which it was: unit, spec or exer.
 #
 # Where the suite comes from, in order: the gem's own test/ if it ships one, the
 # matching directory in an unpacked CRuby source tree, or ruby/spec's
@@ -35,10 +49,17 @@ RUNNER="$IR_ROOT/Util/gems/runner.rb"
 export RUBY="$IR"
 export RUBY_EXE="$IR"
 
+CRUBY="${CRUBY:-ruby}"
+
+case "${1:-}" in
+  popular|stdlib|all) TIER="$1"; shift ;;
+  *)                  TIER=stdlib ;;
+esac
+
 if [ $# -gt 0 ]; then
   GEMS="$*"
 else
-  GEMS=$("$IR" -e 'require_relative "Util/gems/catalog"; puts GemCatalog::ENTRIES.keys.join(" ")' 2>/dev/null)
+  GEMS=$("$IR" "$RUNNER" --list "$TIER" 2>/dev/null)
   [ -z "$GEMS" ] && { echo "could not read the catalog - is the build present?" >&2; exit 1; }
 fi
 
@@ -78,6 +99,30 @@ for g in $GEMS; do
       nums=($(echo "$sum" | grep -oE '[0-9]+'))
       t=${nums[1]} a=${nums[2]} f=${nums[3]} e=${nums[4]} s=${nums[5]}
     fi
+  elif [ "$kind" = exercise ]; then
+    # Most popular gems ship no test/ in the .gem. Run the hand-written
+    # exercise under IronRuby and under CRuby 4.0.6 and diff: CRuby is the
+    # oracle, so a byte-identical stdout is the pass.
+    ex="$IR_ROOT/Util/gems/exercises/$specdir.rb"
+    from=exer
+    timeout "$GEM_TIMEOUT" "$IR" "$ex" >"$LOG_DIR/$g.ir" 2>"$LOG_DIR/$g.ir.err"
+    irc=$?
+    # The oracle needs the same gems. If CRuby's own gem home does not have
+    # them, point CRUBY_GEM_HOME at one that does.
+    timeout "$GEM_TIMEOUT" env ${CRUBY_GEM_HOME:+GEM_HOME="$CRUBY_GEM_HOME"} \
+      "$CRUBY" "$ex" >"$LOG_DIR/$g.cruby" 2>/dev/null
+    crc=$?
+    if [ "$crc" != 0 ]; then
+      note="the exercise does not run on CRuby either (exit $crc)${note:+; $note}"
+    elif [ "$irc" != 0 ]; then
+      note="exercise exit $irc: $(grep -a . "$LOG_DIR/$g.ir.err" | tail -1 | cut -c1-90)"
+    elif diff -q "$LOG_DIR/$g.ir" "$LOG_DIR/$g.cruby" >/dev/null; then
+      t=$(wc -l <"$LOG_DIR/$g.ir"); a=$t; f=0; e=0; s=0
+      [ -z "$note" ] && note='matches CRuby 4.0.6'
+    else
+      t=$(wc -l <"$LOG_DIR/$g.cruby"); f=$(diff "$LOG_DIR/$g.ir" "$LOG_DIR/$g.cruby" | grep -ac '^<'); a=$t; e=0; s=0
+      note="differs from CRuby: $(diff "$LOG_DIR/$g.ir" "$LOG_DIR/$g.cruby" | head -4 | tr '\n' ' ' | cut -c1-90)"
+    fi
   elif [ "$kind" = unit ]; then
     from=unit
     # "8 tests, 17 assertions, 0 failures, 0 errors, 0 skips" - test/unit and
@@ -89,7 +134,7 @@ for g in $GEMS; do
     fi
   fi
 
-  if [ "$t" = - ]; then
+  if [ "$t" = - ] && [ "$from" != exer ]; then
     if [ "$kind" = none ] || [ "$from" = - ]; then
       [ -z "$note" ] && note='load only (no suite on disk)'
     elif [ "$loads" = ok ]; then

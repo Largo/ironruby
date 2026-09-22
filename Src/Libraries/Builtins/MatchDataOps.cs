@@ -38,8 +38,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("[]")]
         public static MutableString GetGroup(MatchData/*!*/ self, [DefaultProtocol]int index) {
-            index = IListOps.NormalizeIndex(self.GroupCount, index);
-            return self.GetGroupValue(index);
+            return self.GetNthGroupValue(index);
         }
 
         [RubyMethod("[]")]

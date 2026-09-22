@@ -11,8 +11,46 @@ module Nokogiri
   # the contents of <style> and <script> are CDATA sections the way libxml2
   # reports them.  Markup on which the two parsers genuinely disagree - unclosed
   # tables, misnested formatting elements - is parsed the HTML5 way.
+  # What an HTML document has on top of an XML one. Small, but #title is reached for
+  # constantly - it is the first thing anything scraping a page asks for.
+  module HtmlDocument
+    # The text of <title>, or nil when the document has none.
+    def title
+      node = at_xpath('//title') || at_css('title')
+      node && node.text
+    end
+
+    # Replaces the text of <title>, creating <head><title> when there is none.
+    def title=(text)
+      node = at_xpath('//title') || at_css('title')
+      if node
+        node.content = text
+        return text
+      end
+
+      head = at_xpath('//head') || at_css('head')
+      unless head
+        html = at_xpath('//html') || at_css('html') || root or return text
+        head = Nokogiri::XML::Node.new('head', self)
+        html.children.first ? html.children.first.add_previous_sibling(head) : html.add_child(head)
+      end
+      title = Nokogiri::XML::Node.new('title', self)
+      title.content = text
+      head.add_child(title)
+      text
+    end
+
+    # The <meta> element that declares the encoding, or nil.
+    def meta_encoding
+      node = at_xpath('//meta[@charset]') || at_css('meta[charset]')
+      node && node['charset']
+    end
+  end
+
   module HTML4
     class Document < Nokogiri::XML::Document
+      include HtmlDocument
+
       def self.document_kind
         :html4
       end
@@ -44,6 +82,8 @@ module Nokogiri
   # nokogiri.
   module HTML5
     class Document < Nokogiri::XML::Document
+      include HtmlDocument
+
       def self.document_kind
         :html5
       end

@@ -29,7 +29,11 @@ using IronRuby.Runtime.Conversions;
 using System.Collections.Generic;
 
 namespace IronRuby.Builtins {
-    [RubyClass("Regexp", Extends = typeof(RubyRegex), Inherits = typeof(Object)), Includes(typeof(Enumerable))]
+    // Not Includes(typeof(Enumerable)): MRI's Regexp is not enumerable, and pretending it is
+    // gives it #to_a, which is what a splat looks for. `Regexp.union(*re)` - mustermann's
+    // escape helper, so every Sinatra route - then called Enumerable#to_a on the Regexp and
+    // died in #each instead of splatting to a one-element array.
+    [RubyClass("Regexp", Extends = typeof(RubyRegex), Inherits = typeof(Object))]
     public static class RegexpOps {
         /// <summary>
         /// Raised when a match runs longer than `Regexp.timeout' or the pattern's own `timeout:'
@@ -634,7 +638,7 @@ namespace IronRuby.Builtins {
                 return match.GetNamedGroupValue(name);
             }
 
-            return match.GetGroupValue(Protocols.CastToFixnum(fixnumCast, groupIndex));
+            return match.GetNthGroupValue(Protocols.CastToFixnum(fixnumCast, groupIndex));
         }
 
         private static string GroupName(object groupIndex) {

@@ -4534,25 +4534,21 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ LeftJustify(MutableString/*!*/ self, 
             [DefaultProtocol]int width, [DefaultProtocol, NotNull]MutableString/*!*/ padding) {
 
-            if (padding.Length == 0) {
+            if (padding.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("zero width padding");
             }
 
-            int count = width - self.Length;
+            // Characters, not bytes: MutableString.Length is the content's own count, which for a
+            // string held as bytes is its bytesize. "  ü-umlaut  ".ljust(13) is 13 bytes but 12
+            // characters, so measuring in bytes left it unpadded - the width of every non-ASCII
+            // cell terminal-table draws came out one short.
+            int count = width - self.GetCharCount();
             if (count <= 0) {
                 return self;
             }
 
-            int iterations = count / padding.Length;
-            int remainder = count % padding.Length;
             MutableString result = self.CloneDerived().TaintBy(padding);
-
-            for (int i = 0; i < iterations; i++) {
-                result.Append(padding);
-            }
-
-            result.Append(padding, 0, remainder);
-
+            AppendPadding(result, padding, count);
             return result;
         }
 
@@ -4570,26 +4566,19 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ RightJustify(MutableString/*!*/ self, 
             [DefaultProtocol]int width, [DefaultProtocol, NotNull]MutableString/*!*/ padding) {
 
-            if (padding.Length == 0) {
+            if (padding.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("zero width padding");
             }
 
-            int count = width - self.Length;
+            // Characters, not bytes - see #ljust.
+            int count = width - self.GetCharCount();
             if (count <= 0) {
                 return self;
             }
 
-            int iterations = count / padding.Length;
-            int remainder = count % padding.Length;
             MutableString result = self.CreateDerived().TaintBy(self).TaintBy(padding);
-
-            for (int i = 0; i < iterations; i++) {
-                result.Append(padding);
-            }
-
-            result.Append(padding.GetSlice(0, remainder));
+            AppendPadding(result, padding, count);
             result.Append(self);
-
             return result;
         }
 
