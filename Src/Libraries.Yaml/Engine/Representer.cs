@@ -132,7 +132,9 @@ namespace IronRuby.StandardLibrary.Yaml {
 
             IDictionary map = data as IDictionary;
             if (map != null) {
-                string taguri = map is Dictionary<object, object> ? Tags.Map : Tags.Map + ":" + map.GetType().Name;
+                // A Ruby Hash used to be a Dictionary<object, object>; it now has its own
+                // insertion-ordered store, so test the interface the plain-map tag really means.
+                string taguri = map is IDictionary<object, object> ? Tags.Map : Tags.Map + ":" + map.GetType().Name;
                 return Map(taguri, map, FlowStyle.Block);
             }
 
