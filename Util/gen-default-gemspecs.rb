@@ -119,6 +119,17 @@ GEMS = {
   # API level implemented, not a nokogiri release.
   "nokogiri" => ["1.18.0", "HTML5, HTML4 and XML parsing, on AngleSharp",
                  ["nokogiri", "nokogiri/"], check: "Nokogiri::VERSION", pinned: true],
+  # nio4r and puma: both C extensions (over libev, and a Ragel HTTP parser plus OpenSSL
+  # glue), so neither installs here.  nio4r's Ruby half is vendored with its native half
+  # in Src/Libraries/Nio4r; puma's Ruby half is vendored unchanged and its HTTP parser is
+  # Src/Libraries/Puma.  puma's MiniSSL (TLS) is not implemented: Puma.ssl? is false, as it
+  # is for a puma built without OpenSSL.  puma depends on nio4r, and says so here too.
+  "nio4r" => ["2.7.5", "NIO::Selector, Monitor and ByteBuffer, on epoll, poll(2) or Socket.Select",
+              ["nio", "nio/", "nio4r", "nio4r_ext"], require: "nio", check: "NIO::VERSION", pinned: true],
+  "puma" => ["8.0.2", "Puma, with its HTTP parser in C#; single mode only, no TLS",
+             ["puma", "puma/", "rack/handler/puma"], require: "puma/const",
+             check: "Puma::Const::PUMA_VERSION", pinned: true, bin: ["puma", "pumactl"],
+             deps: { "nio4r" => "~> 2.0" }],
   # Ruby 4.0 removed the CGI class from the standard library and kept only the
   # escaping half, cgi/escape - which is a C extension there and is vendored in
   # Ruby here.  The `cgi` gem that brings the class back is that same C
@@ -256,7 +267,7 @@ def write_executables(name, version, executables)
   end
 end
 
-def gemspec_source(name, version, summary, files, executables, pinned)
+def gemspec_source(name, version, summary, files, executables, pinned, deps = nil)
   lines = []
   lines << "# -*- encoding: utf-8 -*-"
   lines << "# stub: #{name} #{version} ruby lib"
@@ -284,6 +295,9 @@ def gemspec_source(name, version, summary, files, executables, pinned)
   lines << "  s.files = ["
   files.each {|f| lines << "    #{f.dump}.freeze," }
   lines << "  ]"
+  (deps || {}).each do |dep, requirement|
+    lines << "  s.add_runtime_dependency #{dep.dump}.freeze, [#{requirement.dump}.freeze]"
+  end
   lines << "end"
   lines.join("\n") + "\n"
 end
@@ -327,6 +341,6 @@ GEMS.each do |name, (version, summary, entries, opts)|
   write_executables(name, version, executables) unless executables.empty?
 
   path = File.join(OUT_DIR, "#{name}-#{version}.gemspec")
-  File.write(path, gemspec_source(name, version, summary, files, executables, opts[:pinned]))
+  File.write(path, gemspec_source(name, version, summary, files, executables, opts[:pinned], opts[:deps]))
   puts "#{name}-#{version} (#{files.length} files)"
 end

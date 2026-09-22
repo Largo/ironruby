@@ -829,8 +829,11 @@ module OpenSSL
         @version = @clr.Version - 1
         @subject = Name.parse_openssl(@clr.Subject.to_s)
         @issuer = Name.parse_openssl(@clr.Issuer.to_s)
-        @not_before = ::Time.parse(@clr.NotBefore.ToString("o").to_s) rescue nil
-        @not_after = ::Time.parse(@clr.NotAfter.ToString("o").to_s) rescue nil
+        # UTC, as MRI answers.  This used Time.parse, which only exists once "time" is
+        # required - and the `rescue nil` after it turned that NoMethodError into a
+        # certificate with no validity period at all.
+        @not_before = ::Time.at(::System::DateTimeOffset.new(@clr.NotBefore.ToUniversalTime).ToUnixTimeSeconds).utc
+        @not_after = ::Time.at(::System::DateTimeOffset.new(@clr.NotAfter.ToUniversalTime).ToUnixTimeSeconds).utc
         self
       rescue ::System::Security::Cryptography::CryptographicException => error
         raise CertificateError, error.message

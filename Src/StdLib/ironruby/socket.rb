@@ -1622,11 +1622,16 @@ class Socket
   alias_method :__ir_raw_accept_nonblock, :accept_nonblock
 
   def accept_nonblock(exception: true)
+    # Nothing waiting is the common answer: give it without raising (and rescuing) twice.
+    unless __ir_readable_now?
+      raise IO::EAGAINWaitReadable, "accept(2) would block" if exception
+      return :wait_readable
+    end
     __ir_raw_accept_nonblock
   rescue SocketError => e
     case Socket.__ir_socket_error_code(e)
     when "WouldBlock"
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "accept(2) would block" if exception
       :wait_readable
     else
       raise
@@ -1639,11 +1644,16 @@ class TCPServer
   alias_method :__ir_raw_accept_nonblock, :accept_nonblock
 
   def accept_nonblock(exception: true)
+    # Nothing waiting is the common answer: give it without raising (and rescuing) twice.
+    unless __ir_readable_now?
+      raise IO::EAGAINWaitReadable, "accept(2) would block" if exception
+      return :wait_readable
+    end
     __ir_raw_accept_nonblock
   rescue SocketError => e
     case Socket.__ir_socket_error_code(e)
     when "WouldBlock"
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "accept(2) would block" if exception
       :wait_readable
     else
       raise
@@ -2358,11 +2368,15 @@ class Socket
   end
 
   def accept_nonblock(exception: true)
+    unless __ir_readable_now?
+      raise IO::EAGAINWaitReadable, "accept(2) would block" if exception
+      return :wait_readable
+    end
     __ir_accepted(__ir_raw_accept_nonblock)
   rescue SocketError => e
     case Socket.__ir_socket_error_code(e)
     when "WouldBlock"
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "accept(2) would block" if exception
       :wait_readable
     else
       raise
@@ -2384,6 +2398,11 @@ module IronRubySocketErrors__ # :nodoc: all
 end
 
 IronRubySocketErrors__.wrap(Socket, :accept, :sysaccept)
+
+# IO#read_nonblock and #write_nonblock on a socket: a peer that reset the connection surfaced
+# as a bare SocketError, where every blocking read already raised Errno::ECONNRESET - and a
+# `rescue Errno::ECONNRESET` (puma's test client has one) does not catch a SocketError.
+IronRubySocketErrors__.wrap(BasicSocket, :read_nonblock, :write_nonblock)
 
 # ---------------------------------------------------------------------------
 # The remaining shapes: half-closed sockets, Addrinfo destinations, the IPv6
@@ -2838,11 +2857,16 @@ class UNIXServer
   alias_method :__ir_raw_accept_nonblock, :accept_nonblock
 
   def accept_nonblock(exception: true)
+    # Nothing waiting is the common answer: give it without raising (and rescuing) twice.
+    unless __ir_readable_now?
+      raise IO::EAGAINWaitReadable, "accept(2) would block" if exception
+      return :wait_readable
+    end
     __ir_raw_accept_nonblock
   rescue SocketError => e
     case Socket.__ir_socket_error_code(e)
     when "WouldBlock"
-      raise IO::EAGAINWaitReadable, "Resource temporarily unavailable" if exception
+      raise IO::EAGAINWaitReadable, "accept(2) would block" if exception
       :wait_readable
     else
       raise

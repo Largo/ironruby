@@ -3971,21 +3971,48 @@ namespace IronRuby.Runtime {
             return sb.ToString();
         }
 
+        private CallSite<Func<CallSite, object, object>> _messageSite;
+
+        /// <summary>
+        /// What the report says the exception's message is: its #message, as MRI's error printer
+        /// asks (through #detailed_message). A class that computes its message in #message -
+        /// OptionParser::ParseError does, so puma's "invalid option" error is one - used to be
+        /// reported with the message it was constructed with, which there is its class name.
+        /// </summary>
+        private object GetReportedMessage(Exception/*!*/ exception, RubyExceptionData/*!*/ data) {
+            try {
+                var site = RubyUtils.GetCallSite(ref _messageSite, this, "message", 0);
+                object message = site.Target(site, exception);
+                if (message is MutableString) {
+                    return message;
+                }
+            } catch (Exception) {
+                // a #message that raises: report what the exception was built with
+            }
+            return data.Message;
+        }
+
         private void AppendExceptionReport(StringBuilder/*!*/ sb, Exception/*!*/ exception) {
             var exceptionClass = GetClassOf(exception);
             RubyExceptionData data = RubyExceptionData.GetInstance(exception);
             // The message is written as it is: MRI does not escape control characters or
             // backslashes in it, so a message can color itself with "\e[31m". Only bytes that
             // are not characters are shown escaped.
-            var rawMessage = data.Message as MutableString;
+            object reported = GetReportedMessage(exception, data);
+            var rawMessage = reported as MutableString;
             string message = (rawMessage != null && !rawMessage.IsBinary && !rawMessage.ContainsInvalidCharacters())
                 ? rawMessage.ToString()
-                : RubyExceptionData.GetClrMessage(this, data.Message);
+                : RubyExceptionData.GetClrMessage(this, reported);
 
             RubyArray backtrace = data.Backtrace;
 
+            // A message of several lines gets its "(Class)" after the first one, as MRI prints it.
+            int newline = message.IndexOf('\n');
+            string firstLine = (newline < 0) ? message : message.Substring(0, newline);
+            string restLines = (newline < 0) ? "" : message.Substring(newline);
+
             if (backtrace != null && backtrace.Count > 0) {
-                sb.AppendFormat("{0}: {1} ({2})", Protocols.ToClrStringNoThrow(this, backtrace[0]), message, exceptionClass.Name);
+                sb.AppendFormat("{0}: {1} ({2}){3}", Protocols.ToClrStringNoThrow(this, backtrace[0]), firstLine, exceptionClass.Name, restLines);
                 sb.AppendLine();
 
                 // --backtrace-limit=N keeps N "from" lines and says how many it left out - but only

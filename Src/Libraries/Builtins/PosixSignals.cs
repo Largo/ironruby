@@ -262,6 +262,34 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// What the first #trap of a signal reports as the previous handler. MRI spells "nobody
+        /// ever trapped this" SYSTEM_DEFAULT - except for the signals it installs a handler of its
+        /// own for at boot (HUP, INT, QUIT, ALRM, TERM, USR1, USR2, CHLD), which report DEFAULT,
+        /// and ABRT, SYS and PIPE, which report nil (PIPE is ignored by the interpreter itself, as
+        /// it is by .NET). Code tells the two apart: puma asserts that with PUMA_SKIP_SIGUSR2 set
+        /// it left SIGUSR2 "DEFAULT".
+        /// </summary>
+        private static object InitialCommand(int signal) {
+            switch (signal) {
+                case 1:   // HUP
+                case 2:   // INT
+                case 3:   // QUIT
+                case 10:  // USR1
+                case 12:  // USR2
+                case 14:  // ALRM
+                case 15:  // TERM
+                case 17:  // CHLD
+                    return MutableString.CreateAscii("DEFAULT");
+                case 6:   // ABRT
+                case 13:  // PIPE
+                case 31:  // SYS
+                    return null;
+                default:
+                    return MutableString.CreateAscii("SYSTEM_DEFAULT");
+            }
+        }
+
         internal static object Trap(int signal, object command, Action<int> invoke) {
             return Trap(signal, command, invoke, null);
         }
@@ -278,11 +306,7 @@ namespace IronRuby.Builtins {
 
             lock (_handlers) {
                 Handler handler;
-                // MRI spells "nobody ever trapped this" SYSTEM_DEFAULT; DEFAULT means a handler
-                // was installed and then taken away again. SIGPIPE starts out ignored by the
-                // interpreter itself (as it is by .NET), which trap reports as nil.
-                object previous = (signal == SignalPipe) ? null :
-                    MutableString.CreateAscii(signal == SignalInterrupt ? "DEFAULT" : "SYSTEM_DEFAULT");
+                object previous = InitialCommand(signal);
                 if (_handlers.TryGetValue(signal, out handler)) {
                     previous = handler.Command;
                     if (handler.Registration != null) {

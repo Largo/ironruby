@@ -34,6 +34,11 @@ namespace IronRuby.Builtins {
         private readonly WaitHandle[] _writeEventArray;
         private readonly Queue<byte> _queue;
 
+        // The threads parked in IO.select (or IO#wait, or NIO::Selector#select) on this pipe.
+        // There is no descriptor for the kernel to watch, so the pipe tells them itself when a
+        // write, a read or a close may have changed what they are waiting for.
+        private readonly List<ReadinessWaiter> _waiters;
+
         private const int WriterClosedEventIndex = 1;
         private const int ReaderClosedEventIndex = 2;
 
@@ -52,6 +57,7 @@ namespace IronRuby.Builtins {
             _readerClosedEvent = new ManualResetEvent(false);
             _eventArray = new WaitHandle[3];
             _queue = new Queue<byte>();
+            _waiters = new List<ReadinessWaiter>();
 
             _eventArray[0] = _dataAvailableEvent;
             _eventArray[1] = _writerClosedEvent;
@@ -72,10 +78,32 @@ namespace IronRuby.Builtins {
             _eventArray = pipe._eventArray;
             _writeEventArray = pipe._writeEventArray;
             _queue = pipe._queue;
+            _waiters = pipe._waiters;
         }
 
         internal void CloseWriter() {
             _writerClosedEvent.Set();
+            NotifyWaiters();
+        }
+
+        internal void AddWaiter(ReadinessWaiter/*!*/ waiter) {
+            lock (_waiters) {
+                _waiters.Add(waiter);
+            }
+        }
+
+        internal void RemoveWaiter(ReadinessWaiter/*!*/ waiter) {
+            lock (_waiters) {
+                _waiters.Remove(waiter);
+            }
+        }
+
+        private void NotifyWaiters() {
+            lock (_waiters) {
+                for (int i = 0; i < _waiters.Count; i++) {
+                    _waiters[i].Signal();
+                }
+            }
         }
 
         /// <summary>
@@ -114,22 +142,27 @@ namespace IronRuby.Builtins {
                 throw new Errno.PipeError();
             }
 
+            int written;
             lock (((ICollection)_queue).SyncRoot) {
-                int written = Math.Min(count, Capacity - _queue.Count);
+                written = Math.Min(count, Capacity - _queue.Count);
                 for (int i = 0; i < written; i++) {
                     _queue.Enqueue(buffer[offset + i]);
                 }
                 if (written > 0) {
                     _dataAvailableEvent.Set();
                 }
-                return written;
             }
+            if (written > 0) {
+                NotifyWaiters();
+            }
+            return written;
         }
 
         internal void CloseReader() {
             // Wakes up a thread parked in Read so that closing the read end of a pipe from another
             // thread terminates the blocked read, the way CRuby does.
             _readerClosedEvent.Set();
+            NotifyWaiters();
         }
 
         /// <summary>
@@ -188,9 +221,10 @@ namespace IronRuby.Builtins {
             }
 
             while (true) {
+                int read = 0;
                 lock (((ICollection)_queue).SyncRoot) {
                     if (_queue.Count > 0) {
-                        int read = Math.Min(count, _queue.Count);
+                        read = Math.Min(count, _queue.Count);
                         for (int i = 0; i < read; i++) {
                             buffer[offset + i] = _queue.Dequeue();
                         }
@@ -200,13 +234,16 @@ namespace IronRuby.Builtins {
                         }
                         // Room has just appeared, so a writer parked on a full pipe can carry on.
                         _spaceAvailableEvent.Set();
-                        return read;
-                    }
-
-                    if (_writerClosedEvent.WaitOne(0)) {
+                    } else if (_writerClosedEvent.WaitOne(0)) {
                         // Writer is gone and the queue is drained: end of file.
                         return 0;
                     }
+                }
+
+                if (read > 0) {
+                    // ... and so can a select waiting for the write end to become writable.
+                    NotifyWaiters();
+                    return read;
                 }
 
                 // Wait until data is available, the writer closes the pipe, or this end is closed

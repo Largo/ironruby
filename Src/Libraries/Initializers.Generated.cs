@@ -40,6 +40,8 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3LibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nokogiri.NokogiriLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Fiddle.FiddleLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nio4r.Nio4rLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Puma.PumaLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -11236,6 +11238,11 @@ namespace IronRuby.StandardLibrary.Sockets {
                 new Func<IronRuby.StandardLibrary.Sockets.RubyBasicSocket, IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyArray, System.Boolean, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.SendMessage)
             );
             
+            DefineLibraryMethod(module, "__ir_readable_now?", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Sockets.RubyBasicSocket, System.Boolean>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.IsReadableNow)
+            );
+            
             DefineLibraryMethod(module, "close_read", 0x11, 
                 0x00000000U, 
                 new Action<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Sockets.RubyBasicSocket>(IronRuby.StandardLibrary.Sockets.RubyBasicSocket.CloseRead)
@@ -11662,8 +11669,8 @@ namespace IronRuby.StandardLibrary.Sockets {
         private static void LoadTCPSocket_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "initialize", 0x12, 
                 0x00040000U, 0x00140000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Sockets.TCPServer, IronRuby.Builtins.MutableString, System.Object, System.Int32, IronRuby.StandardLibrary.Sockets.TCPServer>(IronRuby.StandardLibrary.Sockets.TCPSocket.Reinitialize), 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Sockets.TCPServer, IronRuby.Builtins.MutableString, System.Object, IronRuby.Builtins.MutableString, System.Object, IronRuby.StandardLibrary.Sockets.TCPServer>(IronRuby.StandardLibrary.Sockets.TCPSocket.Reinitialize)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Sockets.TCPSocket, IronRuby.Builtins.MutableString, System.Object, System.Int32, IronRuby.StandardLibrary.Sockets.TCPSocket>(IronRuby.StandardLibrary.Sockets.TCPSocket.Reinitialize), 
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Sockets.TCPSocket, IronRuby.Builtins.MutableString, System.Object, IronRuby.Builtins.MutableString, System.Object, IronRuby.StandardLibrary.Sockets.TCPSocket>(IronRuby.StandardLibrary.Sockets.TCPSocket.Reinitialize)
             );
             
         }
@@ -16122,6 +16129,379 @@ namespace IronRuby.StandardLibrary.Fiddle {
         
         public static System.Exception/*!*/ ExceptionFactory__Fiddle__Error(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Fiddle.FiddleOps.FiddleError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Nio4r {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class Nio4rLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
+            IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(System.IO.IOException));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("NIO", typeof(IronRuby.StandardLibrary.Nio4r.NioModule), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("NIO::ByteBuffer", typeof(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer), 0x00000008, classRef0, LoadNIO__ByteBuffer_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Int32, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Create)
+            );
+            IronRuby.Builtins.RubyClass def3 = DefineClass("NIO::ByteBuffer::MarkUnsetError", typeof(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.MarkUnsetError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Nio4rLibraryInitializer.ExceptionFactory__NIO__ByteBuffer__MarkUnsetError));
+            IronRuby.Builtins.RubyClass def4 = DefineClass("NIO::ByteBuffer::OverflowError", typeof(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.OverflowError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Nio4rLibraryInitializer.ExceptionFactory__NIO__ByteBuffer__OverflowError));
+            IronRuby.Builtins.RubyClass def5 = DefineClass("NIO::ByteBuffer::UnderflowError", typeof(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.UnderflowError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(Nio4rLibraryInitializer.ExceptionFactory__NIO__ByteBuffer__UnderflowError));
+            IronRuby.Builtins.RubyClass def6 = DefineClass("NIO::Monitor", typeof(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor), 0x00000008, classRef0, LoadNIO__Monitor_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Builtins.RubyClass, System.Object, System.Object, IronRuby.StandardLibrary.Nio4r.NioModule.Selector, IronRuby.StandardLibrary.Nio4r.NioModule.Monitor>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.Create)
+            );
+            IronRuby.Builtins.RubyClass def7 = DefineClass("NIO::Selector", typeof(IronRuby.StandardLibrary.Nio4r.NioModule.Selector), 0x00000008, classRef0, LoadNIO__Selector_Instance, LoadNIO__Selector_Class, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object, IronRuby.StandardLibrary.Nio4r.NioModule.Selector>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.Create)
+            );
+            SetConstant(def1, "ByteBuffer", def2);
+            SetConstant(def2, "MarkUnsetError", def3);
+            SetConstant(def2, "OverflowError", def4);
+            SetConstant(def2, "UnderflowError", def5);
+            SetConstant(def1, "Monitor", def6);
+            SetConstant(def1, "Selector", def7);
+        }
+        
+        private static void LoadNIO__ByteBuffer_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "[]", 0x11, 
+                0x00010000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Int32, System.Int32>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Fetch)
+            );
+            
+            DefineLibraryMethod(module, "<<", 0x11, 
+                0x00010002U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, IronRuby.Builtins.MutableString, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Put)
+            );
+            
+            DefineLibraryMethod(module, "capacity", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Int32>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.GetCapacity)
+            );
+            
+            DefineLibraryMethod(module, "clear", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Clear)
+            );
+            
+            DefineLibraryMethod(module, "compact", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Compact)
+            );
+            
+            DefineLibraryMethod(module, "each", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Each)
+            );
+            
+            DefineLibraryMethod(module, "flip", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Flip)
+            );
+            
+            DefineLibraryMethod(module, "full?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Boolean>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.IsFull)
+            );
+            
+            DefineLibraryMethod(module, "get", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Get)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00010000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Int32, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Inspect)
+            );
+            
+            DefineLibraryMethod(module, "limit", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Int32>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.GetLimit)
+            );
+            
+            DefineLibraryMethod(module, "limit=", 0x11, 
+                0x00010000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Int32, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.SetLimit)
+            );
+            
+            DefineLibraryMethod(module, "mark", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Mark)
+            );
+            
+            DefineLibraryMethod(module, "position", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Int32>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.GetPosition)
+            );
+            
+            DefineLibraryMethod(module, "position=", 0x11, 
+                0x00010000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Int32, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.SetPosition)
+            );
+            
+            DefineLibraryMethod(module, "read_from", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Object, System.Int32>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.ReadFrom)
+            );
+            
+            DefineLibraryMethod(module, "remaining", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Int32>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Remaining)
+            );
+            
+            DefineLibraryMethod(module, "reset", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Reset)
+            );
+            
+            DefineLibraryMethod(module, "rewind", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.Rewind)
+            );
+            
+            DefineLibraryMethod(module, "size", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Int32>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.GetCapacity)
+            );
+            
+            DefineLibraryMethod(module, "write_to", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer, System.Object, System.Int32>(IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.WriteTo)
+            );
+            
+        }
+        
+        private static void LoadNIO__Monitor_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "add_interest", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.AddInterest)
+            );
+            
+            DefineLibraryMethod(module, "close", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.Close)
+            );
+            
+            DefineLibraryMethod(module, "closed?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Boolean>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.IsClosed)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000040U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object, System.Object, IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "interests", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.GetInterests)
+            );
+            
+            DefineLibraryMethod(module, "interests=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.SetInterests)
+            );
+            
+            DefineLibraryMethod(module, "io", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.GetIO)
+            );
+            
+            DefineLibraryMethod(module, "readable?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Boolean>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.IsReadable)
+            );
+            
+            DefineLibraryMethod(module, "readiness", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.GetReadiness)
+            );
+            
+            DefineLibraryMethod(module, "remove_interest", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.RemoveInterest)
+            );
+            
+            DefineLibraryMethod(module, "selector", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.GetSelector)
+            );
+            
+            DefineLibraryMethod(module, "value", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.GetValue)
+            );
+            
+            DefineLibraryMethod(module, "value=", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Object, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.SetValue)
+            );
+            
+            DefineLibraryMethod(module, "writable?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Boolean>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.IsWritable)
+            );
+            
+            DefineLibraryMethod(module, "writeable?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Monitor, System.Boolean>(IronRuby.StandardLibrary.Nio4r.NioModule.Monitor.IsWritable)
+            );
+            
+        }
+        
+        private static void LoadNIO__Selector_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "backend", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Nio4r.NioModule.Selector, IronRuby.Builtins.RubySymbol>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.Backend)
+            );
+            
+            DefineLibraryMethod(module, "close", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.Close)
+            );
+            
+            DefineLibraryMethod(module, "closed?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Boolean>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.IsClosed)
+            );
+            
+            DefineLibraryMethod(module, "deregister", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Object, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.Deregister)
+            );
+            
+            DefineLibraryMethod(module, "empty?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Boolean>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.IsEmpty)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Object, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "register", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object>>, IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Object, System.Object, IronRuby.StandardLibrary.Nio4r.NioModule.Monitor>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.Register)
+            );
+            
+            DefineLibraryMethod(module, "registered?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Object, System.Boolean>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.IsRegistered)
+            );
+            
+            DefineLibraryMethod(module, "select", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.ConversionStorage<System.Double>, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Object, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.Select)
+            );
+            
+            DefineLibraryMethod(module, "wakeup", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Nio4r.NioModule.Selector, System.Object>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.Wakeup)
+            );
+            
+        }
+        
+        private static void LoadNIO__Selector_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "backends", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Nio4r.NioModule.Selector.Backends)
+            );
+            
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__NIO__ByteBuffer__MarkUnsetError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.MarkUnsetError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__NIO__ByteBuffer__OverflowError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.OverflowError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__NIO__ByteBuffer__UnderflowError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Nio4r.NioModule.ByteBuffer.UnderflowError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Puma {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class PumaLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
+            IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(System.SystemException));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Puma", typeof(IronRuby.StandardLibrary.Puma.PumaModule), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("Puma::HttpParser", typeof(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser), 0x00000008, classRef0, LoadPuma__HttpParser_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, IronRuby.StandardLibrary.Puma.PumaModule.HttpParser>(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser.Create)
+            );
+            IronRuby.Builtins.RubyClass def3 = DefineClass("Puma::HttpParserError", typeof(IronRuby.StandardLibrary.Puma.PumaModule.HttpParserError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(PumaLibraryInitializer.ExceptionFactory__Puma__HttpParserError));
+            SetConstant(def1, "HttpParser", def2);
+            SetConstant(def1, "HttpParserError", def3);
+        }
+        
+        private static void LoadPuma__HttpParser_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "body", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.HttpParser, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser.GetBody)
+            );
+            
+            DefineLibraryMethod(module, "error?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.HttpParser, System.Boolean>(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser.HasError)
+            );
+            
+            DefineLibraryMethod(module, "execute", 0x11, 
+                0x00000006U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.HttpParser, IronRuby.Builtins.Hash, IronRuby.Builtins.MutableString, System.Int32, System.Int32>(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser.Execute)
+            );
+            
+            DefineLibraryMethod(module, "finish", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.HttpParser, System.Boolean>(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser.Finish)
+            );
+            
+            DefineLibraryMethod(module, "finished?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.HttpParser, System.Boolean>(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser.IsFinished)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.HttpParser, IronRuby.StandardLibrary.Puma.PumaModule.HttpParser>(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "nread", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.HttpParser, System.Int32>(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser.NRead)
+            );
+            
+            DefineLibraryMethod(module, "reset", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.Puma.PumaModule.HttpParser, System.Object>(IronRuby.StandardLibrary.Puma.PumaModule.HttpParser.Reset)
+            );
+            
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__Puma__HttpParserError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Puma.PumaModule.HttpParserError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
     }

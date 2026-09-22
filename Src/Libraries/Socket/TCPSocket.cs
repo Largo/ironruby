@@ -64,10 +64,13 @@ namespace IronRuby.StandardLibrary.Sockets {
             ));
         }
 
-        // Reinitialization. Not called when a factory/non-default ctor is called.
+        // Reinitialization. Not called when a factory/non-default ctor is called - but it is what
+        // a Ruby subclass's .new runs (allocate, then #initialize). These took a TCPServer, so
+        // `class MySocket < TCPSocket; end; MySocket.new(host, port)` bound to nothing but
+        // IO#initialize and failed with "no implicit conversion of MySocket into TCPServer".
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static TCPServer/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
-            TCPServer/*!*/ self, [DefaultProtocol]MutableString remoteHost, object remotePort, [Optional]int localPort) {
+        public static TCPSocket/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
+            TCPSocket/*!*/ self, [DefaultProtocol]MutableString remoteHost, object remotePort, [Optional]int localPort) {
 
             // Not sure what the semantics should be in this case but we make sure not to blow up.
             // Real-world code (Server.connect_to in memcache.rb in the memcache-client gem) does do "TCPSocket.new(host, port, 0)"
@@ -81,8 +84,8 @@ namespace IronRuby.StandardLibrary.Sockets {
 
         // Reinitialization. Not called when a factory/non-default ctor is called.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
-        public static TCPServer/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
-            TCPServer/*!*/ self,
+        public static TCPSocket/*!*/ Reinitialize(ConversionStorage<MutableString>/*!*/ stringCast, ConversionStorage<int>/*!*/ fixnumCast,
+            TCPSocket/*!*/ self,
             [DefaultProtocol]MutableString remoteHost, object remotePort,
             [DefaultProtocol]MutableString localHost, object localPort) {
 

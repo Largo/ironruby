@@ -1755,6 +1755,27 @@ namespace IronRuby.Runtime {
         #endregion
 
         /// <summary>
+        /// Installed by the thread library (ThreadOps.RubyThreadInfo): marks the current thread as
+        /// blocked or not - Thread#status "sleep" - and answers what it was before. A thread waiting in
+        /// a syscall is Running as far as the CLR can tell, so code down here that parks a thread in
+        /// poll(2) says so through this rather than through a managed wait it does not need.
+        /// </summary>
+        public static Func<bool, bool> NativeWaitHook;
+
+        /// <summary>Marks the current thread blocked; pass the answer to ExitNativeWait.</summary>
+        public static bool EnterNativeWait() {
+            var hook = NativeWaitHook;
+            return hook != null && hook(true);
+        }
+
+        public static void ExitNativeWait(bool wasBlocked) {
+            var hook = NativeWaitHook;
+            if (hook != null) {
+                hook(wasBlocked);
+            }
+        }
+
+        /// <summary>
         /// A safe point: throws the asynchronous exception parked for the current thread, if there is one.
         /// Called from the blocking primitives and from Thread.pass. Ruby code that neither blocks nor calls
         /// one of those runs to completion even if it was killed - unlike MRI, where the check happens at

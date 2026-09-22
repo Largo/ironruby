@@ -74,6 +74,17 @@ namespace IronRuby.Builtins {
 
         public class RubyThreadInfo {
             private static readonly Dictionary<int, RubyThreadInfo> _mapping = new Dictionary<int, RubyThreadInfo>();
+
+            // Lets the runtime's own native waits (DescriptorStream's poll) report the thread as
+            // sleeping, the way the waits in this library do by setting Blocked themselves.
+            static RubyThreadInfo() {
+                RubyUtils.NativeWaitHook = blocked => {
+                    var info = FromThread(Thread.CurrentThread);
+                    bool was = info._blocked;
+                    info._blocked = blocked;
+                    return was;
+                };
+            }
             private readonly Dictionary<RubySymbol, object> _threadLocalStorage;
             private ThreadGroup _group;
             private readonly Thread _thread;
@@ -518,18 +529,40 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        [RubyMethod("join")]
-        public static Thread/*!*/ Join(Thread/*!*/ self) {
-            RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+        // How long one wait inside Thread#join lasts before the joining thread reaches a safe point.
+        private const int JoinSliceMilliseconds = 20;
 
+        /// <summary>
+        /// Joins in slices rather than in one CLR Thread.Join. A signal is delivered by running its
+        /// trap handler on the main thread at a safe point, and a thread parked in Thread.Join has
+        /// none: `trap("TERM") { ... }; server_thread.join` - which is how puma's single mode, and
+        /// most servers, wait - never ran its handler, so the process ignored SIGTERM and SIGINT.
+        /// Answers whether the thread finished within <paramref name="timeout"/>.
+        /// </summary>
+        private static bool JoinWithSafePoints(Thread/*!*/ self, int timeout) {
+            long deadline = (timeout == Timeout.Infinite) ? Int64.MaxValue : Environment.TickCount64 + timeout;
             while (true) {
                 try {
-                    self.Join();
-                    break;
+                    long remaining = deadline - Environment.TickCount64;
+                    int slice = (int)Math.Max(0, Math.Min(remaining, JoinSliceMilliseconds));
+                    if (self.Join(slice)) {
+                        return true;
+                    }
+                    if (remaining <= JoinSliceMilliseconds) {
+                        return false;
+                    }
+                    RubyUtils.CheckAsyncException();
                 } catch (ThreadInterruptedException) {
                     RubyUtils.TranslateThreadInterrupt();
                 }
             }
+        }
+
+        [RubyMethod("join")]
+        public static Thread/*!*/ Join(Thread/*!*/ self) {
+            RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+
+            JoinWithSafePoints(self, Timeout.Infinite);
 
             Exception threadException = RubyThreadInfo.FromThread(self).Exception;
             if (threadException != null) {
@@ -569,15 +602,7 @@ namespace IronRuby.Builtins {
             if (!(self.ThreadState == ThreadState.AbortRequested || self.ThreadState == ThreadState.Aborted)) {
                 double ms = seconds * 1000;
                 int timeout = (ms < Int32.MinValue || ms > Int32.MaxValue) ? Timeout.Infinite : (int)ms;
-                bool joined;
-                while (true) {
-                    try {
-                        joined = self.Join(timeout);
-                        break;
-                    } catch (ThreadInterruptedException) {
-                        RubyUtils.TranslateThreadInterrupt();
-                    }
-                }
+                bool joined = JoinWithSafePoints(self, timeout);
                 if (!joined) {
                     return null;
                 }

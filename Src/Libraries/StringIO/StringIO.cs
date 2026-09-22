@@ -664,7 +664,7 @@ namespace IronRuby.StandardLibrary.StringIO {
         public static MutableString Read(StringIO/*!*/ self, [DefaultProtocol]int count, [DefaultProtocol, Optional, NotNull]MutableString buffer) {
             var content = self.GetReadableContent();
             if (count < 0) {
-                throw RubyExceptions.CreateArgumentError("negative length -1 given");
+                throw RubyExceptions.CreateArgumentError("negative length {0} given", count);
             }
 
             // A read of so many bytes answers bytes: MRI tags the result ASCII-8BIT however the

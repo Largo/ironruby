@@ -108,7 +108,7 @@ namespace IronRuby.StandardLibrary.Sockets {
                 Assert.NotNull(listeningInterface);
             }
 
-            Socket socket = new Socket(listeningInterface.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
+            Socket socket = NewSocket(listeningInterface.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
             try {
                 // CRuby's TCPServer sets SO_REUSEADDR before bind(2), but that cannot be done
                 // through .NET: SocketOptionName.ReuseAddress is translated to SO_REUSEPORT on
