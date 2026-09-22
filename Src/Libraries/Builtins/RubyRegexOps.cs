@@ -461,12 +461,8 @@ namespace IronRuby.Builtins {
             if (str == null) {
                 match = null;
             } else {
-                int length = str.GetCharCount();
-                if (start < 0) {
-                    start += length;
-                }
                 self.WarnHistoricalBinaryMatch(scope.RubyContext, str);
-                match = (start >= 0 && start <= length) ? self.Match(str, start, false) : null;
+                match = self.MatchFromCharacter(str, start, false, true);
             }
 
             scope.GetInnerMostClosureScope().CurrentMatch = match;
@@ -487,6 +483,23 @@ namespace IronRuby.Builtins {
             return Match(scope, block, self, symbol.String, start);
         }
 
+        /// <summary>
+        /// Whether the pattern matches from character <paramref name="start"/> on, as Regexp#match
+        /// would, but without a MatchData or $~. \A and ^ still mean the start of the string.
+        /// </summary>
+        [RubyMethod("match?")]
+        public static bool IsMatch(RubyRegex/*!*/ self, [DefaultProtocol]MutableString str, [DefaultProtocol, DefaultParameterValue(0)]int start) {
+            if (!self.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("uninitialized Regexp");
+            }
+            return str != null && self.MatchFromCharacter(str, start, false) != null;
+        }
+
+        [RubyMethod("match?")]
+        public static bool IsMatch(RubyRegex/*!*/ self, [NotNull]RubySymbol/*!*/ symbol, [DefaultProtocol, DefaultParameterValue(0)]int start) {
+            return IsMatch(self, symbol.String, start);
+        }
+
         [RubyMethod("hash")]
         public static int GetHash(RubyRegex/*!*/ self) {
             return self.GetHashCode();
@@ -505,7 +518,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("=~")]
         public static object MatchIndex(RubyScope/*!*/ scope, RubyRegex/*!*/ self, [DefaultProtocol]MutableString/*!*/ str) {
             MatchData match = RubyRegex.SetCurrentMatchData(scope, self, str);
-            return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.Index) : null;
+            return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.CharacterIndex) : null;
         }
 
         [RubyMethod("=~")]

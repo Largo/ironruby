@@ -206,7 +206,25 @@ namespace IronRuby.StandardLibrary.StringScanner {
             return 1;
         }
 
-        /// <summary>How many characters the first <paramref name="byteIndex"/> bytes spell.</summary>
+        /// <summary>
+        /// How many characters the first <paramref name="byteIndex"/> bytes spell, as Ruby counts
+        /// them (#charpos): a character above U+FFFF is one, where CharIndexOf counts it as the two
+        /// CLR chars the regex engine sees.
+        /// </summary>
+        private int CharacterCountOf(int byteIndex) {
+            if (byteIndex <= 0) {
+                return 0;
+            }
+            if (_scanString.DetectSingleByteCharacters()) {
+                return byteIndex;
+            }
+            return MutableString.CreateBinary(_scanString.GetBinarySlice(0, byteIndex), _scanString.Encoding).GetCharacterCount();
+        }
+
+        /// <summary>
+        /// The CLR index - into the subject's character representation, which the regex engine
+        /// matches - of byte offset <paramref name="byteIndex"/>.
+        /// </summary>
         private int CharIndexOf(int byteIndex) {
             if (byteIndex <= 0) {
                 return 0;
@@ -592,7 +610,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         [RubyMethod("charpos")]
         public static int GetCharPosition(StringScanner/*!*/ self) {
-            return self.CharIndexOf(self._position);
+            return self.CharacterCountOf(self._position);
         }
 
         [RubyMethod("pos=")]

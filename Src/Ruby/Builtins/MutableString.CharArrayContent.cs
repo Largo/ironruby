@@ -33,6 +33,12 @@ namespace IronRuby.Builtins {
             private int _count;
             private string _immutableSnapshot; // TODO: weak ref?
 
+            // MutableString.CharIndex.cs: the character index of this content, when it holds a
+            // surrogate pair and has been indexed; valid while the owner has no
+            // CharIndexChangedFlags. Kept here rather than in a weak table, which costs far more to
+            // update, since mutable content is exactly what gets its table rebuilt.
+            internal object CharIndexTable;
+
             internal CharArrayContent(char[]/*!*/ data, MutableString owner)
                 : this(data, data.Length, owner) {
             }
@@ -43,6 +49,10 @@ namespace IronRuby.Builtins {
                 Debug.Assert(count >= 0 && count <= data.Length);
                 _data = data;
                 _count = count;
+            }
+
+            internal ReadOnlySpan<char> GetDataSpan() {
+                return new ReadOnlySpan<char>(_data, 0, _count);
             }
 
             internal BinaryContent/*!*/ SwitchToBinary() {

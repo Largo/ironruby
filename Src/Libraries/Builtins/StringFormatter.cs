@@ -1225,6 +1225,16 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateEncodingCompatibilityError(_resultEncoding ?? _encoding, encoding);
         }
 
+        private static int CountCharacters(string/*!*/ str) {
+            int count = 0;
+            for (int i = 0; i < str.Length; i++, count++) {
+                if (i + 1 < str.Length && Char.IsSurrogatePair(str[i], str[i + 1])) {
+                    i++;
+                }
+            }
+            return count;
+        }
+
         private void AppendString(MutableString/*!*/ mutable) {
             TrackEncoding(mutable);
 
@@ -1238,18 +1248,28 @@ namespace IronRuby.Builtins {
                 str = mutable.ToString();
             }
 
+            // Width and precision count characters, and a surrogate pair is one.
+            bool pairs = !mutable.KnowsCharIndexIsClrIndex && str.AsSpan().IndexOfAnyInRange('\uD800', '\uDBFF') >= 0;
             if (_opts.Precision != UnspecifiedPrecision && str.Length > _opts.Precision) {
-                str = str.Substring(0, _opts.Precision);
+                int end = _opts.Precision;
+                if (pairs) {
+                    end = 0;
+                    for (int i = 0; i < _opts.Precision && end < str.Length; i++) {
+                        end += (end + 1 < str.Length && Char.IsSurrogatePair(str[end], str[end + 1])) ? 2 : 1;
+                    }
+                }
+                str = str.Substring(0, end);
             }
 
-            if (!_opts.LeftAdj && _opts.FieldWidth > str.Length) {
-                _buf.Append(' ', _opts.FieldWidth - str.Length);
+            int length = pairs ? CountCharacters(str) : str.Length;
+            if (!_opts.LeftAdj && _opts.FieldWidth > length) {
+                _buf.Append(' ', _opts.FieldWidth - length);
             }
 
             _buf.Append(str);
 
-            if (_opts.LeftAdj && _opts.FieldWidth > str.Length) {
-                _buf.Append(' ', _opts.FieldWidth - str.Length);
+            if (_opts.LeftAdj && _opts.FieldWidth > length) {
+                _buf.Append(' ', _opts.FieldWidth - length);
             }
         }
 

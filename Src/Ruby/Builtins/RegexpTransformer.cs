@@ -60,6 +60,11 @@ namespace IronRuby.Builtins {
 
         private CharacterClassMode _characterClassMode;
 
+        // Whether '.' matches a newline here - (?m) in Ruby, RegexOptions.Singleline in .NET.
+        // Tracked only to translate '.' for an astral subject; null in a copied group, whose
+        // text lands wherever the copy is emitted and so cannot know.
+        private bool? _dotAll;
+
         /// <summary>
         /// A capturing group as a subexpression call or a loop copy needs it: its Ruby body and
         /// the parser state at the start of that body, so that the body can be transformed again
@@ -99,6 +104,8 @@ namespace IronRuby.Builtins {
             public RegexOptions ClrOptions = RegexOptions.Multiline | RegexOptions.CultureInvariant;
             public int MaxCallDepth = DefaultMaxCallDepth;
             public int Emitted;
+            // see Transform(..., astralSafe)
+            public bool AstralSafe;
         }
 
         private sealed class ExpansionTooLargeException : Exception {
@@ -199,6 +206,16 @@ namespace IronRuby.Builtins {
         }
 
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
+            return Transform(rubyPattern, options, out hasGAnchor, false);
+        }
+
+        /// <summary>
+        /// With <paramref name="astralSafe"/> the translation is for a subject that holds
+        /// surrogate pairs: '.' matches a pair as a whole and never half of one, and \B does not
+        /// match between the halves. Without it '.' stays .NET's own, which is all a subject
+        /// with no pairs needs and is what keeps the common case as fast as it was.
+        /// </summary>
+        internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor, bool astralSafe) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
                 hasGAnchor = false;
@@ -207,6 +224,7 @@ namespace IronRuby.Builtins {
             
             RegexpTransformer transformer = new RegexpTransformer(rubyPattern);
             transformer._clrOptions = RubyRegex.ToClrOptions(options);
+            transformer._state.AstralSafe = astralSafe;
             var result = transformer.Transform();
             hasGAnchor = transformer._hasGAnchor;
             return result;
@@ -585,8 +603,13 @@ namespace IronRuby.Builtins {
         #endregion
 
         private Exception/*!*/ MakeError(string/*!*/ message) {
-            // MRI quotes the offending pattern as a regexp literal: "invalid hex escape: /\xn/".
-            return new RegexpError(message + ": /" + _rubyPattern + "/");
+            // MRI quotes the offending pattern as a regexp literal, options included:
+            // "invalid hex escape: /\xn/", "invalid POSIX bracket type: /[[:foo:]]/mix".
+            var options = _clrOptions;
+            return new RegexpError(message + ": /" + _rubyPattern + "/" +
+                ((options & RegexOptions.Singleline) != 0 ? "m" : "") +
+                ((options & RegexOptions.IgnoreCase) != 0 ? "i" : "") +
+                ((options & RegexOptions.IgnorePatternWhitespace) != 0 ? "x" : ""));
         }
 
         private string/*!*/ Transform() {
@@ -600,7 +623,9 @@ namespace IronRuby.Builtins {
                 || _rubyPattern.IndexOf("\\k", StringComparison.Ordinal) >= 0;
 
             for (int depth = DefaultMaxCallDepth; ; depth /= 2) {
+                bool astralSafe = _state.AstralSafe;
                 _state = new SharedState();
+                _state.AstralSafe = astralSafe;
                 _state.MaxCallDepth = depth;
                 _state.ClrOptions = _clrOptions;
                 _state.RootPattern = _rubyPattern;
@@ -621,6 +646,7 @@ namespace IronRuby.Builtins {
                 _warnings = null;
                 _backrefCount = 0;
                 _characterClassMode = CharacterClassMode.Default;
+                _dotAll = (_clrOptions & RegexOptions.Singleline) != 0;
                 _groupNameOccurrences.Clear();
                 try {
                     string result = TransformBody();
@@ -661,6 +687,9 @@ namespace IronRuby.Builtins {
             bool lastWasQuantifier = false;
             int c;
             while (true) {
+                // set by AppendCharacterSet for the token right after it only
+                bool loopGuard = _loopGuardPending;
+                _loopGuardPending = false;
                 switch (c = Read()) {
                     case -1:
                         if (isSubexpression) {
@@ -702,6 +731,9 @@ namespace IronRuby.Builtins {
                         // A quantifier that got wrapped is already a group, so a further
                         // quantifier can apply to it directly.
                         lastWasQuantifier = !ParsePostQuantifier(lastEntityIndex, true, false);
+                        if (loopGuard) {
+                            _sb.Append(CharacterSet.LoopEndGuard);
+                        }
                         break;
                     }
 
@@ -780,7 +812,14 @@ namespace IronRuby.Builtins {
                         lastWasQuantifier = false;
                         lastEntity = null;
                         bool topLevelPosixClass;
-                        ParseCharacterGroup(false, out topLevelPosixClass).AppendTo(_sb, true);
+                        AppendCharacterSet(ParseCharacterGroup(false, out topLevelPosixClass), true);
+                        break;
+
+                    case '.':
+                        lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
+                        lastEntity = null;
+                        AppendAnyCharacter();
                         break;
 
                     case '|':
@@ -805,9 +844,55 @@ namespace IronRuby.Builtins {
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
                         lastEntity = null;
+                        if (Char.IsHighSurrogate((char)c) && Peek() >= 0xdc00 && Peek() <= 0xdfff) {
+                            // A literal character above U+FFFF is a surrogate pair, and a quantifier
+                            // after it applies to the whole of it, not to its trailing half.
+                            int low = Read();
+                            bool group = IsQuantifierNext();
+                            if (group) {
+                                _sb.Append("(?:");
+                            }
+                            Append((char)c);
+                            Append((char)low);
+                            if (group) {
+                                _sb.Append(')');
+                            }
+                            break;
+                        }
                         Append((char)c);
                         break;
                 }
+            }
+        }
+
+        private bool IsQuantifierNext() {
+            int next = Peek();
+            return next == '*' || next == '+' || next == '?' || next == '{';
+        }
+
+        // Onigmo's word characters - the Unicode "word" property - as a .NET entity that takes a
+        // character above U+FFFF as its surrogate pair.
+        private static string _astralWordCharacter;
+
+        /// <summary>
+        /// \b and \B for a subject with surrogate pairs. .NET's \b looks at single UTF-16 units, to
+        /// which both halves of a pair are non-word characters: it would see a boundary around 𝒳 but
+        /// none between 😀 and a letter after it, and a \B between the halves of every pair. So the
+        /// boundary is spelled out with lookarounds over whole characters.
+        /// </summary>
+        private void AppendAstralWordBoundary(bool boundary) {
+            string w = _astralWordCharacter;
+            if (w == null) {
+                var sb = new StringBuilder();
+                CharacterSet.MakeProperty(UnicodeProperties.Find("word"), true).AppendTo(sb, true);
+                _astralWordCharacter = w = sb.ToString();
+            }
+            if (boundary) {
+                _sb.Append("(?:(?<=").Append(w).Append(")(?!").Append(w).Append(")|(?<!").Append(w).Append(")(?=").Append(w).Append("))");
+            } else {
+                _sb.Append("(?:(?<=").Append(w).Append(")(?=").Append(w).Append(")|(?<!").Append(w).Append(")(?!").Append(w).Append("))");
+                // not between the two halves of a pair, both of which are non-word units
+                _sb.Append("(?<![\\ud800-\\udbff])");
             }
         }
 
@@ -1190,6 +1275,7 @@ namespace IronRuby.Builtins {
                 }
             }
             var savedMode = _characterClassMode;
+            var savedDotAll = _dotAll;
             int bodyStart = _index;
             GroupDefinition definition = null;
             bool hasLevelGroup = false;
@@ -1217,6 +1303,7 @@ namespace IronRuby.Builtins {
             Parse(true);
             _groupDepth--;
             _characterClassMode = savedMode;
+            _dotAll = savedDotAll;
             if (groupNumber >= 0) {
                 CloseGroup("#" + groupNumber);
                 if (groupName != null) {
@@ -1252,13 +1339,19 @@ namespace IronRuby.Builtins {
         private void ParseGroupOptions(int c) {
             var flags = new StringBuilder();
             var mode = _characterClassMode;
+            var dotAll = _dotAll;
             bool isScoped = false;
+            bool negative = false;
 
             while (true) {
                 if (c == 'm') {
                     // Map (?m) to (?s) ie. RegexOptions.SingleLine
                     flags.Append('s');
+                    if (dotAll != null) {
+                        dotAll = !negative;
+                    }
                 } else if (c == 'i' || c == 'x' || c == '-') {
+                    negative |= c == '-';
                     flags.Append((char)c);
                 } else if (c == 'a') {
                     mode = CharacterClassMode.Ascii;
@@ -1287,6 +1380,7 @@ namespace IronRuby.Builtins {
 
             if (!isScoped) {
                 _characterClassMode = mode;
+                _dotAll = dotAll;
                 if (options.Length != 0) {
                     _sb.Append("(?").Append(options).Append(')');
                 }
@@ -1295,11 +1389,14 @@ namespace IronRuby.Builtins {
 
             _sb.Append("(?").Append(options).Append(':');
             var savedMode = _characterClassMode;
+            var savedDotAll = _dotAll;
             _characterClassMode = mode;
+            _dotAll = dotAll;
             _groupDepth++;
             Parse(true);
             _groupDepth--;
             _characterClassMode = savedMode;
+            _dotAll = savedDotAll;
             _sb.Append(')');
         }
 
@@ -1413,9 +1510,17 @@ namespace IronRuby.Builtins {
         // escape outside of character group
         private void ParseEscape(int escape) {
             switch (escape) {
-                case 'A':   // beginning a string
                 case 'b':   // word boundary
                 case 'B':   // not a word boundary
+                    if (_state.AstralSafe) {
+                        AppendAstralWordBoundary(escape == 'b');
+                    } else {
+                        Append('\\');
+                        Append((char)escape);
+                    }
+                    break;
+
+                case 'A':   // beginning a string
                 case 'Z':   // end of string or a new line
                 case 'z':   // end of string
                     Append('\\');
@@ -1475,8 +1580,16 @@ namespace IronRuby.Builtins {
                 case 'u':
                     if (Peek() == '{') {
                         // \u{1234 12345 123}
-                        foreach (var codepoint in ParseUnicodeEscapeList()) {
-                            AppendUnicodeCodePoint(_sb, codepoint);
+                        var codepoints = new List<int>(ParseUnicodeEscapeList());
+                        for (int i = 0; i < codepoints.Count; i++) {
+                            // a quantifier after the list applies to its last character, all of it
+                            if (i == codepoints.Count - 1 && codepoints[i] >= 0x10000 && IsQuantifierNext()) {
+                                _sb.Append("(?:");
+                                AppendUnicodeCodePoint(_sb, codepoints[i]);
+                                _sb.Append(')');
+                            } else {
+                                AppendUnicodeCodePoint(_sb, codepoints[i]);
+                            }
                         }
                     } else {
                         // \u1234
@@ -1490,7 +1603,15 @@ namespace IronRuby.Builtins {
                         break;
                     }
 
-                    ParseCharacterEscape(escape).AppendTo(_sb, false);
+                    var set = ParseCharacterEscape(escape);
+                    if ((escape == 'w' || escape == 'W') && _characterClassMode == CharacterClassMode.Unicode) {
+                        // Outside a class Onigmo tests a (?u)\w below U+0100 against its ISO-8859-1
+                        // ctype table, which also counts the superscripts and vulgar fractions
+                        // (U+00B2 U+00B3 U+00B9 U+00BC-U+00BE) as word characters.
+                        var latin1Word = CharacterSet.MakeSet(_latin1WordQuirk, null);
+                        set = (escape == 'w') ? set.Union(latin1Word) : set.Subtract(latin1Word);
+                    }
+                    AppendCharacterSet(set, false);
                     break;
             }
         }
@@ -1944,13 +2065,15 @@ namespace IronRuby.Builtins {
         private CharacterSet/*!*/ ParseCharacterEscape(int escape) {
             int result = ParseSingleByteCharacterEscape(escape);
             if (result != -1) {
-                return new CharacterSet(Escape(result), true);
+                return CharacterSet.MakeCharacter(result, Escape(result));
             }
                     
             switch (escape) {
                 case 'h':
                 case 'H': 
-                    return MakePosixCharacterClass(PosixCharacterClass.XDigit, escape == 'h');
+                    // [0-9a-fA-F] whatever the mode
+                    var hex = CharacterSet.MakeSet(_asciiHexDigit, "a-fA-F0-9");
+                    return (escape == 'h') ? hex : hex.Complement();
                     
                 case 'p':
                 case 'P':
@@ -1959,37 +2082,92 @@ namespace IronRuby.Builtins {
                 // \w, \d and \s are ASCII only in Ruby unless (?u) is in effect, where .NET's
                 // \w, \d and \s are always Unicode aware.
                 case 's':
-                    return MakeAsciiAware(@"\s", "\u0020\u0009-\u000d", true);
+                    return MakeAsciiAware("space", _asciiSpace, "\u0020\u0009-\u000d", true);
 
                 case 'S':
-                    return MakeAsciiAware(@"\S", "\u0020\u0009-\u000d", false);
+                    return MakeAsciiAware("space", _asciiSpace, "\u0020\u0009-\u000d", false);
 
                 case 'd':
-                    return MakeAsciiAware(@"\d", "0-9", true);
+                    return MakeAsciiAware("digit", _asciiDigit, "0-9", true);
 
                 case 'D':
-                    return MakeAsciiAware(@"\D", "0-9", false);
+                    return MakeAsciiAware("digit", _asciiDigit, "0-9", false);
 
                 case 'w':
-                    return MakeAsciiAware(@"\w", "a-zA-Z0-9_", true);
+                    return MakeAsciiAware("word", _asciiWord, "a-zA-Z0-9_", true);
 
                 case 'W':
-                    return MakeAsciiAware(@"\W", "a-zA-Z0-9_", false);
+                    return MakeAsciiAware("word", _asciiWord, "a-zA-Z0-9_", false);
 
                 default:
                     // ignore backslash unless needed
-                    return new CharacterSet(Escape(escape), true);
+                    if (escape >= 0xd800 && escape <= 0xdbff && Peek() >= 0xdc00 && Peek() <= 0xdfff) {
+                        return MakeCodePointSet(Char.ConvertToUtf32((char)escape, (char)Read()));
+                    }
+                    return CharacterSet.MakeCharacter(escape, Escape(escape));
+            }
+        }
+
+        // Set when the entity just emitted is a class loop body that needs CharacterSet.LoopEndGuard
+        // after its quantifier.
+        private bool _loopGuardPending;
+
+        /// <summary>
+        /// '.': .NET's own unless the subject holds surrogate pairs. Then a lone '.' is a pair or
+        /// any BMP character but a surrogate - so it can neither match half a pair nor, when
+        /// something after it fails, backtrack to half a pair. In a * or + loop '.' stays as it
+        /// is, a one-class loop that takes both halves of a pair as two iterations, with the loop
+        /// guard after it so that it cannot stop between them - the same trick as [^"]* (see
+        /// AppendCharacterSet), and what keeps .* the fast loop it is.
+        /// </summary>
+        private void AppendAnyCharacter() {
+            if (!_state.AstralSafe) {
+                Append('.');
+                return;
+            }
+
+            int next = Peek();
+            if (next == '*' || next == '+') {
+                Append('.');
+                _loopGuardPending = true;
+            } else if (_dotAll == true) {
+                _sb.Append("(?:[\\ud800-\\udbff][\\udc00-\\udfff]|[^\\ud800-\\udfff])");
+            } else if (_dotAll == false) {
+                _sb.Append("(?:[\\ud800-\\udbff][\\udc00-\\udfff]|[^\\n\\ud800-\\udfff])");
+            } else {
+                _sb.Append("(?:[\\ud800-\\udbff][\\udc00-\\udfff]|(?![\\ud800-\\udfff]).)");
             }
         }
 
         /// <summary>
-        /// Picks between the Unicode-aware .NET shorthand and an explicit ASCII set.
+        /// Emits a character set as a pattern entity. A set holding every non-BMP character that
+        /// a * or + follows is emitted as one class (CharacterSet.AppendLoopBodyTo), for speed.
         /// </summary>
-        private CharacterSet/*!*/ MakeAsciiAware(string/*!*/ unicodeShorthand, string/*!*/ asciiSet, bool positive) {
-            if (_characterClassMode == CharacterClassMode.Unicode) {
-                return new CharacterSet(positive ? unicodeShorthand : unicodeShorthand.ToUpperInvariant());
+        private void AppendCharacterSet(CharacterSet/*!*/ set, bool parenthesize) {
+            int next = Peek();
+            if ((next == '*' || next == '+') && set.HasAllAstral) {
+                set.AppendLoopBodyTo(_sb);
+                _loopGuardPending = true;
+            } else {
+                set.AppendTo(_sb, parenthesize);
             }
-            var result = new CharacterSet(asciiSet);
+        }
+
+        private static readonly int[] _latin1WordQuirk = new int[] { 0xb2, 0xb3, 0xb9, 0xb9, 0xbc, 0xbe };
+        private static readonly int[] _asciiHexDigit = new int[] { '0', '9', 'A', 'F', 'a', 'f' };
+        private static readonly int[] _asciiSpace = new int[] { 0x09, 0x0d, 0x20, 0x20 };
+        private static readonly int[] _asciiDigit = new int[] { '0', '9' };
+        private static readonly int[] _asciiWord = new int[] { '0', '9', 'A', 'Z', '_', '_', 'a', 'z' };
+
+        /// <summary>
+        /// \s, \d and \w: ASCII only in Ruby unless (?u) is in effect, where they are Onigmo's
+        /// Space, Digit and Word properties.
+        /// </summary>
+        private CharacterSet/*!*/ MakeAsciiAware(string/*!*/ property, int[]/*!*/ ascii, string/*!*/ asciiText, bool positive) {
+            if (_characterClassMode == CharacterClassMode.Unicode) {
+                return CharacterSet.MakeProperty(UnicodeProperties.Find(property), positive);
+            }
+            var result = CharacterSet.MakeSet(ascii, asciiText);
             return positive ? result : result.Complement();
         }
 
@@ -2075,9 +2253,7 @@ namespace IronRuby.Builtins {
             if (codepoint >= 0xd800 && codepoint <= 0xdfff || codepoint > 0x10ffff) {
                 throw MakeError("invalid Unicode range");
             }
-            return (codepoint >= 0x10000)
-                ? CharacterSet.MakeAstralCharacter(codepoint)
-                : new CharacterSet(UnicodeCodePointToString(codepoint), true);
+            return CharacterSet.MakeCharacter(codepoint, (codepoint >= 0x10000) ? null : UnicodeCodePointToString(codepoint));
         }
 
         private void AppendUnicodeCodePoint(StringBuilder/*!*/ builder, int codepoint) {
@@ -2096,452 +2272,398 @@ namespace IronRuby.Builtins {
 
         #region Chracter Groups
 
-        // [include - [exclude]]
-        // ^[include - [exclude]] == [p{All} - [include - [exclude]]
+        // A character class: its members as code point ranges, so that union, intersection,
+        // subtraction and negation are exact - over the whole of Unicode, non-BMP members included.
+        //
+        // .NET's Regex matches UTF-16 code units, so a non-BMP code point cannot be a member of a
+        // .NET character class: [\uD83E\uDD8A] would match either surrogate half on its own. A
+        // class with such members is emitted as (?:[bmp members]|<surrogate pairs>), the pairs
+        // grouped by leading surrogate, and a BMP class never matches a lone surrogate. The one
+        // exception is a * or + loop over a class that holds *every* non-BMP code point - [^"]*,
+        // \W+ - which stays a single .NET class loop that takes in the surrogate block, so that
+        // the common negated classes are as fast as they were (see AppendLoopBodyTo).
         private sealed class CharacterSet {
-            public static readonly CharacterSet Empty = new CharacterSet();
+            public static readonly CharacterSet Empty = new CharacterSet(CodePointRanges.Empty, false, "", -1, -1);
 
+            private static readonly int[] BmpRange = CodePointRanges.Single(0, 0xffff);
+            private static readonly int[] AstralRange = CodePointRanges.Single(0x10000, CodePointRanges.MaxCodePoint);
+            private static readonly int[] SurrogateRange = CodePointRanges.Single(0xd800, 0xdfff);
+
+            private const string SurrogateBlock = "\\ud800-\\udfff";
+            private const string AnySurrogatePair = "[\\ud800-\\udbff][\\udc00-\\udfff]";
+
+            // The members are _ranges, or every code point but those when _negated. Keeping the
+            // complement symbolic lets a negated class be emitted as [\0-\uffff-[...]], which
+            // .NET's IgnoreCase folds the way Onigmo does: /[^a]/i does not match "A".
+            private readonly int[]/*!*/ _ranges;
             private readonly bool _negated;
-            private readonly string/*!*/ _include;
-            private readonly CharacterSet/*!*/ _exclude;
-            private readonly bool _isSingleCharacter;
 
-            // .NET's Regex matches UTF-16 code units, so a non-BMP codepoint cannot be a member
-            // of a character class: [\uD83E\uDD8A] would match either surrogate half on its own.
-            // Such members are held aside as an alternation of surrogate-pair sequences and the
-            // whole class is emitted as (?:[bmp members]|<pairs>).
-            private readonly string/*!*/ _astral = "";
-            // The non-BMP members again, as [low, high] codepoint pairs, so that the set can be
-            // complemented: the surrogate alternation in _astral is already lowered to UTF-16 and
-            // cannot be inverted, but a list of ranges can.  null means "there are non-BMP members
-            // whose ranges were not tracked" - which only happens for the droppable members a
-            // POSIX class brings along (see _astralOptional).
-            private readonly List<int> _astralRanges;
-            // Set on the complement of a class that had non-BMP members: the BMP half of the
-            // result must not match a lone surrogate code unit, or it would match half of a
-            // character the class excluded.
-            private bool _excludeSurrogates;
-            // The single codepoint this set stands for, if it is exactly one non-BMP character.
-            // Needed to build [x-y] ranges, whose endpoints are parsed as separate sets.
-            private readonly int _astralCodepoint = -1;
+            // The body of a .NET character class for _ranges, spelled as the pattern wrote it,
+            // while the set is nothing but a union of BMP characters and ranges; null once it is
+            // anything else. Keeps the translation of ordinary classes - [a-zA-Z\d_] - as it was.
+            private readonly string _text;
 
-            public CharacterSet() {
-                _include = "";
-                _exclude = this;
-                _isSingleCharacter = false;
-            }
-            
-            public CharacterSet(string/*!*/ include)
-                : this(false, include, Empty) {
+            // The code point, if the set was written as a single character (it may bound a range).
+            private readonly int _singleCodepoint;
+
+            // The property table the set is (or is the complement of), for the rendering cache.
+            private readonly int _table;
+
+            private string _rendered;
+
+            private CharacterSet(int[]/*!*/ ranges, bool negated, string text, int singleCodepoint, int table) {
+                _ranges = ranges;
+                _negated = negated;
+                _text = text;
+                _singleCodepoint = singleCodepoint;
+                _table = table;
             }
 
-            public CharacterSet(string/*!*/ include, bool isSingleCharacter)
-                : this(false, include, Empty) {
-                _isSingleCharacter = isSingleCharacter;
+            private CharacterSet(int[]/*!*/ ranges, bool negated)
+                : this(ranges, negated, null, -1, -1) {
             }
 
-            public CharacterSet(bool negate, string/*!*/ include)
-                : this(negate, include, Empty) {
+            /// <summary>A single character; <paramref name="text"/> is its class-body spelling, null for a non-BMP one.</summary>
+            internal static CharacterSet/*!*/ MakeCharacter(int codepoint, string text) {
+                Debug.Assert((codepoint < 0x10000) == (text != null));
+                return new CharacterSet(CodePointRanges.Single(codepoint, codepoint), false, text, codepoint, -1);
             }
 
-            public CharacterSet(string/*!*/ include, CharacterSet/*!*/ exclude)
-                : this(false, include, exclude) {
+            internal static CharacterSet/*!*/ MakeRange(int low, int high, string text) {
+                return new CharacterSet(CodePointRanges.Single(low, high), false, text, -1, -1);
             }
 
-            public CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude) {
-                Assert.NotNull(include, exclude);
-                _negated = negate;
-                _include = include;
-                _exclude = exclude;
+            /// <summary>A set of explicit members; <paramref name="text"/> spells the BMP ones, if they all are.</summary>
+            internal static CharacterSet/*!*/ MakeSet(int[]/*!*/ ranges, string text) {
+                return new CharacterSet(ranges, false, text, -1, -1);
             }
 
-            private CharacterSet(string/*!*/ astral, int astralCodepoint, List<int> astralRanges) {
-                _include = "";
-                _exclude = Empty;
-                _astral = astral;
-                _astralCodepoint = astralCodepoint;
-                _astralRanges = astralRanges;
+            /// <summary>An Onigmo character property (see UnicodeProperties), or its complement.</summary>
+            internal static CharacterSet/*!*/ MakeProperty(int table, bool positive) {
+                return new CharacterSet(UnicodeProperties.GetRanges(table), !positive, null, -1, table);
             }
 
-            /// <summary>A set holding the single non-BMP codepoint <paramref name="codepoint"/>.</summary>
-            internal static CharacterSet/*!*/ MakeAstralCharacter(int codepoint) {
-                return new CharacterSet(SurrogatePair(codepoint), codepoint, new List<int> { codepoint, codepoint });
+            internal bool IsSingleCharacter {
+                get { return _singleCodepoint >= 0; }
             }
 
-            /// <summary>A set holding the inclusive non-BMP range [<paramref name="low"/>, <paramref name="high"/>].</summary>
-            internal static CharacterSet/*!*/ MakeAstralRange(int low, int high) {
-                return new CharacterSet(SurrogateRange(low, high), -1, new List<int> { low, high });
+            internal int SingleCodepoint {
+                get { return _singleCodepoint; }
             }
 
-            internal bool IsAstralCharacter {
-                get { return _astralCodepoint >= 0; }
+            /// <summary>The class-body spelling of a BMP single character.</summary>
+            internal string Text {
+                get { return _text; }
             }
 
-            internal int AstralCodepoint {
-                get { return _astralCodepoint; }
+            public bool IsEmpty {
+                get { return !_negated && _ranges.Length == 0; }
             }
 
-            internal bool HasAstral {
-                get { return _astral.Length != 0; }
+            internal CharacterSet/*!*/ Complement() {
+                return new CharacterSet(_ranges, !_negated, _text, -1, _table);
             }
 
-            /// <summary>The whole UTF-16 surrogate block, as a character class body.</summary>
-            internal const string SurrogateBlock = "\\ud800-\\udfff";
+            internal CharacterSet/*!*/ Union(CharacterSet/*!*/ set) {
+                if (ReferenceEquals(this, Empty)) {
+                    return set;
+                } else if (ReferenceEquals(set, Empty)) {
+                    return this;
+                }
+
+                if (!_negated && !set._negated) {
+                    return new CharacterSet(CodePointRanges.Union(_ranges, set._ranges), false,
+                        (_text != null && set._text != null) ? _text + set._text : null, -1, -1);
+                } else if (_negated && set._negated) {
+                    // ^A or ^B == ^(A and B)
+                    return new CharacterSet(CodePointRanges.Intersect(_ranges, set._ranges), true);
+                } else if (_negated) {
+                    // ^A or B == ^(A \ B)
+                    return new CharacterSet(CodePointRanges.Subtract(_ranges, set._ranges), true);
+                } else {
+                    return set.Union(this);
+                }
+            }
+
+            internal CharacterSet/*!*/ Intersect(CharacterSet/*!*/ set) {
+                if (!_negated && !set._negated) {
+                    return new CharacterSet(CodePointRanges.Intersect(_ranges, set._ranges), false);
+                } else if (_negated && set._negated) {
+                    // ^A and ^B == ^(A or B)
+                    return new CharacterSet(CodePointRanges.Union(_ranges, set._ranges), true);
+                } else if (set._negated) {
+                    // A and ^B == A \ B
+                    return new CharacterSet(CodePointRanges.Subtract(_ranges, set._ranges), false);
+                } else {
+                    return set.Intersect(this);
+                }
+            }
+
+            internal CharacterSet/*!*/ Subtract(CharacterSet/*!*/ set) {
+                return Intersect(set.Complement());
+            }
+
+            private static bool HasAstral(int[]/*!*/ ranges) {
+                return ranges.Length != 0 && ranges[ranges.Length - 1] >= 0x10000;
+            }
+
+            /// <summary>
+            /// The class body as written. A body that starts with '^' would be read as a negation,
+            /// so a leading '^' is escaped: Ruby's /[^^]/ ("anything but a caret") went through
+            /// as [\0-\uffff-[^]] without this.
+            /// </summary>
+            private void AppendText(StringBuilder/*!*/ sb) {
+                if (_text.Length != 0 && _text[0] == '^') {
+                    sb.Append("\\^").Append(_text, 1, _text.Length - 1);
+                } else {
+                    sb.Append(_text);
+                }
+            }
+
+            /// <summary>
+            /// Whether every non-BMP code point is a member - [^a], \W, \P{ASCII} - so that a
+            /// loop over the set can be emitted as a single .NET class (see AppendLoopBodyTo).
+            /// </summary>
+            internal bool HasAllAstral {
+                get {
+                    int[] astral = CodePointRanges.Intersect(_ranges, AstralRange);
+                    return _negated
+                        ? astral.Length == 0
+                        : astral.Length == 2 && astral[0] == 0x10000 && astral[1] == CodePointRanges.MaxCodePoint;
+                }
+            }
+
+            /// <summary>
+            /// The body of a * or + loop over a set that HasAllAstral, as one .NET class that takes
+            /// in the whole surrogate block: a non-BMP character is then matched as two iterations.
+            /// That is what keeps [^"]* a class loop - the surrogate-pair alternation AppendTo emits
+            /// makes it several times slower - and it is exact as long as the loop never stops
+            /// between the two halves of a pair, which the caller ensures by following the loop
+            /// with LoopEndGuard. (A greedy loop over such a class cannot stop there on its own:
+            /// the class has both halves.)
+            /// </summary>
+            internal void AppendLoopBodyTo(StringBuilder/*!*/ sb) {
+                Debug.Assert(HasAllAstral);
+                if (_text != null && _negated) {
+                    sb.Append("[\0-\uffff");
+                    if (_ranges.Length != 0) {
+                        sb.Append("-[");
+                        AppendText(sb);
+                        sb.Append(']');
+                    }
+                    sb.Append(']');
+                    return;
+                }
+
+                int[] bmp = CodePointRanges.Intersect(_ranges, BmpRange);
+                if (_negated) {
+                    bmp = CodePointRanges.Subtract(bmp, SurrogateRange);
+                    sb.Append("[\0-\uffff");
+                    if (bmp.Length != 0) {
+                        sb.Append("-[");
+                        AppendClassBody(sb, bmp);
+                        sb.Append(']');
+                    }
+                    sb.Append(']');
+                } else {
+                    sb.Append('[');
+                    AppendClassBody(sb, CodePointRanges.Union(bmp, SurrogateRange));
+                    sb.Append(']');
+                }
+            }
+
+            /// <summary>Follows a loop emitted by AppendLoopBodyTo: it may not end after a leading surrogate.</summary>
+            internal const string LoopEndGuard = "(?<![\\ud800-\\udbff])";
+
+            public StringBuilder/*!*/ AppendTo(StringBuilder/*!*/ sb, bool parenthesize) {
+                if (_text != null && !HasAstral(_ranges)) {
+                    if (_negated) {
+                        // Any BMP character outside the class - but never a lone surrogate, which
+                        // would be half of a character - or any non-BMP character, as a whole.
+                        sb.Append("(?:[\0-\uffff-[");
+                        AppendText(sb);
+                        sb.Append(SurrogateBlock).Append("]]|").Append(AnySurrogatePair).Append(')');
+                    } else if (_ranges.Length == 0) {
+                        sb.Append("[a-[a]]");
+                    } else if (IsSingleCharacter && !parenthesize) {
+                        // Outside a class a bare '^' is the anchor, so it is escaped here too.
+                        AppendText(sb);
+                    } else {
+                        sb.Append('[');
+                        AppendText(sb);
+                        sb.Append(']');
+                    }
+                    return sb;
+                }
+
+                if (_rendered == null) {
+                    _rendered = (_table >= 0) ? GetCachedRendering(_table, _negated) : Render(_ranges, _negated);
+                }
+                return sb.Append(_rendered);
+            }
+
+            // Renderings of the bare properties, which are large and asked for again and again
+            // (every Regexp.new of a pattern that uses one): per table, positive and negated.
+            private static readonly Dictionary<int, string> _renderings = new Dictionary<int, string>();
+
+            private static string/*!*/ GetCachedRendering(int table, bool negated) {
+                int key = table * 2 + (negated ? 1 : 0);
+                lock (_renderings) {
+                    string result;
+                    if (_renderings.TryGetValue(key, out result)) {
+                        return result;
+                    }
+                }
+                string rendered = Render(UnicodeProperties.GetRanges(table), negated);
+                lock (_renderings) {
+                    _renderings[key] = rendered;
+                }
+                return rendered;
+            }
+
+            private static string/*!*/ Render(int[]/*!*/ ranges, bool negated) {
+                int[] bmp = CodePointRanges.Intersect(ranges, BmpRange);
+                int[] astral = CodePointRanges.Intersect(ranges, AstralRange);
+                var sb = new StringBuilder();
+
+                if (negated) {
+                    // The members are the code points *not* in ranges: the BMP ones as the
+                    // complement of a class that also takes out the surrogate block (a lone
+                    // surrogate would be half of a character), then the non-BMP ones.
+                    bmp = CodePointRanges.Union(bmp, SurrogateRange);
+                    astral = CodePointRanges.Subtract(AstralRange, astral);
+
+                    if (astral.Length != 0) {
+                        sb.Append("(?:");
+                    }
+                    sb.Append("[\0-\uffff-[");
+                    AppendClassBody(sb, bmp);
+                    sb.Append("]]");
+                    if (astral.Length != 0) {
+                        sb.Append('|');
+                        AppendSurrogatePairs(sb, astral);
+                        sb.Append(')');
+                    }
+                    return sb.ToString();
+                }
+
+                bmp = CodePointRanges.Subtract(bmp, SurrogateRange);
+                if (astral.Length == 0) {
+                    if (bmp.Length == 0) {
+                        return "[a-[a]]";
+                    }
+                    sb.Append('[');
+                    AppendClassBody(sb, bmp);
+                    return sb.Append(']').ToString();
+                }
+
+                sb.Append("(?:");
+                if (bmp.Length != 0) {
+                    sb.Append('[');
+                    AppendClassBody(sb, bmp);
+                    sb.Append("]|");
+                }
+                AppendSurrogatePairs(sb, astral);
+                return sb.Append(')').ToString();
+            }
+
+            private static void AppendClassBody(StringBuilder/*!*/ sb, int[]/*!*/ ranges) {
+                for (int i = 0; i < ranges.Length; i += 2) {
+                    AppendClassCharacter(sb, ranges[i]);
+                    if (ranges[i + 1] != ranges[i]) {
+                        if (ranges[i + 1] > ranges[i] + 1) {
+                            sb.Append('-');
+                        }
+                        AppendClassCharacter(sb, ranges[i + 1]);
+                    }
+                }
+            }
+
+            private static void AppendClassCharacter(StringBuilder/*!*/ sb, int c) {
+                if (c >= '0' && c <= '9' || c >= 'A' && c <= 'Z' || c >= 'a' && c <= 'z') {
+                    sb.Append((char)c);
+                } else {
+                    sb.Append("\\u").Append(c.ToString("x4"));
+                }
+            }
 
             private static string/*!*/ Unit(int c) {
                 return "\\u" + c.ToString("x4");
             }
 
-            private static string/*!*/ SurrogatePair(int codepoint) {
-                int v = codepoint - 0x10000;
-                return Unit(0xd800 + (v >> 10)) + Unit(0xdc00 + (v & 0x3ff));
-            }
-
-            private static string/*!*/ SurrogateRange(int low, int high) {
-                int lowLead = 0xd800 + ((low - 0x10000) >> 10), lowTrail = 0xdc00 + ((low - 0x10000) & 0x3ff);
-                int highLead = 0xd800 + ((high - 0x10000) >> 10), highTrail = 0xdc00 + ((high - 0x10000) & 0x3ff);
-
-                if (lowLead == highLead) {
-                    return Unit(lowLead) + "[" + Unit(lowTrail) + "-" + Unit(highTrail) + "]";
-                }
-
-                var sb = new StringBuilder();
-                sb.Append(Unit(lowLead)).Append('[').Append(Unit(lowTrail)).Append("-\\udfff]");
-                if (lowLead + 1 <= highLead - 1) {
-                    sb.Append("|[").Append(Unit(lowLead + 1)).Append('-').Append(Unit(highLead - 1)).Append("][\\udc00-\\udfff]");
-                }
-                sb.Append('|').Append(Unit(highLead)).Append("[\\udc00-").Append(Unit(highTrail)).Append(']');
-                return sb.ToString();
-            }
-
             /// <summary>
-            /// This set as one a character-class operation can use: without the non-BMP members a
-            /// POSIX class brings along, and raising for members that cannot be dropped.
-            ///
-            /// They have to be dropped from the *result*, not merely tolerated here. A set that
-            /// keeps them renders as the alternation (?:[...]|&lt;surrogate pairs&gt;), and splicing
-            /// that into the body of a character class produces a pattern .NET rejects. Ruby
-            /// reaches this with a nested class - CodeRay's identifier pattern is
-            /// [[:alpha:]_[^\0-\177]], whose inner negated class leaves the outer one's exclude
-            /// carrying the non-BMP half of [[:alpha:]].
+            /// Non-BMP ranges as an alternation of surrogate pairs: [leading][trailing] per set of
+            /// leading surrogates that share the same trailing ones. The branches begin with
+            /// disjoint leading surrogates, so at most one of them gets past its first code unit.
             /// </summary>
-            private CharacterSet/*!*/ RequireNoAstral(string/*!*/ operation) {
-                if (HasAstral && !_astralOptional) {
-                    // The surrogate-pair alternation is not a character class, so it cannot take
-                    // part in [a-[b]] subtraction or && intersection.
-                    throw new RegexpError("non-BMP character is not supported in a " + operation + " character class");
-                }
-                var exclude = _exclude.HasAstral ? _exclude.RequireNoAstral(operation) : _exclude;
-                if (!HasAstral && ReferenceEquals(exclude, _exclude)) {
-                    return this;
-                }
-                return new CharacterSet(_negated, _include, exclude);
-            }
-
-            public string/*!*/ Include {
-                get { return _include; }
-            }
-
-            public bool IsEmpty {
-                get { return _include.Length == 0 && _astral.Length == 0 && !_negated; }
-            }
-
-            public bool IsSingleCharacter {
-                get { return _isSingleCharacter; }
-            }
-
-            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral)
-                : this(negate, include, exclude) {
-                _astral = astral;
-            }
-
-            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral, List<int> astralRanges)
-                : this(negate, include, exclude) {
-                _astral = astral;
-                _astralRanges = astralRanges;
-            }
-
-            /// <summary>The complement of a class that had non-BMP members (see Complement).</summary>
-            private static CharacterSet/*!*/ MakeNegatedAstral(string/*!*/ include, CharacterSet/*!*/ exclude,
-                string/*!*/ astral, List<int>/*!*/ astralRanges) {
-                var result = new CharacterSet(true, include, exclude, astral, astralRanges);
-                result._excludeSurrogates = true;
-                return result;
-            }
-
-            // The non-BMP members came from a POSIX class ([[:lower:]] and friends) and can be
-            // left out where a character class operation cannot keep them.
-            private readonly bool _astralOptional;
-
-            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral,
-                List<int> astralRanges, bool astralOptional)
-                : this(negate, include, exclude, astral, astralRanges) {
-                _astralOptional = astralOptional;
-            }
-
-            /// <summary>This set plus non-BMP members that set operations may drop (see _astralOptional).</summary>
-            internal CharacterSet/*!*/ WithOptionalAstral(string/*!*/ astral) {
-                Debug.Assert(!_negated);
-                // The ranges of a POSIX class's non-BMP members are not tracked: they are
-                // droppable, so nothing ever needs to complement them.
-                return new CharacterSet(false, _include, _exclude, JoinAstral(_astral, astral), null,
-                    !HasAstral || _astralOptional);
-            }
-
-            private static string/*!*/ JoinAstral(string/*!*/ a, string/*!*/ b) {
-                return (a.Length == 0) ? b : (b.Length == 0) ? a : a + "|" + b;
-            }
-
-            /// <summary>Ranges of the union, or null when either side's are unknown.</summary>
-            private static List<int> JoinAstralRanges(CharacterSet/*!*/ a, CharacterSet/*!*/ b) {
-                if (!a.HasAstral) {
-                    return b._astralRanges;
-                }
-                if (!b.HasAstral) {
-                    return a._astralRanges;
-                }
-                if (a._astralRanges == null || b._astralRanges == null) {
-                    return null;
-                }
-                var result = new List<int>(a._astralRanges);
-                result.AddRange(b._astralRanges);
-                return result;
-            }
-
-            /// <summary>The non-BMP codepoints outside <paramref name="ranges"/>, sorted and merged.</summary>
-            private static List<int>/*!*/ ComplementAstralRanges(List<int>/*!*/ ranges) {
-                const int First = 0x10000, Last = 0x10ffff;
-
-                var pairs = new List<int[]>();
-                for (int i = 0; i < ranges.Count; i += 2) {
-                    pairs.Add(new[] { ranges[i], ranges[i + 1] });
-                }
-                pairs.Sort((x, y) => x[0].CompareTo(y[0]));
-
-                var result = new List<int>();
-                int next = First;
-                foreach (var pair in pairs) {
-                    if (pair[0] > next) {
-                        result.Add(next);
-                        result.Add(pair[0] - 1);
-                    }
-                    if (pair[1] + 1 > next) {
-                        next = pair[1] + 1;
+            private static void AppendSurrogatePairs(StringBuilder/*!*/ sb, int[]/*!*/ ranges) {
+                // trailing-surrogate ranges (0..0x3ff) per leading surrogate (0..0x3ff)
+                var trails = new List<int>[0x400];
+                for (int i = 0; i < ranges.Length; i += 2) {
+                    int low = ranges[i] - 0x10000, high = ranges[i + 1] - 0x10000;
+                    for (int lead = low >> 10; lead <= high >> 10; lead++) {
+                        int from = (lead == low >> 10) ? low & 0x3ff : 0;
+                        int to = (lead == high >> 10) ? high & 0x3ff : 0x3ff;
+                        var list = trails[lead] ?? (trails[lead] = new List<int>());
+                        list.Add(from);
+                        list.Add(to);
                     }
                 }
-                if (next <= Last) {
-                    result.Add(next);
-                    result.Add(Last);
-                }
-                return result;
-            }
 
-            private static string/*!*/ AstralAlternation(List<int>/*!*/ ranges) {
-                var sb = new StringBuilder();
-                for (int i = 0; i < ranges.Count; i += 2) {
-                    if (sb.Length != 0) {
+                // group the leading surrogates by their trailing class, in order of first appearance
+                var order = new List<string>();
+                var leads = new Dictionary<string, List<int>>();
+                for (int lead = 0; lead < 0x400; lead++) {
+                    if (trails[lead] == null) {
+                        continue;
+                    }
+                    var trail = new StringBuilder();
+                    var list = trails[lead];
+                    for (int i = 0; i < list.Count; i += 2) {
+                        trail.Append(Unit(0xdc00 + list[i]));
+                        if (list[i + 1] != list[i]) {
+                            if (list[i + 1] > list[i] + 1) {
+                                trail.Append('-');
+                            }
+                            trail.Append(Unit(0xdc00 + list[i + 1]));
+                        }
+                    }
+                    string key = (list.Count == 2 && list[0] == list[1]) ? trail.ToString() : "[" + trail + "]";
+                    List<int> leadList;
+                    if (!leads.TryGetValue(key, out leadList)) {
+                        leads[key] = leadList = new List<int>();
+                        order.Add(key);
+                    }
+                    leadList.Add(lead);
+                }
+
+                for (int k = 0; k < order.Count; k++) {
+                    if (k > 0) {
                         sb.Append('|');
                     }
-                    sb.Append(SurrogateRange(ranges[i], ranges[i + 1]));
-                }
-                return sb.ToString();
-            }
-
-            internal CharacterSet/*!*/ GetIncludedSet() {
-                return new CharacterSet(_include, _isSingleCharacter);
-            }
-
-            internal CharacterSet/*!*/ Complement() {
-                // [^...] over a class that has non-BMP members.  The members themselves invert
-                // from their codepoint ranges; the BMP half inverts the way it always does, with
-                // the lead surrogates excluded so that the two halves cannot both match the first
-                // code unit of a surrogate pair.  Ruby needs this for real patterns:
-                // ActiveSupport's XML tag-name check is [^...\u{10000}-\u{EFFFF}].
-                if (HasAstral && !_astralOptional && !_negated && _astralRanges != null) {
-                    var complement = ComplementAstralRanges(_astralRanges);
-                    return MakeNegatedAstral(_include, _exclude, AstralAlternation(complement), complement);
-                }
-
-                var bmp = RequireNoAstral("negated");
-                return new CharacterSet(!bmp._negated, bmp._include, bmp._exclude);
-            }
-
-            internal CharacterSet/*!*/ Subtract(CharacterSet/*!*/ other) {
-                if (IsEmpty || other.IsEmpty) {
-                    return this;
-                }
-                CharacterSet self = RequireNoAstral("subtracted");
-                CharacterSet set = other.RequireNoAstral("subtracted");
-                if (!ReferenceEquals(self, this)) {
-                    return self.Subtract(set);
-                }
-
-                if (_negated) {
-                    if (set._negated) {
-                        // (^A) \ (^B) = ^A and B = B \ A
-                        return set.Complement().Subtract(Complement());
+                    var leadList = leads[order[k]];
+                    if (leadList.Count == 1) {
+                        sb.Append(Unit(0xd800 + leadList[0]));
                     } else {
-                        // (^A) \ B == ^(A or B)
-                        return Complement().Union(set).Complement();
-                    }
-                } else if (set._negated) {
-                    // A \ ^(B) == A and B
-                    return Intersect(set.Complement());
-                }
-
-                // (a \ B) \ C == a \ (B or C)
-                return new CharacterSet(_include, _exclude.Union(set));
-            }
-
-            internal CharacterSet/*!*/ Union(CharacterSet/*!*/ set) {
-                if (IsEmpty) {
-                    return set;
-                } else if (set.IsEmpty) {
-                    return this;
-                }
-
-                if (_negated) {
-                    if (set._negated) {
-                        // ^A or ^B == ^(A and B)
-                        return Complement().Intersect(set.Complement()).Complement();
-                    } else {
-                        // ^A or B == ^(A \ B)
-                        return Complement().Subtract(set).Complement();
-                    }
-                } else if (set._negated) {
-                    // A or ^B == ^(B \ A)
-                    return set.Complement().Subtract(this).Complement();
-                }
-
-                // (a \ B) or (c \ D) == (a or c) \ ((D \ a) or (B \ c) or (B and D))
-                //
-                // Proof: 
-                // (a \ B) or (c \ D) == 
-                // (a and ^B) or (c and ^D) == 
-                // (a or c) and (a or ^D) and (^B or c) and (^B or ^D) ==
-                // (a or c) \ (^(a or ^D) or ^(^B or c) or ^(^B or ^D)) ==
-                // (a or c) \ ((D \ a) or (B \ c) or (B and D))                QED
-                return new CharacterSet(false, _include + set._include,
-                    set._exclude.Subtract(GetIncludedSet()).
-                        Union(this._exclude.Subtract(set.GetIncludedSet())).
-                        Union(this._exclude.Intersect(set._exclude)),
-                    JoinAstral(_astral, set._astral),
-                    JoinAstralRanges(this, set),
-                    (!HasAstral || _astralOptional) && (!set.HasAstral || set._astralOptional)
-                );
-            }
-
-            internal CharacterSet/*!*/ Intersect(CharacterSet/*!*/ other) {
-                if (IsEmpty || other.IsEmpty) {
-                    return Empty;
-                }
-                CharacterSet self = RequireNoAstral("intersected");
-                CharacterSet set = other.RequireNoAstral("intersected");
-                if (!ReferenceEquals(self, this)) {
-                    return self.Intersect(set);
-                }
-
-                if (_negated) {
-                    if (set._negated) {
-                        // ^A and ^B == ^(A or B)
-                        return Complement().Union(set.Complement()).Complement();
-                    } else {
-                        // ^A and B = B \ A
-                        return set.Subtract(Complement());
-                    }
-                } else if (set._negated) {
-                    // A and ^B = A \ B
-                    return Subtract(set.Complement());
-                }
-
-                // (a \ B) and (c \ D) == a \ ^(c \ (B or D))
-                // 
-                // Proof:
-                // (a \ B) and (c \ D) == 
-                // (a and ^B) and (c and ^D) ==
-                // a \ ^(c and ^B and ^D) ==
-                // a \ ^(c \ (B or D))          QED
-                return new CharacterSet(_include, new CharacterSet(true, set._include, _exclude.Union(set._exclude)));
-            }
-
-            /// <summary>
-            /// The members, as the body of a .NET character class. A body that starts with '^'
-            /// would be read as a negation there - whether this set is negated is decided by the
-            /// caller, which emits the complement explicitly - so a leading '^' is escaped.
-            /// Ruby's /[^^]/ ("anything but a caret") went through as [\0-￿-[^]] without this.
-            /// </summary>
-            private void AppendInclude(StringBuilder/*!*/ sb) {
-                if (_include.Length != 0 && _include[0] == '^') {
-                    sb.Append("\\^").Append(_include, 1, _include.Length - 1);
-                } else {
-                    sb.Append(_include);
-                }
-            }
-
-            public StringBuilder/*!*/ AppendTo(StringBuilder/*!*/ sb, bool parenthesize) {
-                if (_negated && (HasAstral || _excludeSurrogates)) {
-                    // The complement of a class that had non-BMP members: any BMP character
-                    // outside the class, but never a lone surrogate - that would match half of a
-                    // character the class excluded - followed by the non-BMP members that are
-                    // *not* in it, each as a whole surrogate pair.
-                    sb.Append("(?:(?![\ud800-\udfff])");
-                    if (_include.Length == 0 && _exclude.IsEmpty) {
-                        sb.Append("[\0-\uffff]");
-                    } else {
-                        sb.Append("[\0-\uffff-[");
-                        AppendInclude(sb);
-                        if (!_exclude.IsEmpty) {
-                            sb.Append('-');
-                            _exclude.AppendTo(sb, true);
-                        }
-                        sb.Append("]]");
-                    }
-                    if (HasAstral) {
-                        sb.Append('|').Append(_astral);
-                    }
-                    sb.Append(')');
-                    return sb;
-                }
-                if (HasAstral) {
-                    sb.Append("(?:");
-                    if (_include.Length != 0 || !_exclude.IsEmpty) {
                         sb.Append('[');
-                        AppendInclude(sb);
-                        if (!_exclude.IsEmpty) {
-                            sb.Append('-');
-                            _exclude.AppendTo(sb, true);
+                        for (int i = 0; i < leadList.Count; ) {
+                            int j = i;
+                            while (j + 1 < leadList.Count && leadList[j + 1] == leadList[j] + 1) {
+                                j++;
+                            }
+                            sb.Append(Unit(0xd800 + leadList[i]));
+                            if (j > i) {
+                                if (j > i + 1) {
+                                    sb.Append('-');
+                                }
+                                sb.Append(Unit(0xd800 + leadList[j]));
+                            }
+                            i = j + 1;
                         }
-                        sb.Append("]|");
-                    }
-                    sb.Append(_astral);
-                    sb.Append(')');
-                    return sb;
-                }
-                if (IsEmpty) {
-                    if (_negated) {
-                        sb.Append("[\0-\uffff]");
-                    } else {
-                        sb.Append("[a-[a]]");
-                    }
-                } else if (IsSingleCharacter && !parenthesize) {
-                    // Outside a class a bare '^' is the anchor, so it is escaped here too.
-                    AppendInclude(sb);
-                } else {
-                    if (_negated) {
-                        sb.Append("[\0-\uffff-");
-                    }
-                    sb.Append('[');
-                    AppendInclude(sb);
-                    if (!_exclude.IsEmpty) {
-                        sb.Append('-');
-                        _exclude.AppendTo(sb, true);
-                    }
-                    sb.Append(']');
-                    if (_negated) {
                         sb.Append(']');
                     }
+                    sb.Append(order[k]);
                 }
-                return sb;
             }
 
             public override string/*!*/ ToString() {
@@ -2558,17 +2680,19 @@ namespace IronRuby.Builtins {
             Debug.Assert(_rubyPattern[_index - 1] == '[');
 
             posixClass = false;
-            bool positive = !Read('^');
 
             // [:alnum:]
-            // [^:alnum:]
+            // [:^alnum:]
+            // ([^:alnum:] is not one: it is the class of anything but ':', 'a', 'l', 'n', 'u' and 'm')
             if (nested) {
-                var parsed = ParsePosixCharacterClass(positive);
+                var parsed = ParsePosixCharacterClass();
                 if (parsed != null) {
                     posixClass = true;
                     return parsed;
                 }
             }
+
+            bool positive = !Read('^');
 
             var result = ParseCharacterGroupIntersections();
             if (!positive) {
@@ -2633,7 +2757,7 @@ namespace IronRuby.Builtins {
                     // \p{...} is an error there, and still is below: mayStartRange is false only
                     // for the nested-class case.)
                     if (!mayStartRange) {
-                        result = result.Union(set).Union(new CharacterSet(@"\-", true));
+                        result = result.Union(set).Union(CharacterSet.MakeCharacter('-', @"\-"));
                         continue;
                     }
 
@@ -2642,44 +2766,31 @@ namespace IronRuby.Builtins {
                     bool mayEndRange;
                     var rangeEnd = ParseCharacter(ref codepoints, out mayEndRange);
                     if (rangeEnd == null) {
-                        result = result.Union(set).Union(new CharacterSet(@"\-", true));
+                        result = result.Union(set).Union(CharacterSet.MakeCharacter('-', @"\-"));
                         break;
                     }
 
                     // [a-b]-z
                     // \p{L}-z
-                    if (!mayStartRange || !(set.IsSingleCharacter || set.IsAstralCharacter)) {
-                        throw MakeError("char-class value at start of range");
+                    if (!mayStartRange || !set.IsSingleCharacter) {
+                        throw MakeError("unmatched range specifier in char-class");
                     }
 
                     // a-[a-z]
                     // a-\p{L}
-                    if (!mayEndRange || !(rangeEnd.IsSingleCharacter || rangeEnd.IsAstralCharacter)) {
+                    if (!mayEndRange || !rangeEnd.IsSingleCharacter) {
                         throw MakeError("char-class value at end of range");
                     }
 
-                    if (set.IsAstralCharacter || rangeEnd.IsAstralCharacter) {
-                        if (set.IsAstralCharacter && !rangeEnd.IsAstralCharacter) {
-                            // [\u{10000}-a]
-                            throw MakeError("empty range in char class");
-                        }
-                        if (!set.IsAstralCharacter) {
-                            // A range straddling U+FFFF is two pieces: the rest of the BMP as a
-                            // character class - with the surrogate block taken out, so that it can
-                            // never match half of a pair - and the non-BMP part as an alternation
-                            // of surrogate pairs.  ActionView's token pattern is one of these:
-                            // [0-9A-Za-z_\u0080-\u{10ffff}-].
-                            var bmp = new CharacterSet(set.Include + "-\\uffff",
-                                new CharacterSet(CharacterSet.SurrogateBlock));
-                            set = bmp.Union(CharacterSet.MakeAstralRange(0x10000, rangeEnd.AstralCodepoint));
-                        } else if (set.AstralCodepoint > rangeEnd.AstralCodepoint) {
-                            throw MakeError("empty range in char class");
-                        } else {
-                            set = CharacterSet.MakeAstralRange(set.AstralCodepoint, rangeEnd.AstralCodepoint);
-                        }
-                    } else {
-                        set = new CharacterSet(set.Include + "-" + rangeEnd.Include);
+                    int low = set.SingleCodepoint, high = rangeEnd.SingleCodepoint;
+                    if (low > high) {
+                        throw MakeError("empty range in char class");
                     }
+
+                    // A range reaching past U+FFFF has non-BMP members, which CharacterSet emits
+                    // as surrogate pairs. ActionView's token pattern is one of these:
+                    // [0-9A-Za-z_\u0080-\u{10ffff}-].
+                    set = CharacterSet.MakeRange(low, high, (high < 0x10000) ? set.Text + "-" + rangeEnd.Text : null);
                 }
 
                 result = result.Union(set);
@@ -2751,132 +2862,32 @@ namespace IronRuby.Builtins {
                 case '-':
                     // warning: character class has '-' without escape
                     mayStartRange = true;
-                    return new CharacterSet(@"\-", true);
+                    return CharacterSet.MakeCharacter('-', @"\-");
 
                 default:
                     mayStartRange = true;
                     if (c >= 0xd800 && c <= 0xdbff && Peek() >= 0xdc00 && Peek() <= 0xdfff) {
                         // a literal non-BMP character, written as its surrogate pair
-                        return CharacterSet.MakeAstralCharacter(Char.ConvertToUtf32((char)c, (char)Read()));
+                        return MakeCodePointSet(Char.ConvertToUtf32((char)c, (char)Read()));
                     }
-                    return new CharacterSet(((char)c).ToString(), true);
+                    return CharacterSet.MakeCharacter(c, ((char)c).ToString());
             }
-        }
-
-        private enum PosixCharacterClass {
-            Alnum,
-            Alpha,
-            Ascii,
-            Blank,
-            Cntrl,
-            Digit,
-            Graph,
-            Lower,
-            Print,
-            Punct,
-            Space,
-            Upper,
-            XDigit,
-            Word,
         }
 
         //
         //  \p{property-name}
         //  \p{^property-name}    (negative)
         //  \P{property-name}     (negative)
-        //          
-        // Property-name:
-        //          
-        //  + works on all encodings
-        //    Alnum, Alpha, Blank, Cntrl, Digit, Graph, Lower,
-        //    Print, Punct, Space, Upper, XDigit, Word, ASCII,
-        //          
-        //  + works on EUC_JP, Shift_JIS
-        //    Hiragana, Katakana
-        //          
-        //  + works on UTF8, UTF16, UTF32
-        //    Any, Assigned, C, Cc, Cf, Cn, Co, Cs, L, Ll, Lm, Lo, Lt, Lu,
-        //    M, Mc, Me, Mn, N, Nd, Nl, No, P, Pc, Pd, Pe, Pf, Pi, Po, Ps,
-        //    S, Sc, Sk, Sm, So, Z, Zl, Zp, Zs, 
-        //    Arabic, Armenian, Bengali, Bopomofo, Braille, Buginese,
-        //    Buhid, Canadian_Aboriginal, Cherokee, Common, Coptic,
-        //    Cypriot, Cyrillic, Deseret, Devanagari, Ethiopic, Georgian,
-        //    Glagolitic, Gothic, Greek, Gujarati, Gurmukhi, Han, Hangul,
-        //    Hanunoo, Hebrew, Hiragana, Inherited, Kannada, Katakana,
-        //    Kharoshthi, Khmer, Lao, Latin, Limbu, Linear_B, Malayalam,
-        //    Mongolian, Myanmar, New_Tai_Lue, Ogham, Old_Italic, Old_Persian,
-        //    Oriya, Osmanya, Runic, Shavian, Sinhala, Syloti_Nagri, Syriac,
-        //    Tagalog, Tagbanwa, Tai_Le, Tamil, Telugu, Thaana, Thai, Tibetan,
-        //    Tifinagh, Ugaritic, Yi
         //
-        /// <summary>
-        /// Onigmo matches a property name ignoring case, underscores, hyphens and spaces, and
-        /// knows the long Unicode names ("Letter") beside the two-letter ones ("L"); the CLR
-        /// knows only the exact two-letter forms.  Names not listed here are handed on as they
-        /// were written - the block names ("IsGreek") and the script names are matched further
-        /// down, and an unknown one has to reach the CLR to be reported as unknown.
-        /// </summary>
-        private static string/*!*/ NormalizeCharacterCategoryName(string/*!*/ name) {
-            var key = new StringBuilder(name.Length);
-            foreach (char c in name) {
-                if (c != '_' && c != '-' && c != ' ') {
-                    key.Append(Char.ToLowerInvariant(c));
-                }
-            }
-
-            string canonical;
-            return _characterCategoryAliases.TryGetValue(key.ToString(), out canonical) ? canonical : name;
-        }
-
-        private static readonly Dictionary<string, string> _characterCategoryAliases =
-            new Dictionary<string, string>() {
-                // POSIX classes, which Ruby also spells in any case
-                { "alnum", "Alnum" }, { "alpha", "Alpha" }, { "blank", "Blank" }, { "cntrl", "Cntrl" },
-                { "digit", "Digit" }, { "graph", "Graph" }, { "lower", "Lower" }, { "print", "Print" },
-                { "punct", "Punct" }, { "space", "Space" }, { "upper", "Upper" }, { "xdigit", "XDigit" },
-                { "ascii", "ASCII" }, { "word", "Word" }, { "any", "Any" }, { "assigned", "Assigned" },
-
-                // general categories: the short name in any case, and the long name
-                { "l", "L" }, { "letter", "L" },
-                { "lc", "Lc" }, { "casedletter", "Lc" },
-                { "lu", "Lu" }, { "uppercaseletter", "Lu" },
-                { "ll", "Ll" }, { "lowercaseletter", "Ll" },
-                { "lt", "Lt" }, { "titlecaseletter", "Lt" },
-                { "lm", "Lm" }, { "modifierletter", "Lm" },
-                { "lo", "Lo" }, { "otherletter", "Lo" },
-                { "m", "M" }, { "mark", "M" }, { "combiningmark", "M" },
-                { "mn", "Mn" }, { "nonspacingmark", "Mn" },
-                { "mc", "Mc" }, { "spacingmark", "Mc" }, { "spacingcombiningmark", "Mc" },
-                { "me", "Me" }, { "enclosingmark", "Me" },
-                { "n", "N" }, { "number", "N" },
-                { "nd", "Nd" }, { "decimalnumber", "Nd" }, { "digitnumber", "Nd" },
-                { "nl", "Nl" }, { "letternumber", "Nl" },
-                { "no", "No" }, { "othernumber", "No" },
-                { "p", "P" }, { "punctuation", "P" },
-                { "pc", "Pc" }, { "connectorpunctuation", "Pc" },
-                { "pd", "Pd" }, { "dashpunctuation", "Pd" },
-                { "ps", "Ps" }, { "openpunctuation", "Ps" },
-                { "pe", "Pe" }, { "closepunctuation", "Pe" },
-                { "pi", "Pi" }, { "initialpunctuation", "Pi" },
-                { "pf", "Pf" }, { "finalpunctuation", "Pf" },
-                { "po", "Po" }, { "otherpunctuation", "Po" },
-                { "s", "S" }, { "symbol", "S" },
-                { "sm", "Sm" }, { "mathsymbol", "Sm" },
-                { "sc", "Sc" }, { "currencysymbol", "Sc" },
-                { "sk", "Sk" }, { "modifiersymbol", "Sk" },
-                { "so", "So" }, { "othersymbol", "So" },
-                { "z", "Z" }, { "separator", "Z" },
-                { "zs", "Zs" }, { "spaceseparator", "Zs" },
-                { "zl", "Zl" }, { "lineseparator", "Zl" },
-                { "zp", "Zp" }, { "paragraphseparator", "Zp" },
-                { "c", "C" }, { "other", "C" },
-                { "cc", "Cc" }, { "control", "Cc" },
-                { "cf", "Cf" }, { "format", "Cf" },
-                { "cs", "Cs" }, { "surrogate", "Cs" },
-                { "co", "Co" }, { "privateuse", "Co" },
-                { "cn", "Cn" }, { "unassigned", "Cn" },
-            };
-
+        // Every property Onigmo knows - the general categories (L, Lu, Letter...), the scripts
+        // (Han, Hiragana, Greek, Grek...), the binary properties (Emoji, Emoji_Presentation,
+        // Extended_Pictographic, Alphabetic, White_Space...), the blocks (In_Greek_and_Coptic),
+        // Age=N.N, Any, Assigned and the POSIX names (Alpha, Word, Punct...) - is spelled out from
+        // Onigmo's own tables (UnicodeProperties), never handed to .NET's \p{...}: that knows only
+        // the general categories and some BMP blocks, of an older Unicode version, and none of it
+        // outside the BMP. Onigmo matches the name ignoring case, ' ', '-' and '_'. (?a) does not
+        // restrict a property - it restricts the POSIX brackets and \w, \d, \s only.
+        //
         private CharacterSet/*!*/ ParseCharacterCategoryName(int escape) {
             bool positive = escape == 'p';
 
@@ -2886,7 +2897,6 @@ namespace IronRuby.Builtins {
             }
             Skip();
 
-            // CLR doesn't support ^:
             if (Peek() == '^') {
                 positive = !positive;
                 Skip();
@@ -2900,197 +2910,34 @@ namespace IronRuby.Builtins {
 
             // trailing }
             if (c == -1) {
-                throw MakeError("invalid Unicode property");
+                throw MakeError("invalid character property name {}");
             }
-            
-            string name = NormalizeCharacterCategoryName(_rubyPattern.Substring(start, _index - start));
+
+            string name = _rubyPattern.Substring(start, _index - start);
             Skip();
 
-            var script = MakeScriptCharacterClass(name);
-            if (script != null) {
-                return positive ? script : script.Complement();
+            string normalized = UnicodeProperties.NormalizeName(name);
+            int table = (normalized != null) ? UnicodeProperties.Find(normalized) : -1;
+            if (table < 0) {
+                throw MakeError("invalid character property name {" + name + "}");
             }
-
-            switch (name) {
-                // CLR unsupported, any encoding:
-                case "Alnum": return MakePosixCharacterClass(PosixCharacterClass.Alnum, positive); 
-                case "Alpha": return MakePosixCharacterClass(PosixCharacterClass.Alpha, positive); 
-                case "Blank": return MakePosixCharacterClass(PosixCharacterClass.Blank, positive); 
-                case "Cntrl": return MakePosixCharacterClass(PosixCharacterClass.Cntrl, positive); 
-                case "Digit": return MakePosixCharacterClass(PosixCharacterClass.Digit, positive); 
-                case "Graph": return MakePosixCharacterClass(PosixCharacterClass.Graph, positive); 
-                case "Lower": return MakePosixCharacterClass(PosixCharacterClass.Lower, positive); 
-                case "Print": return MakePosixCharacterClass(PosixCharacterClass.Print, positive); 
-                case "Punct": return MakePosixCharacterClass(PosixCharacterClass.Punct, positive); 
-                case "Space": return MakePosixCharacterClass(PosixCharacterClass.Space, positive); 
-                case "Upper": return MakePosixCharacterClass(PosixCharacterClass.Upper, positive); 
-                case "XDigit": return MakePosixCharacterClass(PosixCharacterClass.XDigit, positive);
-                case "ASCII": return MakePosixCharacterClass(PosixCharacterClass.Ascii, positive);
-                case "Word": return MakePosixCharacterClass(PosixCharacterClass.Word, positive); 
-
-                // CLR unsupported, Unicode only:
-                case "Any":
-                    // conjunction of any two disjunctive categories:
-                    if (positive) {
-                        return new CharacterSet(@"\P{L}\P{N}");
-                    } else {
-                        return new CharacterSet(@"\p{L}", new CharacterSet(@"\p{L}"));
-                    }
-
-                case "Assigned":
-                    positive = !positive;
-                    name = "Cn";
-                    goto default;
-
-                case "Lc":
-                case "Cased_Letter":
-                    // Onigmo's grouped general category; the CLR knows only the three
-                    // single categories it stands for. rdoc's Text module asks for it.
-                    if (positive) {
-                        return new CharacterSet(@"\p{Lu}\p{Ll}\p{Lt}");
-                    } else {
-                        return new CharacterSet(@"\P{Lu}", new CharacterSet(@"\p{Ll}\p{Lt}"));
-                    }
-
-                case "Arabic": 
-                case "Armenian": 
-                case "Bengali": 
-                case "Bopomofo": 
-                case "Buhid": 
-                case "Cherokee": 
-                case "Cyrillic": 
-                case "Devanagari": 
-                case "Ethiopic": 
-                case "Georgian":
-                case "Greek": 
-                case "Gujarati": 
-                case "Gurmukhi": 
-                case "Hanunoo": 
-                case "Hebrew": 
-                case "Kannada": 
-                case "Khmer": 
-                case "Lao": 
-                case "Limbu": 
-                case "Malayalam":
-                case "Mongolian": 
-                case "Myanmar": 
-                case "Ogham": 
-                case "Oriya": 
-                case "Runic": 
-                case "Sinhala": 
-                case "Syriac":
-                case "Tagalog": 
-                case "Tagbanwa": 
-                case "TaiLe": 
-                case "Tamil": 
-                case "Telugu":
-                case "Thaana": 
-                case "Thai": 
-                case "Tibetan":
-                    // For these scripts .NET happens to have a block of the same name. A block is
-                    // not a script, so this over-matches at the edges, but it is what is available.
-                    name = "Is" + name;
-                    goto default;
-
-                case "Canadian_Aboriginal":
-                    name = "IsUnifiedCanadianAboriginalSyllabics";
-                    goto default;
-
-                default:
-                    return new CharacterSet(@"\" + (positive ? 'p' : 'P') + "{" + name + "}");
-            }
-        }
-
-        /// <summary>
-        /// Unicode *script* properties for the scripts .NET has no identically named block for.
-        /// .NET's Regex knows nothing about scripts, only about a fixed list of Unicode 4.0 era
-        /// BMP blocks, so these are approximations: a script's codepoints are enumerated as
-        /// explicit ranges. Returns null for a name this method does not handle.
-        /// </summary>
-        private CharacterSet MakeScriptCharacterClass(string/*!*/ name) {
-            switch (name) {
-                case "Han":
-                    // CJK Radicals Supplement, Kangxi Radicals, the Han characters scattered
-                    // through CJK Symbols and Punctuation, Extension A, the URO and the
-                    // compatibility ideographs. Non-BMP extensions are out of reach (see
-                    // CharacterSet._astral: a class cannot hold a surrogate pair).
-                    return new CharacterSet("\u2e80-\u2e99\u2e9b-\u2ef3\u2f00-\u2fd5\u3005\u3007" +
-                        "\u3021-\u3029\u3038-\u303b\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufa6d\ufa70-\ufad9");
-
-                case "Hangul":
-                    // Jamo, Compatibility Jamo, Jamo Extended-A/B and the syllables block.
-                    return new CharacterSet("\u1100-\u11ff\u302e\u302f\u3131-\u318e\ua960-\ua97c" +
-                        "\uac00-\ud7a3\ud7b0-\ud7c6\ud7cb-\ud7fb\uffa0-\uffbe\uffc2-\uffc7" +
-                        "\uffca-\uffcf\uffd2-\uffd7\uffda-\uffdc");
-
-                case "Latin":
-                    return new CharacterSet(@"\p{IsBasicLatin}\p{IsLatin-1Supplement}\p{IsLatinExtended-A}" +
-                        @"\p{IsLatinExtended-B}\p{IsLatinExtendedAdditional}" +
-                        "\u2c60-\u2c7f\ua720-\ua7ff\ufb00-\ufb06\uff21-\uff3a\uff41-\uff5a");
-
-                case "Braille":
-                    return new CharacterSet(@"\p{IsBraillePatterns}");
-
-                case "Hiragana":
-                    // Not the whole IsHiragana block: U+3099-U+309C are Inherited/Common and
-                    // U+309B/U+309C are not Hiragana either.
-                    return new CharacterSet("\u3041-\u3096\u309d-\u309f");
-
-                case "Katakana":
-                    // U+30A0, U+30FB and U+30FC (the prolonged sound mark) sit inside the
-                    // IsKatakana block but are script Common, so the block over-matches.
-                    return new CharacterSet("\u30a1-\u30fa\u30fd-\u30ff\u31f0-\u31ff" +
-                        "\u32d0-\u32fe\u3300-\u3357\uff66-\uff6f\uff71-\uff9d");
-
-                case "Coptic":
-                    return new CharacterSet("\u03e2-\u03ef\u2c80-\u2cff\u2e00-\u2e01");
-
-                case "Glagolitic":
-                    return new CharacterSet("\u2c00-\u2c5f");
-
-                case "Tifinagh":
-                    return new CharacterSet("\u2d30-\u2d7f");
-
-                case "Syloti_Nagri":
-                    return new CharacterSet("\ua800-\ua82c");
-
-                case "New_Tai_Lue":
-                    return new CharacterSet("\u1980-\u19df");
-
-                case "Buginese":
-                    return new CharacterSet("\u1a00-\u1a1f");
-
-                case "Yi":
-                    return new CharacterSet(@"\p{IsYiSyllables}\p{IsYiRadicals}");
-
-                case "Common":
-                case "Inherited":
-                case "Cypriot":
-                case "Deseret":
-                case "Gothic":
-                case "Kharoshthi":
-                case "Linear_B":
-                case "Old_Italic":
-                case "Old_Persian":
-                case "Osmanya":
-                case "Shavian":
-                    // Either not a block at all (Common, Inherited span the whole repertoire) or
-                    // entirely outside the BMP, which .NET cannot address in a character class.
-                    throw MakeError("character property '" + name + "' is not supported");
-
-                default:
-                    return null;
-            }
+            return CharacterSet.MakeProperty(table, positive);
         }
 
         // [:xxx:] in character class
         // [^:xxx:] in character class
-        private CharacterSet ParsePosixCharacterClass(bool positive) {
+        private CharacterSet ParsePosixCharacterClass() {
             int i = 0;
             if (Peek(i) == ':') {
                 i++;
             } else {
                 return null;
+            }
+
+            bool positive = true;
+            if (Peek(i) == '^') {
+                positive = false;
+                i++;
             }
 
             int start = _index + i;
@@ -3107,256 +2954,24 @@ namespace IronRuby.Builtins {
             string name = _rubyPattern.Substring(start, _index + i - start);
             _index += i + 2;
 
-            return MakePosixCharacterClass(ParsePosixClass(name), positive);
-        }
-
-        private PosixCharacterClass ParsePosixClass(string/*!*/ name) {
-            switch (name) {
-                case "alnum": return PosixCharacterClass.Alnum;
-                case "alpha": return PosixCharacterClass.Alpha;
-                case "ascii": return PosixCharacterClass.Ascii;
-                case "blank": return PosixCharacterClass.Blank;
-                case "cntrl": return PosixCharacterClass.Cntrl;
-                case "digit": return PosixCharacterClass.Digit;
-                case "graph": return PosixCharacterClass.Graph;
-                case "lower": return PosixCharacterClass.Lower;
-                case "print": return PosixCharacterClass.Print;
-                case "punct": return PosixCharacterClass.Punct;
-                case "space": return PosixCharacterClass.Space;
-                case "upper": return PosixCharacterClass.Upper;
-                case "xdigit": return PosixCharacterClass.XDigit;
-                case "word": return PosixCharacterClass.Word;
-                default: 
-                    throw MakeError("invalid POSIX bracket type");
+            int table = UnicodeProperties.FindPosix(name);
+            if (table < 0) {
+                throw MakeError("invalid POSIX bracket type");
             }
+            return MakePosixCharacterClass(table, positive);
         }
 
-        private CharacterSet MakePosixCharacterClass(PosixCharacterClass charClass, bool positive) {
+        private static readonly int[] _asciiRange = new int[] { 0, 0x7f };
+
+        /// <summary>[[:name:]]: Onigmo's property of that name, all of Unicode unless (?a) is in effect.</summary>
+        private CharacterSet/*!*/ MakePosixCharacterClass(int table, bool positive) {
+            var result = CharacterSet.MakeProperty(table, true);
             if (_characterClassMode == CharacterClassMode.Ascii) {
                 // (?a) restricts the POSIX classes to ASCII. A negated class still matches
                 // non-ASCII: (?a)[[:^alpha:]] accepts a Hiragana character.
-                var ascii = MakePosixCharacterClassCore(charClass, true)
-                    .Intersect(new CharacterSet(@"\p{IsBasicLatin}"));
-                return positive ? ascii : ascii.Complement();
+                result = result.Intersect(CharacterSet.MakeSet(_asciiRange, null));
             }
-            return MakePosixCharacterClassCore(charClass, positive);
-        }
-
-        private CharacterSet MakePosixCharacterClassCore(PosixCharacterClass charClass, bool positive) {
-            var result = MakeBmpPosixCharacterClass(charClass, positive);
-            if (positive) {
-                // .NET matches UTF-16 code units, so a class alone never matches a character
-                // outside the BMP; Onigmo's POSIX classes range over all of Unicode
-                string astral = GetAstralPosixMembers(charClass);
-                if (astral != null) {
-                    result = result.WithOptionalAstral(astral);
-                }
-            }
-            return result;
-        }
-
-        private static readonly Dictionary<PosixCharacterClass, string> _astralPosixMembers = new Dictionary<PosixCharacterClass, string>();
-
-        private static string GetAstralPosixMembers(PosixCharacterClass charClass) {
-            Func<System.Globalization.UnicodeCategory, bool> member;
-            switch (charClass) {
-                case PosixCharacterClass.Lower: member = c => c == System.Globalization.UnicodeCategory.LowercaseLetter; break;
-                case PosixCharacterClass.Upper: member = c => c == System.Globalization.UnicodeCategory.UppercaseLetter; break;
-                case PosixCharacterClass.Alpha: member = c => IsLetter(c) || c == System.Globalization.UnicodeCategory.LetterNumber; break;
-                case PosixCharacterClass.Alnum: member = c => IsLetter(c) || c == System.Globalization.UnicodeCategory.LetterNumber || c == System.Globalization.UnicodeCategory.DecimalDigitNumber; break;
-                case PosixCharacterClass.Digit: member = c => c == System.Globalization.UnicodeCategory.DecimalDigitNumber; break;
-                case PosixCharacterClass.Word:
-                    member = c => IsLetter(c) || c == System.Globalization.UnicodeCategory.NonSpacingMark || c == System.Globalization.UnicodeCategory.SpacingCombiningMark ||
-                        c == System.Globalization.UnicodeCategory.EnclosingMark || c == System.Globalization.UnicodeCategory.DecimalDigitNumber ||
-                        c == System.Globalization.UnicodeCategory.LetterNumber || c == System.Globalization.UnicodeCategory.ConnectorPunctuation;
-                    break;
-                case PosixCharacterClass.Print:
-                    member = c => c != System.Globalization.UnicodeCategory.Control && c != System.Globalization.UnicodeCategory.OtherNotAssigned &&
-                        c != System.Globalization.UnicodeCategory.Surrogate && c != System.Globalization.UnicodeCategory.LineSeparator &&
-                        c != System.Globalization.UnicodeCategory.ParagraphSeparator;
-                    break;
-                case PosixCharacterClass.Graph:
-                    member = c => c != System.Globalization.UnicodeCategory.Control && c != System.Globalization.UnicodeCategory.OtherNotAssigned &&
-                        c != System.Globalization.UnicodeCategory.Surrogate && c != System.Globalization.UnicodeCategory.LineSeparator &&
-                        c != System.Globalization.UnicodeCategory.ParagraphSeparator && c != System.Globalization.UnicodeCategory.SpaceSeparator;
-                    break;
-                case PosixCharacterClass.Punct:
-                    member = c => c >= System.Globalization.UnicodeCategory.ConnectorPunctuation && c <= System.Globalization.UnicodeCategory.OtherPunctuation;
-                    break;
-                default:
-                    return null;
-            }
-
-            lock (_astralPosixMembers) {
-                string result;
-                if (!_astralPosixMembers.TryGetValue(charClass, out result)) {
-                    _astralPosixMembers[charClass] = result = BuildAstralMembers(member);
-                }
-                return result;
-            }
-        }
-
-        private static bool IsLetter(System.Globalization.UnicodeCategory c) {
-            return c <= System.Globalization.UnicodeCategory.OtherLetter;
-        }
-
-        /// <summary>
-        /// The non-BMP code points in a category set as surrogate pairs: one character class of
-        /// trailing surrogates per leading one (or run of leading ones with the same trailing
-        /// class), behind a lookahead that turns away anything that is not a leading surrogate.
-        /// </summary>
-        private static string/*!*/ BuildAstralMembers(Func<System.Globalization.UnicodeCategory, bool>/*!*/ member) {
-            var alternatives = new List<KeyValuePair<int, string>>();
-            var trails = new StringBuilder();
-            for (int lead = 0; lead < 0x400; lead++) {
-                trails.Length = 0;
-                int rangeStart = -1;
-                for (int trail = 0; trail <= 0x400; trail++) {
-                    bool isMember = trail < 0x400 &&
-                        member(System.Globalization.CharUnicodeInfo.GetUnicodeCategory(0x10000 + (lead << 10) + trail));
-                    if (isMember && rangeStart < 0) {
-                        rangeStart = trail;
-                    } else if (!isMember && rangeStart >= 0) {
-                        trails.Append("\\u").Append((0xdc00 + rangeStart).ToString("x4"));
-                        if (trail - 1 > rangeStart) {
-                            trails.Append("-\\u").Append((0xdc00 + trail - 1).ToString("x4"));
-                        }
-                        rangeStart = -1;
-                    }
-                }
-                if (trails.Length > 0) {
-                    alternatives.Add(new KeyValuePair<int, string>(lead, trails.ToString()));
-                }
-            }
-
-            if (alternatives.Count == 0) {
-                return "[a-[a]]";
-            }
-
-            var result = new StringBuilder("(?=[\\ud800-\\udbff])(?:");
-            for (int i = 0; i < alternatives.Count; ) {
-                int j = i;
-                while (j + 1 < alternatives.Count && alternatives[j + 1].Key == alternatives[j].Key + 1 &&
-                    alternatives[j + 1].Value == alternatives[i].Value) {
-                    j++;
-                }
-                if (i > 0) {
-                    result.Append('|');
-                }
-                result.Append('[').Append("\\u").Append((0xd800 + alternatives[i].Key).ToString("x4"));
-                if (j > i) {
-                    result.Append("-\\u").Append((0xd800 + alternatives[j].Key).ToString("x4"));
-                }
-                result.Append("][").Append(alternatives[i].Value).Append(']');
-                i = j + 1;
-            }
-            return result.Append(')').ToString();
-        }
-
-        private CharacterSet MakeBmpPosixCharacterClass(PosixCharacterClass charClass, bool positive) {
-            switch (charClass) {
-                case PosixCharacterClass.Alnum:
-                    if (positive) {
-                        return new CharacterSet(@"\p{L}\p{Nd}\p{Nl}");
-                    } else {
-                        return new CharacterSet(@"\P{L}", new CharacterSet(@"\p{Nd}\p{Nl}"));
-                    }
-
-                case PosixCharacterClass.Alpha:
-                    if (positive) {
-                        return new CharacterSet(@"\p{L}\p{Nl}");
-                    } else {
-                        return new CharacterSet(@"\P{L}", new CharacterSet(@"\p{Nl}"));
-                    }
-
-                case PosixCharacterClass.Ascii:
-                    if (positive) {
-                        return new CharacterSet(@"\p{IsBasicLatin}"); 
-                    } else {
-                        return new CharacterSet(@"\P{IsBasicLatin}"); 
-                    }
-
-                case PosixCharacterClass.Blank:
-                    if (positive) {
-                        return new CharacterSet("\\p{Zs}\t"); 
-                    } else {
-                        return new CharacterSet(@"\P{Zs}", new CharacterSet("\t")); 
-                    }
-                    
-                case PosixCharacterClass.Cntrl:
-                    if (positive) {
-                        return new CharacterSet(@"\p{Cc}"); 
-                    } else {
-                        return new CharacterSet(@"\P{Cc}"); 
-                    }
-
-                case PosixCharacterClass.Digit:
-                    if (positive) {
-                        return new CharacterSet(@"\p{Nd}"); 
-                    } else {
-                        return new CharacterSet(@"\P{Nd}"); 
-                    }
-
-                case PosixCharacterClass.Graph:
-                    if (positive) {
-                        return new CharacterSet(@"\P{Z}", new CharacterSet(@"\p{Cc}\p{Cn}\p{Cs}"));
-                    } else {
-                        return new CharacterSet(@"\p{Z}\p{Cc}\p{Cn}\p{Cs}");
-                    }
-
-                case PosixCharacterClass.Lower:
-                    // TODO: there are some differences (Unicode version?)
-                    if (positive) {
-                        return new CharacterSet(@"\p{Ll}"); 
-                    } else {
-                        return new CharacterSet(@"\P{Ll}"); 
-                    }
-
-                case PosixCharacterClass.Print:
-                    if (positive) {
-                        return new CharacterSet(@"\P{Zl}", new CharacterSet(@"\p{Zp}\p{Cc}\p{Cn}\p{Cs}"));
-                    } else {
-                        return new CharacterSet(@"\p{Zl}\p{Zp}\p{Cc}\p{Cn}\p{Cs}");
-                    }
-
-                case PosixCharacterClass.Punct:
-                    if (positive) {
-                        return new CharacterSet(@"\p{P}"); 
-                    } else {
-                        return new CharacterSet(@"\P{P}"); 
-                    }
-
-                case PosixCharacterClass.Space:
-                    if (positive) {
-                        return new CharacterSet("\\p{Z}\u0085\u0009-\u000d"); 
-                    } else {
-                        return new CharacterSet(@"\P{Z}", new CharacterSet("\u0085\u0009-\u000d")); 
-                    }
-
-                case PosixCharacterClass.Upper:
-                    // TODO: there are some differences (Unicode version?)
-                    if (positive) {
-                        return new CharacterSet(@"\p{Lu}"); 
-                    } else {
-                        return new CharacterSet(@"\P{Lu}"); 
-                    }
-
-                case PosixCharacterClass.XDigit:
-                    if (positive) {
-                        return new CharacterSet("a-fA-F0-9"); 
-                    } else {
-                        return new CharacterSet(true, "a-fA-F0-9");
-                    }
-
-                case PosixCharacterClass.Word:
-                    if (positive) {
-                        return new CharacterSet("\\p{L}\\p{M}\\p{Nd}\\p{Nl}\\p{Pc}\u200c\u200d");
-                    } else {
-                        return new CharacterSet(@"\P{L}", new CharacterSet("\\p{M}\\p{Nd}\\p{Nl}\\p{Pc}\u200c\u200d"));
-                    }
-            }
-
-            throw Assert.Unreachable;
+            return positive ? result : result.Complement();
         }
 
         #endregion
