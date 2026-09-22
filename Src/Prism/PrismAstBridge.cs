@@ -1538,7 +1538,11 @@ namespace IronRuby.Prism {
             if (hoist == null || expression is Literal || expression is SelfReference) {
                 return expression;
             }
-            var temp = CurrentScope.AddVariable("?lhs" + _indexTempCount++ + "?", span);
+            // ResolveOrAddVariable, not AddVariable: the name is unique, so nothing is ever
+            // resolved, but inside a for-loop body CurrentScope is a PaddingLexicalScope,
+            // which defines no variables of its own - the temp belongs to the scope around
+            // the loop, and AddVariable would assert there.
+            var temp = CurrentScope.ResolveOrAddVariable("?lhs" + _indexTempCount++ + "?", span);
             hoist.Add(new SimpleAssignmentExpression(temp, expression, null, span));
             return temp;
         }
@@ -1787,7 +1791,9 @@ namespace IronRuby.Prism {
                 // A splat is expanded once, into an array that both halves splat again (so #to_a
                 // runs once); a literal needs no temporary.
                 if (expressions[i] is SplattedArgument splat) {
-                    var array = CurrentScope.AddVariable("?index" + _indexTempCount++ + "?", span);
+                    // ResolveOrAddVariable: see the note in Hoist - a for-loop body's scope
+                    // takes no definitions, so the temp has to land in the scope around it.
+                    var array = CurrentScope.ResolveOrAddVariable("?index" + _indexTempCount++ + "?", span);
                     statements.Add(new SimpleAssignmentExpression(array,
                         new ArrayConstructor(new Arguments(new Expression[] { splat }), span), null, span));
                     hoisted[i] = new SplattedArgument(array);
@@ -1797,7 +1803,7 @@ namespace IronRuby.Prism {
                     hoisted[i] = expressions[i];
                     continue;
                 }
-                var temp = CurrentScope.AddVariable("?index" + _indexTempCount++ + "?", span);
+                var temp = CurrentScope.ResolveOrAddVariable("?index" + _indexTempCount++ + "?", span);
                 statements.Add(new SimpleAssignmentExpression(temp, expressions[i], null, span));
                 hoisted[i] = temp;
             }
