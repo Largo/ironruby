@@ -26,10 +26,10 @@ jobs:
         tfm: [net8.0, net10.0]
         include:
           # IronRuby.Tests "> FAILED" line counts, measured on this matrix (run
-          # 35730703529). They are the exact current numbers, not head-room: the
-          # job fails as soon as one more line appears. Windows carries three
-          # failures Linux does not - Autoload1 and ConstantCaching_AutoUpdating1A/B -
-          # and net10.0 fixes one of the Serialization1 lines on both platforms.
+          # 35731760445). They are the exact current numbers, not head-room: the
+          # job fails as soon as one more line appears. Windows and Linux fail the
+          # same tests; the two runtimes differ only in Serialization1, which
+          # produces one line on net10.0 and two on net8.0.
           - os: ubuntu-latest
             tfm: net8.0
             baseline: 19
@@ -38,10 +38,10 @@ jobs:
             baseline: 18
           - os: windows-latest
             tfm: net8.0
-            baseline: 22
+            baseline: 19
           - os: windows-latest
             tfm: net10.0
-            baseline: 21
+            baseline: 18
     env:
       TFM: ${{ matrix.tfm }}
       IR_TFM: ${{ matrix.tfm }}
@@ -115,12 +115,15 @@ jobs:
           path: prism/build
           key: prism-${{ matrix.os }}-${{ steps.prism.outputs.sha }}
 
-      # On Linux/macOS prism's own Makefile does it. On Windows `make shared`
-      # is not usable as-is (it asks RbConfig for SOEXT and compiles with
-      # -Werror -fPIC, which MinGW rejects), so link the same sources directly
-      # with the MSYS2 gcc that ruby/setup-ruby puts on PATH. -DPRISM_EXPORT_SYMBOLS
-      # is what the Makefile's shared objects use too; it turns prism's
-      # PRISM_EXPORTED_FUNCTION into __declspec(dllexport) on _WIN32.
+      # On Linux prism's own Makefile does it. prism's own CI never runs
+      # `make shared` on Windows - it builds the extension through mkmf - and the
+      # Makefile is written for a Unix toolchain (SOEXT out of RbConfig, -Werror
+      # together with -fPIC, which MinGW has nothing to do with), so rather than
+      # bend it, link the same sources directly with the MSYS2 gcc that
+      # ruby/setup-ruby puts on PATH. -DPRISM_EXPORT_SYMBOLS is what the
+      # Makefile's shared objects are compiled with too: it turns prism's
+      # PRISM_EXPORTED_FUNCTION into __declspec(dllexport) on _WIN32, which is
+      # what makes the P/Invokes in Src/Prism/PrismNative.cs resolvable.
       - name: Build libprism
         if: steps.prism-cache.outputs.cache-hit != 'true'
         working-directory: prism
