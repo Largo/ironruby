@@ -529,9 +529,8 @@ module Nokogiri
   end
 
   module XML
+    # Nokogiri names the module Nokogiri::XML::XPath, and callers rescue
+    # Nokogiri::XML::XPath::SyntaxError.
     XPath = Nokogiri::XPath
-
-    module XPathModule # :nodoc:
-    end
   end
 end
