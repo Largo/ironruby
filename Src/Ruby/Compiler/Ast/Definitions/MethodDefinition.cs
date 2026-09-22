@@ -292,14 +292,22 @@ namespace IronRuby.Compiler.Ast {
             // to many parameters for Func<> delegate -> use object[]:
             MSA.ParameterExpression array = Ast.Parameter(typeof(object[]), "#params");
             var actualParameters = new AstParameters() { parameters[0], parameters[1], array };
+            // Drop the two implicit parameters - self and the block - so that what is left is
+            // exactly the declared parameters, in order, which is how they are read back out of
+            // the object[].  Both live at the front, so both removals are at index 0: removing
+            // index 1 second would take the *first declared* parameter instead of the block, and
+            // leave the block's Proc-typed variable to be assigned an object out of the array.
             parameters.RemoveAt(0);
-            parameters.RemoveAt(1);
+            parameters.RemoveAt(0);
 
+            // ReadOnlyCollectionBuilder's int constructor takes a capacity, not a length, so the
+            // collection starts empty - assigning through the indexer would be an index out of
+            // range on a list of zero items.
             var bodyWithParamInit = new AstExpressions(parameters.Count + 1);
             for (int i = 0; i < parameters.Count; i++) {
-                bodyWithParamInit[i] = Ast.Assign(parameters[i], Ast.ArrayIndex(array, AstUtils.Constant(i)));
+                bodyWithParamInit.Add(Ast.Assign(parameters[i], Ast.ArrayIndex(array, AstUtils.Constant(i))));
             }
-            bodyWithParamInit[parameters.Count] = body;
+            bodyWithParamInit.Add(body);
 
             return Ast.Lambda<Func<object, Proc, object[], object>>(
                 Ast.Block(

@@ -75,13 +75,19 @@ module Gem
   ##
   # Where the default gems' specifications live.
   #
-  # IronRuby's standard library is not gemified, so its own gem tree has no
-  # specifications/default.  Fall back to the host CRuby's, so that gems which
-  # depend on a gemified stdlib library - parser depends on racc, rspec-core on
-  # did_you_mean, ... - resolve instead of raising Gem::MissingSpecError.  A
-  # default gem never adds itself to $LOAD_PATH (Specification#add_self_to_load_path
-  # returns early for one), so this cannot pull CRuby's library directory in
-  # ahead of IronRuby's own.
+  # IronRuby ships its own, in <default_dir>/specifications/default, generated
+  # by Util/gen-default-gemspecs.rb: one per library it provides itself, C#
+  # implementations (bigdecimal, json, psych, openssl, zlib, prism, ...) and
+  # vendored Ruby ones alike.  They are what tells the resolver that a library
+  # is already here - without them `gem install activesupport` downloads
+  # bigdecimal's C sources and tries to compile them.
+  #
+  # The fallback to a host CRuby's directory is what happens in a tree where
+  # they have not been generated yet; it keeps gems that depend on a gemified
+  # stdlib library resolvable rather than raising Gem::MissingSpecError.  Either
+  # way a default gem never adds itself to $LOAD_PATH
+  # (Specification#add_self_to_load_path returns early for one), so this cannot
+  # pull CRuby's library directory in ahead of IronRuby's own.
 
   def self.default_specifications_dir
     @default_specifications_dir ||= begin
@@ -93,6 +99,43 @@ module Gem
         host || own
       end
     end
+  end
+
+  ##
+  # The standard library directories this interpreter was started with, in
+  # $LOAD_PATH order.  -X:StdLib puts them at the front (behind -I, RUBYLIB and
+  # RUBYOPT's -I, which come first), which is where the Ruby 4.0 tree, the
+  # IronRuby tree and the legacy 1.9 tree all live.
+
+  def self.ironruby_stdlib_dirs # :nodoc:
+    @ironruby_stdlib_dirs ||= begin
+      lib = ironruby_lib_dir                                # <root>/Src/StdLib/ruby/4.0
+      stdlib = File.expand_path("../..", lib)               # <root>/Src/StdLib
+      [lib,
+       File.join(stdlib, "ironruby"),
+       File.join(stdlib, "ruby", RbConfig::CONFIG["ruby_version"])].select {|d| Dir.exist?(d) }
+    end
+  end
+
+  ##
+  # Where an activated gem's directories go on $LOAD_PATH.
+  #
+  # Upstream looks for RbConfig's sitelibdir, because on CRuby that entry sits
+  # *ahead* of the standard library's own - so a gem that replaces a gemified
+  # stdlib library wins.  Here the -X:StdLib directories are in front of
+  # sitelibdir, so upstream's answer would insert activated gems *behind* the
+  # bundled standard library: `gem "logger", "2.0"` would resolve, and then
+  # `require "logger"` would load IronRuby's bundled 1.7.0 anyway.  Rails
+  # depends on exactly this working (it installs newer logger, csv, base64,
+  # benchmark, ... over the versions shipped here).
+  #
+  # So insert at the first standard library directory instead, which is the
+  # same position relative to the library that CRuby uses, and still behind -I
+  # and RUBYLIB.
+
+  def self.load_path_insert_index
+    indexes = ironruby_stdlib_dirs.filter_map {|dir| $LOAD_PATH.index(dir) }
+    indexes.min || $LOAD_PATH.index(RbConfig::CONFIG["sitelibdir"]) || 0
   end
 
   def self.default_path
@@ -168,6 +211,20 @@ module Gem
 
   def self.ironruby_ignored_gems # :nodoc:
     @ironruby_ignored_gems ||= []
+  end
+
+  ##
+  # The names of the gems IronRuby ships gemspecs for in
+  # default_specifications_dir - the libraries it implements itself.  Read from
+  # the file names rather than from the gemspecs, so that nothing is evaluated.
+
+  def self.ironruby_default_gem_names # :nodoc:
+    @ironruby_default_gem_names ||=
+      Dir.glob(File.join(default_specifications_dir, "*.gemspec")).map do |file|
+        File.basename(file, ".gemspec")[/\A(.+)-[^-]+\z/, 1]
+      end.compact
+  rescue StandardError
+    @ironruby_default_gem_names = []
   end
 
   ##
@@ -363,6 +420,32 @@ module Gem
     def self.load_defaults # :nodoc:
       Gem.ironruby_load_default_specs
     end
+
+    ##
+    # Never compile a C extension.
+    #
+    # RubyGems builds a gem's extensions lazily, the first time something
+    # activates it - installing a gem builds its dependencies' extensions too.
+    # On IronRuby that can only fail: there is no ruby.h and no CRuby ABI to
+    # compile against.  Worse, the gem whose extension is missing is usually one
+    # in the *host* CRuby's tree (which is offered read-only, see
+    # host_ruby_dirs), so the attempt writes a half-built Makefile and a
+    # gem_make.out into someone else's installation before it fails, and takes
+    # the whole `gem install` down with it.
+    #
+    # Doing nothing leaves the gem exactly as it is: its .rb files load, the
+    # missing .so raises a plain LoadError if something really reaches for it,
+    # and the pure-Ruby fallback most such gems carry (racc/parser.rb rescues
+    # the LoadError of racc/cparse) is used instead.  The name is recorded so
+    # that `gem env` and -w can report it.
+
+    def build_extensions # :nodoc:
+      return if extensions.empty?
+      return if default_gem?
+
+      Gem.ironruby_ignored_gems << full_name unless Gem.ironruby_ignored_gems.include?(full_name)
+      nil
+    end
   end
 
   class BasicSpecification
@@ -382,8 +465,19 @@ module Gem
     def ignored?
       if @ignored.nil?
         @ignored = false
-        if missing_extensions? && !Gem.ironruby_ignored_gems.include?(full_name)
-          Gem.ironruby_ignored_gems << full_name
+        if missing_extensions?
+          Gem.ironruby_ignored_gems << full_name unless Gem.ironruby_ignored_gems.include?(full_name)
+
+          # One case where upstream's rule is still right: a gem that IronRuby
+          # already *provides*, shipped as a default gem above.  A host CRuby's
+          # bigdecimal-4.0.1 has the same name and the same version as the one
+          # in Src/Libraries, so it sorts ahead of it (an installed gem is
+          # meant to override a default gem) - and then `require "bigdecimal"`
+          # reaches its lib/bigdecimal.rb, which requires bigdecimal.so and
+          # fails.  There is no pure-Ruby fallback to reach in that gem, and
+          # there is a complete implementation right here, so let the default
+          # gem win.
+          @ignored = true if Gem.ironruby_default_gem_names.include?(name)
         end
       end
 
@@ -391,4 +485,25 @@ module Gem
     end
 
   end
+
+  ##
+  # ... and say nothing about it.
+  #
+  # The warning upstream prints from contains_requirable_file? - "Ignoring
+  # bigdecimal-4.0.1 because its extensions are not built.  Try: gem pristine
+  # bigdecimal" - is good advice on CRuby and wrong here twice over: the
+  # extension cannot be built at all, and the library is not missing, it is in
+  # Src/Libraries.  Nothing is being lost, so nothing is worth warning about.
+  # A gem IronRuby does *not* provide still warns, which is the case the
+  # message was written for.
+
+  module IronRubyProvidedGem # :nodoc:
+    def contains_requirable_file?(file)
+      return false if ignored? && Gem.ironruby_default_gem_names.include?(name)
+
+      super
+    end
+  end
+
+  BasicSpecification.prepend(IronRubyProvidedGem)
 end

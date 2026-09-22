@@ -63,6 +63,17 @@ not the other way round, so that the Ripper library can call in here.
 - `PrismParser.ParseToJson(source)` — full AST as JSON (what the bridge
   currently consumes).
 - `dotnet run -- --json file.rb` dumps the JSON AST.
+- **`require "prism"` works too.** prism's own Ruby library is a decoder:
+  every entry point calls one of libprism's `pm_serialize_*` functions and
+  lets `Prism::Serialize` (pure Ruby) turn the bytes into nodes.  Upstream
+  gets those bytes from a CRuby C extension, or from the `ffi` gem on other
+  implementations - and `ffi` is itself a C extension, so that path was
+  closed here.  `PrismSerialize.cs` + `Src/Libraries/Prism/PrismOps.cs`
+  expose the same serialization API to Ruby, and
+  `Src/StdLib/ironruby/prism/ironruby.rb` is the third backend; the
+  vendored `Src/StdLib/ruby/4.0/prism` tree is the Ruby half of the very
+  prism revision `libprism` is built from, generated files included.
+  `Prism::VERSION` is read from `pm_version`, so the two cannot disagree.
 
 Build the native library first:
 

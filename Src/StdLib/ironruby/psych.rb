@@ -28,6 +28,45 @@ module Psych
   VERSION = '5.3.1'
   LIBYAML_VERSION = '0.2.5'
 
+  # Psych's tag registries.  A library registers a YAML tag for one of its
+  # classes here at require time - ActiveSupport does it for
+  # ActiveSupport::TimeWithZone, psych's own tests do it for their fixtures -
+  # so the tables have to exist and behave like Hashes.
+  #
+  # What IronRuby does not do yet: consult them.  The YAML engine
+  # (IronRuby.Libraries.Yaml) resolves `!ruby/...` tags itself, so a tag
+  # registered here is recorded but does not change how a document loads or
+  # dumps.  Registering is what libraries do at load time; relying on the tag to
+  # round-trip is what does not work.
+  @load_tags = {}
+  @dump_tags = {}
+  @domain_types = {}
+
+  class << self
+    attr_accessor :load_tags, :dump_tags, :domain_types
+  end
+
+  def self.add_tag(tag, klass)
+    load_tags[tag] = klass.name
+    dump_tags[klass] = tag
+  end
+
+  def self.add_domain_type(domain, type_tag, &block)
+    key = ['tag', domain, type_tag].join ':'
+    domain_types[key] = [key, block]
+    domain_types["tag:#{type_tag}"] = [key, block]
+  end
+
+  def self.add_builtin_type(type_tag, &block)
+    domain = 'yaml.org,2002'
+    key = ['tag', domain, type_tag].join ':'
+    domain_types[key] = [key, block]
+  end
+
+  def self.remove_type(type_tag)
+    domain_types.delete type_tag
+  end
+
   class BadAlias < Psych::Exception
   end
 

@@ -19,6 +19,9 @@
 # which is what the C extension falls back to reading anyway when NSS is file-backed.
 
 module Etc
+  # The version of the etc gem whose interface this library provides.
+  VERSION = "1.4.6"
+
   Passwd = Struct.new(:name, :passwd, :uid, :gid, :gecos, :dir, :shell)
   Group  = Struct.new(:name, :passwd, :gid, :mem)
 
