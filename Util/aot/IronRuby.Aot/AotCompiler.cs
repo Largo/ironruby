@@ -44,6 +44,7 @@ namespace IronRuby.Aot {
         private readonly Dictionary<object, Expression> _constantFields = new(ReferenceEqualityComparer.Instance);
         private readonly Dictionary<FieldInfo, bool> _siteFieldsUnused = new();
         private readonly Dictionary<string, string> _frameOwners = new();
+        private readonly List<string> _entryPoints = new();
         private Dictionary<object, FieldInfo> _wellKnownStatics;
         private int _fieldCounter;
         public readonly Dictionary<string, int> Stats = new();
@@ -67,15 +68,17 @@ namespace IronRuby.Aot {
             for (int i = 0; i < paths.Length; i++) {
                 var sw = System.Diagnostics.Stopwatch.StartNew();
                 var unit = _context.CreateFileUnit(paths[i]);
-                var options = new RubyCompilerOptions(_context.RubyOptions) { FactoryKind = TopScopeFactoryKind.File };
+                bool isMain = paths[i] == Path.GetFullPath(mainFile);
+                var options = new RubyCompilerOptions(_context.RubyOptions) { FactoryKind = isMain ? TopScopeFactoryKind.Main : TopScopeFactoryKind.File };
                 var ast = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
                 if (ast == null) throw new InvalidOperationException("syntax error in " + paths[i]);
                 new FrameLabelWalker(_frameOwners).Walk(ast);
                 var lambda = _context.TransformTree<Func<RubyScope, object, object>>(ast, unit, options);
 
                 var rewritten = (LambdaExpression)Rewrite(lambda);
-                rewritten = Expression.Lambda<Func<RubyScope, object, object>>(rewritten.Body, "__file" + i, rewritten.Parameters);
-                var method = _type.DefineMethod("__file" + i, MethodAttributes.Public | MethodAttributes.Static);
+                // the name is what the backtrace builder decodes into "file:line:in '<main>'"
+                var method = _type.DefineMethod(lambda.Name, MethodAttributes.Public | MethodAttributes.Static);
+                _entryPoints.Add(lambda.Name);
                 ExpressionCompiler.CompileToMethod(rewritten, method);
                 Console.Error.WriteLine($"compiled {paths[i]} in {sw.ElapsedMilliseconds} ms");
                 if (Environment.GetEnvironmentVariable("IR_AOT_CHECK_BRANCHES") == "1") CheckBranches();
@@ -100,13 +103,14 @@ namespace IronRuby.Aot {
             il.Emit(OpCodes.Ldarg_0);
             il.Emit(OpCodes.Call, typeof(AotRuntime).GetMethod("Main"));
             il.Emit(OpCodes.Ret);
+            main.SetCustomAttribute(new CustomAttributeBuilder(typeof(RubyStackTraceHiddenAttribute).GetConstructor(Type.EmptyTypes), new object[0]));
 
             _type.SetCustomAttribute(new CustomAttributeBuilder(
                 typeof(AotProgramAttribute).GetConstructors()[0],
-                new object[] { Path.GetFullPath(mainFile), paths, chunks, SearchPaths }));
+                new object[] { Path.GetFullPath(mainFile), paths, _entryPoints.ToArray(), chunks, SearchPaths }));
             _type.CreateType();
 
-            Count("constant fields", _constants.Count);
+            Count("constant fields initialized at load time", _constants.Count);
             Count("init chunks", chunks);
 
             var metadata = _assembly.GenerateMetadata(out BlobBuilder ilStream, out BlobBuilder fieldData);
@@ -171,17 +175,32 @@ namespace IronRuby.Aot {
 
             protected override Expression VisitDynamic(DynamicExpression node) {
                 var args = Visit(node.Arguments);
-                var site = _c.SiteField(node.DelegateType, node.Binder);
+                var siteExpr = _c.SiteField(node.DelegateType, node.Binder);
+                var site = Expression.Variable(siteExpr.Type, "#site");
                 var invokeArgs = new List<Expression> { site };
                 invokeArgs.AddRange(args);
-                return Expression.Invoke(Expression.Field(site, "Target"), invokeArgs);
+                return Expression.Block(node.Type, new[] { site },
+                    Expression.Assign(site, siteExpr),
+                    Expression.Invoke(Expression.Field(site, "Target"), invokeArgs));
             }
         }
 
+        /// <summary>
+        /// Initialize constants when first used rather than all at load time: a program (and the
+        /// prelude above all) has thousands of call sites and `def's that never run. The price is
+        /// a null check per use; two threads racing through a first use may both create the value.
+        /// </summary>
+        public bool LazyInit = true;
+
         private Expression NewField(Type type, Expression init, string hint) {
             var field = _type.DefineField("k" + (_fieldCounter++) + "_" + hint, type, FieldAttributes.Public | FieldAttributes.Static);
+            var access = Expression.Field(null, field);
+            if (LazyInit && !type.IsValueType) {
+                Count("constant fields (lazily initialized)");
+                return Expression.Coalesce(access, Expression.Assign(access, init));
+            }
             _constants.Add(new KeyValuePair<FieldBuilder, Expression>(field, init));
-            return Expression.Field(null, field);
+            return access;
         }
 
         private readonly Dictionary<Type, Type> _persistedDelegates = new();

@@ -17,11 +17,13 @@ namespace IronRuby.Aot {
             string outDir = "aot-out";
             var libs = new List<string>();
             string main = null;
-            bool prelude = false;
+            bool prelude = false, eager = false, r2r = false;
             for (int i = 0; i < args.Length; i++) {
                 switch (args[i]) {
                     case "-o": outDir = args[++i]; break;
                     case "--prelude": prelude = true; break;
+                    case "--eager-init": eager = true; break;
+                    case "--r2r": r2r = true; break;
                     case "--lib": libs.Add(args[++i]); break;
                     default: main = args[i]; break;
                 }
@@ -52,7 +54,7 @@ namespace IronRuby.Aot {
 
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var context = AotHost.CreateContext(out _);
-            var compiler = new AotCompiler(context, name) { OutputDirectory = Path.GetFullPath(outDir), SearchPaths = searchPaths };
+            var compiler = new AotCompiler(context, name) { OutputDirectory = Path.GetFullPath(outDir), SearchPaths = searchPaths, LazyInit = !eager };
             var files = new List<string>(libs) { main };
             compiler.Compile(main, files, dll);
             Console.Error.WriteLine($"wrote {dll} ({new FileInfo(dll).Length:N0} bytes) in {sw.ElapsedMilliseconds} ms");
@@ -73,12 +75,50 @@ namespace IronRuby.Aot {
             if (Directory.Exists(Path.Combine(toolDir, "runtimes"))) {
                 CopyDir(Path.Combine(toolDir, "runtimes"), Path.Combine(outDir, "runtimes"));
             }
+            if (r2r) {
+                // ReadyToRun: crossgen2 compiles the program's IL (the Ruby) and IronRuby's own
+                // assemblies to native code ahead of time, so startup does not wait for the JIT.
+                var assemblies = new List<string> { dll };
+                assemblies.AddRange(compiler.ExtraAssemblies);
+                assemblies.AddRange(new[] { "IronRuby.dll", "IronRuby.Libraries.dll", "Microsoft.Scripting.dll", "Microsoft.Dynamic.dll", "IronRuby.Aot.dll" }
+                    .Select(f => Path.Combine(outDir, f)));
+                foreach (var asm in assemblies) {
+                    if (!Crossgen(asm, outDir)) return 1;
+                }
+            }
             return 0;
         }
 
         private static readonly string[] PreludeFiles = {
             "ruby4.rb", "complex18.rb", "rational18.rb", "thread.rb", "set.rb", "argf.rb", "ironruby/gem_compat.rb",
         };
+
+        private static bool Crossgen(string assembly, string outDir) {
+            string home = Environment.GetEnvironmentVariable("HOME");
+            string crossgen = Directory.GetFiles(Path.Combine(home, ".nuget", "packages", "microsoft.netcore.app.crossgen2.linux-x64"), "crossgen2", SearchOption.AllDirectories)
+                .Where(p => p.Contains("/10.")).OrderBy(p => p).LastOrDefault();
+            if (crossgen == null) {
+                Console.Error.WriteLine("crossgen2 (microsoft.netcore.app.crossgen2.linux-x64 10.x) is not in the NuGet cache");
+                return false;
+            }
+            string framework = Path.GetDirectoryName(typeof(object).Assembly.Location);
+            string tmp = assembly + ".r2r";
+            var psi = new System.Diagnostics.ProcessStartInfo(crossgen) { RedirectStandardOutput = true, RedirectStandardError = true };
+            foreach (var a in new[] { assembly, "-o", tmp, "-r", framework + "/*.dll", "-r", Path.GetFullPath(outDir) + "/*.dll",
+                "--targetos", "linux", "--targetarch", "x64", "-O" }) psi.ArgumentList.Add(a);
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            using var p = System.Diagnostics.Process.Start(psi);
+            string output = p.StandardOutput.ReadToEnd() + p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            if (p.ExitCode != 0) {
+                Console.Error.WriteLine("crossgen2 failed on " + assembly + ":\n" + output);
+                return false;
+            }
+            long before = new FileInfo(assembly).Length;
+            File.Move(tmp, assembly, true);
+            Console.Error.WriteLine($"r2r {Path.GetFileName(assembly)}: {before:N0} -> {new FileInfo(assembly).Length:N0} bytes in {sw.ElapsedMilliseconds} ms");
+            return true;
+        }
 
         private static string FindRepoRoot(string dir) {
             for (var d = new DirectoryInfo(dir); d != null; d = d.Parent) {

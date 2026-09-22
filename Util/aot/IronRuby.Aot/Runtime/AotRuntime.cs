@@ -22,17 +22,20 @@ namespace IronRuby.Aot.Runtime {
     /// <summary>Marks the static class an ahead-of-time compiled program lives in.</summary>
     [AttributeUsage(AttributeTargets.Class)]
     public sealed class AotProgramAttribute : Attribute {
-        public AotProgramAttribute(string mainFile, string[] files, int initChunks, string[] searchPaths) {
+        public AotProgramAttribute(string mainFile, string[] files, string[] entryPoints, int initChunks, string[] searchPaths) {
             MainFile = mainFile;
             Files = files;
+            EntryPoints = entryPoints;
             InitChunks = initChunks;
             SearchPaths = searchPaths;
         }
         /// <summary>The load path the compiled files were resolved against (the standard library's directories).</summary>
         public string[] SearchPaths { get; }
         public string MainFile { get; }
-        /// <summary>Full paths of the files compiled in; file i is the static method __file{i}.</summary>
+        /// <summary>Full paths of the files compiled in.</summary>
         public string[] Files { get; }
+        /// <summary>The static method each file's top level was compiled to.</summary>
+        public string[] EntryPoints { get; }
         public int InitChunks { get; }
     }
 
@@ -42,7 +45,7 @@ namespace IronRuby.Aot.Runtime {
         /// <summary>The runtime the compiled code runs in (one per process, as the program has one).</summary>
         public static RubyContext Context => _context;
 
-        /// <summary>Number of times any Ruby parser ran in this process (see -X:ForbidParse / IR_AOT_TRACE).</summary>
+        /// <summary>Number of times any Ruby parser ran in this process (IR_AOT_TRACE / IR_AOT_FORBID_PARSE).</summary>
         public static int ParseCount;
 
         #region Constants the saved code re-creates at load time
@@ -104,6 +107,7 @@ namespace IronRuby.Aot.Runtime {
         /// The entry point of a compiled program: sets up a runtime the way `ir` does (without the
         /// parser), registers the compiled files with the loader, and runs the main one.
         /// </summary>
+        [RubyStackTraceHidden]
         public static int Main(Type program, string[] args) {
             var startTicks = Stopwatch.GetTimestamp();
             var info = program.GetCustomAttribute<AotProgramAttribute>();
@@ -155,7 +159,7 @@ namespace IronRuby.Aot.Runtime {
 
             RubyScriptCode main = null;
             for (int i = 0; i < info.Files.Length; i++) {
-                var target = (Func<RubyScope, object, object>)program.GetMethod("__file" + i, BindingFlags.Public | BindingFlags.Static)
+                var target = (Func<RubyScope, object, object>)program.GetMethod(info.EntryPoints[i], BindingFlags.Public | BindingFlags.Static)
                     .CreateDelegate(typeof(Func<RubyScope, object, object>));
                 string path = info.Files[i];
                 if (path == info.MainFile) {
@@ -188,7 +192,8 @@ namespace IronRuby.Aot.Runtime {
                 status = e.Status;
             }
             if (trace != null) {
-                Console.Error.WriteLine($"[aot] exit {status}; parser calls: {ParseCount}; total {Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds:F0} ms");
+                Console.Error.WriteLine($"[aot] exit {status}; parser calls: {ParseCount}; total {Stopwatch.GetElapsedTime(startTicks).TotalMilliseconds:F0} ms; " +
+                    $"methods JIT-compiled: {System.Runtime.JitInfo.GetCompiledMethodCount()} ({System.Runtime.JitInfo.GetCompilationTime().TotalMilliseconds:F0} ms)");
             }
             return status;
         }
