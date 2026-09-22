@@ -94,19 +94,31 @@ namespace IronRuby.Runtime.Jit {
 
             try {
                 if (!TrySpecialize()) {
-                    _givenUp = true;
-                    JitRuntime.Rejected++;
+                    GiveUp();
                 }
             } catch (Exception) {
-                _givenUp = true;
-                JitRuntime.Rejected++;
+                GiveUp();
             }
+        }
+
+        /// <summary>
+        /// Stop profiling this method for good, and put the generic body back in the fast slot.
+        /// Leaving the slot empty would be much worse than doing nothing: the trampoline would
+        /// go on allocating an argument array and calling Profile - which returns immediately -
+        /// on every call for the rest of the process.  A method the JIT declined is the common
+        /// case, so that path has to cost one delegate hop and nothing else.
+        /// </summary>
+        private void GiveUp() {
+            _givenUp = true;
+            JitRuntime.Rejected++;
+            Install(_generic);
         }
 
         /// <summary>Deoptimize: drop the specialized entry and let profiling start over.</summary>
         internal void Invalidate() {
             JitRuntime.Invalidations++;
-            Install(null);
+            // A method that was already declined must not fall back into profiling here.
+            Install(_givenUp ? _generic : null);
             _calls = 0;
         }
 
