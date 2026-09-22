@@ -63,6 +63,7 @@ namespace IronRuby.Runtime {
         object CopyFor(object copy);
     }
 
+    [ReflectionCached]
     public sealed class RubyContext : LanguageContext {
         #region Constants
 

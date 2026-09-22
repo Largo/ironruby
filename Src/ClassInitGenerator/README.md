@@ -60,6 +60,20 @@ Only needed when you add or change a method/field marked `[Emitted]` in
 dotnet $D/ClassInitGenerator.dll /refcache /out:Src/Ruby/Compiler/ReflectionCache.Generated.cs
 ```
 
+An `[Emitted]` member that has overloads cannot be cached under its bare name.
+Those are declared by hand in the other half of the partial class,
+`Src/Ruby/Compiler/ReflectionCache.cs`, which names each overload
+(`CreateFrozenMutableStringL` vs `CreateFrozenMutableStringLDebug`) and picks it by
+signature; the generator prints a SKIP line for each and carries on. It used to treat
+them as an error and exit 1 *without writing the file*, which is why the generated file
+had drifted into being hand-maintained. If you add an `[Emitted]` overload and do not
+add a hand-written entry, the build fails with a missing `Methods.<name>` - which is
+the loud failure you want.
+
+A type's `[Emitted]` members are only picked up if the type itself is
+`[ReflectionCached]`. The output is sorted by name, so a hand-inserted entry shows up
+as a reordering diff even when its text is right.
+
 ## Procedure after adding a `[RubyMethod]`
 
 1. Add the method in `Src/Libraries/...`.

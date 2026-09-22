@@ -181,10 +181,17 @@ internal sealed class ReflectionCacheGenerator : Generator {
         if (members.TryGetValue(name, out existing)) {
             switch (existing.MemberType) {
                 case MemberTypes.Method:
-                    Console.WriteLine("ERROR: Emitted methods should not have overloads: \n\t{0}\n\t{1}",
+                    // An [Emitted] method with overloads cannot be cached under its bare name, so
+                    // it is declared by hand in the ReflectionCache.cs half of the partial class,
+                    // which names each overload (CreateFrozenMutableStringL vs ...LDebug) and picks
+                    // it by signature.  Skip it here rather than failing the whole generation - a
+                    // new overload with no hand-written entry still shows up loudly, as the build
+                    // error for the missing member.
+                    Console.WriteLine("SKIP: overloaded, expected in ReflectionCache.cs by hand: \n\t{0}\n\t{1}",
                          ReflectionUtils.FormatSignature(new StringBuilder(), (MethodInfo)(object)existing),
                          ReflectionUtils.FormatSignature(new StringBuilder(), (MethodInfo)(object)member));
-                    break;
+                    members.Remove(name);
+                    return;
 
                 case MemberTypes.Field:
                     Console.WriteLine("ERROR: Multiple fields of name {0}", name);
