@@ -326,10 +326,11 @@ namespace IronRuby.Builtins {
             int collisions = 0;
             while ((uint)i < (uint)entries.Length) {
                 // A tombstone is unlinked from its chain, so it is never reached from here.
-                if (entries[i].HashCode == hashCode && comparer.Equals(entries[i].Key, key)) {
+                ref Entry e = ref entries[i];
+                if (e.HashCode == hashCode && comparer.Equals(e.Key, key)) {
                     return i;
                 }
-                i = entries[i].Next;
+                i = e.Next;
                 if (++collisions > entries.Length) {
                     break;
                 }
@@ -414,16 +415,18 @@ namespace IronRuby.Builtins {
             int i = _buckets[bucket] - 1;
             int collisions = 0;
             while ((uint)i < (uint)entries.Length) {
-                if (entries[i].HashCode == hashCode && comparer.Equals(entries[i].Key, key)) {
+                ref Entry existing = ref entries[i];
+                if (existing.HashCode == hashCode && comparer.Equals(existing.Key, key)) {
+                    if (behavior == InsertOverwrite) {
+                        existing.Value = value;
+                        return false;
+                    }
                     if (behavior == InsertThrow) {
                         throw new ArgumentException("An item with the same key has already been added.");
                     }
-                    if (behavior == InsertOverwrite) {
-                        entries[i].Value = value;
-                    }
                     return false;
                 }
-                i = entries[i].Next;
+                i = existing.Next;
                 if (++collisions > entries.Length) {
                     break;
                 }
@@ -479,17 +482,18 @@ namespace IronRuby.Builtins {
             int i = _buckets[bucket] - 1;
             int collisions = 0;
             while ((uint)i < (uint)entries.Length) {
-                if (entries[i].HashCode == hashCode && comparer.Equals(entries[i].Key, key)) {
-                    value = entries[i].Value;
+                ref Entry found = ref entries[i];
+                if (found.HashCode == hashCode && comparer.Equals(found.Key, key)) {
+                    value = found.Value;
                     if (last < 0) {
-                        _buckets[BucketIndex(hashCode)] = entries[i].Next + 1;
+                        _buckets[BucketIndex(hashCode)] = found.Next + 1;
                     } else {
-                        entries[last].Next = entries[i].Next;
+                        entries[last].Next = found.Next;
                     }
-                    entries[i].HashCode = 0;
-                    entries[i].Next = TombstoneNext;
-                    entries[i].Key = null;
-                    entries[i].Value = null;
+                    found.HashCode = 0;
+                    found.Next = TombstoneNext;
+                    found.Key = null;
+                    found.Value = null;
                     _liveCount--;
                     _version++;
                     // Removing the newest entry needs no tombstone at all; dropping it (and any
@@ -521,7 +525,7 @@ namespace IronRuby.Builtins {
                     return true;
                 }
                 last = i;
-                i = entries[i].Next;
+                i = found.Next;
                 if (++collisions > entries.Length) {
                     break;
                 }
