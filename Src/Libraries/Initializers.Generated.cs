@@ -36,6 +36,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Coverage.CoverageLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Ripper.RipperLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Termios.TermiosLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Prism.PrismLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -14909,6 +14910,66 @@ namespace IronRuby.StandardLibrary.Termios {
             DefineLibraryMethod(module, "winsize", 0x21, 
                 0x00000002U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Object>(IronRuby.StandardLibrary.Termios.TermiosOps.WinSize)
+            );
+            
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Prism {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class PrismLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Prism", typeof(IronRuby.StandardLibrary.Prism.PrismOps), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def2 = DefineModule("Prism::LibRubyParser", typeof(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps), 0x00000008, null, LoadPrism__LibRubyParser_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            SetConstant(def1, "LibRubyParser", def2);
+        }
+        
+        private static void LoadPrism__LibRubyParser_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "errors_format", 0x21, 
+                0x00070002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Int32, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.ErrorsFormat)
+            );
+            
+            DefineLibraryMethod(module, "parse_success?", 0x21, 
+                0x00030002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.ParseSuccess)
+            );
+            
+            DefineLibraryMethod(module, "serialize_lex", 0x21, 
+                0x00030002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.SerializeLex)
+            );
+            
+            DefineLibraryMethod(module, "serialize_parse", 0x21, 
+                0x00030002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.SerializeParse)
+            );
+            
+            DefineLibraryMethod(module, "serialize_parse_comments", 0x21, 
+                0x00030002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.SerializeParseComments)
+            );
+            
+            DefineLibraryMethod(module, "serialize_parse_lex", 0x21, 
+                0x00030002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.SerializeParseLex)
+            );
+            
+            DefineLibraryMethod(module, "string_query", 0x21, 
+                0x0007000eU, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Int32>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.StringQuery)
+            );
+            
+            DefineLibraryMethod(module, "version", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.Version)
             );
             
         }

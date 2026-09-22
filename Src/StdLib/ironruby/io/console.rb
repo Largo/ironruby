@@ -18,6 +18,9 @@ class IO
   # The four termios flag words plus the control characters, as tcgetattr
   # hands them over.  MRI calls the same thing IO::ConsoleMode.
   class ConsoleMode
+    # The version of the io-console gem whose interface this library provides.
+    VERSION = "0.8.2"
+
     attr_accessor :iflag, :oflag, :cflag, :lflag, :cc
 
     def initialize(attrs)

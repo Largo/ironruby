@@ -2110,6 +2110,16 @@ namespace IronRuby.Builtins {
             // Such members are held aside as an alternation of surrogate-pair sequences and the
             // whole class is emitted as (?:[bmp members]|<pairs>).
             private readonly string/*!*/ _astral = "";
+            // The non-BMP members again, as [low, high] codepoint pairs, so that the set can be
+            // complemented: the surrogate alternation in _astral is already lowered to UTF-16 and
+            // cannot be inverted, but a list of ranges can.  null means "there are non-BMP members
+            // whose ranges were not tracked" - which only happens for the droppable members a
+            // POSIX class brings along (see _astralOptional).
+            private readonly List<int> _astralRanges;
+            // Set on the complement of a class that had non-BMP members: the BMP half of the
+            // result must not match a lone surrogate code unit, or it would match half of a
+            // character the class excluded.
+            private bool _excludeSurrogates;
             // The single codepoint this set stands for, if it is exactly one non-BMP character.
             // Needed to build [x-y] ranges, whose endpoints are parsed as separate sets.
             private readonly int _astralCodepoint = -1;
@@ -2144,21 +2154,22 @@ namespace IronRuby.Builtins {
                 _exclude = exclude;
             }
 
-            private CharacterSet(string/*!*/ astral, int astralCodepoint) {
+            private CharacterSet(string/*!*/ astral, int astralCodepoint, List<int> astralRanges) {
                 _include = "";
                 _exclude = Empty;
                 _astral = astral;
                 _astralCodepoint = astralCodepoint;
+                _astralRanges = astralRanges;
             }
 
             /// <summary>A set holding the single non-BMP codepoint <paramref name="codepoint"/>.</summary>
             internal static CharacterSet/*!*/ MakeAstralCharacter(int codepoint) {
-                return new CharacterSet(SurrogatePair(codepoint), codepoint);
+                return new CharacterSet(SurrogatePair(codepoint), codepoint, new List<int> { codepoint, codepoint });
             }
 
             /// <summary>A set holding the inclusive non-BMP range [<paramref name="low"/>, <paramref name="high"/>].</summary>
             internal static CharacterSet/*!*/ MakeAstralRange(int low, int high) {
-                return new CharacterSet(SurrogateRange(low, high), -1);
+                return new CharacterSet(SurrogateRange(low, high), -1, new List<int> { low, high });
             }
 
             internal bool IsAstralCharacter {
@@ -2172,6 +2183,9 @@ namespace IronRuby.Builtins {
             internal bool HasAstral {
                 get { return _astral.Length != 0; }
             }
+
+            /// <summary>The whole UTF-16 surrogate block, as a character class body.</summary>
+            internal const string SurrogateBlock = "\\ud800-\\udfff";
 
             private static string/*!*/ Unit(int c) {
                 return "\\u" + c.ToString("x4");
@@ -2227,23 +2241,96 @@ namespace IronRuby.Builtins {
                 _astral = astral;
             }
 
+            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral, List<int> astralRanges)
+                : this(negate, include, exclude) {
+                _astral = astral;
+                _astralRanges = astralRanges;
+            }
+
+            /// <summary>The complement of a class that had non-BMP members (see Complement).</summary>
+            private static CharacterSet/*!*/ MakeNegatedAstral(string/*!*/ include, CharacterSet/*!*/ exclude,
+                string/*!*/ astral, List<int>/*!*/ astralRanges) {
+                var result = new CharacterSet(true, include, exclude, astral, astralRanges);
+                result._excludeSurrogates = true;
+                return result;
+            }
+
             // The non-BMP members came from a POSIX class ([[:lower:]] and friends) and can be
             // left out where a character class operation cannot keep them.
             private readonly bool _astralOptional;
 
-            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral, bool astralOptional)
-                : this(negate, include, exclude, astral) {
+            private CharacterSet(bool negate, string/*!*/ include, CharacterSet/*!*/ exclude, string/*!*/ astral,
+                List<int> astralRanges, bool astralOptional)
+                : this(negate, include, exclude, astral, astralRanges) {
                 _astralOptional = astralOptional;
             }
 
             /// <summary>This set plus non-BMP members that set operations may drop (see _astralOptional).</summary>
             internal CharacterSet/*!*/ WithOptionalAstral(string/*!*/ astral) {
                 Debug.Assert(!_negated);
-                return new CharacterSet(false, _include, _exclude, JoinAstral(_astral, astral), !HasAstral || _astralOptional);
+                // The ranges of a POSIX class's non-BMP members are not tracked: they are
+                // droppable, so nothing ever needs to complement them.
+                return new CharacterSet(false, _include, _exclude, JoinAstral(_astral, astral), null,
+                    !HasAstral || _astralOptional);
             }
 
             private static string/*!*/ JoinAstral(string/*!*/ a, string/*!*/ b) {
                 return (a.Length == 0) ? b : (b.Length == 0) ? a : a + "|" + b;
+            }
+
+            /// <summary>Ranges of the union, or null when either side's are unknown.</summary>
+            private static List<int> JoinAstralRanges(CharacterSet/*!*/ a, CharacterSet/*!*/ b) {
+                if (!a.HasAstral) {
+                    return b._astralRanges;
+                }
+                if (!b.HasAstral) {
+                    return a._astralRanges;
+                }
+                if (a._astralRanges == null || b._astralRanges == null) {
+                    return null;
+                }
+                var result = new List<int>(a._astralRanges);
+                result.AddRange(b._astralRanges);
+                return result;
+            }
+
+            /// <summary>The non-BMP codepoints outside <paramref name="ranges"/>, sorted and merged.</summary>
+            private static List<int>/*!*/ ComplementAstralRanges(List<int>/*!*/ ranges) {
+                const int First = 0x10000, Last = 0x10ffff;
+
+                var pairs = new List<int[]>();
+                for (int i = 0; i < ranges.Count; i += 2) {
+                    pairs.Add(new[] { ranges[i], ranges[i + 1] });
+                }
+                pairs.Sort((x, y) => x[0].CompareTo(y[0]));
+
+                var result = new List<int>();
+                int next = First;
+                foreach (var pair in pairs) {
+                    if (pair[0] > next) {
+                        result.Add(next);
+                        result.Add(pair[0] - 1);
+                    }
+                    if (pair[1] + 1 > next) {
+                        next = pair[1] + 1;
+                    }
+                }
+                if (next <= Last) {
+                    result.Add(next);
+                    result.Add(Last);
+                }
+                return result;
+            }
+
+            private static string/*!*/ AstralAlternation(List<int>/*!*/ ranges) {
+                var sb = new StringBuilder();
+                for (int i = 0; i < ranges.Count; i += 2) {
+                    if (sb.Length != 0) {
+                        sb.Append('|');
+                    }
+                    sb.Append(SurrogateRange(ranges[i], ranges[i + 1]));
+                }
+                return sb.ToString();
             }
 
             internal CharacterSet/*!*/ GetIncludedSet() {
@@ -2251,6 +2338,16 @@ namespace IronRuby.Builtins {
             }
 
             internal CharacterSet/*!*/ Complement() {
+                // [^...] over a class that has non-BMP members.  The members themselves invert
+                // from their codepoint ranges; the BMP half inverts the way it always does, with
+                // the lead surrogates excluded so that the two halves cannot both match the first
+                // code unit of a surrogate pair.  Ruby needs this for real patterns:
+                // ActiveSupport's XML tag-name check is [^...\u{10000}-\u{EFFFF}].
+                if (HasAstral && !_astralOptional && !_negated && _astralRanges != null) {
+                    var complement = ComplementAstralRanges(_astralRanges);
+                    return MakeNegatedAstral(_include, _exclude, AstralAlternation(complement), complement);
+                }
+
                 RequireNoAstral("negated");
                 return new CharacterSet(!_negated, _include, _exclude);
             }
@@ -2312,6 +2409,7 @@ namespace IronRuby.Builtins {
                         Union(this._exclude.Subtract(set.GetIncludedSet())).
                         Union(this._exclude.Intersect(set._exclude)),
                     JoinAstral(_astral, set._astral),
+                    JoinAstralRanges(this, set),
                     (!HasAstral || _astralOptional) && (!set.HasAstral || set._astralOptional)
                 );
             }
@@ -2347,6 +2445,28 @@ namespace IronRuby.Builtins {
             }
 
             public StringBuilder/*!*/ AppendTo(StringBuilder/*!*/ sb, bool parenthesize) {
+                if (_negated && (HasAstral || _excludeSurrogates)) {
+                    // The complement of a class that had non-BMP members: any BMP character
+                    // outside the class, but never a lone surrogate - that would match half of a
+                    // character the class excluded - followed by the non-BMP members that are
+                    // *not* in it, each as a whole surrogate pair.
+                    sb.Append("(?:(?![\ud800-\udfff])");
+                    if (_include.Length == 0 && _exclude.IsEmpty) {
+                        sb.Append("[\0-\uffff]");
+                    } else {
+                        sb.Append("[\0-\uffff-[").Append(_include);
+                        if (!_exclude.IsEmpty) {
+                            sb.Append('-');
+                            _exclude.AppendTo(sb, true);
+                        }
+                        sb.Append("]]");
+                    }
+                    if (HasAstral) {
+                        sb.Append('|').Append(_astral);
+                    }
+                    sb.Append(')');
+                    return sb;
+                }
                 if (HasAstral) {
                     sb.Append("(?:");
                     if (_include.Length != 0 || !_exclude.IsEmpty) {
@@ -2490,14 +2610,24 @@ namespace IronRuby.Builtins {
                     }
 
                     if (set.IsAstralCharacter || rangeEnd.IsAstralCharacter) {
-                        if (!set.IsAstralCharacter || !rangeEnd.IsAstralCharacter) {
-                            // A range straddling U+FFFF would need both a class and an alternation.
-                            throw MakeError("char-class range crosses the BMP boundary");
-                        }
-                        if (set.AstralCodepoint > rangeEnd.AstralCodepoint) {
+                        if (set.IsAstralCharacter && !rangeEnd.IsAstralCharacter) {
+                            // [\u{10000}-a]
                             throw MakeError("empty range in char class");
                         }
-                        set = CharacterSet.MakeAstralRange(set.AstralCodepoint, rangeEnd.AstralCodepoint);
+                        if (!set.IsAstralCharacter) {
+                            // A range straddling U+FFFF is two pieces: the rest of the BMP as a
+                            // character class - with the surrogate block taken out, so that it can
+                            // never match half of a pair - and the non-BMP part as an alternation
+                            // of surrogate pairs.  ActionView's token pattern is one of these:
+                            // [0-9A-Za-z_\u0080-\u{10ffff}-].
+                            var bmp = new CharacterSet(set.Include + "-\\uffff",
+                                new CharacterSet(CharacterSet.SurrogateBlock));
+                            set = bmp.Union(CharacterSet.MakeAstralRange(0x10000, rangeEnd.AstralCodepoint));
+                        } else if (set.AstralCodepoint > rangeEnd.AstralCodepoint) {
+                            throw MakeError("empty range in char class");
+                        } else {
+                            set = CharacterSet.MakeAstralRange(set.AstralCodepoint, rangeEnd.AstralCodepoint);
+                        }
                     } else {
                         set = new CharacterSet(set.Include + "-" + rangeEnd.Include);
                     }

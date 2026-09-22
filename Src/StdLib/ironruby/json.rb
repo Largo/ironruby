@@ -3,6 +3,14 @@
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Json'
 
 module JSON
+  # IronRuby implements the JSON 2.x API in C#; this is the version of that
+  # API, not of upstream's C extension.
+  VERSION = "2.18.0"
+  VERSION_ARRAY = VERSION.split(".").map {|x| x.to_i } # :nodoc:
+  VERSION_MAJOR = VERSION_ARRAY[0] # :nodoc:
+  VERSION_MINOR = VERSION_ARRAY[1] # :nodoc:
+  VERSION_BUILD = VERSION_ARRAY[2] # :nodoc:
+
   # Convenience wrappers the C# module does not need to provide itself.
   def self.pretty_unparse(obj); pretty_generate(obj); end
   def self.unparse(obj); generate(obj); end

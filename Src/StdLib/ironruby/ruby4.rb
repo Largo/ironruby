@@ -13979,3 +13979,11 @@ require "argf"
 # that never touches it does not pay for it at startup.
 Object.autoload :Monitor, "monitor"
 Object.autoload :MonitorMixin, "monitor"
+
+# error_highlight is loaded by CRuby's own startup, so ::ErrorHighlight is there
+# for anything that asks - ActiveSupport calls ErrorHighlight.spot for every
+# frame it renders on the Rails error page, with no require of its own.  Same
+# treatment as Monitor: autoloaded, so a program that never raises does not pay
+# for it.  See Src/StdLib/ironruby/error_highlight.rb for what IronRuby's copy
+# can and cannot do.
+Object.autoload :ErrorHighlight, "error_highlight"

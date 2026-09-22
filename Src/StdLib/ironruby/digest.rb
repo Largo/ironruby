@@ -14,6 +14,7 @@
 # ****************************************************************************
 
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Digest'
+require 'digest/version'
 
 # The C# library (IronRuby.StandardLibrary.Digest) supplies the algorithm-dependent
 # parts -- update/finish/reset plus block_length and digest_length, which need the
