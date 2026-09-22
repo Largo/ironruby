@@ -409,7 +409,7 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private MSA.Expression/*!*/ Emit(RExpr/*!*/ node, out JT type) {
-            if (++_nodes > MaxNodes) { throw JitBailout.Instance; }
+            if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
 
             var literal = node as Literal;
             if (literal != null) { return EmitLiteral(literal, out type); }
@@ -499,7 +499,7 @@ namespace IronRuby.Runtime.Jit {
                 return EmitStatements(body.Statements, out type);
             }
 
-            throw JitBailout.Instance;
+            throw Bail("node: " + node.GetType().Name);
         }
 
         private MSA.Expression/*!*/ EmitLiteral(Literal/*!*/ literal, out JT type) {
@@ -509,7 +509,7 @@ namespace IronRuby.Runtime.Jit {
             if (v is double) { type = JT.Dbl; return Ast.Constant((double)v, typeof(double)); }
             if (v is bool) { type = JT.Bool; return Ast.Constant((bool)v, typeof(bool)); }
             if (v == null) { type = JT.Obj; return Ast.Constant(null, typeof(object)); }
-            throw JitBailout.Instance;
+            throw Bail("literal: " + (v == null ? "nil" : v.GetType().Name));
         }
 
         private MSA.Expression/*!*/ EmitLocalRead(LocalVariable/*!*/ local, out JT type) {
@@ -521,7 +521,7 @@ namespace IronRuby.Runtime.Jit {
                     return LoadLoopSlot(p);
                 }
                 // A local read before any assignment is nil in Ruby; not modelled.
-                throw JitBailout.Instance;
+                throw Bail("local read before assignment: " + local.Name);
             }
             return (_loop != null) ? LoadLoopSlot(p) : p;
         }
@@ -786,14 +786,14 @@ namespace IronRuby.Runtime.Jit {
                 case JT.Int:
                 case JT.Lng:
                 case JT.Dbl: return Ast.Block(e, Ast.Constant(true));
-                default: throw JitBailout.Instance;
+                default: throw Bail("condition of type " + t);
             }
         }
 
         // ---- calls -------------------------------------------------------------------------
 
         private MSA.Expression/*!*/ EmitCall(MethodCall/*!*/ node, out JT type) {
-            if (node.Block != null) { throw JitBailout.Instance; }
+            if (node.Block != null) { throw Bail("call with a block: " + node.MethodName); }
             var args = node.Arguments;
             int argc = (args == null) ? 0 : args.Expressions.Length;
 
@@ -825,7 +825,7 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            throw JitBailout.Instance;
+            throw Bail("call: " + node.MethodName + "/" + argc);
         }
 
         private static bool IsNumeric(JT t) {
@@ -887,7 +887,7 @@ namespace IronRuby.Runtime.Jit {
 
         private MSA.Expression/*!*/ EmitBinary(string/*!*/ op, MSA.Expression/*!*/ l, JT lt, MSA.Expression/*!*/ r, JT rt, out JT type) {
             JT operand = Unify(lt, rt);
-            if (operand == JT.Obj) { throw JitBailout.Instance; }
+            if (operand == JT.Obj) { throw Bail("operator " + op + " on " + lt + ", " + rt); }
 
             if (operand == JT.Dbl) {
                 l = Coerce(l, lt, JT.Dbl);
@@ -934,11 +934,11 @@ namespace IronRuby.Runtime.Jit {
                 case "*": if (bothInt) { return Ast.Multiply(l, r); } _canDeopt = true; return Ast.Call(JitRuntime.M("MulLong"), l, r);
                 case "/": _canDeopt = true; return Ast.Call(JitRuntime.M("DivLong"), l, r);
                 case "%": _canDeopt = true; return Ast.Call(JitRuntime.M("ModLong"), l, r);
-                default: throw JitBailout.Instance;
+                default: throw Bail("integer operator " + op);
             }
         }
 
-        private static MSA.Expression/*!*/ EmitCompare(string/*!*/ op, MSA.Expression/*!*/ l, MSA.Expression/*!*/ r, out JT type) {
+        private MSA.Expression/*!*/ EmitCompare(string/*!*/ op, MSA.Expression/*!*/ l, MSA.Expression/*!*/ r, out JT type) {
             type = JT.Bool;
             switch (op) {
                 case "<": return Ast.LessThan(l, r);
@@ -947,7 +947,7 @@ namespace IronRuby.Runtime.Jit {
                 case ">=": return Ast.GreaterThanOrEqual(l, r);
                 case "==": return Ast.Equal(l, r);
                 case "!=": return Ast.NotEqual(l, r);
-                default: throw JitBailout.Instance;
+                default: throw Bail("float operator " + op);
             }
         }
     }
