@@ -18,6 +18,19 @@ module OpenSSL
   module SSL
     class SSLError < OpenSSLError; end unless const_defined?(:SSLError, false)
 
+    # What a non-blocking SSL read or write raises when the handshake needs the other
+    # direction first. IronRuby's SSL sockets are blocking, so nothing here raises these - but
+    # `rescue OpenSSL::SSL::SSLErrorWaitReadable` is written unconditionally by libraries that
+    # do non-blocking IO, and a missing constant makes the file that mentions it fail to load.
+    # aws-sdk-core's Seahorse HTTP handler is one, so every aws-sdk-* gem needs them.
+    class SSLErrorWaitReadable < SSLError
+      include IO::WaitReadable
+    end
+
+    class SSLErrorWaitWritable < SSLError
+      include IO::WaitWritable
+    end
+
     OP_ALL = 0x80000054
     OP_NO_SSLv2 = 0x01000000
     OP_NO_SSLv3 = 0x02000000
