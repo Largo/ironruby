@@ -41,6 +41,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nokogiri.NokogiriLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Fiddle.FiddleLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.WebSocketDriver.WebSocketDriverLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.MessagePack.MessagePackLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -16148,6 +16149,481 @@ namespace IronRuby.StandardLibrary.WebSocketDriver {
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.WebSocketDriver.WebSocketOps.MaskOps.Mask)
             );
             
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.MessagePack {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class MessagePackLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(IronRuby.Builtins.RubyObject));
+            IronRuby.Builtins.RubyClass classRef1 = GetClass(typeof(System.SystemException));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("MessagePack", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("MessagePack::Buffer", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject), 0x00000008, classRef0, LoadMessagePack__Buffer_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Create)
+            );
+            IronRuby.Builtins.RubyClass def3 = DefineClass("MessagePack::Factory", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject), 0x00000008, classRef0, LoadMessagePack__Factory_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject.Create)
+            );
+            IronRuby.Builtins.RubyClass def5 = DefineClass("MessagePack::Packer", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject), 0x00000008, classRef0, LoadMessagePack__Packer_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.Create)
+            );
+            IronRuby.Builtins.RubyClass def9 = DefineClass("MessagePack::Unpacker", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject), 0x00000008, classRef0, LoadMessagePack__Unpacker_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+                new Func<IronRuby.Builtins.RubyClass, System.Object[], IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Create)
+            );
+            IronRuby.Builtins.RubyClass def10 = DefineClass("MessagePack::UnpackError", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackError), 0x00000008, classRef1, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(MessagePackLibraryInitializer.ExceptionFactory__MessagePack__UnpackError));
+            IronRuby.Builtins.RubyClass def4 = DefineClass("MessagePack::MalformedFormatError", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps.MalformedFormatError), 0x00000008, def10, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(MessagePackLibraryInitializer.ExceptionFactory__MessagePack__MalformedFormatError));
+            IronRuby.Builtins.RubyClass def6 = DefineClass("MessagePack::StackError", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps.StackError), 0x00000008, def10, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(MessagePackLibraryInitializer.ExceptionFactory__MessagePack__StackError));
+            IronRuby.Builtins.RubyClass def7 = DefineClass("MessagePack::UnexpectedTypeError", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnexpectedTypeError), 0x00000008, def10, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(MessagePackLibraryInitializer.ExceptionFactory__MessagePack__UnexpectedTypeError));
+            IronRuby.Builtins.RubyClass def8 = DefineClass("MessagePack::UnknownExtTypeError", typeof(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnknownExtTypeError), 0x00000008, def10, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray, 
+            new Func<IronRuby.Builtins.RubyClass, System.Object, System.Exception>(MessagePackLibraryInitializer.ExceptionFactory__MessagePack__UnknownExtTypeError));
+            SetConstant(def1, "Buffer", def2);
+            SetConstant(def1, "Factory", def3);
+            SetConstant(def1, "Packer", def5);
+            SetConstant(def1, "Unpacker", def9);
+            SetConstant(def1, "UnpackError", def10);
+            SetConstant(def1, "MalformedFormatError", def4);
+            SetConstant(def1, "StackError", def6);
+            SetConstant(def1, "UnexpectedTypeError", def7);
+            SetConstant(def1, "UnknownExtTypeError", def8);
+        }
+        
+        private static void LoadMessagePack__Buffer_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "<<", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Append)
+            );
+            
+            DefineLibraryMethod(module, "clear", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Clear)
+            );
+            
+            DefineLibraryMethod(module, "close", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Close)
+            );
+            
+            DefineLibraryMethod(module, "empty?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Boolean>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.IsEmpty)
+            );
+            
+            DefineLibraryMethod(module, "flush", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Flush)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object[], System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Inspect)
+            );
+            
+            DefineLibraryMethod(module, "io", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Io)
+            );
+            
+            DefineLibraryMethod(module, "read", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Read)
+            );
+            
+            DefineLibraryMethod(module, "read_all", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object[], IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.ReadAll)
+            );
+            
+            DefineLibraryMethod(module, "size", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Size)
+            );
+            
+            DefineLibraryMethod(module, "skip", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Skip)
+            );
+            
+            DefineLibraryMethod(module, "skip_all", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.SkipAll)
+            );
+            
+            DefineLibraryMethod(module, "to_a", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.ToA)
+            );
+            
+            DefineLibraryMethod(module, "to_s", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.ToStr)
+            );
+            
+            DefineLibraryMethod(module, "to_str", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.ToStr)
+            );
+            
+            DefineLibraryMethod(module, "write", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.Write)
+            );
+            
+            DefineLibraryMethod(module, "write_to", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject, System.Object, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject.WriteTo)
+            );
+            
+        }
+        
+        private static void LoadMessagePack__Factory_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "dup", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject, IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject.Dup)
+            );
+            
+            DefineLibraryMethod(module, "freeze", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject, IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject.Freeze)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject, System.Object[], System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "packer", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject, System.Object[], IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject.Packer)
+            );
+            
+            DefineLibraryMethod(module, "register_type_internal", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject, System.Object, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject.RegisterTypeInternal)
+            );
+            
+            DefineLibraryMethod(module, "registered_types_internal", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject.RegisteredTypesInternal)
+            );
+            
+            DefineLibraryMethod(module, "unpacker", 0x11, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject, System.Object[], IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.FactoryObject.Unpacker)
+            );
+            
+        }
+        
+        private static void LoadMessagePack__Packer_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "buffer", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.GetBuffer)
+            );
+            
+            DefineLibraryMethod(module, "clear", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.Reset)
+            );
+            
+            DefineLibraryMethod(module, "compatibility_mode?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Boolean>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.IsCompatibilityMode)
+            );
+            
+            DefineLibraryMethod(module, "empty?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Boolean>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.IsEmpty)
+            );
+            
+            DefineLibraryMethod(module, "flush", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.Flush)
+            );
+            
+            DefineLibraryMethod(module, "full_pack", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.FullPack)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object[], System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.Inspect)
+            );
+            
+            DefineLibraryMethod(module, "pack", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.Write)
+            );
+            
+            DefineLibraryMethod(module, "register_type_internal", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.RegisterTypeInternal)
+            );
+            
+            DefineLibraryMethod(module, "registered_types_internal", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.RegisteredTypesInternal)
+            );
+            
+            DefineLibraryMethod(module, "reset", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.Reset)
+            );
+            
+            DefineLibraryMethod(module, "size", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.Size)
+            );
+            
+            DefineLibraryMethod(module, "to_a", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.ToA)
+            );
+            
+            DefineLibraryMethod(module, "to_s", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.ToStr)
+            );
+            
+            DefineLibraryMethod(module, "to_str", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.ToStr)
+            );
+            
+            DefineLibraryMethod(module, "write", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.Write)
+            );
+            
+            DefineLibraryMethod(module, "write_array", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteArray)
+            );
+            
+            DefineLibraryMethod(module, "write_array_header", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteArrayHeader)
+            );
+            
+            DefineLibraryMethod(module, "write_bin", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteBin)
+            );
+            
+            DefineLibraryMethod(module, "write_bin_header", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteBinHeader)
+            );
+            
+            DefineLibraryMethod(module, "write_ext", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteExtValue)
+            );
+            
+            DefineLibraryMethod(module, "write_extension", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteExtension)
+            );
+            
+            DefineLibraryMethod(module, "write_false", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteFalse)
+            );
+            
+            DefineLibraryMethod(module, "write_float", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteFloat)
+            );
+            
+            DefineLibraryMethod(module, "write_float32", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteFloat32)
+            );
+            
+            DefineLibraryMethod(module, "write_hash", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteHash)
+            );
+            
+            DefineLibraryMethod(module, "write_int", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteInt)
+            );
+            
+            DefineLibraryMethod(module, "write_map_header", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteMapHeader)
+            );
+            
+            DefineLibraryMethod(module, "write_nil", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteNil)
+            );
+            
+            DefineLibraryMethod(module, "write_string", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteString)
+            );
+            
+            DefineLibraryMethod(module, "write_symbol", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteSymbol)
+            );
+            
+            DefineLibraryMethod(module, "write_to", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, System.Object, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteTo)
+            );
+            
+            DefineLibraryMethod(module, "write_true", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject, IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.PackerObject.WriteTrue)
+            );
+            
+        }
+        
+        private static void LoadMessagePack__Unpacker_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "allow_unknown_ext?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Boolean>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.IsAllowUnknownExt)
+            );
+            
+            DefineLibraryMethod(module, "buffer", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, IronRuby.StandardLibrary.MessagePack.MessagePackOps.BufferObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.GetBuffer)
+            );
+            
+            DefineLibraryMethod(module, "each", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Each)
+            );
+            
+            DefineLibraryMethod(module, "feed", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Feed)
+            );
+            
+            DefineLibraryMethod(module, "feed_each", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.FeedEach)
+            );
+            
+            DefineLibraryMethod(module, "feed_reference", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Feed)
+            );
+            
+            DefineLibraryMethod(module, "freeze?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Boolean>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.IsFreeze)
+            );
+            
+            DefineLibraryMethod(module, "full_unpack", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.FullUnpack)
+            );
+            
+            DefineLibraryMethod(module, "initialize", 0x12, 
+                0x80000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object[], System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Initialize)
+            );
+            
+            DefineLibraryMethod(module, "inspect", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.UnaryOpStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Inspect)
+            );
+            
+            DefineLibraryMethod(module, "read", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Read)
+            );
+            
+            DefineLibraryMethod(module, "read_array_header", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.ReadArrayHeader)
+            );
+            
+            DefineLibraryMethod(module, "read_map_header", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.ReadMapHeader)
+            );
+            
+            DefineLibraryMethod(module, "register_type_internal", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.RegisterTypeInternal)
+            );
+            
+            DefineLibraryMethod(module, "registered_types_internal", 0x12, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, IronRuby.Builtins.Hash>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.RegisteredTypesInternal)
+            );
+            
+            DefineLibraryMethod(module, "reset", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Reset)
+            );
+            
+            DefineLibraryMethod(module, "skip", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Skip)
+            );
+            
+            DefineLibraryMethod(module, "skip_nil", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Boolean>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.SkipNil)
+            );
+            
+            DefineLibraryMethod(module, "symbolize_keys?", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Boolean>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.IsSymbolizeKeys)
+            );
+            
+            DefineLibraryMethod(module, "unpack", 0x11, 
+                0x00000000U, 
+                new Func<IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject, System.Object>(IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackerObject.Read)
+            );
+            
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__MessagePack__MalformedFormatError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.MessagePack.MessagePackOps.MalformedFormatError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__MessagePack__StackError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.MessagePack.MessagePackOps.StackError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__MessagePack__UnexpectedTypeError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnexpectedTypeError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__MessagePack__UnknownExtTypeError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnknownExtTypeError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+        public static System.Exception/*!*/ ExceptionFactory__MessagePack__UnpackError(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
+            return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.MessagePack.MessagePackOps.UnpackError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
         }
         
     }

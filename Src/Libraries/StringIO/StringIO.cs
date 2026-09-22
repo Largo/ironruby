@@ -393,9 +393,10 @@ namespace IronRuby.StandardLibrary.StringIO {
             return lengthObj;
         }
 
+        // MRI's strio_rewind does not check that the stream is open: a StringIO that a
+        // GzipWriter has closed can still be rewound, and its #string read back.
         [RubyMethod("rewind")]
         public static int Rewind(StringIO/*!*/ self) {
-            self.GetContent();
             self._position = 0;
             self._lineNumber = 0;
             return 0;

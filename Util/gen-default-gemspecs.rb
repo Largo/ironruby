@@ -134,6 +134,11 @@ GEMS = {
                           "websocket/http/", "websocket/mask", "websocket/websocket_mask"],
                          pinned: true,
                          deps: [["websocket-extensions", ">= 0.1.0"]]],
+  # msgpack's C extension (Buffer, Packer, Unpacker, Factory, the error
+  # classes) is C# here (Src/Libraries/MessagePack); lib/msgpack is vendored
+  # unchanged and requires "msgpack/msgpack", which is IronRuby's loader.
+  "msgpack" => ["1.8.5", "MessagePack serialization; the C extension ported to C#",
+                ["msgpack", "msgpack/"], check: "MessagePack::VERSION", pinned: true],
   # Ruby 4.0 removed the CGI class from the standard library and kept only the
   # escaping half, cgi/escape - which is a C extension there and is vendored in
   # Ruby here.  The `cgi` gem that brings the class back is that same C
