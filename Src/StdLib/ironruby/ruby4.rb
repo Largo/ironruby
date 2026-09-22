@@ -2841,34 +2841,45 @@ unless defined?(Fiber)
     end
 
     # Runs on the fiber's own thread.
+    #
+    # Everything but the fiber's own block runs with interrupts deferred. Thread#raise is
+    # delivered at every method entry and loop back edge, and this is the machinery that
+    # MRI has in C: an exception landing between the `rescue' and __finish__ would skip the
+    # hand-back and reach the resumer as "unexpected return" (Mutex#lock's "does not raise
+    # deadlock if a fiber's attempt to lock was interrupted" spec). One that arrives while
+    # the fiber is finishing stays parked and dies with the fiber's thread.
     def __run__
       msg = __await__
       result = nil
       error = nil
       handed_back = false
-      begin
-        catch(KILL_TAG) do
-          begin
-            case msg[0]
-            when :resume, :transfer
-              result = @block.call(*msg[1])
-            else
-              __act__(msg)
+      ::Thread.handle_interrupt(::Object => :never) do
+        begin
+          catch(KILL_TAG) do
+            begin
+              ::Thread.handle_interrupt(::Object => :immediate) do
+                case msg[0]
+                when :resume, :transfer
+                  result = @block.call(*msg[1])
+                else
+                  __act__(msg)
+                end
+              end
+            rescue ::Exception => e
+              error = e
             end
-          rescue ::Exception => e
-            error = e
           end
-        end
-        __finish__(error ? [:error, error] : [:return, result])
-        handed_back = true
-      ensure
-        unless handed_back
-          # `return` or `break` out of the fiber block unwinds with something
-          # `rescue Exception` cannot see. Hand control back anyway - dropping
-          # it here would park the resuming fiber forever.
-          begin
-            __finish__([:error, ::LocalJumpError.new("unexpected return")])
-          rescue ::Exception
+          __finish__(error ? [:error, error] : [:return, result])
+          handed_back = true
+        ensure
+          unless handed_back
+            # `return` or `break` out of the fiber block unwinds with something
+            # `rescue Exception` cannot see. Hand control back anyway - dropping
+            # it here would park the resuming fiber forever.
+            begin
+              __finish__([:error, ::LocalJumpError.new("unexpected return")])
+            rescue ::Exception
+            end
           end
         end
       end
