@@ -194,9 +194,10 @@ namespace IronRuby.Builtins {
             int count = _count;
             int dst = 0;
             for (int src = _start; src < count; src++) {
-                if (entries[src].Next != TombstoneNext) {
+                ref Entry e = ref entries[src];
+                if (e.Next != TombstoneNext) {
                     if (dst != src) {
-                        entries[dst] = entries[src];
+                        entries[dst] = e;
                     }
                     dst++;
                 }
@@ -253,9 +254,10 @@ namespace IronRuby.Builtins {
             int[] buckets = _buckets;
             Entry[] entries = _entries;
             for (int i = _start; i < _count; i++) {
-                if (entries[i].Next != TombstoneNext) {
-                    int bucket = BucketIndex(entries[i].HashCode);
-                    entries[i].Next = buckets[bucket] - 1;
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext) {
+                    int bucket = BucketIndex(e.HashCode);
+                    e.Next = buckets[bucket] - 1;
                     buckets[bucket] = i + 1;
                 }
             }
@@ -303,49 +305,51 @@ namespace IronRuby.Builtins {
 
         #region Lookup
 
-        /// <summary>The index into _entries of <paramref name="key"/>, or -1.</summary>
-        private int FindEntry(object key) {
+        /// <summary>
+        /// Walks the bucket chain and hands back the entry itself, so that reading the value
+        /// does not cost a second bounds-checked index into the entry array. It is the shape
+        /// Dictionary.FindValue has, for the same reason.
+        /// </summary>
+        private ref Entry FindEntryRef(object key, out bool found) {
             if (key == null) {
                 throw new ArgumentNullException("key");
             }
-            if (_buckets == null) {
-                return -1;
-            }
-            IEqualityComparer<object> comparer = _comparer;
-            int hashCode = comparer.GetHashCode(key);
-            // _buckets can have been replaced by a re-entrant comparer between the two calls, so
-            // re-read it rather than cache it across GetHashCode.
-            if (_buckets == null) {
-                return -1;
-            }
             Entry[] entries = _entries;
-            int i = _buckets[BucketIndex(hashCode)] - 1;
-            // A chain can be no longer than the entry array; a comparer that mutates the hash
-            // under us could otherwise send this walking in circles forever. Same guard, and the
-            // same "look at the array we started with" rule, that Dictionary uses.
-            int collisions = 0;
-            while ((uint)i < (uint)entries.Length) {
-                // A tombstone is unlinked from its chain, so it is never reached from here.
-                ref Entry e = ref entries[i];
-                if (e.HashCode == hashCode && comparer.Equals(e.Key, key)) {
-                    return i;
-                }
-                i = e.Next;
-                if (++collisions > entries.Length) {
-                    break;
+            if (entries != null) {
+                IEqualityComparer<object> comparer = _comparer;
+                int hashCode = comparer.GetHashCode(key);
+                int i = _buckets[BucketIndex(hashCode)] - 1;
+                int collisions = 0;
+                while ((uint)i < (uint)entries.Length) {
+                    ref Entry e = ref entries[i];
+                    if (e.HashCode == hashCode && comparer.Equals(e.Key, key)) {
+                        found = true;
+                        return ref e;
+                    }
+                    i = e.Next;
+                    if (++collisions > entries.Length) {
+                        break;
+                    }
                 }
             }
-            return -1;
+            found = false;
+            return ref _NoEntry[0];
         }
 
+        // The "not found" target of FindEntryRef. Never read, never written.
+        private static readonly Entry[]/*!*/ _NoEntry = new Entry[1];
+
         public bool ContainsKey(object key) {
-            return FindEntry(key) >= 0;
+            bool found;
+            FindEntryRef(key, out found);
+            return found;
         }
 
         public bool TryGetValue(object key, out object value) {
-            int i = FindEntry(key);
-            if (i >= 0) {
-                value = _entries[i].Value;
+            bool found;
+            ref Entry e = ref FindEntryRef(key, out found);
+            if (found) {
+                value = e.Value;
                 return true;
             }
             value = null;
@@ -357,7 +361,8 @@ namespace IronRuby.Builtins {
             int count = _count;
             if (value == null) {
                 for (int i = _start; i < count; i++) {
-                    if (entries[i].Next != TombstoneNext && entries[i].Value == null) {
+                    ref Entry e = ref entries[i];
+                    if (e.Next != TombstoneNext && e.Value == null) {
                         return true;
                     }
                 }
@@ -365,7 +370,8 @@ namespace IronRuby.Builtins {
             }
             var comparer = EqualityComparer<object>.Default;
             for (int i = _start; i < count; i++) {
-                if (entries[i].Next != TombstoneNext && comparer.Equals(entries[i].Value, value)) {
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext && comparer.Equals(e.Value, value)) {
                     return true;
                 }
             }
@@ -374,11 +380,12 @@ namespace IronRuby.Builtins {
 
         public object this[object key] {
             get {
-                int i = FindEntry(key);
-                if (i < 0) {
+                bool found;
+                ref Entry e = ref FindEntryRef(key, out found);
+                if (!found) {
                     throw new KeyNotFoundException();
                 }
-                return _entries[i].Value;
+                return e.Value;
             }
             set {
                 Insert(key, value, InsertOverwrite);
@@ -590,13 +597,15 @@ namespace IronRuby.Builtins {
         }
 
         bool ICollection<KeyValuePair<object, object>>.Contains(KeyValuePair<object, object> item) {
-            int i = FindEntry(item.Key);
-            return i >= 0 && EqualityComparer<object>.Default.Equals(_entries[i].Value, item.Value);
+            bool found;
+            ref Entry e = ref FindEntryRef(item.Key, out found);
+            return found && EqualityComparer<object>.Default.Equals(e.Value, item.Value);
         }
 
         bool ICollection<KeyValuePair<object, object>>.Remove(KeyValuePair<object, object> item) {
-            int i = FindEntry(item.Key);
-            if (i >= 0 && EqualityComparer<object>.Default.Equals(_entries[i].Value, item.Value)) {
+            bool found;
+            ref Entry e = ref FindEntryRef(item.Key, out found);
+            if (found && EqualityComparer<object>.Default.Equals(e.Value, item.Value)) {
                 return Remove(item.Key);
             }
             return false;
@@ -607,8 +616,9 @@ namespace IronRuby.Builtins {
             Entry[] entries = _entries;
             int count = _count;
             for (int i = _start; i < count; i++) {
-                if (entries[i].Next != TombstoneNext) {
-                    array[index++] = new KeyValuePair<object, object>(entries[i].Key, entries[i].Value);
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext) {
+                    array[index++] = new KeyValuePair<object, object>(e.Key, e.Value);
                 }
             }
         }
@@ -653,8 +663,9 @@ namespace IronRuby.Builtins {
                 if (key == null) {
                     return null;
                 }
-                int i = FindEntry(key);
-                return i >= 0 ? _entries[i].Value : null;
+                bool found;
+                ref Entry e = ref FindEntryRef(key, out found);
+                return found ? e.Value : null;
             }
             set { this[key] = value; }
         }
@@ -700,8 +711,9 @@ namespace IronRuby.Builtins {
             int count = _count;
             if (entriesArray != null) {
                 for (int i = _start; i < count; i++) {
-                    if (entries[i].Next != TombstoneNext) {
-                        entriesArray[index++] = new DictionaryEntry(entries[i].Key, entries[i].Value);
+                    ref Entry e = ref entries[i];
+                    if (e.Next != TombstoneNext) {
+                        entriesArray[index++] = new DictionaryEntry(e.Key, e.Value);
                     }
                 }
                 return;
@@ -711,8 +723,9 @@ namespace IronRuby.Builtins {
                 throw new ArgumentException("Invalid array type.");
             }
             for (int i = _start; i < count; i++) {
-                if (entries[i].Next != TombstoneNext) {
-                    objects[index++] = new KeyValuePair<object, object>(entries[i].Key, entries[i].Value);
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext) {
+                    objects[index++] = new KeyValuePair<object, object>(e.Key, e.Value);
                 }
             }
         }
@@ -762,8 +775,9 @@ namespace IronRuby.Builtins {
                 Entry[] entries = _hash._entries;
                 while (_index < _hash._count) {
                     int i = _index++;
-                    if (entries[i].Next != TombstoneNext) {
-                        _current = new KeyValuePair<object, object>(entries[i].Key, entries[i].Value);
+                    ref Entry e = ref entries[i];
+                    if (e.Next != TombstoneNext) {
+                        _current = new KeyValuePair<object, object>(e.Key, e.Value);
                         return true;
                     }
                 }
@@ -860,8 +874,9 @@ namespace IronRuby.Builtins {
                 Entry[] entries = _hash._entries;
                 int count = _hash._count;
                 for (int i = _hash._start; i < count; i++) {
-                    if (entries[i].Next != TombstoneNext) {
-                        array[index++] = entries[i].Key;
+                    ref Entry e = ref entries[i];
+                    if (e.Next != TombstoneNext) {
+                        array[index++] = e.Key;
                     }
                 }
             }
@@ -876,8 +891,9 @@ namespace IronRuby.Builtins {
                 Entry[] entries = _hash._entries;
                 int count = _hash._count;
                 for (int i = _hash._start; i < count; i++) {
-                    if (entries[i].Next != TombstoneNext) {
-                        array.SetValue(entries[i].Key, index++);
+                    ref Entry e = ref entries[i];
+                    if (e.Next != TombstoneNext) {
+                        array.SetValue(e.Key, index++);
                     }
                 }
             }
@@ -922,8 +938,9 @@ namespace IronRuby.Builtins {
                     Entry[] entries = _hash._entries;
                     while (_index < _hash._count) {
                         int i = _index++;
-                        if (entries[i].Next != TombstoneNext) {
-                            _current = entries[i].Key;
+                        ref Entry e = ref entries[i];
+                        if (e.Next != TombstoneNext) {
+                            _current = e.Key;
                             return true;
                         }
                     }
@@ -981,8 +998,9 @@ namespace IronRuby.Builtins {
                 Entry[] entries = _hash._entries;
                 int count = _hash._count;
                 for (int i = _hash._start; i < count; i++) {
-                    if (entries[i].Next != TombstoneNext) {
-                        array[index++] = entries[i].Value;
+                    ref Entry e = ref entries[i];
+                    if (e.Next != TombstoneNext) {
+                        array[index++] = e.Value;
                     }
                 }
             }
@@ -997,8 +1015,9 @@ namespace IronRuby.Builtins {
                 Entry[] entries = _hash._entries;
                 int count = _hash._count;
                 for (int i = _hash._start; i < count; i++) {
-                    if (entries[i].Next != TombstoneNext) {
-                        array.SetValue(entries[i].Value, index++);
+                    ref Entry e = ref entries[i];
+                    if (e.Next != TombstoneNext) {
+                        array.SetValue(e.Value, index++);
                     }
                 }
             }
@@ -1043,8 +1062,9 @@ namespace IronRuby.Builtins {
                     Entry[] entries = _hash._entries;
                     while (_index < _hash._count) {
                         int i = _index++;
-                        if (entries[i].Next != TombstoneNext) {
-                            _current = entries[i].Value;
+                        ref Entry e = ref entries[i];
+                        if (e.Next != TombstoneNext) {
+                            _current = e.Value;
                             return true;
                         }
                     }
