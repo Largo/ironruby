@@ -193,7 +193,14 @@ module Kernel
     if !File.file?(caller_path) || File.symlink?(caller_path)
       location = __source_location_of__(caller_path)
     end
-    require File.expand_path(path, File.dirname(location || caller_path))
+    # MRI's require_relative is rb_f_require_relative, which goes straight into the
+    # loader; it never re-dispatches through the caller's #require. Sending :require to
+    # self would pick up any singleton or module #require that happens to be in scope --
+    # Bundler.require(*groups), for one, which Bundler.self_manager would then invoke
+    # instead of loading bundler/self_manager.rb. Bind Kernel#require (which RubyGems
+    # replaces, so gem activation still happens) rather than calling self.require.
+    ::Kernel.instance_method(:require).bind(self).
+      call(File.expand_path(path, File.dirname(location || caller_path)))
   end unless private_method_defined?(:require_relative)
 
   # Like #require, this is both a private instance method and a public singleton

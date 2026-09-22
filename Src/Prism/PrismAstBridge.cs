@@ -803,10 +803,15 @@ namespace IronRuby.Prism {
                         // passes the method's own block on
                         _usesBlock = true;
                     }
-                    Block superBlock = OptionalBlock(super.Block);
+                    // Arguments before the block, for the reason given in Call().
+                    Block superBlock = null;
                     var superArgs = super.Arguments != null
                         ? BuildArguments(super.Arguments, ref superBlock)
                         : new Arguments();
+                    Block superLiteralBlock = OptionalBlock(super.Block);
+                    if (superLiteralBlock != null) {
+                        superBlock = superLiteralBlock;
+                    }
                     return new SuperCall(superArgs, superBlock, span);
                 }
                 case Pm.ForwardingSuperNode forwardingSuper:
@@ -1300,8 +1305,17 @@ namespace IronRuby.Prism {
             }
 
             Expression receiver = node.Receiver != null ? Expr(node.Receiver) : null;
-            Block block = OptionalBlock(node.Block);
+            // The arguments are walked before the block: a local first assigned in the argument
+            // list belongs to the enclosing scope, and the block that follows closes over that
+            // local rather than declaring a fresh one - `h.fetch(k = key) { p k }` prints the key.
+            // Building the block first would resolve `k` against a scope that has not seen the
+            // assignment yet, and the block would read a nil of its own.
+            Block block = null;
             Arguments args = node.Arguments != null ? BuildArguments(node.Arguments, ref block) : null;
+            Block literalBlock = OptionalBlock(node.Block);
+            if (literalBlock != null) {
+                block = literalBlock;
+            }
             return new MethodCall(receiver, name, args, block, span) {
                 IsVariableCall = HasFlag(node, Pm.CallNodeFlags.VariableCall)
             };

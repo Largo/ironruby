@@ -143,6 +143,26 @@ module Gem
   end
 
   ##
+  # A binstub RubyGems writes gets `#!/usr/bin/env <ruby_install_name>` by
+  # default, and RbConfig's ruby_install_name here is "ir" - the apphost, which
+  # is not on PATH and which would start without the arguments that make it a
+  # Ruby 4 interpreter anyway.  Turn the env shebang off for every install, so
+  # the line becomes `#!<Gem.ruby>`, the ir.sh wrapper.  That also makes
+  # Bundler's CLI::Exec#ruby_shebang? recognise the binstub - it matches
+  # "#!#{Gem.ruby}" - so `bundle exec <gem executable>` loads it in this process
+  # instead of exec'ing it into whatever `ruby` is on PATH.
+  #
+  # This is a pre_install hook rather than a reopened Gem::Installer because
+  # rubygems/installer.rb is loaded long after this file and would overwrite the
+  # method.  A hook that returns false aborts the install, so it returns true.
+  pre_install do |installer|
+    if installer.respond_to?(:instance_variable_set) && !Gem.configuration[:custom_shebang]
+      installer.instance_variable_set(:@env_shebang, false)
+    end
+    true
+  end
+
+  ##
   # Gems whose C extensions IronRuby cannot load, collected while scanning the
   # gem index.  See BasicSpecification#ignored? below.
 

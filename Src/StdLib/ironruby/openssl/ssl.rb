@@ -32,7 +32,43 @@ module OpenSSL
     TLS1_2_VERSION = 0x0303
     TLS1_3_VERSION = 0x0304
 
+    # MRI's SSLSocket includes this and forwards the socket-level calls that an
+    # SslStream does not answer itself to the underlying IO.  net/http sets
+    # TCP_NODELAY through it on every connection, so without it no HTTPS request
+    # gets off the ground.
+    module SocketForwarder
+      def addr
+        to_io.addr
+      end
+
+      def peeraddr
+        to_io.peeraddr
+      end
+
+      def setsockopt(level, optname, optval)
+        to_io.setsockopt(level, optname, optval)
+      end
+
+      def getsockopt(level, optname)
+        to_io.getsockopt(level, optname)
+      end
+
+      def fcntl(*args)
+        to_io.fcntl(*args)
+      end
+
+      def closed?
+        to_io.closed?
+      end
+
+      def do_not_reverse_lookup=(flag)
+        to_io.do_not_reverse_lookup = flag
+      end
+    end
+
     class SSLSocket
+      include SocketForwarder
+
       attr_reader :io, :context
       attr_accessor :hostname, :sync_close, :session
 
