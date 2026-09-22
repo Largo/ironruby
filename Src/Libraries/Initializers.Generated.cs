@@ -40,6 +40,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Sqlite3.Sqlite3LibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nokogiri.NokogiriLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Fiddle.FiddleLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.WebSocketDriver.WebSocketDriverLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -16122,6 +16123,31 @@ namespace IronRuby.StandardLibrary.Fiddle {
         
         public static System.Exception/*!*/ ExceptionFactory__Fiddle__Error(IronRuby.Builtins.RubyClass/*!*/ self, [DefaultParameterValueAttribute(null)]object message) {
             return IronRuby.Runtime.RubyExceptionData.InitializeException(new IronRuby.StandardLibrary.Fiddle.FiddleOps.FiddleError(IronRuby.Runtime.RubyExceptionData.GetClrMessage(self, message), (System.Exception)null), message);
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.WebSocketDriver {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class WebSocketDriverLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("WebSocket", typeof(IronRuby.StandardLibrary.WebSocketDriver.WebSocketOps), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def2 = DefineModule("WebSocket::Mask", typeof(IronRuby.StandardLibrary.WebSocketDriver.WebSocketOps.MaskOps), 0x00000008, null, LoadWebSocket__Mask_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            SetConstant(def1, "Mask", def2);
+        }
+        
+        private static void LoadWebSocket__Mask_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "mask", 0x21, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.WebSocketDriver.WebSocketOps.MaskOps.Mask)
+            );
+            
         }
         
     }

@@ -54,6 +54,10 @@ OUT_DIR = File.join(STDLIB, "ruby", "gems", "4.0.0", "specifications", "default"
 # answers without a file on disk (ruby2_keywords is built into the loader)
 # is written as [name, :builtin].
 #
+# :deps lists runtime dependencies as [name, requirement...] - the ones the real
+# gem declares, so that Bundler still installs what the vendored Ruby requires
+# (websocket-driver's websocket-extensions, say) from rubygems.org.
+#
 # :check is the constant whose value must equal the version.  :require is what
 # to require before reading it, when that is not the gem's own name.
 #
@@ -119,6 +123,17 @@ GEMS = {
   # API level implemented, not a nokogiri release.
   "nokogiri" => ["1.18.0", "HTML5, HTML4 and XML parsing, on AngleSharp",
                  ["nokogiri", "nokogiri/"], check: "Nokogiri::VERSION", pinned: true],
+  # websocket-driver is pure Ruby apart from WebSocket::Mask.mask, the frame
+  # masking loop, which is C upstream and C# here (Src/Libraries/WebSocketDriver).
+  # The gem's Ruby is vendored unchanged.  It is a dependency of faye-websocket
+  # and ActionCable.  Upstream also depends on base64, which is left out: IronRuby
+  # ships base64.rb itself, and a dependency no gem satisfies would make
+  # `gem "websocket-driver"` fail to activate outside a bundle.
+  "websocket-driver" => ["0.8.2", "WebSocket protocol handler; WebSocket::Mask in C#",
+                         ["websocket_mask", "websocket/driver", "websocket/driver/", "websocket/http",
+                          "websocket/http/", "websocket/mask", "websocket/websocket_mask"],
+                         pinned: true,
+                         deps: [["websocket-extensions", ">= 0.1.0"]]],
   # Ruby 4.0 removed the CGI class from the standard library and kept only the
   # escaping half, cgi/escape - which is a C extension there and is vendored in
   # Ruby here.  The `cgi` gem that brings the class back is that same C
@@ -256,7 +271,7 @@ def write_executables(name, version, executables)
   end
 end
 
-def gemspec_source(name, version, summary, files, executables, pinned)
+def gemspec_source(name, version, summary, files, executables, pinned, deps = [])
   lines = []
   lines << "# -*- encoding: utf-8 -*-"
   lines << "# stub: #{name} #{version} ruby lib"
@@ -284,6 +299,13 @@ def gemspec_source(name, version, summary, files, executables, pinned)
   lines << "  s.files = ["
   files.each {|f| lines << "    #{f.dump}.freeze," }
   lines << "  ]"
+  unless deps.empty?
+    lines << ""
+    deps.each do |dep, *reqs|
+      reqs = [">= 0"] if reqs.empty?
+      lines << "  s.add_runtime_dependency(#{dep.dump}.freeze, [#{reqs.map {|r| "#{r.dump}.freeze" }.join(", ")}])"
+    end
+  end
   lines << "end"
   lines.join("\n") + "\n"
 end
@@ -327,6 +349,7 @@ GEMS.each do |name, (version, summary, entries, opts)|
   write_executables(name, version, executables) unless executables.empty?
 
   path = File.join(OUT_DIR, "#{name}-#{version}.gemspec")
-  File.write(path, gemspec_source(name, version, summary, files, executables, opts[:pinned]))
+  File.write(path, gemspec_source(name, version, summary, files, executables, opts[:pinned],
+                                   Array(opts[:deps])))
   puts "#{name}-#{version} (#{files.length} files)"
 end
