@@ -53,7 +53,7 @@ module GemCatalog
 
     'net-http'     => { require: 'net/http',     tests: %w[test/net/http/*.rb],
                         note: 'spawns servers; slow' },
-    'net-imap'     => { require: 'net/imap',     specs: 'net-imap' },
+    'net-imap'     => { require: 'net/imap' },
     'net-smtp'     => { require: 'net/smtp' },
     'net-pop'      => { require: 'net/pop' },
     'net-ftp'      => { require: 'net/ftp',      specs: 'net-ftp' },

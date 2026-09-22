@@ -17,6 +17,12 @@
 #   IR_CONFIG   Debug (default) or Release
 #   GEM_TIMEOUT seconds per gem         (default 120)
 #   GEM_LOG_DIR where the per-gem logs go
+#
+# A gem or two takes a few seconds; the whole catalog takes around twenty
+# minutes, because the CRuby suites spawn a child interpreter per separated
+# test and IronRuby's startup is not free. Name the gems you care about while
+# working on one, and raise GEM_TIMEOUT if the box is busy - a gem that runs
+# out of time is reported TIMEOUT, not as a failure.
 
 set -u
 IR_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
@@ -84,7 +90,7 @@ for g in $GEMS; do
   fi
 
   if [ "$t" = - ]; then
-    if [ "$kind" = none ]; then
+    if [ "$kind" = none ] || [ "$from" = - ]; then
       [ -z "$note" ] && note='load only (no suite on disk)'
     elif [ "$loads" = ok ]; then
       if [ "$rc" = 124 ]; then note="TIMEOUT after ${GEM_TIMEOUT}s${note:+; $note}"

@@ -2375,7 +2375,10 @@ $LOAD_PATH.delete('.') if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array)
 # Object#clone(freeze:) (2.4)
 # --------------------------------------------------------------------------
 
-class Object
+# Kernel, not Object: MRI keeps #clone there, and delegate.rb builds its forwarder
+# out of `Kernel.dup` - a copy that would otherwise carry only the runtime's
+# argument-less #clone and refuse clone(freeze: false).
+module Kernel
   unless (begin; Object.new.clone(:freeze => nil); true; rescue ArgumentError; false; end)
     alias_method :clone_without_options, :clone
 
