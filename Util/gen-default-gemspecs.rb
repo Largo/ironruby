@@ -69,6 +69,8 @@ GEMS = {
             ["etc"], check: "Etc::VERSION"],
   "fcntl" => ["1.3.0", "Constants for fcntl(2) and open(2)",
               ["fcntl"], check: "Fcntl::VERSION"],
+  "fiddle" => ["1.1.8", "Calling shared-library functions, on NativeLibrary and calli",
+               ["fiddle", "fiddle/"], check: "Fiddle::VERSION"],
   "io-console" => ["0.8.2", "Console size and raw mode",
                    ["io/console", "io/console/"], require: "io/console",
                    check: "IO::ConsoleMode::VERSION"],
