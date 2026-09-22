@@ -83,62 +83,70 @@ puts(/b#{/a/}/)
             TestCorrectPatternTranslation(@"\u{005b}", @"\[");
             TestCorrectPatternTranslation(@"\u{5b 2a}", @"\[\*");
 
-            // Posix categories
-            TestPosixClassTranslation(@"[x[:alnum:]y]", @"[x\p{L}\p{Nd}\p{Nl}y]");
-            TestCorrectPatternTranslation(@"[a[^:alnum:]b]", @"[a\P{L}b-[\p{Nd}\p{Nl}-[ab]]]");
-            TestPosixClassTranslation(@"[[:alpha:]]", @"[\p{L}\p{Nl}]");
-            TestCorrectPatternTranslation(@"[[^:alpha:]]", @"[\P{L}-[\p{Nl}]]");
-            TestCorrectPatternTranslation(@"[[:ascii:]]", @"[\p{IsBasicLatin}]");
-            TestCorrectPatternTranslation(@"[[^:ascii:]]", @"[\P{IsBasicLatin}]");
-            TestCorrectPatternTranslation(@"[[:blank:]]", "[\\p{Zs}\t]");
-            TestCorrectPatternTranslation(@"[[^:blank:]]", "[\\P{Zs}-[\t]]");
-            TestCorrectPatternTranslation(@"[[:cntrl:]]", @"[\p{Cc}]");
-            TestCorrectPatternTranslation(@"[[^:cntrl:]]", @"[\P{Cc}]");
-            TestPosixClassTranslation(@"[[:digit:]]", @"[\p{Nd}]");
-            TestCorrectPatternTranslation(@"[[^:digit:]]", @"[\P{Nd}]");
-            TestPosixClassTranslation(@"[[:lower:]]", @"[\p{Ll}]");
-            TestCorrectPatternTranslation(@"[[^:lower:]]", @"[\P{Ll}]");
-            TestPosixClassTranslation(@"[[:punct:]]", @"[\p{P}]");
-            TestCorrectPatternTranslation(@"[[^:punct:]]", @"[\P{P}]");
-            TestCorrectPatternTranslation(@"[[:space:]]", "[\\p{Z}\u0085\u0009-\u000d]");
-            TestCorrectPatternTranslation(@"[[^:space:]]", "[\\P{Z}-[\u0085\u0009-\u000d]]");
-            TestCorrectPatternTranslation(@"[[:upper:]]", @"[\p{Lu}]");
-            TestCorrectPatternTranslation(@"[[^:upper:]]", @"[\P{Lu}]");
-            TestCorrectPatternTranslation(@"[[:xdigit:]]", "[a-fA-F0-9]");
-            TestCorrectPatternTranslation(@"[[^:xdigit:]]", "[\0-\uffff-[a-fA-F0-9]]");
+            // POSIX classes and properties are spelled out from Onigmo's own tables (see
+            // UnicodeProperties), so these check what the translation matches rather than its
+            // text; every expectation was checked against CRuby 4.0.6. A class with members
+            // outside the BMP gets surrogate-pair alternatives, which the non-BMP characters here
+            // exercise.
+            TestClassTranslation(@"[x[:alnum:]y]", "xyaZ5\u00e9\u0663\U0001D400", "-_ \U0001F600");
+            TestClassTranslation(@"[a[^:alnum:]b]", "abxZ5-\U0001F600", ":lnum");
+            TestClassTranslation(@"[[:alpha:]]", "aZ\u00e9\u03b1\u6f22\U00020000", "5_- \U0001F600");
+            TestClassTranslation(@"[[:^alpha:]]", "5_- \U0001F600", "aZ\u00e9\u6f22\U00020000");
+            TestClassTranslation(@"[[:ascii:]]", "\u0000A\u007f", "\u0080\u00e9\U0001F600");
+            TestClassTranslation(@"[[:^ascii:]]", "\u0080\u00e9\U0001F600", "\u0000A\u007f");
+            TestClassTranslation(@"[[:blank:]]", " \u0009\u3000", "\u000aa");
+            TestClassTranslation(@"[[:cntrl:]]", "\u0000\u001f\u007f\u0085", "a \u00a0");
+            TestClassTranslation(@"[[:digit:]]", "09\u0663\uff10\U0001D7CE", "a\u00b2\u00bd");
+            TestClassTranslation(@"[[:^digit:]]", "a\u00b2\U0001F600", "0\u0663\U0001D7CE");
+            TestClassTranslation(@"[[:lower:]]", "a\u00df\u03b1\U00010428", "A1\U00010400");
+            TestClassTranslation(@"[[:punct:]]", "!$+<^`|~\u00bf", "a1 ");
+            TestClassTranslation(@"[[:space:]]", " \u0009\u000a\u000b\u000c\u000d\u0085\u00a0\u2028\u3000", "a\u200b");
+            TestClassTranslation(@"[[:upper:]]", "A\u03a9\U00010400", "a1\U00010428");
+            TestClassTranslation(@"[[:xdigit:]]", "09afAF", "gG\uff10");
+            TestClassTranslation(@"[[:word:]]", "a_1\u00e9\u0301\u200c\U0001D400", "-! \U0001F600");
+            TestClassTranslation(@"(?a)[[:alpha:]]", "aZ", "\u00e9\u03b1\U00020000");
+            TestClassTranslation(@"(?a)[[:^alpha:]]", "1\u00e9\u3042\U00020000", "aZ");
+            TestClassTranslation(@"\p{L}", "a\u00e9\u6f22\U0001D400", "1_ ");
+            TestClassTranslation(@"\P{L}", "1_ \U0001F600", "a\u00e9\u6f22\U0001D400");
+            TestClassTranslation(@"\p{^L}", "1_ \U0001F600", "a\u00e9\u6f22\U0001D400");
+            TestClassTranslation(@"\P{^L}", "a\u00e9\u6f22\U0001D400", "1_ ");
+            TestClassTranslation(@"\p{Alnum}", "a1\u0663\U0001D400", "-_\U0001F600");
+            TestClassTranslation(@"[a\p{Alnum}b]", "ab1\U0001D400", "-_\U0001F600");
+            TestClassTranslation(@"[^\p{Alnum}]", "-_ \U0001F600", "a1\U0001D400");
+            TestClassTranslation(@"[\P{Alnum}]", "-_ \U0001F600", "a1\U0001D400");
+            TestClassTranslation(@"[\p{Alnum}-]", "a1-", "_ ");
+            TestClassTranslation(@"\p{Punct}", "!_\u00bf", "$+a");
+            TestClassTranslation(@"\p{Word}", "a_\u0301\U0001D400", "-\U0001F600");
+            TestClassTranslation(@"\p{XDigit}", "0aF", "g\uff10");
+            TestClassTranslation(@"\p{Emoji}", "#*09\u00a9\u263a\U0001F600", "a \u00e9");
+            TestClassTranslation(@"\P{Emoji}", "a\u00e9\U00010400", "#0\u263a\U0001F600");
+            TestClassTranslation(@"[\p{Emoji}&&[^\d#*]]", "\u00a9\u263a\U0001F600\U0001F44D", "#*09a");
+            TestClassTranslation(@"[^\p{Emoji}&&[^\d#*]]", "#*0a\U00010400", "\u00a9\u263a\U0001F600");
+            TestClassTranslation(@"[\p{Emoji}&&[^\u{1f600}-\u{1f64f}]]", "\u263a\U0001F44D1", "\U0001F600\U0001F64Fa");
+            TestClassTranslation(@"\p{Emoji_Presentation}", "\u231a\U0001F600", "\u263a1");
+            TestClassTranslation(@"\p{Extended_Pictographic}", "\u00a9\u263a\U0001F600\U0001FFFD", "1#");
+            TestClassTranslation(@"\p{Han}", "\u6f22\u3005\U00020000", "a\u3042");
+            TestClassTranslation(@"\p{Hiragana}", "\u3042\u309d", "\u30a2\u309b");
+            TestClassTranslation(@"\p{Greek}", "\u03b1\u1f00\U00010140", "a\u03e2");
+            TestClassTranslation(@"\p{In_Greek_and_Coptic}", "\u03b1\u03e2", "\u1f00a");
+            TestClassTranslation(@"\p{Latin}", "a\u00e9\u1e00\uff21", "\u03b11");
+            TestClassTranslation(@"\p{Any}", "\u0000a\uffff\U0001F600\U0010FFFF", "");
+            TestClassTranslation(@"\p{Assigned}", "a\U0001F600", "\u0378\U0010FFFF");
+            TestClassTranslation(@"\p{Age=6.0}", "a\U0001F601", "\U0001F600\U0001F97A");
+            TestClassTranslation(@"\p{alpha}", "a\u00e9", "1");
+            TestClassTranslation(@"\p{ ALPHA }", "a\u00e9", "1");
+            TestClassTranslation(@"\p{Lc}", "aA\u01c5", "\u02b01");
+            TestClassTranslation(@"\p{Cs}", "", "a\U0001F600");
 
-            // Unicode categories
-            TestCorrectPatternTranslation(@"\p{L}", @"[\p{L}]");
-            TestCorrectPatternTranslation(@"\p{Alnum}", @"[\p{L}\p{Nd}\p{Nl}]");
-            TestCorrectPatternTranslation(@"\P{Alnum}*", @"[\P{L}-[\p{Nd}\p{Nl}]]*");
-            TestCorrectPatternTranslation(@"\P{^Alnum}", @"[\p{L}\p{Nd}\p{Nl}]");
-            TestCorrectPatternTranslation(@"[a\p{Alnum}b]", @"[a\p{L}\p{Nd}\p{Nl}b]");
-            TestCorrectPatternTranslation(@"[^\p{Alnum}]", "[\0-\uffff-[\\p{L}\\p{Nd}\\p{Nl}]]");
-            TestCorrectPatternTranslation(@"[\P{Alnum}]", @"[\P{L}-[\p{Nd}\p{Nl}]]");
-            TestCorrectPatternTranslation(@"\P{^Alnum}", @"[\p{L}\p{Nd}\p{Nl}]");
-            TestCorrectPatternTranslation(@"\p{^Alnum}", @"[\P{L}-[\p{Nd}\p{Nl}]]");
-            TestCorrectPatternTranslation(@"\p{Alnum}", @"[\p{L}\p{Nd}\p{Nl}]");
-            TestCorrectPatternTranslation(@"\P{Alnum}", @"[\P{L}-[\p{Nd}\p{Nl}]]");
-            TestCorrectPatternTranslation(@"\p{Alpha}", @"[\p{L}\p{Nl}]");
-            TestCorrectPatternTranslation(@"\P{Alpha}", @"[\P{L}-[\p{Nl}]]");
-            TestCorrectPatternTranslation(@"\p{ASCII}", "[\\p{IsBasicLatin}]");
-            TestCorrectPatternTranslation(@"\P{ASCII}", "[\\P{IsBasicLatin}]");
-            TestCorrectPatternTranslation(@"\p{Blank}", "[\\p{Zs}\t]");
-            TestCorrectPatternTranslation(@"\P{Blank}", "[\\P{Zs}-[\t]]");
-            TestCorrectPatternTranslation(@"\p{Cntrl}", @"[\p{Cc}]");
-            TestCorrectPatternTranslation(@"\P{Cntrl}", @"[\P{Cc}]");
-            TestCorrectPatternTranslation(@"\p{Digit}", @"[\p{Nd}]");
-            TestCorrectPatternTranslation(@"\P{Digit}", @"[\P{Nd}]");
-            TestCorrectPatternTranslation(@"\p{Lower}", @"[\p{Ll}]");
-            TestCorrectPatternTranslation(@"\P{Lower}", @"[\P{Ll}]");
-            TestCorrectPatternTranslation(@"\p{Punct}", @"[\p{P}]");
-            TestCorrectPatternTranslation(@"\P{Punct}", @"[\P{P}]");
-            TestCorrectPatternTranslation(@"\p{Space}", "[\\p{Z}\u0085\u0009-\u000d]");
-            TestCorrectPatternTranslation(@"\P{Space}", "[\\P{Z}-[\u0085\u0009-\u000d]]");
-            TestCorrectPatternTranslation(@"\p{Upper}", @"[\p{Lu}]");
-            TestCorrectPatternTranslation(@"\P{Upper}", @"[\P{Lu}]");
-            TestCorrectPatternTranslation(@"\p{XDigit}", "[a-fA-F0-9]");
-            TestCorrectPatternTranslation(@"\P{XDigit}", "[\0-\uffff-[a-fA-F0-9]]");
+            // the rendering itself, for small sets
+            TestCorrectPatternTranslation(@"[[:xdigit:]]", "[0-9A-Fa-f]");
+            TestCorrectPatternTranslation(@"\p{XDigit}", "[0-9A-Fa-f]");
+            TestCorrectPatternTranslation(@"[[:^xdigit:]]", "(?:[\0-\uffff-[0-9A-Fa-f\\ud800-\\udfff]]|[\\ud800-\\udbff][\\udc00-\\udfff])");
+            TestCorrectPatternTranslation(@"\p{Emoji_Modifier}", "(?:\\ud83c[\\udffb-\\udfff])");
+            // a * or + loop over a class holding every non-BMP character stays a class loop,
+            // and may not stop between the halves of a surrogate pair
+            TestCorrectPatternTranslation(@"\P{XDigit}*", "[\0-\uffff-[0-9A-Fa-f]]*(?<![\\ud800-\\udbff])");
+            TestCorrectPatternTranslation(@"[^a]+?", "[\0-\uffff-[a]]+?(?<![\\ud800-\\udbff])");
        
             // possessive quantifiers
             TestCorrectPatternTranslation(@"xyza*+", @"xyz(?>a*)");
@@ -169,17 +177,16 @@ puts(/b#{/a/}/)
             // handed to .NET, whose \w is Unicode aware. Checked against CRuby 4.0.6:
             //   /[\w-]+/.match("a-\u3042")  =>  "a-"
             TestCorrectPatternTranslation(@"[\w-]", @"[a-zA-Z0-9_\-]");
-            TestCorrectPatternTranslation(@"[\p{Alnum}-]", @"[\p{L}\p{Nd}\p{Nl}\-]");
 
             // character set operations
-            TestCorrectPatternTranslation("[a-z&&d-e]", "[a-z-[\0-\uffff-[d-e]]]");
-            TestCorrectPatternTranslation("[a-z&&[d-e&&e-f]]", "[a-z-[\0-\uffff-[d-e-[\0-\uffff-[e-f]]]]]");
-            TestCorrectPatternTranslation("[a-z&&^[b[^c]]]", "[a-z-[c-[b^]]]");
-            TestCorrectPatternTranslation("[a-z&&[^b[^c]]]", "[a-z-[\0-\uffff-[c-[b]]]]");
-            TestCorrectPatternTranslation("[[^a-z][e-f][^b-q]]", "[\0-\uffff-[a-z-[\0-\uffff-[b-q-[e-f]]]]]");
+            TestCorrectPatternTranslation("[a-z&&d-e]", "[de]");
+            TestCorrectPatternTranslation("[a-z&&[d-e&&e-f]]", "[e]");
+            TestCorrectPatternTranslation("[a-z&&^[b[^c]]]", "[abd-z]");
+            TestCorrectPatternTranslation("[a-z&&[^b[^c]]]", "[c]");
+            TestCorrectPatternTranslation("[[^a-z][e-f][^b-q]]", "(?:[\0-\uffff-[b-dg-q\\ud800-\\udfff]]|[\\ud800-\\udbff][\\udc00-\\udfff])");
             TestCorrectPatternTranslation("[&&d-e]", "[a-[a]]");
-            TestCorrectPatternTranslation("[a-z&&[d-e&&e-f]x&&^[b[^c]]]", "[a-z-[\0-\uffff-[d-ex-[\0-\uffff-[e-fx-[c-[b^]]]]]]]");
-            TestCorrectPatternTranslation("[^[a-b][c-d][^e-f]&&[a-z&&[^d-e]]]", "[\0-\uffff-[a-z-[d-ee-f-[a-bc-d-[d-e]]]]]");
+            TestCorrectPatternTranslation("[a-z&&[d-e&&e-f]x&&^[b[^c]]]", "[ex]");
+            TestCorrectPatternTranslation("[^[a-b][c-d][^e-f]&&[a-z&&[^d-e]]]", "(?:[\0-\uffff-[a-cg-z\\ud800-\\udfff]]|[\\ud800-\\udbff][\\udc00-\\udfff])");
 
             // groups
             TestCorrectPatternTranslation("((((a))))", "((((a))))");
@@ -223,14 +230,20 @@ puts(/b#{/a/}/)
             // error: TestCorrectPatternTranslation("(?<a)b>c)", "(?<a)b>c)");
         }
 
-        // A POSIX class that has members outside the BMP (letters, digits, punctuation in the
-        // supplementary planes) is its BMP class followed by an alternative matching the surrogate
-        // pairs of the rest, since a .NET character class sees UTF-16 code units, not code points.
-        private void TestPosixClassTranslation(string/*!*/ pattern, string/*!*/ bmpClass) {
+        // Translates a class and checks, with the .NET regex, that it matches each character of
+        // members as a whole and none of those of nonMembers (a surrogate pair is one character).
+        private void TestClassTranslation(string/*!*/ pattern, string/*!*/ members, string/*!*/ nonMembers) {
             bool hasGAnchor;
             string actual = RegexpTransformer.Transform(pattern, RubyRegexOptions.NONE, out hasGAnchor);
-            Assert(actual.StartsWith("(?:" + bmpClass + "|", StringComparison.Ordinal) && actual.EndsWith(")", StringComparison.Ordinal));
-            new Regex(actual);
+            var regex = new Regex(@"\A(?:" + actual + @")\z", RubyRegex.ToClrOptions(RubyRegexOptions.NONE));
+            for (int i = 0; i < members.Length; i += Char.IsHighSurrogate(members[i]) ? 2 : 1) {
+                string c = members.Substring(i, Char.IsHighSurrogate(members[i]) ? 2 : 1);
+                Assert(regex.IsMatch(c), pattern + " should match U+" + Char.ConvertToUtf32(c, 0).ToString("X4"));
+            }
+            for (int i = 0; i < nonMembers.Length; i += Char.IsHighSurrogate(nonMembers[i]) ? 2 : 1) {
+                string c = nonMembers.Substring(i, Char.IsHighSurrogate(nonMembers[i]) ? 2 : 1);
+                Assert(!regex.IsMatch(c), pattern + " should not match U+" + Char.ConvertToUtf32(c, 0).ToString("X4"));
+            }
             Assert(!hasGAnchor);
         }
 
@@ -244,7 +257,7 @@ puts(/b#{/a/}/)
             bool hasGAnchor;
             string actual = RegexpTransformer.Transform(pattern, options, out hasGAnchor);
             // a class with members outside the BMP gets a surrogate-pair alternative after it (see
-            // TestPosixClassTranslation); the BMP part is what these expectations spell out
+            // TestClassTranslation); the BMP part is what these expectations spell out
             if (actual != expected && actual.StartsWith("(?:" + expected + "|", StringComparison.Ordinal) && actual.EndsWith(")", StringComparison.Ordinal)) {
                 expected = actual;
             }
