@@ -5092,11 +5092,6 @@ namespace IronRuby.Builtins {
             );
             
             #endif
-            DefineLibraryMethod(module, "type", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyClass>(IronRuby.Builtins.KernelOps.GetClassObsolete)
-            );
-            
             DefineLibraryMethod(module, "untrace_var", 0x52, 
                 0x00020004U, 0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.UntraceVariable), 
