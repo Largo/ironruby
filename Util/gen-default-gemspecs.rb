@@ -116,6 +116,13 @@ GEMS = {
   "forwardable" => ["1.4.0", "Provides delegation of specified methods to a designated object",
                     ["forwardable", "forwardable/"]],
   "ipaddr" => ["1.2.8", "A class to manipulate an IP address", ["ipaddr"]],
+  # railties depends on irb, and irb on reline.  Without these two, installing
+  # railties resolves irb against rubygems.org, which drags in rdoc 8 and then
+  # rbs - a C extension - for a library IronRuby already ships and already runs
+  # as `ir -S irb`.
+  "irb" => ["1.16.0", "Interactive Ruby", ["irb", "irb/"], require: false, bin: ["irb"]],
+  "reline" => ["0.6.3", "GNU Readline and Editline, in pure Ruby",
+               ["reline", "reline/"], require: false],
   "net-http" => ["0.9.1", "HTTP client api for Ruby", ["net/http", "net/https", "net/http/"],
                  require: "net/http"],
   "net-protocol" => ["0.2.2", "The abstract interface for net-* client",
