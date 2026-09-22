@@ -1195,7 +1195,8 @@ namespace IronRuby.Runtime {
         private readonly HashSet<string>/*!*/ _hiddenLoadedFiles = new HashSet<string>(StringComparer.Ordinal);
 
         private static readonly string[]/*!*/ _CorePreludeFiles = {
-            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "complex18.rb", "rational18.rb"
+            "gem_prelude.rb", "ruby4.rb", "argf.rb", "thread.rb", "complex18.rb", "rational18.rb",
+            "gem_compat.rb"
         };
 
         // What MRI 4.0 has in $" before the program starts: features that are part of the core

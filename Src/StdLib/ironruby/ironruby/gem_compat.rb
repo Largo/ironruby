@@ -42,6 +42,10 @@ module IronRuby
 
 end
 
+# This file counts as internal (RubyStackTraceBuilder._InternalFiles), so the extra
+# frame the wrapper adds is not reported -- `warn(uplevel:)` counts frames, and a
+# wrapper that showed up would make every warning point one level too shallow.
+#
 # Wrap Kernel#require by capturing the current implementation rather than by
 # prepending a module.  RubyGems boots later and does
 # `alias_method :gem_original_require, :require`, which picks up whatever is in
@@ -58,8 +62,6 @@ module Kernel # :nodoc:
     loaded
   end
 
-  private :require
-  module_function :require
   private :require
 end
 
