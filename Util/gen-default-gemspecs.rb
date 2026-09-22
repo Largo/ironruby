@@ -30,8 +30,10 @@
 #     so the table cannot drift away from the implementation.
 #
 # A library IronRuby does *not* implement must not be listed here.  Leaving it
-# out means RubyGems installs the real gem from rubygems.org, which is the
-# right answer for anything pure Ruby (logger, csv, base64, racc, ...).
+# out means RubyGems uses the real gem, which is the right answer for anything
+# pure Ruby.  CRuby 4.0's pure-Ruby bundled gems (logger, csv, base64, racc,
+# rake, rexml, minitest, ...) are installed as real gems in the same gem home by
+# Util/install-bundled-gems.rb; this file is only for default gems.
 
 require "fileutils"
 
@@ -161,6 +163,15 @@ GEMS = {
   # get it, the same as on a Ruby 4.0 without the gem.
   "cgi" => ["0.5.0", "CGI.escape and friends - Ruby 4.0's cgi/escape, not the full CGI class",
             ["cgi", "cgi/escape", "cgi/util"], pinned: true],
+  # Bundled gems on CRuby 4.0 rather than default ones, but C extensions whose
+  # lib/ only loads the .so, so they are not among the bundled gems
+  # Util/install-bundled-gems.rb installs.  IronRuby implements both, and says
+  # so here, so that a Gemfile naming one resolves to that instead of to a
+  # compiler.
+  "nkf" => ["0.2.0", "Network Kanji Filter, on String#encode",
+            ["nkf", "kconv"], pinned: true],
+  "syslog" => ["0.3.0", "Syslog, implemented in Src/Libraries/Syslog",
+               ["syslog", "syslog/"], check: "Syslog::VERSION", pinned: true],
 
   # --- vendored from the CRuby release in Src/StdLib/ruby/4.0 --------------
   "bundler" => ["4.0.16", "The best way to manage a Ruby application's gems",
@@ -204,7 +215,7 @@ GEMS = {
   "pp" => ["0.6.3", "Pretty-prints Ruby objects", ["pp"]],
   "prettyprint" => ["0.2.0", "Implements a pretty printing algorithm for readable structure",
                     ["prettyprint"]],
-  "resolv" => ["0.7.0", "Thread-aware DNS resolver library", ["resolv", "resolv-replace"]],
+  "resolv" => ["0.7.0", "Thread-aware DNS resolver library", ["resolv"]],
   "ruby2_keywords" => ["0.0.5", "Shim library for Module#ruby2_keywords",
                        [["ruby2_keywords", :builtin]], require: false],
   "securerandom" => ["0.4.1", "Interface for secure random number generator", ["securerandom"]],

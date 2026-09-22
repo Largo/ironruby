@@ -45,6 +45,37 @@ module Gem
   # Rather than force every user to set GEM_PATH, look for a `ruby` on PATH and
   # offer its <prefix>/lib/ruby/gems/<api version> read-only, when the API
   # version matches ours.  Set IRONRUBY_NO_HOST_GEMS=1 to opt out.
+  #
+  # What these trees may provide, and what they may not
+  # ----------------------------------------------------
+  # They are a convenience for *third-party* gems only.  Nothing IronRuby ships
+  # may come from them: not a default gem (the gemspecs in
+  # specifications/default, see default_specifications_dir) and not a bundled
+  # gem (the gems Util/install-bundled-gems.rb installs into default_dir -
+  # rake, rexml, minitest, csv, logger, ...).  IronRubyHostGemFilter at the end
+  # of this file drops the host's copy of every gem whose name IronRuby's own
+  # gem home has, whatever its version, so `require "rexml/document"` and
+  # `ir -S rake` resolve to the same files on every machine: the ones in this
+  # tree, or a newer release the user installed *for IronRuby*.
+  #
+  # That used to be otherwise.  Before the bundled gems were shipped here, a
+  # machine with CRuby 4.0 installed got rake 13 and rexml 3.4 from the host,
+  # and one without it - Windows, CI, most users - got a LoadError or a 1.9-era
+  # copy, with nothing in between to say which it was.
+  #
+  # Why this is still on by default
+  # -------------------------------
+  # Turning it into an opt-in was considered and not done.  With the filter it
+  # can no longer change what the standard library is, so what is left is the
+  # convenience - a Gemfile or a script that uses a gem the host CRuby already
+  # has works without installing it again for IronRuby - and the ruby-bench,
+  # Rails and popular-gem setups on this project's machines are built on it.
+  # IRONRUBY_NO_HOST_GEMS=1 is what makes a run behave like a machine with no
+  # CRuby at all, and is how the self-containment check is run.
+  #
+  # Bundler narrows GEM_HOME and GEM_PATH to its bundle_path on every command,
+  # which would hide these trees and default_dir alike; Gem.path below keeps
+  # both.
 
   def self.host_ruby_dirs # :nodoc:
     return @host_ruby_dirs if defined?(@host_ruby_dirs) && @host_ruby_dirs
@@ -82,23 +113,12 @@ module Gem
   # is already here - without them `gem install activesupport` downloads
   # bigdecimal's C sources and tries to compile them.
   #
-  # The fallback to a host CRuby's directory is what happens in a tree where
-  # they have not been generated yet; it keeps gems that depend on a gemified
-  # stdlib library resolvable rather than raising Gem::MissingSpecError.  Either
-  # way a default gem never adds itself to $LOAD_PATH
-  # (Specification#add_self_to_load_path returns early for one), so this cannot
-  # pull CRuby's library directory in ahead of IronRuby's own.
+  # They are committed, so the directory always exists.  There is deliberately
+  # no fallback to a host CRuby's specifications/default: that would make the
+  # list of libraries IronRuby claims to provide depend on the machine.
 
   def self.default_specifications_dir
-    @default_specifications_dir ||= begin
-      own = File.join(default_dir, "specifications", "default")
-      if Dir.exist?(own) && !Dir.glob(File.join(own, "*.gemspec")).empty?
-        own
-      else
-        host = host_ruby_dirs.map {|d| File.join(d, "specifications", "default") }.find {|d| Dir.exist?(d) }
-        host || own
-      end
-    end
+    @default_specifications_dir ||= File.join(default_dir, "specifications", "default")
   end
 
   ##
@@ -191,15 +211,20 @@ module Gem
   end
 
   ##
-  # The host trees stay on Gem.path even when something narrows GEM_HOME and
-  # GEM_PATH - which Bundler does on every command, pinning both to its
-  # bundle_path.  On CRuby that loses nothing, because bundle_path defaults to
-  # the very directory the gems are in; here it would hide them all.  They are
-  # read-only extra sources, like a vendor directory, so appending them is
-  # always safe.
+  # IronRuby's own gem home and the host trees stay on Gem.path even when
+  # something narrows GEM_HOME and GEM_PATH - which Bundler does on every
+  # command, pinning both to its bundle_path (and GEM_PATH to nothing at all
+  # when a path is configured).  On CRuby that loses little, because
+  # bundle_path defaults to the very directory the bundled gems are in; here it
+  # would hide them, and a Gemfile that names rake or minitest would go to
+  # rubygems.org for a gem this tree already has.  default_dir holds the
+  # bundled gems IronRuby ships (Util/install-bundled-gems.rb) and the host
+  # trees are filtered (IronRubyHostGemFilter), so both are read-only extra
+  # sources, like a vendor directory, and appending them is always safe.  They
+  # go last, so a gem installed into GEM_HOME or GEM_PATH is found first.
 
   def self.path
-    paths.path | host_ruby_dirs
+    paths.path | [default_dir] | host_ruby_dirs
   end
 
   ##
@@ -621,25 +646,46 @@ module Gem
   BasicSpecification.prepend(IronRubyProvidedGem)
 
   ##
-  # A host CRuby's copy of a library IronRuby implements itself is never usable.
+  # A host CRuby's copy of a gem IronRuby ships is never used.
   #
   # host_ruby_dirs offers a matching CRuby's gem tree read-only, which is right
-  # for pure-Ruby gems.  It also offers that CRuby's *installed* bigdecimal,
-  # json, psych and bundler, though, and an installed gem sorts ahead of a
-  # default gem of the same version - so the host's bigdecimal-4.0.1 shadowed
-  # the one in Src/Libraries, and, worse, the host's bundler shadowed the
-  # bundler shipped here: a Gemfile.lock saying `BUNDLED WITH 4.0.12` made
+  # for third-party pure-Ruby gems.  It also offers that CRuby's *installed*
+  # bigdecimal, json, psych and bundler, though, and an installed gem sorts
+  # ahead of a default gem of the same version - so the host's bigdecimal-4.0.1
+  # shadowed the one in Src/Libraries, and, worse, the host's bundler shadowed
+  # the bundler shipped here: a Gemfile.lock saying `BUNDLED WITH 4.0.12` made
   # Bundler::SelfManager switch to the host's 4.0.12, an upstream release with
   # none of IronRuby's carve-outs, which then dropped every extension gem from
   # its index and aborted the bundle.
   #
-  # Those gems have a complete implementation right here, so drop the host's
-  # copies from the index entirely.  Only the host trees are filtered: a gem the
-  # user installed *for IronRuby* over a default one is still an upgrade and
-  # still wins, exactly as on CRuby.
+  # The same goes for the bundled gems in default_dir, for a quieter reason: the
+  # host's rake-13.4.2 is newer than the rake-13.3.1 shipped here, so on a
+  # machine with CRuby it would win activation, and `ir -S rake` would run a
+  # different rake there than everywhere else.
+  #
+  # So drop the host's copy of every gem IronRuby has its own of - a default
+  # gem, or any gem in its own gem home - from the index entirely.  Only the
+  # host trees are filtered: a gem the user installed *for IronRuby* over a
+  # shipped one is still an upgrade and still wins, exactly as on CRuby.
   #
   # Defined ahead of rubygems/specification_record.rb (which reopens the class)
   # and prepended, so the real definition cannot overwrite it.
+
+  ##
+  # The names of the gems in IronRuby's own gem home, default and installed:
+  # the ones a host tree may not provide.  Read from file names, so that
+  # nothing is evaluated.
+
+  def self.ironruby_own_gem_names # :nodoc:
+    @ironruby_own_gem_names ||= begin
+      installed = Dir.glob(File.join(default_dir, "specifications", "*.gemspec")).map do |file|
+        File.basename(file, ".gemspec")[/\A(.+)-[^-]+\z/, 1]
+      end
+      (ironruby_default_gem_names + installed.compact).uniq
+    end
+  rescue StandardError
+    @ironruby_own_gem_names = ironruby_default_gem_names
+  end
 
   class SpecificationRecord; end
 
@@ -651,10 +697,10 @@ module Gem
       host = Gem.host_ruby_dirs
       return stubs if host.empty?
 
-      names = Gem.ironruby_default_gem_names
+      names = Gem.ironruby_own_gem_names
       return stubs if names.empty?
 
-      stubs.reject {|stub| names.include?(stub.name) && host.include?(stub.base_dir) }
+      stubs.reject {|stub| host.include?(stub.base_dir) && names.include?(stub.name) }
     end
   end
 

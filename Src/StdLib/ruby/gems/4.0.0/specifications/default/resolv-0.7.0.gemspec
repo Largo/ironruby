@@ -16,6 +16,5 @@ Gem::Specification.new do |s|
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
   s.files = [
     "lib/resolv.rb".freeze,
-    "lib/resolv-replace.rb".freeze,
   ]
 end

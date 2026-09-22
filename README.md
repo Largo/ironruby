@@ -143,6 +143,19 @@ does not know the library is already there: `gem install activesupport` used to 
 reason.  The versions in the table are checked against the running interpreter's own
 `VERSION` constants when the gemspecs are generated, so they cannot drift.
 
+### Bundled gems
+
+CRuby 4.0's pure-Ruby **bundled gems** - `rake`, `rexml`, `minitest`, `test-unit`, `csv`,
+`logger`, `matrix`, `net-imap`/`-smtp`/`-pop`/`-ftp`, `drb`, `racc`, `ostruct` and the rest -
+ship as real installed gems in IronRuby's own gem home, `Src/StdLib/ruby/gems/4.0.0`, at the
+versions CRuby 4.0.6 bundles, so `require "rexml/document"` and `ir -S rake` work the same on
+every machine, with or without a CRuby next to IronRuby.
+[`Util/install-bundled-gems.rb`](Util/install-bundled-gems.rb) installs them from a CRuby
+source tarball's `gems/*.gem` and lists the ones left out and why (the C extensions IronRuby
+implements itself, and the ones that need `rbs`).  A host CRuby 4.0's gem directory is still
+offered for third-party gems, but never for a gem IronRuby ships;
+`IRONRUBY_NO_HOST_GEMS=1` turns it off entirely.
+
 A C extension is never built: there is no `ruby.h` to compile against, and the gem whose
 extension is missing is often in a read-only host CRuby tree.  Such a gem is left alone -
 its `.rb` files load, a real `require` of the `.so` raises `LoadError`, and the pure-Ruby

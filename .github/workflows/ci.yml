@@ -167,6 +167,12 @@ jobs:
           puts [1, 2, 3].filter_map { it * 10 if it.odd? }.inspect
           puts (nil&.length).inspect
           puts (2**100).to_s.length
+
+          # Bundled gems, from Src/StdLib/ruby/gems - the runner's Ruby 3.3 offers none.
+          require "rexml/document"
+          require "csv"
+          require "rake"
+          puts "rexml #{REXML::VERSION}, csv #{CSV::VERSION}, rake #{Rake::VERSION}"
           RUBY
           if [ "$RUNNER_OS" = Windows ]; then
             cmd //c ir.cmd smoke.rb
@@ -185,6 +191,8 @@ jobs:
           grep -q '0 failed' sweep40.txt
           "$SWEEP" --sweep Src/StdLib/ruby/1.9.1 | tee sweep19.txt
           grep -q '0 failed' sweep19.txt
+          "$SWEEP" --sweep Src/StdLib/ruby/gems | tee sweepgems.txt
+          grep -q '0 failed' sweepgems.txt
 
       - name: IronRuby test suite
         working-directory: ironruby
