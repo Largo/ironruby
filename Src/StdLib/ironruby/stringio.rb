@@ -128,7 +128,7 @@ class StringIO
   # is, and only a stream that cannot be read from answers nil without looking.
   def set_encoding_by_bom
     if frozen?
-      ::Kernel.raise(::FrozenError, "can't modify frozen StringIO: #{inspect}")
+      ::Kernel.raise(::FrozenError.new("can't modify frozen StringIO: #{inspect}", receiver: self))
     end
     return nil unless __readable_stream__?
     start = pos

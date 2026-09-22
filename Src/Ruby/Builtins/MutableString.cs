@@ -968,7 +968,7 @@ namespace IronRuby.Builtins {
             set {
                 var flags = _flags;
                 if ((flags & IsFrozenFlag) != 0) {
-                    throw RubyExceptions.CreateObjectFrozenError("String");
+                    throw RubyExceptions.CreateStringFrozenError(this);
                 }
 
                 _flags = (flags & ~IsTaintedFlag) | (value ? IsTaintedFlag : 0);
@@ -982,7 +982,7 @@ namespace IronRuby.Builtins {
             set {
                 var flags = _flags;
                 if ((flags & IsFrozenFlag) != 0) {
-                    throw RubyExceptions.CreateObjectFrozenError("String");
+                    throw RubyExceptions.CreateStringFrozenError(this);
                 }
 
                 _flags = (flags & ~IsUntrustedFlag) | (value ? IsUntrustedFlag : 0);
@@ -1022,7 +1022,7 @@ namespace IronRuby.Builtins {
 
         public void RequireNotFrozen() {
             if (IsFrozen) {
-                throw RubyExceptions.CreateObjectFrozenError("String");
+                throw RubyExceptions.CreateStringFrozenError(this);
             }
         }
 

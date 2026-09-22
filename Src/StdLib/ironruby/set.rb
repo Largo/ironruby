@@ -748,7 +748,7 @@ class Set
     if @hash.respond_to?(:rehash)
       @hash.rehash # This should perform frozenness check.
     else
-      raise FrozenError, "can't modify frozen #{self.class.name}" if frozen?
+      raise FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self) if frozen?
     end
     self
   end

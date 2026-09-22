@@ -389,7 +389,7 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static void CheckLocalsNotFrozen(RubyContext/*!*/ context, Thread/*!*/ self) {
             if (context.IsObjectFrozen(self)) {
-                throw new FrozenError("can't modify frozen thread locals");
+                throw new FrozenError("can't modify frozen thread locals").SetReceiver(self);
             }
         }
 

@@ -869,7 +869,7 @@ namespace IronRuby.Builtins {
 
         public void InitializeModuleCopy(RubyModule/*!*/ module) {
             if (_context.IsObjectFrozen(this)) {
-                throw RubyExceptions.CreateTypeError("can't modify frozen Module");
+                throw RubyExceptions.CreateObjectFrozenError(_context, this);
             }
 
             using (Context.ClassHierarchyLocker()) {

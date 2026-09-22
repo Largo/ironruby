@@ -276,7 +276,7 @@ namespace IronRuby.Builtins {
         [Emitted]
         public static object SetValue(RubyStruct/*!*/ self, int index, object value) {
             if (self.IsFrozen) {
-                throw RubyExceptions.CreateObjectFrozenError();
+                throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
             }
             return self._data[index] = value;
         }
@@ -326,7 +326,7 @@ namespace IronRuby.Builtins {
 
         private void RequireNotFrozen() {
             if (IsFrozen) {
-                throw RubyExceptions.CreateObjectFrozenError();
+                throw RubyExceptions.CreateObjectFrozenErrorFor(this, "Struct");
             }
         }
 

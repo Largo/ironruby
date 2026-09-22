@@ -227,7 +227,8 @@ namespace IronRuby.Builtins {
 
         public void RequireNotFrozen() {
             if ((_flags & IsFrozenFlag) != 0) {
-                throw RubyExceptions.CreateObjectFrozenError("Hash");
+                // MRI: "can't modify frozen Hash: {a: 1}", with the hash as FrozenError#receiver.
+                throw RubyExceptions.CreateObjectFrozenErrorFor(this, "Hash");
             }
         }
 

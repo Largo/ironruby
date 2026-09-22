@@ -230,7 +230,7 @@ module Enumerable
 
     hash = counts.is_a?(Hash) ? counts : Hash.try_convert(counts)
     raise TypeError, "no implicit conversion of #{counts.class} into Hash" if hash.nil?
-    raise FrozenError.new("can't modify frozen Hash: #{hash.inspect}") if hash.frozen?
+    raise FrozenError.new("can't modify frozen Hash: #{hash.inspect}", receiver: hash) if hash.frozen?
     each do |*values|
       item = __enum_item__(values)
       # #fetch rather than #[] so that a default value or default proc on the
@@ -1343,7 +1343,7 @@ class Hash
 
   def transform_values!(&block)
     return to_enum(:transform_values!) { size } unless block
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     keys.each { |k| self[k] = block.call(self[k]) }
     self
   end unless method_defined?(:transform_values!)
@@ -1371,7 +1371,7 @@ class Hash
   def transform_keys!(*args, &block)
     mapping = __key_mapping__(args)
     return to_enum(:transform_keys!) { size } if mapping.nil? && block.nil?
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     # CRuby semantics: walk a snapshot of the pairs, deleting the old key only
     # if it has not already been produced as a new key (so `break` leaves the
     # already-processed prefix rewritten and the rest untouched).
@@ -7431,7 +7431,7 @@ class Enumerator
 
     def __check_frozen__
       return unless frozen?
-      ::Kernel.raise(::FrozenError, "can't modify frozen #{self.class}: #{inspect}")
+      ::Kernel.raise(::FrozenError.new("can't modify frozen #{self.class}: #{inspect}", receiver: self))
     end
     private :__check_frozen__
   end
@@ -12609,14 +12609,14 @@ class Hash
 
   def select!(&block)
     return to_enum(:select!) unless block
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     before = size
     keep_if(&block)
     size == before ? nil : self
   end unless method_defined?(:select!)
 
   def default_proc=(proc)
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     self.DefaultValue = nil
     if proc.nil?
       self.DefaultProc = nil
@@ -12647,7 +12647,7 @@ class Hash
   end
 
   def merge!(*others, &block)
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     others.each { |other| __update_one__(other, &block) }
     self
   end
@@ -12662,13 +12662,13 @@ class Hash
   # without a block; the 1.9 core raised LocalJumpError instead.
   alias_method :__delete_if_block__, :delete_if
   def delete_if(&block)
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen? && block
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen? && block
     return to_enum(:delete_if) unless block
     __delete_if_block__(&block)
   end
 
   def keep_if(&block)
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen? && block
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen? && block
     return to_enum(:keep_if) unless block
     delete_if { |k, v| !block.call(k, v) }
   end
@@ -12676,7 +12676,7 @@ class Hash
   alias_method :__reject_bang_block__, :reject!
   def reject!(&block)
     return to_enum(:reject!) unless block
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     __reject_bang_block__(&block)
   end
 
@@ -12692,7 +12692,7 @@ class Hash
   # Hash#shift returns nil on an empty hash since 3.0 - it no longer consults
   # the default value or the default proc.
   def shift
-    raise FrozenError, "can't modify frozen Hash: #{inspect}" if frozen?
+    raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
     return nil if empty?
     key = keys.first
     [key, delete(key)]
