@@ -21,28 +21,32 @@ module Kconv
 
   #Constant of Encoding
 
+  # These name encodings: #kconv passes them to nkf as --oc=/--ic= and #iseuc and its
+  # neighbours hand them to String#force_encoding. The NKF::* integers this used to read
+  # are nkf's own internal numbering and mean nothing to either.
+
   # Auto-Detect
   AUTO = NKF::AUTO
   # ISO-2022-JP
-  JIS = NKF::JIS
+  JIS = Encoding::ISO_2022_JP
   # EUC-JP
-  EUC = NKF::EUC
+  EUC = Encoding::EUC_JP
   # Shift_JIS
-  SJIS = NKF::SJIS
+  SJIS = Encoding::Shift_JIS
   # BINARY
-  BINARY = NKF::BINARY
+  BINARY = Encoding::ASCII_8BIT
   # NOCONV
-  NOCONV = NKF::NOCONV
+  NOCONV = Encoding::ASCII_8BIT
   # ASCII
-  ASCII = NKF::ASCII
+  ASCII = Encoding::US_ASCII
   # UTF-8
-  UTF8 = NKF::UTF8
+  UTF8 = Encoding::UTF_8
   # UTF-16
-  UTF16 = NKF::UTF16
+  UTF16 = Encoding::UTF_16BE
   # UTF-32
-  UTF32 = NKF::UTF32
+  UTF32 = Encoding::UTF_32BE
   # UNKNOWN
-  UNKNOWN = NKF::UNKNOWN
+  UNKNOWN = Encoding::ASCII_8BIT
 
   #
   # Public Methods

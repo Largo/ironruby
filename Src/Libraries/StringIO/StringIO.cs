@@ -586,6 +586,28 @@ namespace IronRuby.StandardLibrary.StringIO {
             return Write(self, Protocols.ConvertToString(tosConversion, obj));
         }
 
+        /// <summary>
+        /// IO#write - and so StringIO#write - takes any number of arguments and answers the
+        /// total it wrote. #syswrite does not: it is the one-argument call above.
+        /// </summary>
+        [RubyMethod("write")]
+        public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self,
+            object first, [NotNull]params object[]/*!*/ rest) {
+
+            int written = Write(tosConversion, self, first);
+            foreach (object value in rest) {
+                written += Write(tosConversion, self, value);
+            }
+            return written;
+        }
+
+        [RubyMethod("write")]
+        public static int Write(StringIO/*!*/ self) {
+            // Nothing to write, but the stream still has to be writable to say so.
+            self.GetWritableContent();
+            return 0;
+        }
+
         #endregion
 
         #region read, sysread
@@ -659,6 +681,43 @@ namespace IronRuby.StandardLibrary.StringIO {
             buffer.ForceEncoding(encoding);
             self._position += bytesRead;
             return buffer;
+        }
+
+        /// <summary>
+        /// pread(maxlen, offset, outbuf = nil): a read at an absolute offset that leaves the
+        /// position where it was. As on a real descriptor, reading at or past the end is an
+        /// EOFError rather than nil - except for a zero length, which answers "".
+        /// </summary>
+        [RubyMethod("pread")]
+        public static MutableString/*!*/ PRead(StringIO/*!*/ self, [DefaultProtocol]int count, [DefaultProtocol]int offset,
+            [DefaultProtocol, Optional, NotNull]MutableString buffer) {
+
+            self.GetReadableContent();
+            if (count < 0) {
+                throw RubyExceptions.CreateArgumentError(String.Format("negative string size (or size too big): {0}", count));
+            }
+            // A zero length read is answered before anything is looked at: MRI neither seeks
+            // nor touches a given buffer, so even a negative offset is accepted here.
+            if (count == 0) {
+                return buffer ?? MutableString.CreateBinary();
+            }
+            if (offset < 0) {
+                throw RubyExceptions.CreateEINVAL();
+            }
+
+            lock (self._mutex) {
+                int saved = self._position;
+                try {
+                    self._position = offset;
+                    var result = Read(self, count, buffer);
+                    if (result == null) {
+                        throw new EOFError("end of file reached");
+                    }
+                    return result;
+                } finally {
+                    self._position = saved;
+                }
+            }
         }
 
         // MRI's #sysread is #read with the one difference that a nil answer is an error - and
@@ -1050,6 +1109,12 @@ namespace IronRuby.StandardLibrary.StringIO {
             int count = pushed.GetByteCount();
             if (count == 0) {
                 return;
+            }
+
+            // io.ungetc(io.string) pushes the content back over itself: the writes below would
+            // then be reading from the string they are rewriting. Work from a copy in that case.
+            if (ReferenceEquals(pushed, content)) {
+                pushed = content.Clone();
             }
 
             try {

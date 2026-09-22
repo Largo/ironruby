@@ -21,27 +21,6 @@ load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Digest'
 # Digest::Instance, which MRI also defines in Ruby terms.
 
 module Digest
-  # MRI's Digest::const_missing requires digest/<name> and turns a failure into a
-  # LoadError naming the class, which is what callers rescue -- PStore picks its
-  # checksum algorithm by trying Digest("SHA512"), Digest("SHA384"), ... until
-  # one of them does not raise LoadError.  The C# half raises NotImplementedError
-  # from its own const_missing, so this replaces it.
-  def self.const_missing(name)
-    library = case name
-              when :SHA256, :SHA384, :SHA512 then "digest/sha2"
-              else File.join("digest", name.to_s.downcase)
-              end
-    begin
-      require library
-    rescue LoadError
-      raise LoadError, "library not found for class Digest::#{name} -- #{library}"
-    end
-    unless const_defined?(name)
-      raise NameError, "uninitialized constant Digest::#{name}"
-    end
-    const_get(name)
-  end
-
   module Instance
     # Abstract in MRI; Digest::Base overrides both with the C# implementation.
     # They exist here so that Digest::Instance itself answers to them, and so the
@@ -116,14 +95,44 @@ module Digest
   end
 end
 
-module Kernel
-  # Digest("SHA256") -> Digest::SHA256.  A private method on every object, the
-  # way MRI's digest.rb defines it; it is how code picks a digest class by name
-  # and how it finds out (LoadError) that a name is not available.
-  def Digest(name)
-    const = name.to_sym
-    Digest.const_missing(const) unless Digest.const_defined?(const)
-    Digest.const_get(const)
+module Digest
+  # Digest() has to require the library for a class that is not loaded yet, and two
+  # threads must not race into the same require.  MRI keeps the mutex here.
+  REQUIRE_MUTEX = Thread::Mutex.new
+
+  # The C# library defines MD5, SHA1 and the SHA2 family up front, so const_missing
+  # only ever runs for something that still lives in a file (or does not exist).
+  def self.const_missing(name)
+    lib = case name
+          when :SHA256, :SHA384, :SHA512 then 'digest/sha2'
+          else File.join('digest', name.to_s.downcase)
+          end
+
+    begin
+      require lib
+    rescue LoadError
+      raise LoadError, "library not found for class Digest::#{name} -- #{lib}", caller(1)
+    end
+    unless Digest.const_defined?(name)
+      raise NameError, "uninitialized constant Digest::#{name}", caller(1)
+    end
+    Digest.const_get(name)
   end
-  private :Digest
+end
+
+# Digest("SHA256") -> Digest::SHA256, loading the library on demand.  MRI goes
+# through const_missing even when the constant is already there, so that an
+# autoload cannot hand back a half-initialised class; the LoadError rescue is what
+# makes constants that do not come from a digest/* file still resolve.
+def Digest(name)
+  const = name.to_sym
+  Digest::REQUIRE_MUTEX.synchronize {
+    Digest.const_missing(const)
+  }
+rescue LoadError
+  if Digest.const_defined?(const)
+    Digest.const_get(const)
+  else
+    raise
+  end
 end

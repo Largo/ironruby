@@ -188,8 +188,11 @@ namespace IronRuby.Builtins {
                 var toIntStorage = new ConversionStorage<int?>(context);
                 var toIntSite = toIntStorage.GetSite(TryConvertToFixnumAction.Make(context));
                 int? numeric = toIntSite.Target(toIntSite, optionValue);
+                // The integer is a platform O_* value - the same thing the positional mode
+                // argument takes - so it has to be translated, not cast: O_CREAT is 64 on
+                // Linux and 0x100 in IOMode.
                 result = numeric.HasValue
-                    ? result.AddMode(context, (IOMode)numeric.Value)
+                    ? result.AddMode(context, IOModeNative.ToIOMode(numeric.Value))
                     : result.AddModeAndEncoding(context, Protocols.CastToString(toStr, optionValue));
             }
 
