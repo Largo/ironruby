@@ -2410,18 +2410,44 @@ namespace IronRuby.Prism {
 
             // MRI reports every missing keyword in one error, and does so before complaining
             // about keywords it does not know; a signature with **rest knows them all.
+            //
+            // Both errors are spelled with an array difference, which allocates three arrays and
+            // builds a set to say "nothing is wrong" - on every call. Each one therefore sits
+            // behind a test that costs nothing and can only be true when there is nothing to
+            // report; the array difference runs only to word the error.
             var checks = new List<Expression>();
             if (requiredNames.Count > 0) {
-                checks.Add(RaiseForKeywordList(
+                // Every required keyword is there, or something is missing and the list says what.
+                Expression allPresent = null;
+                foreach (var name in requiredNames) {
+                    var present = new MethodCall(kwVar, "key?",
+                        new Arguments(new SymbolLiteral(name, _encoding, span)), span);
+                    allPresent = (allPresent == null) ? (Expression)present : new AndExpression(allPresent, present, span);
+                }
+                checks.Add(new UnlessExpression(allPresent, new Statements(RaiseForKeywordList(
                     new MethodCall(SymbolArray(requiredNames, span), "-",
                         new Arguments(new MethodCall(kwVar, "keys", null, span)), span),
-                    "missing keyword: ", "missing keywords: ", span));
+                    "missing keyword: ", "missing keywords: ", span)), null, span));
             }
             if (!(node.KeywordRest is Pm.KeywordRestParameterNode)) {
-                checks.Add(RaiseForKeywordList(
-                    new MethodCall(new MethodCall(kwVar, "keys", null, span), "-",
-                        new Arguments(SymbolArray(names, span)), span),
-                    "unknown keyword: ", "unknown keywords: ", span));
+                // As many keys as there are declared keywords among them means there is nothing
+                // else in the hash, since a key the signature declares is one it knows. Counting
+                // them costs a #key? per keyword and allocates nothing.
+                Expression declaredPresent = Literal.Integer(0, span);
+                foreach (var name in names) {
+                    declaredPresent = new MethodCall(declaredPresent, "+", new Arguments(
+                        new ConditionalExpression(
+                            new MethodCall(kwVar, "key?",
+                                new Arguments(new SymbolLiteral(name, _encoding, span)), span),
+                            Literal.Integer(1, span), Literal.Integer(0, span), span)), span);
+                }
+                checks.Add(new UnlessExpression(
+                    new MethodCall(new MethodCall(kwVar, "size", null, span), "==",
+                        new Arguments(declaredPresent), span),
+                    new Statements(RaiseForKeywordList(
+                        new MethodCall(new MethodCall(kwVar, "keys", null, span), "-",
+                            new Arguments(SymbolArray(names, span)), span),
+                        "unknown keyword: ", "unknown keywords: ", span)), null, span));
             }
             checks.AddRange(prologue);
             return checks;

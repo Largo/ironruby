@@ -67,6 +67,9 @@ Util/References
 /spec
 /rubyspec_temp/
 
+# Where Util/rubybench/run.sh puts the gems a bundled benchmark needs.
+/.gems
+
 # Agent worktrees and local session state
 /.claude/
 # scratch copies of ir.sh pointing at an out-of-tree build

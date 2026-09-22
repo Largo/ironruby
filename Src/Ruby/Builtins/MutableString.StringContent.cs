@@ -234,6 +234,17 @@ namespace IronRuby.Builtins {
             }
 
             public override byte[]/*!*/ GetBinarySlice(int start, int count) {
+                if (_owner.HasByteCharacters && !_owner.HasSurrogates() && start >= 0 && count >= 0 && count <= _data.Length - start) {
+                    // Every character is its own byte, so the slice can be taken without switching
+                    // the whole string over to a byte array. Switching is what makes a mixed
+                    // reader - StringScanner matches on the characters and then slices out the
+                    // bytes it matched - convert the entire subject back and forth on every token.
+                    var result = new byte[count];
+                    for (int i = 0; i < count; i++) {
+                        result[i] = (byte)_data[start + i];
+                    }
+                    return result;
+                }
                 return SwitchToBinary().GetBinarySlice(start, count);
             }
 
