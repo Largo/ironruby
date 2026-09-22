@@ -174,6 +174,12 @@ namespace IronRuby.Compiler.Ast {
                 Ast.Assign(redoVariable, AstUtils.Constant(_isPostTest)),
 
                 AstFactory.Infinite(breakLabel, continueLabel,
+                    // The interrupt check on the back edge, so that Thread#raise, Thread#kill and
+                    // Timeout reach a thread spinning in this loop (RubyUtils.SafePoint: one
+                    // volatile load and a branch while nothing is pending). It carries the loop's
+                    // own line, which is where MRI reports an exception raised at a back edge;
+                    // without it the frame would show the cleared sequence point (0xFEEFEE).
+                    gen.AddDebugInfo(Ast.Call(RubyUtils.SafePointMethod), Location),
                     backEdge,
                     AstUtils.Try(
 

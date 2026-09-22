@@ -1581,6 +1581,9 @@ namespace IronRuby.Runtime {
             }
 
             lock (_pendingAsyncExceptions) {
+                if (!_pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId)) {
+                    RequestSafePoint();
+                }
                 _pendingAsyncExceptions[thread.ManagedThreadId] = e;
             }
 
@@ -1603,6 +1606,7 @@ namespace IronRuby.Runtime {
             // be delivered. MRI finishes unwinding the raised exception (and reports it) first.
             lock (_pendingAsyncExceptions) {
                 if (!_pendingAsyncExceptions.ContainsKey(thread.ManagedThreadId)) {
+                    RequestSafePoint();
                     _pendingAsyncExceptions[thread.ManagedThreadId] = new ThreadExitSignal();
                 }
             }
@@ -1671,6 +1675,7 @@ namespace IronRuby.Runtime {
                 int key = thread.ManagedThreadId;
                 if (_pendingAsyncExceptions.TryGetValue(key, out e)) {
                     _pendingAsyncExceptions.Remove(key);
+                    SafePointRequestDone();
                     return e;
                 }
             }
@@ -1754,11 +1759,68 @@ namespace IronRuby.Runtime {
 
         #endregion
 
+        #region Safe points in running code
+
+        // How many pieces of safe-point work are outstanding anywhere in the process: exceptions
+        // parked by Thread#raise / Thread#kill, POSIX signals and Ruby finalizers parked for the
+        // main thread. Zero almost always, and then a safe point costs one load and a branch.
+        //
+        // One process-wide counter rather than a flag per thread, because a static field is the
+        // cheapest thing emitted code can test: a [ThreadStatic] costs a TLS lookup on every back
+        // edge. The price is that while one thread has work parked, every thread's safe points
+        // take the slow path; that lasts until the work is delivered, and a thread that dies with
+        // an exception still parked for it has it dropped (ThreadOps.RubyThreadStart).
+        private static int _safePointRequests;
+
+        /// <summary>Records one piece of work a safe point has to pick up.</summary>
+        public static void RequestSafePoint() {
+            Interlocked.Increment(ref _safePointRequests);
+        }
+
+        /// <summary>The work recorded by <see cref="RequestSafePoint"/> has been taken.</summary>
+        public static void SafePointRequestDone() {
+            Interlocked.Decrement(ref _safePointRequests);
+        }
+
+        /// <summary>True while any safe-point work is outstanding. One volatile load.</summary>
+        public static bool IsSafePointRequested {
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get { return Volatile.Read(ref _safePointRequests) != 0; }
+        }
+
+        /// <summary>
+        /// The safe point running Ruby code passes through: every loop back edge and every method
+        /// and block entry. MRI checks for interrupts at the same places (its backward branches
+        /// and method calls), which is what makes Thread#raise, Thread#kill and Timeout.timeout
+        /// reach a thread that is spinning in `loop {}` or `while true`.
+        ///
+        /// The fast path is one volatile load of a static and a not-taken branch; it is inlined
+        /// wherever the CLR JIT sees the call, emitted code included. The load is volatile so
+        /// that the JIT cannot hoist it out of a loop whose body calls nothing.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void SafePoint() {
+            if (Volatile.Read(ref _safePointRequests) != 0) {
+                SafePointSlow();
+            }
+        }
+
+        /// <summary><see cref="SafePoint"/>, for code that emits a call to it.</summary>
+        public static readonly MethodInfo/*!*/ SafePointMethod = typeof(RubyUtils).GetMethod("SafePoint");
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void SafePointSlow() {
+            // Not a blocking call: Thread.handle_interrupt(... => :on_blocking) holds its
+            // exceptions back here, as MRI does at a backward branch.
+            CheckAsyncException(false);
+        }
+
+        #endregion
+
         /// <summary>
         /// A safe point: throws the asynchronous exception parked for the current thread, if there is one.
-        /// Called from the blocking primitives and from Thread.pass. Ruby code that neither blocks nor calls
-        /// one of those runs to completion even if it was killed - unlike MRI, where the check happens at
-        /// every VM instruction. That difference is not fixable without a check in the interpreter loop.
+        /// Called from the blocking primitives and from Thread.pass, and - through <see cref="SafePoint"/> -
+        /// from every loop back edge and every method and block entry.
         /// </summary>
         public static void CheckAsyncException() {
             CheckAsyncException(true);

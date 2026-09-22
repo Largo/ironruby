@@ -141,6 +141,15 @@ namespace IronRuby.Runtime.Osr {
                 }
                 if (!ReferenceEquals(result, Retry)) { return result; }
 
+                if (RubyUtils.IsSafePointRequested) {
+                    // Not a failure: the copy stopped at an iteration boundary because a
+                    // Thread#raise, Thread#kill, signal or finalizer is waiting
+                    // (JitRuntime.OsrSafePoint). The generic loop delivers it at its next back
+                    // edge; if it was for another thread, the copy is asked again shortly.
+                    ReArmCountdown();
+                    return Retry;
+                }
+
                 // The copy gave the loop back: an Integer overflowed out of Int64, a guard did
                 // not hold, or a division would have raised. A few of those and the loop is
                 // better off where it is; until then the generic body runs a short stretch and

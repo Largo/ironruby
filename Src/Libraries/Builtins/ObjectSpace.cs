@@ -136,6 +136,7 @@ namespace IronRuby.Builtins {
         private static void Park(FinalizerInvoker/*!*/ invoker) {
             lock (_pending) {
                 _pending.Enqueue(invoker);
+                RubyUtils.RequestSafePoint();
             }
         }
 
@@ -163,6 +164,7 @@ namespace IronRuby.Builtins {
                             return;
                         }
                         _pending.Dequeue();
+                        RubyUtils.SafePointRequestDone();
                     }
                     invoker.RunOnMainThread();
                 }

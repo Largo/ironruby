@@ -9,6 +9,7 @@
 
 using System;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Runtime;
 
@@ -201,6 +202,32 @@ namespace IronRuby.Runtime.Jit {
 
         internal static Exception Deopt() {
             Deopts++;
+            return JitDeoptException.Instance;
+        }
+
+        // ---- safe points -----------------------------------------------------------------
+
+        /// <summary>
+        /// The back-edge safe point of an outlined (OSR) loop. A specialized copy keeps the Ruby
+        /// locals in CLR locals, so it must not let a Thread#raise escape from the middle of
+        /// itself - the tuples would be left holding the values from the loop's entry. Instead
+        /// it hands the loop back at the iteration boundary, through the deopt path that already
+        /// stores the locals home, and the generic loop's own safe point (RubyUtils.SafePoint,
+        /// first thing on its back edge) delivers the exception. OsrLoopSite.Run does not count
+        /// this as a failed specialization.
+        ///
+        /// For a JIT-specialized *method* body use RubyUtils.SafePoint instead: a deopt there
+        /// re-runs the whole method generically, and an interrupt can simply be thrown.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void OsrSafePoint() {
+            if (RubyUtils.IsSafePointRequested) {
+                throw SafePointDeopt();
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static Exception/*!*/ SafePointDeopt() {
             return JitDeoptException.Instance;
         }
 

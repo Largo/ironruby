@@ -173,6 +173,10 @@ namespace IronRuby.Runtime {
             RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule, string/*!*/ definitionName, 
             object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame) {
 
+            // Method entry is a safe point, as in MRI: a thread that recurses or calls methods in a
+            // loop is reachable by Thread#raise / Thread#kill even where no back edge is.
+            RubyUtils.SafePoint();
+
             var scope = new RubyMethodScope(
                 locals, variableNames ?? ArrayUtils.EmptyStrings, visibleParameterCount,
                 parentScope, declaringModule, definitionName, selfObject, blockParameter,
@@ -223,6 +227,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static RubyBlockScope/*!*/ CreateBlockScope(MutableTuple locals, string[] variableNames, 
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
+
+            // Block entry too: `n.times { }` and `each { }` loop in C#, where no back edge is emitted.
+            RubyUtils.SafePoint();
 
             var scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
             if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {

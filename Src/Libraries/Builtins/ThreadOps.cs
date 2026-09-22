@@ -1185,6 +1185,10 @@ namespace IronRuby.Builtins {
                 // MRI releases every mutex a thread still holds when it dies.
                 IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(Thread.CurrentThread);
 
+                // A Thread#raise that arrived too late to be delivered dies with the thread. Left
+                // parked it would keep every other thread's safe points on the slow path.
+                RubyUtils.GetPendingAsyncException(Thread.CurrentThread);
+
                 // Its not a good idea to terminate a thread which has set Thread.critical=true, but its hard to predict
                 // which thread will be scheduled next, even with green threads. However, ConditionVariable.create_timer 
                 // in monitor.rb explicitly does "Thread.critical=true; other_thread.raise" before exiting, and expects
@@ -1431,7 +1435,10 @@ namespace IronRuby.Builtins {
 
             RubyUtils.PushInterruptMask(classes, timings);
             try {
-                RubyUtils.CheckAsyncException(true);
+                // Not a blocking call: MRI's check here is RUBY_VM_CHECK_INTS, so an interrupt the
+                // new mask makes :on_blocking stays parked until the block blocks (timeout's
+                // issue 41 - test_handle_interrupt_with_interrupt_mask_inheritance).
+                RubyUtils.CheckAsyncException(false);
 
                 object result;
                 block.Yield(out result);
@@ -1439,8 +1446,9 @@ namespace IronRuby.Builtins {
             } finally {
                 RubyUtils.PopInterruptMask();
                 // Anything the mask held back is taken here, replacing an exception the block was
-                // already unwinding with - which is what MRI does.
-                RubyUtils.CheckAsyncException(true);
+                // already unwinding with - which is what MRI does. Again not a blocking point: an
+                // enclosing :on_blocking mask keeps holding its exceptions.
+                RubyUtils.CheckAsyncException(false);
             }
         }
 
