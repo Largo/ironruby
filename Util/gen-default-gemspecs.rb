@@ -88,6 +88,8 @@ GEMS = {
              ["zlib"], check: "Zlib::VERSION"],
   "prism" => ["1.9.0", "The Prism Ruby parser - IronRuby's own front end",
               ["prism", "prism/"], check: "Prism::VERSION"],
+  "sqlite3" => ["2.9.6", "SQLite3, on the native library Microsoft.Data.Sqlite carries",
+                ["sqlite3", "sqlite3/"], check: "SQLite3::VERSION"],
 
   # --- vendored from the CRuby release in Src/StdLib/ruby/4.0 --------------
   "bundler" => ["4.0.16", "The best way to manage a Ruby application's gems",

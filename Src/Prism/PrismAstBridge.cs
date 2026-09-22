@@ -604,11 +604,14 @@ namespace IronRuby.Prism {
 
                 case Pm.IfNode ifNode: return If(ifNode, span);
                 case Pm.UnlessNode unless: {
+                    // Source order, for the reason If() gives.
+                    var unlessCondition = Condition(unless.Predicate);
+                    var unlessBody = BuildStatements(unless.Statements);
                     ElseIfClause elseClause = null;
                     if (unless.ElseClause is Pm.ElseNode elseNode) {
                         elseClause = new ElseIfClause(null, BuildStatements(elseNode.Statements), Span(elseNode));
                     }
-                    return new UnlessExpression(Condition(unless.Predicate), BuildStatements(unless.Statements), elseClause, span);
+                    return new UnlessExpression(unlessCondition, unlessBody, elseClause, span);
                 }
                 case Pm.WhileNode whileNode:
                     return new WhileLoopExpression(Condition(whileNode.Predicate), true,
@@ -1234,6 +1237,13 @@ namespace IronRuby.Prism {
         }
 
         private Expression/*!*/ If(Pm.IfNode/*!*/ node, SourceSpan span) {
+            // Built in source order, and not as arguments to the IfExpression constructor:
+            // /(?<x>..)/ =~ s introduces the local x where it appears, so a bare `x` in an
+            // earlier branch is still a method call and one in a later branch is not.
+            // Walking the else branch first made the whole statement see the local.
+            var condition = Condition(node.Predicate);
+            var body = BuildStatements(node.Statements);
+
             var elseIfClauses = new List<ElseIfClause>();
             var subsequent = node.Subsequent;
             while (subsequent != null) {
@@ -1246,7 +1256,7 @@ namespace IronRuby.Prism {
                     break;
                 }
             }
-            return new IfExpression(Condition(node.Predicate), BuildStatements(node.Statements), elseIfClauses, span);
+            return new IfExpression(condition, body, elseIfClauses, span);
         }
 
         private Expression/*!*/ HashExpression(Pm.PmNode[]/*!*/ elements, bool isKeywordArguments, SourceSpan span) {

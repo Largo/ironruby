@@ -936,6 +936,21 @@ end
 module OpenSSL
   # MRI's name for HMAC's error class is OpenSSL::HMACError.
   HMACError = HMAC::HMACError unless const_defined?(:HMACError, false)
+
+  # PKCS5 is the older, positional spelling of what OpenSSL::KDF answers with
+  # keywords; openssl still ships it and code still calls it - ActiveSupport's
+  # KeyGenerator, for one.  Both go to the same PBKDF2.
+  module PKCS5
+    def self.pbkdf2_hmac(pass, salt, iter, keylen, digest)
+      digest = digest.name if digest.kind_of?(OpenSSL::Digest)
+      OpenSSL::KDF.pbkdf2_hmac(pass.to_s, salt: salt.to_s, iterations: Integer(iter),
+                               length: Integer(keylen), hash: digest)
+    end
+
+    def self.pbkdf2_hmac_sha1(pass, salt, iter, keylen)
+      pbkdf2_hmac(pass, salt, iter, keylen, "SHA1")
+    end
+  end
 end
 
 # The rest of OpenSSL, each part on the piece of System.Security.Cryptography

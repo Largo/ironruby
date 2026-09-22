@@ -360,6 +360,37 @@ module IronRuby
         say options, "copying:     #{base}"
         FileUtils.cp(src, dest)
       end
+      copy_native_assets(options, bin, out)
+    end
+
+    # A NuGet package's native part does not sit next to the assemblies: it is under
+    # runtimes/<rid>/native, and the app resolves it through its own deps.json.  The
+    # generated host has a deps.json of its own that knows nothing about those
+    # packages, so the files are flattened next to the executable instead, where
+    # DllImport's default probing finds them.  This is what makes `require "sqlite3"`
+    # work in a packaged application: libe_sqlite3.so comes from
+    # Microsoft.Data.Sqlite's SQLitePCLRaw dependency.
+    def copy_native_assets(options, bin, out)
+      rid = begin
+        System::Runtime::InteropServices::RuntimeInformation.runtime_identifier.to_s
+      rescue StandardError, NameError
+        nil
+      end
+      return if rid.nil? || rid.empty?
+
+      # linux-x64 also matches what a package built for the portable RID ships.
+      dirs = [File.join(bin, "runtimes", rid, "native")]
+      dirs << File.join(bin, "runtimes", rid.sub(/-.*/, "") + "-x64", "native") if rid !~ /-/
+      dirs.each do |dir|
+        next unless File.directory?(dir)
+        Dir.glob(File.join(dir, "*")).each do |src|
+          next unless File.file?(src)
+          dest = File.join(out, File.basename(src))
+          next if File.file?(dest)
+          say options, "copying:     #{File.basename(src)} (native, #{rid})"
+          FileUtils.cp(src, dest)
+        end
+      end
     end
 
     # rbconfig.rb works out prefix/libdir from its own location, so a copy named

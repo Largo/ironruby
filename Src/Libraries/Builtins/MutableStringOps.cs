@@ -1735,9 +1735,26 @@ namespace IronRuby.Builtins {
                 }
             } else {
                 var characters = self.GetCharacters();
+                // '#' is escaped only when what follows it would start an interpolation, so it
+                // cannot be written until the next character is known. The enumerator does not
+                // look ahead, so the '#' is held back for one round instead.
+                bool pendingHash = false;
                 while (characters.MoveNext()) {
                     MutableString character = characters.Current.ToMutableString(encoding);
-                    if (characters.Current.IsValid && characters.Current.Codepoint < 0x80) {
+                    bool isAscii = characters.Current.IsValid && characters.Current.Codepoint < 0x80;
+                    if (pendingHash) {
+                        int next = isAscii ? characters.Current.Codepoint : -1;
+                        if (next == '{' || next == '$' || next == '@') {
+                            result.Append('\\');
+                        }
+                        result.Append('#');
+                        pendingHash = false;
+                    }
+                    if (isAscii) {
+                        if (characters.Current.Codepoint == '#') {
+                            pendingHash = true;
+                            continue;
+                        }
                         MutableString.AppendCharRepresentation(result, characters.Current.Codepoint, -1,
                             MutableString.Escape.Special, '"', -1);
                         continue;
@@ -1759,6 +1776,9 @@ namespace IronRuby.Builtins {
                         result.Append(((int)b).ToString("X2", CultureInfo.InvariantCulture));
                     }
                     result.Append('}');
+                }
+                if (pendingHash) {
+                    result.Append('#');
                 }
             }
 
