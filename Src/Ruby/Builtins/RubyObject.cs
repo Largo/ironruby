@@ -34,7 +34,8 @@ namespace IronRuby.Builtins {
         internal const string DebuggerDisplayValue = "{" + ImmediateClassFieldName + ".GetDebuggerDisplayValue(this),nq}";
         internal const string DebuggerDisplayType = "{" + ImmediateClassFieldName + ".GetDebuggerDisplayType(),nq}";
 
-        private RubyInstanceData _instanceData;
+        // internal: the instance variable fast paths read it directly (RubyOps.GetInstanceVariable)
+        internal RubyInstanceData _instanceData;
         private RubyClass/*!*/ _immediateClass;
 
         /// <summary>

@@ -3621,10 +3621,70 @@ namespace IronRuby.Runtime {
         
         #region Instance variable support
 
+        // `@x`: a Ruby object whose shape the site has seen is a reference compare and an array
+        // load. See RubyInstanceData for the layout and why no lock is needed.
         [Emitted]
-        public static object GetInstanceVariable(RubyScope/*!*/ scope, object self, string/*!*/ name) {
-            RubyInstanceData data = scope.RubyContext.TryGetInstanceData(self);
-            return (data != null) ? data.GetInstanceVariable(name) : null;
+        public static object GetInstanceVariable(RubyScope/*!*/ scope, object self, InstanceVariableSite/*!*/ site) {
+            RubyInstanceData data;
+            var obj = self as RubyObject;
+            if (obj != null) {
+                data = obj._instanceData;
+            } else {
+                // class-level @x
+                var module = self as RubyModule;
+                if (module == null) {
+                    return GetInstanceVariableSlow(scope.RubyContext, self, site);
+                }
+                data = module._instanceData;
+            }
+
+            if (data == null) {
+                return null;
+            }
+            object[] slots = data._ivars;
+            var entry = site.Cache;
+            if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                return RubyInstanceData.GetSlot(slots, entry.Index);
+            }
+            return data.GetInstanceVariable(site);
+        }
+
+        public static object ReadInstanceVariable(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            RubyInstanceData data;
+            var obj = self as RubyObject;
+            if (obj != null) {
+                data = obj._instanceData;
+            } else {
+                // class-level @x
+                var module = self as RubyModule;
+                if (module == null) {
+                    return GetInstanceVariableSlow(context, self, site);
+                }
+                data = module._instanceData;
+            }
+
+            if (data == null) {
+                return null;
+            }
+            object[] slots = data._ivars;
+            var entry = site.Cache;
+            if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                return RubyInstanceData.GetSlot(slots, entry.Index);
+            }
+            return data.GetInstanceVariable(site);
+        }
+
+        private static object GetInstanceVariableSlow(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            RubyInstanceData data = context.TryGetInstanceData(self);
+            if (data == null) {
+                return null;
+            }
+            object[] slots = data._ivars;
+            var entry = site.Cache;
+            if (RubyInstanceData.ShapeOf(slots) == entry.Shape) {
+                return RubyInstanceData.GetSlot(slots, entry.Index);
+            }
+            return data.GetInstanceVariable(site);
         }
 
         [Emitted]
@@ -3635,9 +3695,30 @@ namespace IronRuby.Runtime {
             return data.TryGetInstanceVariable(name, out value);
         }
 
+        // `@x = v`: a Ruby object whose shape the site has seen stores without a lock; adding a
+        // variable the site has seen added is a CAS. See RubyInstanceData.
         [Emitted]
-        public static object SetInstanceVariable(object self, object value, RubyScope/*!*/ scope, string/*!*/ name) {
-            scope.RubyContext.SetInstanceVariable(self, name, value);
+        public static object SetInstanceVariable(object self, object value, RubyScope/*!*/ scope, InstanceVariableSite/*!*/ site) {
+            var obj = self as RubyObject;
+            if (obj != null) {
+                var data = obj._instanceData ?? GetInstanceData(ref obj._instanceData);
+                if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
+                    return value;
+                }
+            }
+            scope.RubyContext.SetInstanceVariable(self, value, site);
+            return value;
+        }
+
+        public static object WriteInstanceVariable(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
+            var obj = self as RubyObject;
+            if (obj != null) {
+                var data = obj._instanceData ?? GetInstanceData(ref obj._instanceData);
+                if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
+                    return value;
+                }
+            }
+            context.SetInstanceVariable(self, value, site);
             return value;
         }
 

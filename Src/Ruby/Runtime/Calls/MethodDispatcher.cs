@@ -111,6 +111,9 @@ namespace IronRuby.Runtime.Calls {
     public abstract class AttributeDispatcher : MemberDispatcher {
         internal string/*!*/ Name;
 
+        // the dispatcher is per call site, so this is a per-site inline cache of the variable's slot
+        internal InstanceVariableSite/*!*/ Site;
+
         internal static AttributeDispatcher CreateRubyObjectWriterDispatcher(Type/*!*/ delegateType, string/*!*/ name, int version) {
             var dispatcher = (AttributeDispatcher)CreateDispatcher(delegateType, 1, true, false, version, null, RubyObjectAttributeWriterDispatchersWithScope);
             if (dispatcher != null) {
@@ -125,6 +128,7 @@ namespace IronRuby.Runtime.Calls {
     public sealed class RubyObjectAttributeReaderDispatcherWithScope : AttributeDispatcher {
         internal override void Initialize(string/*!*/ name, int version) {
             Name = name;
+            Site = new InstanceVariableSite(name);
             Version = version;
         }
 
@@ -137,9 +141,7 @@ namespace IronRuby.Runtime.Calls {
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self) {
             IRubyObject obj = self as IRubyObject;
             if (obj != null && obj.ImmediateClass.Version.Method == Version) {
-                // TODO: optimize
-                RubyInstanceData data = obj.TryGetInstanceData();
-                return (data != null) ? data.GetInstanceVariable(Name) : null;
+                return RubyOps.ReadInstanceVariable(obj.ImmediateClass.Context, obj, Site);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object, object>>)callSite).Update(callSite, scope, self);
             }
@@ -149,6 +151,7 @@ namespace IronRuby.Runtime.Calls {
     public sealed class RubyObjectAttributeWriterDispatcherWithScope<T0> : AttributeDispatcher {
         internal override void Initialize(string/*!*/ name, int version) {
             Name = name;
+            Site = new InstanceVariableSite(name);
             Version = version;
         }
 
@@ -161,10 +164,7 @@ namespace IronRuby.Runtime.Calls {
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, T0 arg0) {
             IRubyObject obj = self as IRubyObject;
             if (obj != null && obj.ImmediateClass.Version.Method == Version) {
-                var result = (object)arg0;
-                // TODO: optimize
-                obj.ImmediateClass.Context.SetInstanceVariable(obj, Name, result);
-                return result;
+                return RubyOps.WriteInstanceVariable(obj.ImmediateClass.Context, obj, (object)arg0, Site);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object, T0, object>>)callSite).Update(callSite, scope, self, arg0);
             }

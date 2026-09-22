@@ -382,7 +382,8 @@ namespace IronRuby.Builtins {
                     foreach (object obj in list) {
                         // an object whose id has not been asked for yet has no instance data, and it is not created here
                         var rubyObject = obj as IRubyObject;
-                        if (rubyObject != null && rubyObject.TryGetInstanceData() != null && RubyUtils.GetObjectId(context, obj) == value) {
+                        var data = rubyObject != null ? rubyObject.TryGetInstanceData() : null;
+                        if (data != null && data.HasObjectId && RubyUtils.GetObjectId(context, obj) == value) {
                             return obj;
                         }
                     }

@@ -695,9 +695,18 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// The name of an instance variable the runtime keeps for its own purposes: the angle
+        /// brackets make it one no Ruby code can name, and RubyContext.GetInstanceVariableNames
+        /// leaves it out.
+        /// </summary>
+        public static string/*!*/ GetHiddenInstanceVariableName(string/*!*/ name) {
+            return "<ir>" + name;
+        }
+
         public static void CheckInstanceVariableName(string name) {
             if (!Tokenizer.IsInstanceVariableName(name)) {
-                throw RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as an instance variable name", name));
+                throw RubyExceptions.CreateNameError(String.Format("'{0}' is not allowed as an instance variable name", name));
             }
         }
 
@@ -728,7 +737,7 @@ namespace IronRuby.Runtime {
         public static void CheckInstanceVariableName(RubyContext/*!*/ context, object receiver, string/*!*/ name, object nameArg) {
             if (!Tokenizer.IsInstanceVariableName(name)) {
                 throw RubyExceptions.WithNameAndReceiver(
-                    RubyExceptions.CreateNameError(String.Format("`{0}' is not allowed as an instance variable name", name)),
+                    RubyExceptions.CreateNameError(String.Format("'{0}' is not allowed as an instance variable name", name)),
                     GetVariableNameForError(context, name, nameArg), receiver);
             }
         }

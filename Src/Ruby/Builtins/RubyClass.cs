@@ -92,6 +92,13 @@ namespace IronRuby.Builtins {
         // This allows to create modules without locking. 
         private bool _dependenciesInitialized;
 
+        /// <summary>
+        /// How many instance variables the instances of this class have been seen to get (capped):
+        /// the slot array of a new instance is allocated with room for that many, so that it
+        /// normally never has to grow. See RubyInstanceData.
+        /// </summary>
+        internal int InstanceVariableCapacity;
+
         //
         // Null if this class doesn't represent a CLR type, it represets a CLR type that implements IRubyObject or 
         // if it doesn't have any singleton-subclasses.
