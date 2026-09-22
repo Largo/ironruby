@@ -145,6 +145,11 @@ GEMS = {
   # NotImplementedError.  lib/oj is vendored unchanged.
   "oj" => ["3.17.6", "Oj's :strict, :null, :compat and :rails modes and mimic_JSON, in C#",
            ["oj", "oj/"], check: "Oj::VERSION", pinned: true],
+  # bcrypt: bcrypt_ext's BCrypt::Engine.__bc_crypt and __bc_salt (Openwall's
+  # crypt_blowfish) are C# (Src/Libraries/BCrypt); lib/bcrypt is vendored
+  # unchanged.  Devise and has_secure_password depend on it.
+  "bcrypt" => ["3.1.22", "OpenBSD bcrypt password hashing; bcrypt_ext in C#",
+               ["bcrypt", "bcrypt/", "bcrypt_ext"], pinned: true],
   # Ruby 4.0 removed the CGI class from the standard library and kept only the
   # escaping half, cgi/escape - which is a C extension there and is vendored in
   # Ruby here.  The `cgi` gem that brings the class back is that same C

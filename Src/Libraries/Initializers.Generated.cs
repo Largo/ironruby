@@ -43,6 +43,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.WebSocketDriver.WebSocketDriverLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.MessagePack.MessagePackLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Oj.OjLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.BCrypt.BCryptLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -16904,6 +16905,37 @@ namespace IronRuby.StandardLibrary.Oj {
             DefineLibraryMethod(module, "optimized?", 0x11, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder, System.Object, System.Boolean>(IronRuby.StandardLibrary.Oj.OjOps.RailsOps.Encoder.IsOptimized)
+            );
+            
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.BCrypt {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class BCryptLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            IronRuby.Builtins.RubyClass classRef0 = GetClass(typeof(System.Object));
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("BCrypt", typeof(IronRuby.StandardLibrary.BCrypt.BCryptOps), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyClass def2 = DefineClass("BCrypt::Engine", typeof(IronRuby.StandardLibrary.BCrypt.BCryptOps.EngineOps), 0x00000008, classRef0, null, LoadBCrypt__Engine_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            SetConstant(def1, "Engine", def2);
+        }
+        
+        private static void LoadBCrypt__Engine_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__bc_crypt", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.BCrypt.BCryptOps.EngineOps.BcCrypt)
+            );
+            
+            DefineLibraryMethod(module, "__bc_salt", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.BCrypt.BCryptOps.EngineOps.BcSalt)
             );
             
         }
