@@ -14,6 +14,7 @@ Gem::Specification.new do |s|
   s.summary = "IO#wait and friends".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
+  s.metadata = { "ironruby_native".freeze => "true".freeze }
   s.files = [
     "lib/io/wait.rb".freeze,
   ]

@@ -14,6 +14,7 @@ Gem::Specification.new do |s|
   s.summary = "HTML5, HTML4 and XML parsing, on AngleSharp".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
+  s.metadata = { "ironruby_native".freeze => "true".freeze }
   s.files = [
     "lib/nokogiri.rb".freeze,
     "lib/nokogiri/css.rb".freeze,

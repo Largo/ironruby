@@ -443,3 +443,18 @@ module Random::Formatter
     end
   end
 end
+
+# MRI wires Formatter into Random from random.c: `require "random/formatter"`
+# both mixes it into Random - so a Random instance answers #hex, #alphanumeric,
+# #uuid - and extends the Random class object with it, so `Random.alphanumeric`
+# works and draws from Random::DEFAULT.  Neither happens anywhere in this file
+# upstream, so it happens here.  ActiveRecord's own benchmarks and a good deal
+# of gem code call Random.alphanumeric, and without this it is a NoMethodError.
+class Random
+  include Formatter
+
+  # Including rather than extending on the class side too: the module goes
+  # behind Random's own singleton methods, so Random.bytes and Random.rand stay
+  # the interpreter's - which is what Formatter#gen_random then draws from.
+  singleton_class.include Formatter
+end
