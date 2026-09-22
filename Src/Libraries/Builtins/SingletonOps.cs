@@ -18,6 +18,8 @@ using System.Diagnostics;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
+using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {
 
@@ -162,11 +164,20 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         [RubyMethod("include", RubyMethodAttributes.PublicInstance)]
-        public static RubyModule/*!*/ Include(RubyScope/*!*/ scope, object/*!*/ self, params RubyModule[]/*!*/ modules) {
+        public static RubyModule/*!*/ Include(
+            CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ appendFeaturesStorage,
+            CallSiteStorage<Func<CallSite, RubyModule, RubyModule, object>>/*!*/ includedStorage,
+            RubyScope/*!*/ scope, object/*!*/ self, [NotNullItems]params RubyModule/*!*/[]/*!*/ modules) {
+
             // MRI: in a file loaded with wrapping the modules go into the wrapper module, not Object
             RubyModule result = scope.Top.Module ?? scope.RubyContext.GetClassOf(self);
-            result.IncludeModules(modules);
-            return result;
+
+            // Through Module#include rather than straight into the ancestor list, because the
+            // #append_features and #included hooks are where a module does its real work:
+            // ActiveSupport::Concern installs its ClassMethods there, so a top-level
+            // `include SomeConcern` that skipped them kept only half the module. ActionView's
+            // SanitizeHelper is one of those, and #sanitize in a plain script then failed.
+            return ModuleOps.Include(appendFeaturesStorage, includedStorage, result, modules);
         }
 
         #endregion

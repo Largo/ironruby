@@ -849,10 +849,15 @@ namespace IronRuby.Builtins {
 
         // Object#=~ is gone since Ruby 3.2; #!~ calls whatever #=~ the receiver has, and a
         // NoMethodError if it has none.
+        // The scope is handed to #=~ rather than left behind: $~ belongs to the frame that wrote
+        // the `!~`, and Regexp#=~ sets it on the scope it is given. Without this, `if RE !~ line`
+        // matched and then left $1 as whatever it had been - httpclient parses every status line
+        // that way.
         [RubyMethod("!~")]
-        public static bool NotMatch(BinaryOpStorage/*!*/ match, object self, object other) {
-            var site = match.GetCallSite("=~", 1);
-            return RubyOps.IsFalse(site.Target(site, self, other));
+        public static bool NotMatch(CallSiteStorage<Func<CallSite, RubyScope, object, object, object>>/*!*/ match,
+            RubyScope/*!*/ scope, object self, object other) {
+            var site = match.GetCallSite("=~", new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf));
+            return RubyOps.IsFalse(site.Target(site, scope, self, other));
         }
 
         // calls == by default

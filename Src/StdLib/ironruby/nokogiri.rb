@@ -24,9 +24,10 @@
 # older one, and only its serialization is HTML4-shaped (see nokogiri/html.rb);
 # XPath is this library's own evaluator and covers location paths and the common
 # predicate functions rather than all of XPath 1.0 (see nokogiri/xpath.rb);
-# Nokogiri::CSS.xpath_for, the Builder API, SAX, Reader, Schema/RelaxNG,
-# XSLT and libxml2's parse-option flags are not implemented and say so when
-# called.
+# Nokogiri::CSS.xpath_for, the Builder API, Reader, Schema/RelaxNG, XSLT and
+# libxml2's parse-option flags are not implemented and say so when called.  SAX
+# is here, but replayed off the parsed tree rather than streamed (see
+# nokogiri/xml/sax.rb).
 
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Nokogiri'
 
@@ -57,6 +58,7 @@ require "nokogiri/xml/node"
 require "nokogiri/xml/node_set"
 require "nokogiri/xml/document"
 require "nokogiri/xml/document_fragment"
+require "nokogiri/xml/sax"
 require "nokogiri/html"
 
 module Nokogiri

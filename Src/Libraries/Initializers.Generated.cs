@@ -452,8 +452,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "include", 0x51, 
-                0x80000000U, 
-                new Func<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.Include)
+                0x80000010U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyModule, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyModule[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.MainSingletonOps.Include)
             );
             
             DefineLibraryMethod(module, "initialize", 0x52, 
@@ -4570,7 +4570,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "!~", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.NotMatch)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Boolean>(IronRuby.Builtins.KernelOps.NotMatch)
             );
             
             DefineLibraryMethod(module, "<=>", 0x51, 
@@ -12924,9 +12924,11 @@ namespace IronRuby.StandardLibrary.StringIO {
             );
             
             DefineLibraryMethod(module, "read", 0x11, 
-                0x00000000U, 0x00020004U, 0x00030004U, 
+                new[] { 0x00000000U, 0x00020004U, 0x00000000U, 0x00010000U, 0x00030004U}, 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read), 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read), 
+                new Func<IronRuby.StandardLibrary.StringIO.StringIO, Microsoft.Scripting.Runtime.DynamicNull, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read), 
+                new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Int32, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read), 
                 new Func<IronRuby.StandardLibrary.StringIO.StringIO, System.Int32, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.StringIO.StringIO.Read)
             );
             

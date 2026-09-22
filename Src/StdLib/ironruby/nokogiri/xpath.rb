@@ -474,12 +474,15 @@ module Nokogiri
         when "starts-with" then to_string(arguments[0]).start_with?(to_string(arguments[1]))
         when "ends-with" then to_string(arguments[0]).end_with?(to_string(arguments[1]))
         when "string" then to_string(arguments[0])
-        when "string-length" then to_string(arguments[0]).length
+        # XPath 1.0 has one numeric type and it is a double, so the numeric functions answer
+        # Floats - which is what libxml2 hands nokogiri, and what `xpath("count(//a)")` is
+        # compared against.
+        when "string-length" then to_string(arguments[0]).length.to_f
         when "normalize-space" then to_string(arguments[0]).strip.gsub(/\s+/, " ")
         when "concat" then arguments.map { |argument| to_string(argument) }.join
-        when "count" then to_nodes(arguments[0]).length
-        when "last" then @size || 1
-        when "position" then @position || 1
+        when "count" then to_nodes(arguments[0]).length.to_f
+        when "last" then (@size || 1).to_f
+        when "position" then (@position || 1).to_f
         when "name", "local-name"
           node = to_nodes(arguments.empty? ? context : arguments[0]).first
           node ? node.name : ""
