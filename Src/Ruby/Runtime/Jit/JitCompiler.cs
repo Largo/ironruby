@@ -16,7 +16,9 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using IronRuby.Builtins;
 using IronRuby.Compiler.Ast;
+using IronRuby.Runtime.Calls;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Runtime.Jit {
@@ -28,6 +30,9 @@ namespace IronRuby.Runtime.Jit {
     /// <summary>The type lattice. Deliberately tiny: this is a prototype.</summary>
     internal enum JT {
         None = 0,   // no value yet
+        Never,      // bottom: the expression never produces a value (it jumped away). Unifies
+                    // with anything, and is coerced by evaluating it and then falling into an
+                    // unreachable default of whatever type the context wanted.
         Int,        // CLR int, an Integer that fits in an Int32
         Lng,        // CLR long, an Integer that fits in an Int64 but not an Int32 - and, inside
                     // the specialized region, any integer at all: integer arithmetic happens in
@@ -84,6 +89,24 @@ namespace IronRuby.Runtime.Jit {
         private bool _canDeopt;
         private bool _selfCall;
         private int _nodes;
+
+        // Explicit `return'. The label is created on the first one met, typed by the return type
+        // the round is compiling under (_selfReturn); _returnUnion is what the values actually
+        // seen so far unify to, which is how the round after this one is typed. _retype is set
+        // when a return value cannot flow into the current guess at all, so the round is
+        // abandoned and re-run against the wider type rather than rejected.
+        private MSA.LabelTarget _returnLabel;
+        private JT _returnUnion = JT.None;
+        private JT _retype = JT.None;
+        private bool _firstRound;
+
+        /// <summary>The reason the last bailout gave, for IR_JIT_VERBOSE=1. Not on a fast path.</summary>
+        private string _bailReason;
+
+        private JitBailout/*!*/ Bail(string/*!*/ reason) {
+            if (JitRuntime.Verbose && _bailReason == null) { _bailReason = reason; }
+            return JitBailout.Instance;
+        }
 
         private JitCompiler(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes) {
             _ast = ast;
@@ -277,10 +300,13 @@ namespace IronRuby.Runtime.Jit {
         internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
+            // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
+            // how many there can be; a guess that does not settle is rejected.
             JT guess = JT.None;
-            for (int round = 0; round < 3; round++) {
+            for (int round = 0; round < 5; round++) {
                 var c = new JitCompiler(ast, context, paramTypes);
-                c._selfReturn = (guess == JT.None) ? JT.Int : guess;
+                c._firstRound = (guess == JT.None);
+                c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(paramTypes, c._selfReturn);
                 if (c._selfDelegateType == null) { return null; }
 
@@ -289,14 +315,33 @@ namespace IronRuby.Runtime.Jit {
                 try {
                     body = c.EmitBody(out actual);
                 } catch (JitBailout) {
+                    // A `return' whose value does not fit the type this round assumed is not a
+                    // rejection, it is a re-run against the type that does fit.
+                    if (c._retype != JT.None && c._retype != c._selfReturn) { guess = c._retype; continue; }
+                    if (JitRuntime.Verbose) {
+                        Console.Error.WriteLine("[jit] rejected {0} arity {1}: {2}", ast.Name, paramTypes.Length,
+                            c._bailReason ?? "unsupported construct");
+                    }
                     return null;
                 }
 
-                if (actual != c._selfReturn) {
-                    if (guess != JT.None) { return null; }   // did not settle
-                    guess = actual;
+                // The method's value is the value it falls off with, unified with every value an
+                // explicit `return' hands back.
+                JT result = (c._returnUnion == JT.None) ? actual : Merge(actual, c._returnUnion);
+                if (result != c._selfReturn) {
+                    if (result == guess) { return null; }    // did not settle
+                    guess = result;
                     continue;
                 }
+
+                // The return label carries every explicit `return'; the body falls into it.
+                if (actual != result || c._returnLabel != null) {
+                    body = c.Coerce(body, actual, result);
+                }
+                if (c._returnLabel != null) {
+                    body = Ast.Label(c._returnLabel, body);
+                }
+                actual = result;
 
                 // A body that can deopt mid-flight is only safe to restart if nothing it has
                 // already done is observable.
@@ -375,7 +420,7 @@ namespace IronRuby.Runtime.Jit {
         /// node kinds the screen rejected, so the omission shows up there.
         /// </summary>
         private MSA.Expression/*!*/ Emit(RExpr/*!*/ node, out JT type) {
-            if (++_nodes > MaxNodes) { throw JitBailout.Instance; }
+            if (++_nodes > MaxNodes) { throw Bail("too many nodes"); }
 
             var literal = node as Literal;
             if (literal != null) { return EmitLiteral(literal, out type); }
@@ -400,8 +445,12 @@ namespace IronRuby.Runtime.Jit {
 
             var not = node as NotExpression;
             if (not != null) {
+                // `!x' is a call of x's #! - which the program may have redefined.
+                JT operandType;
+                var operand = EmitCondition(not.Expression, out operandType);
+                RequireBuiltin(operandType, "!");
                 type = JT.Bool;
-                return Ast.Not(EmitCondition(not.Expression));
+                return Ast.Not(operand);
             }
 
             var and = node as AndExpression;
@@ -454,6 +503,9 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
+            var ret = node as ReturnStatement;
+            if (ret != null) { return EmitReturn(ret, out type); }
+
             var body = node as Body;
             if (body != null) {
                 if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
@@ -462,7 +514,7 @@ namespace IronRuby.Runtime.Jit {
                 return EmitStatements(body.Statements, out type);
             }
 
-            throw JitBailout.Instance;
+            throw Bail("node: " + node.GetType().Name);
         }
 
         private MSA.Expression/*!*/ EmitLiteral(Literal/*!*/ literal, out JT type) {
@@ -472,7 +524,7 @@ namespace IronRuby.Runtime.Jit {
             if (v is double) { type = JT.Dbl; return Ast.Constant((double)v, typeof(double)); }
             if (v is bool) { type = JT.Bool; return Ast.Constant((bool)v, typeof(bool)); }
             if (v == null) { type = JT.Obj; return Ast.Constant(null, typeof(object)); }
-            throw JitBailout.Instance;
+            throw Bail("literal: " + (v == null ? "nil" : v.GetType().Name));
         }
 
         private MSA.Expression/*!*/ EmitLocalRead(LocalVariable/*!*/ local, out JT type) {
@@ -484,7 +536,7 @@ namespace IronRuby.Runtime.Jit {
                     return LoadLoopSlot(p);
                 }
                 // A local read before any assignment is nil in Ruby; not modelled.
-                throw JitBailout.Instance;
+                throw Bail("local read before assignment: " + local.Name);
             }
             return (_loop != null) ? LoadLoopSlot(p) : p;
         }
@@ -624,6 +676,53 @@ namespace IronRuby.Runtime.Jit {
             return Ast.Block(copies);
         }
 
+        /// <summary>
+        /// `return v' / `return'. The value leaves through a DLR return label typed by the
+        /// return type this round is compiling under, which is the same type the value the body
+        /// falls off with is given - so an early `return n' and a trailing `return f(n)' unify
+        /// exactly the way the two branches of an `if' do. A round whose guess turns out to be
+        /// too narrow for a value some `return' produces is abandoned and re-run wider.
+        ///
+        /// The value is JT.Never: control does not continue here, so whatever the context wanted
+        /// this expression to be, it may be.
+        /// </summary>
+        private MSA.Expression/*!*/ EmitReturn(ReturnStatement/*!*/ node, out JT type) {
+            // In loop mode the body being emitted is one loop outlined out of its method, entered
+            // and left by the OSR site. A `return' there returns from the *method*, which the
+            // outlined copy has no way to do.
+            if (_loop != null) { throw Bail("return inside an outlined loop"); }
+
+            var args = node.Arguments;
+            JT vt;
+            MSA.Expression value;
+            if (args == null || args.Expressions.Length == 0) {
+                vt = JT.Obj;
+                value = Ast.Constant(null, typeof(object));
+            } else if (args.Expressions.Length == 1 && !(args.Expressions[0] is SplattedArgument)) {
+                value = Emit(args.Expressions[0], out vt);
+            } else {
+                throw Bail("return of several values");
+            }
+
+            if (vt == JT.Never) {
+                // `return (return v)' - only the inner jump ever happens.
+                type = JT.Never;
+                return value;
+            }
+
+            _returnUnion = (_returnUnion == JT.None) ? vt : Merge(_returnUnion, vt);
+            if (Merge(vt, _selfReturn) != _selfReturn) {
+                // The first round's Int is an assumption, not an observation, so it does not
+                // take part in the merge: a Float `return x' makes the next round Float, not Obj.
+                _retype = _firstRound ? vt : Merge(_selfReturn, vt);
+                throw Bail("return value wider than this round's return type");
+            }
+
+            if (_returnLabel == null) { _returnLabel = Ast.Label(ClrType(_selfReturn), "#return"); }
+            type = JT.Never;
+            return Ast.Return(_returnLabel, Coerce(value, vt, _selfReturn), typeof(object));
+        }
+
         private MSA.Expression/*!*/ EmitIfLike(RExpr/*!*/ c, RExpr/*!*/ t, RExpr/*!*/ f, out JT type) {
             var test = EmitCondition(c);
             JT tt, ft;
@@ -633,10 +732,30 @@ namespace IronRuby.Runtime.Jit {
         }
 
         private MSA.Expression/*!*/ Join(MSA.Expression/*!*/ test, MSA.Expression/*!*/ a, JT at, MSA.Expression/*!*/ b, JT bt, out JT type) {
-            type = Unify(at, bt);
+            type = Merge(at, bt);
             return Ast.Condition(test, Coerce(a, at, type), Coerce(b, bt, type), ClrType(type));
         }
 
+        /// <summary>
+        /// The type of a value that comes from one of two control-flow paths - the arms of an
+        /// `if', the fall-off value and the explicit returns. Int and Lng are two
+        /// representations of one Ruby class, so they merge to Lng. An Integer and a Float do
+        /// NOT merge to Float: converting the Integer would change its class (`c ? 1.5 : 2' is
+        /// 2, not 2.0), so a mixed pair is boxed.
+        /// </summary>
+        private static JT Merge(JT a, JT b) {
+            if (a == b) { return a; }
+            // A path that jumped away contributes no value, so the other one decides.
+            if (a == JT.Never) { return b; }
+            if (b == JT.Never) { return a; }
+            if (IsInteger(a) && IsInteger(b)) { return JT.Lng; }
+            return JT.Obj;
+        }
+
+        /// <summary>
+        /// The operand type of a binary numeric operation: Ruby promotes an Integer operand of
+        /// Float arithmetic to Float, so here - and only here - Int op Dbl is Dbl.
+        /// </summary>
         private static JT Unify(JT a, JT b) {
             if (a == b) { return a; }
             if (IsNumeric(a) && IsNumeric(b)) {
@@ -648,6 +767,11 @@ namespace IronRuby.Runtime.Jit {
 
         private MSA.Expression/*!*/ Coerce(MSA.Expression/*!*/ e, JT from, JT to) {
             if (from == to) { return e; }
+            if (from == JT.Never) {
+                // e always jumps away, so what follows it is unreachable and only there to give
+                // the expression the static type its context wants.
+                return Ast.Block(ClrType(to), e, Ast.Default(ClrType(to)));
+            }
             if (to == JT.Dbl && (from == JT.Int || from == JT.Lng)) { return Ast.Convert(e, typeof(double)); }
             if (to == JT.Lng && from == JT.Int) { return Ast.Convert(e, typeof(long)); }
             if (to == JT.Int && from == JT.Lng) {
@@ -673,20 +797,24 @@ namespace IronRuby.Runtime.Jit {
         /// </summary>
         private MSA.Expression/*!*/ EmitCondition(RExpr/*!*/ node) {
             JT t;
+            return EmitCondition(node, out t);
+        }
+
+        private MSA.Expression/*!*/ EmitCondition(RExpr/*!*/ node, out JT t) {
             var e = Emit(node, out t);
             switch (t) {
                 case JT.Bool: return e;
                 case JT.Int:
                 case JT.Lng:
                 case JT.Dbl: return Ast.Block(e, Ast.Constant(true));
-                default: throw JitBailout.Instance;
+                default: throw Bail("condition of type " + t);
             }
         }
 
         // ---- calls -------------------------------------------------------------------------
 
         private MSA.Expression/*!*/ EmitCall(MethodCall/*!*/ node, out JT type) {
-            if (node.Block != null) { throw JitBailout.Instance; }
+            if (node.Block != null) { throw Bail("call with a block: " + node.MethodName); }
             var args = node.Arguments;
             int argc = (args == null) ? 0 : args.Expressions.Length;
 
@@ -718,7 +846,7 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            throw JitBailout.Instance;
+            throw Bail("call: " + node.MethodName + "/" + argc);
         }
 
         private static bool IsNumeric(JT t) {
@@ -778,9 +906,49 @@ namespace IronRuby.Runtime.Jit {
             return null;
         }
 
+        // ---- the operators the body inlines must be the built-in ones ----------------------
+        // Inlining `a + b' as a CLR add is only right while Integer#+ is the library method.
+        // GlobalMethodVersion covers a redefinition AFTER specialization - the entry guard then
+        // fails - but not one that happened before: a method that first turns hot after
+        // `class Integer; def +(o) ... end; end' would otherwise inline the operator the program
+        // replaced. So every operator is resolved, at compile time, on the class of its receiver,
+        // and must be a library method registered under that very name (which also rejects
+        // `alias_method :-, :+', a library method under someone else's name).
+
+        private RubyClass/*!*/ ClassOfType(JT t, bool value) {
+            object sample = (t == JT.Dbl) ? (object)0.0 : (t == JT.Bool) ? (object)value : (object)0;
+            return JitRuntime.ClassOf(_context, sample);
+        }
+
+        private static bool IsBuiltinMethod(RubyClass/*!*/ cls, string/*!*/ name) {
+            var resolved = cls.ResolveMethod(name, VisibilityContext.AllVisible);
+            var info = resolved.Found ? resolved.Info as RubyLibraryMethodInfo : null;
+            if (info == null) { return false; }
+            foreach (var member in info.GetMembers()) {
+                bool named = false;
+                foreach (RubyMethodAttribute a in member.GetCustomAttributes(typeof(RubyMethodAttribute), false)) {
+                    if (a.Name == name) { named = true; break; }
+                }
+                if (!named) { return false; }
+            }
+            return true;
+        }
+
+        /// <summary>`op' called on a receiver of type t is the built-in method; bail out if not.</summary>
+        private void RequireBuiltin(JT t, string/*!*/ op) {
+            bool ok = (t == JT.Bool)
+                ? IsBuiltinMethod(ClassOfType(t, true), op) && IsBuiltinMethod(ClassOfType(t, false), op)
+                : IsBuiltinMethod(ClassOfType(t, false), op);
+            // BasicObject#!= answers by calling ==.
+            if (ok && op == "!=") { RequireBuiltin(t, "=="); }
+            if (!ok) { throw Bail("operator " + op + " on " + t + " is not the built-in one"); }
+        }
+
         private MSA.Expression/*!*/ EmitBinary(string/*!*/ op, MSA.Expression/*!*/ l, JT lt, MSA.Expression/*!*/ r, JT rt, out JT type) {
             JT operand = Unify(lt, rt);
-            if (operand == JT.Obj) { throw JitBailout.Instance; }
+            if (operand == JT.Obj) { throw Bail("operator " + op + " on " + lt + ", " + rt); }
+            // Ruby dispatches on the receiver: `1 + 2.0' is Integer#+.
+            RequireBuiltin(lt, op);
 
             if (operand == JT.Dbl) {
                 l = Coerce(l, lt, JT.Dbl);
@@ -827,11 +995,11 @@ namespace IronRuby.Runtime.Jit {
                 case "*": if (bothInt) { return Ast.Multiply(l, r); } _canDeopt = true; return Ast.Call(JitRuntime.M("MulLong"), l, r);
                 case "/": _canDeopt = true; return Ast.Call(JitRuntime.M("DivLong"), l, r);
                 case "%": _canDeopt = true; return Ast.Call(JitRuntime.M("ModLong"), l, r);
-                default: throw JitBailout.Instance;
+                default: throw Bail("integer operator " + op);
             }
         }
 
-        private static MSA.Expression/*!*/ EmitCompare(string/*!*/ op, MSA.Expression/*!*/ l, MSA.Expression/*!*/ r, out JT type) {
+        private MSA.Expression/*!*/ EmitCompare(string/*!*/ op, MSA.Expression/*!*/ l, MSA.Expression/*!*/ r, out JT type) {
             type = JT.Bool;
             switch (op) {
                 case "<": return Ast.LessThan(l, r);
@@ -840,7 +1008,7 @@ namespace IronRuby.Runtime.Jit {
                 case ">=": return Ast.GreaterThanOrEqual(l, r);
                 case "==": return Ast.Equal(l, r);
                 case "!=": return Ast.NotEqual(l, r);
-                default: throw JitBailout.Instance;
+                default: throw Bail("float operator " + op);
             }
         }
     }
