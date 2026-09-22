@@ -861,8 +861,22 @@ namespace IronRuby.StandardLibrary.Date {
             var sb = new StringBuilder();
             sb.Append("#<").Append(context.GetClassDisplayName(self)).Append(": ");
             sb.Append(DateFormatter.Format(self, self is RubyDateTime ? "%Y-%m-%dT%H:%M:%S%:z" : "%Y-%m-%d"));
-            sb.Append(" ((").Append(self._jd.ToString(CultureInfo.InvariantCulture)).Append("j,");
-            sb.Append(self._df.ToString(CultureInfo.InvariantCulture)).Append("s,");
+            // The triple MRI prints is its own internal representation, which counts
+            // the day and the seconds in *UTC* and keeps the offset beside them.  The
+            // fields here are local, so they are shifted back before printing -
+            // everything else about a DateTime, #jd and #hour included, is local on
+            // both.
+            long inspectJd = self._jd;
+            int inspectDf = self._df - self._of;
+            if (inspectDf < 0) {
+                inspectDf += 86400;
+                inspectJd -= 1;
+            } else if (inspectDf >= 86400) {
+                inspectDf -= 86400;
+                inspectJd += 1;
+            }
+            sb.Append(" ((").Append(inspectJd.ToString(CultureInfo.InvariantCulture)).Append("j,");
+            sb.Append(inspectDf.ToString(CultureInfo.InvariantCulture)).Append("s,");
             sb.Append(DateFormatter.NanosecondString(self._sf)).Append("n),");
             sb.Append(self._of >= 0 ? "+" : "").Append(self._of.ToString(CultureInfo.InvariantCulture)).Append("s,");
             if (Double.IsPositiveInfinity(self._sg)) {

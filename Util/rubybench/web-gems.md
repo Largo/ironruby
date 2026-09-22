@@ -22,7 +22,7 @@ the last one (rack goes 1197 -> 771 -> 564 ms across the three).
 | grape        | OK     | 19334 ms | 1773 ms | 10.9x    | Grape API, 100k requests |
 | rubocop      | OK     | 26219 ms | 1139 ms | 23x      | autocorrect a fixture through RuboCop::Runner (one iteration, see below) |
 | railsbench   | OK     | 124815 ms| 6271 ms | 19.9x    | Rails 8.1 + sqlite3, 2000 requests, every one asserted 200 |
-| sequel       | FAIL   | -        | 94 ms   | -        | its Gemfile asks for `sqlite3 ~> 1.4`; IronRuby provides sqlite3 2.9.6 and the 1.x gem is C source.  Sequel itself works here - the same script on IronRuby's sqlite3 gives byte-identical output to CRuby |
+| sequel       | FAIL   | -        | 94 ms*  | -        | its Gemfile asks for `sqlite3 ~> 1.4`; IronRuby provides sqlite3 2.9.6 and the 1.x gem is C source.  Sequel itself works here - the same script on IronRuby's sqlite3 gives byte-identical output to CRuby.  *one iteration |
 | ruby-lsp     | N/A    | -        | -       | -        | ruby-lsp depends on rbs, a C extension with no pure-Ruby fallback |
 | fluentd      | N/A    | -        | -       | -        | fluentd depends on strptime, and the Gemfile on yajl-ruby; both are C extensions |
 | lobsters     | N/A    | -        | -       | -        | needs bcrypt and markly (C extensions), and pins rubocop 0.81 which needs jaro_winkler (C) |
