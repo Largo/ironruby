@@ -59,10 +59,10 @@ output to CRuby 4.0.6. The rank is the gem's position in the top-100 list.
 | 17 | faraday | 2.14.4 | **WORKS** | the middleware stack over Faraday's test adapter, `raise_error`, nested query encoding |
 | 18 | public_suffix | 7.0.5 | **WORKS** | the real PSL: TLD/SLD/TRD splits, private domains, wildcard rules, both error classes |
 | 19 | diff-lcs | 2.0.0 | **WORKS** | `lcs`, `diff`, `sdiff`, `patch`, `unpatch!`, a unified hunk |
-| 29 | rspec (with -core, -expectations, -mocks, -support) | 3.13.2 | **WORKS** | a real in-process run: matchers, doubles, shared examples, and a failure, an error and a pending example, all reported identically |
 | 24 | multi_json | 1.21.2 | **WORKS** | dump/load/pretty over the json adapter, `ParseError`. Needed the `JSON.generate(obj, state)` arity fix |
 | 25 | thor | 1.5.0 | **WORKS** | a command class with options, subcommands, shell tables, `InvocationError`. Needed the `Regexp.last_match(-1)` fix |
 | 27 | ffi | 1.17.4 | **IMPOSSIBLE as a gem** | C extension over libffi. A .NET shim is a real possibility - see below |
+| 29 | rspec (with -core, -expectations, -mocks, -support) | 3.13.2 | **WORKS** | a real in-process run: matchers, doubles, shared examples, and a failure, an error and a pending example, all reported identically |
 | 30 | unicode-display_width | 3.3.0 | **WORKS** | East Asian wide, combining marks, emoji sequences, `overwrite:` |
 | 31 | builder | 3.3.0 | **WORKS** | nested XML with attributes, namespaces, comments, escaping |
 | 32 | mime-types | 3.7.0 | **WORKS** | the registry: lookup by type and by filename, extensions, `binary?`, ordering |
