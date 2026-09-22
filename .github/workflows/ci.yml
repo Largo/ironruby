@@ -25,20 +25,23 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         tfm: [net8.0, net10.0]
         include:
-          # IronRuby.Tests failure baselines, measured per platform - they are
-          # exact numbers, not thresholds: the run fails if it goes above them.
+          # IronRuby.Tests "> FAILED" line counts, measured on this matrix (run
+          # 35730703529). They are the exact current numbers, not head-room: the
+          # job fails as soon as one more line appears. Windows carries three
+          # failures Linux does not - Autoload1 and ConstantCaching_AutoUpdating1A/B -
+          # and net10.0 fixes one of the Serialization1 lines on both platforms.
           - os: ubuntu-latest
             tfm: net8.0
-            baseline: 22
+            baseline: 19
           - os: ubuntu-latest
             tfm: net10.0
-            baseline: 22
+            baseline: 18
           - os: windows-latest
             tfm: net8.0
             baseline: 22
           - os: windows-latest
             tfm: net10.0
-            baseline: 22
+            baseline: 21
     env:
       TFM: ${{ matrix.tfm }}
       IR_TFM: ${{ matrix.tfm }}
@@ -199,6 +202,15 @@ jobs:
             echo "::endgroup::"
             exit 1
           fi
+
+      # The full transcript, for looking at a failure that is inside the baseline.
+      - name: Keep the test output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ironruby-tests-${{ matrix.os }}-${{ matrix.tfm }}
+          path: ironruby/Src/IronRuby.Tests/bin/Debug/${{ matrix.tfm }}/results.txt
+          if-no-files-found: ignore
 
   ruby-spec:
     name: ruby/spec ${{ matrix.tfm }}
