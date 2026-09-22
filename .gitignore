@@ -9,6 +9,9 @@ bin/
 # since git does not look inside an excluded directory.
 !/Src/StdLib/bin/
 !/Src/StdLib/bin/*
+# ... and the bin/ directories of the gems installed in the standard library's gem home
+# (Util/install-bundled-gems.rb): minitest, racc and test-unit keep their executables there.
+!/Src/StdLib/ruby/gems/*/gems/*/bin/
 /Stage
 /Package
 

@@ -12,12 +12,28 @@ module IronRuby
   module GemCompat
     @patches = Hash.new { |h, k| h[k] = [] }
     @applied = {}
+    @refused = {}
 
     class << self
       # Run +block+ after the feature whose path ends in +suffix+ is required.
       def on_require(suffix, &block)
         @patches[suffix] << block
         self
+      end
+
+      # Make `require feature` raise LoadError, for a library that cannot run
+      # here and fails in a way its callers do not expect.  A LoadError is what
+      # a library that only *might* be present is guarded with.
+      def refuse(feature, reason)
+        @refused[feature] = reason
+        self
+      end
+
+      # Called by the require hook before it loads anything.
+      def check_refused(feature)
+        return if @refused.empty? || !feature.is_a?(::String)
+        reason = @refused[feature]
+        raise ::LoadError, "cannot load such file -- #{feature} (#{reason})" if reason
       end
 
       # Called by the require hook with the feature as the caller spelled it.
@@ -71,6 +87,7 @@ module Kernel # :nodoc:
   previous_require = instance_method(:require)
 
   define_method(:require) do |feature|
+    ::IronRuby::GemCompat.check_refused(feature)
     loaded = previous_require.bind(self).call(feature)
     ::IronRuby::GemCompat.after_require(feature) if loaded
     loaded
@@ -81,6 +98,7 @@ module Kernel # :nodoc:
   previous_module_require = singleton_class.instance_method(:require)
 
   singleton_class.send(:define_method, :require) do |feature|
+    ::IronRuby::GemCompat.check_refused(feature)
     loaded = previous_module_require.bind(self).call(feature)
     ::IronRuby::GemCompat.after_require(feature) if loaded
     loaded
@@ -111,6 +129,17 @@ IronRuby::GemCompat.on_require("concurrent/collection/map/synchronized_map_backe
     end
   end
 end
+
+# power_assert: Parser#valid_syntax? checks a line with
+# RubyVM::InstructionSequence.compile, and PowerAssert::Parser builds one at
+# load time, so on an engine without RubyVM the require dies with a NameError.
+# test-unit - a CRuby 4.0 bundled gem, shipped here - requires power_assert
+# under `rescue LoadError, SyntaxError` and falls back to plain assertions, so
+# the NameError escapes and takes `require "test/unit"` down with it.
+# power_assert itself raises LoadError on an engine whose TracePoint it cannot
+# use; IronRuby's TracePoint passes that check, and RubyVM is the part that is
+# missing.  Faking RubyVM would mislead everything else that tests for it.
+IronRuby::GemCompat.refuse("power_assert", "power_assert needs RubyVM::InstructionSequence, which IronRuby does not have")
 
 # Bundler: a library IronRuby implements itself - bigdecimal, json, psych,
 # sqlite3, nokogiri, cgi, ... - has exactly one version here, the one the
@@ -172,5 +201,40 @@ IronRuby::GemCompat.on_require("bundler") do
       end
     end
     ::Bundler::Source::Rubygems.prepend(native_gems)
+  end
+
+  # `bundle exec rake`: Bundler looks the command up on PATH, with the bundle's
+  # own bin directory in front.  On CRuby a bundled gem's binstub is in
+  # RbConfig's bindir, which is on PATH; here it is in Src/StdLib/bin, which
+  # ir.sh and ir.cmd put on RUBYPATH instead - putting it on PATH would hand
+  # IronRuby's `gem` and `bundle` to every CRuby a child process starts.  So
+  # when the bundle's bin directory does not have the command, look in RUBYPATH
+  # before PATH, which is the order `ir -S` uses.  Without this the command
+  # was either missing, or - on a machine with CRuby - the host's binstub,
+  # which Bundler execs, so `bundle exec rake` silently ran CRuby.
+  if ::Bundler.respond_to?(:which) && !::Bundler.respond_to?(:ironruby_rubypath_which)
+    rubypath_which = Module.new do
+      def ironruby_rubypath_which(executable) # :nodoc:
+        return nil if executable.to_s.empty? || executable.to_s.include?("/")
+        (ENV["RUBYPATH"] || "").split(File::PATH_SEPARATOR).each do |dir|
+          next if dir.empty?
+          found = find_executable(File.expand_path(executable, dir))
+          return found if found
+        end
+        nil
+      end
+
+      def which(executable)
+        found = super
+        bundle_bin = begin
+          File.join(::Bundler.bundle_path.to_s, "bin")
+        rescue ::StandardError
+          nil
+        end
+        return found if found && bundle_bin && File.dirname(found) == bundle_bin
+        ironruby_rubypath_which(executable) || found
+      end
+    end
+    ::Bundler.singleton_class.prepend(rubypath_which)
   end
 end
