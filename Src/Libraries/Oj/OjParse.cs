@@ -1090,7 +1090,11 @@ namespace IronRuby.StandardLibrary.Oj {
             }
         }
 
-        /// <summary>oj_parse2.</summary>
+        /// <summary>
+        /// oj_parse2.  The whole document is one call, so it is compiled optimized up front
+        /// rather than left to tiered compilation's on-stack replacement.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveOptimization)]
         internal static void Parse2(ParseInfo/*!*/ pi) {
             bool first = true;
             int start = 0;

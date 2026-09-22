@@ -1328,6 +1328,7 @@ namespace IronRuby.StandardLibrary.MessagePack {
                 }
             }
 
+            [MethodImpl(MethodImplOptions.AggressiveOptimization)]
             internal void WriteArrayValue(RubyArray/*!*/ v) {
                 long len = v.Count;
                 WriteArrayHeaderValue((uint)len);
@@ -2159,7 +2160,8 @@ namespace IronRuby.StandardLibrary.MessagePack {
                 return 0;
             }
 
-            /// <summary>msgpack_unpacker_read.</summary>
+            /// <summary>msgpack_unpacker_read.  One call reads a whole document, so it is compiled optimized up front.</summary>
+            [MethodImpl(MethodImplOptions.AggressiveOptimization)]
             internal int ReadObject(int targetStackDepth) {
                 bool stackAllocated = _stack == null;
                 if (stackAllocated) {
