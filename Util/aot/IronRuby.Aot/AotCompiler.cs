@@ -1,0 +1,448 @@
+// Ruby -> a saved .NET assembly whose IL is the compiled Ruby.
+//
+//   IronRuby.Aot compile -o out/app.dll main.rb [lib.rb ...] [--prelude]
+//
+// 1. Each file is parsed and transformed to IronRuby's DLR expression tree, exactly as `ir`
+//    would; every `def' body (which IronRuby otherwise compiles lazily from the AST at the first
+//    call) is transformed too, with its declaring scope and module as lambda parameters.
+// 2. A rewriter removes what a saved assembly cannot hold: every live object the tree embeds
+//    becomes a static field initialized at load time from an expression that re-creates it, and
+//    every dynamic call site becomes a static CallSite<T> field whose binder is re-created.
+// 3. The ported System.Core LambdaCompiler (ExpressionCompiler/) compiles the rewritten trees
+//    into static methods of a PersistedAssemblyBuilder type, which is saved with an entry point.
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Linq.Expressions;
+using System.Reflection;
+using System.Reflection.Emit;
+using System.Reflection.Metadata;
+using System.Reflection.Metadata.Ecma335;
+using System.Reflection.PortableExecutable;
+using System.Runtime.CompilerServices;
+using IronRuby.Aot.Runtime;
+using IronRuby.Builtins;
+using IronRuby.Compiler;
+using IronRuby.Compiler.Ast;
+using Expression = System.Linq.Expressions.Expression;
+using MethodDefinition = IronRuby.Compiler.Ast.MethodDefinition;
+using ModuleDefinition = IronRuby.Compiler.Ast.ModuleDefinition;
+using LocalVariable = IronRuby.Compiler.Ast.LocalVariable;
+using ExpressionCompiler = IronRuby.Aot.Compiler.ExpressionCompiler;
+using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
+using Microsoft.Scripting;
+using Microsoft.Scripting.Runtime;
+
+namespace IronRuby.Aot {
+    internal sealed class AotCompiler {
+        private readonly RubyContext _context;
+        private readonly PersistedAssemblyBuilder _assembly;
+        private readonly TypeBuilder _type;
+        private readonly List<KeyValuePair<FieldBuilder, Expression>> _constants = new();
+        private readonly Dictionary<object, Expression> _constantFields = new(ReferenceEqualityComparer.Instance);
+        private readonly Dictionary<FieldInfo, bool> _siteFieldsUnused = new();
+        private readonly Dictionary<string, string> _frameOwners = new();
+        private Dictionary<object, FieldInfo> _wellKnownStatics;
+        private int _fieldCounter;
+        public readonly Dictionary<string, int> Stats = new();
+
+        public AotCompiler(RubyContext context, string assemblyName) {
+            _context = context;
+            _assembly = new PersistedAssemblyBuilder(new AssemblyName(assemblyName), typeof(object).Assembly);
+            var module = _assembly.DefineDynamicModule(assemblyName);
+            _type = module.DefineType("RubyProgram", TypeAttributes.Public | TypeAttributes.Class | TypeAttributes.Abstract | TypeAttributes.Sealed);
+        }
+
+        private void Count(string what, int n = 1) {
+            Stats.TryGetValue(what, out int c);
+            Stats[what] = c + n;
+        }
+
+        #region Driver
+
+        public void Compile(string mainFile, IList<string> files, string outputPath) {
+            var paths = files.Select(Path.GetFullPath).ToArray();
+            for (int i = 0; i < paths.Length; i++) {
+                var sw = System.Diagnostics.Stopwatch.StartNew();
+                var unit = _context.CreateFileUnit(paths[i]);
+                var options = new RubyCompilerOptions(_context.RubyOptions) { FactoryKind = TopScopeFactoryKind.File };
+                var ast = IronRuby.Prism.PrismAstBridge.Parse(unit, options, ErrorSink.Default);
+                if (ast == null) throw new InvalidOperationException("syntax error in " + paths[i]);
+                new FrameLabelWalker(_frameOwners).Walk(ast);
+                var lambda = _context.TransformTree<Func<RubyScope, object, object>>(ast, unit, options);
+
+                var rewritten = (LambdaExpression)Rewrite(lambda);
+                rewritten = Expression.Lambda<Func<RubyScope, object, object>>(rewritten.Body, "__file" + i, rewritten.Parameters);
+                var method = _type.DefineMethod("__file" + i, MethodAttributes.Public | MethodAttributes.Static);
+                ExpressionCompiler.CompileToMethod(rewritten, method);
+                Console.Error.WriteLine($"compiled {paths[i]} in {sw.ElapsedMilliseconds} ms");
+                if (Environment.GetEnvironmentVariable("IR_AOT_CHECK_BRANCHES") == "1") CheckBranches();
+            }
+
+            // load-time initialization of the constants, in chunks to keep methods a sane size
+            const int ChunkSize = 200;
+            int chunks = 0;
+            for (int start = 0; start < _constants.Count; start += ChunkSize, chunks++) {
+                var assigns = _constants.Skip(start).Take(ChunkSize)
+                    .Select(kv => (Expression)Expression.Assign(Expression.Field(null, kv.Key), kv.Value)).ToList();
+                assigns.Add(Expression.Empty());
+                var init = Expression.Lambda<Action>(Expression.Block(assigns), "__init" + chunks, null);
+                ExpressionCompiler.CompileToMethod(init, _type.DefineMethod("__init" + chunks, MethodAttributes.Public | MethodAttributes.Static));
+            }
+
+            // Main(string[] args) => AotRuntime.Main(typeof(RubyProgram), args)
+            var main = _type.DefineMethod("Main", MethodAttributes.Public | MethodAttributes.Static, typeof(int), new[] { typeof(string[]) });
+            var il = main.GetILGenerator();
+            il.Emit(OpCodes.Ldtoken, _type);
+            il.Emit(OpCodes.Call, typeof(Type).GetMethod("GetTypeFromHandle"));
+            il.Emit(OpCodes.Ldarg_0);
+            il.Emit(OpCodes.Call, typeof(AotRuntime).GetMethod("Main"));
+            il.Emit(OpCodes.Ret);
+
+            _type.SetCustomAttribute(new CustomAttributeBuilder(
+                typeof(AotProgramAttribute).GetConstructors()[0],
+                new object[] { Path.GetFullPath(mainFile), paths, chunks, SearchPaths }));
+            _type.CreateType();
+
+            Count("constant fields", _constants.Count);
+            Count("init chunks", chunks);
+
+            var metadata = _assembly.GenerateMetadata(out BlobBuilder ilStream, out BlobBuilder fieldData);
+            var peBuilder = new ManagedPEBuilder(
+                header: PEHeaderBuilder.CreateExecutableHeader(),
+                metadataRootBuilder: new MetadataRootBuilder(metadata),
+                ilStream: ilStream,
+                mappedFieldData: fieldData,
+                entryPoint: MetadataTokens.MethodDefinitionHandle(main.MetadataToken));
+            var blob = new BlobBuilder();
+            peBuilder.Serialize(blob);
+            using (var fs = File.Create(outputPath)) {
+                blob.WriteContentTo(fs);
+            }
+        }
+
+        // Debugging aid: the branch fixups PersistedAssemblyBuilder does at save time need every
+        // method's branches in increasing operand order.
+        private static void CheckBranches() {
+            foreach (var mb in IronRuby.Aot.Compiler.LambdaCompiler.CreatedMethods) {
+                var il = mb.GetILGenerator();
+                var cf = il.GetType().GetField("_cfBuilder", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(il);
+                var branches = (System.Collections.IList)cf.GetType().GetField("_branches", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(cf);
+                int last = -1;
+                foreach (var b in branches) {
+                    int off = (int)b.GetType().GetField("OperandOffset", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(b);
+                    object op = b.GetType().GetField("OpCode", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(b);
+                    if (off <= last) {
+                        Console.Error.WriteLine($"BAD BRANCH ORDER in {mb.Name}: operand at {off} after {last} ({op})");
+                        break;
+                    }
+                    last = off;
+                }
+            }
+            IronRuby.Aot.Compiler.LambdaCompiler.CreatedMethods.Clear();
+        }
+
+        #endregion
+
+        #region Rewriting
+
+        private Expression Rewrite(Expression node) => new Rewriter(this).Visit(node);
+
+        private sealed class Rewriter : DynamicExpressionVisitor {
+            private readonly AotCompiler _c;
+            public Rewriter(AotCompiler c) { _c = c; }
+
+            protected override Expression VisitExtension(Expression node) {
+                if (!node.CanReduce) {
+                    throw new NotSupportedException("irreducible extension node " + node.GetType());
+                }
+                return Visit(node.Reduce());
+            }
+
+            protected override Expression VisitConstant(ConstantExpression node) {
+                if (Census.IsLiteral(node.Value, node.Type)) {
+                    return node;
+                }
+                var field = _c.ConstantField(node.Value, node.Type);
+                return field.Type == node.Type ? field : Expression.Convert(field, node.Type);
+            }
+
+            protected override Expression VisitDynamic(DynamicExpression node) {
+                var args = Visit(node.Arguments);
+                var site = _c.SiteField(node.DelegateType, node.Binder);
+                var invokeArgs = new List<Expression> { site };
+                invokeArgs.AddRange(args);
+                return Expression.Invoke(Expression.Field(site, "Target"), invokeArgs);
+            }
+        }
+
+        private Expression NewField(Type type, Expression init, string hint) {
+            var field = _type.DefineField("k" + (_fieldCounter++) + "_" + hint, type, FieldAttributes.Public | FieldAttributes.Static);
+            _constants.Add(new KeyValuePair<FieldBuilder, Expression>(field, init));
+            return Expression.Field(null, field);
+        }
+
+        private readonly Dictionary<Type, Type> _persistedDelegates = new();
+        public readonly List<string> ExtraAssemblies = new();
+        public string OutputDirectory;
+        public string[] SearchPaths;
+
+        /// <summary>
+        /// The DLR makes delegate types for call sites with more arguments than Func has in an
+        /// in-memory assembly, which a saved assembly cannot reference. Each is re-made in a small
+        /// saved assembly of its own, loaded back right away so the rest of the compilation can use
+        /// it as a real type.
+        /// </summary>
+        private Type PersistDelegateType(Type inMemory) {
+            if (_persistedDelegates.TryGetValue(inMemory, out var result)) return result;
+            var invoke = inMemory.GetMethod("Invoke");
+            string name = _type.Assembly.GetName().Name + ".Delegate" + _persistedDelegates.Count;
+            var ab = new PersistedAssemblyBuilder(new AssemblyName(name), typeof(object).Assembly);
+            var tb = ab.DefineDynamicModule(name).DefineType("D", TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.AutoClass, typeof(MulticastDelegate));
+            tb.DefineConstructor(MethodAttributes.RTSpecialName | MethodAttributes.HideBySig | MethodAttributes.Public,
+                CallingConventions.Standard, new[] { typeof(object), typeof(IntPtr) }).SetImplementationFlags(MethodImplAttributes.Runtime | MethodImplAttributes.Managed);
+            tb.DefineMethod("Invoke", MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Virtual,
+                invoke.ReturnType, invoke.GetParameters().Select(p => p.ParameterType).ToArray()).SetImplementationFlags(MethodImplAttributes.Runtime | MethodImplAttributes.Managed);
+            tb.CreateType();
+            string path = Path.Combine(OutputDirectory, name + ".dll");
+            ab.Save(path);
+            result = Assembly.LoadFrom(path).GetType("D");
+            ExtraAssemblies.Add(path);
+            return _persistedDelegates[inMemory] = result;
+        }
+
+        private Expression ContextExpression => Expression.Property(null, typeof(AotRuntime).GetProperty("Context"));
+
+        /// <summary>A static CallSite field for a dynamic site: `CallSite<T>.Create(binder)` at load time.</summary>
+        private Expression SiteField(Type delegateType, CallSiteBinder binder) {
+            if (delegateType.Assembly.IsDynamic) {
+                delegateType = PersistDelegateType(delegateType);
+                Count("call sites needing a delegate type of their own (> 16 arguments)");
+            }
+            Count("call sites");
+            var siteType = typeof(CallSite<>).MakeGenericType(delegateType);
+            var init = Expression.Call(siteType.GetMethod("Create"), BinderExpression(binder));
+            return NewField(siteType, init, "site");
+        }
+
+        /// <summary>
+        /// The binder, bound to the runtime the program runs in. IronRuby's binders describe
+        /// themselves as `X.MakeShared(args)` - a binder usable from any runtime, which pays for
+        /// cross-runtime checks in every rule - so that is turned into `X.Make(context, args)`.
+        /// </summary>
+        private Expression BinderExpression(CallSiteBinder binder) {
+            if (binder is not IExpressionSerializable ser) {
+                throw new NotSupportedException("binder " + binder.GetType() + " cannot describe itself as an expression");
+            }
+            var expr = ser.CreateExpression();
+            if (expr is MethodCallExpression call && call.Method.Name == "MakeShared") {
+                var types = new[] { typeof(RubyContext) }.Concat(call.Method.GetParameters().Select(p => p.ParameterType)).ToArray();
+                var make = call.Method.DeclaringType.GetMethod("Make", BindingFlags.Public | BindingFlags.Static, null, types, null);
+                if (make != null) {
+                    Count("binders bound to the runtime");
+                    expr = Expression.Call(make, new[] { ContextExpression }.Concat(call.Arguments));
+                } else {
+                    Count("binders left shared (no Make(RubyContext, ...))");
+                }
+            }
+            return Rewrite(expr);
+        }
+
+        /// <summary>The static field that holds a live object of the tree, created on first sight.</summary>
+        private Expression ConstantField(object value, Type type) {
+            if (_constantFields.TryGetValue(value, out var existing)) {
+                return existing;
+            }
+            if (value is RubyContext) {
+                Count("constants: RubyContext");
+                return ContextExpression;
+            }
+            if (WellKnownStatics.TryGetValue(value, out var staticField)) {
+                Count("constants: well-known static " + staticField.DeclaringType.Name + "." + staticField.Name);
+                return _constantFields[value] = Expression.Field(null, staticField);
+            }
+            Expression init = Serialize(value, out string hint);
+            Count("constants: " + (hint.StartsWith("def_") ? "def (method body)" : hint));
+            var fieldType = type.IsVisible ? type : value.GetType();
+            if (!fieldType.IsVisible) fieldType = typeof(object);
+            var field = NewField(fieldType, init.Type == fieldType ? init : Expression.Convert(init, fieldType), hint);
+            _constantFields[value] = field;
+            return field;
+        }
+
+        private Dictionary<object, FieldInfo> WellKnownStatics {
+            get {
+                if (_wellKnownStatics == null) {
+                    _wellKnownStatics = new Dictionary<object, FieldInfo>(ReferenceEqualityComparer.Instance);
+                    foreach (var t in typeof(RubyContext).Assembly.GetExportedTypes()) {
+                        if (t.ContainsGenericParameters) continue;
+                        foreach (var f in t.GetFields(BindingFlags.Public | BindingFlags.Static)) {
+                            if (!f.IsInitOnly || f.FieldType.IsValueType) continue;
+                            try {
+                                object v = f.GetValue(null);
+                                if (v != null && !(v is string) && !_wellKnownStatics.ContainsKey(v)) _wellKnownStatics[v] = f;
+                            } catch (Exception) { }
+                        }
+                    }
+                }
+                return _wellKnownStatics;
+            }
+        }
+
+        private static readonly FieldInfo _dispatcherAttributes = typeof(BlockDispatcher).GetField("_attributesAndArity", BindingFlags.NonPublic | BindingFlags.Instance);
+
+        /// <summary>An expression that re-creates <paramref name="value"/> at load time.</summary>
+        private Expression Serialize(object value, out string hint) {
+            switch (value) {
+                case CallSite site:
+                    hint = "site";
+                    return Expression.Call(site.GetType().GetMethod("Create"), BinderExpression(site.Binder));
+
+                case RubyMethodBody body:
+                    hint = "def_" + Sanitize(body.Name);
+                    return SerializeMethodBody(body);
+
+                case BlockDispatcher dispatcher: {
+                    hint = "block";
+                    int postCount = 0;
+                    var postField = dispatcher.GetType().GetField("_postCount", BindingFlags.NonPublic | BindingFlags.Instance);
+                    if (postField != null) postCount = (int)postField.GetValue(dispatcher);
+                    int attributes = (int)(BlockSignatureAttributes)_dispatcherAttributes.GetValue(dispatcher);
+                    return Expression.Call(typeof(AotRuntime).GetMethod("CreateBlockDispatcher"),
+                        Expression.Constant(dispatcher.ParameterCount), Expression.Constant(postCount), Expression.Constant(attributes),
+                        Expression.Constant(dispatcher.SourcePath, typeof(string)), Expression.Constant(dispatcher.SourceLine),
+                        SerializeSignature(dispatcher.ParameterSignature));
+                }
+
+                case RubySymbol symbol:
+                    hint = "sym";
+                    return Expression.Call(typeof(AotRuntime).GetMethod("Symbol"),
+                        ByteArray(symbol.String.ToByteArray()), ConstantField(symbol.Encoding, typeof(RubyEncoding)));
+
+                case string[] strings:
+                    hint = "strings";
+                    return Expression.NewArrayInit(typeof(string), strings.Select(s => Expression.Constant(s, typeof(string))));
+
+                case byte[] bytes:
+                    hint = "bytes";
+                    return ByteArray(bytes);
+
+                case ConstantSiteCache:
+                case IsDefinedConstantSiteCache:
+                    hint = "constcache";
+                    return Expression.New(value.GetType());
+
+                case BinaryOpStorage:
+                    hint = "opstorage";
+                    return Expression.New(typeof(BinaryOpStorage).GetConstructor(new[] { typeof(RubyContext) }), ContextExpression);
+
+                case IronRuby.Builtins.Range range when range.Begin is int && range.End is int:
+                    hint = "range";
+                    return Expression.New(typeof(IronRuby.Builtins.Range).GetConstructor(new[] { typeof(int), typeof(int), typeof(bool) }),
+                        Expression.Constant(range.Begin), Expression.Constant(range.End), Expression.Constant(range.ExcludeEnd));
+
+                case IStrongBox box when value.GetType().IsGenericType && value.GetType().GetGenericTypeDefinition() == typeof(StrongBox<>):
+                    if (box.Value != null) throw new NotSupportedException("StrongBox holding " + box.Value.GetType());
+                    hint = "cache";
+                    return Expression.New(value.GetType());
+
+                case IExpressionSerializable ser:
+                    hint = value.GetType().Name;
+                    return Rewrite(ser.CreateExpression());
+            }
+            Count("UNSUPPORTED constant " + value.GetType().FullName);
+            throw new NotSupportedException("cannot re-create a " + value.GetType().FullName + " at load time");
+        }
+
+        private static Expression ByteArray(byte[] bytes) =>
+            Expression.NewArrayInit(typeof(byte), bytes.Select(b => Expression.Constant(b)));
+
+        private static string Sanitize(string s) => new string(s.Select(ch => char.IsLetterOrDigit(ch) ? ch : '_').ToArray());
+
+        private static Expression Strings(IEnumerable<string> strings) =>
+            strings == null ? (Expression)Expression.Constant(null, typeof(string[]))
+                : Expression.NewArrayInit(typeof(string), strings.Select(s => Expression.Constant(s, typeof(string))));
+
+        private static readonly Func<RubyParameterSignature, object>[] _sigFields = null;
+
+        private static T SigField<T>(RubyParameterSignature sig, string name) =>
+            (T)typeof(RubyParameterSignature).GetField(name, BindingFlags.NonPublic | BindingFlags.Instance).GetValue(sig);
+
+        private Expression SerializeSignature(RubyParameterSignature sig) {
+            if (sig == null) return Expression.Constant(null, typeof(RubyParameterSignature));
+            var ps = SigField<RubyParameterSignature.Parameter[]>(sig, "_parameters");
+            return Expression.Call(typeof(AotRuntime).GetMethod("Signature"),
+                Strings(ps.Select(p => p.Kind)), Strings(ps.Select(p => p.Name)),
+                Expression.Constant(SigField<int>(sig, "_leadingCount")), Expression.Constant(SigField<int>(sig, "_optionalCount")),
+                Expression.Constant(SigField<int>(sig, "_postCount")), Expression.Constant(SigField<bool>(sig, "_hasRest")),
+                Expression.Constant(SigField<int>(sig, "_requiredKeywordCount")), Expression.Constant(SigField<bool>(sig, "_hasKeywords")),
+                Expression.Constant(SigField<bool>(sig, "_hasKeywordRest")), Strings(sig.ImplicitParameterNames));
+        }
+
+        /// <summary>
+        /// A `def': the header (what the runtime asks of the method's AST) plus a factory lambda
+        /// (declaringScope, declaringModule) => body delegate, compiled here instead of at the first call.
+        /// </summary>
+        private Expression SerializeMethodBody(RubyMethodBody body) {
+            var ast = body.Ast;
+            var ps = ast.Parameters;
+            string label;
+            if (!_frameOwners.TryGetValue(LocationKey(ast), out label)) label = ast.Name;
+
+            var gen = new AstGenerator(_context, new RubyCompilerOptions(), body.Document, AotHost.GetEncoding(body), false);
+            var scopeParam = Expression.Parameter(typeof(RubyScope), "#declaringScope");
+            var moduleParam = Expression.Parameter(typeof(RubyModule), "#declaringModule");
+            var bodyLambda = ast.TransformBody(gen, scopeParam, moduleParam, label, null);
+            var factory = Expression.Lambda<Func<RubyScope, RubyModule, Delegate>>(
+                Expression.Convert(Rewrite(bodyLambda), typeof(Delegate)), "def " + label, new[] { scopeParam, moduleParam });
+            Count("method bodies compiled ahead of time");
+
+            var loc = ast.Location;
+            int[] location = { loc.Start.Index, loc.Start.Line, loc.Start.Column, loc.End.Index, loc.End.Line, loc.End.Column };
+            var header = Expression.Call(typeof(AotRuntime).GetMethod("MethodHeader"),
+                Expression.Constant(ast.Name), Expression.Constant(ast.Target != null), Expression.Constant(ast.UsesBlock),
+                Expression.NewArrayInit(typeof(int), location.Select(i => Expression.Constant(i))),
+                Strings(ps.Mandatory.Select(m => ((LocalVariable)m).Name)), Expression.Constant(ps.LeadingMandatoryCount),
+                Strings(ps.Optional.Select(o => ((LocalVariable)o.Left).Name)),
+                Expression.Constant(ps.Unsplat != null ? ((LocalVariable)ps.Unsplat).Name : null, typeof(string)),
+                Expression.Constant(ps.Block?.Name, typeof(string)),
+                SerializeSignature(ps.Signature));
+            return Expression.Call(typeof(AotRuntime).GetMethod("CreateMethodBody"),
+                header, Expression.Constant(body.Document?.FileName, typeof(string)),
+                ConstantField(AotHost.GetEncoding(body), typeof(RubyEncoding)), factory);
+        }
+
+        internal static string LocationKey(MethodDefinition def) => def.Location.Start.Index + ":" + def.Location.End.Index + ":" + def.Name;
+
+        #endregion
+
+        /// <summary>
+        /// Frame labels ("Counter#bump", "Object#fib") that the runtime works out from the
+        /// declaring module when the `def' runs; here they come from the lexical nesting.
+        /// </summary>
+        private sealed class FrameLabelWalker : Walker {
+            private readonly Dictionary<string, string> _owners;
+            private readonly Stack<string> _modules = new();
+            public FrameLabelWalker(Dictionary<string, string> owners) { _owners = owners; }
+
+            public override bool Enter(ClassDefinition node) { _modules.Push(node.QualifiedName.Name); return true; }
+            public override void Exit(ClassDefinition node) { _modules.Pop(); }
+            public override bool Enter(ModuleDefinition node) { _modules.Push(node.QualifiedName.Name); return true; }
+            public override void Exit(ModuleDefinition node) { _modules.Pop(); }
+            public override bool Enter(SingletonDefinition node) { _modules.Push(null); return true; }
+            public override void Exit(SingletonDefinition node) { _modules.Pop(); }
+
+            public override bool Enter(MethodDefinition node) {
+                string owner = _modules.Count == 0 ? "Object" : string.Join("::", _modules.Reverse().Where(m => m != null));
+                bool singleton = node.Target != null || (_modules.Count > 0 && _modules.Peek() == null);
+                string label = singleton
+                    ? (node.Target is SelfReference && owner.Length > 0 ? owner + "." + node.Name : node.Name)
+                    : (owner.Length > 0 ? owner + "#" + node.Name : node.Name);
+                _owners[LocationKey(node)] = label;
+                return true;
+            }
+        }
+    }
+}

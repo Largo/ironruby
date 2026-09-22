@@ -201,7 +201,7 @@ namespace IronRuby.Aot.Compiler {
                 }
                 _ilg.Emit(OpCodes.Castclass, b.Type);
             }
-            _ilg.Emit(OpCodes.Br_S, labEnd);
+            _ilg.Emit(OpCodes.Br, labEnd);
             _ilg.MarkLabel(labCast);
             if (!TypeUtils.AreEquivalent(b.Left.Type, b.Type)) {
                 Debug.Assert(!b.Left.Type.IsValueType);
@@ -239,23 +239,23 @@ namespace IronRuby.Aot.Compiler {
             _ilg.Emit(OpCodes.Stloc, locRight);
             _ilg.Emit(OpCodes.Ldloca, locRight);
             _ilg.EmitHasValue(type);
-            _ilg.Emit(OpCodes.Brfalse_S, labReturnNull);
+            _ilg.Emit(OpCodes.Brfalse, labReturnNull);
             _ilg.Emit(OpCodes.Ldloca, locRight);
             _ilg.EmitGetValueOrDefault(type);
             _ilg.Emit(OpCodes.Ldc_I4_0);
             _ilg.Emit(OpCodes.Ceq);
-            _ilg.Emit(OpCodes.Brtrue_S, labReturnFalse);
+            _ilg.Emit(OpCodes.Brtrue, labReturnFalse);
             // check left for null again
             _ilg.Emit(OpCodes.Ldloca, locLeft);
             _ilg.EmitHasValue(type);
             _ilg.Emit(OpCodes.Brfalse, labReturnNull);
             // return true
             _ilg.Emit(OpCodes.Ldc_I4_1);
-            _ilg.Emit(OpCodes.Br_S, labReturnValue);
+            _ilg.Emit(OpCodes.Br, labReturnValue);
             // return false
             _ilg.MarkLabel(labReturnFalse);
             _ilg.Emit(OpCodes.Ldc_I4_0);
-            _ilg.Emit(OpCodes.Br_S, labReturnValue);
+            _ilg.Emit(OpCodes.Br, labReturnValue);
             _ilg.MarkLabel(labReturnValue);
             ConstructorInfo ci = type.GetConstructor(new Type[] { typeof(bool) });
             _ilg.Emit(OpCodes.Newobj, ci);
@@ -355,23 +355,23 @@ namespace IronRuby.Aot.Compiler {
             _ilg.Emit(OpCodes.Stloc, locRight);
             _ilg.Emit(OpCodes.Ldloca, locRight);
             _ilg.EmitHasValue(type);
-            _ilg.Emit(OpCodes.Brfalse_S, labReturnNull);
+            _ilg.Emit(OpCodes.Brfalse, labReturnNull);
             _ilg.Emit(OpCodes.Ldloca, locRight);
             _ilg.EmitGetValueOrDefault(type);
             _ilg.Emit(OpCodes.Ldc_I4_0);
             _ilg.Emit(OpCodes.Ceq);
-            _ilg.Emit(OpCodes.Brfalse_S, labReturnTrue);
+            _ilg.Emit(OpCodes.Brfalse, labReturnTrue);
             // check left for null again
             _ilg.Emit(OpCodes.Ldloca, locLeft);
             _ilg.EmitHasValue(type);
             _ilg.Emit(OpCodes.Brfalse, labReturnNull);
             // return false
             _ilg.Emit(OpCodes.Ldc_I4_0);
-            _ilg.Emit(OpCodes.Br_S, labReturnValue);
+            _ilg.Emit(OpCodes.Br, labReturnValue);
             // return true
             _ilg.MarkLabel(labReturnTrue);
             _ilg.Emit(OpCodes.Ldc_I4_1);
-            _ilg.Emit(OpCodes.Br_S, labReturnValue);
+            _ilg.Emit(OpCodes.Br, labReturnValue);
             _ilg.MarkLabel(labReturnValue);
             ConstructorInfo ci = type.GetConstructor(new Type[] { typeof(bool) });
             _ilg.Emit(OpCodes.Newobj, ci);

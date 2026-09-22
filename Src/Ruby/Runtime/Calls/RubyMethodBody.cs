@@ -55,6 +55,17 @@ namespace IronRuby.Runtime.Calls {
             _coverage = coverage;
         }
 
+        // Set for a body compiled ahead of time (Util/aot): builds the delegate for a declaring
+        // scope and module, in place of transforming the AST - which then carries only the
+        // method's header (name, parameters, location), not its body.
+        private readonly Func<RubyScope, RubyModule, Delegate> _precompiled;
+
+        internal RubyMethodBody(MethodDeclaration/*!*/ header, MSA.SymbolDocumentInfo document, RubyEncoding/*!*/ encoding,
+            Func<RubyScope, RubyModule, Delegate>/*!*/ precompiled)
+            : this(header, document, encoding, (LineCoverage)null) {
+            _precompiled = precompiled;
+        }
+
         /// <summary>
         /// Set by Module#ruby2_keywords. It lives on the body rather than on the method info so
         /// that it is shared with every alias of the method, which is what MRI does - marking a
@@ -198,6 +209,10 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private Delegate/*!*/ Compile(RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule) {
+            if (_precompiled != null) {
+                return _precompiled(declaringScope, declaringModule);
+            }
+
             // TODO: remove options
             AstGenerator gen = new AstGenerator(declaringScope.RubyContext, new RubyCompilerOptions(), _document, _encoding, false);
             gen.Coverage = _coverage;

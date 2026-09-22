@@ -775,7 +775,7 @@ namespace IronRuby.Aot.Compiler {
             il.Emit(OpCodes.Ldloca, locFrom);
             il.EmitHasValue(typeFrom);
             labIfNull = il.DefineLabel();
-            il.Emit(OpCodes.Brfalse_S, labIfNull);
+            il.Emit(OpCodes.Brfalse, labIfNull);
             il.Emit(OpCodes.Ldloca, locFrom);
             il.EmitGetValueOrDefault(typeFrom);
             Type nnTypeFrom = TypeUtils.GetNonNullableType(typeFrom);
@@ -786,7 +786,7 @@ namespace IronRuby.Aot.Compiler {
             il.Emit(OpCodes.Newobj, ci);
             il.Emit(OpCodes.Stloc, locTo);
             labEnd = il.DefineLabel();
-            il.Emit(OpCodes.Br_S, labEnd);
+            il.Emit(OpCodes.Br, labEnd);
             // if null then create a default one
             il.MarkLabel(labIfNull);
             il.Emit(OpCodes.Ldloca, locTo);

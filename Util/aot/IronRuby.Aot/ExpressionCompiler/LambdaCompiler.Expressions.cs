@@ -967,7 +967,7 @@ namespace IronRuby.Aot.Compiler {
                             ConstructorInfo ci = resultType.GetConstructor(new Type[] { mc.Type });
                             _ilg.Emit(OpCodes.Newobj, ci);
                         }
-                        _ilg.Emit(OpCodes.Br_S, exit);
+                        _ilg.Emit(OpCodes.Br, exit);
                         _ilg.MarkLabel(exitNull);
                         if (TypeUtils.AreEquivalent(resultType, TypeUtils.GetNullableType(mc.Type))) {
                             if (resultType.IsValueType) {
@@ -1058,11 +1058,11 @@ namespace IronRuby.Aot.Compiler {
                             ConstructorInfo ci = resultType.GetConstructor(new Type[] { mc.Type });
                             _ilg.Emit(OpCodes.Newobj, ci);
                         }
-                        _ilg.Emit(OpCodes.Br_S, exit);
+                        _ilg.Emit(OpCodes.Br, exit);
 
                         _ilg.MarkLabel(exitAllNull);
                         _ilg.EmitBoolean(nodeType == ExpressionType.Equal);
-                        _ilg.Emit(OpCodes.Br_S, exit);
+                        _ilg.Emit(OpCodes.Br, exit);
 
                         _ilg.MarkLabel(exitAnyNull);
                         _ilg.EmitBoolean(nodeType == ExpressionType.NotEqual);

@@ -105,7 +105,10 @@ namespace IronRuby.Aot.Compiler {
         /// <summary>
         /// Creates a lambda compiler that will compile into the provided Methodbuilder
         /// </summary>
+        internal static readonly List<MethodBuilder> CreatedMethods = new List<MethodBuilder>();
+
         private LambdaCompiler(AnalyzedTree tree, LambdaExpression lambda, MethodBuilder method) {
+            CreatedMethods.Add(method);
             _hasClosureArgument = tree.Scopes[lambda].NeedsClosure;
             Type[] paramTypes = GetParameterTypes(lambda);
             if (_hasClosureArgument) {

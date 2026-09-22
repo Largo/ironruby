@@ -112,7 +112,7 @@ namespace IronRuby.Aot.Compiler {
                             // test for null
                             _ilg.Emit(OpCodes.Ldloca, loc);
                             _ilg.EmitHasValue(operandType);
-                            _ilg.Emit(OpCodes.Brfalse_S, labEnd);
+                            _ilg.Emit(OpCodes.Brfalse, labEnd);
 
                             // do op on non-null value
                             _ilg.Emit(OpCodes.Ldloca, loc);
@@ -147,7 +147,7 @@ namespace IronRuby.Aot.Compiler {
                             _ilg.Emit(OpCodes.Stloc, loc);
                             _ilg.Emit(OpCodes.Ldloca, loc);
                             _ilg.EmitHasValue(operandType);
-                            _ilg.Emit(OpCodes.Brfalse_S, labIfNull);
+                            _ilg.Emit(OpCodes.Brfalse, labIfNull);
 
                             // apply operator to non-null value
                             _ilg.Emit(OpCodes.Ldloca, loc);
@@ -159,7 +159,7 @@ namespace IronRuby.Aot.Compiler {
                             ConstructorInfo ci = resultType.GetConstructor(new Type[] { nnOperandType });
                             _ilg.Emit(OpCodes.Newobj, ci);
                             _ilg.Emit(OpCodes.Stloc, loc);
-                            _ilg.Emit(OpCodes.Br_S, labEnd);
+                            _ilg.Emit(OpCodes.Br, labEnd);
 
                             // if null then create a default one
                             _ilg.MarkLabel(labIfNull);

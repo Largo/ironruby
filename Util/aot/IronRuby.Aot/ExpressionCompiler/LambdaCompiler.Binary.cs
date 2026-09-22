@@ -236,10 +236,10 @@ namespace IronRuby.Aot.Compiler {
                         if (TypeUtils.IsUnsigned(leftType)) {
                             _ilg.Emit(OpCodes.Ble_Un_S, labFalse);
                         } else {
-                            _ilg.Emit(OpCodes.Ble_S, labFalse);
+                            _ilg.Emit(OpCodes.Ble, labFalse);
                         }
                         _ilg.Emit(OpCodes.Ldc_I4_0);
-                        _ilg.Emit(OpCodes.Br_S, labEnd);
+                        _ilg.Emit(OpCodes.Br, labEnd);
                         _ilg.MarkLabel(labFalse);
                         _ilg.Emit(OpCodes.Ldc_I4_1);
                         _ilg.MarkLabel(labEnd);
@@ -258,10 +258,10 @@ namespace IronRuby.Aot.Compiler {
                         if (TypeUtils.IsUnsigned(leftType)) {
                             _ilg.Emit(OpCodes.Bge_Un_S, labFalse);
                         } else {
-                            _ilg.Emit(OpCodes.Bge_S, labFalse);
+                            _ilg.Emit(OpCodes.Bge, labFalse);
                         }
                         _ilg.Emit(OpCodes.Ldc_I4_0);
-                        _ilg.Emit(OpCodes.Br_S, labEnd);
+                        _ilg.Emit(OpCodes.Br, labEnd);
                         _ilg.MarkLabel(labFalse);
                         _ilg.Emit(OpCodes.Ldc_I4_1);
                         _ilg.MarkLabel(labEnd);
@@ -397,7 +397,7 @@ namespace IronRuby.Aot.Compiler {
                 _ilg.Emit(OpCodes.Ceq);
                 _ilg.Emit(OpCodes.And);
                 _ilg.Emit(OpCodes.Dup);
-                _ilg.Emit(OpCodes.Brtrue_S, shortCircuit);
+                _ilg.Emit(OpCodes.Brtrue, shortCircuit);
                 _ilg.Emit(OpCodes.Pop);
 
                 // test for either is null -> false
@@ -408,7 +408,7 @@ namespace IronRuby.Aot.Compiler {
                 _ilg.Emit(OpCodes.And);
 
                 _ilg.Emit(OpCodes.Dup);
-                _ilg.Emit(OpCodes.Brfalse_S, shortCircuit);
+                _ilg.Emit(OpCodes.Brfalse, shortCircuit);
                 _ilg.Emit(OpCodes.Pop);
             } else if (op == ExpressionType.NotEqual) {
                 // test for both null -> false
@@ -418,7 +418,7 @@ namespace IronRuby.Aot.Compiler {
                 _ilg.EmitHasValue(rightType);
                 _ilg.Emit(OpCodes.Or);
                 _ilg.Emit(OpCodes.Dup);
-                _ilg.Emit(OpCodes.Brfalse_S, shortCircuit);
+                _ilg.Emit(OpCodes.Brfalse, shortCircuit);
                 _ilg.Emit(OpCodes.Pop);
 
                 // test for either is null -> true
@@ -432,7 +432,7 @@ namespace IronRuby.Aot.Compiler {
                 _ilg.Emit(OpCodes.Ceq);
                 _ilg.Emit(OpCodes.Or);
                 _ilg.Emit(OpCodes.Dup);
-                _ilg.Emit(OpCodes.Brtrue_S, shortCircuit);
+                _ilg.Emit(OpCodes.Brtrue, shortCircuit);
                 _ilg.Emit(OpCodes.Pop);
             } else {
                 // test for either is null -> false
@@ -442,7 +442,7 @@ namespace IronRuby.Aot.Compiler {
                 _ilg.EmitHasValue(rightType);
                 _ilg.Emit(OpCodes.And);
                 _ilg.Emit(OpCodes.Dup);
-                _ilg.Emit(OpCodes.Brfalse_S, shortCircuit);
+                _ilg.Emit(OpCodes.Brfalse, shortCircuit);
                 _ilg.Emit(OpCodes.Pop);
             }
 
@@ -505,12 +505,12 @@ namespace IronRuby.Aot.Compiler {
             if (leftIsNullable) {
                 _ilg.Emit(OpCodes.Ldloca, locLeft);
                 _ilg.EmitHasValue(leftType);
-                _ilg.Emit(OpCodes.Brfalse_S, labIfNull);
+                _ilg.Emit(OpCodes.Brfalse, labIfNull);
             }
             if (rightIsNullable) {
                 _ilg.Emit(OpCodes.Ldloca, locRight);
                 _ilg.EmitHasValue(rightType);
-                _ilg.Emit(OpCodes.Brfalse_S, labIfNull);
+                _ilg.Emit(OpCodes.Brfalse, labIfNull);
             }
             
             // do op on values
@@ -538,7 +538,7 @@ namespace IronRuby.Aot.Compiler {
             ConstructorInfo ci = resultType.GetConstructor(new Type[] { TypeUtils.GetNonNullableType(resultType) });
             _ilg.Emit(OpCodes.Newobj, ci);
             _ilg.Emit(OpCodes.Stloc, locResult);
-            _ilg.Emit(OpCodes.Br_S, labEnd);
+            _ilg.Emit(OpCodes.Br, labEnd);
 
             // if null then create a default one
             _ilg.MarkLabel(labIfNull);
@@ -582,7 +582,7 @@ namespace IronRuby.Aot.Compiler {
             _ilg.MarkLabel(labComputeRight);
             _ilg.Emit(OpCodes.Ldloca, locRight);
             _ilg.EmitHasValue(type);
-            _ilg.Emit(OpCodes.Brfalse_S, labReturnNull);
+            _ilg.Emit(OpCodes.Brfalse, labReturnNull);
             _ilg.Emit(OpCodes.Ldloca, locRight);
 
             //RELEASING locRight
@@ -591,7 +591,7 @@ namespace IronRuby.Aot.Compiler {
             _ilg.EmitGetValueOrDefault(type);
             _ilg.Emit(OpCodes.Ldc_I4_0);
             _ilg.Emit(OpCodes.Ceq);
-            _ilg.Emit(OpCodes.Brtrue_S, labReturnFalse);
+            _ilg.Emit(OpCodes.Brtrue, labReturnFalse);
 
             // check left for null again
             _ilg.Emit(OpCodes.Ldloca, locLeft);
@@ -600,12 +600,12 @@ namespace IronRuby.Aot.Compiler {
 
             // return true
             _ilg.Emit(OpCodes.Ldc_I4_1);
-            _ilg.Emit(OpCodes.Br_S, labReturnValue);
+            _ilg.Emit(OpCodes.Br, labReturnValue);
 
             // return false
             _ilg.MarkLabel(labReturnFalse);
             _ilg.Emit(OpCodes.Ldc_I4_0);
-            _ilg.Emit(OpCodes.Br_S, labReturnValue);
+            _ilg.Emit(OpCodes.Br, labReturnValue);
 
             _ilg.MarkLabel(labReturnValue);
             ConstructorInfo ci = type.GetConstructor(new Type[] { typeof(bool) });
@@ -654,7 +654,7 @@ namespace IronRuby.Aot.Compiler {
             _ilg.MarkLabel(labComputeRight);
             _ilg.Emit(OpCodes.Ldloca, locRight);
             _ilg.EmitHasValue(type);
-            _ilg.Emit(OpCodes.Brfalse_S, labReturnNull);
+            _ilg.Emit(OpCodes.Brfalse, labReturnNull);
             _ilg.Emit(OpCodes.Ldloca, locRight);
 
             //RELEASING locRight
@@ -663,7 +663,7 @@ namespace IronRuby.Aot.Compiler {
             _ilg.EmitGetValueOrDefault(type);
             _ilg.Emit(OpCodes.Ldc_I4_0);
             _ilg.Emit(OpCodes.Ceq);
-            _ilg.Emit(OpCodes.Brfalse_S, labReturnTrue);
+            _ilg.Emit(OpCodes.Brfalse, labReturnTrue);
 
             // check left for null again
             _ilg.Emit(OpCodes.Ldloca, locLeft);
@@ -672,12 +672,12 @@ namespace IronRuby.Aot.Compiler {
 
             // return false
             _ilg.Emit(OpCodes.Ldc_I4_0);
-            _ilg.Emit(OpCodes.Br_S, labReturnValue);
+            _ilg.Emit(OpCodes.Br, labReturnValue);
 
             // return true
             _ilg.MarkLabel(labReturnTrue);
             _ilg.Emit(OpCodes.Ldc_I4_1);
-            _ilg.Emit(OpCodes.Br_S, labReturnValue);
+            _ilg.Emit(OpCodes.Br, labReturnValue);
 
             _ilg.MarkLabel(labReturnValue);
             ConstructorInfo ci = type.GetConstructor(new Type[] { typeof(bool) });
