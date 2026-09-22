@@ -520,6 +520,13 @@ namespace IronRuby.StandardLibrary.Date {
                 return false;
             }
 
+            // MRI's k_numeric_p: only a Numeric is taken apart through #to_r. A Time has a #to_r
+            // too, and `Date.today + Time.now' is a TypeError there, not a date 56 years out.
+            RubyContext context = toR.Context;
+            if (!context.GetClassOf(value).HasAncestor(context.GetClass(typeof(Numeric)))) {
+                return false;
+            }
+
             object r;
             try {
                 var toRSite = toR.GetCallSite("to_r");
@@ -529,6 +536,18 @@ namespace IronRuby.StandardLibrary.Date {
             }
             if (r == null) {
                 return false;
+            }
+
+            // MRI insists that #to_r answered a Rational before it takes it apart. Asking anything
+            // else for its #numerator is how a Numeric whose #to_r is `self' - test_date_arith's
+            // Rat - recursed through Numeric#numerator until the CLR stack overflowed and took the
+            // process down.
+            if (!(r is int || r is long || r is BigInteger)) {
+                RubyClass cls = context.GetClassOf(r);
+                if (cls.Name != "Rational") {
+                    throw RubyExceptions.CreateTypeError(String.Format(
+                        "wrong argument type {0} (expected Rational)", context.GetClassDisplayName(r)));
+                }
             }
 
             var numSite = num.GetCallSite("numerator");
