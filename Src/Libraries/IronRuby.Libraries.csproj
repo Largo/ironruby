@@ -14,6 +14,12 @@
     <Compile Remove="Initializers.Generated.cs" />
   </ItemGroup>
   <ItemGroup>
+    <!-- SQLite3 library (Src/Libraries/Sqlite3): Microsoft.Data.Sqlite brings
+         SQLitePCLRaw, whose bundle_e_sqlite3 carries a native SQLite for
+         linux-x64/win-x64 under runtimes/<rid>/native. -->
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.10" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\Ruby\Ruby.csproj" />
     <ProjectReference Include="..\Prism\IronRuby.Prism.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />

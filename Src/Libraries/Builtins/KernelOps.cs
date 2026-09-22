@@ -928,19 +928,19 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region nil?, __id__, id, object_id
+        #region nil?, __id__, object_id
 
         // thread-safe:
         [RubyMethod("nil?")]
         public static bool IsNil(object self) {
             return self == null;
         }
-        
-        [RubyMethod("id")]
-        public static object GetId(RubyContext/*!*/ context, object self) {
-            context.ReportWarning("Object#id will be deprecated; use Object#object_id");
-            return GetObjectId(context, self);
-        }
+
+        // There is no Kernel#id.  Ruby 1.8 had one, deprecated in favour of #object_id,
+        // and 1.9 removed it - so `obj.respond_to?(:id)` has to answer false.  Keeping it
+        // was not merely a stale warning: ActiveRecord's predicate builder asks exactly
+        // that question to decide whether a value is a record to take the primary key of,
+        // and every object answering yes built the wrong SQL.
 
         // #__id__ is defined on BasicObject, where MRI keeps it, not here.
         [RubyMethod("object_id")]
