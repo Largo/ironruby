@@ -141,8 +141,11 @@ loader_cs << <<~CS
 CS
 
 Dir.mkdir(out_dir) unless Dir.exist?(out_dir)
-File.write(File.join(out_dir, "PrismNodes.Generated.cs"), nodes_cs.string)
-File.write(File.join(out_dir, "PrismLoader.Generated.cs"), loader_cs.string)
+# Binary mode: on Windows Ruby a text-mode write would turn every "\n" into
+# "\r\n", so the generated sources would differ byte-for-byte from the ones a
+# Linux run produces. The generator is run in CI on both platforms.
+File.binwrite(File.join(out_dir, "PrismNodes.Generated.cs"), nodes_cs.string)
+File.binwrite(File.join(out_dir, "PrismLoader.Generated.cs"), loader_cs.string)
 puts "generated #{nodes.size} node classes, #{flags.size} flag sets -> #{out_dir}"
 
 # ---- PrismMeta.Generated.cs ----
@@ -176,5 +179,5 @@ meta_cs << <<~CS
       }
   }
 CS
-File.write(File.join(out_dir, "PrismMeta.Generated.cs"), meta_cs.string)
+File.binwrite(File.join(out_dir, "PrismMeta.Generated.cs"), meta_cs.string)
 puts "generated #{config.fetch("tokens").size} token types -> #{out_dir}/PrismMeta.Generated.cs"
