@@ -175,7 +175,10 @@ namespace IronRuby.Runtime.Jit {
             // hands the loop back, so the iteration is re-run: it must not have been observable.
             if (c._canDeopt && !c._pure) { return null; }
             slots = c._slots;
-            canDeopt = c._canDeopt;
+            // the back-edge safe point hands the loop back through the deopt
+            // catch, so the catch is always needed - but it fires at the top of an iteration,
+            // before anything observable, so it does not make an impure body unspecializable.
+            canDeopt = true;
             return body;
         }
 
@@ -650,9 +653,17 @@ namespace IronRuby.Runtime.Jit {
             // at an iteration boundary and the generic copy re-runs the iteration from there.
             MSA.Expression snapshot = (node == _loop) ? EmitSnapshot() : null;
 
+            // The interrupt check (Thread#raise, Thread#kill, a trap handler), after the snapshot and the (pure) test, before the body.
+            // An inner loop of an outlined one deopts to the *outer* iteration's top, which
+            // re-runs part of that iteration: only allowed for a pure body, as for any deopt.
+            if (_loop != null && node != _loop) { _canDeopt = true; }
+            MSA.Expression safePoint = (_loop != null)
+                ? Ast.Call(JitRuntime.M("OsrSafePoint"))
+                : Ast.Call(RubyUtils.SafePointMethod);
+
             var iteration = (snapshot != null)
-                ? Ast.Block(snapshot, Ast.IfThen(Ast.Not(test), Ast.Break(exit)), body)
-                : Ast.Block(Ast.IfThen(Ast.Not(test), Ast.Break(exit)), body);
+                ? Ast.Block(snapshot, Ast.IfThen(Ast.Not(test), Ast.Break(exit)), safePoint, body)
+                : Ast.Block(Ast.IfThen(Ast.Not(test), Ast.Break(exit)), safePoint, body);
 
             return Ast.Block(typeof(object),
                 Ast.Loop(iteration, exit, cont),
