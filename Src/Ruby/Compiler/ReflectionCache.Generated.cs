@@ -76,6 +76,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _ConvertRubySymbolToClrString;
         public static MethodInfo/*!*/ ConvertStringToFloat { get { return _ConvertStringToFloat ?? (_ConvertStringToFloat = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.String, System.Double>(RubyOps.ConvertStringToFloat)); } }
         private static MethodInfo _ConvertStringToFloat;
+        public static MethodInfo/*!*/ ClearKeywordArguments { get { return _ClearKeywordArguments ?? (_ClearKeywordArguments = CallInstruction.CacheFunc<System.Object, System.Object>(RubyOps.ClearKeywordArguments)); } }
+        private static MethodInfo _ClearKeywordArguments;
         public static MethodInfo/*!*/ ConvertSymbolToClrString { get { return _ConvertSymbolToClrString ?? (_ConvertSymbolToClrString = CallInstruction.CacheFunc<IronRuby.Builtins.RubySymbol, System.String>(RubyOps.ConvertSymbolToClrString)); } }
         private static MethodInfo _ConvertSymbolToClrString;
         public static MethodInfo/*!*/ ConvertSymbolToMutableString { get { return _ConvertSymbolToMutableString ?? (_ConvertSymbolToMutableString = CallInstruction.CacheFunc<IronRuby.Builtins.RubySymbol, IronRuby.Builtins.MutableString>(RubyOps.ConvertSymbolToMutableString)); } }

@@ -335,9 +335,13 @@ namespace IronRuby.StandardLibrary.Yaml {
                         break;
 
                     case '>':
-                        if (!IsWhitespace(Peek(1))) {
-                            return FetchPlain();
-                        } else if (FlowLevel == 0) {
+                        // Same rule as '|' above: outside a flow collection this opens a block
+                        // scalar, and ScanBlockScalarIndicators reads whatever header follows.
+                        // Requiring whitespace right after the '>' - as this used to - made every
+                        // folded scalar that carries a chomping or indentation indicator (`>-`,
+                        // `>+`, `>2`) scan as a plain scalar instead, so the header ended up in
+                        // the value: `a: >-` with "one\ntwo" under it loaded as ">- one two".
+                        if (FlowLevel == 0) {
                             return FetchFolded();
                         }
                         break;

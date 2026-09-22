@@ -124,6 +124,18 @@ namespace IronRuby.Runtime.Calls {
         /// takes the hash back off the end, and it can only recognise it while it still says it is
         /// keyword arguments. This is also exactly the shape ruby2_keywords is allowed on.
         /// </summary>
+        /// <summary>
+        /// Whether the method's prologue is interested in a trailing hash that says it is the
+        /// call's keyword arguments - because it declares keyword parameters, or because it
+        /// declares `**nil` and has to refuse them.
+        /// </summary>
+        internal bool TakesOrRefusesKeywords {
+            get {
+                var signature = _body.Ast.Parameters.Signature;
+                return signature != null && (signature.TakesKeywords || signature.RefusesKeywords);
+            }
+        }
+
         internal bool KeepsTrailingHashInRest {
             get {
                 var signature = _body.Ast.Parameters.Signature;
@@ -236,6 +248,19 @@ namespace IronRuby.Runtime.Calls {
                 boxedArguments[restIndex] = Methods.NormalizeRestArgument.OpCall(
                     AstUtils.Convert(boxedArguments[restIndex], typeof(RubyArray)),
                     AstUtils.Constant(_body)
+                );
+            }
+
+            // The same for a method that declares no keyword parameters at all: there the hash a
+            // call site built for `f(a: 1)` is simply a positional argument, and the method is
+            // free to keep it. Unmark it, or the next call that does take keywords would read a
+            // hash it was handed positionally as its keyword arguments and report an arity error
+            // (see PrismAstBridge.KeywordSeparationChecks). `**nil` is not this case: its
+            // prologue takes the hash like any keyword-accepting method, only to reject it.
+            if (!TakesOrRefusesKeywords && argsBuilder.LastArgumentParameterIndex >= 0) {
+                int lastIndex = argsBuilder.LastArgumentParameterIndex;
+                boxedArguments[lastIndex] = Methods.ClearKeywordArguments.OpCall(
+                    AstUtils.Box(boxedArguments[lastIndex])
                 );
             }
 

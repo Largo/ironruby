@@ -1090,18 +1090,18 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region class, type, extend, instance_of?, is_a?, kind_of? (thread-safe)
+        #region class, extend, instance_of?, is_a?, kind_of? (thread-safe)
 
         [RubyMethod("class")]
         public static RubyClass/*!*/ GetClass(RubyContext/*!*/ context, object self) {
             return context.GetClassOf(self);
         }
 
-        [RubyMethod("type")]
-        public static RubyClass/*!*/ GetClassObsolete(RubyContext/*!*/ context, object self) {
-            context.ReportWarning("Object#type will be deprecated; use Object#class");
-            return context.GetClassOf(self);
-        }
+        // Object#type, the 1.8 spelling of #class, is gone since 1.9 and must not be defined:
+        // `obj.respond_to?(:type)` is a live test in real code, and answering it for every object
+        // sends that code down the wrong path.  HexaPDF asks it to tell already-segmented text
+        // items from raw ones (TextLayouter#fit), and with a Kernel#type in the way it skipped
+        // segmentation and laid out nothing - an empty PDF rather than an error.
 
         // thread-safe:
         [RubyMethod("is_a?")]

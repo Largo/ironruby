@@ -448,7 +448,68 @@ module Gem
     end
   end
 
-  class BasicSpecification
+  ##
+  # ... and do not compile one while *installing* a gem either.
+  #
+  # Gem::Installer#build_extensions is a different method from the one above -
+  # it runs as part of `gem install` / `bundle install`, before the gem is ever
+  # activated - and it is the one that runs extconf.rb.  Leaving it alone makes
+  # every Gemfile that mentions a gem with an extension uninstallable, even when
+  # the extension is beside the point: liquid's Gemfile.lock pins bigdecimal
+  # 3.2.2, and bundler would rather abort the whole bundle than install the
+  # .rb files of a gem whose .so will not build.
+  #
+  # Skipping the build installs the gem's Ruby files and nothing else, which is
+  # what is actually usable here - and for a library IronRuby provides itself
+  # (bigdecimal, json, psych, ...) BasicSpecification#ignored? below then routes
+  # `require` to the implementation in Src/Libraries rather than to the .so that
+  # was never built.
+  #
+  # Prepended rather than reopened: rubygems/installer.rb is loaded long after
+  # this file and would overwrite a plain definition.
+
+  class Installer; end
+
+  module IronRubyNoExtensionBuild # :nodoc:
+    def build_extensions
+      return if spec.extensions.empty?
+
+      name = spec.full_name
+      Gem.ironruby_ignored_gems << name unless Gem.ironruby_ignored_gems.include?(name)
+      nil
+    end
+  end
+
+  Installer.prepend(IronRubyNoExtensionBuild)
+
+  class BasicSpecification; end
+
+  module IronRubyProvidedGem # :nodoc:
+    ##
+    # An *installed* gem that is the Ruby half of a C extension IronRuby
+    # implements itself: bigdecimal, json, psych, ...  Its lib/<name>.rb is a
+    # one-line stub that requires <name>.so, so it has nothing to offer here and
+    # everything to break - the complete implementation is in Src/Libraries.
+    #
+    # Decided from the gemspec's own extensions rather than from
+    # missing_extensions?, which is not a reliable answer to this question:
+    # Bundler replaces it (Bundler::StubSpecification#missing_extensions? has an
+    # IronRuby carve-out of its own, so that extension gems stay resolvable),
+    # and under `bundle exec` it reports false for exactly these gems.
+
+    def ironruby_provided_library? # :nodoc:
+      return @ironruby_provided_library unless @ironruby_provided_library.nil?
+
+      @ironruby_provided_library =
+        begin
+          !default_gem? &&
+            Gem.ironruby_default_gem_names.include?(name) &&
+            respond_to?(:extensions) && !extensions.empty?
+        rescue StandardError
+          false
+        end
+    end
+
     ##
     # Upstream marks a gem "ignored" when its extensions are not built for the
     # running Ruby, and Gem::Dependency#matching_specs then rejects it.  On
@@ -460,50 +521,99 @@ module Gem
     # and the ones that do not fail at require time with a plain LoadError for
     # the extension file, which is a better answer than refusing to resolve.
     #
+    # The one case where upstream's rule is still right is a library IronRuby
+    # provides itself: there the default gem must win.
+    #
     # The names are recorded so `gem env` and -w can report them.
 
     def ignored?
-      if @ignored.nil?
-        @ignored = false
-        if missing_extensions?
+      if @ironruby_ignored.nil?
+        @ironruby_ignored = ironruby_provided_library?
+        if @ironruby_ignored || super
           Gem.ironruby_ignored_gems << full_name unless Gem.ironruby_ignored_gems.include?(full_name)
-
-          # One case where upstream's rule is still right: a gem that IronRuby
-          # already *provides*, shipped as a default gem above.  A host CRuby's
-          # bigdecimal-4.0.1 has the same name and the same version as the one
-          # in Src/Libraries, so it sorts ahead of it (an installed gem is
-          # meant to override a default gem) - and then `require "bigdecimal"`
-          # reaches its lib/bigdecimal.rb, which requires bigdecimal.so and
-          # fails.  There is no pure-Ruby fallback to reach in that gem, and
-          # there is a complete implementation right here, so let the default
-          # gem win.
-          @ignored = true if Gem.ironruby_default_gem_names.include?(name)
         end
       end
 
-      @ignored
+      @ironruby_ignored
     end
 
-  end
+    ##
+    # ... and say nothing about it.
+    #
+    # The warning upstream prints from contains_requirable_file? - "Ignoring
+    # bigdecimal-4.0.1 because its extensions are not built.  Try: gem pristine
+    # bigdecimal" - is good advice on CRuby and wrong here twice over: the
+    # extension cannot be built at all, and the library is not missing, it is in
+    # Src/Libraries.  Nothing is being lost, so nothing is worth warning about.
+    # A gem IronRuby does *not* provide still warns, which is the case the
+    # message was written for.
 
-  ##
-  # ... and say nothing about it.
-  #
-  # The warning upstream prints from contains_requirable_file? - "Ignoring
-  # bigdecimal-4.0.1 because its extensions are not built.  Try: gem pristine
-  # bigdecimal" - is good advice on CRuby and wrong here twice over: the
-  # extension cannot be built at all, and the library is not missing, it is in
-  # Src/Libraries.  Nothing is being lost, so nothing is worth warning about.
-  # A gem IronRuby does *not* provide still warns, which is the case the
-  # message was written for.
-
-  module IronRubyProvidedGem # :nodoc:
     def contains_requirable_file?(file)
-      return false if ignored? && Gem.ironruby_default_gem_names.include?(name)
+      return false if ironruby_provided_library?
+
+      super
+    end
+
+    ##
+    # Nor may such a gem put its lib directory on $LOAD_PATH.
+    #
+    # contains_requirable_file? above covers the gem *activation* route, but not
+    # Bundler's: Bundler resolves a Gemfile itself and then unshifts every
+    # selected gem's load paths (Bundler::Runtime#setup -> spec.load_paths,
+    # which is this method).  bigdecimal's lib/bigdecimal.rb is a one-line stub
+    # that requires bigdecimal.so, so a Gemfile.lock pinning bigdecimal 3.2.2 -
+    # liquid's does - would otherwise put that stub ahead of IronRuby's own
+    # implementation and turn `require "bigdecimal"` into a LoadError for a .so
+    # that was never built and never can be.  With no require paths the gem is
+    # installed and resolved but invisible to require, which is exactly right:
+    # what it provides is already here.
+
+    def full_require_paths
+      return [] if ironruby_provided_library?
 
       super
     end
   end
 
   BasicSpecification.prepend(IronRubyProvidedGem)
+
+  ##
+  # A host CRuby's copy of a library IronRuby implements itself is never usable.
+  #
+  # host_ruby_dirs offers a matching CRuby's gem tree read-only, which is right
+  # for pure-Ruby gems.  It also offers that CRuby's *installed* bigdecimal,
+  # json, psych and bundler, though, and an installed gem sorts ahead of a
+  # default gem of the same version - so the host's bigdecimal-4.0.1 shadowed
+  # the one in Src/Libraries, and, worse, the host's bundler shadowed the
+  # bundler shipped here: a Gemfile.lock saying `BUNDLED WITH 4.0.12` made
+  # Bundler::SelfManager switch to the host's 4.0.12, an upstream release with
+  # none of IronRuby's carve-outs, which then dropped every extension gem from
+  # its index and aborted the bundle.
+  #
+  # Those gems have a complete implementation right here, so drop the host's
+  # copies from the index entirely.  Only the host trees are filtered: a gem the
+  # user installed *for IronRuby* over a default one is still an upgrade and
+  # still wins, exactly as on CRuby.
+  #
+  # Defined ahead of rubygems/specification_record.rb (which reopens the class)
+  # and prepended, so the real definition cannot overwrite it.
+
+  class SpecificationRecord; end
+
+  module IronRubyHostGemFilter # :nodoc:
+    private
+
+    def installed_stubs(pattern)
+      stubs = super
+      host = Gem.host_ruby_dirs
+      return stubs if host.empty?
+
+      names = Gem.ironruby_default_gem_names
+      return stubs if names.empty?
+
+      stubs.reject {|stub| names.include?(stub.name) && host.include?(stub.base_dir) }
+    end
+  end
+
+  SpecificationRecord.prepend(IronRubyHostGemFilter)
 end
