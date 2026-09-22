@@ -14,7 +14,7 @@ Gem::Specification.new do |s|
   s.summary = "YAML parser and emitter".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
-  s.metadata = { "ironruby_native".freeze => "true".freeze }
+  s.metadata = { "ironruby_pinned".freeze => "true".freeze }
   s.files = [
     "lib/psych.rb".freeze,
     "lib/psych/coder.rb".freeze,

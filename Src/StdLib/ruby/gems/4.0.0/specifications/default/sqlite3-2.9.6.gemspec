@@ -14,7 +14,7 @@ Gem::Specification.new do |s|
   s.summary = "SQLite3, on the native library Microsoft.Data.Sqlite carries".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
-  s.metadata = { "ironruby_native".freeze => "true".freeze }
+  s.metadata = { "ironruby_pinned".freeze => "true".freeze }
   s.files = [
     "lib/sqlite3.rb".freeze,
     "lib/sqlite3/constants.rb".freeze,

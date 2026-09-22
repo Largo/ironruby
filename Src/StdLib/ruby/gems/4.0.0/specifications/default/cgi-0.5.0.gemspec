@@ -14,7 +14,7 @@ Gem::Specification.new do |s|
   s.summary = "CGI.escape and friends - Ruby 4.0's cgi/escape, not the full CGI class".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
-  s.metadata = { "ironruby_native".freeze => "true".freeze }
+  s.metadata = { "ironruby_pinned".freeze => "true".freeze }
   s.files = [
     "lib/cgi.rb".freeze,
     "lib/cgi/escape.rb".freeze,

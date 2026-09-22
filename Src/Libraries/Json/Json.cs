@@ -45,22 +45,83 @@ namespace IronRuby.StandardLibrary.Json {
 
         #region generate
 
+        /// <summary>
+        /// The layout half of the generator's options - what the json gem calls indent,
+        /// space, space_before, object_nl and array_nl.  A null Layout is the compact
+        /// output JSON.generate produces when it is given no options.
+        /// </summary>
+        private sealed class Layout {
+            public string Indent = "";
+            public string Space = "";
+            public string SpaceBefore = "";
+            public string ObjectNewLine = "";
+            public string ArrayNewLine = "";
+
+            public static Layout FromOptions(Hash options) {
+                if (options == null || options.Count == 0) {
+                    return null;
+                }
+                var layout = new Layout {
+                    Indent = StringOption(options, "indent"),
+                    Space = StringOption(options, "space"),
+                    SpaceBefore = StringOption(options, "space_before"),
+                    ObjectNewLine = StringOption(options, "object_nl"),
+                    ArrayNewLine = StringOption(options, "array_nl"),
+                };
+                return layout.IsCompact ? null : layout;
+            }
+
+            public bool IsCompact {
+                get {
+                    return Indent.Length == 0 && Space.Length == 0 && SpaceBefore.Length == 0
+                        && ObjectNewLine.Length == 0 && ArrayNewLine.Length == 0;
+                }
+            }
+
+            public static readonly Layout Pretty = new Layout {
+                Indent = "  ", Space = " ", ObjectNewLine = "\n", ArrayNewLine = "\n"
+            };
+        }
+
+        private static string/*!*/ StringOption(Hash/*!*/ options, string/*!*/ name) {
+            foreach (var entry in options) {
+                var key = entry.Key;
+                var keyString = key as MutableString;
+                var keySymbol = key as RubySymbol;
+                string spelled = keyString != null ? keyString.ConvertToString() :
+                    keySymbol != null ? keySymbol.ToString() : null;
+                if (spelled != name) {
+                    continue;
+                }
+                var value = entry.Value as MutableString;
+                return value != null ? value.ConvertToString() : "";
+            }
+            return "";
+        }
+
+        // JSON.generate(obj, opts) - opts being the json gem's generator options.  A
+        // JSON::State arrives here as its own to_h, from JSON::State#generate, so what
+        // this sees is always a Hash.  Only the layout options change the output; the
+        // rest (max_nesting, allow_nan, ...) are accepted and ignored, the way the gem
+        // ignores an option it does not know.
         [RubyMethod("generate", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("dump", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Generate(RubyContext/*!*/ context, object self, object obj) {
+        public static MutableString/*!*/ Generate(RubyContext/*!*/ context, object self, object obj,
+            [DefaultParameterValue(null)]Hash options) {
             var builder = new StringBuilder();
-            WriteValue(context, builder, obj, null, 0);
+            WriteValue(context, builder, obj, Layout.FromOptions(options), 0);
             return MutableString.Create(builder.ToString(), RubyEncoding.UTF8);
         }
 
         [RubyMethod("pretty_generate", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ PrettyGenerate(RubyContext/*!*/ context, object self, object obj) {
+        public static MutableString/*!*/ PrettyGenerate(RubyContext/*!*/ context, object self, object obj,
+            [DefaultParameterValue(null)]Hash options) {
             var builder = new StringBuilder();
-            WriteValue(context, builder, obj, "  ", 0);
+            WriteValue(context, builder, obj, Layout.FromOptions(options) ?? Layout.Pretty, 0);
             return MutableString.Create(builder.ToString(), RubyEncoding.UTF8);
         }
 
-        private static void WriteValue(RubyContext/*!*/ context, StringBuilder/*!*/ builder, object obj, string indent, int depth) {
+        private static void WriteValue(RubyContext/*!*/ context, StringBuilder/*!*/ builder, object obj, Layout layout, int depth) {
             if (depth > 100) {
                 throw new JsonGeneratorError("nesting of 100 is too deep");
             }
@@ -103,13 +164,13 @@ namespace IronRuby.StandardLibrary.Json {
 
             var hash = obj as Hash;
             if (hash != null) {
-                WriteHash(context, builder, hash, indent, depth);
+                WriteHash(context, builder, hash, layout, depth);
                 return;
             }
 
             var list = obj as IList<object>;
             if (list != null) {
-                WriteArray(context, builder, list, indent, depth);
+                WriteArray(context, builder, list, layout, depth);
                 return;
             }
 
@@ -117,7 +178,7 @@ namespace IronRuby.StandardLibrary.Json {
             WriteString(builder, context.Inspect(obj).ConvertToString());
         }
 
-        private static void WriteHash(RubyContext/*!*/ context, StringBuilder/*!*/ builder, Hash/*!*/ hash, string indent, int depth) {
+        private static void WriteHash(RubyContext/*!*/ context, StringBuilder/*!*/ builder, Hash/*!*/ hash, Layout layout, int depth) {
             builder.Append('{');
             bool first = true;
             foreach (var entry in hash) {
@@ -125,7 +186,7 @@ namespace IronRuby.StandardLibrary.Json {
                     builder.Append(',');
                 }
                 first = false;
-                NewLine(builder, indent, depth + 1);
+                NewLine(builder, layout, layout == null ? null : layout.ObjectNewLine, depth + 1);
 
                 // JSON object keys are always strings
                 var key = entry.Key;
@@ -141,41 +202,55 @@ namespace IronRuby.StandardLibrary.Json {
                     WriteString(builder, key.ToString());
                 }
 
-                builder.Append(':');
-                if (indent != null) {
-                    builder.Append(' ');
+                if (layout != null) {
+                    builder.Append(layout.SpaceBefore);
                 }
-                WriteValue(context, builder, entry.Value, indent, depth + 1);
+                builder.Append(':');
+                if (layout != null) {
+                    builder.Append(layout.Space);
+                }
+                WriteValue(context, builder, entry.Value, layout, depth + 1);
             }
             if (!first) {
-                NewLine(builder, indent, depth);
+                CloseLine(builder, layout, layout == null ? null : layout.ObjectNewLine, depth);
             }
             builder.Append('}');
         }
 
-        private static void WriteArray(RubyContext/*!*/ context, StringBuilder/*!*/ builder, IList<object>/*!*/ list, string indent, int depth) {
+        private static void WriteArray(RubyContext/*!*/ context, StringBuilder/*!*/ builder, IList<object>/*!*/ list, Layout layout, int depth) {
             builder.Append('[');
             for (int i = 0; i < list.Count; i++) {
                 if (i > 0) {
                     builder.Append(',');
                 }
-                NewLine(builder, indent, depth + 1);
-                WriteValue(context, builder, list[i], indent, depth + 1);
+                NewLine(builder, layout, layout == null ? null : layout.ArrayNewLine, depth + 1);
+                WriteValue(context, builder, list[i], layout, depth + 1);
             }
             if (list.Count > 0) {
-                NewLine(builder, indent, depth);
+                CloseLine(builder, layout, layout == null ? null : layout.ArrayNewLine, depth);
             }
             builder.Append(']');
         }
 
-        private static void NewLine(StringBuilder/*!*/ builder, string indent, int depth) {
-            if (indent == null) {
+        private static void NewLine(StringBuilder/*!*/ builder, Layout layout, string newLine, int depth) {
+            if (layout == null) {
                 return;
             }
-            builder.Append('\n');
+            builder.Append(newLine);
             for (int i = 0; i < depth; i++) {
-                builder.Append(indent);
+                builder.Append(layout.Indent);
             }
+        }
+
+        // Before the closing bracket the json gem writes nothing at all when the
+        // collection's newline option is empty - unlike between elements, where it still
+        // indents.  `JSON.generate(x, indent: "\t")` with no array_nl is the case that
+        // tells them apart.
+        private static void CloseLine(StringBuilder/*!*/ builder, Layout layout, string newLine, int depth) {
+            if (layout == null || String.IsNullOrEmpty(newLine)) {
+                return;
+            }
+            NewLine(builder, layout, newLine, depth);
         }
 
         private static void WriteString(StringBuilder/*!*/ builder, string/*!*/ value) {

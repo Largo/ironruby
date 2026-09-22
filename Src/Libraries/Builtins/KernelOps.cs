@@ -1090,16 +1090,15 @@ namespace IronRuby.Builtins {
 
         #endregion
 
-        #region class, type, extend, instance_of?, is_a?, kind_of? (thread-safe)
+        // Object#type was Ruby 1.8's spelling of Object#class and was removed in 1.9, so it
+        // is gone here too.  It was not harmless: Rails reaches ActiveRecord's
+        // TimeZoneConverter#type - a DelegateClass method, so a method_missing away - and an
+        // Object#type in front of it answers the class instead, which makes every :time
+        // column cast wrongly and, in railsbench, leaves the seeded rows unsaved.
+        #region class, extend, instance_of?, is_a?, kind_of? (thread-safe)
 
         [RubyMethod("class")]
         public static RubyClass/*!*/ GetClass(RubyContext/*!*/ context, object self) {
-            return context.GetClassOf(self);
-        }
-
-        [RubyMethod("type")]
-        public static RubyClass/*!*/ GetClassObsolete(RubyContext/*!*/ context, object self) {
-            context.ReportWarning("Object#type will be deprecated; use Object#class");
             return context.GetClassOf(self);
         }
 

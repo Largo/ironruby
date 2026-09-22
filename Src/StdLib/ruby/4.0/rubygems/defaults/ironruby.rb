@@ -139,23 +139,29 @@ module Gem
   end
 
   ##
-  # The gems IronRuby *is*, rather than gems it merely ships: bigdecimal, json,
-  # psych, openssl, sqlite3, nokogiri, cgi and the rest of the libraries whose
-  # real gem is a C extension.  Their gemspecs carry
-  # metadata["ironruby_native"], written by Util/gen-default-gemspecs.rb.
+  # The gems whose version here is the only one this interpreter can have.
+  # Their gemspecs carry metadata["ironruby_pinned"], written by
+  # Util/gen-default-gemspecs.rb, which is also where the list and the reason for
+  # each entry live.
   #
-  # No release of one of these from rubygems.org can ever run here - it is C
-  # source, and there is no compiler at the other end.  A resolver that does not
-  # know that picks the newest release, as resolvers do, and the install stops
-  # at extconf.rb: `gem "activerecord"` fails on bigdecimal, which IronRuby has
-  # implemented all along.  So the answer for these names is fixed, and
-  # Bundler's Source::Rubygems uses this to say so.
+  # Two things put a library on it.  Most of them - bigdecimal, json, psych,
+  # openssl, sqlite3, nokogiri, cgi, erb - have a C extension for their real
+  # gem, and there is no compiler at the other end of a download.  The rest, irb
+  # and reline, are part of IronRuby's standard library and their upstream
+  # dependency tree ends at one: irb depends on rdoc, rdoc 8 on rbs, and rbs is
+  # a C extension.
+  #
+  # A resolver that does not know this picks the newest release, as resolvers
+  # do, and the install stops at extconf.rb: `gem "activerecord"` fails on
+  # bigdecimal, and `gem "railties"` on rbs, for libraries IronRuby has been
+  # providing all along.  So the answer for these names is fixed, and Bundler
+  # uses this to say so.
   #
   # Returns name => Gem::Version.
 
-  def self.ironruby_native_gems
-    @ironruby_native_gems ||= begin
-      native = {}
+  def self.ironruby_pinned_gems
+    @ironruby_pinned_gems ||= begin
+      pinned = {}
       begin
         Gem::Specification.default_stubs("*.gemspec").each do |stub|
           next unless stub.respond_to?(:to_spec)
@@ -165,13 +171,13 @@ module Gem
             nil
           end
           next unless spec
-          next unless spec.metadata.is_a?(Hash) && spec.metadata["ironruby_native"]
-          native[spec.name] = spec.version
+          next unless spec.metadata.is_a?(Hash) && spec.metadata["ironruby_pinned"]
+          pinned[spec.name] = spec.version
         end
       rescue StandardError
-        native = {}
+        pinned = {}
       end
-      native.freeze
+      pinned.freeze
     end
   end
 

@@ -131,7 +131,7 @@ end
 # that version is a gem, not the one in Src/StdLib - the patch has to reach it
 # too.
 IronRuby::GemCompat.on_require("bundler") do
-  if defined?(::Gem.ironruby_native_gems) && ::Bundler::Source::Rubygems.method_defined?(:specs)
+  if defined?(::Gem.ironruby_pinned_gems) && ::Bundler::Source::Rubygems.method_defined?(:specs)
     unless ::Bundler::Index.method_defined?(:ironruby_replace_specs!)
       ::Bundler::Index.class_eval do
         # Make +spec+ the only candidate this index offers under its name.
@@ -150,10 +150,10 @@ IronRuby::GemCompat.on_require("bundler") do
       def specs
         index = super
         return index unless @allow_local
-        return index if @ironruby_native_gems_applied
+        return index if @ironruby_pinned_gems_applied
 
-        @ironruby_native_gems_applied = true
-        ::Gem.ironruby_native_gems.each do |name, version|
+        @ironruby_pinned_gems_applied = true
+        ::Gem.ironruby_pinned_gems.each do |name, version|
           spec = default_specs.search(name).find {|s| s.version == version }
           index.ironruby_replace_specs!(spec) if spec
         end
@@ -166,7 +166,7 @@ IronRuby::GemCompat.on_require("bundler") do
       # the answer has to be "there is no such gem": the implementation IronRuby
       # already has is the one that must be used.
       def cached_built_in_gem(spec, *args, **kwargs)
-        return nil if ::Gem.ironruby_native_gems[spec.name] == spec.version
+        return nil if ::Gem.ironruby_pinned_gems[spec.name] == spec.version
 
         super
       end

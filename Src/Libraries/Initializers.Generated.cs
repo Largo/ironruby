@@ -5091,11 +5091,6 @@ namespace IronRuby.Builtins {
             );
             
             #endif
-            DefineLibraryMethod(module, "type", 0x51, 
-                0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubyClass>(IronRuby.Builtins.KernelOps.GetClassObsolete)
-            );
-            
             DefineLibraryMethod(module, "untrace_var", 0x52, 
                 0x00020004U, 0x00020004U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Object>(IronRuby.Builtins.KernelOps.UntraceVariable), 
@@ -14112,12 +14107,12 @@ namespace IronRuby.StandardLibrary.Json {
         private static void LoadJSON_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "dump", 0x21, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Hash, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
             );
             
             DefineLibraryMethod(module, "generate", 0x21, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Hash, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.Generate)
             );
             
             DefineLibraryMethod(module, "load", 0x21, 
@@ -14132,7 +14127,7 @@ namespace IronRuby.StandardLibrary.Json {
             
             DefineLibraryMethod(module, "pretty_generate", 0x21, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.PrettyGenerate)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.Hash, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Json.JsonModule.PrettyGenerate)
             );
             
         }

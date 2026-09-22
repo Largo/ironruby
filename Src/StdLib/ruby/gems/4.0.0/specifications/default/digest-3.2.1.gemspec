@@ -14,7 +14,7 @@ Gem::Specification.new do |s|
   s.summary = "Message digest libraries".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
-  s.metadata = { "ironruby_native".freeze => "true".freeze }
+  s.metadata = { "ironruby_pinned".freeze => "true".freeze }
   s.files = [
     "lib/digest.rb".freeze,
     "lib/digest/bubblebabble.rb".freeze,

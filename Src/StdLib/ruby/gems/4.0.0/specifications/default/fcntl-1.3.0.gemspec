@@ -14,7 +14,7 @@ Gem::Specification.new do |s|
   s.summary = "Constants for fcntl(2) and open(2)".freeze
   s.homepage = "https://github.com/IronLanguages/ironruby".freeze
   s.licenses = ["Ruby".freeze, "BSD-2-Clause".freeze]
-  s.metadata = { "ironruby_native".freeze => "true".freeze }
+  s.metadata = { "ironruby_pinned".freeze => "true".freeze }
   s.files = [
     "lib/fcntl.rb".freeze,
   ]

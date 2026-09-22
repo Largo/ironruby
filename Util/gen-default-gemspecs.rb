@@ -57,48 +57,56 @@ OUT_DIR = File.join(STDLIB, "ruby", "gems", "4.0.0", "specifications", "default"
 # :check is the constant whose value must equal the version.  :require is what
 # to require before reading it, when that is not the gem's own name.
 #
-# :native marks a library whose real gem is a C extension, so that no release of
-# it from rubygems.org can ever be used here - IronRuby's implementation is the
-# only one this interpreter can have.  Those gemspecs carry
-# metadata["ironruby_native"], which is what Gem.ironruby_native_gems reads and
-# what makes Bundler resolve against IronRuby's version rather than download C
-# sources for a newer release (see bundler/source/rubygems.rb).  A vendored
-# pure-Ruby library is *not* :native: installing a newer release of it over the
-# bundled copy is fine, and is what a Gemfile asking for one should get.
+# :pinned marks a library where the version IronRuby provides is the only one
+# this interpreter can have, so that no release from rubygems.org is offered as
+# an alternative.  Two things earn it:
+#
+#   * the real gem is a C extension - bigdecimal, json, psych, sqlite3,
+#     nokogiri, cgi, erb - and nothing here compiles C;
+#   * the library is part of IronRuby's standard library and its upstream
+#     dependency tree cannot be satisfied here anyway: irb depends on rdoc,
+#     rdoc 8 on rbs, and rbs is a C extension, so `gem "railties"` reaches a
+#     compiler through irb - a library `ir -S irb` has been running all along.
+#
+# Those gemspecs carry metadata["ironruby_pinned"], which
+# Gem.ironruby_pinned_gems reads and gem_compat.rb hands to Bundler.  A vendored
+# pure-Ruby library is *not* pinned by default: installing a newer release of it
+# over the bundled copy is fine, and is what a Gemfile asking for one should
+# get.
 GEMS = {
   # --- implemented in C# (Src/Libraries) -----------------------------------
   # These are the entries that matter: without them RubyGems compiles C.
   "bigdecimal" => ["4.0.1", "Arbitrary-precision decimal arithmetic",
-                   ["bigdecimal", "bigdecimal/"], check: "BigDecimal::VERSION", native: true],
+                   ["bigdecimal", "bigdecimal/"], check: "BigDecimal::VERSION", pinned: true],
   "date" => ["3.3.4", "Date and DateTime",
-             ["date", "date/"], check: "Date::VERSION", native: true],
+             ["date", "date/"], check: "Date::VERSION", pinned: true],
   "digest" => ["3.2.1", "Message digest libraries",
-               ["digest", "digest/"], check: "Digest::VERSION", native: true],
+               ["digest", "digest/"], check: "Digest::VERSION", pinned: true],
   "etc" => ["1.4.6", "Access to information from the passwd and group files",
-            ["etc"], check: "Etc::VERSION", native: true],
+            ["etc"], check: "Etc::VERSION", pinned: true],
   "fcntl" => ["1.3.0", "Constants for fcntl(2) and open(2)",
-              ["fcntl"], check: "Fcntl::VERSION", native: true],
+              ["fcntl"], check: "Fcntl::VERSION", pinned: true],
   "io-console" => ["0.8.2", "Console size and raw mode",
                    ["io/console", "io/console/"], require: "io/console",
-                   check: "IO::ConsoleMode::VERSION", native: true],
-  "io-nonblock" => ["0.3.2", "IO#nonblock", ["io/nonblock"], require: "io/nonblock", native: true],
-  "io-wait" => ["0.4.0", "IO#wait and friends", ["io/wait"], require: "io/wait", native: true],
+                   check: "IO::ConsoleMode::VERSION", pinned: true],
+  "io-nonblock" => ["0.3.2", "IO#nonblock", ["io/nonblock"], require: "io/nonblock", pinned: true],
+  "io-wait" => ["0.4.0", "IO#wait and friends", ["io/wait"], require: "io/wait", pinned: true],
   "json" => ["2.18.0", "JSON parsing and generation",
-             ["json", "json/"], check: "JSON::VERSION", native: true],
+             ["json", "json/"], check: "JSON::VERSION", pinned: true],
   "openssl" => ["3.2.0", "OpenSSL bindings, on .NET's cryptography stack",
-                ["openssl", "openssl/"], check: "OpenSSL::VERSION", native: true],
+                ["openssl", "openssl/"], check: "OpenSSL::VERSION", pinned: true],
   "psych" => ["5.3.1", "YAML parser and emitter",
-              ["psych", "psych/"], check: "Psych::VERSION", native: true],
+              ["psych", "psych/"], check: "Psych::VERSION", pinned: true],
   "stringio" => ["3.2.0", "IO on strings",
-                 ["stringio"], check: "StringIO::VERSION", native: true],
+                 ["stringio"], check: "StringIO::VERSION", pinned: true],
   "strscan" => ["3.1.6", "Lexical scanning of strings",
-                ["strscan"], check: "StringScanner::Version", native: true],
+                ["strscan"], check: "StringScanner::Version", pinned: true],
   "zlib" => ["3.2.3", "Deflate/inflate, on System.IO.Compression",
-             ["zlib"], check: "Zlib::VERSION", native: true],
+             ["zlib"], check: "Zlib::VERSION", pinned: true],
   "prism" => ["1.9.0", "The Prism Ruby parser - IronRuby's own front end",
-              ["prism", "prism/"], check: "Prism::VERSION", native: true],
+              ["prism", "prism/"], check: "Prism::VERSION", pinned: true],
   "sqlite3" => ["2.9.6", "SQLite3, on the native library Microsoft.Data.Sqlite carries",
-                ["sqlite3", "sqlite3/"], check: "SQLite3::VERSION", native: true],
+                ["sqlite3", "sqlite3/"], check: "SQLite3::VERSION", pinned: true],
   # Not a default gem anywhere else: nokogiri is a C extension over libxml2 and
   # gumbo, and neither compiles here.  It is listed because it is a hard
   # dependency of rails-html-sanitizer -> loofah -> actionview and of
@@ -106,7 +114,7 @@ GEMS = {
   # `gem install actionview` stops at a C compiler.  The version is the nokogiri
   # API level implemented, not a nokogiri release.
   "nokogiri" => ["1.18.0", "HTML5, HTML4 and XML parsing, on AngleSharp",
-                 ["nokogiri", "nokogiri/"], check: "Nokogiri::VERSION", native: true],
+                 ["nokogiri", "nokogiri/"], check: "Nokogiri::VERSION", pinned: true],
   # Ruby 4.0 removed the CGI class from the standard library and kept only the
   # escaping half, cgi/escape - which is a C extension there and is vendored in
   # Ruby here.  The `cgi` gem that brings the class back is that same C
@@ -117,7 +125,7 @@ GEMS = {
   # that wants the full CGI class - cgi/core, cgi/cookie, cgi/session - does not
   # get it, the same as on a Ruby 4.0 without the gem.
   "cgi" => ["0.5.0", "CGI.escape and friends - Ruby 4.0's cgi/escape, not the full CGI class",
-            ["cgi", "cgi/escape", "cgi/util"], native: true],
+            ["cgi", "cgi/escape", "cgi/util"], pinned: true],
 
   # --- vendored from the CRuby release in Src/StdLib/ruby/4.0 --------------
   "bundler" => ["4.0.16", "The best way to manage a Ruby application's gems",
@@ -126,8 +134,11 @@ GEMS = {
   "did_you_mean" => ["2.0.0", "Did you mean? experience",
                      ["did_you_mean", "did_you_mean/"]],
   "english" => ["0.8.1", "Readable aliases for the special variables", ["English"]],
+  # erb is here rather than under the vendored heading because ERB::Escape -
+  # ERB::Util.html_escape - is a C extension upstream, so no release of the erb
+  # gem installs here.  Everything else about it is the vendored Ruby.
   "erb" => ["6.0.1.1", "An easy-to-use but powerful templating system",
-            ["erb", "erb/"], check: "ERB::VERSION"],
+            ["erb", "erb/"], check: "ERB::VERSION", pinned: true],
   # IronRuby answers the error_highlight API, but ErrorHighlight.spot always
   # returns nil - see Src/StdLib/ironruby/error_highlight.rb for why.
   "error_highlight" => ["0.7.2", "The error_highlight API; spot always answers nil here",
@@ -142,9 +153,10 @@ GEMS = {
   # railties resolves irb against rubygems.org, which drags in rdoc 8 and then
   # rbs - a C extension - for a library IronRuby already ships and already runs
   # as `ir -S irb`.
-  "irb" => ["1.16.0", "Interactive Ruby", ["irb", "irb/"], require: false, bin: ["irb"]],
+  "irb" => ["1.16.0", "Interactive Ruby", ["irb", "irb/"], require: false, bin: ["irb"],
+            pinned: true],
   "reline" => ["0.6.3", "GNU Readline and Editline, in pure Ruby",
-               ["reline", "reline/"], require: false],
+               ["reline", "reline/"], require: false, pinned: true],
   "net-http" => ["0.9.1", "HTTP client api for Ruby", ["net/http", "net/https", "net/http/"],
                  require: "net/http"],
   "net-protocol" => ["0.2.2", "The abstract interface for net-* client",
@@ -240,7 +252,7 @@ def write_executables(name, version, executables)
   end
 end
 
-def gemspec_source(name, version, summary, files, executables, native)
+def gemspec_source(name, version, summary, files, executables, pinned)
   lines = []
   lines << "# -*- encoding: utf-8 -*-"
   lines << "# stub: #{name} #{version} ruby lib"
@@ -258,8 +270,8 @@ def gemspec_source(name, version, summary, files, executables, native)
   lines << "  s.summary = #{summary.dump}.freeze"
   lines << "  s.homepage = \"https://github.com/IronLanguages/ironruby\".freeze"
   lines << "  s.licenses = [\"Ruby\".freeze, \"BSD-2-Clause\".freeze]"
-  if native
-    lines << "  s.metadata = { \"ironruby_native\".freeze => \"true\".freeze }"
+  if pinned
+    lines << "  s.metadata = { \"ironruby_pinned\".freeze => \"true\".freeze }"
   end
   unless executables.empty?
     lines << "  s.bindir = #{BIN_DIR.dump}.freeze"
@@ -311,6 +323,6 @@ GEMS.each do |name, (version, summary, entries, opts)|
   write_executables(name, version, executables) unless executables.empty?
 
   path = File.join(OUT_DIR, "#{name}-#{version}.gemspec")
-  File.write(path, gemspec_source(name, version, summary, files, executables, opts[:native]))
+  File.write(path, gemspec_source(name, version, summary, files, executables, opts[:pinned]))
   puts "#{name}-#{version} (#{files.length} files)"
 end
