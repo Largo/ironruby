@@ -7575,6 +7575,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubySymbol, System.Int32, System.Object>(IronRuby.Builtins.RegexpOps.Match)
             );
             
+            DefineLibraryMethod(module, "match?", 0x51, 
+                0x00030000U, 0x00020002U, 
+                new Func<IronRuby.Builtins.RubyRegex, IronRuby.Builtins.MutableString, System.Int32, System.Boolean>(IronRuby.Builtins.RegexpOps.IsMatch), 
+                new Func<IronRuby.Builtins.RubyRegex, IronRuby.Builtins.RubySymbol, System.Int32, System.Boolean>(IronRuby.Builtins.RegexpOps.IsMatch)
+            );
+            
             DefineLibraryMethod(module, "named_captures", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.Hash>(IronRuby.Builtins.RegexpOps.GetNamedCaptures)

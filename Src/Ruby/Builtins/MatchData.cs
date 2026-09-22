@@ -40,6 +40,13 @@ namespace IronRuby.Builtins {
         private int _startByteOffset;
         private int _startCharOffset;
 
+        // The text the CLR regex ran on, when it holds a surrogate pair - which makes its CLR
+        // offsets differ from Ruby's character offsets. Null otherwise (nearly always), and then
+        // the two agree. It is the regex's own immutable input, not _originalString, so the
+        // translation neither depends on _originalString's representation nor on a clone of it
+        // having to work out its character index again.
+        private string _pairedText;
+
         // The pattern that produced the match. MatchData#regexp has to answer the very object
         // the caller matched with - the spec compares object_id - so it cannot be rebuilt from
         // the CLR Regex and has to be carried here from every construction site.
@@ -93,6 +100,19 @@ namespace IronRuby.Builtins {
             get { return GetGroupLength(0); } 
         }
 
+        /// <summary>
+        /// Where the match starts as Ruby counts: in characters. <see cref="Index"/> is the CLR
+        /// index into the subject, for slicing it; this is the one to hand to Ruby code.
+        /// </summary>
+        public int CharacterIndex {
+            get { return ToCharIndex(_match.Index); }
+        }
+
+        /// <summary>Where the match ends, in characters.</summary>
+        public int CharacterEnd {
+            get { return ToCharIndex(_match.Index + _match.Length); }
+        }
+
         #region Construction
 
         private MatchData(Match/*!*/ match, MutableString/*!*/ originalString) {
@@ -115,7 +135,13 @@ namespace IronRuby.Builtins {
             if (startByteOffset > 0) {
                 int byteCount;
                 byte[] bytes = originalString.GetByteArray(out byteCount);
-                _startCharOffset = encoding.GetCharCount(bytes, 0, Math.Min(startByteOffset, byteCount));
+                int prefixBytes = Math.Min(startByteOffset, byteCount);
+                if (encoding.IsSingleByte) {
+                    _startCharOffset = prefixBytes;
+                } else {
+                    // characters, not UTF-16 code units: a pair is one
+                    _startCharOffset = encoding.GetString(bytes, 0, prefixBytes).GetCharacterCount();
+                }
             }
         }
 
@@ -145,6 +171,7 @@ namespace IronRuby.Builtins {
             _encoding = other._encoding;
             _startByteOffset = other._startByteOffset;
             _startCharOffset = other._startCharOffset;
+            _pairedText = other._pairedText;
             _regexp = other._regexp;
             _frozenInput = other._frozenInput;
         }
@@ -156,7 +183,7 @@ namespace IronRuby.Builtins {
         /// while <paramref name="input"/> is still addressed by byte, so they must be translated.
         /// </summary>
         internal static MatchData Create(Match/*!*/ match, MutableString/*!*/ input, bool freezeInput, string/*!*/ encodedInput,
-            RubyEncoding kcode, int startByteOffset, RubyRegex regexp) {
+            RubyEncoding kcode, int startByteOffset, RubyRegex regexp, bool hasPairs) {
 
             if (!match.Success) {
                 return null;
@@ -170,6 +197,9 @@ namespace IronRuby.Builtins {
                 ? new MatchData(match, input)
                 : new MatchData(match, input, encodedInput, kcode.Encoding, startByteOffset);
             result._regexp = regexp;
+            if (hasPairs) {
+                result._pairedText = encodedInput;
+            }
             return result;
         }
 
@@ -207,15 +237,20 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// The character offset a CLR offset stands for. Without a k-code decoding the regex ran
-        /// on the string's own characters and the two agree; with one, the CLR offset already
-        /// counts characters of the decoded input, only from the position the match started at.
+        /// The Ruby character offset a CLR offset stands for. Without a k-code decoding the regex
+        /// ran on the string's own character representation, and the string translates it (the
+        /// identity unless it holds a surrogate pair); with one, the CLR offset counts UTF-16
+        /// units of the decoded input, only from the position the match started at.
         /// </summary>
         private int ToCharIndex(int clrIndex) {
             if (_encodedInput == null) {
-                return clrIndex;
+                return (_pairedText == null) ? clrIndex : MutableString.ToCharacterIndex(_pairedText, clrIndex);
             }
-            return _startCharOffset + Math.Min(Math.Max(clrIndex, 0), _encodedInput.Length);
+            int units = Math.Min(Math.Max(clrIndex, 0), _encodedInput.Length);
+            if (_pairedText != null) {
+                units = MutableString.ToCharacterIndex(_pairedText, units);
+            }
+            return _startCharOffset + units;
         }
 
         /// <summary>

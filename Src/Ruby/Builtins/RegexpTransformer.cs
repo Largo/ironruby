@@ -60,6 +60,11 @@ namespace IronRuby.Builtins {
 
         private CharacterClassMode _characterClassMode;
 
+        // Whether '.' matches a newline here - (?m) in Ruby, RegexOptions.Singleline in .NET.
+        // Tracked only to translate '.' for an astral subject; null in a copied group, whose
+        // text lands wherever the copy is emitted and so cannot know.
+        private bool? _dotAll;
+
         /// <summary>
         /// A capturing group as a subexpression call or a loop copy needs it: its Ruby body and
         /// the parser state at the start of that body, so that the body can be transformed again
@@ -99,6 +104,8 @@ namespace IronRuby.Builtins {
             public RegexOptions ClrOptions = RegexOptions.Multiline | RegexOptions.CultureInvariant;
             public int MaxCallDepth = DefaultMaxCallDepth;
             public int Emitted;
+            // see Transform(..., astralSafe)
+            public bool AstralSafe;
         }
 
         private sealed class ExpansionTooLargeException : Exception {
@@ -199,6 +206,16 @@ namespace IronRuby.Builtins {
         }
 
         internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor) {
+            return Transform(rubyPattern, options, out hasGAnchor, false);
+        }
+
+        /// <summary>
+        /// With <paramref name="astralSafe"/> the translation is for a subject that holds
+        /// surrogate pairs: '.' matches a pair as a whole and never half of one, and \B does not
+        /// match between the halves. Without it '.' stays .NET's own, which is all a subject
+        /// with no pairs needs and is what keeps the common case as fast as it was.
+        /// </summary>
+        internal static string Transform(string/*!*/ rubyPattern, RubyRegexOptions options, out bool hasGAnchor, bool astralSafe) {
             // TODO: surrogates (REXML uses this pattern)
             if (rubyPattern == "^[\t\n\r -\uD7FF\uE000-\uFFFD\uD800\uDC00-\uDBFF\uDFFF]*$") {
                 hasGAnchor = false;
@@ -207,6 +224,7 @@ namespace IronRuby.Builtins {
             
             RegexpTransformer transformer = new RegexpTransformer(rubyPattern);
             transformer._clrOptions = RubyRegex.ToClrOptions(options);
+            transformer._state.AstralSafe = astralSafe;
             var result = transformer.Transform();
             hasGAnchor = transformer._hasGAnchor;
             return result;
@@ -605,7 +623,9 @@ namespace IronRuby.Builtins {
                 || _rubyPattern.IndexOf("\\k", StringComparison.Ordinal) >= 0;
 
             for (int depth = DefaultMaxCallDepth; ; depth /= 2) {
+                bool astralSafe = _state.AstralSafe;
                 _state = new SharedState();
+                _state.AstralSafe = astralSafe;
                 _state.MaxCallDepth = depth;
                 _state.ClrOptions = _clrOptions;
                 _state.RootPattern = _rubyPattern;
@@ -626,6 +646,7 @@ namespace IronRuby.Builtins {
                 _warnings = null;
                 _backrefCount = 0;
                 _characterClassMode = CharacterClassMode.Default;
+                _dotAll = (_clrOptions & RegexOptions.Singleline) != 0;
                 _groupNameOccurrences.Clear();
                 try {
                     string result = TransformBody();
@@ -794,6 +815,13 @@ namespace IronRuby.Builtins {
                         AppendCharacterSet(ParseCharacterGroup(false, out topLevelPosixClass), true);
                         break;
 
+                    case '.':
+                        lastEntityIndex = _sb.Length;
+                        lastWasQuantifier = false;
+                        lastEntity = null;
+                        AppendAnyCharacter();
+                        break;
+
                     case '|':
                         Append('|');
                         lastEntityIndex = _sb.Length;
@@ -816,9 +844,55 @@ namespace IronRuby.Builtins {
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
                         lastEntity = null;
+                        if (Char.IsHighSurrogate((char)c) && Peek() >= 0xdc00 && Peek() <= 0xdfff) {
+                            // A literal character above U+FFFF is a surrogate pair, and a quantifier
+                            // after it applies to the whole of it, not to its trailing half.
+                            int low = Read();
+                            bool group = IsQuantifierNext();
+                            if (group) {
+                                _sb.Append("(?:");
+                            }
+                            Append((char)c);
+                            Append((char)low);
+                            if (group) {
+                                _sb.Append(')');
+                            }
+                            break;
+                        }
                         Append((char)c);
                         break;
                 }
+            }
+        }
+
+        private bool IsQuantifierNext() {
+            int next = Peek();
+            return next == '*' || next == '+' || next == '?' || next == '{';
+        }
+
+        // Onigmo's word characters - the Unicode "word" property - as a .NET entity that takes a
+        // character above U+FFFF as its surrogate pair.
+        private static string _astralWordCharacter;
+
+        /// <summary>
+        /// \b and \B for a subject with surrogate pairs. .NET's \b looks at single UTF-16 units, to
+        /// which both halves of a pair are non-word characters: it would see a boundary around 𝒳 but
+        /// none between 😀 and a letter after it, and a \B between the halves of every pair. So the
+        /// boundary is spelled out with lookarounds over whole characters.
+        /// </summary>
+        private void AppendAstralWordBoundary(bool boundary) {
+            string w = _astralWordCharacter;
+            if (w == null) {
+                var sb = new StringBuilder();
+                CharacterSet.MakeProperty(UnicodeProperties.Find("word"), true).AppendTo(sb, true);
+                _astralWordCharacter = w = sb.ToString();
+            }
+            if (boundary) {
+                _sb.Append("(?:(?<=").Append(w).Append(")(?!").Append(w).Append(")|(?<!").Append(w).Append(")(?=").Append(w).Append("))");
+            } else {
+                _sb.Append("(?:(?<=").Append(w).Append(")(?=").Append(w).Append(")|(?<!").Append(w).Append(")(?!").Append(w).Append("))");
+                // not between the two halves of a pair, both of which are non-word units
+                _sb.Append("(?<![\\ud800-\\udbff])");
             }
         }
 
@@ -1201,6 +1275,7 @@ namespace IronRuby.Builtins {
                 }
             }
             var savedMode = _characterClassMode;
+            var savedDotAll = _dotAll;
             int bodyStart = _index;
             GroupDefinition definition = null;
             bool hasLevelGroup = false;
@@ -1228,6 +1303,7 @@ namespace IronRuby.Builtins {
             Parse(true);
             _groupDepth--;
             _characterClassMode = savedMode;
+            _dotAll = savedDotAll;
             if (groupNumber >= 0) {
                 CloseGroup("#" + groupNumber);
                 if (groupName != null) {
@@ -1263,13 +1339,19 @@ namespace IronRuby.Builtins {
         private void ParseGroupOptions(int c) {
             var flags = new StringBuilder();
             var mode = _characterClassMode;
+            var dotAll = _dotAll;
             bool isScoped = false;
+            bool negative = false;
 
             while (true) {
                 if (c == 'm') {
                     // Map (?m) to (?s) ie. RegexOptions.SingleLine
                     flags.Append('s');
+                    if (dotAll != null) {
+                        dotAll = !negative;
+                    }
                 } else if (c == 'i' || c == 'x' || c == '-') {
+                    negative |= c == '-';
                     flags.Append((char)c);
                 } else if (c == 'a') {
                     mode = CharacterClassMode.Ascii;
@@ -1298,6 +1380,7 @@ namespace IronRuby.Builtins {
 
             if (!isScoped) {
                 _characterClassMode = mode;
+                _dotAll = dotAll;
                 if (options.Length != 0) {
                     _sb.Append("(?").Append(options).Append(')');
                 }
@@ -1306,11 +1389,14 @@ namespace IronRuby.Builtins {
 
             _sb.Append("(?").Append(options).Append(':');
             var savedMode = _characterClassMode;
+            var savedDotAll = _dotAll;
             _characterClassMode = mode;
+            _dotAll = dotAll;
             _groupDepth++;
             Parse(true);
             _groupDepth--;
             _characterClassMode = savedMode;
+            _dotAll = savedDotAll;
             _sb.Append(')');
         }
 
@@ -1424,9 +1510,17 @@ namespace IronRuby.Builtins {
         // escape outside of character group
         private void ParseEscape(int escape) {
             switch (escape) {
-                case 'A':   // beginning a string
                 case 'b':   // word boundary
                 case 'B':   // not a word boundary
+                    if (_state.AstralSafe) {
+                        AppendAstralWordBoundary(escape == 'b');
+                    } else {
+                        Append('\\');
+                        Append((char)escape);
+                    }
+                    break;
+
+                case 'A':   // beginning a string
                 case 'Z':   // end of string or a new line
                 case 'z':   // end of string
                     Append('\\');
@@ -1486,8 +1580,16 @@ namespace IronRuby.Builtins {
                 case 'u':
                     if (Peek() == '{') {
                         // \u{1234 12345 123}
-                        foreach (var codepoint in ParseUnicodeEscapeList()) {
-                            AppendUnicodeCodePoint(_sb, codepoint);
+                        var codepoints = new List<int>(ParseUnicodeEscapeList());
+                        for (int i = 0; i < codepoints.Count; i++) {
+                            // a quantifier after the list applies to its last character, all of it
+                            if (i == codepoints.Count - 1 && codepoints[i] >= 0x10000 && IsQuantifierNext()) {
+                                _sb.Append("(?:");
+                                AppendUnicodeCodePoint(_sb, codepoints[i]);
+                                _sb.Append(')');
+                            } else {
+                                AppendUnicodeCodePoint(_sb, codepoints[i]);
+                            }
                         }
                     } else {
                         // \u1234
@@ -2009,6 +2111,33 @@ namespace IronRuby.Builtins {
         // Set when the entity just emitted is a class loop body that needs CharacterSet.LoopEndGuard
         // after its quantifier.
         private bool _loopGuardPending;
+
+        /// <summary>
+        /// '.': .NET's own unless the subject holds surrogate pairs. Then a lone '.' is a pair or
+        /// any BMP character but a surrogate - so it can neither match half a pair nor, when
+        /// something after it fails, backtrack to half a pair. In a * or + loop '.' stays as it
+        /// is, a one-class loop that takes both halves of a pair as two iterations, with the loop
+        /// guard after it so that it cannot stop between them - the same trick as [^"]* (see
+        /// AppendCharacterSet), and what keeps .* the fast loop it is.
+        /// </summary>
+        private void AppendAnyCharacter() {
+            if (!_state.AstralSafe) {
+                Append('.');
+                return;
+            }
+
+            int next = Peek();
+            if (next == '*' || next == '+') {
+                Append('.');
+                _loopGuardPending = true;
+            } else if (_dotAll == true) {
+                _sb.Append("(?:[\\ud800-\\udbff][\\udc00-\\udfff]|[^\\ud800-\\udfff])");
+            } else if (_dotAll == false) {
+                _sb.Append("(?:[\\ud800-\\udbff][\\udc00-\\udfff]|[^\\n\\ud800-\\udfff])");
+            } else {
+                _sb.Append("(?:[\\ud800-\\udbff][\\udc00-\\udfff]|(?![\\ud800-\\udfff]).)");
+            }
+        }
 
         /// <summary>
         /// Emits a character set as a pattern entity. A set holding every non-BMP character that

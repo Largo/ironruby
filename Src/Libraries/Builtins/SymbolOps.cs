@@ -349,7 +349,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("size")]
         [RubyMethod("length")]
         public static int GetLength(RubySymbol/*!*/ self) {
-            return self.GetCharCount();
+            return self.String.GetCharacterCount();
         }
 
         #endregion

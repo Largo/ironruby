@@ -6134,11 +6134,14 @@ class String
     __ir_plain_copy__.force_encoding(Encoding::BINARY)
   end unless method_defined?(:b)
 
+  # Regexp#match? does the work: it matches from a character position with \A still at
+  # the start of the string, and leaves $~ alone. A String pattern is a regexp source.
   def match?(pattern, pos = 0)
-    # the bundled String#match takes no position argument
-    target = pos.zero? ? self : self[pos..-1]
-    return false if target.nil?
-    !target.match(pattern).nil?
+    pattern = ::Regexp.new(pattern) if pattern.is_a?(::String)
+    unless pattern.is_a?(::Regexp)
+      ::Kernel.raise(::TypeError, "wrong argument type #{pattern.nil? ? 'nil' : pattern.class} (expected Regexp)")
+    end
+    pattern.match?(self, pos)
   end unless method_defined?(:match?)
 
   def start_with?(*prefixes)
@@ -7791,8 +7794,8 @@ class MatchData
           ::Kernel.raise(::IndexError, "undefined group name reference: #{name}")
         end
         return nil unless NamedGroupSuccess(name)
-        start = GetNamedGroupStart(name)
-        return string[start, GetNamedGroupLength(name)]
+        # sliced by the CLR offsets it has, not through String#[], which counts characters
+        return GetNamedGroupValue(name)
       end
       # The groups are a plain Array as far as a Range is concerned, down to
       # md[3..1] being [] while md[-30..2] is nil.
@@ -7801,8 +7804,18 @@ class MatchData
     __ir_index__(*args)
   end
 
+  # The pattern's own Regexp#names - except that MRI matched a pattern of no fixed
+  # encoding against a non-ASCII subject with a copy compiled for the subject's
+  # encoding, and the names come out in that one.
   def names
-    GetGroupNames().map { |n| n.to_s }
+    re = regexp
+    return GetGroupNames().map { |n| n.to_s } unless re
+    result = re.names
+    unless re.fixed_encoding? || string.ascii_only?
+      enc = string.encoding
+      result = result.map { |n| n.dup.force_encoding(enc) }
+    end
+    result
   end unless method_defined?(:names)
 
   def named_captures(symbolize_names: false)
@@ -7854,10 +7867,12 @@ class MatchData
   # Ranges, names and Integers can be mixed. Array#values_at already has the
   # Range rules - nil fill past the end, RangeError for a start that is negative
   # and out of range, [] for an empty Range - so the numeric part goes to it.
+  # A single Integer is MRI's rb_reg_nth_match, as for #[]: counted back from the
+  # end it never reaches group 0, so values_at(-1) of a groupless match is nil.
   def values_at(*indexes)
     groups = to_a
     indexes.flat_map do |i|
-      (i.is_a?(::Symbol) || i.is_a?(::String)) ? [self[i]] : groups.values_at(i)
+      (i.is_a?(::Symbol) || i.is_a?(::String) || i.is_a?(::Integer)) ? [self[i]] : groups.values_at(i)
     end
   end
 end

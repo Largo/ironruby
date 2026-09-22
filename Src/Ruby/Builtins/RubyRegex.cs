@@ -37,6 +37,13 @@ namespace IronRuby.Builtins {
 
         private Regex _cachedRegex;
 
+        // The same pattern translated for a subject that holds surrogate pairs, where '.' and \B
+        // must treat a pair as the one character it is (see RegexpTransformer). A subject without
+        // pairs - nearly all of them - never pays for that and matches with _cachedRegex.
+        private Regex _cachedAstralRegex;
+        private RubyRegexOptions _cachedAstralKCode;
+        private TimeSpan _cachedAstralTimeout;
+
         // The same CLR regex forced to start where the search starts, for the scanning operations
         // that only ever look at the current position (StringScanner#scan, #skip, #check, #match?).
         // Cached against the regex it was derived from, so it follows _cachedRegex's own lifetime.
@@ -147,6 +154,8 @@ namespace IronRuby.Builtins {
             // RubyRegexOptions.Once is only used to determine how the Regexp object should be created and cached. 
             // It is not a property of the final object. /foo/ should compare equal with /foo/o.
             _options = options & ~RubyRegexOptions.Once;
+            _cachedRegex = null;
+            _cachedAstralRegex = null;
 
             RubyEncoding encoding = RubyEncoding.GetRegexEncoding(options);
             if (encoding != null) {
@@ -202,6 +211,16 @@ namespace IronRuby.Builtins {
         }
 
         private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput) {
+            bool astral;
+            return Transform(ref encoding, input, start, out strInput, out astral);
+        }
+
+        /// <summary>
+        /// <paramref name="astral"/> tells whether the subject the regex runs on holds a surrogate
+        /// pair: CLR offsets then are not character offsets, and an empty match has to step over
+        /// a whole pair.
+        /// </summary>
+        private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput, out bool astral) {
             ContractUtils.RequiresNotNull(input, "input");
 
             RequireMatchableEncoding(input);
@@ -253,13 +272,42 @@ namespace IronRuby.Builtins {
                 } else {
                     strInput = ForceEncoding(input, encoding.Encoding, start);
                 }
+                astral = strInput != null && !encoding.IsSingleByteCharacterSet && strInput.AsSpan().IndexOfAnyInRange('\uD800', '\uDBFF') >= 0;
             } else {
                 _pattern.RequireCompatibleEncoding(input);
                 input.PrepareForCharacterRead();
                 strInput = input.ConvertToString();
+                // O(1): matching has just validated the input, which works the flags out
+                astral = input.HasSurrogatePairs();
             }
 
-            return TransformPattern(encoding, kc);
+            return astral ? TransformAstralPattern(encoding, kc) : TransformPattern(encoding, kc);
+        }
+
+        private Regex/*!*/ TransformAstralPattern(RubyEncoding encoding, RubyRegexOptions kc) {
+            TimeSpan timeout = EffectiveTimeout;
+            if (_cachedAstralRegex != null && kc == _cachedAstralKCode && timeout == _cachedAstralTimeout) {
+                return _cachedAstralRegex;
+            }
+
+            // the plain translation first: it validates the pattern and sets _hasGAnchor
+            Regex plain = TransformPattern(encoding, kc);
+            Regex result;
+            try {
+                bool hasGAnchor;
+                result = new Regex(RegexpTransformer.Transform(GetClrPatternSource(encoding, kc), _options, out hasGAnchor, true), plain.Options, timeout);
+            } catch (Exception) {
+                result = plain;
+            }
+
+            _cachedAstralTimeout = timeout;
+            _cachedAstralKCode = kc;
+            _cachedAstralRegex = result;
+            return result;
+        }
+
+        private string/*!*/ GetClrPatternSource(RubyEncoding encoding, RubyRegexOptions kc) {
+            return (kc != 0 || encoding == RubyEncoding.Binary) ? _pattern.ToString(encoding.Encoding) : _pattern.ConvertToString();
         }
 
         private Regex/*!*/ TransformPattern(RubyEncoding encoding, RubyRegexOptions kc) {
@@ -270,12 +318,7 @@ namespace IronRuby.Builtins {
                 return _cachedRegex;
             }
 
-            string pattern;
-            if (kc != 0 || encoding == RubyEncoding.Binary) {
-                pattern = _pattern.ToString(encoding.Encoding);
-            } else {
-                pattern = _pattern.ConvertToString();
-            }
+            string pattern = GetClrPatternSource(encoding, kc);
 
             Regex result;
             try {
@@ -676,10 +719,124 @@ namespace IronRuby.Builtins {
 
         #region Match, LastMatch, Matches, Split
 
+        /// <summary>
+        /// Ruby's pos argument - Regexp#match(str, pos), String#index(re, pos), #match? - is a
+        /// character index, negative from the end, while Match and LastMatch take the index
+        /// space the regex runs in: CLR chars, or bytes under a k-coding. Answers false when the
+        /// position is outside the string.
+        /// </summary>
+        private bool ToSearchStart(MutableString/*!*/ input, ref int start, bool clamp) {
+            if ((_options & RubyRegexOptions.EncodingMask) == 0 || input.HasByteCharacters) {
+                // the regex runs on the string's own characters (or on bytes that are characters)
+                if (start == 0 || input.KnowsCharIndexIsClrIndex) {
+                    return true;
+                }
+                input.PrepareForCharacterRead();
+                if (!input.HasSurrogatePairs()) {
+                    return true;
+                }
+            }
+
+            int length = input.GetCharacterCount();
+            if (start < 0) {
+                start += length;
+                if (start < 0) {
+                    return false;
+                }
+            }
+            if (start > length) {
+                if (!clamp) {
+                    return false;
+                }
+                start = length;
+            }
+
+            if ((_options & RubyRegexOptions.EncodingMask) == 0 || input.HasByteCharacters) {
+                start = input.ToClrIndex(start);
+            } else {
+                input.PrepareForCharacterRead();
+                start = input.GetSlice(0, input.ToClrIndex(start)).GetByteCount();
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// Match starting at Ruby character index <paramref name="start"/> (negative counts from
+        /// the end). Null if there is no match or the start is outside the string.
+        /// </summary>
+        public MatchData MatchFromCharacter(MutableString/*!*/ input, int start, bool freezeInput) {
+            return MatchFromCharacter(input, start, freezeInput, false);
+        }
+
+        /// <summary>
+        /// With <paramref name="clampToEnd"/> a start past the end searches from the end, which is
+        /// what Regexp#match and String#match do (MRI's rb_str_offset stops at the end); #index
+        /// and #match? answer nil resp. false instead.
+        /// </summary>
+        public MatchData MatchFromCharacter(MutableString/*!*/ input, int start, bool freezeInput, bool clampToEnd) {
+            if (clampToEnd && start > 0) {
+                int length = input.GetCharacterCount();
+                if (start > length) {
+                    start = length;
+                }
+            }
+            if (!ToSearchStart(input, ref start, false)) {
+                return null;
+            }
+            return Match(input, start, freezeInput);
+        }
+
+        /// <summary>
+        /// The last match starting at or before Ruby character index <paramref name="start"/>.
+        /// </summary>
+        public MatchData LastMatchFromCharacter(MutableString/*!*/ input, int start) {
+            if (start != Int32.MaxValue && !ToSearchStart(input, ref start, true)) {
+                return null;
+            }
+            return LastMatch(input, start);
+        }
+
+
         public MatchData Match(MutableString/*!*/ input) {
             string str;
             RubyEncoding kcode = null;
-            return MatchData.Create(Transform(ref kcode, input, 0, out str).Match(str), input, true, str, kcode, 0, this);
+            bool astral;
+            Regex regex = Transform(ref kcode, input, 0, out str, out astral);
+            return MatchData.Create(astral ? MatchOutsidePairs(regex, str, 0) : regex.Match(str), input, true, str, kcode, 0, this, astral);
+        }
+
+        /// <summary>
+        /// A search in a subject with surrogate pairs: .NET tries every UTF-16 position in turn,
+        /// the one between the two halves of a pair included, and a match can start there - a loop
+        /// over a class that takes in both halves ([^"]*, .*), \B, a lookaround. None of those
+        /// are positions Ruby has, so such a match is dropped and the search goes on from the
+        /// next character. (Only a match nothing before it could make gets that far.)
+        /// </summary>
+        private static Match/*!*/ MatchOutsidePairs(Regex/*!*/ regex, string/*!*/ str, int start) {
+            while (true) {
+                Match match = regex.Match(str, start);
+                if (!match.Success || !IsInsidePair(str, match.Index)) {
+                    return match;
+                }
+                start = match.Index + 1;
+            }
+        }
+
+        /// <summary>
+        /// The same over a window of the subject. A window's start is where \A matches, so the
+        /// search cannot be restarted past the dropped match with a narrower window; it goes on
+        /// with NextMatch instead, inside the same window.
+        /// </summary>
+        private static Match/*!*/ MatchOutsidePairs(Regex/*!*/ regex, string/*!*/ str, int start, int length) {
+            Match match = regex.Match(str, start, length);
+            while (match.Success && IsInsidePair(str, match.Index)) {
+                match = match.NextMatch();
+            }
+            return match;
+        }
+
+        internal static bool IsInsidePair(string/*!*/ str, int index) {
+            return index > 0 && index < str.Length && Char.IsLowSurrogate(str[index]) && Char.IsHighSurrogate(str[index - 1]);
         }
 
         /// <summary>
@@ -688,14 +845,15 @@ namespace IronRuby.Builtins {
         public MatchData Match(MutableString/*!*/ input, int start, bool freezeInput) {
             string str;
             RubyEncoding kcode = null;
-            Regex regex = Transform(ref kcode, input, start, out str);
+            bool astral;
+            Regex regex = Transform(ref kcode, input, start, out str, out astral);
 
             Match match;
             if (kcode != null) {
                 if (str == null) {
                     return null;
                 }
-                match = regex.Match(str, 0);
+                match = astral ? MatchOutsidePairs(regex, str, 0) : regex.Match(str, 0);
             } else {
                 if (start < 0) {
                     start += str.Length;
@@ -703,10 +861,10 @@ namespace IronRuby.Builtins {
                 if (start < 0 || start > str.Length) {
                     return null;
                 }
-                match = regex.Match(str, start);
+                match = astral ? MatchOutsidePairs(regex, str, start) : regex.Match(str, start);
             }
 
-            return MatchData.Create(match, input, freezeInput, str, kcode, (kcode != null) ? ((start < 0) ? start + input.GetByteCount() : start) : 0, this);
+            return MatchData.Create(match, input, freezeInput, str, kcode, (kcode != null) ? ((start < 0) ? start + input.GetByteCount() : start) : 0, this, astral);
         }
 
         /// <summary>
@@ -731,7 +889,8 @@ namespace IronRuby.Builtins {
             // paying for the tail again at every position the scanner stops at.
             string str;
             RubyEncoding kcode = null;
-            Regex regex = Transform(ref kcode, input, 0, out str);
+            bool astral;
+            Regex regex = Transform(ref kcode, input, 0, out str, out astral);
 
             // Under a k-coding the offsets are bytes, and "start" only indexes the converted
             // string directly when that coding spells every character in one byte - which the
@@ -739,7 +898,7 @@ namespace IronRuby.Builtins {
             int offset = 0;
             if (kcode != null && !kcode.IsSingleByteCharacterSet) {
                 kcode = null;
-                regex = Transform(ref kcode, input, start, out str);
+                regex = Transform(ref kcode, input, start, out str, out astral);
                 offset = (start < 0) ? start + input.GetByteCount() : start;
                 start = 0;
             }
@@ -758,8 +917,8 @@ namespace IronRuby.Builtins {
                 regex = AnchorAtSearchStart(regex);
             }
 
-            Match match = regex.Match(str, start, str.Length - start);
-            return MatchData.Create(match, input, freezeInput, str, kcode, offset, this);
+            Match match = astral ? MatchOutsidePairs(regex, str, start, str.Length - start) : regex.Match(str, start, str.Length - start);
+            return MatchData.Create(match, input, freezeInput, str, kcode, offset, this, astral);
         }
 
         /// <summary>
@@ -807,7 +966,8 @@ namespace IronRuby.Builtins {
         public MatchData LastMatch(MutableString/*!*/ input, int start) {
             string str;
             RubyEncoding kcode = null;
-            Regex regex = Transform(ref kcode, input, 0, out str);
+            bool astral;
+            Regex regex = Transform(ref kcode, input, 0, out str, out astral);
             Debug.Assert(str != null);
 
             if (kcode != null) {
@@ -830,19 +990,24 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            if (astral && IsInsidePair(str, start)) {
+                // no match can start between the halves of a pair
+                start--;
+            }
+
             Match match;
             if (_hasGAnchor) {
-                match = LastMatchWithGAnchor(regex, str, start);
+                match = LastMatchWithGAnchor(regex, str, start, astral);
                 if (match == null) {
                     return null;
                 }
             } else {
-                match = LastMatch(regex, str, start);
+                match = LastMatch(regex, str, start, astral);
                 if (match == null) {
                     return null;
                 }
             }
-            return MatchData.Create(match, input, true, str, kcode, 0, this);
+            return MatchData.Create(match, input, true, str, kcode, 0, this, astral);
         }
 
         /// <summary>
@@ -851,7 +1016,7 @@ namespace IronRuby.Builtins {
         /// starts at, so \G becomes a lookbehind for exactly "start" characters and a candidate position
         /// only counts when the leftmost match from it starts right there.
         /// </summary>
-        private static Match LastMatchWithGAnchor(Regex/*!*/ regex, string/*!*/ input, int start) {
+        private static Match LastMatchWithGAnchor(Regex/*!*/ regex, string/*!*/ input, int start, bool astral) {
             string pattern = regex.ToString();
             var sb = new StringBuilder();
             for (int i = 0; i < pattern.Length; i++) {
@@ -870,6 +1035,9 @@ namespace IronRuby.Builtins {
 
             var rewritten = new Regex(sb.ToString(), regex.Options, regex.MatchTimeout);
             for (int p = start; p >= 0; p--) {
+                if (astral && IsInsidePair(input, p)) {
+                    continue;
+                }
                 Match match = rewritten.Match(input, p);
                 if (match.Success && match.Index == p) {
                     return match;
@@ -881,14 +1049,14 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Binary searches "str" for the last match whose index is within the range [0, start].
         /// </summary>
-        private static Match LastMatch(Regex/*!*/ regex, string/*!*/ input, int start) {
+        private static Match LastMatch(Regex/*!*/ regex, string/*!*/ input, int start, bool astral) {
             Match result = null;
             int s = 0;
             int e = start;
 
             while (s <= e) {
                 int m = (s + e) / 2;
-                Match match = regex.Match(input, m);
+                Match match = astral ? MatchOutsidePairs(regex, input, m) : regex.Match(input, m);
                 if (match.Success && match.Index <= e) {
                     result = match;
                     s = match.Index + 1;
@@ -906,7 +1074,9 @@ namespace IronRuby.Builtins {
         public IList<MatchData>/*!*/ Matches(MutableString/*!*/ input, bool inputMayMutate) {
             string str;
             RubyEncoding kcode = null;
-            MatchCollection matches = Transform(ref kcode, input, 0, out str).Matches(str);
+            bool astral;
+            Regex regex = Transform(ref kcode, input, 0, out str, out astral);
+            IList<Match> matches = astral ? MatchesOverPairs(regex, str) : (IList<Match>)regex.Matches(str);
 
             var result = new MatchData[matches.Count];
             if (result.Length > 0 && inputMayMutate) {
@@ -915,9 +1085,32 @@ namespace IronRuby.Builtins {
             }
 
             for (int i = 0; i < result.Length; i++) {
-                result[i] = MatchData.Create(matches[i], input, false, str, kcode, 0, this);
+                result[i] = MatchData.Create(matches[i], input, false, str, kcode, 0, this, astral);
             }
 
+            return result;
+        }
+
+        /// <summary>
+        /// Regex.Matches, except that the search after an empty match resumes past the whole
+        /// character it stopped at: .NET moves on by one UTF-16 unit, which inside a surrogate
+        /// pair would find an empty match between its halves ("\u{1F600}".scan(/x*/) would be
+        /// three matches, not two).
+        /// </summary>
+        private static List<Match>/*!*/ MatchesOverPairs(Regex/*!*/ regex, string/*!*/ str) {
+            var result = new List<Match>();
+            Match match = MatchOutsidePairs(regex, str, 0);
+            while (match.Success) {
+                result.Add(match);
+                int next = match.Index + match.Length;
+                if (match.Length == 0) {
+                    if (next >= str.Length) {
+                        break;
+                    }
+                    next = MutableString.NextCharacterClrIndex(str, next);
+                }
+                match = MatchOutsidePairs(regex, str, next);
+            }
             return result;
         }
 

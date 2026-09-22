@@ -38,7 +38,7 @@ namespace IronRuby.Builtins {
         private Content/*!*/ _content;
         private RubyEncoding/*!*/ _encoding;
         
-        private uint _flags = AsciiUnknownFlag | SurrogatesUnknownFlag;
+        private uint _flags = AsciiUnknownFlag | SurrogatesUnknownFlag | CharIndexChangedFlags;
 
         // true if frozen:
         private const uint IsFrozenFlag = 1;
@@ -50,7 +50,11 @@ namespace IronRuby.Builtins {
         // set every time a change occurs, used to track CharArrayContent._immutableSnapshot validity:
         private const uint HasChangedCharArrayToStringFlag = 1 << 2;
 
-        private const uint HasChangedFlags = HasChangedFlag | HasChangedCharArrayToStringFlag;
+        // Set every time a change occurs: retires the character index table of mutable content
+        // (MutableString.CharIndex.cs).
+        private const uint CharIndexChangedFlags = 1 << 14;
+
+        private const uint HasChangedFlags = HasChangedFlag | HasChangedCharArrayToStringFlag | CharIndexChangedFlags;
 
         // true if all bytes/characters are < x80 and the encoding is ASCII-identity
         private const uint IsAsciiFlag = 1 << 3;
@@ -113,6 +117,7 @@ namespace IronRuby.Builtins {
             Assert.NotNull(content);
             content.SetOwner(this);
             _content = content;
+            _flags |= CharIndexChangedFlags;
         }
 
         private void SetEncoding(RubyEncoding/*!*/ encoding) {
@@ -136,7 +141,7 @@ namespace IronRuby.Builtins {
                 flags |= SurrogatesUnknownFlag;
             }
 
-            _flags = flags | HasChangedFlag;
+            _flags = flags | HasChangedFlag | CharIndexChangedFlags;
             _encoding = encoding;
         }
 
@@ -155,6 +160,10 @@ namespace IronRuby.Builtins {
             : this(str._content.Clone(), str._encoding) {
             IsTainted = str.IsTainted;
             IsUntrusted = str.IsUntrusted;
+            // The same characters in the same encoding: what is known about them still holds, so
+            // a copy - the frozen one each MatchData keeps, say - need not scan them again.
+            const uint CharacterFlags = IsAsciiFlag | AsciiUnknownFlag | NoSurrogatesFlag | SurrogatesUnknownFlag;
+            _flags = (_flags & ~CharacterFlags) | (str._flags & CharacterFlags);
         }
 
         // mutable (doesn't make a copy of the array):
@@ -1350,6 +1359,7 @@ namespace IronRuby.Builtins {
 
         public void SetLength(int value) {
             ContractUtils.Requires(value >= 0, "value");
+            _flags |= CharIndexChangedFlags;
             if (value < _content.Count) {
                 _content.Remove(value, _content.Count - value);
             } else {
@@ -1370,6 +1380,9 @@ namespace IronRuby.Builtins {
         /// Each invalid byte sequence is counted as a single character.
         /// </summary>
         public int GetCharacterCount() {
+            if (!KnowsCharIndexIsClrIndex && !IsBinary && HasSurrogates()) {
+                return GetCharacterCountWithPairs();
+            }
             return _content.GetCharacterCount();
         }
 
@@ -2334,9 +2347,25 @@ namespace IronRuby.Builtins {
         public MutableString/*!*/ Replace(int start, int count, MutableString value) {
             //RequiresArrayRange(start, count);
 
-            // TODO:
-            Mutate(value);
-            return Remove(start, count).Insert(start, value);
+            // Checked up front, so that an incompatible value leaves the string as it was. Remove
+            // and Insert then keep what is known about the ASCII-ness and surrogates of the string
+            // (Mutate(value) used to throw both away), so that a String#[]= does not make the next
+            // index operation rescan the whole string.
+            RequireCompatibleEncoding(value);
+
+            // One BMP character for another leaves every character where it was, so a character
+            // index table (MutableString.CharIndex.cs) stays valid: s[i] = "x" in a loop over a
+            // string with surrogate pairs would otherwise rebuild it on every assignment.
+            var content = _content;
+            bool keepCharIndex = (_flags & CharIndexChangedFlags) == 0 && count == 1 && !IsBinary && !value.IsBinary &&
+                value._content.Count == 1 && !Char.IsSurrogate(value._content.GetChar(0)) && !Char.IsSurrogate(content.GetChar(start));
+
+            Remove(start, count).Insert(start, value);
+
+            if (keepCharIndex && ReferenceEquals(content, _content)) {
+                _flags &= ~CharIndexChangedFlags;
+            }
+            return this;
         }
 
         // TODO: characters

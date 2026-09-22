@@ -74,6 +74,31 @@ namespace IronRuby.Builtins {
 
         #region Helpers
 
+        // Ruby indexes a String by character, the CLR by UTF-16 code unit, and the two differ for
+        // a character above U+FFFF (a surrogate pair). The methods that take or answer an index
+        // work in characters - GetCharacterLength - and translate to CLR indices only at the
+        // point they touch the content, with MutableString.ToClrIndex / ToClrRange /
+        // ToCharacterIndex (MutableString.CharIndex.cs). For a string without pairs every one
+        // of those is the identity decided by a cached flag.
+
+        /// <summary>
+        /// The length in characters, as Ruby counts it, with the content switched to characters so
+        /// that the CLR indices translated from it address characters too.
+        /// </summary>
+        internal static int GetCharacterLength(MutableString/*!*/ self) {
+            self.PrepareForCharacterRead();
+            return self.KnowsCharIndexIsClrIndex ? self.GetCharCount() : self.GetCharacterCount();
+        }
+
+        /// <summary>
+        /// The characters [start, start + count), both already normalized against
+        /// GetCharacterLength.
+        /// </summary>
+        internal static MutableString/*!*/ GetCharacterSlice(MutableString/*!*/ self, int start, int count) {
+            self.ToClrRange(ref start, ref count);
+            return self.GetSlice(start, count);
+        }
+
         internal static bool InExclusiveRangeNormalized(int length, ref int index) {
             if (index < 0) {
                 index = index + length;
@@ -81,11 +106,11 @@ namespace IronRuby.Builtins {
             return index >= 0 && index < length;
         }
 
-        private static bool InInclusiveRangeNormalized(MutableString/*!*/ str, ref int index) {
+        private static bool InInclusiveRangeNormalized(int length, ref int index) {
             if (index < 0) {
-                index = index + str.Length;
+                index = index + length;
             }
-            return index >= 0 && index <= str.Length;
+            return index >= 0 && index <= length;
         }
 
         internal static bool NormalizeSubstringRange(ConversionStorage<int>/*!*/ fixnumCast, Range/*!*/ range, int length, out int begin, out int count) {
@@ -131,7 +156,8 @@ namespace IronRuby.Builtins {
         internal static int NormalizeInsertIndex(int index, int length) {
             int result = index < 0 ? index + length + 1 : index;
             if (result > length || result < 0) {
-                throw RubyExceptions.CreateIndexError("index {0} out of string", index);
+                // MRI inserts before index + 1 for a negative index and reports that one
+                throw RubyExceptions.CreateIndexError("index {0} out of string", index < 0 ? index + 1 : index);
             }
             return result;
         }
@@ -769,12 +795,14 @@ namespace IronRuby.Builtins {
             self.RequireNotFrozen();
 
             // Ruby 1.9 returns the character at the index, not its first byte.
-            if (!InExclusiveRangeNormalized(self.GetCharCount(), ref index)) {
+            if (!InExclusiveRangeNormalized(GetCharacterLength(self), ref index)) {
                 return null;
             }
 
-            MutableString result = self.GetSlice(index, 1);
-            self.Remove(index, 1);
+            int count = 1;
+            self.ToClrRange(ref index, ref count);
+            MutableString result = self.GetSlice(index, count);
+            self.Remove(index, count);
             return result;
         }
 
@@ -785,14 +813,21 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
-            if (!InInclusiveRangeNormalized(self, ref start)) {
+            int charCount = GetCharacterLength(self);
+            if (!InInclusiveRangeNormalized(charCount, ref start)) {
                 return null;
             }
 
-            if (start + length > self.Length) {
-                length = self.Length - start;
+            if ((long)start + length > charCount) {
+                length = charCount - start;
             }
 
+            self.ToClrRange(ref start, ref length);
+            return RemoveClrRange(self, start, length);
+        }
+
+        /// <summary>Removes and answers the CLR range [start, start + length).</summary>
+        private static MutableString/*!*/ RemoveClrRange(MutableString/*!*/ self, int start, int length) {
             MutableString result = self.CreateDerived().Append(self, start, length).TaintBy(self);
             self.Remove(start, length);
             return result;
@@ -805,7 +840,7 @@ namespace IronRuby.Builtins {
             // Through NormalizeSubstringRange so that a beginless or endless range means the start
             // resp. the end of the string, as it does for #slice: `str.slice!(0..)` clears it.
             int begin, count;
-            if (!NormalizeSubstringRange(fixnumCast, range, self.Length, out begin, out count)) {
+            if (!NormalizeSubstringRange(fixnumCast, range, GetCharacterLength(self), out begin, out count)) {
                 return null;
             }
 
@@ -815,16 +850,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice!")]
         public static MutableString RemoveSubstringInPlace(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex) {
             self.RequireNotFrozen();
-            if (regex.IsEmpty) {
-                return self.CloneDerived().TaintBy(regex, scope);
-            }
-
             MatchData match = RegexpOps.Match(scope, regex, self);
             if (match == null) {
                 return null;
             }
 
-            return RemoveSubstringInPlace(self, match.Index, match.Length).TaintBy(regex, scope);
+            return RemoveClrRange(self, match.Index, match.Length).TaintBy(regex, scope);
         }
 
         [RubyMethod("slice!")]
@@ -832,17 +863,13 @@ namespace IronRuby.Builtins {
             [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int occurrance) {
 
             self.RequireNotFrozen();
-            if (regex.IsEmpty) {
-                return self.CloneDerived().TaintBy(regex, scope);
-            }
-
             MatchData match = RegexpOps.Match(scope, regex, self);
             if (match == null || !RegexpOps.NormalizeGroupIndex(ref occurrance, match.GroupCount)) {
                 return null;
             }
 
             return match.GroupSuccess(occurrance) ?
-                RemoveSubstringInPlace(self, match.GetGroupStart(occurrance), match.GetGroupLength(occurrance)).TaintBy(regex, scope) : null;
+                RemoveClrRange(self, match.GetGroupStart(occurrance), match.GetGroupLength(occurrance)).TaintBy(regex, scope) : null;
         }
 
         [RubyMethod("slice!")]
@@ -852,12 +879,16 @@ namespace IronRuby.Builtins {
                 return searchStr.CloneDerived();
             }
 
+            // CLR indices of the character representations: a byte-level operation (#start_with?,
+            // #getbyte) may have left either one as bytes.
+            self.PrepareForCharacterRead();
+            searchStr.PrepareForCharacterRead();
             int index = self.IndexOf(searchStr);
             if (index < 0) {
                 return null;
             }
 
-            RemoveSubstringInPlace(self, index, searchStr.Length);
+            RemoveClrRange(self, index, searchStr.Length);
             return searchStr.CloneDerived();
         }
 
@@ -868,17 +899,18 @@ namespace IronRuby.Builtins {
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static MutableString GetChar(MutableString/*!*/ self, [DefaultProtocol]int index) {
-            return InExclusiveRangeNormalized(self.GetCharCount(), ref index) ? self.GetSlice(index, 1) : null;
+            return InExclusiveRangeNormalized(GetCharacterLength(self), ref index) ? GetCharacterSlice(self, index, 1) : null;
         }
 
         [RubyMethod("[]")]
         [RubyMethod("slice")]
         public static MutableString GetSubstring(MutableString/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol]int count) {
-            int charCount = self.GetCharCount();
+            int charCount = GetCharacterLength(self);
             if (!NormalizeSubstringRange(charCount, ref start, ref count)) {
-                return (start == charCount) ? self.CreateDerived().TaintBy(self) : null;
+                return (start == charCount && count >= 0) ? self.CreateDerived().TaintBy(self) : null;
             }
 
+            self.ToClrRange(ref start, ref count);
             return self.CreateDerived().Append(self, start, count).TaintBy(self);
         }
 
@@ -976,7 +1008,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice")]
         public static MutableString GetSubstring(ConversionStorage<int>/*!*/ fixnumCast, MutableString/*!*/ self, [NotNull]Range/*!*/ range) {
             int begin, count;
-            if (!NormalizeSubstringRange(fixnumCast, range, self.GetCharCount(), out begin, out count)) {
+            if (!NormalizeSubstringRange(fixnumCast, range, GetCharacterLength(self), out begin, out count)) {
                 return null;
             }
             return (count < 0) ? self.CreateDerived().TaintBy(self) : GetSubstring(self, begin, count);
@@ -1007,10 +1039,6 @@ namespace IronRuby.Builtins {
         [RubyMethod("slice")]
         public static MutableString GetSubstring(RubyScope/*!*/ scope, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int occurrance) {
-            if (regex.IsEmpty) {
-                return self.CreateDerived().TaintBy(self).TaintBy(regex, scope);
-            }
-
             MatchData match = RegexpOps.Match(scope, regex, self);
             if (match == null || !RegexpOps.NormalizeGroupIndex(ref occurrance, match.GroupCount)) {
                 return null;
@@ -1098,24 +1126,27 @@ namespace IronRuby.Builtins {
 
             // The index counts characters: content left as bytes by a byte operation (#bytesize,
             // #getbyte, ...) is switched back first, or a multibyte character would be split.
-            self.PrepareForCharacterRead();
-            index = index < 0 ? index + self.Length : index;
+            int length = GetCharacterLength(self);
+            int at = index < 0 ? index + length : index;
             // Appending at the very end is allowed, which is the only way "" can be assigned to.
-            if (index < 0 || index > self.Length) {
+            if (at < 0 || at > length) {
+                // MRI quotes the index as it was given
                 throw RubyExceptions.CreateIndexError("index {0} out of string", index);
             }
 
-            if (index == self.Length) {
+            if (at == length) {
                 self.Append(value).TaintBy(value);
                 return value;
             }
 
+            int count = 1;
+            self.ToClrRange(ref at, ref count);
             if (value.IsEmpty) {
-                self.Remove(index, 1).TaintBy(value);
+                self.Remove(at, count).TaintBy(value);
                 return MutableString.CreateEmpty();
             }
 
-            self.Replace(index, 1, value).TaintBy(value);
+            self.Replace(at, count, value).TaintBy(value);
             return value;
         }
 
@@ -1127,32 +1158,20 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateIndexError("negative length {0}", charsToOverwrite);
             }
 
-            self.PrepareForCharacterRead();
-            if (System.Math.Abs(start) > self.Length) {
+            int length = GetCharacterLength(self);
+            if (System.Math.Abs((long)start) > length) {
                 throw RubyExceptions.CreateIndexError("index {0} out of string", start);
             }
 
-            start = start < 0 ? start + self.Length : start;
+            start = start < 0 ? start + length : start;
+            int count = System.Math.Min(charsToOverwrite, length - start);
+            self.ToClrRange(ref start, ref count);
+            return ReplaceClrRange(self, start, count, value);
+        }
 
-            if (charsToOverwrite <= value.Length) {
-                int insertIndex = start + charsToOverwrite;
-                int limit = charsToOverwrite;
-                if (insertIndex > self.Length) {
-                    limit -= insertIndex - self.Length;
-                    insertIndex = self.Length;
-                }
-
-                self.Replace(start, limit, value);
-            } else {
-                self.Replace(start, value.Length, value);
-
-                int pos = start + value.Length;
-                int charsToRemove = charsToOverwrite - value.Length;
-                int charsLeftInString = self.Length - pos;
-
-                self.Remove(pos, System.Math.Min(charsToRemove, charsLeftInString));
-            }
-
+        /// <summary>Replaces the CLR range [start, start + count) with value.</summary>
+        private static MutableString/*!*/ ReplaceClrRange(MutableString/*!*/ self, int start, int count, MutableString/*!*/ value) {
+            self.Replace(start, count, value);
             self.TaintBy(value);
             return value;
         }
@@ -1161,17 +1180,20 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ ReplaceSubstring(ConversionStorage<int>/*!*/ fixnumCast, MutableString/*!*/ self, 
             [NotNull]Range/*!*/ range, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
+            int length = GetCharacterLength(self);
             int begin = (range.Begin == null) ? 0 : Protocols.CastToFixnum(fixnumCast, range.Begin);
-            int end = (range.End == null) ? self.Length : Protocols.CastToFixnum(fixnumCast, range.End);
+            int end = (range.End == null) ? length : Protocols.CastToFixnum(fixnumCast, range.End);
 
-            int normalizedBegin = begin < 0 ? begin + self.Length : begin;
+            int normalizedBegin = begin < 0 ? begin + length : begin;
 
-            if (normalizedBegin < 0 || normalizedBegin > self.Length) {
-                // MRI quotes the range as it was written, not as it was normalized.
-                throw RubyExceptions.CreateRangeError("{0}..{1} out of range", begin, end);
+            if (normalizedBegin < 0 || normalizedBegin > length) {
+                // MRI quotes the range as it was written, not as it was normalized - and an
+                // endless one without its missing end.
+                throw RubyExceptions.CreateRangeError("{0}{1}{2} out of range", begin,
+                    range.ExcludeEnd ? "..." : "..", (range.End == null) ? (object)"" : end);
             }
 
-            end = end < 0 ? end + self.Length : end;
+            end = end < 0 ? end + length : end;
 
             int count = range.ExcludeEnd ? end - normalizedBegin : end - normalizedBegin + 1;
             // An end before the beginning is an insertion, not a negative-length error.
@@ -1182,12 +1204,15 @@ namespace IronRuby.Builtins {
         public static MutableString ReplaceSubstring(MutableString/*!*/ self,
             [NotNull]MutableString/*!*/ substring, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
 
+            // see RemoveSubstringInPlace(self, searchStr)
+            self.PrepareForCharacterRead();
+            substring.PrepareForCharacterRead();
             int index = self.IndexOf(substring);
             if (index == -1) {
                 throw RubyExceptions.CreateIndexError("string not matched");
             }
 
-            return ReplaceSubstring(self, index, substring.Length, value);
+            return ReplaceClrRange(self, index, substring.Length, value);
         }
 
         [RubyMethod("[]=")]
@@ -1230,7 +1255,7 @@ namespace IronRuby.Builtins {
 
             var replacement = value as MutableString ?? Protocols.CastToString(stringCast, value);
 
-            return ReplaceSubstring(self, match.GetGroupStart(groupIndex), match.GetGroupLength(groupIndex), replacement);
+            return ReplaceClrRange(self, match.GetGroupStart(groupIndex), match.GetGroupLength(groupIndex), replacement);
         }
 
         #endregion
@@ -1504,7 +1529,7 @@ namespace IronRuby.Builtins {
                 self.RequireCompatibleEncoding(padding);
             }
 
-            int selfLength = self.GetCharCount();
+            int selfLength = GetCharacterLength(self);
             if (selfLength >= length) {
                 return self;
             }
@@ -1524,14 +1549,14 @@ namespace IronRuby.Builtins {
 
         /// <summary>Appends the padding, repeated and then cut short, until count characters are added.</summary>
         private static void AppendPadding(MutableString/*!*/ result, MutableString/*!*/ padding, int count) {
-            int paddingLength = padding.GetCharCount();
+            int paddingLength = GetCharacterLength(padding);
             for (int i = 0; i < count / paddingLength; i++) {
                 result.Append(padding);
             }
 
             int remainder = count % paddingLength;
             if (remainder > 0) {
-                result.Append(padding.GetSlice(0, remainder));
+                result.Append(GetCharacterSlice(padding, 0, remainder));
             }
         }
 
@@ -1584,6 +1609,11 @@ namespace IronRuby.Builtins {
                     result.Remove(length - 1, 1);
                 }
             } else if (result.EndsWith(separator)) {
+                // EndsWith may have switched either string to bytes, so the lengths are taken
+                // afterwards, in the same representation
+                result.PrepareForCharacterRead();
+                separator.PrepareForCharacterRead();
+                length = result.GetCharCount();
                 int separatorLength = separator.GetCharCount();
                 result.Remove(length - separatorLength, separatorLength);
             }
@@ -1623,7 +1653,9 @@ namespace IronRuby.Builtins {
         private static MutableString/*!*/ ChopInteral(MutableString/*!*/ self) {
             int length = self.GetCharCount();
             if (length == 1 || self.GetChar(length - 2) != '\r' || self.GetChar(length - 1) != '\n') {
-                self.Remove(length - 1, 1);
+                // the last character, which is two CLR chars if it is a surrogate pair
+                int last = (length > 1 && !self.IsBinary && Char.IsSurrogatePair(self.GetChar(length - 2), self.GetChar(length - 1))) ? 2 : 1;
+                self.Remove(length - last, last);
             } else {
                 self.Remove(length - 2, 2);
             }
@@ -3087,16 +3119,15 @@ namespace IronRuby.Builtins {
         public static object Index(MutableString/*!*/ self, 
             [DefaultProtocol, NotNull]MutableString/*!*/ substring, [DefaultProtocol, Optional]int start) {
 
-            self.PrepareForCharacterRead();
-            if (!NormalizeStart(self.GetCharCount(), ref start)) {
+            if (!NormalizeStart(GetCharacterLength(self), ref start)) {
                 return null;
             }
 
             self.RequireCompatibleEncoding(substring);
             substring.PrepareForCharacterRead();
 
-            int result = self.IndexOf(substring, start);
-            return (result != -1) ? ScriptingRuntimeHelpers.Int32ToObject(result) : null;
+            int result = self.IndexOf(substring, self.ToClrIndex(start));
+            return (result != -1) ? ScriptingRuntimeHelpers.Int32ToObject(self.ToCharacterIndex(result)) : null;
         }
 
         // encoding aware
@@ -3108,17 +3139,16 @@ namespace IronRuby.Builtins {
             // refuse a receiver whose bytes are not valid in its encoding, the way MRI does.
             RequireValidEncoding(self);
 
-            MatchData match = regex.Match(self, start, true);
+            MatchData match = regex.MatchFromCharacter(self, start, true);
             scope.GetInnerMostClosureScope().CurrentMatch = match;
-            return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.Index) : null;
+            return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.CharacterIndex) : null;
         }
         
         // encoding aware
         [RubyMethod("rindex")]
         public static object LastIndexOf(MutableString/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ substring) {
             if (substring.IsEmpty) {
-                self.PrepareForCharacterRead();
-                return ScriptingRuntimeHelpers.Int32ToObject(self.GetCharCount());
+                return ScriptingRuntimeHelpers.Int32ToObject(GetCharacterLength(self));
             }
             return LastIndexOf(self, substring, -1);
         }
@@ -3128,8 +3158,7 @@ namespace IronRuby.Builtins {
         public static object LastIndexOf(MutableString/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ substring, [DefaultProtocol]int start) {
 
-            self.PrepareForCharacterRead();
-            int charCount = self.GetCharCount();
+            int charCount = GetCharacterLength(self);
 
             start = IListOps.NormalizeIndex(charCount, start);
             if (start < 0) {
@@ -3141,8 +3170,11 @@ namespace IronRuby.Builtins {
             }
 
             self.RequireCompatibleEncoding(substring);
-            substring.PrepareForCharacterRead();
-            int subCharCount = substring.GetCharCount();
+            // A substring with a pair cannot occur in a receiver without one, so its CLR length -
+            // no scan of a fresh literal needed - is good enough for the checks below then.
+            int subCharCount = self.KnowsCharIndexIsClrIndex
+                ? substring.PrepareForCharacterRead().GetCharCount()
+                : GetCharacterLength(substring);
 
             // Nothing can match a substring longer than the receiver. Without this the clamp below
             // turns "".rindex("l", 0) into LastIndexOf(.., -1), which is a CLR ArgumentException.
@@ -3151,15 +3183,16 @@ namespace IronRuby.Builtins {
             }
 
             // LastIndexOf has CLR semantics: no characters of the substring are matched beyond start position.
-            // Hence we need to increase start by the length of the substring - 1.
+            // Hence we need to increase start by the length of the substring - 1 (in CLR chars).
+            int clrStart;
             if (start > charCount - subCharCount) {
-                start = charCount - 1;
+                clrStart = self.GetCharCount() - 1;
             } else {
-                start += subCharCount - 1;
+                clrStart = self.ToClrIndex(start) + substring.GetCharCount() - 1;
             }
 
-            int result = self.LastIndexOf(substring, start);
-            return (result != -1) ? ScriptingRuntimeHelpers.Int32ToObject(result) : null;
+            int result = self.LastIndexOf(substring, clrStart);
+            return (result != -1) ? ScriptingRuntimeHelpers.Int32ToObject(self.ToCharacterIndex(result)) : null;
         }
 
         // encoding aware
@@ -3167,9 +3200,9 @@ namespace IronRuby.Builtins {
         public static object LastIndexOf(RubyScope/*!*/ scope, MutableString/*!*/ self, 
             [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol, DefaultParameterValue(Int32.MaxValue)]int start) {
 
-            MatchData match = regex.LastMatch(self, start);
+            MatchData match = regex.LastMatchFromCharacter(self, start);
             scope.GetInnerMostClosureScope().CurrentMatch = match;
-            return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.Index) : null;
+            return (match != null) ? ScriptingRuntimeHelpers.Int32ToObject(match.CharacterIndex) : null;
         }
 
         // #byteindex, #byterindex, #partition and #rpartition do their work in Ruby (ruby4.rb), but a
@@ -3342,6 +3375,15 @@ namespace IronRuby.Builtins {
             var map = CharacterSelectorSet.Parse(self, ranges);
             self.PrepareForCharacterRead();
             MutableString result = self.CreateDerived().TaintBy(self);
+            if (self.HasSurrogatePairs()) {
+                for (int i = 0; i < self.Length; ) {
+                    int start = i;
+                    if (!map.Contains(CodePointAt(self, ref i))) {
+                        result.Append(self, start, i - start);
+                    }
+                }
+                return result;
+            }
             for (int i = 0; i < self.Length; i++) {
                 if (!map.Contains(self.GetChar(i))) {
                     result.Append(self.GetChar(i));
@@ -3406,6 +3448,15 @@ namespace IronRuby.Builtins {
             var map = CharacterSelectorSet.Parse(self, ranges);
             self.PrepareForCharacterRead();
             int count = 0;
+            if (self.HasSurrogatePairs()) {
+                // by code point: a character above U+FFFF is a pair
+                for (int i = 0; i < self.Length; ) {
+                    if (map.Contains(CodePointAt(self, ref i))) {
+                        count++;
+                    }
+                }
+                return ScriptingRuntimeHelpers.Int32ToObject(count);
+            }
             for (int i = 0; i < self.Length; i++) {
                 if (map.Contains(self.GetChar(i))) {
                     count++;
@@ -3461,7 +3512,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("insert")]
         public static MutableString Insert(MutableString/*!*/ self, [DefaultProtocol]int start, [DefaultProtocol, NotNull]MutableString/*!*/ value) {
-            return self.Insert(NormalizeInsertIndex(start, self.GetLength()), value).TaintBy(value);
+            return self.Insert(self.ToClrIndex(NormalizeInsertIndex(start, GetCharacterLength(self))), value).TaintBy(value);
         }
 
         #endregion
@@ -3966,14 +4017,14 @@ namespace IronRuby.Builtins {
 
             RequireValidEncoding(self);
 
-            if (regexp.IsEmpty) {
-                return InternalSplit(self, MutableString.FrozenEmpty, limit);
-            }
-
             if (self.IsEmpty) {
                 // If self is "", the result is always []. This is special cased because the code will
                 // return [""].
                 return new RubyArray();
+            }
+
+            if (regexp.IsEmpty) {
+                return InternalSplit(self, MutableString.FrozenEmpty, limit);
             }
 
             if (limit == 1) {
@@ -4001,7 +4052,9 @@ namespace IronRuby.Builtins {
         /// The captures of each match go into the result after the field it ended.
         /// </summary>
         private static RubyArray/*!*/ RegexSplit(MutableString/*!*/ self, RubyRegex/*!*/ regexp, int limit) {
+            // CLR indices throughout: they come from the matches and go straight back into slices.
             RubyArray result = new RubyArray();
+            self.PrepareForCharacterRead();
             int length = self.GetCharCount();
             int searchFrom = 0;
             int fieldStart = 0;
@@ -4023,13 +4076,13 @@ namespace IronRuby.Builtins {
                         break;
                     }
                     if (!steppedOverEmptyMatch) {
-                        // Nothing to cut here: move on a character and see whether the pattern
-                        // still matches emptily there.
-                        searchFrom++;
+                        // Nothing to cut here: move on a character - a whole surrogate pair if
+                        // it is one - and see whether the pattern still matches emptily there.
+                        searchFrom = self.NextCharacterClrIndex(searchFrom);
                         steppedOverEmptyMatch = true;
                         continue;
                     }
-                    result.Add(self.GetSlice(fieldStart, 1).TaintBy(self));
+                    result.Add(self.GetSlice(fieldStart, searchFrom - fieldStart).TaintBy(self));
                     fieldStart = searchFrom;
                 } else {
                     result.Add(self.GetSlice(fieldStart, matchStart - fieldStart).TaintBy(self));
@@ -4264,6 +4317,30 @@ namespace IronRuby.Builtins {
             }
             str.PrepareForCharacterRead();
 
+            if (str.HasSurrogatePairs()) {
+                // by code point, into a copy: a pair is one character
+                var squeezed = str.CreateDerived();
+                int previous = -1;
+                bool changed = false;
+                for (int i = 0; i < str.Length; ) {
+                    int start = i;
+                    int c = CodePointAt(str, ref i);
+                    if (c == previous && (ranges.Length == 0 || map.Contains(c))) {
+                        changed = true;
+                        continue;
+                    }
+                    squeezed.Append(str, start, i - start);
+                    previous = c;
+                }
+                if (!changed) {
+                    str.RequireNotFrozen();
+                    return null;
+                }
+                str.Clear();
+                str.Append(squeezed);
+                return str;
+            }
+
             // Do the squeeze in place
             int j = 1, k = 1;
             while (j < str.Length) {
@@ -4468,6 +4545,20 @@ namespace IronRuby.Builtins {
             from.PrepareForCharacterRead();
             to.PrepareForCharacterRead();
 
+            src.PrepareForCharacterRead();
+            if (src.HasSurrogatePairs() || from.HasSurrogatePairs() || to.HasSurrogatePairs()) {
+                // CharacterMap maps single CLR chars; a pair anywhere takes the code point path.
+                MutableString translated = TranslateCodePoints(src, from, to, squeeze, out anyCharacterMaps);
+                if (inplace) {
+                    if (anyCharacterMaps) {
+                        src.Clear();
+                        src.Append(translated);
+                    }
+                    return src;
+                }
+                return translated;
+            }
+
             CharacterMap map = CharacterMap.Create(from, to);
 
             if (to.IsEmpty) {
@@ -4479,6 +4570,125 @@ namespace IronRuby.Builtins {
             }
 
             return dst;
+        }
+
+        /// <summary>The code point at CLR index <paramref name="i"/>, which it moves past it.</summary>
+        private static int CodePointAt(MutableString/*!*/ str, ref int i) {
+            char c = str.GetChar(i++);
+            if (Char.IsHighSurrogate(c) && i < str.Length) {
+                char low = str.GetChar(i);
+                if (Char.IsLowSurrogate(low)) {
+                    i++;
+                    return Char.ConvertToUtf32(c, low);
+                }
+            }
+            return c;
+        }
+
+        private static void AppendCodePoint(MutableString/*!*/ str, int c) {
+            if (c >= 0x10000) {
+                str.Append(Char.ConvertFromUtf32(c));
+            } else {
+                str.Append((char)c);
+            }
+        }
+
+        /// <summary>
+        /// A tr operand as the ordered code point ranges it spells (low, high, low, high, ...),
+        /// by MRI's trnext rules - the ones CharacterSelector.Parse follows.
+        /// </summary>
+        private static List<int>/*!*/ ParseTrOperand(MutableString/*!*/ spec, bool allowNegation, out bool negated) {
+            spec.PrepareForCharacterRead();
+            int length = spec.Length;
+            int position = 0;
+            negated = allowNegation && length > 1 && spec.GetChar(0) == '^';
+            if (negated) {
+                position = 1;
+            }
+            var result = new List<int>();
+            while (position < length) {
+                if (spec.GetChar(position) == '\\' && position < length - 1) {
+                    position++;
+                }
+                int first = CodePointAt(spec, ref position);
+                if (position < length - 1 && spec.GetChar(position) == '-') {
+                    position++;
+                    int last = CodePointAt(spec, ref position);
+                    if (first > last) {
+                        throw RubyExceptions.CreateArgumentError("invalid range in string transliteration");
+                    }
+                    result.Add(first);
+                    result.Add(last);
+                } else {
+                    result.Add(first);
+                    result.Add(first);
+                }
+            }
+            return result;
+        }
+
+        /// <summary>#tr and #tr_s by code point, for strings with characters above U+FFFF.</summary>
+        private static MutableString/*!*/ TranslateCodePoints(MutableString/*!*/ src, MutableString/*!*/ from, MutableString/*!*/ to,
+            bool squeeze, out bool anyCharacterMaps) {
+
+            bool negated, ignored;
+            List<int> fromRanges = ParseTrOperand(from, true, out negated);
+            List<int> toRanges = ParseTrOperand(to, false, out ignored);
+            int last = toRanges.Count > 0 ? toRanges[toRanges.Count - 1] : -1;
+            bool delete = to.IsEmpty;
+
+            var result = src.CreateDerived().TaintBy(src);
+            anyCharacterMaps = false;
+            int previous = -1;
+            for (int i = 0; i < src.Length; ) {
+                int start = i;
+                int c = CodePointAt(src, ref i);
+
+                // position of c in the from sequence; a character listed twice maps as its last listing
+                int position = -1;
+                int offset = 0;
+                for (int r = 0; r < fromRanges.Count; r += 2) {
+                    if (c >= fromRanges[r] && c <= fromRanges[r + 1]) {
+                        position = offset + (c - fromRanges[r]);
+                    }
+                    offset += fromRanges[r + 1] - fromRanges[r] + 1;
+                }
+
+                int image;
+                if (negated) {
+                    image = (position < 0) ? last : -1;
+                } else if (position >= 0) {
+                    image = last;
+                    int at = 0;
+                    for (int r = 0; r < toRanges.Count; r += 2) {
+                        int size = toRanges[r + 1] - toRanges[r] + 1;
+                        if (position < at + size) {
+                            image = toRanges[r] + (position - at);
+                            break;
+                        }
+                        at += size;
+                    }
+                } else {
+                    image = -1;
+                }
+
+                if (image < 0 && !(delete && (negated ? position < 0 : position >= 0))) {
+                    result.Append(src, start, i - start);
+                    previous = -1;
+                    continue;
+                }
+
+                anyCharacterMaps = true;
+                if (delete) {
+                    continue;
+                }
+                if (squeeze && image == previous) {
+                    continue;
+                }
+                AppendCodePoint(result, image);
+                previous = image;
+            }
+            return result;
         }
 
         // encoding aware, TODO: KCODE
@@ -4542,7 +4752,7 @@ namespace IronRuby.Builtins {
             // string held as bytes is its bytesize. "  ü-umlaut  ".ljust(13) is 13 bytes but 12
             // characters, so measuring in bytes left it unpadded - the width of every non-ASCII
             // cell terminal-table draws came out one short.
-            int count = width - self.GetCharCount();
+            int count = width - GetCharacterLength(self);
             if (count <= 0) {
                 return self;
             }
@@ -4571,7 +4781,7 @@ namespace IronRuby.Builtins {
             }
 
             // Characters, not bytes - see #ljust.
-            int count = width - self.GetCharCount();
+            int count = width - GetCharacterLength(self);
             if (count <= 0) {
                 return self;
             }
