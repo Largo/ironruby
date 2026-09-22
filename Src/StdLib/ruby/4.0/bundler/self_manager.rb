@@ -185,6 +185,16 @@ module Bundler
     def find_restart_version
       return unless SharedHelpers.in_bundle?
 
+      # Never switch away from the Bundler IronRuby ships.  The copy in
+      # Src/StdLib carries the carve-outs that make Bundler work on an
+      # implementation that cannot build a C extension (see
+      # Bundler::StubSpecification#missing_extensions?); a release downloaded
+      # from rubygems.org has none of them, and switching to it - which any
+      # `BUNDLED WITH` line naming another version asks for, and almost every
+      # checked-in Gemfile.lock has one - makes Bundler drop every extension gem
+      # from its local index and then fail to materialize the bundle.
+      return if RUBY_ENGINE == "ironruby"
+
       configured_version = Bundler.settings[:version]
       return if configured_version == "system"
 
