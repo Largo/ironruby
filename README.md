@@ -63,6 +63,7 @@ users&.filter_map { it.name if it.active? }
 | Integer | Int32, then BigInteger | Int32 → **Int64** → BigInteger |
 | Execution | DLR interpreter, then IL | + a **method JIT and OSR** that specialize on observed types |
 | REPL | irb from 2011 | **irb 1.16.0 + reline**, on a termios `io/console` |
+| Gems | RubyGems 1.3.7 (2010) | **RubyGems 4.0.16 + Bundler**, installing over real TLS |
 
 ## The prism front end
 
@@ -152,6 +153,16 @@ Build with `-c Release` and run with `IR_CONFIG=Release ./ir.sh`: the optimized 
 ~1.8x faster than the default Debug build across the whole suite. See
 [`Util/bench/README.md`](Util/bench/README.md).
 
+## Platforms
+
+Linux is the primary target and the one the numbers above are measured on. **Windows works**:
+`ir.cmd` and `irb.cmd` run, and `spec/language` (2920 examples) and `spec/security` pass with
+**0 failures**. `spec/core` and `spec/library` are rougher there — symlinks/chmod/umask in
+`core/file`, fork and signals in `core/process`, and `IO.select`/`IO#wait` on pipes (which is
+`poll(2)`, so `core/io` and the socket suites hang rather than fail). `zlib`, Win32OLE and
+readline are not implemented on Windows; `IO.console` is nil, so irb falls back to its ANSI
+input path. macOS is untested.
+
 ## Building
 
 Requires the .NET SDK, plus Ruby and a C compiler to build prism.
@@ -173,9 +184,10 @@ Running the conformance suite:
 ```console
 $ git clone https://github.com/ruby/spec && git clone https://github.com/ruby/mspec
 $ RUBY_EXE=./ir.sh ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language
-$ Util/parallel-sweep.sh out            # all five suites, 8 at a time, ~6 minutes
+$ Util/parallel-sweep.sh out            # all five suites, 8 at a time, ~8 minutes
 $ Util/run-tests.sh                     # IronRuby's own C# tests
 $ Util/bench/run.sh                     # benchmarks against CRuby
+$ Util/gems/run.sh                      # default/bundled gems, each with its own suite
 ```
 
 ### Windows
