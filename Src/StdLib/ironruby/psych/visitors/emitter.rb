@@ -1,12 +1,4 @@
 # frozen_string_literal: true
-#
-# Vendored from the psych gem (lib/psych/visitors/emitter.rb), unchanged.  It walks a
-# Psych::Nodes tree and replays it as events into a Psych::Emitter, which is what writes the
-# YAML text.  RubyGems emits a gemspec this way (Gem::Specification#to_yaml builds the tree
-# with Gem::NoAliasYAMLTree and hands it to this visitor), and so does Nodes::Node#yaml.
-#
-# Upstream Psych::Emitter is libyaml; here it is the handler in psych.rb that feeds
-# IronRuby's own YAML emitter.  It takes the same event calls, so this file needs no change.
 module Psych
   module Visitors
     class Emitter < Psych::Visitors::Visitor

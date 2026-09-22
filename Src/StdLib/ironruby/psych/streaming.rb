@@ -1,10 +1,4 @@
 # frozen_string_literal: true
-#
-# Vendored from the psych gem (lib/psych/streaming.rb), which is pure Ruby.
-# IronRuby's Psych is its own C#-backed implementation and did not ship the
-# visitors at all.  Gem::Specification#to_yaml and anything else that builds a
-# Psych::Nodes tree from Ruby objects names Psych::Visitors::YAMLTree directly,
-# so the constant has to be the real thing.
 module Psych
   module Streaming
     module ClassMethods

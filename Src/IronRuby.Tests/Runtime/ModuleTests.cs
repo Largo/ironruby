@@ -363,7 +363,7 @@ end
 ", @"
 constant
 method
-#<RuntimeError: can't modify frozen class>
+#<FrozenError: can't modify frozen Class: Object>
 ");
         }
 

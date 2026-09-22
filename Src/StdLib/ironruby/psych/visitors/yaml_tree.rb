@@ -1,10 +1,7 @@
 # frozen_string_literal: true
-#
-# Vendored from the psych gem (lib/psych/visitors/yaml_tree.rb), which is pure Ruby.
-# IronRuby's Psych is its own C#-backed implementation and did not ship the
-# visitors at all.  Gem::Specification#to_yaml and anything else that builds a
-# Psych::Nodes tree from Ruby objects names Psych::Visitors::YAMLTree directly,
-# so the constant has to be the real thing.
+require_relative '../tree_builder'
+require_relative '../scalar_scanner'
+require_relative '../class_loader'
 
 module Psych
   module Visitors
@@ -152,10 +149,7 @@ module Psych
       def visit_Object o
         tag = Psych.dump_tags[o.class]
         unless tag
-          # ::Object, not Object: this file is vendored, but IronRuby's Psych also has a
-          # Psych::Object (the Syck-era unresolved object in yaml/types.rb), which is what a
-          # bare Object resolves to here and would tag every plain object "!ruby/object:Object".
-          klass = o.class == ::Object ? nil : o.class.name
+          klass = o.class == Object ? nil : o.class.name
           tag   = ['!ruby/object', klass].compact.join(':')
         end
 
@@ -544,7 +538,7 @@ module Psych
         @coders << o
         tag = Psych.dump_tags[o.class]
         unless tag
-          klass = o.class == ::Object ? nil : o.class.name
+          klass = o.class == Object ? nil : o.class.name
           tag   = ['!ruby/object', klass].compact.join(':')
         end
 

@@ -161,9 +161,10 @@ namespace IronRuby.Builtins {
                 case 'u': return Number((t.DayOfWeek == 0) ? 7 : t.DayOfWeek, modifiers, width, 1, '0');
                 case 'w': return Number(t.DayOfWeek, modifiers, width, 1, '0');
                 case 'y': return Number(Mod(t.Year, 100), modifiers, width, 2, '0');
-                case 'Y': return Number(t.Year, modifiers, width, 4, '0');
+                // MRI pads a negative year to four digits after the sign: -0001.
+                case 'Y': return Number(t.Year, modifiers, width, t.Year < 0 ? 5 : 4, '0');
 
-                case 'G': return Number(IsoYear(t), modifiers, width, 4, '0');
+                case 'G': return Number(IsoYear(t), modifiers, width, IsoYear(t) < 0 ? 5 : 4, '0');
                 case 'g': return Number(Mod(IsoYear(t), 100), modifiers, width, 2, '0');
                 case 'V': return Number(IsoWeek(t), modifiers, width, 2, '0');
 

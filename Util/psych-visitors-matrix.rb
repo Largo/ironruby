@@ -3,18 +3,11 @@
 #   ./ir.sh Util/psych-visitors-matrix.rb         # IronRuby
 # Diff the two outputs; every differing line is a bug.
 #
-# Each object is written twice: through Psych.dump, which IronRuby answers in C# (its own
-# representer and emitter), and through Psych::Visitors::YAMLTree plus
-# Psych::Nodes::Stream#yaml, which is pure Ruby down to the emitter. The two paths are
-# independent, and RubyGems uses the second one (Gem::Specification#to_yaml), so both have
-# to match CRuby.
-#
-# Known gaps on the tree path, as of writing:
-#   * "reemit parsed" loses the "---": the YAML engine does not record whether a document
-#     spelled its start out, so Psych.parse builds every Document with implicit = true.
-#   * "tree line_width" wraps a long double-quoted scalar with a backslash continuation
-#     where libyaml folds on the space.
-# The remaining "dump ..." differences are the C# representer's, not these visitors'.
+# Each object is written twice: through Psych.dump, and through Psych::Visitors::YAMLTree
+# plus Psych::Nodes::Stream#yaml by hand, which is what RubyGems does
+# (Gem::Specification#to_yaml). On IronRuby both are psych's own Ruby code over the YAML
+# engine's port of libyaml's emitter (Src/StdLib/ironruby/psych/ironruby.rb), as on CRuby
+# they are over libyaml, so the two paths should agree with each other and with CRuby.
 
 require 'psych'
 require 'date'

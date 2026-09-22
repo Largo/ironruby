@@ -139,6 +139,13 @@ namespace IronRuby.Builtins {
                 return null;
             }
 
+            // "r:BOM|UTF-8": the encoding after the bar, which is what Psych.load_file and
+            // YAML.load_file open every file with. (The byte order mark itself is not skipped
+            // here; Psych's parser skips it.)
+            if (str.StartsWith("BOM|", StringComparison.OrdinalIgnoreCase)) {
+                str = str.Substring(4);
+            }
+
             try {
                 return context.GetRubyEncoding(str);
             } catch (ArgumentException) {
