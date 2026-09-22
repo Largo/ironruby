@@ -107,6 +107,9 @@ Measured with [ruby/spec](https://github.com/ruby/spec) at CRuby 4.0.6, `Util/pa
 CRuby 4.0.6 is the oracle: where a spec and IronRuby disagree, the behaviour is checked
 against `ruby` and IronRuby is changed, not the spec.
 
+The same tree **runs on Windows**, where `spec/language` and `spec/security` are also at
+zero; see [Windows](#windows) for how to build it and what is still missing there.
+
 The **Ruby 4.0 standard library is vendored** in `Src/StdLib/ruby/4.0` and comes first on the
 load path; the 1.9 tree sits behind it for the libraries 4.0 gemified or implements as C
 extensions. A compatibility prelude
@@ -161,6 +164,10 @@ $ (cd Src/Prism && ruby generate.rb)                             # C# nodes + lo
 $ dotnet build Src/Console/Ruby.Console.csproj
 ```
 
+The prism revision is pinned: `Generated/` is produced from a particular `config.yml`, and
+a `libprism` built from a different one deserializes into the wrong fields. See
+[`Src/Prism/README.md`](Src/Prism/README.md) for the revision and how to check a checkout.
+
 Running the conformance suite:
 
 ```console
@@ -170,6 +177,75 @@ $ Util/parallel-sweep.sh out            # all five suites, 8 at a time, ~6 minut
 $ Util/run-tests.sh                     # IronRuby's own C# tests
 $ Util/bench/run.sh                     # benchmarks against CRuby
 ```
+
+### Windows
+
+Windows needs `prism.dll` instead of `libprism.so`, and nothing else: `ir.exe` is an
+ordinary framework-dependent .NET 8 app, so it can be published from Linux and run on a box
+that has only the **runtime** installed. Build prism with the RubyInstaller DevKit's MinGW
+(`make shared` names its output after RbConfig's `SOEXT`, so there it is `libprism.dll`):
+
+```
+C:\> git clone https://github.com/ruby/prism C:\prism
+C:\> cd C:\prism && git checkout 531cd5e~1
+C:\prism> ruby templates\template.rb
+C:\prism> ridk exec make shared -j4          :: -> C:\prism\build\libprism.dll
+```
+
+Copy `libprism.dll` next to `libprism.so` in `../prism/build` and build or publish for
+Windows; `IronRuby.Prism.csproj` ships whichever shared libraries are there and
+`PrismNative` loads the one for the platform it wakes up on:
+
+```console
+$ dotnet build Src/Console/Ruby.Console.csproj -c Release -r win-x64 --self-contained false
+```
+
+Copy `Src/Console/bin/Release/net8.0/win-x64/`, `Src/StdLib/`, `ir.cmd` and `irb.cmd` to the
+Windows machine, keeping the same relative layout (`ir.cmd` finds the binaries under
+`Src\Console\bin\%IR_CONFIG%\net8.0\`, with or without a `win-x64` level). Then:
+
+```
+C:\ir> set IR_CONFIG=Release
+C:\ir> ir.cmd -e "puts RUBY_DESCRIPTION"
+IronRuby 1.2.0-dev (4.0.0) on .NET 8.0.31 [x64-mswin64]
+C:\ir> irb.cmd
+C:\ir> set RUBY_EXE=C:\ir\ir.cmd
+C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
+```
+
+`ir.cmd` is the twin of `ir.sh`; note that `-X:StdLib` is split on the platform's path
+separator, so its argument is `;`-separated on Windows (a `:`-separated list would be cut
+apart at every drive letter).
+
+Conformance on Windows 11 x64 (.NET 8.0.31), same ruby/spec revision as the Linux table
+above. Some suites are run a directory at a time there because three of them hang (see
+below), which the whole-suite numbers on Linux do not need:
+
+| suite | examples | Windows | Linux |
+|---|---|---|---|
+| `spec/language` | 2920 | **0 failures, 0 errors** | 0 |
+| `spec/security` | 32 | **0** | 0 |
+| `spec/command_line` | 167 | 13 failures, all of them the *spec's* Unix shell syntax — `-e 'code'` (cmd.exe does not treat `'` as a quote) and `2> /dev/null` | 0 |
+| `spec/library` | 3902 | 1 failure, 193 errors; `io-wait`, `net-http` and `socket` hang | 0 |
+| `spec/core` | 20999 | 74 failures, 172 errors | 21 errors, all `ObjectSpace` |
+
+Where the Windows errors are: `core/file` (113) and `core/filetest` (8) are symlinks,
+`chmod`/`umask` and the other Unix file metadata; `core/process` (36 failures, 15 errors) is
+`fork`, process groups, uid/gid and signals; `library/win32ole` (114) and `library/readline`
+(25) are libraries IronRuby does not implement and whose specs only run on Windows;
+`library/zlib` (42) is the `LoadError` below. `core/objectspace` needs `-X:ObjectSpace`, as
+on Linux.
+
+What Windows does not have yet: **`zlib`** (`require "zlib"` is a clean `LoadError` — there
+is no libz to bind to, and the `z_stream` binding is laid out for an LP64 C compiler, so a
+stray `zlib1.dll` would be read through the wrong struct), **`io/console`** (`IO.console` is
+`nil`, the termios binding being Unix-only by construction; irb and reline fall back to
+their ANSI path and start fine — `Src/Libraries/Termios` would need a Win32 console-API
+twin), **`IO#wait`/`IO.select` on a pipe** (they are `poll(2)`, which is why `io-wait`,
+`socket` and `core/io` hang rather than fail), redirection of **descriptors above 2** in
+`Process.spawn`/`exec` options (Windows hands a child three handles, not a descriptor
+table, so such a redirection is refused with `EINVAL`), and the Unix-only half of
+`Src/Libraries/Builtins/PosixProcess.cs` (`setsid`, `getpriority`, `setrlimit`, …).
 
 ## License
 

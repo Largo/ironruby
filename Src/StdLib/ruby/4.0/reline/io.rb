@@ -11,7 +11,14 @@ module Reline
 
         case RbConfig::CONFIG['host_os']
         when /mswin|msys|mingw|cygwin|bccwin|wince|emc/
-          require 'reline/io/windows'
+          # IronRuby: reline/io/windows is a fiddle binding to the Win32 console API, and
+          # there is no fiddle here. Fall back to the ANSI gate rather than take irb down
+          # with a LoadError; Windows Terminal and conhost both understand ANSI now.
+          begin
+            require 'reline/io/windows'
+          rescue LoadError
+            return Reline::ANSI.new
+          end
           io = Reline::Windows.new
           if io.msys_tty?
             Reline::ANSI.new

@@ -50,7 +50,31 @@ namespace IronRuby.Hosting {
 
         protected override ConsoleOptions ParseOptions(string[] args, ScriptRuntimeSetup runtimeSetup, LanguageSetup languageSetup) {
             languageSetup.Options["ApplicationBase"] = AppDomain.CurrentDomain.BaseDirectory;
+            runtimeSetup.HostType = typeof(RubyScriptHost);
             return base.ParseOptions(args, runtimeSetup, languageSetup);
+        }
+
+        /// <summary>
+        /// The host the runtime asks for its PlatformAdaptationLayer, so that source files
+        /// are opened the way MRI opens a script: readable by anyone and deletable while
+        /// open. The DLR's default opens them FileShare.Read, which on Windows makes the
+        /// file undeletable until the stream is collected - and a Ruby program that writes a
+        /// script, loads it and then removes it (every ruby/spec code-loading example does)
+        /// gets Errno::EACCES for its trouble. Unix never noticed because unlink(2) there
+        /// does not care who has the file open.
+        /// </summary>
+        private sealed class RubyScriptHost : ScriptHost {
+            public override PlatformAdaptationLayer PlatformAdaptationLayer {
+                get { return SharedPlatform; }
+            }
+        }
+
+        private static readonly PlatformAdaptationLayer/*!*/ SharedPlatform = new RubyPlatformAdaptationLayer();
+
+        private sealed class RubyPlatformAdaptationLayer : PlatformAdaptationLayer {
+            public override Stream OpenInputFileStream(string path, FileMode mode, FileAccess access, FileShare share, int bufferSize) {
+                return base.OpenInputFileStream(path, mode, access, share | FileShare.ReadWrite | FileShare.Delete, bufferSize);
+            }
         }
 
         private static void SetHomeEnvironmentVariable() {

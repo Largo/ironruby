@@ -25,6 +25,10 @@ namespace IronRuby.Prism {
         private static extern void pm_serialize_lex(IntPtr buffer, IntPtr source, nuint size, IntPtr data);
 
         public static List<PrismLexToken>/*!*/ Lex(byte[]/*!*/ source) {
+            // pm_serialize_lex below is declared on this type, so PrismNative's static
+            // constructor - which installs the DllImport resolver that finds libprism at all -
+            // is not guaranteed to have run yet.
+            PrismNative.EnsureResolver();
             return Decode(Serialize(source, PrismParser.BuildOptionsData(null, 1, null)));
         }
 

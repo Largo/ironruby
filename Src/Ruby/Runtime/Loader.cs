@@ -835,6 +835,10 @@ namespace IronRuby.Runtime {
                     dir = loadPath;
                 }
                 dir = ResolveDirectoryLinks(dir);
+                // GetFullPath hands back a path in the platform's own spelling, which on
+                // Windows is backslashed; Ruby paths - and so __FILE__ and $LOADED_FEATURES
+                // - use forward slashes everywhere.
+                dir = RubyUtils.CanonicalizePath(dir);
                 ResolvedFile file = ResolveFile(RubyUtils.CombinePaths(dir, path), extension, appendExtensions, sourceFileExtensions);
                 if (file != null) {
                     result.Add(file);

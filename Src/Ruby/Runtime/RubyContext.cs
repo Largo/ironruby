@@ -856,10 +856,23 @@ namespace IronRuby.Runtime {
                 case PlatformID.Win32NT:
                 case PlatformID.Win32S:
                 case PlatformID.Win32Windows:
-                    return "i386-mswin32";
+                    // MRI's own Windows builds are x64-mswin64 (MSVC) or x64-mingw-ucrt
+                    // (RubyInstaller); "i386-mswin32" was a constant from the days when
+                    // there was only one, and it told a 64-bit process it was 32-bit.
+                    return MakeWindowsPlatformName();
 
                 default:
                     return "unknown";
+            }
+        }
+
+        /// <summary>RUBY_PLATFORM as MRI's MSVC Windows builds spell it: x64-mswin64 on a
+        /// 64-bit process, i386-mswin32 on a 32-bit one.</summary>
+        private static string/*!*/ MakeWindowsPlatformName() {
+            switch (RuntimeInformation.ProcessArchitecture) {
+                case Architecture.X64: return "x64-mswin64";
+                case Architecture.Arm64: return "arm64-mswin64";
+                default: return "i386-mswin32";
             }
         }
 

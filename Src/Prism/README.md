@@ -68,8 +68,40 @@ Build the native library first:
 
 ```sh
 git clone https://github.com/ruby/prism ../../../prism
-cd ../../../prism && ruby templates/template.rb && make shared
+cd ../../../prism && git checkout 531cd5e~1
+ruby templates/template.rb && make shared        # -> build/libprism.so
 ```
+
+**The prism commit is pinned, and it matters.** `Generated/` is generated
+from a particular `config.yml`; a `libprism` built from a different one
+serializes its nodes differently and the loader walks off the end of the
+buffer - the symptom is a mid-parse `ArgumentError: Offset and length were
+out of bounds` or `TypeError: Unknown prism node type: 0` in whichever
+stdlib file trips over the changed node first, not a clean version error.
+The tree as it stands matches prism just before
+[`531cd5e`](https://github.com/ruby/prism/commit/531cd5e) ("Make
+`SymbolNode#value_loc` non-optional"), which is v1.9.0 plus a few commits.
+To check a checkout instead of guessing, regenerate into a scratch
+directory and diff - identical output means the shared library from that
+checkout is safe:
+
+```sh
+ruby generate.rb ../../../prism/config.yml /tmp/gen && diff -r Generated /tmp/gen
+```
+
+On **Windows**, build the same checkout with the RubyInstaller DevKit's
+MinGW toolchain. `make shared` names its output after RbConfig's `SOEXT`,
+so there it produces `build/libprism.dll`:
+
+```
+ruby templates\template.rb
+ridk exec make shared -j4
+```
+
+`IronRuby.Prism.csproj` copies whichever of `libprism.so` /
+`libprism.dll` / `libprism.dylib` is present next to the host, and
+`PrismNative`'s `DllImport` resolver picks the one for the running
+platform - so a tree holding both can publish for either.
 
 ## Known limits / next steps
 
