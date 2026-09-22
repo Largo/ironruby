@@ -41,10 +41,10 @@ $ ./igem.sh install rack     # or: ./ir.sh -S gem install rack
 $ ./ir.sh -S bundle install
 ```
 
-`ir` / `igem` / `iirb` are the i-prefixed names IronRuby has used since 1.x, so they can
-sit on `PATH` beside CRuby's `ruby` and `gem` — the same reason JRuby ships `jruby`,
-`jgem` and `jirb`. The unprefixed `gem`, `irb`, `bundle` and `bundler` live in
-`Src/StdLib/bin` and are what `ir -S <name>` finds.
+`ir` / `igem` / `iirb` / `irubyc` are the i-prefixed names IronRuby has used since 1.x, so
+they can sit on `PATH` beside CRuby's `ruby` and `gem` — the same reason JRuby ships
+`jruby`, `jgem`, `jirb` and `jrubyc`. The unprefixed `gem`, `irb`, `bundle`, `bundler` and
+`irubyc` live in `Src/StdLib/bin` and are what `ir -S <name>` finds.
 
 ```ruby
 # all of this runs today
@@ -159,6 +159,69 @@ guess:
 Build with `-c Release` and run with `IR_CONFIG=Release ./ir.sh`: the optimized build is
 ~1.8x faster than the default Debug build across the whole suite. See
 [`Util/bench/README.md`](Util/bench/README.md).
+
+## Packaging an application (`irubyc`)
+
+`irubyc` is IronRuby's answer to JRuby's `jrubyc`: it turns a Ruby program into a .NET
+application that runs without the source tree.
+
+```console
+$ ./irubyc.sh -t /tmp/out app.rb lib/
+irubyc: wrote /tmp/out/app
+irubyc: run it with /tmp/out/app/app
+$ /tmp/out/app/app --some --args
+```
+
+It generates a C# host, compiles it with the .NET SDK, and embeds every `.rb` file in the
+resulting assembly as a **managed resource**; a `PlatformAdaptationLayer` overlay serves
+those resources to the runtime, so the main script, `require` and `load` read them out of
+the assembly. No `.rb` file is written next to the executable. The output directory also
+gets IronRuby's assemblies, `libprism` and a copy of the standard library (including
+whatever `igem` has installed), so `require "json"` and `require "some_gem"` work.
+
+**Be clear about what it does not do: `irubyc` does not emit IL for the Ruby code.** The
+embedded sources are still parsed and compiled by IronRuby at startup, exactly as
+`ir app.rb` would, so a compiled application starts no faster than the same script run
+from a source tree — what you get is a single deployable directory, not AOT-compiled Ruby.
+Real AOT is blocked on a missing API rather than on effort: the DLR's assembly-saving
+machinery is all still here (`SavableScriptCode`, `ToDiskRewriter`, `AssemblyGen`, the
+`-X:SaveAssemblies` switch, `Loader.SaveCompiledCode`), but every path through it ends at
+`LambdaExpression.CompileToMethod`, which .NET Core dropped and .NET 10 still does not
+have. `PersistedAssemblyBuilder` (new in .NET 9) can *save* an assembly, but nothing in
+.NET Core can turn a DLR expression tree into a `MethodBuilder`; reviving it means
+re-implementing the expression-tree-to-IL compiler that .NET Framework had.
+
+Options, with jrubyc's names kept where they mean the same thing:
+
+| | |
+|---|---|
+| `-t, --target DIR` | where to write the application directory (default `.`) |
+| `-d, --dir BASEDIR` | base directory the embedded paths are relative to |
+| `-p, --prefix PREFIX` | prefix prepended to every embedded path |
+| `--main FILE` | which script to run (default: the first file given) |
+| `-o, --output NAME` | name of the application |
+| `--exe` / `--dll` | native launcher (default), or just `<name>.dll` for `dotnet <name>.dll` |
+| `--self-contained [RID]` | bundle the .NET runtime too — runs with no .NET installed |
+| `--no-stdlib` | leave out the vendored Ruby 4.0 tree and the gems (30 MB → 19 MB) |
+| `--keep`, `--verbose` | keep the generated C# project / narrate every step |
+
+Sizes, for a three-file demo app on Linux: **30 MB** framework-dependent (18 MB of that is
+the standard library, 12 MB IronRuby, the DLR and `libprism`), **101 MB** with
+`--self-contained`, which then runs on a box with no .NET at all. `irubyc` itself needs the
+.NET SDK; the application it produces does not. It links whichever build of IronRuby is
+running it, so `IR_CONFIG=Release ./irubyc.sh …` produces a Release-linked application.
+
+Startup, best of seven on an idle Linux box, Debug build: `./ir.sh -e ''` 1.58 s, the demo
+app from its source tree 1.96 s, the same app compiled 1.77 s — the small difference is the
+shell wrapper and reading the sources from memory rather than the disk, not compiled Ruby.
+
+The embedded tree behaves like a read-only directory at `<app>/src`: `require`,
+`require_relative`, `load`, `File.read`, `Dir.glob` and `Dir.entries` all see it, because
+those go through the DLR's `PlatformAdaptationLayer`, which is what the overlay replaces.
+What does **not**: `File.exist?` and the rest of `FileTest` answer `false` for an embedded
+file, because they stat the real file system directly rather than ask the platform layer;
+`__FILE__` and `$0` name a path that has no directory behind it; and anything that shells
+out to `ruby` or re-execs `$0` will not find an interpreter.
 
 ## Platforms
 
