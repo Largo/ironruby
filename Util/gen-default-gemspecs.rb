@@ -88,6 +88,14 @@ GEMS = {
              ["zlib"], check: "Zlib::VERSION"],
   "prism" => ["1.9.0", "The Prism Ruby parser - IronRuby's own front end",
               ["prism", "prism/"], check: "Prism::VERSION"],
+  # Not a default gem anywhere else: nokogiri is a C extension over libxml2 and
+  # gumbo, and neither compiles here.  It is listed because it is a hard
+  # dependency of rails-html-sanitizer -> loofah -> actionview and of
+  # rails-dom-testing -> actionpack, so without a gemspec saying it is present
+  # `gem install actionview` stops at a C compiler.  The version is the nokogiri
+  # API level implemented, not a nokogiri release.
+  "nokogiri" => ["1.18.0", "HTML5, HTML4 and XML parsing, on AngleSharp",
+                 ["nokogiri", "nokogiri/"], check: "Nokogiri::VERSION"],
 
   # --- vendored from the CRuby release in Src/StdLib/ruby/4.0 --------------
   "bundler" => ["4.0.16", "The best way to manage a Ruby application's gems",

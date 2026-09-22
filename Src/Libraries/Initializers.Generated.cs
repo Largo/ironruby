@@ -37,6 +37,7 @@
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Ripper.RipperLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Termios.TermiosLibraryInitializer))]
 [assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Prism.PrismLibraryInitializer))]
+[assembly: IronRuby.Runtime.RubyLibraryAttribute(typeof(IronRuby.StandardLibrary.Nokogiri.NokogiriLibraryInitializer))]
 
 namespace IronRuby.Builtins {
     using System;
@@ -14125,12 +14126,12 @@ namespace IronRuby.StandardLibrary.Json {
             
             DefineLibraryMethod(module, "load", 0x21, 
                 0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Json.JsonModule.Parse)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash, System.Object>(IronRuby.StandardLibrary.Json.JsonModule.Parse)
             );
             
             DefineLibraryMethod(module, "parse", 0x21, 
                 0x00020004U, 
-                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Json.JsonModule.Parse)
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.Hash, System.Object>(IronRuby.StandardLibrary.Json.JsonModule.Parse)
             );
             
             DefineLibraryMethod(module, "pretty_generate", 0x21, 
@@ -14970,6 +14971,196 @@ namespace IronRuby.StandardLibrary.Prism {
             DefineLibraryMethod(module, "version", 0x21, 
                 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Prism.PrismOps.LibRubyParserOps.Version)
+            );
+            
+        }
+        
+    }
+}
+
+namespace IronRuby.StandardLibrary.Nokogiri {
+    using System;
+    using Microsoft.Scripting.Utils;
+    using System.Runtime.InteropServices;
+    
+    public sealed class NokogiriLibraryInitializer : IronRuby.Builtins.LibraryInitializer {
+        protected override void LoadModules() {
+            
+            
+            IronRuby.Builtins.RubyModule def1 = DefineGlobalModule("Nokogiri", typeof(IronRuby.StandardLibrary.Nokogiri.NokogiriOps), 0x00000008, null, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            IronRuby.Builtins.RubyModule def2 = DefineModule("Nokogiri::Native", typeof(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps), 0x00000008, null, LoadNokogiri__Native_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            SetConstant(def1, "Native", def2);
+        }
+        
+        private static void LoadNokogiri__Native_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "append_child", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.AppendChild)
+            );
+            
+            DefineLibraryMethod(module, "attributes", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.Attributes)
+            );
+            
+            DefineLibraryMethod(module, "body", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.Body)
+            );
+            
+            DefineLibraryMethod(module, "children", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.Children)
+            );
+            
+            DefineLibraryMethod(module, "clone_node", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Boolean, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.CloneNode)
+            );
+            
+            DefineLibraryMethod(module, "create_comment", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.CreateComment)
+            );
+            
+            DefineLibraryMethod(module, "create_element", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.CreateElement)
+            );
+            
+            DefineLibraryMethod(module, "create_fragment", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.CreateFragment)
+            );
+            
+            DefineLibraryMethod(module, "create_text", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.CreateText)
+            );
+            
+            DefineLibraryMethod(module, "document_element", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.DocumentElement)
+            );
+            
+            DefineLibraryMethod(module, "element_name", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.ElementName)
+            );
+            
+            DefineLibraryMethod(module, "get_attribute", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.GetAttribute)
+            );
+            
+            DefineLibraryMethod(module, "insert_before", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.InsertBefore)
+            );
+            
+            DefineLibraryMethod(module, "matches", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.Matches)
+            );
+            
+            DefineLibraryMethod(module, "namespace_uri", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.NamespaceUri)
+            );
+            
+            DefineLibraryMethod(module, "new_html_document", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.NewHtmlDocument)
+            );
+            
+            DefineLibraryMethod(module, "next_sibling", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.NextSibling)
+            );
+            
+            DefineLibraryMethod(module, "node_type", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Int32>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.NodeType)
+            );
+            
+            DefineLibraryMethod(module, "node_value", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.NodeValue)
+            );
+            
+            DefineLibraryMethod(module, "owner_document", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.OwnerDocument)
+            );
+            
+            DefineLibraryMethod(module, "parent", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.Parent)
+            );
+            
+            DefineLibraryMethod(module, "parse_html", 0x21, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.ParseHtml)
+            );
+            
+            DefineLibraryMethod(module, "parse_html_fragment", 0x21, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, System.Object, IronRuby.Builtins.RubyArray>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.ParseHtmlFragment)
+            );
+            
+            DefineLibraryMethod(module, "parse_xml", 0x21, 
+                0x00010000U, 
+                new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.ParseXml)
+            );
+            
+            DefineLibraryMethod(module, "previous_sibling", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.PreviousSibling)
+            );
+            
+            DefineLibraryMethod(module, "query_selector_all", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.QuerySelectorAll)
+            );
+            
+            DefineLibraryMethod(module, "remove_attribute", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.RemoveAttribute)
+            );
+            
+            DefineLibraryMethod(module, "remove_child", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.RemoveChild)
+            );
+            
+            DefineLibraryMethod(module, "rename", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.Rename)
+            );
+            
+            DefineLibraryMethod(module, "replace_child", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.ReplaceChild)
+            );
+            
+            DefineLibraryMethod(module, "set_attribute", 0x21, 
+                0x00060000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.SetAttribute)
+            );
+            
+            DefineLibraryMethod(module, "set_node_value", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.SetNodeValue)
+            );
+            
+            DefineLibraryMethod(module, "set_text_content", 0x21, 
+                0x00020000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.SetTextContent)
+            );
+            
+            DefineLibraryMethod(module, "text_content", 0x21, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Nokogiri.NokogiriOps.NativeOps.TextContent)
             );
             
         }

@@ -15,6 +15,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.Runtime.InteropServices;
 using System.Numerics;
 using System.Text;
 using IronRuby.Builtins;
@@ -206,14 +207,34 @@ namespace IronRuby.StandardLibrary.Json {
 
         [RubyMethod("parse", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("load", RubyMethodAttributes.PublicSingleton)]
-        public static object Parse(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]MutableString/*!*/ source) {
+        public static object Parse(RubyContext/*!*/ context, object self, [DefaultProtocol, NotNull]MutableString/*!*/ source,
+            [DefaultParameterValue(null)]Hash options) {
+
             var parser = new JsonParser(source.ConvertToString(), context);
+            parser.SymbolizeNames = TruthyOption(context, options, "symbolize_names");
             object result = parser.ParseValue(0);
             parser.SkipWhitespace();
             if (!parser.AtEnd) {
                 throw new JsonParserError("unexpected token at '" + parser.Rest + "'");
             }
             return result;
+        }
+
+        /// <summary>
+        /// One keyword of the options Hash JSON.parse takes.  Only the options this parser
+        /// can honour are read: symbolize_names, and allow_comments, which needs no flag
+        /// because this parser has always skipped comments.  An option it does not know is
+        /// ignored rather than rejected, the way the json gem ignores unknown keys.
+        /// </summary>
+        private static bool TruthyOption(RubyContext/*!*/ context, Hash options, string/*!*/ name) {
+            if (options == null) {
+                return false;
+            }
+            object value;
+            if (!options.TryGetValue(context.CreateSymbol(name, RubyEncoding.UTF8), out value)) {
+                return false;
+            }
+            return RubyOps.IsTrue(value);
         }
 
         #endregion
@@ -247,6 +268,11 @@ namespace IronRuby.StandardLibrary.Json {
         private readonly RubyContext/*!*/ _context;
         private int _position;
 
+        /// <summary>
+        /// JSON.parse(source, symbolize_names: true) answers Symbol keys.
+        /// </summary>
+        internal bool SymbolizeNames { get; set; }
+
         internal JsonParser(string/*!*/ source, RubyContext/*!*/ context) {
             _source = source;
             _context = context;
@@ -267,6 +293,13 @@ namespace IronRuby.StandardLibrary.Json {
                     _position++;
                 } else if (c == '/' && _position + 1 < _source.Length && _source[_position + 1] == '/') {
                     while (_position < _source.Length && _source[_position] != '\n') _position++;
+                } else if (c == '/' && _position + 1 < _source.Length && _source[_position + 1] == '*') {
+                    _position += 2;
+                    while (_position + 1 < _source.Length &&
+                           !(_source[_position] == '*' && _source[_position + 1] == '/')) {
+                        _position++;
+                    }
+                    _position = Math.Min(_position + 2, _source.Length);
                 } else {
                     break;
                 }
@@ -316,7 +349,10 @@ namespace IronRuby.StandardLibrary.Json {
                 if (AtEnd || _source[_position] != '"') {
                     throw new JsonParserError("expected object key at '" + Rest + "'");
                 }
-                var key = MutableString.Create(ParseString(), RubyEncoding.UTF8);
+                string name = ParseString();
+                object key = SymbolizeNames
+                    ? (object)_context.CreateSymbol(name, RubyEncoding.UTF8)
+                    : MutableString.Create(name, RubyEncoding.UTF8);
                 SkipWhitespace();
                 if (AtEnd || _source[_position] != ':') {
                     throw new JsonParserError("expected ':' at '" + Rest + "'");
