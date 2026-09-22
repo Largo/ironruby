@@ -13,6 +13,15 @@
 #
 # ****************************************************************************
 
+# There is no libz to bind to on Windows, and the z_stream this binds to is laid out for
+# an LP64 C compiler - `unsigned long` is 8 bytes there and 4 under MSVC - so even a
+# zlib1.dll that happens to be on PATH would be read through the wrong struct. Refusing
+# here is a LoadError the caller can rescue; letting it through was a
+# TypeInitializationException from the first constant the class defines.
+if ::File::ALT_SEPARATOR == "\\"
+  raise LoadError, "cannot load such file -- zlib (no libz on this platform)"
+end
+
 load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Zlib'
 
 # Zlib::ZStream, Inflate and Deflate are the libz binding in Src/Libraries/Zlib/zlib.cs.

@@ -591,6 +591,12 @@ namespace IronRuby.Builtins {
         public static bool TryRedirectDescriptor(RubyIO/*!*/ io, RubyIO/*!*/ source, out System.IO.Stream rebuilt) {
             rebuilt = null;
 
+            // No dup2 to call off Unix; the caller swaps streams in IronRuby's own table
+            // instead, which is what it does for any IO without a kernel descriptor.
+            if (!_hasFileControl) {
+                return false;
+            }
+
             int target = io.KernelDescriptor;
             int from = source.KernelDescriptor;
             if (target < 0 || from < 0) {
@@ -652,7 +658,7 @@ namespace IronRuby.Builtins {
         /// <summary>dup(2), so that a copy of an IO survives its original being reopened.</summary>
         public static int TryDuplicateDescriptor(RubyIO/*!*/ io) {
             int descriptor = io.KernelDescriptor;
-            return (descriptor < 0) ? -1 : sys_dup(descriptor);
+            return (descriptor < 0 || !_hasFileControl) ? -1 : sys_dup(descriptor);
         }
 
         /// <summary>The operating system descriptor a stream reads and writes, or -1.</summary>

@@ -10,16 +10,46 @@ namespace IronRuby.Prism {
     internal static class PrismNative {
         private const string Lib = "prism";
 
+        /// <summary>
+        /// The file name the prism build produces on this platform. `make shared` names it
+        /// after RbConfig's SOEXT, so it is libprism.so on Linux, libprism.dll under the
+        /// Windows DevKit (MinGW keeps the lib prefix) and libprism.dylib on macOS. The
+        /// plain Windows spelling prism.dll is accepted too, for a hand-built or vendored
+        /// copy.
+        /// </summary>
+        private static readonly string[] FileNames =
+            RuntimeInformation.IsOSPlatform(OSPlatform.Windows) ? new[] { "libprism.dll", "prism.dll" } :
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? new[] { "libprism.dylib", "prism.dylib" } :
+            new[] { "libprism.so", "prism.so" };
+
         static PrismNative() {
             NativeLibrary.SetDllImportResolver(typeof(PrismNative).Assembly, (name, assembly, path) => {
                 if (name == Lib) {
-                    string local = System.IO.Path.Combine(AppContext.BaseDirectory, "libprism.so");
-                    if (System.IO.File.Exists(local)) {
-                        return NativeLibrary.Load(local);
+                    foreach (string fileName in FileNames) {
+                        string local = System.IO.Path.Combine(AppContext.BaseDirectory, fileName);
+                        if (System.IO.File.Exists(local)) {
+                            return NativeLibrary.Load(local);
+                        }
+                    }
+                    // Not beside the host: let the OS loader look on its own search path
+                    // (LD_LIBRARY_PATH, PATH, the app directory) before giving up.
+                    foreach (string fileName in FileNames) {
+                        if (NativeLibrary.TryLoad(fileName, out IntPtr handle)) {
+                            return handle;
+                        }
                     }
                 }
                 return IntPtr.Zero;
             });
+        }
+
+        /// <summary>
+        /// Forces the DllImport resolver above to be installed. Other types in this assembly
+        /// P/Invoke "prism" as well (PrismLex), and a static constructor only runs when its own
+        /// type is first touched - so the resolver has to be armed before any of them is called.
+        /// </summary>
+        internal static void EnsureResolver() {
+            System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(PrismNative).TypeHandle);
         }
 
         // arena + parser + node lifecycle

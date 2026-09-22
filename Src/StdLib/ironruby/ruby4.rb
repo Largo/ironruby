@@ -9634,6 +9634,34 @@ module Process
     if in readonly return set shift then times trap unset until while
   ].freeze
 
+  # Whether there is a /bin/sh at all. Everything below that says "shell" means cmd.exe
+  # on Windows, and the executable search there has to try the PATHEXT extensions: a
+  # command named "ruby" is a file named ruby.exe, and File.executable? cannot invent
+  # the suffix for it.
+  SPAWN_WINDOWS = ::File::ALT_SEPARATOR == "\\"
+
+  # cmd.exe's built-ins, which are no more a file to exec than `exit` is on sh. `echo hi`
+  # has to reach the shell or it is an Errno::ENOENT for a command named "echo".
+  SPAWN_CMD_BUILTINS = %w[
+    assoc break call cd chdir cls color copy date del dir echo endlocal erase exit for
+    ftype goto if md mkdir mklink move path pause popd prompt pushd rd rem ren rename
+    rmdir set setlocal shift start time title type ver verify vol
+  ].freeze
+
+  # [shell, argv] for running a command line through the system's shell.
+  def self.__spawn_shell__(command)
+    return ["/bin/sh", ["sh", "-c", command]] unless SPAWN_WINDOWS
+    shell = ENV["COMSPEC"] || ENV["ComSpec"] || "C:\\Windows\\system32\\cmd.exe"
+    [shell, [shell, "/c", command]]
+  end
+
+  # The suffixes an extensionless command name may really have, in PATHEXT's own order -
+  # which is the order CreateProcess and cmd.exe try them in. Just [""] off Windows.
+  def self.__spawn_path_extensions__
+    return [""] unless SPAWN_WINDOWS
+    [""] + (ENV["PATHEXT"] || ".COM;.EXE;.BAT;.CMD").split(";").reject(&:empty?)
+  end
+
   def self.__check_spawn_string__(value, what)
     unless value.is_a?(String)
       unless value.respond_to?(:to_str)
@@ -9780,12 +9808,22 @@ module Process
       candidates = path.split(File::PATH_SEPARATOR).map { |dir| File.join(dir.empty? ? "." : dir, name) }
     end
 
+    # On Windows an extensionless name stands for name.exe / name.bat / ...; the bare
+    # name is tried first, as CreateProcess does.
+    extensions = __spawn_path_extensions__
+    if extensions.size > 1 && File.extname(name).empty?
+      candidates = candidates.flat_map { |c| extensions.map { |ext| c + ext } }
+    end
+
     candidates.each do |candidate|
       next unless File.exist?(candidate)
       # A file that cannot be run is a reason to refuse only when the caller named it. A
       # PATH search that turns one up simply keeps looking, and ends in ENOENT if nothing
       # runnable is there - naming the command, not the last unusable file that matched.
-      unless File.executable?(candidate) && !File.directory?(candidate)
+      # Windows has no execute bit - what makes a file runnable is its extension, which
+      # the PATHEXT pass above has already decided - so only the directory test applies.
+      runnable = File.directory?(candidate) ? false : (SPAWN_WINDOWS || File.executable?(candidate))
+      unless runnable
         next unless named
         raise Errno::EACCES, candidate
       end
@@ -9841,12 +9879,13 @@ module Process
       command = __check_spawn_string__(first, "command")
       # a command line is bytes to the shell; one that is not valid in its encoding still runs
       if (command.valid_encoding? ? command : command.b) =~ SPAWN_SHELL_META
-        return ["/bin/sh", ["sh", "-c", command]]
+        return __spawn_shell__(command)
       end
       words = command.split(" ")
       raise Errno::ENOENT, command if words.empty?
-      if SPAWN_SHELL_BUILTINS.include?(words.first)
-        return ["/bin/sh", ["sh", "-c", command]]
+      builtins = SPAWN_WINDOWS ? SPAWN_CMD_BUILTINS : SPAWN_SHELL_BUILTINS
+      if builtins.include?(SPAWN_WINDOWS ? words.first.downcase : words.first)
+        return __spawn_shell__(command)
       end
       return [__resolve_executable__(words.first, search_path), words]
     end
@@ -9920,7 +9959,7 @@ module Process
       result = __spawn__(file, argv, envp, actions, pgroup, close_others)
       # An executable file with no #! line is a shell script to execve(2), which refuses it
       # (ENOEXEC); MRI then runs it with /bin/sh, as a shell would.
-      if result == -8 && file != "/bin/sh"
+      if result == -8 && !SPAWN_WINDOWS && file != "/bin/sh"
         result = __spawn__("/bin/sh", ["sh", file] + argv[1..-1], envp, actions, pgroup, close_others)
       end
       __check__(result, file)
@@ -10590,11 +10629,24 @@ end
 end
 
 class Random
-  # Real entropy from the OS. /dev/urandom is the same source MRI uses on Unix;
-  # the System.Security.Cryptography assembly is not loadable from here.
-  def self.urandom(count)
-    File.open("/dev/urandom", "rb") { |f| f.read(count) }
-  end unless respond_to?(:urandom)
+  # Real entropy from the OS. /dev/urandom is the same source MRI uses on Unix.
+  # Windows has no such file - and reading one that does not exist is how
+  # Tempfile, Dir.mktmpdir, SecureRandom and net/http all used to die there - so
+  # off Unix this goes to .NET's CSPRNG instead. System.Security.Cryptography is
+  # not one of the assemblies the host pre-references, hence the load_assembly.
+  unless respond_to?(:urandom)
+    if ::File.exist?("/dev/urandom")
+      def self.urandom(count)
+        File.open("/dev/urandom", "rb") { |f| f.read(count) }
+      end
+    else
+      load_assembly "System.Security.Cryptography"
+      def self.urandom(count)
+        count = ::Kernel.Integer(count)
+        ::System::Security::Cryptography::RandomNumberGenerator.get_bytes(count).to_a.pack("C*")
+      end
+    end
+  end
 end
 
 module Kernel

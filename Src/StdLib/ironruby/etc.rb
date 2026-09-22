@@ -74,6 +74,36 @@ module Etc
       def sysconfdir
         'C:/Windows'
       end
+
+      def nprocessors
+        System::Environment.ProcessorCount
+      end
+
+      def uname
+        version = System::Environment.OSVersion.Version
+        {
+          :sysname => 'Windows_NT',
+          :nodename => System::Environment.MachineName.to_s,
+          :release => "#{version.Major}.#{version.Minor}.#{version.Build}",
+          :version => System::Environment.OSVersion.VersionString.to_s,
+          :machine => ENV['PROCESSOR_ARCHITECTURE'] || 'x64',
+        }
+      end
+
+      # MRI's Windows build answers only the handful of sysconf/confstr names it can;
+      # everything else is nil rather than a guess.
+      def sysconf(name)
+        case name
+        when SC_NPROCESSORS_CONF, SC_NPROCESSORS_ONLN then nprocessors
+        when SC_PAGESIZE then 4096
+        when SC_CLK_TCK then 100
+        else nil
+        end
+      end
+
+      def confstr(name)
+        raise Errno::EINVAL, "confstr(#{name})"
+      end
     else
       PASSWD_FILE = '/etc/passwd'
       GROUP_FILE = '/etc/group'

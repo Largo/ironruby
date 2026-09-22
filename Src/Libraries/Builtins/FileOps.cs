@@ -823,8 +823,12 @@ namespace IronRuby.Builtins {
         /// an unknown user name is an ArgumentError rather than a silent pass-through.
         /// </summary>
         private static string/*!*/ ExpandTilde(RubyContext/*!*/ context, string/*!*/ path) {
-            if (path.Length == 0 || path[0] != '~' || IsWindows) {
+            if (path.Length == 0 || path[0] != '~') {
                 return path;
+            }
+
+            if (IsWindows) {
+                return ExpandWindowsTilde(context, path);
             }
 
             int slash = path.IndexOf('/', 1);
@@ -850,6 +854,40 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            return (rest == null) ? home : home + "/" + rest;
+        }
+
+        /// <summary>
+        /// "~" on Windows, where there is no user database to ask. MRI looks at $HOME, then at
+        /// $HOMEDRIVE + $HOMEPATH, then at $USERPROFILE, and refuses "~name" outright. Leaving
+        /// the tilde alone - which is what this used to do - made Dir.home, Gem's user directory
+        /// and every "~/.somethingrc" resolve inside the working directory.
+        /// </summary>
+        private static string/*!*/ ExpandWindowsTilde(RubyContext/*!*/ context, string/*!*/ path) {
+            int slash = path.IndexOfAny(SeparatorChars, 1);
+            string userName = (slash < 0) ? path.Substring(1) : path.Substring(1, slash - 1);
+            string rest = (slash < 0) ? null : path.Substring(slash + 1);
+
+            if (userName.Length != 0) {
+                throw RubyExceptions.CreateArgumentError("can't find user {0}", userName);
+            }
+
+            string home = RubyEnvironment.GetVariable(context.Platform, "HOME");
+            if (home == null) {
+                string drive = RubyEnvironment.GetVariable(context.Platform, "HOMEDRIVE");
+                string tail = RubyEnvironment.GetVariable(context.Platform, "HOMEPATH");
+                if (tail != null) {
+                    home = (drive ?? "") + tail;
+                }
+            }
+            if (home == null) {
+                home = RubyEnvironment.GetVariable(context.Platform, "USERPROFILE");
+            }
+            if (home == null) {
+                throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
+            }
+
+            home = home.Replace(AltDirectorySeparatorChar, DirectorySeparatorChar);
             return (rest == null) ? home : home + "/" + rest;
         }
 
@@ -1837,7 +1875,27 @@ namespace IronRuby.Builtins {
                     var mode = self.UnixFileMode;
                     return (mode & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) != 0;
                 }
-                return self.Extension.Equals(".exe", StringComparison.OrdinalIgnoreCase);
+                return IsWindowsExecutableExtension(self.Extension);
+            }
+
+            /// <summary>
+            /// Windows has no execute bit: what makes a file runnable is its extension being
+            /// in %PATHEXT%, and that is what MRI's rb_file_executable_p looks at there.
+            /// Accepting only ".exe" said no to every .bat and .cmd - including the ir.cmd
+            /// that mspec is pointed at as RUBY_EXE, which it then silently replaced with a
+            /// command line reconstructed from RbConfig.
+            /// </summary>
+            private static bool IsWindowsExecutableExtension(string extension) {
+                if (String.IsNullOrEmpty(extension)) {
+                    return false;
+                }
+                string pathExt = Environment.GetEnvironmentVariable("PATHEXT") ?? ".COM;.EXE;.BAT;.CMD";
+                foreach (string candidate in pathExt.Split(';')) {
+                    if (candidate.Length != 0 && extension.Equals(candidate, StringComparison.OrdinalIgnoreCase)) {
+                        return true;
+                    }
+                }
+                return false;
             }
 
             [RubyMethod("executable_real?")]

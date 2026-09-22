@@ -29,6 +29,16 @@ namespace IronRuby.Builtins {
 
     public static partial class RubyProcess {
 
+        /// <summary>
+        /// Whether the primitives below have a libc to call at all. Off Unix each one hands
+        /// over to WindowsSpawn, which implements the same contract - a pid or a negative
+        /// errno - on CreateProcess and friends. Without this every one of them would come
+        /// out as a DllNotFoundException for "libc" rather than as a Ruby error.
+        /// </summary>
+        internal static bool IsWindows {
+            get { return System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(OSPlatform.Windows); }
+        }
+
         #region libc
 
         [DllImport("libc", EntryPoint = "posix_spawn")]
@@ -269,6 +279,11 @@ namespace IronRuby.Builtins {
             [NotNull]MutableString/*!*/ file, [NotNull]RubyArray/*!*/ argv, RubyArray envp, RubyArray actions,
             object pgroup, bool closeOthers) {
 
+            if (IsWindows) {
+                return ScriptingRuntimeHelpers.Int32ToObject(
+                    WindowsSpawn.Spawn(context, file, argv, envp, actions, pgroup));
+            }
+
             // posix_spawn_file_actions_t is 80 bytes and posix_spawnattr_t 336 on glibc; both
             // are opaque, so over-allocate rather than mirror a private layout.
             IntPtr fileActions = Marshal.AllocHGlobal(1024);
@@ -334,6 +349,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("__exec__", RubyMethodAttributes.PublicSingleton)]
         public static object ExecPrimitive(RubyContext/*!*/ context, RubyModule/*!*/ self,
             [NotNull]MutableString/*!*/ file, [NotNull]RubyArray/*!*/ argv, RubyArray envp, RubyArray actions) {
+
+            if (IsWindows) {
+                return ScriptingRuntimeHelpers.Int32ToObject(WindowsSpawn.Exec(context, file, argv, envp, actions));
+            }
 
             var strings = new NativeStrings();
             try {
@@ -415,6 +434,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("__waitpid__", RubyMethodAttributes.PublicSingleton)]
         public static object WaitPidPrimitive(RubyContext/*!*/ context, RubyModule/*!*/ self, int pid, int flags) {
+            if (IsWindows) {
+                return WindowsSpawn.WaitPid(context, pid, flags);
+            }
+
             int status;
             int result;
             do {
@@ -440,6 +463,9 @@ namespace IronRuby.Builtins {
         /// program says "let the child have this one".
         /// </summary>
         private static void ClearCloseOnExec(int fd) {
+            if (IsWindows) {
+                return;
+            }
             int flags = SysFcntl(fd, F_GETFD, 0);
             if (flags >= 0 && (flags & FD_CLOEXEC) != 0) {
                 SysFcntl(fd, F_SETFD, flags & ~FD_CLOEXEC);
@@ -453,6 +479,9 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("__get_cloexec__", RubyMethodAttributes.PublicSingleton)]
         public static object GetCloseOnExec(RubyContext/*!*/ context, RubyModule/*!*/ self, [DefaultProtocol]int descriptor) {
+            if (IsWindows) {
+                return WindowsSpawn.GetCloseOnExec(context, descriptor);
+            }
             int native = NativeDescriptor(context, self, descriptor);
             if (native < 0) {
                 return null;
@@ -466,6 +495,9 @@ namespace IronRuby.Builtins {
         /// MRI's IO#dup sets it on the copy - see IoOps.InitializeCopy.
         /// </summary>
         internal static void SetCloseOnExec(int nativeDescriptor) {
+            if (IsWindows) {
+                return;
+            }
             if (nativeDescriptor < 0) {
                 return;
             }
@@ -478,6 +510,10 @@ namespace IronRuby.Builtins {
         [RubyMethod("__set_cloexec__", RubyMethodAttributes.PublicSingleton)]
         public static object SetCloseOnExec(RubyContext/*!*/ context, RubyModule/*!*/ self,
             [DefaultProtocol]int descriptor, bool value) {
+
+            if (IsWindows) {
+                return WindowsSpawn.SetCloseOnExec(context, descriptor, value);
+            }
 
             int native = NativeDescriptor(context, self, descriptor);
             if (native < 0) {
@@ -516,7 +552,13 @@ namespace IronRuby.Builtins {
                 return descriptor;
             }
             var stream = context.GetStream(descriptor);
-            return (stream != null) ? RubyIO.DescriptorOf(stream) : -1;
+            if (stream == null) {
+                return -1;
+            }
+            // Windows has no descriptor table to translate into: WindowsSpawn resolves a
+            // redirection by looking the stream up under this very number, so the number to
+            // put in the file action is the one Ruby already uses.
+            return IsWindows ? descriptor : RubyIO.DescriptorOf(stream);
         }
 
         #endregion
@@ -530,6 +572,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("__os_pipe__", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ OsPipe(RubyContext/*!*/ context, RubyModule/*!*/ self) {
+            if (IsWindows) {
+                return WindowsSpawn.OsPipe(context);
+            }
+
             // O_CLOEXEC, so that our end of the pipe does not leak into the child: a child
             // that holds the write end open means the read end never reaches end of file.
             int[] fds = new int[2];
@@ -600,6 +646,10 @@ namespace IronRuby.Builtins {
         /// </summary>
         internal static MutableString/*!*/ CaptureOutput(RubyContext/*!*/ context,
             MutableString/*!*/ file, RubyArray/*!*/ argv, RubyArray envp, RubyArray actions) {
+
+            if (IsWindows) {
+                return WindowsSpawn.CaptureOutput(context, file, argv, envp, actions);
+            }
 
             int[] fds = new int[2];
             if (SysPipe2(fds, O_CLOEXEC) != 0) {
