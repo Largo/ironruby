@@ -188,6 +188,11 @@ namespace IronRuby.Builtins {
             if (clrIndex <= 0) {
                 return _startByteOffset;
             }
+            if (_encoding.IsSingleByte) {
+                // One byte per character, so the offsets already agree. Counting the bytes of the
+                // prefix instead would make every group offset a pass over everything before it.
+                return _startByteOffset + Math.Min(clrIndex, _encodedInput.Length);
+            }
             if (clrIndex >= _encodedInput.Length) {
                 return _startByteOffset + _encoding.GetByteCount(_encodedInput);
             }
@@ -224,6 +229,12 @@ namespace IronRuby.Builtins {
             }
             if (clrIndex <= 0) {
                 return 0;
+            }
+            if (_originalString.DetectSingleByteCharacters()) {
+                // One byte per character, so the CLR offset already is the byte offset. Worth the
+                // check: the general path below copies the whole prefix out to count its bytes,
+                // which turns every match on a long subject into a pass over it.
+                return Math.Min(clrIndex, _originalString.GetByteCount());
             }
             return _originalString.GetSlice(0, Math.Min(clrIndex, _originalString.GetCharCount())).GetByteCount();
         }

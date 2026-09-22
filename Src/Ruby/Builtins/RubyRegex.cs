@@ -37,6 +37,12 @@ namespace IronRuby.Builtins {
 
         private Regex _cachedRegex;
 
+        // The same CLR regex forced to start where the search starts, for the scanning operations
+        // that only ever look at the current position (StringScanner#scan, #skip, #check, #match?).
+        // Cached against the regex it was derived from, so it follows _cachedRegex's own lifetime.
+        private Regex _cachedAnchoredRegex;
+        private Regex _cachedAnchoredSource;
+
         // Ruby 1.8: match operations use KCODE encoding so we need to remember the one for which we have cached CLR Regex.
         private RubyRegexOptions _cachedKCode;
 
@@ -236,7 +242,17 @@ namespace IronRuby.Builtins {
                     kc = 0;
                 }
                 
-                strInput = ForceEncoding(input, encoding.Encoding, start);
+                if (start == 0 && encoding == RubyEncoding.Binary && input.Encoding == RubyEncoding.Binary) {
+                    // Binary in, binary out: one byte is one character either way, so forcing the
+                    // coding produces exactly the string the subject already knows how to be - and
+                    // MutableString keeps that one, where ForceEncoding builds a fresh copy on
+                    // every match. Only binary: a wider k-coding decodes the bytes differently
+                    // from the subject's own encoding, and the offsets would not line up.
+                    input.PrepareForCharacterRead();
+                    strInput = input.ConvertToString();
+                } else {
+                    strInput = ForceEncoding(input, encoding.Encoding, start);
+                }
             } else {
                 _pattern.RequireCompatibleEncoding(input);
                 input.PrepareForCharacterRead();
@@ -691,6 +707,92 @@ namespace IronRuby.Builtins {
             }
 
             return MatchData.Create(match, input, freezeInput, str, kcode, (kcode != null) ? ((start < 0) ? start + input.GetByteCount() : start) : 0, this);
+        }
+
+        /// <summary>
+        /// Matches the window that starts at <paramref name="start"/> and runs to the end of the
+        /// input, as if the rest of the string were the whole subject: \A, ^ and \z anchor to the
+        /// window, not to the string it was cut from. That is what StringScanner needs, and taking
+        /// a window costs nothing, where copying the rest of the subject out into a string of its
+        /// own - which is how the scanner used to get those semantics - costs a pass over it on
+        /// every single scan.
+        ///
+        /// With <paramref name="anchored"/> the match has to begin at the window's first character
+        /// rather than anywhere in it, which is what Onigmo's onig_match does for MRI's scanning
+        /// operations. Searching instead and throwing the result away when it started too late is
+        /// the same answer, but it reads the whole rest of the subject to produce it.
+        ///
+        /// Offsets in the returned MatchData are relative to the whole input, as with #Match.
+        /// Start is a number of bytes if kcode is given, otherwise a number of characters.
+        /// </summary>
+        public MatchData MatchWindow(MutableString/*!*/ input, int start, bool anchored, bool freezeInput) {
+            // Convert the whole input, not the part from "start" on: the conversion is the
+            // expensive half of a match on a long subject, and converting only the tail means
+            // paying for the tail again at every position the scanner stops at.
+            string str;
+            RubyEncoding kcode = null;
+            Regex regex = Transform(ref kcode, input, 0, out str);
+
+            // Under a k-coding the offsets are bytes, and "start" only indexes the converted
+            // string directly when that coding spells every character in one byte - which the
+            // usual one here, /n, does. Anything wider still has to be cut at "start".
+            int offset = 0;
+            if (kcode != null && !kcode.IsSingleByteCharacterSet) {
+                kcode = null;
+                regex = Transform(ref kcode, input, start, out str);
+                offset = (start < 0) ? start + input.GetByteCount() : start;
+                start = 0;
+            }
+
+            if (str == null) {
+                return null;
+            }
+            if (start < 0) {
+                start += str.Length;
+            }
+            if (start < 0 || start > str.Length) {
+                return null;
+            }
+
+            if (anchored) {
+                regex = AnchorAtSearchStart(regex);
+            }
+
+            Match match = regex.Match(str, start, str.Length - start);
+            return MatchData.Create(match, input, freezeInput, str, kcode, offset, this);
+        }
+
+        /// <summary>
+        /// The same pattern with a \G in front of it, which in a forward CLR match stands for the
+        /// position the search was told to start at. The body goes in a non-capturing group so that
+        /// a top-level alternation still binds inside the anchor, and group numbers do not move.
+        ///
+        /// Under IgnorePatternWhitespace a trailing "#" comment would otherwise swallow the closing
+        /// parenthesis, so the group is closed on a line of its own - a newline that only exists in
+        /// the mode that ignores it.
+        ///
+        /// If the wrapped pattern will not compile for some reason the original is returned, and
+        /// the caller falls back to searching: slower, never wrong.
+        /// </summary>
+        private Regex/*!*/ AnchorAtSearchStart(Regex/*!*/ regex) {
+            if (_cachedAnchoredSource == regex && _cachedAnchoredRegex != null) {
+                return _cachedAnchoredRegex;
+            }
+
+            Regex result;
+            try {
+                string body = regex.ToString();
+                string pattern = ((regex.Options & RegexOptions.IgnorePatternWhitespace) != 0)
+                    ? "\\G(?:" + body + "\n)"
+                    : "\\G(?:" + body + ")";
+                result = new Regex(pattern, regex.Options, regex.MatchTimeout);
+            } catch (Exception) {
+                result = regex;
+            }
+
+            _cachedAnchoredSource = regex;
+            _cachedAnchoredRegex = result;
+            return result;
         }
 
         public MatchData LastMatch(MutableString/*!*/ input) {

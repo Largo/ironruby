@@ -211,6 +211,12 @@ namespace IronRuby.StandardLibrary.StringScanner {
             if (byteIndex <= 0) {
                 return 0;
             }
+            if (_scanString.DetectSingleByteCharacters()) {
+                // One byte per character, so the two indices are the same number. The general
+                // path below copies the prefix out to count its characters, which would make
+                // every scan cost a pass over everything already scanned.
+                return byteIndex;
+            }
             return MutableString.CreateBinary(_scanString.GetBinarySlice(0, byteIndex), _scanString.Encoding).GetCharCount();
         }
 
@@ -265,13 +271,17 @@ namespace IronRuby.StandardLibrary.StringScanner {
             ClearMatch();
 
             MatchData match;
-            int matchBase;
+            int matchBase = 0;
             if (_fixedAnchor) {
                 match = pattern.Match(_scanString, CharIndexOf(_position), false);
-                matchBase = 0;
             } else {
-                match = pattern.Match(RestString(), 0, false);
-                matchBase = _position;
+                // Without a fixed anchor, \A, ^ and \z have to see the rest of the string as if it
+                // were the whole subject. Cutting the rest out into a string of its own says that,
+                // but it also copies - and re-encodes - everything left to scan on every single
+                // call, which makes a scan of a long subject quadratic in its length. Matching a
+                // window of the subject says exactly the same thing to the CLR regex engine and
+                // costs nothing, and the offsets it reports are already absolute.
+                match = pattern.MatchWindow(_scanString, CharIndexOf(_position), anchored, false);
             }
 
             if (match == null) {
