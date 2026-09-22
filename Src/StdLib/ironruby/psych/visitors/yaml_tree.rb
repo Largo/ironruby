@@ -152,7 +152,10 @@ module Psych
       def visit_Object o
         tag = Psych.dump_tags[o.class]
         unless tag
-          klass = o.class == Object ? nil : o.class.name
+          # ::Object, not Object: this file is vendored, but IronRuby's Psych also has a
+          # Psych::Object (the Syck-era unresolved object in yaml/types.rb), which is what a
+          # bare Object resolves to here and would tag every plain object "!ruby/object:Object".
+          klass = o.class == ::Object ? nil : o.class.name
           tag   = ['!ruby/object', klass].compact.join(':')
         end
 
@@ -541,7 +544,7 @@ module Psych
         @coders << o
         tag = Psych.dump_tags[o.class]
         unless tag
-          klass = o.class == Object ? nil : o.class.name
+          klass = o.class == ::Object ? nil : o.class.name
           tag   = ['!ruby/object', klass].compact.join(':')
         end
 

@@ -304,11 +304,15 @@ module Psych
         value
       end
 
+      # The YAML this tree stands for, written by Psych::Visitors::Emitter rather than by
+      # dumping what #to_ruby answers, so a node's tag, anchor and quoting style survive.
+      # Like upstream's, this only works on a whole stream: a bare document or scalar has no
+      # stream start in front of it, and the emitter refuses it exactly as libyaml does.
       def yaml(io = nil, options = {})
-        # The engine's dump takes no options, so they are accepted and dropped
-        # rather than passed on - the same thing that happens to an emitter
-        # option it does not understand.
-        io ? Psych.dump(to_ruby, io) : Psych.dump(to_ruby)
+        real_io = io || StringIO.new(''.dup.force_encoding(Encoding::UTF_8))
+        Visitors::Emitter.new(real_io, options).accept self
+        return real_io.string unless io
+        io
       end
       alias to_yaml yaml
 
@@ -456,15 +460,6 @@ module Psych
 
       def stream?; true; end
 
-      # A stream emits its documents one after another, each with its own "---".
-      # Node#yaml would dump the Array #to_ruby answers instead, which is a
-      # different document altogether.
-      def yaml(io = nil, options = {})
-        out = children.map {|document| document.yaml(nil, options) }.join
-        io ? io.write(out) : out
-      end
-      alias to_yaml yaml
-
       def __build # :nodoc:
         children.map(&:to_ruby)
       end
@@ -531,6 +526,18 @@ module Psych
   # upstream psych's Psych::Handler, and Psych::TreeBuilder below is its main
   # implementation.
   class Handler
+    # What Psych::Visitors::Emitter hands an emitter when the caller asked for non-default
+    # formatting.
+    class DumperOptions
+      attr_accessor :line_width, :indentation, :canonical
+
+      def initialize
+        @line_width = 0
+        @indentation = 2
+        @canonical = false
+      end
+    end
+
     EVENTS = [
       :alias, :empty, :end_document, :end_mapping, :end_sequence, :end_stream,
       :scalar, :start_document, :start_mapping, :start_sequence, :start_stream,
@@ -683,6 +690,82 @@ module Psych
     end
   end
 
+  # This name was taken by the Syck-era representer the YAML engine registers; that class is
+  # still Psych::Syck::Emitter, which is what it always was.
+  remove_const :Emitter if const_defined?(:Emitter, false)
+
+  ##
+  # Writes the YAML text for the events it is handed - the other end of Parser, and what
+  # Psych::Visitors::Emitter drives.  Upstream this is libyaml writing event by event; here
+  # the events are collected and the YAML engine's emitter (the same algorithm) writes them
+  # out when the stream ends, so the io only fills up at #end_stream.
+  class Emitter < Psych::Handler
+    attr_accessor :line_width, :indentation, :canonical
+
+    def initialize(io, options = nil)
+      @io = io
+      @events = []
+      @line_width = options ? options.line_width : 0
+      @indentation = options ? options.indentation : 2
+      @canonical = options ? options.canonical : false
+    end
+
+    def start_stream(encoding)
+      @events << [0]
+      self
+    end
+
+    # Every other event needs the stream open first, which upstream's emitter says with this
+    # message rather than writing a document that has no stream around it.
+    def __event(event) # :nodoc:
+      raise 'expected STREAM-START' if @events.empty?
+      @events << event
+      self
+    end
+    private :__event
+
+    def end_stream
+      raise 'expected STREAM-START' if @events.empty?
+      @events << [1]
+      events, @events = @events, []
+      @io.write Psych.__emit_events(events, @indentation, @line_width, @canonical)
+      @io
+    end
+
+    def start_document(version, tag_directives, implicit)
+      __event [2, version, implicit]
+    end
+
+    # +implicit+ here is Psych's implicit *end*: a document that does not write "...".
+    def end_document(implicit = false)
+      __event [3, !implicit]
+    end
+
+    def alias(anchor)
+      __event [4, anchor]
+    end
+
+    def scalar(value, anchor, tag, plain, quoted, style)
+      __event [5, value, anchor, tag, plain, quoted, style]
+    end
+
+    def start_sequence(anchor, tag, implicit, style)
+      __event [6, anchor, tag, implicit, style]
+    end
+
+    def end_sequence
+      __event [7]
+    end
+
+    def start_mapping(anchor, tag, implicit, style)
+      __event [8, anchor, tag, implicit, style]
+    end
+
+    def end_mapping
+      __event [9]
+    end
+  end
+
   ##
   # The event-driven half of Psych's API: parse a document and call methods on a
   # handler for each YAML event.  RuboCop's duplicate-key checker, Psych's own
@@ -770,5 +853,7 @@ require 'psych/visitors/visitor'
 require 'psych/visitors/to_ruby'
 require 'psych/streaming'
 require 'psych/visitors/yaml_tree'
+require 'psych/visitors/emitter'
+require 'psych/visitors/depth_first'
 
 require 'yaml/types'

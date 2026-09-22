@@ -263,6 +263,11 @@ namespace IronRuby.StandardLibrary.Yaml {
         }
         
         private static void LoadPsych_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__emit_events", 0x21, 
+                0x00060002U, 
+                new Func<IronRuby.Builtins.RubyModule, System.Collections.IList, System.Int32, System.Int32, System.Object, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.Yaml.RubyYaml.EmitEvents)
+            );
+            
             DefineLibraryMethod(module, "add_builtin_type", 0x21, 
                 0x00020005U, 
                 new Func<IronRuby.Runtime.BlockParam, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object>(IronRuby.StandardLibrary.Yaml.RubyYaml.AddBuiltinType)

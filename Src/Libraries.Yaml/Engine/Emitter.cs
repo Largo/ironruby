@@ -247,7 +247,8 @@ namespace IronRuby.StandardLibrary.Yaml {
         }
 
         private void WriteVersionDirective(string version_text) {
-            Write("%Yaml " + version_text);
+            // prepareVersion already puts the space in front of the number.
+            Write("%YAML" + version_text);
             WriteLineBreak();
         }
 
@@ -374,7 +375,10 @@ namespace IronRuby.StandardLibrary.Yaml {
         }
 
         private void WriteFolded(string/*!*/ text) {
-            WriteIndicator(">" + DetermineChomp(text), true, false, false);
+            WriteIndicator(">" + DetermineIndentHint(text) + DetermineChomp(text), true, false, false);
+            // A block scalar's content is indented one step past what holds it, and at the root
+            // of a document that step is the first one - which is what "flow" asks for here.
+            increaseIndent(true, false);
             WriteIndent();
             bool leadingSpace = false;
             bool spaces = false;
@@ -431,12 +435,13 @@ namespace IronRuby.StandardLibrary.Yaml {
                 }
                 ending++;
             }
+            _indent = _indents.Pop();
         }
 
         private void WriteLiteral(string/*!*/ text, bool indent) {
             string chomp = DetermineChomp(text);
-            WriteIndicator("|" + chomp, true, false, false);
-            increaseIndent(false, false);
+            WriteIndicator("|" + DetermineIndentHint(text) + chomp, true, false, false);
+            increaseIndent(true, false);
             WriteIndent();
             bool breaks = false;
             int start = 0, ending = 0;
@@ -453,8 +458,6 @@ namespace IronRuby.StandardLibrary.Yaml {
                         }
                         if (c != 0) {
                             WriteIndent();
-                        } else if (chomp.Length == 0) {
-                            WriteLineBreak();
                         }
                         start = ending;
                     }
@@ -826,6 +829,15 @@ namespace IronRuby.StandardLibrary.Yaml {
                 (allowDoubleQuoted ? ScalarProperties.AllowDoubleQuoted : 0) |
                 (allowBlock ? ScalarProperties.AllowBlock : 0) |
                 (specialCharacters ? ScalarProperties.SpecialCharacters : 0);
+        }
+
+        // A block scalar whose first line starts with a space or is empty needs its indentation
+        // spelled out, or the reader takes the indentation from that line instead.
+        private string DetermineIndentHint(string/*!*/ text) {
+            if (text.Length > 0 && (text[0] == ' ' || text[0] == '\n')) {
+                return _bestIndent.ToString(System.Globalization.CultureInfo.InvariantCulture);
+            }
+            return "";
         }
 
         /// <summary>
@@ -1271,12 +1283,25 @@ namespace IronRuby.StandardLibrary.Yaml {
                         (flowLevel != 0 && ev.AllowFlowPlain || flowLevel == 0 && ev.AllowBlockPlain)) {
                         return ScalarQuotingStyle.None;
                     }
+
+                    // Plain is not available. libyaml would quote; the representer never asks
+                    // for a block style, so a multi-line string becomes a literal block here
+                    // instead - that is what makes Psych.dump write "|" - and anything else
+                    // falls back the way libyaml does, single quotes before double.
+                    if (ev.IsMultiline && !ev.HasSpecialCharacters && flowLevel == 0 && ev.AllowBlock) {
+                        return ScalarQuotingStyle.Literal;
+                    }
+                    if (ev.AllowSingleQuoted && !(simpleKey && ev.IsMultiline)) {
+                        return ScalarQuotingStyle.Single;
+                    }
                     break;
 
                 case ScalarQuotingStyle.Literal:
                 case ScalarQuotingStyle.Folded:
+                    // A block style is only available outside a flow collection; libyaml keeps
+                    // the one that was asked for there, and this used to answer Single instead.
                     if (flowLevel == 0 && ev.AllowBlock) {
-                        return ScalarQuotingStyle.Single;
+                        return ev.Style;
                     }
                     break;
             }
