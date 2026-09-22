@@ -1438,20 +1438,28 @@ namespace IronRuby.Builtins {
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName, [Optional]bool includePrivate) {
 
             var context = scope.RubyContext;
+            RubyClass cls = context.GetImmediateClassOf(self);
 
-            // Without include_private only *public* methods count. Resolving with the receiver's own
-            // class as the visibility context, which is what the bool overload does, also makes
-            // protected methods visible -- MRI has answered false for those since 2.0.
-            var visibility = includePrivate
-                ? VisibilityContext.AllVisible
-                : new VisibilityContext(RubyMethodAttributes.Public);
+            // A refinement active where #respond_to? was called counts, as it does for a call. Without
+            // one - nearly always - the answer comes from the class's lock-free method-lookup cache.
+            if (scope.GetActiveRefinements().IsEmpty) {
+                var lookup = cls.GetMethodLookup(methodName);
 
-            // A refinement active where #respond_to? was called counts, as it does for a call.
-            var method = context.ResolveMethodWithRefinements(self, methodName, visibility, scope);
-            if (method.Found) {
-                // MRI's rb_f_notimplement methods (fork on a platform without it) are defined but denied.
-                var libraryMethod = method.Info as RubyLibraryMethodInfo;
-                return libraryMethod == null || !libraryMethod.IsNotImplemented;
+                // Without include_private only *public* methods count; MRI has answered false for
+                // protected ones since 2.0. The visibility is the one at the name's entry point, so
+                // `public :m' re-exporting an inherited private m counts.
+                if (lookup.Found && (includePrivate || lookup.Visibility == RubyMethodVisibility.Public)) {
+                    return IsImplemented(lookup.Info);
+                }
+            } else {
+                var visibility = includePrivate
+                    ? VisibilityContext.AllVisible
+                    : new VisibilityContext(RubyMethodAttributes.Public);
+
+                var method = cls.ResolveMethodWithRefinements(methodName, visibility, scope);
+                if (method.Found) {
+                    return IsImplemented(method.Info);
+                }
             }
 
             // MRI asks respond_to_missing? before giving up, so that method_missing-backed methods can
@@ -1459,14 +1467,47 @@ namespace IronRuby.Builtins {
             // Kernel#respond_to? altogether, so a conversion method advertised this way is still not seen there.
             //
             // A BasicObject subclass that borrowed only #respond_to?, or a class that undefined
-            // #respond_to_missing?, has nothing to ask; MRI answers false rather than raising.
-            if (!context.ResolveMethod(self, "respond_to_missing?", VisibilityContext.AllVisible).Found) {
+            // #respond_to_missing?, has nothing to ask; MRI answers false rather than raising. Nor is
+            // Kernel's own respond_to_missing? called: it answers false, and MRI's basic_obj_respond_to
+            // skips it the same way (rb_method_basic_definition_p). Only the *lookup* is cached - a
+            // user-defined respond_to_missing? is called every time.
+            var missing = cls.GetMethodLookup(Symbols.RespondToMissing);
+            if (!missing.Found || IsKernelRespondToMissing(missing.Info)) {
                 return false;
             }
 
-            var site = respondToMissingStorage.GetCallSite("respond_to_missing?", 2);
+            var site = respondToMissingStorage.GetCallSite(Symbols.RespondToMissing, 2);
             return Protocols.IsTrue(site.Target(site, self, context.StringifyIdentifier(methodName),
                 ScriptingRuntimeHelpers.BooleanToObject(includePrivate)));
+        }
+
+        // MRI's rb_f_notimplement methods (fork on a platform without it) are defined but denied.
+        private static bool IsImplemented(RubyMemberInfo/*!*/ method) {
+            var libraryMethod = method as RubyLibraryMethodInfo;
+            return libraryMethod == null || !libraryMethod.IsNotImplemented;
+        }
+
+        private static readonly MethodInfo/*!*/ _respondToMissingMethod = typeof(KernelOps).GetMethod("RespondToMissing");
+
+        // The last method info found to be Kernel#respond_to_missing? itself (or an alias of it).
+        private static RubyMemberInfo _defaultRespondToMissing;
+
+        private static bool IsKernelRespondToMissing(RubyMemberInfo/*!*/ method) {
+            if (ReferenceEquals(method, _defaultRespondToMissing)) {
+                return true;
+            }
+
+            var libraryMethod = method as RubyLibraryMethodInfo;
+            if (libraryMethod == null) {
+                return false;
+            }
+
+            var members = libraryMethod.GetMembers();
+            if (members.Length == 1 && members[0] == _respondToMissingMethod) {
+                _defaultRespondToMissing = method;
+                return true;
+            }
+            return false;
         }
 
         [RubyMethod("respond_to_missing?", RubyMethodAttributes.PrivateInstance)]

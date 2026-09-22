@@ -701,6 +701,7 @@ namespace IronRuby.Builtins {
 
             _methods = new Dictionary<string, RubyMemberInfo>();
             _methodsState = MemberTableState.Initializing;
+            Context.MethodTableInitializationDepth++;
 
             try {
                 if (_methodsInitializer != null) {
@@ -711,6 +712,7 @@ namespace IronRuby.Builtins {
             } finally {
                 _methodsInitializer = null;
                 _methodsState = MemberTableState.Initialized;
+                Context.MethodTableInitializationDepth--;
             }
         }
 
@@ -2427,6 +2429,12 @@ namespace IronRuby.Builtins {
 
         // thread-safe:
         public MethodResolutionResult ResolveMethod(string/*!*/ name, VisibilityContext visibility) {
+            // The all-visible lookup of a class is what reflection and the runtime's own protocol checks
+            // ask for (method_defined?, respond_to_missing?, _dump, ...): answer it from the class's cache.
+            if (IsClass && visibility.Class == null && visibility.Visible == RubyMethodAttributes.VisibilityMask) {
+                return GetMethodLookup(name).Result;
+            }
+
             using (Context.ClassHierarchyLocker()) {
                 return ResolveMethodNoLock(name, visibility);
             }
