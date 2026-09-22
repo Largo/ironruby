@@ -12,8 +12,8 @@ module JSON
   VERSION_BUILD = VERSION_ARRAY[2] # :nodoc:
 
   # Convenience wrappers the C# module does not need to provide itself.
-  def self.pretty_unparse(obj); pretty_generate(obj); end
-  def self.unparse(obj); generate(obj); end
+  def self.pretty_unparse(obj, opts = nil); pretty_generate(obj, opts); end
+  def self.unparse(obj, opts = nil); generate(obj, opts); end
 
   # MRI declares these with module_function, so "include JSON" hands them on as
   # private instance methods - which is how JSON's own test suite calls parse().
@@ -25,5 +25,5 @@ module JSON
 end
 
 class Object
-  def to_json(*); JSON.generate(self); end unless method_defined?(:to_json)
+  def to_json(*args); JSON.generate(self, *args); end unless method_defined?(:to_json)
 end

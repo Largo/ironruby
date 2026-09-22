@@ -45,24 +45,100 @@ namespace IronRuby.StandardLibrary.Json {
 
         #region generate
 
+        /// <summary>
+        /// The formatting options of JSON::State, as far as the generator here reads them.
+        /// The json gem takes them as an options Hash (or a State) in generate's second
+        /// argument and ignores any key it does not know, which is what callers rely on:
+        /// the graphql gem, for one, still passes the long-removed <c>quirks_mode</c>.
+        /// </summary>
+        private sealed class GeneratorOptions {
+            internal string Indent = "";
+            internal string Space = "";
+            internal string SpaceBefore = "";
+            internal string ObjectNl = "";
+            internal string ArrayNl = "";
+            internal int MaxNesting = 100;
+
+            internal static readonly GeneratorOptions Compact = new GeneratorOptions();
+
+            internal static GeneratorOptions/*!*/ Pretty() {
+                return new GeneratorOptions { Indent = "  ", Space = " ", ObjectNl = "\n", ArrayNl = "\n" };
+            }
+
+            internal static GeneratorOptions/*!*/ Parse(object opts, GeneratorOptions/*!*/ defaults) {
+                var hash = opts as Hash;
+                if (hash == null || hash.Count == 0) {
+                    return defaults;
+                }
+
+                var result = new GeneratorOptions {
+                    Indent = defaults.Indent,
+                    Space = defaults.Space,
+                    SpaceBefore = defaults.SpaceBefore,
+                    ObjectNl = defaults.ObjectNl,
+                    ArrayNl = defaults.ArrayNl,
+                    MaxNesting = defaults.MaxNesting,
+                };
+
+                foreach (var entry in hash) {
+                    string name = KeyName(entry.Key);
+                    switch (name) {
+                        case "indent": result.Indent = OptionString(entry.Value); break;
+                        case "space": result.Space = OptionString(entry.Value); break;
+                        case "space_before": result.SpaceBefore = OptionString(entry.Value); break;
+                        case "object_nl": result.ObjectNl = OptionString(entry.Value); break;
+                        case "array_nl": result.ArrayNl = OptionString(entry.Value); break;
+                        case "max_nesting":
+                            if (entry.Value is int) {
+                                result.MaxNesting = (int)entry.Value;
+                            } else if (entry.Value == null || entry.Value is bool && !(bool)entry.Value) {
+                                result.MaxNesting = 0;
+                            }
+                            break;
+                    }
+                }
+                return result;
+            }
+
+            private static string KeyName(object key) {
+                var symbol = key as RubySymbol;
+                if (symbol != null) {
+                    return symbol.ToString();
+                }
+                var str = key as MutableString;
+                return str != null ? str.ConvertToString() : null;
+            }
+
+            private static string/*!*/ OptionString(object value) {
+                var str = value as MutableString;
+                return str != null ? str.ConvertToString() : "";
+            }
+        }
+
         [RubyMethod("generate", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("dump", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ Generate(RubyContext/*!*/ context, object self, object obj) {
+        public static MutableString/*!*/ Generate(RubyContext/*!*/ context, object self, object obj,
+            [Optional]object opts) {
+
             var builder = new StringBuilder();
-            WriteValue(context, builder, obj, null, 0);
+            WriteValue(context, builder, obj, GeneratorOptions.Parse(opts, GeneratorOptions.Compact), 0);
             return MutableString.Create(builder.ToString(), RubyEncoding.UTF8);
         }
 
         [RubyMethod("pretty_generate", RubyMethodAttributes.PublicSingleton)]
-        public static MutableString/*!*/ PrettyGenerate(RubyContext/*!*/ context, object self, object obj) {
+        public static MutableString/*!*/ PrettyGenerate(RubyContext/*!*/ context, object self, object obj,
+            [Optional]object opts) {
+
             var builder = new StringBuilder();
-            WriteValue(context, builder, obj, "  ", 0);
+            WriteValue(context, builder, obj, GeneratorOptions.Parse(opts, GeneratorOptions.Pretty()), 0);
             return MutableString.Create(builder.ToString(), RubyEncoding.UTF8);
         }
 
-        private static void WriteValue(RubyContext/*!*/ context, StringBuilder/*!*/ builder, object obj, string indent, int depth) {
-            if (depth > 100) {
-                throw new JsonGeneratorError("nesting of 100 is too deep");
+        private static void WriteValue(RubyContext/*!*/ context, StringBuilder/*!*/ builder, object obj,
+            GeneratorOptions/*!*/ options, int depth) {
+
+            if (options.MaxNesting > 0 && depth > options.MaxNesting) {
+                throw new JsonGeneratorError(String.Format("nesting of {0} is too deep", options.MaxNesting));
             }
 
             if (obj == null) {
@@ -103,13 +179,13 @@ namespace IronRuby.StandardLibrary.Json {
 
             var hash = obj as Hash;
             if (hash != null) {
-                WriteHash(context, builder, hash, indent, depth);
+                WriteHash(context, builder, hash, options, depth);
                 return;
             }
 
             var list = obj as IList<object>;
             if (list != null) {
-                WriteArray(context, builder, list, indent, depth);
+                WriteArray(context, builder, list, options, depth);
                 return;
             }
 
@@ -117,7 +193,9 @@ namespace IronRuby.StandardLibrary.Json {
             WriteString(builder, context.Inspect(obj).ConvertToString());
         }
 
-        private static void WriteHash(RubyContext/*!*/ context, StringBuilder/*!*/ builder, Hash/*!*/ hash, string indent, int depth) {
+        private static void WriteHash(RubyContext/*!*/ context, StringBuilder/*!*/ builder, Hash/*!*/ hash,
+            GeneratorOptions/*!*/ options, int depth) {
+
             builder.Append('{');
             bool first = true;
             foreach (var entry in hash) {
@@ -125,7 +203,7 @@ namespace IronRuby.StandardLibrary.Json {
                     builder.Append(',');
                 }
                 first = false;
-                NewLine(builder, indent, depth + 1);
+                NewLine(builder, options.ObjectNl, options.Indent, depth + 1);
 
                 // JSON object keys are always strings
                 var key = entry.Key;
@@ -141,38 +219,39 @@ namespace IronRuby.StandardLibrary.Json {
                     WriteString(builder, key.ToString());
                 }
 
+                builder.Append(options.SpaceBefore);
                 builder.Append(':');
-                if (indent != null) {
-                    builder.Append(' ');
-                }
-                WriteValue(context, builder, entry.Value, indent, depth + 1);
+                builder.Append(options.Space);
+                WriteValue(context, builder, entry.Value, options, depth + 1);
             }
             if (!first) {
-                NewLine(builder, indent, depth);
+                NewLine(builder, options.ObjectNl, options.Indent, depth);
             }
             builder.Append('}');
         }
 
-        private static void WriteArray(RubyContext/*!*/ context, StringBuilder/*!*/ builder, IList<object>/*!*/ list, string indent, int depth) {
+        private static void WriteArray(RubyContext/*!*/ context, StringBuilder/*!*/ builder, IList<object>/*!*/ list,
+            GeneratorOptions/*!*/ options, int depth) {
+
             builder.Append('[');
             for (int i = 0; i < list.Count; i++) {
                 if (i > 0) {
                     builder.Append(',');
                 }
-                NewLine(builder, indent, depth + 1);
-                WriteValue(context, builder, list[i], indent, depth + 1);
+                NewLine(builder, options.ArrayNl, options.Indent, depth + 1);
+                WriteValue(context, builder, list[i], options, depth + 1);
             }
             if (list.Count > 0) {
-                NewLine(builder, indent, depth);
+                NewLine(builder, options.ArrayNl, options.Indent, depth);
             }
             builder.Append(']');
         }
 
-        private static void NewLine(StringBuilder/*!*/ builder, string indent, int depth) {
-            if (indent == null) {
+        private static void NewLine(StringBuilder/*!*/ builder, string/*!*/ newLine, string/*!*/ indent, int depth) {
+            if (newLine.Length == 0 && indent.Length == 0) {
                 return;
             }
-            builder.Append('\n');
+            builder.Append(newLine);
             for (int i = 0; i < depth; i++) {
                 builder.Append(indent);
             }
