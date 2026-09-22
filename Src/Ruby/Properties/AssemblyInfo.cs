@@ -40,6 +40,8 @@ using IronRuby.Runtime;
 [assembly: InternalsVisibleTo("IronRuby.Tests")]
 [assembly: InternalsVisibleTo("ClassInitGenerator")]
 [assembly: InternalsVisibleTo("IronRuby.Prism")]
+// the ahead-of-time compiler prototype, Util/aot
+[assembly: InternalsVisibleTo("IronRuby.Aot")]
 
 
 [assembly: SecurityTransparent]
