@@ -775,14 +775,58 @@ namespace IronRuby.Builtins {
                 ? Int64.MaxValue
                 : Environment.TickCount64 + timeoutMilliseconds;
 
+            var watched = new List<RubyIO>(reads.Length + writes.Length + errors.Length);
+            var kinds = new List<int>(watched.Capacity);
+            AddWatched(watched, kinds, reads, IoReadiness.Read);
+            AddWatched(watched, kinds, writes, IoReadiness.Write);
+            AddWatched(watched, kinds, errors, IoReadiness.Error);
+
+            return WaitUntilReady(watched, kinds, deadline, () => CollectReady(reads, writes, errors));
+        }
+
+        private static void AddWatched(List<RubyIO>/*!*/ watched, List<int>/*!*/ kinds, SelectEntry[]/*!*/ entries, int kind) {
+            for (int i = 0; i < entries.Length; i++) {
+                watched.Add(entries[i].IO);
+                kinds.Add(kind);
+            }
+        }
+
+        /// <summary>
+        /// The wait IO.select, IO#wait and NIO::Selector#select share: ask <paramref name="check"/>
+        /// what is ready, and if nothing is, sleep in the kernel (IoReadiness.Block) until one of
+        /// the watched IOs might have changed, then ask again. A thread parked here is asleep as far
+        /// as Ruby is concerned, and Thread#kill and Thread#raise reach it between two sleeps.
+        ///
+        /// This used to be a loop that slept a millisecond between checks, which woke every
+        /// selecting thread a thousand times a second and added up to a millisecond to every wakeup.
+        /// </summary>
+        internal static T WaitUntilReady<T>(IList<RubyIO>/*!*/ watched, IList<int>/*!*/ kinds, long deadline, Func<T>/*!*/ check)
+            where T : class {
+
             var info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
             bool wasBlocked = info.Blocked;
+            ReadinessWaiter waiter = null;
+            List<RubyPipe> pipes = null;
             try {
-                // A thread parked in select is asleep as far as Ruby is concerned.
                 info.Blocked = true;
 
+                // In-process pipes have no descriptor to poll; they signal the waiter instead.
+                for (int i = 0; i < watched.Count; i++) {
+                    if (!watched[i].Closed && IoReadiness.GetPipe(watched[i]) != null) {
+                        waiter = ReadinessWaiter.Current;
+                        break;
+                    }
+                }
+                if (waiter != null) {
+                    pipes = IoReadiness.Register(waiter, watched);
+                }
+
                 while (true) {
-                    RubyArray ready = CollectReady(reads, writes, errors);
+                    if (waiter != null) {
+                        waiter.Reset();
+                    }
+
+                    T ready = check();
                     if (ready != null) {
                         return ready;
                     }
@@ -793,16 +837,15 @@ namespace IronRuby.Builtins {
                     }
 
                     RubyUtils.CheckAsyncException();
-                    Thread.Sleep((int)Math.Min(remaining, SelectPollIntervalMilliseconds));
+                    IoReadiness.Block(watched, kinds, waiter, (int)Math.Min(remaining, IoReadiness.SliceMilliseconds));
                 }
             } finally {
+                if (waiter != null) {
+                    IoReadiness.Unregister(waiter, pipes);
+                }
                 info.Blocked = wasBlocked;
             }
         }
-
-        // How long the select loop waits between readiness checks. Short enough that a spec timing
-        // a 1 ms select does not notice, long enough not to spin a core.
-        private const int SelectPollIntervalMilliseconds = 1;
 
         /// <summary>The three result arrays, or null when nothing is ready yet.</summary>
         private static RubyArray CollectReady(SelectEntry[]/*!*/ reads, SelectEntry[]/*!*/ writes, SelectEntry[]/*!*/ errors) {
@@ -862,6 +905,28 @@ namespace IronRuby.Builtins {
             // the line (reline does, to tell a paste from typing) is told yes for ever.
             int descriptor = io.KernelDescriptor;
             if (descriptor < 0) {
+                // Off Unix a socket has no descriptor IronRuby can poll(2), but it is still a
+                // socket, and the socket can be asked. Without this every socket was "ready" on
+                // Windows, and a select loop over one spun instead of waiting.
+                var socket = IoReadiness.GetSocket(io);
+                if (socket != null) {
+                    switch (kind) {
+                        case Readiness.Read: return socket.Poll(0, System.Net.Sockets.SelectMode.SelectRead);
+                        case Readiness.Write: return socket.Poll(0, System.Net.Sockets.SelectMode.SelectWrite);
+                        default: return socket.Poll(0, System.Net.Sockets.SelectMode.SelectError);
+                    }
+                }
+
+                // And a Windows pipe can be asked whether anything is waiting in it.
+                var windowsPipe = IoReadiness.GetWindowsPipe(io);
+                if (windowsPipe != null) {
+                    switch (kind) {
+                        case Readiness.Read: return io.Mode.CanRead() && IoReadiness.IsWindowsPipeReadable(windowsPipe);
+                        case Readiness.Write: return io.Mode.CanWrite();
+                        default: return false;
+                    }
+                }
+
                 // No descriptor and no pipe - a StringIO-like stream, where the mode is all there
                 // is to go on. MRI says a regular file is always ready, and this is as close as
                 // we get.
@@ -1004,28 +1069,16 @@ namespace IronRuby.Builtins {
                 ? Int64.MaxValue
                 : Environment.TickCount64 + milliseconds;
 
-            var info = ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
-            bool wasBlocked = info.Blocked;
-            try {
-                info.Blocked = true;
+            var watched = new List<RubyIO>(3);
+            var kinds = new List<int>(3);
+            if ((events & Readable) != 0) { watched.Add(io); kinds.Add(IoReadiness.Read); }
+            if ((events & Writable) != 0) { watched.Add(io); kinds.Add(IoReadiness.Write); }
+            if ((events & Priority) != 0) { watched.Add(io); kinds.Add(IoReadiness.Error); }
 
-                while (true) {
-                    int ready = ReadyEvents(io, events);
-                    if (ready != 0) {
-                        return ScriptingRuntimeHelpers.Int32ToObject(ready);
-                    }
-
-                    long remaining = deadline - Environment.TickCount64;
-                    if (remaining <= 0) {
-                        return null;
-                    }
-
-                    RubyUtils.CheckAsyncException();
-                    Thread.Sleep((int)Math.Min(remaining, SelectPollIntervalMilliseconds));
-                }
-            } finally {
-                info.Blocked = wasBlocked;
-            }
+            return WaitUntilReady<object>(watched, kinds, deadline, () => {
+                int ready = ReadyEvents(io, events);
+                return (ready != 0) ? ScriptingRuntimeHelpers.Int32ToObject(ready) : null;
+            });
         }
 
         private static int ReadyEvents(RubyIO/*!*/ io, int events) {
@@ -1728,7 +1781,7 @@ namespace IronRuby.Builtins {
         public static MutableString Read(RubyIO/*!*/ self, [DefaultProtocol]int bytes, [DefaultProtocol, Optional]MutableString buffer) {
             self.RequireReadable();
             if (bytes < 0) {
-                throw RubyExceptions.CreateArgumentError("negative length -1 given");
+                throw RubyExceptions.CreateArgumentError("negative length {0} given", bytes);
             }
 
             buffer = PrepareReadBuffer(self, buffer);

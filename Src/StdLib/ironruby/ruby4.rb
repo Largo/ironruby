@@ -1822,6 +1822,11 @@ class IO
       unless exception == true || exception == false
         raise ArgumentError, "expected true or false as exception: #{exception.inspect}"
       end
+      # A socket can say whether the read would block without being asked to try; the
+      # exceptionless form then answers without raising and rescuing an EAGAIN.
+      if !exception && len.to_int > 0 && respond_to?(:__ir_readable_now?, true) && !__ir_readable_now?
+        return :wait_readable
+      end
       begin
         result = buf.nil? ? __read_nonblock_raising__(len) : __read_nonblock_raising__(len, buf)
       rescue IO::WaitReadable, Errno::EAGAIN => e

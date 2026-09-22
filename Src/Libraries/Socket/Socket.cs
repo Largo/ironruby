@@ -44,7 +44,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             RubyClass/*!*/ self, [NotNull]object/*!*/ domain, [DefaultProtocol]int/*!*/ type, [DefaultProtocol]int protocol) {
 
             AddressFamily addressFamily = ConvertToAddressFamily(stringCast, fixnumCast, domain);
-            return new RubySocket(self.Context, new Socket(addressFamily, (SocketType)type, (ProtocolType)protocol));
+            return new RubySocket(self.Context, NewSocket(addressFamily, (SocketType)type, (ProtocolType)protocol));
         }
 
 #endregion
@@ -296,7 +296,11 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static int Bind(RubyContext/*!*/ context, RubySocket/*!*/ self, MutableString sockaddr) {
             // CreateEndPoint rather than UnpackSockAddr: the latter reads every sockaddr as an
             // IPv4 one, so a sockaddr_un bound whatever four bytes happened to follow the family.
-            self.Socket.Bind(CreateEndPoint(sockaddr));
+            EndPoint endPoint = CreateEndPoint(sockaddr);
+            var unix = endPoint as UnixDomainSocketEndPoint;
+            // Keeps the socket file when the socket is closed, as CRuby does - see
+            // UNIXSocket.ToBindEndPoint.
+            self.Socket.Bind(unix != null ? UNIXSocket.ToBindEndPoint(unix.ToString()) : endPoint);
             return 0;
         }
 

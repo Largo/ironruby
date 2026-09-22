@@ -18,6 +18,7 @@
 using System;
 using System.Collections.Generic;
 using System.Net;
+using System.IO;
 using System.Net.Sockets;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -70,6 +71,9 @@ namespace IronRuby.StandardLibrary.Sockets {
             Mode = IOMode.ReadWrite | IOMode.PreserveEndOfLines;
             SetEncodings(RubyEncoding.Binary, null);
             _doNotReverseLookup = DoNotReverseLookup(context).Value;
+            // CRuby's sockets are sync (rsock_init_sock sets FMODE_SYNC): #sync is true, and a
+            // #syswrite after a #write is not "for buffered IO".
+            AutoFlush = true;
         }
 
         /// <summary>
@@ -81,6 +85,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             SetEncodings(RubyEncoding.Binary, null);
             // CRuby snapshots BasicSocket.do_not_reverse_lookup into the socket at creation.
             _doNotReverseLookup = DoNotReverseLookup(context).Value;
+            AutoFlush = true;
         }
 
         public override int SetReadTimeout(int timeout) {
@@ -90,6 +95,16 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         public override void NonBlockingOperation(Action operation, bool isRead) {
+            // Ask first. A read that would block used to find out from a SocketException, which
+            // .NET builds with a stack trace, and then raised the Ruby EAGAIN on top of it - two
+            // exceptions for the most ordinary answer a non-blocking read has. A server polling
+            // an idle keep-alive connection (puma does, after every response) paid for both.
+            // Bytes already in IronRuby's buffer are served without touching the socket.
+            if (isRead && !Closed && _socket != null && !GetStream().DataBuffered
+                && !_socket.Poll(0, SelectMode.SelectRead)) {
+                throw RubyIOOps.NonBlockingError(Context, true, "read would block");
+            }
+
             bool wasBlocking = _socket.Blocking;
             try {
                 _socket.Blocking = false;
@@ -211,11 +226,59 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static RubyBasicSocket/*!*/ ForFileDescriptor(RubyClass/*!*/ self, [DefaultProtocol]int fileDescriptor) {
             SocketStream stream = self.Context.GetStream(fileDescriptor) as SocketStream;
             if (stream == null) {
-                throw RubyExceptions.CreateEBADF();
+                // Not one of ours: a descriptor this process was handed at birth - a listener
+                // inherited across exec (puma's hot restart passes its sockets that way, as
+                // PUMA_INHERIT_n=fd:url) or from systemd's socket activation. The kernel knows it
+                // by that number, and .NET can wrap it; before, this was always EBADF, so a
+                // restarted puma could not pick up its own listeners.
+                Socket inherited = AdoptKernelSocket(self.Context, fileDescriptor);
+                if (inherited == null) {
+                    throw RubyExceptions.CreateEBADF();
+                }
+                return CreateForClass(self, inherited);
             }
             RubyBasicSocket result = CreateForClass(self, stream.Socket);
             result.SetFileDescriptor(fileDescriptor);
             return result;
+        }
+
+        /// <summary>
+        /// A new socket, with the operating system's own IPV6_V6ONLY default. .NET turns
+        /// IPV6_V6ONLY on for every IPv6 socket it creates; CRuby leaves the kernel's default,
+        /// which on Linux (net.ipv6.bindv6only=0) is a dual-stack socket - so a server bound to
+        /// "::" (puma binds there when no host is given) accepts IPv4 clients too. Windows'
+        /// default is v6-only already, and is left alone.
+        /// </summary>
+        internal static Socket/*!*/ NewSocket(AddressFamily family, SocketType type, ProtocolType protocol) {
+            var socket = new Socket(family, type, protocol);
+            if (family == AddressFamily.InterNetworkV6 && Path.DirectorySeparatorChar == '/') {
+                try {
+                    socket.DualMode = true;
+                } catch (SocketException) {
+                } catch (NotSupportedException) {
+                }
+            }
+            return socket;
+        }
+
+        /// <summary>
+        /// A socket for a raw kernel descriptor, or null when it is not an open socket. Unix
+        /// only: on Windows a descriptor number is not a socket handle. A number IronRuby's own
+        /// table already uses for something else is not the kernel's to hand out, and is refused.
+        /// </summary>
+        private static Socket AdoptKernelSocket(RubyContext/*!*/ context, int descriptor) {
+            if (Path.DirectorySeparatorChar != '/' || descriptor < 3 || context.GetStream(descriptor) != null) {
+                return null;
+            }
+            var handle = new SafeSocketHandle((IntPtr)descriptor, true);
+            try {
+                return new Socket(handle);
+            } catch (SocketException) {
+            } catch (ArgumentException) {
+            }
+            // Not a socket after all: leave the descriptor to whoever does own it.
+            handle.SetHandleAsInvalid();
+            return null;
         }
 
         /// <summary>
@@ -823,6 +886,21 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         #endregion
+
+        /// <summary>
+        /// Whether a read (or, on a listening socket, an accept) would return at once: bytes in
+        /// IronRuby's buffer, bytes in the kernel's, a peer that has closed, or a connection
+        /// waiting. socket.rb asks this before a *_nonblock call, so that "it would block" - the
+        /// usual answer for a server polling its sockets - costs no exception at all.
+        /// </summary>
+        [RubyMethod("__ir_readable_now?", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsReadableNow(RubyBasicSocket/*!*/ self) {
+            if (self.Closed) {
+                return true;  // let the operation itself raise IOError
+            }
+            var socket = self.Socket;
+            return self.GetStream().DataBuffered || socket.Poll(0, SelectMode.SelectRead);
+        }
 
         [RubyMethod("recv_nonblock")]
         public static MutableString/*!*/ ReceiveNonBlocking(ConversionStorage<int>/*!*/ fixnumCast, RubyBasicSocket/*!*/ self,

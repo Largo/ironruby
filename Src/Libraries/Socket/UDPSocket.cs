@@ -52,7 +52,7 @@ namespace IronRuby.StandardLibrary.Sockets {
         }
 
         private static Socket/*!*/ CreateSocket(AddressFamily addressFamily) {
-            return new Socket(addressFamily, SocketType.Dgram, ProtocolType.Udp);
+            return RubyBasicSocket.NewSocket(addressFamily, SocketType.Dgram, ProtocolType.Udp);
         }
 
 #region Public Instance Methods

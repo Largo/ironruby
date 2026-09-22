@@ -239,8 +239,16 @@ namespace IronRuby.Builtins {
             MutableString result = MutableString.CreateMutable(context.GetIdentifierEncoding());
             result.Append("#<");
             result.Append(className);
-            result.Append(": ");
-            result.Append(KernelOps.Inspect(inspectStorage, tosConversion, message));
+            if (messageString != null && messageString.IndexOf('\n') >= 0) {
+                // Ruby 3.4: a message that spans lines is shown quoted, so the inspect of an
+                // exception stays on one line - #<RuntimeError:"a\nb">, with no space.
+                var inspectSite = inspectStorage.GetCallSite("inspect");
+                result.Append(':');
+                result.Append(Protocols.ConvertToString(tosConversion, inspectSite.Target(inspectSite, messageString)));
+            } else {
+                result.Append(": ");
+                result.Append(KernelOps.Inspect(inspectStorage, tosConversion, message));
+            }
             result.Append('>');
             return result;
         }

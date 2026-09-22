@@ -330,6 +330,10 @@ namespace IronRuby.Builtins {
         public long Position {
             get {
                 var stream = GetStream();
+                long position;
+                if (TrySeekDescriptor(stream, 0, SeekOrigin.Current, out position)) {
+                    return position;
+                }
                 try {
                     return stream.Position;
                 } catch (ObjectDisposedException) {
@@ -338,6 +342,10 @@ namespace IronRuby.Builtins {
             }
             set {
                 var stream = GetStream();
+                long position;
+                if (TrySeekDescriptor(stream, value, SeekOrigin.Begin, out position)) {
+                    return;
+                }
                 try {
                     stream.Position = value;
                 } catch (ObjectDisposedException) {
@@ -348,6 +356,10 @@ namespace IronRuby.Builtins {
 
         public void Seek(long offset, SeekOrigin origin) {
             var stream = GetStream();
+            long position;
+            if (TrySeekDescriptor(stream, offset, origin, out position)) {
+                return;
+            }
             try {
                 stream.Seek(offset, origin);
             } catch (IOException) {
@@ -355,6 +367,46 @@ namespace IronRuby.Builtins {
             } catch (ObjectDisposedException) {
                 throw RubyExceptions.CreateEBADF();
             }
+        }
+
+        [DllImport("libc", EntryPoint = "lseek", SetLastError = true)]
+        private static extern long sys_lseek(int fd, long offset, int whence);
+
+        /// <summary>
+        /// lseek(2) for a stream that cannot seek itself but sits on a descriptor that can - the
+        /// standard streams after #reopen, above all. `$stdout.reopen(tempfile)` points descriptor
+        /// 1 at the file with dup2, but Ruby still writes through the console stream it had, and
+        /// that stream answers every Seek with NotSupportedException. minitest's
+        /// capture_subprocess_io reopens $stdout onto a Tempfile and then rewinds it, so it failed
+        /// with a raw System::NotSupportedException. A descriptor that really cannot seek (a pipe,
+        /// a terminal) gets MRI's Errno::ESPIPE.
+        /// </summary>
+        private bool TrySeekDescriptor(RubyBufferedStream/*!*/ stream, long offset, SeekOrigin origin, out long position) {
+            position = 0;
+            if (!_hasFileControl || stream.CanSeek) {
+                return false;
+            }
+            int descriptor = KernelDescriptor;
+            if (descriptor < 0) {
+                return false;
+            }
+
+            stream.Flush();
+            position = sys_lseek(descriptor, offset, (int)origin);
+            if (position < 0) {
+                const int ESPIPE = 29;
+                if (Marshal.GetLastWin32Error() == ESPIPE) {
+                    object errno;
+                    if (_context.ObjectClass.TryGetConstant(null, "Errno", out errno) && errno is RubyModule) {
+                        var error = _context.CreateLibraryException((RubyModule)errno, "ESPIPE", "Illegal seek");
+                        if (error != null) {
+                            throw error;
+                        }
+                    }
+                }
+                throw RubyExceptions.CreateEINVAL();
+            }
+            return true;
         }
 
         public void Flush() {
@@ -758,6 +810,59 @@ namespace IronRuby.Builtins {
 
         [DllImport("libc", EntryPoint = "poll", SetLastError = true)]
         private static extern int sys_poll([In, Out] PollFd[] fds, uint nfds, int timeout);
+
+        /// <summary>
+        /// poll(2) over the first <paramref name="count"/> descriptors, filling in their revents.
+        /// Answers what poll answers - the number of descriptors with events, 0 on timeout - or -1
+        /// when it failed or the platform has none (check HasPoll). EINTR reads as a timeout.
+        /// </summary>
+        public static int Poll(int[]/*!*/ descriptors, short[]/*!*/ events, short[]/*!*/ revents, int count, int timeoutMilliseconds) {
+            if (!_hasFileControl) {
+                return -1;
+            }
+
+            var fds = new PollFd[count];
+            for (int i = 0; i < count; i++) {
+                fds[i].fd = descriptors[i];
+                fds[i].events = events[i];
+            }
+
+            int result = sys_poll(fds, (uint)count, timeoutMilliseconds);
+            if (result < 0) {
+                return Marshal.GetLastWin32Error() == 4 ? 0 : -1;
+            }
+            for (int i = 0; i < count; i++) {
+                revents[i] = fds[i].revents;
+            }
+            return result;
+        }
+
+        /// <summary>Whether this platform has poll(2) - every Unix, and not Windows.</summary>
+        public static bool HasPoll {
+            get { return _hasFileControl; }
+        }
+
+        /// <summary>
+        /// Blocks in one poll(2) over the given descriptors until one of them has an event, or
+        /// the timeout passes. Answers false when the platform has no poll. The revents are not
+        /// reported: the callers (IO.select and friends) ask each IO again afterwards, which is
+        /// what decides readiness; this is only how they sleep.
+        /// </summary>
+        public static bool PollWait(System.Collections.Generic.IList<int>/*!*/ descriptors,
+            System.Collections.Generic.IList<short>/*!*/ events, int timeoutMilliseconds) {
+            if (!_hasFileControl) {
+                return false;
+            }
+
+            var fds = new PollFd[descriptors.Count];
+            for (int i = 0; i < fds.Length; i++) {
+                fds[i].fd = descriptors[i];
+                fds[i].events = events[i];
+            }
+
+            // An EINTR just ends the wait early, which the callers are ready for.
+            return sys_poll(fds, (uint)fds.Length, timeoutMilliseconds) >= 0 || Marshal.GetLastWin32Error() == 4;
+        }
 
         /// <summary>
         /// poll(2) over the given descriptors. Answers a parallel array of revents, or null when

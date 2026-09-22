@@ -92,6 +92,41 @@ namespace IronRuby.StandardLibrary.Sockets {
             return new UnixDomainSocketEndPoint(path.Length == 0 ? "/" : path);
         }
 
+        /// <summary>
+        /// The endpoint to bind(2) to. A socket bound through a UnixDomainSocketEndPoint deletes
+        /// its file when .NET disposes it; CRuby's leaves the file where it is - closing a
+        /// UNIXServer does not unlink its path, and code that keeps a socket file across
+        /// restarts (or, like puma, must not remove a path it did not create) relies on that.
+        /// Binding through this wrapper, which .NET does not recognise, keeps the file.
+        /// </summary>
+        internal static EndPoint/*!*/ ToBindEndPoint(string/*!*/ path) {
+            return new KeepFileEndPoint((UnixDomainSocketEndPoint)ToEndPoint(path));
+        }
+
+        private sealed class KeepFileEndPoint : EndPoint {
+            private readonly UnixDomainSocketEndPoint/*!*/ _endPoint;
+
+            public KeepFileEndPoint(UnixDomainSocketEndPoint/*!*/ endPoint) {
+                _endPoint = endPoint;
+            }
+
+            public override AddressFamily AddressFamily {
+                get { return AddressFamily.Unix; }
+            }
+
+            public override SocketAddress/*!*/ Serialize() {
+                return _endPoint.Serialize();
+            }
+
+            public override EndPoint/*!*/ Create(SocketAddress/*!*/ socketAddress) {
+                return _endPoint.Create(socketAddress);
+            }
+
+            public override string/*!*/ ToString() {
+                return _endPoint.ToString();
+            }
+        }
+
         #endregion
 
         #region Addresses
@@ -252,7 +287,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             string pathStr = context.DecodePath(Protocols.CheckPath(path));
             Socket socket = NewUnixSocket(SocketType.Stream);
             try {
-                socket.Bind(ToEndPoint(pathStr));
+                socket.Bind(ToBindEndPoint(pathStr));
                 socket.Listen(128);
             } catch (Exception e) {
                 socket.Close();

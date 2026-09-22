@@ -153,11 +153,7 @@ namespace IronRuby.Builtins {
                     throw RubyExceptions.CreateIOError("stream closed in another thread");
                 }
 
-                // poll(2) with no timeout at all, and then a managed wait: a thread parked in
-                // a P/Invoke is still Running as far as the CLR is concerned, and Ruby code
-                // that waits for a reader to block - Thread#stop? - would spin for ever. The
-                // event is also what a close from another thread sets, so the reader wakes at
-                // once rather than after the tick.
+                // Ask first, without waiting, and only then park in poll(2) - see WaitFor.
                 var fds = new PollFd[1];
                 fds[0].fd = _descriptor;
                 fds[0].events = POLLIN;
@@ -169,7 +165,7 @@ namespace IronRuby.Builtins {
                     throw new IOException("poll failed");
                 }
                 if (ready == 0) {
-                    _closing.WaitOne(5);
+                    WaitFor(POLLIN);
                     continue;
                 }
 
@@ -230,23 +226,40 @@ namespace IronRuby.Builtins {
             }
         }
 
+        // How long one poll(2) waits before the thread looks up to see whether it has been
+        // closed underneath, killed or raised into. None of those can wake a thread inside poll.
+        private const int WaitSliceMilliseconds = 20;
+
         /// <summary>
-        /// Blocks until poll(2) reports the given event, waking early if another thread closes
-        /// this end. Same managed-wait reasoning as Read.
+        /// Blocks in poll(2) until the descriptor reports the given event or this end is closed.
+        ///
+        /// This used to ask poll(2) with no timeout and then sleep 5 ms on a managed event, so
+        /// that the thread looked asleep to Thread#status (a thread in a P/Invoke is Running to
+        /// the CLR). But that made every wakeup wait for the next tick: a reader woke up to 5 ms
+        /// after its data arrived, and a thread handing a byte to another through IO.pipe - which
+        /// is how puma's and nio4r's wakeups work - took milliseconds per round trip. Now the
+        /// kernel wakes the reader as soon as there is data, and the thread says it is blocked
+        /// through RubyUtils.EnterNativeWait instead. A close from another thread, Thread#kill
+        /// and Thread#raise are noticed within one slice.
         /// </summary>
         private void WaitFor(short events) {
-            while (!_closed) {
-                var fds = new PollFd[1];
-                fds[0].fd = _descriptor;
-                fds[0].events = events;
-                int ready = sys_poll(fds, 1, 0);
-                if (ready > 0) {
-                    return;
+            bool wasBlocked = RubyUtils.EnterNativeWait();
+            try {
+                while (!_closed) {
+                    var fds = new PollFd[1];
+                    fds[0].fd = _descriptor;
+                    fds[0].events = events;
+                    int ready = sys_poll(fds, 1, WaitSliceMilliseconds);
+                    if (ready > 0) {
+                        return;
+                    }
+                    if (ready < 0 && Marshal.GetLastWin32Error() != EINTR) {
+                        throw new IOException("poll failed");
+                    }
+                    RubyUtils.CheckAsyncException();
                 }
-                if (ready < 0 && Marshal.GetLastWin32Error() != EINTR) {
-                    throw new IOException("poll failed");
-                }
-                _closing.WaitOne(5);
+            } finally {
+                RubyUtils.ExitNativeWait(wasBlocked);
             }
         }
 
