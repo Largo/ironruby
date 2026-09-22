@@ -779,7 +779,8 @@ namespace IronRuby.Builtins {
                         lastEntityIndex = _sb.Length;
                         lastWasQuantifier = false;
                         lastEntity = null;
-                        ParseCharacterGroup(false).AppendTo(_sb, true);
+                        bool topLevelPosixClass;
+                        ParseCharacterGroup(false, out topLevelPosixClass).AppendTo(_sb, true);
                         break;
 
                     case '|':
@@ -2213,15 +2214,28 @@ namespace IronRuby.Builtins {
                 return sb.ToString();
             }
 
+            /// <summary>
+            /// This set as one a character-class operation can use: without the non-BMP members a
+            /// POSIX class brings along, and raising for members that cannot be dropped.
+            ///
+            /// They have to be dropped from the *result*, not merely tolerated here. A set that
+            /// keeps them renders as the alternation (?:[...]|&lt;surrogate pairs&gt;), and splicing
+            /// that into the body of a character class produces a pattern .NET rejects. Ruby
+            /// reaches this with a nested class - CodeRay's identifier pattern is
+            /// [[:alpha:]_[^\0-\177]], whose inner negated class leaves the outer one's exclude
+            /// carrying the non-BMP half of [[:alpha:]].
+            /// </summary>
             private CharacterSet/*!*/ RequireNoAstral(string/*!*/ operation) {
-                // the non-BMP members a POSIX class brings along are dropped instead, which leaves
-                // such a class as it was before they were added
                 if (HasAstral && !_astralOptional) {
                     // The surrogate-pair alternation is not a character class, so it cannot take
                     // part in [a-[b]] subtraction or && intersection.
                     throw new RegexpError("non-BMP character is not supported in a " + operation + " character class");
                 }
-                return this;
+                var exclude = _exclude.HasAstral ? _exclude.RequireNoAstral(operation) : _exclude;
+                if (!HasAstral && ReferenceEquals(exclude, _exclude)) {
+                    return this;
+                }
+                return new CharacterSet(_negated, _include, exclude);
             }
 
             public string/*!*/ Include {
@@ -2348,16 +2362,19 @@ namespace IronRuby.Builtins {
                     return MakeNegatedAstral(_include, _exclude, AstralAlternation(complement), complement);
                 }
 
-                RequireNoAstral("negated");
-                return new CharacterSet(!_negated, _include, _exclude);
+                var bmp = RequireNoAstral("negated");
+                return new CharacterSet(!bmp._negated, bmp._include, bmp._exclude);
             }
 
-            internal CharacterSet/*!*/ Subtract(CharacterSet/*!*/ set) {
-                if (IsEmpty || set.IsEmpty) {
+            internal CharacterSet/*!*/ Subtract(CharacterSet/*!*/ other) {
+                if (IsEmpty || other.IsEmpty) {
                     return this;
                 }
-                RequireNoAstral("subtracted");
-                set.RequireNoAstral("subtracted");
+                CharacterSet self = RequireNoAstral("subtracted");
+                CharacterSet set = other.RequireNoAstral("subtracted");
+                if (!ReferenceEquals(self, this)) {
+                    return self.Subtract(set);
+                }
 
                 if (_negated) {
                     if (set._negated) {
@@ -2414,12 +2431,15 @@ namespace IronRuby.Builtins {
                 );
             }
 
-            internal CharacterSet/*!*/ Intersect(CharacterSet/*!*/ set) {
-                if (IsEmpty || set.IsEmpty) {
+            internal CharacterSet/*!*/ Intersect(CharacterSet/*!*/ other) {
+                if (IsEmpty || other.IsEmpty) {
                     return Empty;
                 }
-                RequireNoAstral("intersected");
-                set.RequireNoAstral("intersected");
+                CharacterSet self = RequireNoAstral("intersected");
+                CharacterSet set = other.RequireNoAstral("intersected");
+                if (!ReferenceEquals(self, this)) {
+                    return self.Intersect(set);
+                }
 
                 if (_negated) {
                     if (set._negated) {
@@ -2444,6 +2464,20 @@ namespace IronRuby.Builtins {
                 return new CharacterSet(_include, new CharacterSet(true, set._include, _exclude.Union(set._exclude)));
             }
 
+            /// <summary>
+            /// The members, as the body of a .NET character class. A body that starts with '^'
+            /// would be read as a negation there - whether this set is negated is decided by the
+            /// caller, which emits the complement explicitly - so a leading '^' is escaped.
+            /// Ruby's /[^^]/ ("anything but a caret") went through as [\0-￿-[^]] without this.
+            /// </summary>
+            private void AppendInclude(StringBuilder/*!*/ sb) {
+                if (_include.Length != 0 && _include[0] == '^') {
+                    sb.Append("\\^").Append(_include, 1, _include.Length - 1);
+                } else {
+                    sb.Append(_include);
+                }
+            }
+
             public StringBuilder/*!*/ AppendTo(StringBuilder/*!*/ sb, bool parenthesize) {
                 if (_negated && (HasAstral || _excludeSurrogates)) {
                     // The complement of a class that had non-BMP members: any BMP character
@@ -2454,7 +2488,8 @@ namespace IronRuby.Builtins {
                     if (_include.Length == 0 && _exclude.IsEmpty) {
                         sb.Append("[\0-\uffff]");
                     } else {
-                        sb.Append("[\0-\uffff-[").Append(_include);
+                        sb.Append("[\0-\uffff-[");
+                        AppendInclude(sb);
                         if (!_exclude.IsEmpty) {
                             sb.Append('-');
                             _exclude.AppendTo(sb, true);
@@ -2470,7 +2505,8 @@ namespace IronRuby.Builtins {
                 if (HasAstral) {
                     sb.Append("(?:");
                     if (_include.Length != 0 || !_exclude.IsEmpty) {
-                        sb.Append('[').Append(_include);
+                        sb.Append('[');
+                        AppendInclude(sb);
                         if (!_exclude.IsEmpty) {
                             sb.Append('-');
                             _exclude.AppendTo(sb, true);
@@ -2488,13 +2524,14 @@ namespace IronRuby.Builtins {
                         sb.Append("[a-[a]]");
                     }
                 } else if (IsSingleCharacter && !parenthesize) {
-                    sb.Append(_include);
+                    // Outside a class a bare '^' is the anchor, so it is escaped here too.
+                    AppendInclude(sb);
                 } else {
                     if (_negated) {
                         sb.Append("[\0-\uffff-");
                     }
                     sb.Append('[');
-                    sb.Append(_include);
+                    AppendInclude(sb);
                     if (!_exclude.IsEmpty) {
                         sb.Append('-');
                         _exclude.AppendTo(sb, true);
@@ -2517,17 +2554,19 @@ namespace IronRuby.Builtins {
         //
         // negation_opt ::= '^' | <empty>
         //
-        private CharacterSet/*!*/ ParseCharacterGroup(bool nested) {
+        private CharacterSet/*!*/ ParseCharacterGroup(bool nested, out bool posixClass) {
             Debug.Assert(_rubyPattern[_index - 1] == '[');
 
+            posixClass = false;
             bool positive = !Read('^');
 
             // [:alnum:]
             // [^:alnum:]
             if (nested) {
-                var posixClass = ParsePosixCharacterClass(positive);
-                if (posixClass != null) {
-                    return posixClass;
+                var parsed = ParsePosixCharacterClass(positive);
+                if (parsed != null) {
+                    posixClass = true;
+                    return parsed;
                 }
             }
 
@@ -2588,6 +2627,16 @@ namespace IronRuby.Builtins {
                 }
 
                 if (codepoints == null && Read('-')) {
+                    // A '-' straight after a nested character class is a literal member of the
+                    // outer class, not the start of a range - MRI reads [[[:alnum:]]-_.], which is
+                    // kramdown's autolink pattern, as alnum plus '-', '_' and '.'. (A '-' after
+                    // \p{...} is an error there, and still is below: mayStartRange is false only
+                    // for the nested-class case.)
+                    if (!mayStartRange) {
+                        result = result.Union(set).Union(new CharacterSet(@"\-", true));
+                        continue;
+                    }
+
                     // [a-]
                     // [a-&&b]
                     bool mayEndRange;
@@ -2688,9 +2737,16 @@ namespace IronRuby.Builtins {
                         return ParseCharacterEscape(escape);
                     }
 
-                case '[':
-                    mayStartRange = false;
-                    return ParseCharacterGroup(true);
+                case '[': {
+                    // A POSIX class - [:alnum:] - may not be a range bound, and MRI says so;
+                    // a nested class - [[:alnum:]] or [a-b] - may not either, but there MRI
+                    // reads the '-' after it as an ordinary member instead of complaining.
+                    // mayStartRange tells the two apart for the caller.
+                    bool posixClass;
+                    var group = ParseCharacterGroup(true, out posixClass);
+                    mayStartRange = posixClass;
+                    return group;
+                }
 
                 case '-':
                     // warning: character class has '-' without escape

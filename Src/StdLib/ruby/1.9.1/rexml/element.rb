@@ -1012,6 +1012,9 @@ module REXML
     #    p attr.expanded_name+" => "+attr.value
     #  }
     def each_attribute # :yields: attribute
+      # Without a block this is an Enumerator, as every other #each_ in the library is;
+      # multi_xml writes attributes.each_attribute.with_object({}) and got "no block given".
+      return to_enum(:each_attribute) unless block_given?
       each_value do |val|
         if val.kind_of? Attribute
           yield val

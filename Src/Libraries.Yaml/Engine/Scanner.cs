@@ -335,9 +335,14 @@ namespace IronRuby.StandardLibrary.Yaml {
                         break;
 
                     case '>':
-                        if (!IsWhitespace(Peek(1))) {
-                            return FetchPlain();
-                        } else if (FlowLevel == 0) {
+                        // A folded block scalar, like '|' just above. What follows '>' may be a
+                        // chomping indicator and an indentation digit before the line ends -
+                        // ">-" is the spelling RuboCop's default.yml uses for every cop
+                        // description - and ScanBlockScalar falls back to a plain scalar when
+                        // those turn out not to be valid indicators. Requiring whitespace right
+                        // after the '>' made every ">-" and ">2" a plain scalar, which then swept
+                        // the block's own lines up as mapping entries.
+                        if (FlowLevel == 0) {
                             return FetchFolded();
                         }
                         break;
