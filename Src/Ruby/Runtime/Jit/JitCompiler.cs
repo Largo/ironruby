@@ -942,6 +942,18 @@ namespace IronRuby.Runtime.Jit {
         }
 
         /// <summary>
+        /// An operand of a binary operator, or the right side of `x op= v': EmitCall and
+        /// EmitAssignment only go on when both sides are numeric, and an instance variable, self,
+        /// or a nil/true/false literal never is - `@count + 1' is refused whatever gets profiled.
+        /// </summary>
+        private bool WalkOperand(RExpr/*!*/ node) {
+            if (node is InstanceVariable || node is SelfReference) { return No(node); }
+            var literal = node as Literal;
+            if (literal != null && !(literal.Value is int || literal.Value is long || literal.Value is double)) { return No(node); }
+            return Walk(node);
+        }
+
+        /// <summary>
         /// Mirrors JitCompiler.Emit, case for case and in the same order. Read the two side by
         /// side; that is the point of them being in one file.
         /// </summary>
@@ -976,7 +988,7 @@ namespace IronRuby.Runtime.Jit {
                 }
                 var target = assign.Left as LocalVariable;
                 if (target == null || target.DefinitionLexicalDepth != _scopeDepth) { return No(node); }
-                return Walk(assign.Right);
+                return (op != null) ? WalkOperand(assign.Right) : Walk(assign.Right);
             }
 
             var call = node as MethodCall;
@@ -1065,10 +1077,12 @@ namespace IronRuby.Runtime.Jit {
                 // Emit only reaches EmitBinary for a one-argument call on a target, and only
                 // EmitBinary's own operators survive there whatever the operand types are.
                 return No(node);
-            } else if (!Walk(node.Target)) {
-                return false;
+            } else {
+                return WalkOperand(node.Target) && WalkOperand(args.Expressions[0]);
             }
 
+            // The self-call: each argument is coerced to its parameter's profiled type, which is
+            // a question about types, so any argument Emit can emit at all will do.
             for (int i = 0; i < argc; i++) {
                 if (!Walk(args.Expressions[i])) { return false; }
             }
