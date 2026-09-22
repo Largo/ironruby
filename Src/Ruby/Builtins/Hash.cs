@@ -14,8 +14,8 @@
  * ***************************************************************************/
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
-using System.Reflection;
 using System.Runtime.CompilerServices;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
@@ -24,13 +24,20 @@ using IronRuby.Runtime;
 namespace IronRuby.Builtins {
 
     /// <summary>
-    /// TODO: ordered dictionary
     /// TODO: all operations should check frozen state!
     /// 
     /// Dictionary inherits from Object, mixes in Enumerable.
-    /// Ruby hash is a Dictionary{object, object}, but it adds default value/proc
+    /// Ruby hash is an IDictionary{object, object}, but it adds default value/proc.
+    /// 
+    /// The storage is an insertion-ordered dictionary of its own (Hash.Storage.cs) rather than
+    /// <see cref="Dictionary{TKey,TValue}"/>, which reuses the slot of a removed entry and so
+    /// loses the enumeration order Ruby guarantees. The interfaces Dictionary used to supply -
+    /// IDictionary{object, object} above all, which is what <c>IDictionaryOps</c> is mixed in
+    /// through and what every [DefaultProtocol] Hash parameter in the libraries converts to -
+    /// are implemented directly.
     /// </summary>
-    public partial class Hash : Dictionary<object, object>, IRubyObjectState, IDuplicable {
+    public partial class Hash : IDictionary<object, object>, IDictionary, IReadOnlyDictionary<object, object>,
+        IRubyObjectState, IDuplicable {
 
         // The default value can be a Proc that we should *return*, and that is different
         // from the default value being a Proc that we should *call*, hence two variables
@@ -43,11 +50,6 @@ namespace IronRuby.Builtins {
         private const uint IsUntrustedFlag = 4;
         private const uint IsKeywordArgumentsFlag = 8;
         private const uint IsRuby2KeywordsHashFlag = 16;
-
-        // Hash#compare_by_identity has to swap the comparer of an *existing* dictionary, which
-        // Dictionary<,> offers no API for; the field is patched directly and the entries rehashed.
-        private static readonly FieldInfo _DictionaryComparerField =
-            typeof(Dictionary<object, object>).GetField("_comparer", BindingFlags.NonPublic | BindingFlags.Instance);
 
         private bool _comparesByIdentity;
 
@@ -75,14 +77,16 @@ namespace IronRuby.Builtins {
                 return this;
             }
             IEqualityComparer<object> comparer = value ? IdentityComparer.Instance : defaultComparer;
-            if (comparer == null || _DictionaryComparerField == null) {
-                throw new NotSupportedException("Hash#compare_by_identity is not available: Dictionary<,> layout changed");
+            if (comparer == null) {
+                throw new NotSupportedException("Hash#compare_by_identity is not available: no comparer to switch back to");
             }
 
+            // The entries have to be re-hashed under the new comparer, and in insertion order so
+            // that the hash keeps the order it had.
             var entries = new KeyValuePair<object, object>[Count];
-            ((ICollection<KeyValuePair<object, object>>)this).CopyTo(entries, 0);
+            CopyTo(entries, 0);
             Clear();
-            _DictionaryComparerField.SetValue(this, comparer);
+            _comparer = comparer;
             _comparesByIdentity = value;
             foreach (var entry in entries) {
                 this[entry.Key] = entry.Value;
@@ -142,8 +146,8 @@ namespace IronRuby.Builtins {
 
         #region Construction
 
-        // Dictionary has no constructor of its own to chain through, so every constructor here
-        // records the new hash; off unless the objspace library asked for it.
+        // Records the new hash for ObjectSpace; off unless the objspace library asked for it.
+        // Every public constructor chains through the (comparer, capacity) one, which calls this.
         private void Created() {
             if (ObjectTracking.Enabled) {
                 ObjectTracking.Track(this);
@@ -151,43 +155,48 @@ namespace IronRuby.Builtins {
         }
 
         public Hash(RubyContext/*!*/ context)
-            : base(context.EqualityComparer) {
-            Created();
+            : this(context.EqualityComparer, 0) {
         }
 
         public Hash(IEqualityComparer<object>/*!*/ comparer)
-            : base(comparer) {
-            Created();
+            : this(comparer, 0) {
         }
 
         public Hash(EqualityComparer/*!*/ comparer, Proc defaultProc, object defaultValue)
-            : base(comparer) {
+            : this(comparer, 0) {
             _defaultValue = defaultValue;
             _defaultProc = defaultProc;
-            Created();
         }
 
-        public Hash(EqualityComparer/*!*/ comparer, int capacity)
-            : base(capacity, comparer) {
+        public Hash(IEqualityComparer<object>/*!*/ comparer, int capacity) {
+            ContractUtils.RequiresNotNull(comparer, "comparer");
+            _comparer = comparer;
+            if (capacity > 0) {
+                Initialize(capacity);
+            }
             Created();
         }
 
         public Hash(IDictionary<object, object>/*!*/ dictionary)
-            : base(dictionary) {
-            Created();
+            : this(dictionary, dictionary is Hash ? ((Hash)dictionary).Comparer : EqualityComparer<object>.Default) {
         }
 
-        public Hash(IDictionary<object, object>/*!*/ dictionary, EqualityComparer/*!*/ comparer)
-            : base(dictionary, comparer) {
-            Created();
+        public Hash(IDictionary<object, object>/*!*/ dictionary, IEqualityComparer<object>/*!*/ comparer)
+            : this(comparer, dictionary.Count) {
+            // in insertion order, whatever the source enumerates in
+            foreach (var entry in dictionary) {
+                this[entry.Key] = entry.Value;
+            }
         }
 
         public Hash(Hash/*!*/ hash)
-            : base(hash, hash.Comparer) {
+            : this(hash.Comparer, hash.Count) {
             _defaultProc = hash._defaultProc;
             _defaultValue = hash.DefaultValue;
             _comparesByIdentity = hash._comparesByIdentity;
-            Created();
+            foreach (var entry in hash) {
+                this[entry.Key] = entry.Value;
+            }
         }
 
         /// <summary>
