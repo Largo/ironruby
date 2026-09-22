@@ -61,7 +61,7 @@ output to CRuby 4.0.6. The rank is the gem's position in the top-100 list.
 | 19 | diff-lcs | 2.0.0 | **WORKS** | `lcs`, `diff`, `sdiff`, `patch`, `unpatch!`, a unified hunk |
 | 24 | multi_json | 1.21.2 | **WORKS** | dump/load/pretty over the json adapter, `ParseError`. Needed the `JSON.generate(obj, state)` arity fix |
 | 25 | thor | 1.5.0 | **WORKS** | a command class with options, subcommands, shell tables, `InvocationError`. Needed the `Regexp.last_match(-1)` fix |
-| 27 | ffi | 1.17.4 | **IMPOSSIBLE as a gem** | C extension over libffi. A .NET shim is a real possibility - see below |
+| 27 | ffi | 1.17.4 | **WORKS** | Not the C extension: IronRuby implements ffi on its own Fiddle. ffi's own RSpec suite runs 5009 examples with 656 failures, all in four documented limits (struct by value across a call, float variadics, :long_double, dispatcher thread names) |
 | 29 | rspec (with -core, -expectations, -mocks, -support) | 3.13.2 | **WORKS** | a real in-process run: matchers, doubles, shared examples, and a failure, an error and a pending example, all reported identically |
 | 30 | unicode-display_width | 3.3.0 | **WORKS** | East Asian wide, combining marks, emoji sequences, `overwrite:` |
 | 31 | builder | 3.3.0 | **WORKS** | nested XML with attributes, namespaces, comments, escaping |
@@ -147,7 +147,7 @@ Named in the brief, further down the list:
 | standard | 1.56.0 | **WORKS** | `Standard::Cli` over a file with a real offence; it is RuboCop underneath |
 | yard | 0.9.45 | **BROKEN** | `require "yard"` succeeds; parsing Ruby does not. `YARD::Parser::Ruby::RipperParser` builds its handlers from `Ripper::PARSER_EVENT_TABLE` at load, and IronRuby's Ripper is a prism tree translator with `Ripper.sexp` and the scanner events, not an event parser |
 | prawn | 2.5.0 | **BROKEN** | pins `bigdecimal ~> 3.1`; IronRuby's built-in bigdecimal presents as 4.0.1, so RubyGems tries to build the C one and fails. CRuby installs the C gem instead |
-| rb-inotify | 0.11.1 | **BROKEN** | needs ffi |
+| rb-inotify | 0.11.1 | **WORKS** | on IronRuby's ffi; create/modify/delete events match CRuby |
 | bcrypt | 3.1.22 | **IMPOSSIBLE as a gem** | C extension: the Blowfish KDF. A port, not a shim - `BCrypt.Net` already exists on NuGet |
 | oj | 3.17.6 | **IMPOSSIBLE as a gem** | C extension. Use `json`, which IronRuby implements |
 | google-protobuf | 4.36.2 | **IMPOSSIBLE as a gem** | C extension over upb |
@@ -176,10 +176,15 @@ Named in the brief, further down the list:
 
 ## How far down it gets
 
-Of the 77 top-100 gems in the popular tier, **72 work** and 5 do not:
-`ffi` (27), `nio4r` (64), `websocket-driver` (70), `puma` (79) and
-`msgpack` (92). All five are the same thing - a C extension with no pure-Ruby
-path - and the first of them is at **#27**.
+Of the 77 top-100 gems in the popular tier, **73 work** and 4 do not:
+`nio4r` (64), `websocket-driver` (70), `puma` (79) and `msgpack` (92). All four
+are the same thing - a C extension with no pure-Ruby path - and the first of
+them is at **#64**.
+
+This table was measured before ffi existed here. ffi was #27 and the first
+stop; it is implemented now (on Fiddle, see `Util/ffi-matrix.rb`), which moves
+the first stop down to #64 and brings rb-inotify, ethon, typhoeus and rbnacl
+with it.
 
 Nothing in the top 100 fails any more for a reason that is IronRuby's own. The
 ones that did are fixed: Thor, multi_json, Sinatra, RuboCop, terminal-table,
@@ -190,17 +195,12 @@ IronRuby, not a gem that needed patching.
 
 ## The shims that would unblock the most
 
-1. **ffi** (#27, and rb-inotify, ethon, typhoeus and every gem that binds a
-   shared library without writing C). The single biggest lever, and the most
-   tractable of the lot: `attach_function` maps onto `NativeLibrary.GetExport`
-   plus a delegate built at runtime, and `FFI::Pointer`/`MemoryPointer`/`Struct`
-   onto `Marshal.AllocHGlobal` and `Marshal.PtrToStructure`. The work is the
-   type table (ffi's type names to CLR marshalling), struct layout including
-   bitfields and arrays, callbacks (a Ruby Proc reached from native code is a
-   reverse P/Invoke delegate), and `FFI::Library`'s search paths. A week, not a
-   month - and most of it is the same machinery Fiddle needs, which is being
-   written right now, so the two should share a layer rather than be built
-   twice. **Not implemented this round, deliberately.**
+1. ~~**ffi** (#27)~~ - **done**, in the same round as this survey. It was
+   written the way this entry proposed: on Fiddle rather than beside it, so
+   there is one thunk cache, one closure emitter and one ownership model.
+   `attach_function` reaches `NativeLibrary.GetExport`, and calls go through
+   Fiddle's `DynamicMethod`+`EmitCalli` thunks. rb-inotify, ethon, typhoeus and
+   rbnacl were verified against CRuby on top of it.
 2. **nio4r** (#64, and therefore ActionCable, Puma's reactor and anything built
    on a selector). `NIO::Selector` is `Socket.Select` or, better,
    `SocketAsyncEventArgs`; `NIO::Monitor` is a small object around it. Far
