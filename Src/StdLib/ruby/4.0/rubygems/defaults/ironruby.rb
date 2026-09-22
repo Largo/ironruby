@@ -150,6 +150,201 @@ module Gem
     @ironruby_ignored_gems ||= []
   end
 
+  ##
+  # Lazy loading of the host CRuby's default gemspecs.
+  #
+  # Upstream's Gem::Specification.load_defaults evaluates every gemspec in
+  # Gem.default_specifications_dir at boot, purely to feed
+  # Gem.register_default_spec - which only wants, per gem, the list of paths
+  # that `require` should map to it.  On CRuby that directory holds a handful
+  # of specs and the eval is compiled C; here it is the host's 46 default
+  # gemspecs, and evaluating them is by far the largest single cost of
+  # `require "rubygems"`.
+  #
+  # Nothing at boot needs the Gem::Specification objects themselves, so the
+  # require-name -> gemspec-file mapping is computed once and cached on disk.
+  # A later boot restores the mapping from the cache and stores the gemspec's
+  # *path* in Gem's map; Gem.find_default_spec - the only reader of that map -
+  # evaluates the gemspec the first time a require actually hits it, and then
+  # replaces the placeholders through the ordinary register_default_spec, so
+  # the map ends up holding exactly what upstream would have put there.
+  #
+  # Set IRONRUBY_NO_GEM_CACHE=1 to fall back to upstream's eager scan.
+
+  IRONRUBY_DEFAULT_SPEC_INDEX_VERSION = 1 # :nodoc:
+
+  ##
+  # The standard library this process is running out of.  A source tree can be
+  # checked out many times over - every worktree on this box shares one home
+  # directory and one host CRuby - so it is part of the cache's identity: the
+  # recorded feature paths point into *this* tree, and requiring another
+  # worktree's copy of rubygems/dependency.rb would be a real bug.
+
+  def self.ironruby_lib_dir # :nodoc:
+    @ironruby_lib_dir ||= File.expand_path("../..", __dir__)
+  end
+
+  def self.ironruby_default_spec_index_file # :nodoc:
+    # A plain deterministic checksum: String#hash is salted per process, and
+    # requiring digest at boot would cost more than this whole cache saves.
+    tag = ironruby_lib_dir.each_byte.inject(17) {|a, b| (a * 31 + b) & 0xffffffff }
+    File.join(Gem.cache_home, "ironruby",
+              "default-specs-#{ruby_api_version}-#{tag.to_s(36)}.cache")
+  end
+
+  ##
+  # Cheap fingerprint of the default specifications directory: every gemspec's
+  # name, size and mtime.  Installing, removing or updating a default gem
+  # changes it, which is exactly when the mapping has to be rebuilt.
+
+  def self.ironruby_default_spec_stamp(files) # :nodoc:
+    files.sort.map do |file|
+      stat = File.stat(file)
+      [File.basename(file), stat.size, stat.mtime.to_i]
+    end
+  end
+
+  ##
+  # Evaluate +file+, a default gemspec, and let upstream's
+  # register_default_spec put the real Gem::Specification into the map under
+  # every name it owns.  Returns the spec, or nil when the gemspec is bad.
+
+  def self.ironruby_register_default_spec_file(file) # :nodoc:
+    spec = Gem::Specification.load(file)
+    return nil unless spec
+
+    register_default_spec spec
+    spec
+  end
+
+  def self.find_default_spec(path) # :nodoc:
+    spec = @path_to_default_spec_map[path]
+    return spec unless spec.is_a?(String)
+
+    # A placeholder: the gemspec has not been evaluated yet.  Doing so rewrites
+    # every entry this gemspec owns, this one included.
+    ironruby_register_default_spec_file(spec)
+    spec = @path_to_default_spec_map[path]
+    spec.is_a?(String) ? nil : spec
+  end
+
+  ##
+  # Replacement for Gem::Specification.load_defaults.  Uses the on-disk
+  # mapping when it is still valid, and otherwise does what upstream does
+  # while recording the mapping for next time.
+
+  def self.ironruby_load_default_specs # :nodoc:
+    dir = Gem.default_specifications_dir
+    files = Gem::Util.glob_files_in_dir("*.gemspec", dir)
+    return if files.empty?
+
+    stamp = nil
+    cached = nil
+    features = nil
+    unless ENV["IRONRUBY_NO_GEM_CACHE"]
+      begin
+        stamp = ironruby_default_spec_stamp(files)
+        data = File.open(ironruby_default_spec_index_file, "rb", &:read)
+        data = Marshal.load(data)
+        if data.is_a?(Hash) &&
+           data[:version] == IRONRUBY_DEFAULT_SPEC_INDEX_VERSION &&
+           data[:dir] == dir && data[:lib] == ironruby_lib_dir &&
+           data[:stamp] == stamp
+          cached = data[:map]
+          features = data[:features]
+        end
+      rescue StandardError, NotImplementedError
+        cached = nil
+      end
+    end
+
+    if cached
+      # Evaluating the gemspecs pulls a few of RubyGems' own autoloaded files
+      # in - a gemspec with a dependency loads rubygems/dependency.rb.  Load
+      # them here so that $LOADED_FEATURES is the same either way.
+      Array(features).each {|f| require f if File.file?(f) }
+      @path_to_default_spec_map.update(cached)
+      ironruby_activate_already_loaded_defaults(cached)
+      return
+    end
+
+    loaded_before = $LOADED_FEATURES.dup
+
+    # Cache miss: do exactly what upstream does, and note which gemspec each
+    # registered name came from so the next boot can skip the evaluation.
+    origin = {}
+    files.each do |file|
+      spec = Gem::Specification.load(file)
+      next unless spec
+
+      origin[spec.object_id] = file
+      register_default_spec spec
+    end
+
+    return unless stamp
+
+    map = {}
+    @path_to_default_spec_map.each do |name, spec|
+      file = origin[spec.object_id]
+      map[name] = file if file
+    end
+    ironruby_write_default_spec_index(dir, stamp, map, $LOADED_FEATURES - loaded_before)
+  end
+
+  def self.ironruby_write_default_spec_index(dir, stamp, map, features) # :nodoc:
+    return if ENV["IRONRUBY_NO_GEM_CACHE"]
+
+    file = ironruby_default_spec_index_file
+    require "fileutils"
+    FileUtils.mkdir_p File.dirname(file)
+    tmp = "#{file}.#{Process.pid}"
+    File.open(tmp, "wb") do |io|
+      io.write Marshal.dump(version: IRONRUBY_DEFAULT_SPEC_INDEX_VERSION,
+                            dir: dir, lib: ironruby_lib_dir,
+                            stamp: stamp, map: map, features: features)
+    end
+    File.rename tmp, file
+  rescue StandardError, NotImplementedError
+    begin
+      File.delete tmp if tmp && File.exist?(tmp)
+    rescue StandardError
+      nil
+    end
+  end
+
+  ##
+  # register_default_spec activates a default gem whose file the interpreter
+  # has already loaded.  With placeholders in the map that check has to run the
+  # other way round - over $LOADED_FEATURES rather than over every name - so
+  # that the same gems end up activated without evaluating the other 45
+  # gemspecs.
+
+  def self.ironruby_activate_already_loaded_defaults(map) # :nodoc:
+    return if $LOADED_FEATURES.empty?
+
+    prefixes = default_gem_load_paths.map {|lp| "#{lp}/" }
+    pending = nil
+    $LOADED_FEATURES.each do |feature|
+      prefixes.each do |prefix|
+        next unless feature.start_with?(prefix)
+
+        file = map[feature[prefix.length..-1]]
+        next unless file.is_a?(String)
+
+        (pending ||= []) << file
+      end
+    end
+    return unless pending
+
+    pending.uniq.each {|file| ironruby_register_default_spec_file(file) }
+  end
+
+  class Specification
+    def self.load_defaults # :nodoc:
+      Gem.ironruby_load_default_specs
+    end
+  end
+
   class BasicSpecification
     ##
     # Upstream marks a gem "ignored" when its extensions are not built for the
