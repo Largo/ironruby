@@ -231,7 +231,7 @@ module GemCatalog
     'webmock'         => { require: 'webmock',         gem: true, exercise: 'webmock',     status: :works },
     'vcr'             => { require: 'vcr',             gem: true, exercise: 'vcr',         status: :works },
     'yard'            => { require: 'yard',            gem: true, status: :broken,
-                           note: "needs Ripper's event parser (PARSER_EVENT_TABLE and on_* dispatch)" },
+                           note: "loads, but parsing Ruby needs Ripper's event parser (PARSER_EVENT_TABLE)" },
     'kramdown'        => { require: 'kramdown',        gem: true, exercise: 'kramdown',    status: :works },
     'asciidoctor'     => { require: 'asciidoctor',     gem: true, exercise: 'asciidoctor', status: :works },
     'terminal-table'  => { require: 'terminal-table',  gem: true, exercise: 'terminal-table', status: :works },
