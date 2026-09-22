@@ -101,11 +101,28 @@ namespace IronRuby.Tests {
             _options = options;
             _pal = options.Pal != null ?
                 (PlatformAdaptationLayer)Activator.CreateInstance(options.Pal) :
-                PlatformAdaptationLayer.Default;
+                SharedPlatform;
         }
 
         public override PlatformAdaptationLayer PlatformAdaptationLayer {
             get { return _pal; }
+        }
+
+        private static readonly PlatformAdaptationLayer/*!*/ SharedPlatform = new TestPlatformAdaptationLayer();
+
+        /// <summary>
+        /// The same platform layer RubyConsoleHost installs for `ir`: loaded files are opened
+        /// FileShare.ReadWrite | Delete. The DLR's default opens them FileShare.Read, and on
+        /// Windows that makes the file undeletable while the stream is alive - so every test
+        /// that requires a temp file and then deletes it (Autoload1,
+        /// ConstantCaching_AutoUpdating1A/B) failed in Dispose with "the process cannot access
+        /// the file", on Windows only. Unix never noticed: unlink(2) does not care who has the
+        /// file open.
+        /// </summary>
+        private sealed class TestPlatformAdaptationLayer : PlatformAdaptationLayer {
+            public override Stream OpenInputFileStream(string path, FileMode mode, FileAccess access, FileShare share, int bufferSize) {
+                return base.OpenInputFileStream(path, mode, access, share | FileShare.ReadWrite | FileShare.Delete, bufferSize);
+            }
         }
     }
 
