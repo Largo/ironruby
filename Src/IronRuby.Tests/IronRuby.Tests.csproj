@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
     <OutputType>Exe</OutputType>
     <AssemblyName>IronRuby.Tests</AssemblyName>
     <RootNamespace>IronRuby.Tests</RootNamespace>

@@ -174,6 +174,22 @@ module IronRuby
       RbConfig::CONFIG["libdir"]
     end
 
+    # The compiled app has to target the framework the interpreter it links against was
+    # built for: the tree multi-targets net8.0;net10.0, and bin_dir is one of those output
+    # directories.  Take the TFM from the directory name when it is one (bin/<config>/<tfm>),
+    # and otherwise from the runtime this process is on -- a published or installed layout
+    # has no TFM in its path, and there the running runtime is the right answer anyway.
+    def target_framework
+      name = File.basename(bin_dir)
+      return name if name =~ /\Anet\d+\.\d+\z/
+      major = begin
+        System::Environment.version.major
+      rescue StandardError, NameError
+        8
+      end
+      major >= 5 ? "net#{major}.0" : "net8.0"
+    end
+
     def dotnet
       candidates = []
       candidates << ENV["DOTNET"] if ENV["DOTNET"]
@@ -216,7 +232,7 @@ module IronRuby
       <<~XML
         <Project Sdk="Microsoft.NET.Sdk">
           <PropertyGroup>
-            <TargetFramework>net8.0</TargetFramework>
+            <TargetFramework>#{target_framework}</TargetFramework>
             <OutputType>Exe</OutputType>
             <AssemblyName>#{name}</AssemblyName>
             <RootNamespace>IronRuby.Compiled</RootNamespace>
