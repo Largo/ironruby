@@ -73,6 +73,15 @@ jobs:
           repository: ruby/prism
           path: prism
 
+      # IronRuby uses DLR APIs that are not upstream yet; the patches that add
+      # them live in Build/dlr-patches and go onto the fresh upstream checkout.
+      - name: Patch the DLR
+        run: |
+          for patch in ironruby/Build/dlr-patches/*.patch; do
+            echo "applying $patch"
+            git -C dlr apply "../$patch"
+          done
+
       # Both runtimes are installed on every matrix entry: the SDK builds either
       # target framework, but running the net8.0 output needs the .NET 8 runtime.
       - uses: actions/setup-dotnet@v4
@@ -118,8 +127,10 @@ jobs:
             command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
             gcc --version
             mkdir -p build
+            shopt -s nullglob          # prism has no src subdirectories today
+            sources=(src/*.c src/*/*.c)
             gcc -shared -O2 -std=c99 -DPRISM_EXPORT_SYMBOLS -Iinclude \
-              -o build/libprism.dll src/*.c src/*/*.c
+              -o build/libprism.dll "${sources[@]}"
           else
             make shared
           fi
@@ -219,6 +230,14 @@ jobs:
         with:
           repository: ruby/mspec
           path: ironruby/mspec
+
+      - name: Patch the DLR
+        shell: bash
+        run: |
+          for patch in ironruby/Build/dlr-patches/*.patch; do
+            echo "applying $patch"
+            git -C dlr apply "../$patch"
+          done
 
       - uses: actions/setup-dotnet@v4
         with:
