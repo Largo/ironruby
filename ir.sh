@@ -32,7 +32,13 @@ IR_BIN="$IR_ROOT/Src/Console/bin/$IR_CONFIG/net8.0/ir"
 # that has only ever been built Debug is the whole reason this check is here.
 if [ ! -x "$IR_BIN" ]; then
   echo "ir.sh: no $IR_CONFIG build at $IR_BIN" >&2
-  echo "ir.sh: build it with: dotnet build Src/Console/Ruby.Console.csproj -c $IR_CONFIG -p:DlrSourceDir=..." >&2
+  if [ "$IR_CONFIG" = "R2R" ]; then
+    # Not a build configuration: a ReadyToRun publish, which starts about 0.45s
+    # faster than Release because IronRuby's own assemblies are already native.
+    echo "ir.sh: build it with: Util/publish-r2r.sh" >&2
+  else
+    echo "ir.sh: build it with: dotnet build Src/Console/Ruby.Console.csproj -c $IR_CONFIG -p:DlrSourceDir=..." >&2
+  fi
   exit 127
 fi
 
