@@ -52,7 +52,13 @@ module Bundler
 
     # This is defined directly to avoid having to loading the full spec
     def missing_extensions?
-      return false if RUBY_ENGINE == "jruby"
+      # IronRuby, like JRuby, never builds a gem's C extensions, so "the
+      # extensions are missing" is the normal state of every extension gem here
+      # rather than a broken install.  Treating it as broken would make Bundler
+      # drop each of them - and every gem that merely depends on one - from the
+      # local index, which is the same call rubygems/defaults/ironruby.rb makes
+      # for Gem::BasicSpecification#ignored?.
+      return false if RUBY_ENGINE == "jruby" || RUBY_ENGINE == "ironruby"
       return false if default_gem?
       return false if extensions.empty?
       return false if File.exist? gem_build_complete_path

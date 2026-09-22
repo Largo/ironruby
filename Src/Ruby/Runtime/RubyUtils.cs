@@ -1106,14 +1106,21 @@ namespace IronRuby.Runtime {
         public static readonly MutableString InfiniteRecursionMarker = MutableString.CreateAscii("[...]").Freeze();
 
         public class RecursionTracker {
-            [ThreadStatic]
-            private Dictionary<object, bool> _infiniteTracker;
+            // The set of objects an operation is already inside must be per thread: the
+            // trackers themselves are process-wide singletons, so a Dictionary held here is
+            // read and written by every thread at once.  [ThreadStatic] does not make it per
+            // thread - the attribute only has an effect on a *static* field and is silently
+            // ignored on an instance field, which is what this used to be.  Two threads
+            // comparing or inspecting arrays (RubyGems installs each gem on a thread of its
+            // own) corrupted the dictionary and failed with IndexOutOfRangeException or
+            // "a concurrent update was performed on this collection".
+            private readonly System.Threading.ThreadLocal<Dictionary<object, bool>>/*!*/ _infiniteTracker =
+                new System.Threading.ThreadLocal<Dictionary<object, bool>>(
+                    () => new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance)
+                );
 
             private Dictionary<object, bool> TryPushInfinite(object obj) {
-                if (_infiniteTracker == null) {
-                    _infiniteTracker = new Dictionary<object, bool>(ReferenceEqualityComparer<object>.Instance);
-                }
-                Dictionary<object, bool> infinite = _infiniteTracker;
+                Dictionary<object, bool> infinite = _infiniteTracker.Value;
                 if (infinite.ContainsKey(obj)) {
                     return null;
                 }
