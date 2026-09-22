@@ -88,6 +88,10 @@ elsif entry[:framework] == :minitest
 else
   $LOAD_PATH.unshift(File.join(GemCatalog::RUBY_SRC, 'tool', 'lib'))
   $LOAD_PATH.unshift(File.join(GemCatalog::RUBY_SRC, 'test', 'lib'))
+  # Tests in a subdirectory load their suite's helper by its path under test/
+  # (test/psych/visitors/*.rb: require 'psych/helper'), as CRuby's test runner
+  # has test/ on the path. Last, so that nothing in it shadows a library.
+  $LOAD_PATH.push(File.join(GemCatalog::RUBY_SRC, 'test'))
   require 'test/unit'
 
   # LeakChecker walks the heap with ObjectSpace.each_object(IO) / (File).  The CLR

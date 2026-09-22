@@ -240,7 +240,3 @@ plumbing a Ruby API onto them.
 * Nokogiri's SAX events are replayed off the parsed tree rather than streamed,
   so a document has to fit in memory - which is the one thing SAX exists to
   avoid.
-* Psych's engine does not keep anchor names, so a `Psych::Nodes::Alias` built
-  from a document reports a generated anchor rather than the one in the source.
-* `Psych::ClassLoader::Restricted` records its whitelist but does not enforce it
-  on the way back out; `Psych.safe_load` is the checked path.

@@ -1,8 +1,4 @@
 # frozen_string_literal: true
-#
-# Vendored from the psych gem (lib/psych/visitors/depth_first.rb), unchanged.  It calls a
-# block for every node of a tree, children before parents; nothing about it is
-# implementation-specific.
 module Psych
   module Visitors
     class DepthFirst < Psych::Visitors::Visitor

@@ -118,7 +118,7 @@ class Date
     def _valid_weeknum?(y, w, d, f, sg=Date::ITALY) # :nodoc:
       d += 7 if d < 0
       if w < 0
-        ny, nw, nd = jd_to_weeknum(weeknum_to_jd(y + 1, 1, f, f, sg) + w * 7, f, sg)
+        ny, nw, _nd = jd_to_weeknum(weeknum_to_jd(y + 1, 1, f, f, sg) + w * 7, f, sg)
         return nil unless ny == y
         w = nw
       end
