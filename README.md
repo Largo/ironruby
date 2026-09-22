@@ -33,11 +33,18 @@ That is **irb 1.16.0 and reline 0.6.3**, the same ones CRuby 4.0 ships — with 
 highlighting, auto-indent, Tab completion, history and `ls`/`show_source` — running on
 IronRuby. `io/console` is a C extension in CRuby, so IronRuby implements it over termios.
 
-Scripts run the same way:
+Scripts run the same way, and gems install with real TLS:
 
 ```console
 $ ./ir.sh script.rb          # prism front end, vendored stdlib, JIT and OSR on
+$ ./igem.sh install rack     # or: ./ir.sh -S gem install rack
+$ ./ir.sh -S bundle install
 ```
+
+`ir` / `igem` / `iirb` are the i-prefixed names IronRuby has used since 1.x, so they can
+sit on `PATH` beside CRuby's `ruby` and `gem` — the same reason JRuby ships `jruby`,
+`jgem` and `jirb`. The unprefixed `gem`, `irb`, `bundle` and `bundler` live in
+`Src/StdLib/bin` and are what `ir -S <name>` finds.
 
 ```ruby
 # all of this runs today
