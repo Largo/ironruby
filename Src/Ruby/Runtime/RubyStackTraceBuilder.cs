@@ -491,6 +491,16 @@ namespace IronRuby.Runtime {
                     type.Namespace.StartsWith("IronRuby.Builtins", StringComparison.Ordinal))) {
                     return false;
                 }                
+
+                // The bottom of every non-main thread's stack: the runtime's own thread entry
+                // point, which calls the delegate Thread.Start was given.  It is not a Ruby frame
+                // and MRI has nothing like it, so it does not belong in a backtrace.  .NET 8 never
+                // showed it; .NET 10 does (Thread.StartCallback appears below the thread's block),
+                // which otherwise adds a bogus "\tfrom :0:in 'StartCallback'" line to every
+                // Thread#backtrace and to the report_on_exception output.
+                if (type == typeof(Thread)) {
+                    return false;
+                }
             }
 
             // TODO: check loaded assemblies?

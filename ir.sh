@@ -26,7 +26,13 @@ S="$IR_ROOT/Src/StdLib"
 # Debug stays the default because every worktree and every agent script builds it.
 : "${IR_CONFIG:=Debug}"
 
-IR_BIN="$IR_ROOT/Src/Console/bin/$IR_CONFIG/net8.0/ir"
+# IR_TFM picks the target framework, the same way IR_CONFIG picks the configuration.  The
+# tree multi-targets net8.0;net10.0 (Directory.Build.props), so one `dotnet build` leaves
+# both side by side and IR_TFM=net10.0 runs the same IL on the .NET 10 runtime.  net8.0
+# stays the default: it is what every worktree, agent script and baseline was taken on.
+: "${IR_TFM:=net8.0}"
+
+IR_BIN="$IR_ROOT/Src/Console/bin/$IR_CONFIG/$IR_TFM/ir"
 # Say which configuration is missing rather than let the shell's "not found" - which a
 # filtered spec log swallows - be the only clue. Getting IR_CONFIG=Release past a tree
 # that has only ever been built Debug is the whole reason this check is here.
@@ -35,9 +41,10 @@ if [ ! -x "$IR_BIN" ]; then
   if [ "$IR_CONFIG" = "R2R" ]; then
     # Not a build configuration: a ReadyToRun publish, which starts about 0.45s
     # faster than Release because IronRuby's own assemblies are already native.
-    echo "ir.sh: build it with: Util/publish-r2r.sh" >&2
+    echo "ir.sh: build it with: IR_TFM=$IR_TFM Util/publish-r2r.sh" >&2
   else
     echo "ir.sh: build it with: dotnet build Src/Console/Ruby.Console.csproj -c $IR_CONFIG -p:DlrSourceDir=..." >&2
+    echo "ir.sh: (that builds every framework in IronRubyTargetFrameworks, including $IR_TFM)" >&2
   fi
   exit 127
 fi

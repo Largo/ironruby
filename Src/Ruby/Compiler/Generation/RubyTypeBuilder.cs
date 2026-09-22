@@ -423,6 +423,17 @@ namespace IronRuby.Compiler.Generation {
             _tb.AddInterfaceImplementation(typeof(ICustomTypeDescriptor));
 
             foreach (MethodInfo m in typeof(ICustomTypeDescriptor).GetMethods()) {
+                // .NET 9 added GetConverterFromRegisteredType, GetEventsFromRegisteredType,
+                // GetPropertiesFromRegisteredType and the RequireRegisteredTypes property to
+                // ICustomTypeDescriptor as *default* interface methods, for trim-safe
+                // TypeDescriptor.  Only the abstract members have to be - and can be -
+                // implemented here: CustomTypeDescHelpers has no counterpart for the new ones,
+                // and EmitCall would throw "Type doesn't have a method with a given name and
+                // signature".  The interface's own implementation is what a non-abstract member
+                // is for, so leaving it alone is also the right behaviour.
+                if (!m.IsAbstract) {
+                    continue;
+                }
                 ImplementCTDOverride(m);
             }
         }

@@ -13,10 +13,14 @@ rem IR_CONFIG=Release runs the optimized build instead. Debug stays the default,
 rem exactly as in ir.sh.
 if "%IR_CONFIG%"=="" set "IR_CONFIG=Debug"
 
-rem A tree built on Windows puts ir.exe straight in net8.0; one cross-published from
-rem Linux with -r win-x64 puts it in net8.0\win-x64. Take whichever exists.
-set "IR_BIN=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\net8.0\win-x64\ir.exe"
-if not exist "%IR_BIN%" set "IR_BIN=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\net8.0\ir.exe"
+rem IR_TFM picks the target framework out of the multi-targeted build (net8.0;net10.0),
+rem exactly as in ir.sh. net8.0 stays the default.
+if "%IR_TFM%"=="" set "IR_TFM=net8.0"
+
+rem A tree built on Windows puts ir.exe straight in %IR_TFM%; one cross-published from
+rem Linux with -r win-x64 puts it in %IR_TFM%\win-x64. Take whichever exists.
+set "IR_BIN=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\%IR_TFM%\win-x64\ir.exe"
+if not exist "%IR_BIN%" set "IR_BIN=%IR_ROOT%\Src\Console\bin\%IR_CONFIG%\%IR_TFM%\ir.exe"
 if not exist "%IR_BIN%" (
   echo ir.cmd: no %IR_CONFIG% build at %IR_BIN% 1>&2
   echo ir.cmd: build it with: dotnet build Src\Console\Ruby.Console.csproj -c %IR_CONFIG% -r win-x64 --self-contained false 1>&2

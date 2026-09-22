@@ -42,6 +42,9 @@ fi
 export DOTNET_ROOT=${DOTNET_ROOT:-/usr/local/dotnet}
 DOTNET="$DOTNET_ROOT/dotnet"
 : "${IR_CONFIG:=Debug}"
+# The generator only reflects over attributes, so the framework it runs on does not change
+# what it writes; IR_TFM just says which of the multi-targeted outputs to run.
+: "${IR_TFM:=net8.0}"
 DLR=${DLR_SOURCE_DIR:-../dlr/src/core}
 GEN=Src/Libraries/Initializers.Generated.cs
 LIBS="IronRuby.Builtins;IronRuby.StandardLibrary.Threading;IronRuby.StandardLibrary.Sockets;IronRuby.StandardLibrary.OpenSsl;IronRuby.StandardLibrary.Digest;IronRuby.StandardLibrary.Zlib;IronRuby.StandardLibrary.StringIO;IronRuby.StandardLibrary.StringScanner;IronRuby.StandardLibrary.Enumerator;IronRuby.StandardLibrary.FunctionControl;IronRuby.StandardLibrary.FileControl;IronRuby.StandardLibrary.BigDecimal;IronRuby.StandardLibrary.Iconv;IronRuby.StandardLibrary.ParseTree;IronRuby.StandardLibrary.Open3;IronRuby.StandardLibrary.Win32API;IronRuby.StandardLibrary.Json;IronRuby.StandardLibrary.Date;IronRuby.StandardLibrary.Syslog;IronRuby.StandardLibrary.Coverage;IronRuby.StandardLibrary.Ripper;IronRuby.StandardLibrary.Termios;IronRuby.StandardLibrary.Prism;IronRuby.StandardLibrary.Sqlite3;IronRuby.StandardLibrary.Nokogiri"
@@ -80,7 +83,7 @@ if ! BUILD_LOG=$($DOTNET build Src/ClassInitGenerator/ClassInitGenerator.csproj 
 fi
 echo "$BUILD_LOG" | grep -E 'Build succeeded'
 
-D=Src/ClassInitGenerator/bin/$IR_CONFIG/net8.0
+D=Src/ClassInitGenerator/bin/$IR_CONFIG/$IR_TFM
 $DOTNET $D/ClassInitGenerator.dll $D/IronRuby.Libraries.dll "/libraries:$LIBS" /out:/tmp/Initializers.Generated.new.cs > /dev/null
 # the checked-in file uses CRLF
 python3 -c "

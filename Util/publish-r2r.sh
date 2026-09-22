@@ -20,19 +20,22 @@
 # and every agent script should pay on each rebuild.  The IL is the same, so the
 # published host passes the same specs as the Release build it came from.
 #
-# The output lands in Src/Console/bin/R2R/net8.0, which is exactly where
+# The output lands in Src/Console/bin/R2R/$IR_TFM, which is exactly where
 # IR_CONFIG=R2R makes ir.sh look; no change to ir.sh is needed.
 IR_ROOT="$(dirname "$(dirname "$(readlink -f "$0")")")"
 export DOTNET_ROOT=/usr/local/dotnet
 export PATH=/usr/local/dotnet:$PATH
 : "${DLR_SOURCE_DIR:=/root/workspace/dlr/src/core}"
 : "${RID:=linux-x64}"
+# Which framework to precompile for; crossgen2 has to pick one.  net8.0 is the default
+# everything else uses, IR_TFM=net10.0 publishes the .NET 10 one next to it.
+: "${IR_TFM:=net8.0}"
 
 cd "$IR_ROOT" || exit 1
 dotnet publish Src/Console/Ruby.Console.csproj \
-  -c Release -r "$RID" --self-contained false \
+  -c Release -r "$RID" --self-contained false -f "$IR_TFM" \
   -p:PublishReadyToRun=true \
   -p:DlrSourceDir="$DLR_SOURCE_DIR" \
-  -o "$IR_ROOT/Src/Console/bin/R2R/net8.0" "$@" || exit 1
+  -o "$IR_ROOT/Src/Console/bin/R2R/$IR_TFM" "$@" || exit 1
 
-echo "published: $IR_ROOT/Src/Console/bin/R2R/net8.0/ir  (run it with IR_CONFIG=R2R ./ir.sh)"
+echo "published: $IR_ROOT/Src/Console/bin/R2R/$IR_TFM/ir  (run it with IR_CONFIG=R2R ./ir.sh)"

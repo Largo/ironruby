@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0</TargetFramework>
+    <TargetFrameworks>$(IronRubyTargetFrameworks)</TargetFrameworks>
     <AssemblyName>IronRuby</AssemblyName>
     <RootNamespace>IronRuby</RootNamespace>
   </PropertyGroup>
@@ -10,7 +10,10 @@
     <Compile Remove="Builtins\RubyErrno.cs" />
   </ItemGroup>
   <ItemGroup>
-    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+    <!-- Version tracks the target runtime: on net10.0 the 8.0.0 package resolves to an
+         assembly older than the one in the shared framework, which NU1605-downgrades. -->
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" Condition="'$(TargetFramework)' == 'net8.0'" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="10.0.0" Condition="'$(TargetFramework)' == 'net10.0'" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Scripting\Microsoft.Scripting.csproj" />
     <ProjectReference Include="$(DlrSourceDir)\Microsoft.Dynamic\Microsoft.Dynamic.csproj" />
   </ItemGroup>
