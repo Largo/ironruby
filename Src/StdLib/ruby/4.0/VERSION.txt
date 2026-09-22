@@ -17,6 +17,7 @@ Added from the gems MRI 4.0 ships (lib/ copied verbatim):
   logger.rb, logger/ - logger 1.7.0 (a bundled gem since 3.5)
   csv.rb, csv/       - csv 3.3.5 (a bundled gem since 3.4)
   getoptlong.rb      - getoptlong 0.2.1 (a bundled gem since 3.4)
+  pstore.rb          - pstore 0.2.1 (a bundled gem since 4.0)
   irb.rb, irb/       - irb 1.16.0 (default gem), with its LICENSE.txt
   reline.rb, reline/ - reline 0.6.3, irb's line editor, with COPYING, BSDL and
                        license_of_rb-readline
