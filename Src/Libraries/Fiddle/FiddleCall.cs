@@ -16,15 +16,23 @@
  * thunk is cached per signature, so a Function called in a loop emits nothing
  * after the first call, and two Functions with the same signature share one.
  *
- * One thing this cannot do is errno.  CRuby's Fiddle sets Fiddle.last_error from
- * it after every call; since .NET 6 the runtime saves the thread's system error
- * before a managed-to-native transition and restores it afterwards, so that a
- * P/Invoke without SetLastError cannot disturb managed code's last-error value.
- * A calli is such a transition, and errno is already back to what it was by the
- * time the next IL instruction runs - reading it inside the thunk, one
- * instruction after the call, answers 0 just the same.  Fiddle.last_error is
- * therefore a per-thread value Ruby can read and write, not one foreign calls
- * fill in, and that is documented rather than faked.
+ * The one thing a calli cannot do is errno.  Since .NET 6 the runtime saves the
+ * thread's system error before a managed-to-native transition and restores it
+ * afterwards, so that a P/Invoke without SetLastError cannot disturb managed
+ * code's last-error value.  A calli is such a transition, and errno is already
+ * back to what it was by the time the next IL instruction runs - reading it
+ * inside the thunk, one instruction after the call, answers 0 just the same,
+ * and so does calling __errno_location() afterwards.
+ *
+ * The one transition that *does* keep errno is a delegate whose type carries
+ * [UnmanagedFunctionPointer(..., SetLastError = true)]: the marshalling stub
+ * reads the system error the instant the callee returns and parks it where
+ * Marshal.GetLastPInvokeError() can find it.  So there is a second thunk
+ * flavour here, emitted only for a Function asked to save the error
+ * (Function.new(..., save_last_error: true), which is what FFI's
+ * attach_function uses so that FFI.errno works).  It goes through
+ * Marshal.GetDelegateForFunctionPointer instead of calli and is therefore a
+ * little slower, which is why it is opt-in rather than the default.
  *
  * This source code is subject to terms and conditions of the Apache License,
  * Version 2.0. A copy of the license can be found in the License.html file at
@@ -49,6 +57,19 @@ namespace IronRuby.StandardLibrary.Fiddle {
 
         /// <summary>The shape every emitted thunk has.</summary>
         internal delegate object NativeThunk(IntPtr function, object[]/*!*/ args);
+
+        /// <summary>
+        /// The shape of the errno-preserving thunk: the same work, but the call goes
+        /// through a [UnmanagedFunctionPointer(SetLastError = true)] delegate instead of
+        /// a calli, so that the marshalling stub captures errno for us.
+        /// </summary>
+        internal delegate object BoundThunk(Delegate/*!*/ function, object[]/*!*/ args);
+
+        /// <summary>A signature's emitted delegate type and the thunk that invokes it.</summary>
+        internal sealed class ErrnoThunk {
+            internal Type/*!*/ DelegateType;
+            internal BoundThunk/*!*/ Thunk;
+        }
 
         internal static class NativeCall {
 
@@ -134,6 +155,18 @@ namespace IronRuby.StandardLibrary.Fiddle {
                     new[] { typeof(IntPtr), typeof(object[]) }, typeof(NativeCall).Module, true);
                 ILGenerator il = method.GetILGenerator();
 
+                EmitArguments(il, argTypes, native);
+
+                il.Emit(OpCodes.Ldarg_0);
+                il.EmitCalli(OpCodes.Calli, cc, nativeReturn, native);
+                EmitBoxResult(il, returnType, nativeReturn);
+                il.Emit(OpCodes.Ret);
+
+                return (NativeThunk)method.CreateDelegate(typeof(NativeThunk));
+            }
+
+            /// <summary>Unboxes args[0..n] and pushes them as the native parameter types.</summary>
+            private static void EmitArguments(ILGenerator/*!*/ il, int[]/*!*/ argTypes, Type[]/*!*/ native) {
                 for (int i = 0; i < argTypes.Length; i++) {
                     il.Emit(OpCodes.Ldarg_1);
                     il.Emit(OpCodes.Ldc_I4, i);
@@ -150,13 +183,60 @@ namespace IronRuby.StandardLibrary.Fiddle {
                         EmitNarrow(il, native[i]);
                     }
                 }
+            }
 
+            #endregion
+
+            #region The errno-preserving emitter
+
+            private static readonly Dictionary<string, ErrnoThunk>/*!*/ _errnoThunks = new Dictionary<string, ErrnoThunk>();
+
+            /// <summary>
+            /// The delegate type and thunk for a signature whose calls have to leave errno
+            /// readable.  The delegate type is the one Fiddle::Closure's emitter builds,
+            /// only with SetLastError on, which is what makes the runtime keep the system
+            /// error instead of restoring it over the transition.
+            /// </summary>
+            internal static ErrnoThunk/*!*/ GetErrnoThunk(int[]/*!*/ argTypes, int returnType, CallingConvention cc) {
+                string key = SignatureKey(argTypes, returnType, cc);
+                lock (_errnoThunks) {
+                    ErrnoThunk cached;
+                    if (_errnoThunks.TryGetValue(key, out cached)) {
+                        return cached;
+                    }
+                    ErrnoThunk thunk = EmitBound(argTypes, returnType, cc);
+                    _errnoThunks[key] = thunk;
+                    return thunk;
+                }
+            }
+
+            private static ErrnoThunk/*!*/ EmitBound(int[]/*!*/ argTypes, int returnType, CallingConvention cc) {
+                Type[] native = new Type[argTypes.Length];
+                for (int i = 0; i < argTypes.Length; i++) {
+                    native[i] = ClrType(argTypes[i]);
+                    if (native[i] == typeof(void)) {
+                        throw RubyExceptions.CreateTypeError("void is not a valid argument type");
+                    }
+                }
+                Type nativeReturn = ClrType(returnType);
+                Type delegateType = Trampolines.MakeDelegateType(nativeReturn, native, cc, true);
+
+                var method = new DynamicMethod("fiddle_bound", typeof(object),
+                    new[] { typeof(Delegate), typeof(object[]) }, typeof(NativeCall).Module, true);
+                ILGenerator il = method.GetILGenerator();
+
+                // the delegate goes on the stack before its arguments
                 il.Emit(OpCodes.Ldarg_0);
-                il.EmitCalli(OpCodes.Calli, cc, nativeReturn, native);
+                il.Emit(OpCodes.Castclass, delegateType);
+                EmitArguments(il, argTypes, native);
+                il.Emit(OpCodes.Callvirt, delegateType.GetMethod("Invoke"));
                 EmitBoxResult(il, returnType, nativeReturn);
                 il.Emit(OpCodes.Ret);
 
-                return (NativeThunk)method.CreateDelegate(typeof(NativeThunk));
+                return new ErrnoThunk {
+                    DelegateType = delegateType,
+                    Thunk = (BoundThunk)method.CreateDelegate(typeof(BoundThunk))
+                };
             }
 
             /// <summary>Narrows the Int64 on the stack to the native parameter type.</summary>

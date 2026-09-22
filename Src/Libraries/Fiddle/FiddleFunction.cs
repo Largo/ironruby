@@ -37,6 +37,16 @@ namespace IronRuby.StandardLibrary.Fiddle {
             private CallingConvention _callingConvention = CallingConvention.Cdecl;
             private NativeThunk _thunk;
 
+            /// <summary>
+            /// Set by the <c>save_last_error: true</c> option.  The call then goes through
+            /// the errno-preserving thunk in FiddleCall.cs and fills Fiddle.last_error in,
+            /// the way CRuby's fiddle does for every call.  It is opt-in because that path
+            /// is a marshalled delegate rather than a calli.
+            /// </summary>
+            private bool _saveLastError;
+            private ErrnoThunk _errnoThunk;
+            private Delegate _bound;
+
             /// <summary>True when the type list ends with TYPE_VARIADIC.</summary>
             private bool _variadic;
 
@@ -169,6 +179,8 @@ namespace IronRuby.StandardLibrary.Fiddle {
                 self._returnType = returnType;
                 self._callingConvention = (abi == STDCALL) ? CallingConvention.StdCall : CallingConvention.Cdecl;
                 self._thunk = null;
+                self._errnoThunk = null;
+                self._bound = null;
                 self._variadic = self._argTypes.Length > 0 && self._argTypes[self._argTypes.Length - 1] == FiddleType.Variadic;
 
                 // validate the signature now rather than at the first call
@@ -179,12 +191,14 @@ namespace IronRuby.StandardLibrary.Fiddle {
                     }
                 }
 
-                object name = null, needGvl = null;
+                object name = null, needGvl = null, saveLastError = null;
                 var hash = options as IDictionary<object, object>;
                 if (hash != null) {
                     hash.TryGetValue(context.CreateAsciiSymbol("name"), out name);
                     hash.TryGetValue(context.CreateAsciiSymbol("need_gvl"), out needGvl);
+                    hash.TryGetValue(context.CreateAsciiSymbol("save_last_error"), out saveLastError);
                 }
+                self._saveLastError = Protocols.IsTrue(saveLastError);
 
                 // the gem's fiddle/function.rb reads these
                 context.SetInstanceVariable(self, "@ptr", address);
@@ -283,17 +297,26 @@ namespace IronRuby.StandardLibrary.Fiddle {
                         }
                     }
 
-                    NativeThunk thunk;
-                    if (self._variadic) {
-                        thunk = NativeCall.GetThunk(types, self._returnType, self._callingConvention);
-                    } else {
-                        thunk = self._thunk;
-                        if (thunk == null) {
-                            thunk = self._thunk = NativeCall.GetThunk(types, self._returnType, self._callingConvention);
-                        }
+                    object result;
+                    if (self._saveLastError && !self.PrepareBoundCall(types)) {
+                        self._saveLastError = false;
                     }
-
-                    object result = thunk(self._address, converted);
+                    if (self._saveLastError) {
+                        result = self._errnoThunk.Thunk(self._bound, converted);
+                        // read it before anything else can disturb it
+                        _lastError = ScriptingRuntimeHelpers.Int32ToObject(Marshal.GetLastPInvokeError());
+                    } else {
+                        NativeThunk thunk;
+                        if (self._variadic) {
+                            thunk = NativeCall.GetThunk(types, self._returnType, self._callingConvention);
+                        } else {
+                            thunk = self._thunk;
+                            if (thunk == null) {
+                                thunk = self._thunk = NativeCall.GetThunk(types, self._returnType, self._callingConvention);
+                            }
+                        }
+                        result = thunk(self._address, converted);
+                    }
 
                     // The result has to become a Ruby object here, inside the try: a
                     // TYPE_CONST_STRING return may point into a temporary block, and the
@@ -303,10 +326,38 @@ namespace IronRuby.StandardLibrary.Fiddle {
                     NativeCall.ReleaseTemporaries(temporaries, pointers, rubyResult as Pointer);
                 }
 
-                // Fiddle.last_error is deliberately left alone here; see the errno region
-                // in FiddleCall.cs for why the CLR makes errno unreadable after the call.
+                // Fiddle.last_error is only filled in for a Function made with
+                // save_last_error: true; see the head of FiddleCall.cs for why a plain
+                // calli leaves errno unreadable.
                 Closure.RethrowPendingCallbackError();
                 return rubyResult;
+            }
+
+            /// <summary>
+            /// Binds the errno-preserving thunk to this function's address, and answers
+            /// whether that path can be used at all.
+            ///
+            /// It cannot when the address is one of our own closures:
+            /// GetDelegateForFunctionPointer recognises a pointer it handed out for a
+            /// managed delegate and answers that very delegate, which has the closure's
+            /// type rather than the SetLastError one the thunk casts to.  Calling a Ruby
+            /// callback has no errno to report anyway, so such a Function falls back to
+            /// the calli thunk for good.
+            /// </summary>
+            private bool PrepareBoundCall(int[]/*!*/ types) {
+                // a variadic call's signature is per call, so nothing about it is cached
+                if (_variadic || _errnoThunk == null || _bound == null) {
+                    ErrnoThunk thunk = NativeCall.GetErrnoThunk(types, _returnType, _callingConvention);
+                    Delegate bound = Marshal.GetDelegateForFunctionPointer(_address, thunk.DelegateType);
+                    if (!thunk.DelegateType.IsInstanceOfType(bound)) {
+                        _errnoThunk = null;
+                        _bound = null;
+                        return false;
+                    }
+                    _errnoThunk = thunk;
+                    _bound = bound;
+                }
+                return true;
             }
 
             /// <summary>

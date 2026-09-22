@@ -327,9 +327,19 @@ namespace IronRuby.StandardLibrary.Fiddle {
             /// [UnmanagedFunctionPointer] is what makes GetFunctionPointerForDelegate hand
             /// out a stub C can call with the right convention.
             /// </summary>
-            private static Type/*!*/ MakeDelegateType(Type/*!*/ returnType, Type[]/*!*/ parameterTypes, CallingConvention cc) {
+            internal static Type/*!*/ MakeDelegateType(Type/*!*/ returnType, Type[]/*!*/ parameterTypes, CallingConvention cc) {
+                return MakeDelegateType(returnType, parameterTypes, cc, false);
+            }
+
+            /// <summary>
+            /// <paramref name="setLastError"/> makes the marshalling stub capture errno (or
+            /// GetLastError) the instant the callee returns, for Marshal.GetLastPInvokeError
+            /// to read; see the head of FiddleCall.cs.
+            /// </summary>
+            internal static Type/*!*/ MakeDelegateType(Type/*!*/ returnType, Type[]/*!*/ parameterTypes,
+                CallingConvention cc, bool setLastError) {
                 TypeBuilder type = Module.DefineType(
-                    "FiddleClosure" + Interlocked.Increment(ref _counter).ToString(System.Globalization.CultureInfo.InvariantCulture),
+                    (setLastError ? "FiddleBound" : "FiddleClosure") + Interlocked.Increment(ref _counter).ToString(System.Globalization.CultureInfo.InvariantCulture),
                     TypeAttributes.Public | TypeAttributes.Sealed | TypeAttributes.Class | TypeAttributes.AnsiClass | TypeAttributes.AutoClass,
                     typeof(MulticastDelegate));
 
@@ -343,9 +353,17 @@ namespace IronRuby.StandardLibrary.Fiddle {
                     returnType, parameterTypes);
                 invoke.SetImplementationFlags(MethodImplAttributes.Runtime | MethodImplAttributes.Managed);
 
-                type.SetCustomAttribute(new CustomAttributeBuilder(
-                    typeof(UnmanagedFunctionPointerAttribute).GetConstructor(new[] { typeof(CallingConvention) }),
-                    new object[] { cc }));
+                if (setLastError) {
+                    type.SetCustomAttribute(new CustomAttributeBuilder(
+                        typeof(UnmanagedFunctionPointerAttribute).GetConstructor(new[] { typeof(CallingConvention) }),
+                        new object[] { cc },
+                        new[] { typeof(UnmanagedFunctionPointerAttribute).GetField("SetLastError") },
+                        new object[] { true }));
+                } else {
+                    type.SetCustomAttribute(new CustomAttributeBuilder(
+                        typeof(UnmanagedFunctionPointerAttribute).GetConstructor(new[] { typeof(CallingConvention) }),
+                        new object[] { cc }));
+                }
 
                 return type.CreateTypeInfo();
             }
