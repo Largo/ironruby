@@ -127,6 +127,15 @@ namespace IronRuby.Runtime {
         private static int _frozenErrorInspectDepth;
 
         /// <summary>
+        /// For the mutation guards that live on the object itself (Hash, Array, Struct, ...) and so
+        /// have no RubyContext in hand: the process has one by the time any Ruby code can run.
+        /// </summary>
+        public static Exception/*!*/ CreateObjectFrozenErrorFor(object obj, string/*!*/ className) {
+            var context = RubyContext._Default;
+            return (context != null) ? CreateObjectFrozenError(context, obj) : CreateObjectFrozenError(className);
+        }
+
+        /// <summary>
         /// MRI: "can't modify frozen Array: [1, 2]".
         /// </summary>
         public static Exception/*!*/ CreateObjectFrozenError(RubyContext/*!*/ context, object obj) {

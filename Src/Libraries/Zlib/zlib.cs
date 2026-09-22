@@ -17,6 +17,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
@@ -437,6 +438,22 @@ namespace IronRuby.StandardLibrary.Zlib {
             /// <summary>Output produced but not handed to Ruby yet - MRI's z->buf.</summary>
             private readonly List<byte>/*!*/ _output = new List<byte>();
 
+            /// <summary>
+            /// Serializes every use of the native z_stream. MRI runs a stream under the GVL, so two
+            /// Ruby threads never touch one z_stream at once there; IronRuby threads really are
+            /// concurrent, and two of them in deflate() on one stream corrupt libz's state and the
+            /// native heap (test_multithread_deflate killed the process with SIGSEGV), or one
+            /// thread's run points next_in at a buffer the other has already unpinned.
+            /// Reentrant, because a block yielded to mid-run may call back into the stream; the
+            /// in-progress flag turns that into MRI's InProgressError instead.
+            /// </summary>
+            private readonly object/*!*/ _lock = new object();
+            private bool _inProgress;
+
+            /// <summary>MRI wraps #deflate and #inflate in a per-stream Mutex; this is its owner.</summary>
+            private readonly object/*!*/ _methodLock = new object();
+            private Thread _methodOwner;
+
             internal ZStream(bool isInflate) {
                 _isInflate = isInflate;
                 _z = Marshal.AllocHGlobal(LibZ.StreamSize);
@@ -455,6 +472,12 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             private void Dispose(bool disposing) {
+                lock (_lock) {
+                    DisposeNoLock();
+                }
+            }
+
+            private void DisposeNoLock() {
                 if (_z != IntPtr.Zero) {
                     if (!_ended) {
                         if (_isInflate) {
@@ -470,7 +493,43 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             internal LibZ.ZStreamRec Rec {
-                get { return (LibZ.ZStreamRec)Marshal.PtrToStructure(_z, typeof(LibZ.ZStreamRec)); }
+                get {
+                    lock (_lock) {
+                        if (_z == IntPtr.Zero) {
+                            throw new Error("stream is not ready");
+                        }
+                        return (LibZ.ZStreamRec)Marshal.PtrToStructure(_z, typeof(LibZ.ZStreamRec));
+                    }
+                }
+            }
+
+            /// <summary>
+            /// Runs a native call on the stream with the stream lock held, so that it cannot race
+            /// a run, an #end or a #reset on another thread.
+            /// </summary>
+            internal int Native(Func<IntPtr, int>/*!*/ call) {
+                lock (_lock) {
+                    return call(Handle);
+                }
+            }
+
+            /// <summary>
+            /// MRI's rb_mutex_synchronize(z->mutex, ...) around #deflate and #inflate: another
+            /// thread waits its turn, and the owning thread coming back in - from the block it was
+            /// given - is a recursive lock, which MRI reports as a ThreadError.
+            /// </summary>
+            internal T Synchronize<T>(Func<T>/*!*/ body) {
+                if (_methodOwner == Thread.CurrentThread) {
+                    throw new ThreadError("deadlock; recursive locking");
+                }
+                lock (_methodLock) {
+                    _methodOwner = Thread.CurrentThread;
+                    try {
+                        return body();
+                    } finally {
+                        _methodOwner = null;
+                    }
+                }
             }
 
             private void SetRec(LibZ.ZStreamRec value) {
@@ -517,6 +576,20 @@ namespace IronRuby.StandardLibrary.Zlib {
             /// Returns the result the block broke with, or null. <paramref name="broke"/> says which.
             /// </summary>
             internal object Run(byte[]/*!*/ data, int flush, BlockParam block, out bool broke) {
+                lock (_lock) {
+                    if (_inProgress) {
+                        throw new InProgressError("zlib stream is in progress");
+                    }
+                    _inProgress = true;
+                    try {
+                        return RunNoLock(data, flush, block, out broke);
+                    } finally {
+                        _inProgress = false;
+                    }
+                }
+            }
+
+            private object RunNoLock(byte[]/*!*/ data, int flush, BlockParam block, out bool broke) {
                 broke = false;
                 object blockResult = null;
 
@@ -538,9 +611,11 @@ namespace IronRuby.StandardLibrary.Zlib {
                 try {
                     IntPtr inBase = inHandle.AddrOfPinnedObject();
                     IntPtr outBase = outHandle.AddrOfPinnedObject();
-                    IntPtr handle = Handle;
 
                     while (true) {
+                        // Fetched on every pass: the block yielded to below may have closed
+                        // the stream, and libz must not be handed an ended z_stream.
+                        IntPtr handle = Handle;
                         var z = Rec;
                         z.next_in = inBase + consumed;
                         z.avail_in = (uint)(pending.Length - consumed);
@@ -581,7 +656,9 @@ namespace IronRuby.StandardLibrary.Zlib {
                         }
                     }
                 } finally {
-                    ClearPointers();
+                    if (_z != IntPtr.Zero) {
+                        ClearPointers();
+                    }
                     inHandle.Free();
                     outHandle.Free();
                 }
@@ -634,6 +711,15 @@ namespace IronRuby.StandardLibrary.Zlib {
             /// Runs a libz entry point that produces output but takes no input - deflateParams().
             /// </summary>
             internal int RunWithOutputBuffer(Func<IntPtr, int>/*!*/ call) {
+                lock (_lock) {
+                    if (_inProgress) {
+                        throw new InProgressError("zlib stream is in progress");
+                    }
+                    return RunWithOutputBufferNoLock(call);
+                }
+            }
+
+            private int RunWithOutputBufferNoLock(Func<IntPtr, int>/*!*/ call) {
                 var scratch = new byte[ChunkSize];
                 GCHandle outHandle = GCHandle.Alloc(scratch, GCHandleType.Pinned);
                 int err;
@@ -712,18 +798,29 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             internal void End() {
-                if (_z == IntPtr.Zero || _ended) {
-                    return;
+                lock (_lock) {
+                    if (_z == IntPtr.Zero || _ended) {
+                        return;
+                    }
+                    if (_isInflate) {
+                        LibZ.inflateEnd(_z);
+                    } else {
+                        LibZ.deflateEnd(_z);
+                    }
+                    _ended = true;
                 }
-                if (_isInflate) {
-                    LibZ.inflateEnd(_z);
-                } else {
-                    LibZ.deflateEnd(_z);
-                }
-                _ended = true;
             }
 
             internal void ResetStream() {
+                lock (_lock) {
+                    if (_inProgress) {
+                        throw new InProgressError("zlib stream is in progress");
+                    }
+                    ResetStreamNoLock();
+                }
+            }
+
+            private void ResetStreamNoLock() {
                 int err = _isInflate ? LibZ.inflateReset(Handle) : LibZ.deflateReset(Handle);
                 if (err != LibZ.Z_OK) {
                     throw MakeError(err, Rec.msg);
@@ -919,7 +1016,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             internal void SetDictionary(byte[]/*!*/ dictionary) {
-                int err = LibZ.inflateSetDictionary(Handle, dictionary, (uint)dictionary.Length);
+                int err = Native(h => LibZ.inflateSetDictionary(h, dictionary, (uint)dictionary.Length));
                 if (err != LibZ.Z_OK) {
                     throw MakeError(err, Rec.msg);
                 }
@@ -927,6 +1024,11 @@ namespace IronRuby.StandardLibrary.Zlib {
 
             [RubyMethod("inflate")]
             public static object InflateMethod(BlockParam block, Inflate/*!*/ self, [DefaultProtocol]MutableString src) {
+                return self.Synchronize(() => self.InflateBody(block, src));
+            }
+
+            private object InflateBody(BlockParam block, MutableString src) {
+                Inflate self = this;
                 bool broke;
 
                 if (self.IsFinished) {
@@ -987,7 +1089,7 @@ namespace IronRuby.StandardLibrary.Zlib {
 
             [RubyMethod("sync_point?")]
             public static bool IsSyncPoint(Inflate/*!*/ self) {
-                int err = LibZ.inflateSyncPoint(self.Handle);
+                int err = self.Native(LibZ.inflateSyncPoint);
                 if (err == 1) {
                     return true;
                 }
@@ -1066,12 +1168,15 @@ namespace IronRuby.StandardLibrary.Zlib {
             public static object DeflateMethod(ConversionStorage<int>/*!*/ fixnumCast, BlockParam block, Deflate/*!*/ self,
                 [DefaultProtocol]MutableString src, [Optional]object flush) {
 
-                bool broke;
-                object result = self.DoDeflate(src, OptionalInt(fixnumCast, flush, LibZ.Z_NO_FLUSH), block, out broke);
-                if (broke) {
-                    return result;
-                }
-                return self.DetachBuffer(block, out broke);
+                int f = OptionalInt(fixnumCast, flush, LibZ.Z_NO_FLUSH);
+                return self.Synchronize(() => {
+                    bool broke;
+                    object result = self.DoDeflate(src, f, block, out broke);
+                    if (broke) {
+                        return result;
+                    }
+                    return self.DetachBuffer(block, out broke);
+                });
             }
 
             [RubyMethod("<<")]
@@ -1112,7 +1217,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             [RubyMethod("set_dictionary")]
             public static MutableString/*!*/ SetDictionary(Deflate/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ dictionary) {
                 byte[] bytes = dictionary.ToByteArray();
-                int err = LibZ.deflateSetDictionary(self.Handle, bytes, (uint)bytes.Length);
+                int err = self.Native(h => LibZ.deflateSetDictionary(h, bytes, (uint)bytes.Length));
                 if (err != LibZ.Z_OK) {
                     throw MakeError(err, self.Rec.msg);
                 }

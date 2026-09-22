@@ -22,7 +22,7 @@ the last one (rack goes 1197 -> 771 -> 564 ms across the three).
 | grape        | OK     | 19334 ms | 1773 ms | 10.9x    | Grape API, 100k requests |
 | rubocop      | OK     | 26219 ms | 1139 ms | 23x      | autocorrect a fixture through RuboCop::Runner (one iteration, see below) |
 | railsbench   | OK     | 124815 ms| 6271 ms | 19.9x    | Rails 8.1 + sqlite3, 2000 requests, every one asserted 200 |
-| sequel       | FAIL   | -        | 94 ms*  | -        | its Gemfile asks for `sqlite3 ~> 1.4`; IronRuby provides sqlite3 2.9.6 and the 1.x gem is C source.  Sequel itself works here - the same script on IronRuby's sqlite3 gives byte-identical output to CRuby.  *one iteration |
+| sequel       | FAIL   | -        | 94 ms*  | -        | its Gemfile asks for `sqlite3 ~> 1.4`; IronRuby provides sqlite3 2.9.6 and the 1.x gem is C source.  Sequel itself works here - the same script on IronRuby's sqlite3 gives byte-identical output to CRuby.  *one iteration.  The shim is 2.x's API, not 1.x's, so claiming 1.4 would be false - see below |
 | ruby-lsp     | N/A    | -        | -       | -        | ruby-lsp depends on rbs, a C extension with no pure-Ruby fallback |
 | fluentd      | N/A    | -        | -       | -        | fluentd depends on strptime, and the Gemfile on yajl-ruby; both are C extensions |
 | lobsters     | N/A    | -        | -       | -        | needs bcrypt and markly (C extensions), and pins rubocop 0.81 which needs jaro_winkler (C) |
@@ -124,6 +124,26 @@ Found, not fixed:
   as `2001-12-15 03:59:43.1 +0100` (the box's zone) instead of CRuby's
   `2001-12-14 21:59:43.1 -0500`.  Pre-existing, in the engine's timestamp
   constructor, and unrelated to the scanner fix above.
+
+### Why the sqlite3 shim cannot stand in for `~> 1.4`
+
+`SQLite3::VERSION` is 2.9.6 because the shim implements sqlite3-ruby 2.x, and
+2.0 removed API that 1.x code may use.  Run against CRuby with each real gem
+(1.7.3 and 2.9.6) and against the shim, the shim answers exactly as 2.9.6 does
+and differently from 1.7.3 on every one of these:
+
+- bind parameters as varargs, `db.execute(sql, 1, "x")` - 1.x binds them, 2.x
+  (and the shim) raise ArgumentError;
+- `Database#type_translation=`, `#translator`, `SQLite3::Translator`;
+- rows that answer `#fields` / `#types` (1.x's ArrayWithTypesAndFields);
+- `results_as_hash` rows indexable by column number (`row[0]`), which 1.x
+  allows and 2.x does not;
+- `SQLite3::VersionProxy`.
+
+So there is no honest way to let Bundler accept it for `~> 1.4`: a gemspec
+that said 1.x would promise behaviour the library does not have.  Sequel
+supports both majors, so the benchmark's pin is the only obstacle; it is
+ruby-bench's, and that checkout is not modified here.
 
 ## Running these by hand
 

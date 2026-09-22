@@ -156,10 +156,7 @@ namespace IronRuby.Builtins {
             // MRI names the receiver in the message ("can't modify frozen Array: [1, 2]") and
             // hangs it off FrozenError#receiver. An Array does not carry its context, but the
             // process has one by the time any of this can run.
-            var context = RubyContext._Default;
-            throw (context != null)
-                ? RubyExceptions.CreateObjectFrozenError(context, this)
-                : RubyExceptions.CreateObjectFrozenError("Array");
+            throw RubyExceptions.CreateObjectFrozenErrorFor(this, "Array");
         }
 
         private void Mutate() {

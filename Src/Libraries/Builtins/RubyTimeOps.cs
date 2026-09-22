@@ -1175,7 +1175,7 @@ namespace IronRuby.Builtins {
         public static RubyTime/*!*/ SwitchToUtc(RubyContext/*!*/ context, RubyTime/*!*/ self) {
             if (!self.IsUtc) {
                 if (context.IsObjectFrozen(self)) {
-                    throw RubyExceptions.CreateObjectFrozenError();
+                    throw RubyExceptions.CreateObjectFrozenError(context, self);
                 }
             }
             self.CopyFrom(self.WithZone(RubyTimeZoneKind.Utc, ExactNum.Zero, null));
@@ -1187,7 +1187,7 @@ namespace IronRuby.Builtins {
             RubyTime result = GetLocal(context, self, zone);
             if (result.ZoneKind != self.ZoneKind || result.UtcOffsetExact.CompareTo(self.UtcOffsetExact) != 0) {
                 if (context.IsObjectFrozen(self)) {
-                    throw RubyExceptions.CreateObjectFrozenError();
+                    throw RubyExceptions.CreateObjectFrozenError(context, self);
                 }
             }
             self.CopyFrom(result);

@@ -355,6 +355,7 @@ namespace IronRuby.Builtins {
                         return;
                     }
                     signal = _pending.Dequeue();
+                    RubyUtils.SafePointRequestDone();
                 }
                 RunHandler(signal);
             }
@@ -364,6 +365,8 @@ namespace IronRuby.Builtins {
         private static void Enqueue(int signal) {
             lock (_handlers) {
                 _pending.Enqueue(signal);
+                // so that a main thread spinning in `loop {}` runs the handler at its next back edge
+                RubyUtils.RequestSafePoint();
             }
 
             Thread main = _mainThread;
