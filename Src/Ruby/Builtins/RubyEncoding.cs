@@ -144,6 +144,9 @@ namespace IronRuby.Builtins {
             if (RubyOnlyEncodings.IsRubyOnly(codepage)) {
                 return RubyOnlyEncodings.Create(codepage, throwOnError);
             }
+            if (codepage == CodePageUTF7) {
+                return CreateUTF7Encoding(throwOnError);
+            }
             if (throwOnError) {
                 return Encoding.GetEncoding(codepage, EncoderFallback.ExceptionFallback, DecoderFallback.ExceptionFallback);
             } else {
@@ -153,6 +156,33 @@ namespace IronRuby.Builtins {
             return new UTF8Encoding(false, throwOnError);
 #endif
         }
+
+#if FEATURE_ENCODING
+        /// <summary>
+        /// UTF-7 without System.Text.Encoding.EnableUnsafeUTF7Encoding. .NET 5+ refuses
+        /// Encoding.GetEncoding(65000) unless that switch is on, and it reads the switch only once
+        /// per process: the AppContext.SetSwitch in RegisterCodePageProvider works for ir and for a
+        /// host that has not asked yet, but a host that has already enumerated encodings (anything
+        /// calling Encoding.GetEncodings(), as ASP.NET and logging stacks do) has cached "off", and
+        /// the engine then failed to start at all - the Encoding class initializer builds UTF-7
+        /// eagerly. The switch gates only the lookup; the UTF7Encoding class works regardless.
+        /// UTF-7 is a dummy encoding in Ruby, so strings tagged with it are kept as bytes, and
+        /// this object is rarely asked to transcode anything.
+        /// </summary>
+        private static Encoding/*!*/ CreateUTF7Encoding(bool throwOnError) {
+#pragma warning disable SYSLIB0001 // UTF-7 is obsolete in .NET, and still one of Ruby's encodings
+            var encoding = (Encoding)new UTF7Encoding().Clone();
+#pragma warning restore SYSLIB0001
+            if (throwOnError) {
+                encoding.EncoderFallback = EncoderFallback.ExceptionFallback;
+                encoding.DecoderFallback = DecoderFallback.ExceptionFallback;
+            } else {
+                encoding.EncoderFallback = EncoderFallback.ReplacementFallback;
+                encoding.DecoderFallback = BinaryDecoderFallback.Instance;
+            }
+            return encoding;
+        }
+#endif
 
         #region Serialization
 #if FEATURE_SERIALIZATION

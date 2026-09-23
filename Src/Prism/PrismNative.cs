@@ -25,10 +25,15 @@ namespace IronRuby.Prism {
         static PrismNative() {
             NativeLibrary.SetDllImportResolver(typeof(PrismNative).Assembly, (name, assembly, path) => {
                 if (name == Lib) {
-                    foreach (string fileName in FileNames) {
-                        string local = System.IO.Path.Combine(AppContext.BaseDirectory, fileName);
-                        if (System.IO.File.Exists(local)) {
-                            return NativeLibrary.Load(local);
+                    // Beside the host first, then beside this assembly: a plugin's IronRuby (an
+                    // irubyc --library, say) is not in the host's directory, and on Windows the
+                    // runtime's own probing would not find it by the lib-prefixed name either.
+                    foreach (string dir in SearchDirectories()) {
+                        foreach (string fileName in FileNames) {
+                            string local = System.IO.Path.Combine(dir, fileName);
+                            if (System.IO.File.Exists(local)) {
+                                return NativeLibrary.Load(local);
+                            }
                         }
                     }
                     // Not beside the host: let the OS loader look on its own search path
@@ -41,6 +46,15 @@ namespace IronRuby.Prism {
                 }
                 return IntPtr.Zero;
             });
+        }
+
+        private static System.Collections.Generic.IEnumerable<string> SearchDirectories() {
+            yield return AppContext.BaseDirectory;
+            string location = typeof(PrismNative).Assembly.Location;
+            if (!string.IsNullOrEmpty(location)) {
+                string own = System.IO.Path.GetDirectoryName(location);
+                if (!string.IsNullOrEmpty(own)) yield return own;
+            }
         }
 
         /// <summary>

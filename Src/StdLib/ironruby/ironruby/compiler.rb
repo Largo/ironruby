@@ -26,6 +26,7 @@
 require "optparse"
 require "fileutils"
 require "rbconfig"
+require_relative "compiler/library"
 
 module IronRuby
   module Compiler
@@ -34,8 +35,8 @@ module IronRuby
     class Options
       attr_accessor :target, :basedir, :prefix, :main, :name, :app_host,
                     :self_contained, :rid, :stdlib, :verbose, :keep, :configuration,
-                    :single_file
-      attr_reader :sources
+                    :single_file, :library, :framework
+      attr_reader :sources, :cs_files, :host_references
 
       def initialize
         @target = "."
@@ -51,7 +52,11 @@ module IronRuby
         @keep = false
         @configuration = "Release"
         @single_file = false      # --single-file
+        @library = false          # --library
+        @framework = nil          # --framework
         @sources = []
+        @cs_files = []            # --cs
+        @host_references = []     # --reference
       end
     end
 
@@ -101,6 +106,14 @@ module IronRuby
           options.app_host = true
           options.rid = rid if rid
         end
+        opts.on("--library", "Produce one self-contained class library (<name>.dll) for a .NET host",
+                "to load as a plugin; see --cs and --reference") do
+          options.library = true
+          options.app_host = false
+        end
+        opts.on("--cs FILE", "C# source to compile into the --library (repeatable)") { |f| options.cs_files << f }
+        opts.on("--reference DLL", "Assembly the host provides: compiled against, not bundled (repeatable)") { |f| options.host_references << f }
+        opts.on("--framework TFM", "Target framework (default: the one this IronRuby was built for)") { |f| options.framework = f }
         opts.on("--no-stdlib", "Leave out Lib/ruby (the MRI library and gems); keeps the prelude") { options.stdlib = false }
         opts.on("--debug", "Compile the host with the Debug configuration") { options.configuration = "Debug" }
         opts.on("--keep", "Keep the generated C# project and say where it is") { options.keep = true }
@@ -239,7 +252,7 @@ module IronRuby
       <<~XML
         <Project Sdk="Microsoft.NET.Sdk">
           <PropertyGroup>
-            <TargetFramework>#{target_framework}</TargetFramework>
+            <TargetFramework>#{framework(options)}</TargetFramework>
             <OutputType>Exe</OutputType>
             <AssemblyName>#{name}</AssemblyName>
             <RootNamespace>IronRuby.Compiled</RootNamespace>
@@ -259,6 +272,7 @@ module IronRuby
           </ItemGroup>
           <ItemGroup>
             <Compile Include="apphost.cs" />
+            <Compile Include="sources.cs" />
           </ItemGroup>
           <ItemGroup>
         #{res}
@@ -285,13 +299,16 @@ module IronRuby
     # memory) also keeps Assembly.Location non-empty, which IronRuby relies on.
     PAYLOAD_DIR = "payload"
 
-    # The assemblies the host is compiled against.  For --single-file that is every
-    # managed assembly the runtime ships, not just the ones the host calls directly:
-    # as references the SDK resolves and de-duplicates them (a transitive dependency
-    # such as Microsoft.Scripting.Metadata would otherwise arrive twice - NETSDK1152)
-    # and bundles them; the payload is left with only native libraries and Lib/.
+    # The assemblies the host is compiled against: every managed assembly the runtime
+    # ships, not just the ones the host calls directly.  As references the SDK resolves
+    # and de-duplicates them (a transitive dependency such as Microsoft.Scripting.Metadata
+    # would otherwise arrive twice under --single-file - NETSDK1152), bundles them, and
+    # lists them in the app's deps.json.  That last part matters for the directory
+    # layout too: an assembly the runtime only loads by name - the YAML library, which
+    # yaml.rb load_assembly's - is not found by the default load context unless the
+    # deps.json names it, so a copy next to the app is not enough (`require "yaml"`
+    # failed in --exe/--dll/--self-contained applications).
     def references(options, bin)
-      return REFERENCES unless options.single_file
       (REFERENCES + managed_assemblies(bin)).uniq
     end
 
@@ -342,21 +359,48 @@ module IronRuby
       XML
     end
 
-    def apphost_source(main_path, resources)
-      template = File.read(File.expand_path("compiler/apphost.cs", __dir__))
+    def template(name)
+      File.read(File.expand_path("compiler/#{name}", __dir__))
+    end
+
+    def apphost_source
+      template("apphost.cs")
+    end
+
+    # The embedded-sources overlay (sources.cs).  An application's virtual source root is
+    # <app dir>/src; a library's is <extraction dir>/src, beside the assembly carrying them.
+    def sources_source(main_path, resources, root_base: "AppContext.BaseDirectory")
       # Path.Combine understands '/' on both platforms, so keep the portable form.
       manifest = resources.map { |_file, logical|
         embedded = logical.sub(%r{\A#{Regexp.escape(RESOURCE_PREFIX)}}, "")
         %(            { @"#{embedded}", @"#{logical}" },)
       }
-      template
-        .sub("@@MAIN_PATH@@", main_path)
-        .sub("@@MANIFEST@@", manifest.join("\n"))
+      template("sources.cs")
+        .sub("@@MAIN_PATH@@") { main_path }
+        .sub("@@MANIFEST@@") { manifest.join("\n") }
+        .sub("@@SOURCE_ROOT_BASE@@") { root_base }
+    end
+
+    def framework(options)
+      options.framework || target_framework
     end
 
     # --- the compile itself ------------------------------------------------
 
+    def check_options(options)
+      if options.library
+        raise CompileError, "--library makes a class library; it cannot be combined with --single-file" if options.single_file
+        raise CompileError, "--library carries its runtime inside; --self-contained does not apply" if options.self_contained
+      elsif !options.cs_files.empty? || !options.host_references.empty?
+        raise CompileError, "--cs and --reference are for --library"
+      end
+      (options.cs_files + options.host_references).each do |f|
+        raise CompileError, "no such file -- #{f}" unless File.file?(f)
+      end
+    end
+
     def compile(options)
+      check_options(options)
       files = collect_sources(options)
       main = main_file(options, files)
       base = base_dir(options, files)
@@ -379,7 +423,21 @@ module IronRuby
 
       FileUtils.rm_rf(work)
       FileUtils.mkdir_p(work)
-      File.write(File.join(work, "apphost.cs"), apphost_source(main_path, resources))
+      if options.library
+        Library.new(options, name: name, main_path: main_path, resources: resources,
+                    bin: bin, work: work, out: out).build
+        FileUtils.rm_rf(work) unless options.keep
+        puts "irubyc: wrote #{File.join(out, name + ".dll")}"
+        # Like --single-file, the payload holds this machine's native libraries; the DLL
+        # itself would load anywhere, so say it here and refuse at run time.
+        puts "irubyc: it carries #{runtime_identifier} native libraries (libprism, sqlite) " \
+             "and runs on #{runtime_identifier} only"
+        puts "irubyc: generated projects kept in #{work}" if options.keep
+        return
+      end
+
+      File.write(File.join(work, "apphost.cs"), apphost_source)
+      File.write(File.join(work, "sources.cs"), sources_source(main_path, resources))
       File.write(File.join(work, "#{name}.csproj"), csproj(name, options, resources, bin))
 
       if options.single_file

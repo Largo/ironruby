@@ -2,15 +2,14 @@
 //
 // This file is the host of a compiled IronRuby application.  The Ruby sources
 // are embedded in the assembly as managed resources and are served to the
-// runtime through a PlatformAdaptationLayer overlay, so `require`, `load` and
-// the main script read them out of the assembly rather than off disk.  The
-// Ruby code itself is still compiled by IronRuby at run time, exactly as
-// `ir app.rb` would compile it -- see irubyc --help.
+// runtime through a PlatformAdaptationLayer overlay (sources.cs), so `require`,
+// `load` and the main script read them out of the assembly rather than off
+// disk.  The Ruby code itself is still compiled by IronRuby at run time,
+// exactly as `ir app.rb` would compile it -- see irubyc --help.
 
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Text.RegularExpressions;
 using IronRuby.Hosting;
 using IronRuby.Runtime;
 using Microsoft.Scripting;
@@ -19,169 +18,10 @@ using Microsoft.Scripting.Hosting.Shell;
 
 namespace IronRuby.Compiled {
 
-    internal static class EmbeddedSources {
-        // Path of the main script, relative to the virtual source root.
-        public const string MainPath = @"@@MAIN_PATH@@";
-
-        // relative path => manifest resource name
-        private static readonly string[,] Manifest = new string[,] {
-@@MANIFEST@@
-        };
-
-        public static readonly string Root =
-            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "src"));
-
-        public static readonly Dictionary<string, string> ByFullPath =
-            new Dictionary<string, string>(StringComparer.Ordinal);
-
-        private static readonly HashSet<string> Directories =
-            new HashSet<string>(StringComparer.Ordinal);
-
-        static EmbeddedSources() {
-            for (int i = 0; i < Manifest.GetLength(0); i++) {
-                string full = Path.GetFullPath(Path.Combine(Root, Manifest[i, 0]));
-                ByFullPath[full] = Manifest[i, 1];
-                for (string d = Path.GetDirectoryName(full);
-                     d != null && d.Length >= Root.Length;
-                     d = Path.GetDirectoryName(d)) {
-                    Directories.Add(d);
-                    if (string.Equals(d, Root, StringComparison.Ordinal)) break;
-                }
-            }
-            Directories.Add(Root);
-        }
-
-        public static string MainFullPath {
-            get { return Path.GetFullPath(Path.Combine(Root, MainPath)); }
-        }
-
-        private static string Normalize(string path) {
-            if (string.IsNullOrEmpty(path)) return null;
-            try {
-                string full = Path.GetFullPath(path);
-                if (full.Length > 1) full = full.TrimEnd(Path.DirectorySeparatorChar);
-                return full;
-            } catch {
-                return null;
-            }
-        }
-
-        public static bool IsFile(string path) {
-            string full = Normalize(path);
-            return full != null && ByFullPath.ContainsKey(full);
-        }
-
-        public static bool IsDirectory(string path) {
-            string full = Normalize(path);
-            return full != null && Directories.Contains(full);
-        }
-
-        public static bool TryOpen(string path, out Stream stream) {
-            stream = null;
-            string full = Normalize(path);
-            if (full == null) return false;
-            string resource;
-            if (!ByFullPath.TryGetValue(full, out resource)) return false;
-            stream = typeof(EmbeddedSources).Assembly.GetManifestResourceStream(resource);
-            return stream != null;
-        }
-
-        public static byte[] Read(string path) {
-            Stream s;
-            if (!TryOpen(path, out s)) return null;
-            using (s) {
-                var ms = new MemoryStream();
-                s.CopyTo(ms);
-                return ms.ToArray();
-            }
-        }
-
-        public static List<string> Entries(string path, string searchPattern, bool includeFiles, bool includeDirectories) {
-            var result = new List<string>();
-            string dir = Normalize(path);
-            if (dir == null || !Directories.Contains(dir)) return result;
-
-            string pattern = "^" + Regex.Escape(searchPattern ?? "*").Replace(@"\*", ".*").Replace(@"\?", ".") + "$";
-            var rx = new Regex(pattern, RegexOptions.CultureInvariant);
-            string prefix = dir + Path.DirectorySeparatorChar;
-
-            if (includeFiles) {
-                foreach (var k in ByFullPath.Keys) {
-                    if (k.StartsWith(prefix, StringComparison.Ordinal) &&
-                        !k.Substring(prefix.Length).Contains(Path.DirectorySeparatorChar) &&
-                        rx.IsMatch(Path.GetFileName(k))) {
-                        result.Add(k);
-                    }
-                }
-            }
-            if (includeDirectories) {
-                foreach (var d in Directories) {
-                    if (d.StartsWith(prefix, StringComparison.Ordinal) &&
-                        !d.Substring(prefix.Length).Contains(Path.DirectorySeparatorChar) &&
-                        rx.IsMatch(Path.GetFileName(d))) {
-                        result.Add(d);
-                    }
-                }
-            }
-            return result;
-        }
-    }
-
-    /// <summary>
-    /// Serves the embedded sources as if they were files under <see cref="EmbeddedSources.Root"/>;
-    /// everything else falls through to the real file system.  The FileShare widening matches
-    /// RubyConsoleHost's own platform layer, which opens scripts the way MRI does.
-    /// </summary>
-    internal sealed class EmbeddedPlatformAdaptationLayer : PlatformAdaptationLayer {
-        public override bool FileExists(string path) {
-            return EmbeddedSources.IsFile(path) || base.FileExists(path);
-        }
-
-        public override bool DirectoryExists(string path) {
-            return EmbeddedSources.IsDirectory(path) || base.DirectoryExists(path);
-        }
-
-        public override Stream OpenInputFileStream(string path, FileMode mode, FileAccess access, FileShare share, int bufferSize) {
-            Stream s;
-            if (EmbeddedSources.TryOpen(path, out s)) return s;
-            return base.OpenInputFileStream(path, mode, access, share | FileShare.ReadWrite | FileShare.Delete, bufferSize);
-        }
-
-        public override Stream OpenFileStream(string path, FileMode mode, FileAccess access, FileShare share, int bufferSize) {
-            Stream s;
-            if (access == FileAccess.Read && EmbeddedSources.TryOpen(path, out s)) return s;
-            return base.OpenFileStream(path, mode, access, share, bufferSize);
-        }
-
-        public override string[] GetFileSystemEntries(string path, string searchPattern, bool includeFiles, bool includeDirectories) {
-            var embedded = EmbeddedSources.Entries(path, searchPattern, includeFiles, includeDirectories);
-            if (embedded.Count == 0) {
-                return base.GetFileSystemEntries(path, searchPattern, includeFiles, includeDirectories);
-            }
-            if (base.DirectoryExists(path)) {
-                embedded.AddRange(base.GetFileSystemEntries(path, searchPattern, includeFiles, includeDirectories));
-            }
-            return embedded.ToArray();
-        }
-    }
-
-    internal sealed class EmbeddedScriptHost : ScriptHost {
-        private static readonly PlatformAdaptationLayer Platform = new EmbeddedPlatformAdaptationLayer();
-        public override PlatformAdaptationLayer PlatformAdaptationLayer {
-            get { return Platform; }
-        }
-    }
-
-    internal sealed class EmbeddedContentProvider : StreamContentProvider {
-        private readonly byte[] _bytes;
-        public EmbeddedContentProvider(byte[] bytes) { _bytes = bytes; }
-        public override Stream GetStream() { return new MemoryStream(_bytes, false); }
-    }
-
     /// <summary>
     /// RubyCommandLine.RunFile reaches for System.IO.File directly (MRI reports an unreadable
     /// script as a LoadError before the runtime is involved), so the main script needs its own
-    /// route out of the assembly; `require` goes through the platform layer above.
+    /// route out of the assembly; `require` goes through the platform layer.
     /// </summary>
     internal sealed class EmbeddedCommandLine : RubyCommandLine {
         protected override int RunFile(string fileName) {

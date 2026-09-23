@@ -249,6 +249,10 @@ Options, with jrubyc's names kept where they mean the same thing:
 | `--exe` / `--dll` | native launcher (default), or just `<name>.dll` for `dotnet <name>.dll` |
 | `--self-contained [RID]` | bundle the .NET runtime too — runs with no .NET installed |
 | `--single-file [RID]` | produce **one executable file** instead of a directory (combine with `--self-contained`) |
+| `--library` | produce **one class library** (`<name>.dll`) that a .NET host loads as a plugin |
+| `--cs FILE` | C# source compiled into the `--library` (repeatable) |
+| `--reference DLL` | an assembly the host provides: compiled against, not bundled (repeatable) |
+| `--framework TFM` | target framework (default: the one the running IronRuby was built for) |
 | `--no-stdlib` | leave out the vendored Ruby 4.0 tree and the gems (30 MB → 19 MB) |
 | `--keep`, `--verbose` | keep the generated C# project / narrate every step |
 
@@ -289,6 +293,64 @@ What does **not**: `File.exist?` and the rest of `FileTest` answer `false` for a
 file, because they stat the real file system directly rather than ask the platform layer;
 `__FILE__` and `$0` name a path that has no directory behind it; and anything that shells
 out to `ruby` or re-execs `$0` will not find an interpreter.
+
+### One plugin DLL (`--library`)
+
+```console
+$ ./irubyc.sh --library -o Plugin -t /tmp/out --cs Plugin.cs \
+      --reference Host.Api.dll plugin.rb
+irubyc: wrote /tmp/out/Plugin/Plugin.dll
+```
+
+For a host that loads plugins — typically one that `Assembly.LoadFile`s every DLL in a
+plugin directory — `--library` makes **one
+class library** carrying IronRuby, the DLR, `libprism` and sqlite, the standard library and
+the Ruby files. .NET has no single-file mode for a library, so it unpacks itself: IronRuby,
+the natives and `Lib/` are one zip embedded as a resource, and a generated bootstrap extracts
+it on first use and resolves IronRuby from there. The `--cs` files are compiled into the
+DLL; they reach IronRuby through a generated `IronRuby.Embedded.RubyHost`:
+
+```csharp
+var engine = RubyHost.CreateEngine();          // stdlib, prelude and RubyGems booted, prism parser
+var scope  = engine.CreateScope();
+scope.SetVariable("plugin", this);
+dynamic ruby = RubyHost.Run(engine, "plugin.rb", scope);   // an embedded file; returns its last value
+```
+
+`CreateEngine` makes the DLL's own assembly and every `--reference` visible to Ruby, so
+`Host::Api::SomeType` resolves; `CreateEngine(runtime => ..., language => ...)`
+adjusts the setups (`runtime.PrivateBinding = true` lets Ruby call protected CLR members, which
+IronRuby otherwise allows only from a Ruby subclass). `RubyHost.RunMain` runs the main file,
+`RubyHost.ExtractDirectory` says where the payload went.
+
+- **First use extracts.** IronRuby needs a real `Assembly.Location` (for `Lib/` and RbConfig)
+  and the natives have to be files to be loaded at all, so nothing runs from memory. The payload
+  goes to `$IRUBYC_EXTRACT_BASE_DIR/<name>-<hash>/`, by default `<temp>/irubyc-<user>/` (created
+  `0700`; a directory others can write to is refused). `<hash>` is the payload's SHA-256, so a
+  rebuilt DLL never reuses a stale copy, and the build is byte-for-byte reproducible. Each
+  process extracts into a private temporary directory and renames it into place, so concurrent
+  first loads are safe — the losers use the winner's copy — and a copy with files missing is
+  moved aside and extracted again. For a small demo plugin: about 250 ms to extract, 33 MB on disk.
+- **Type-load order.** A plugin host calls `GetTypes()` on the DLL before any of its code runs,
+  and IronRuby is not resolvable until the bootstrap has installed its resolvers. The resolvers
+  are installed by a `[ModuleInitializer]`, which runs before the first method of the DLL (the
+  host's constructor call), and everything that *derives* from IronRuby types lives in a second,
+  generated assembly inside the payload. So the `--cs` code must not derive from or implement
+  IronRuby/DLR types, nor hold them in struct fields; fields, locals, parameters and return
+  types of IronRuby types are fine — the CLR resolves those only when a method using them is
+  compiled.
+- **Load contexts.** IronRuby is loaded into the plugin's own `AssemblyLoadContext`
+  (`Assembly.LoadFile` gives every plugin one); that context's `Resolving` event is the hook that
+  fires, `AppDomain.AssemblyResolve` is only a fallback. Two IronRuby plugins in one process each
+  get their own IronRuby, and neither sees the other's.
+- **Platform.** Like `--single-file`, the DLL carries the build machine's native libraries. The
+  DLL itself would load anywhere, so it checks at run time and fails with a message naming the
+  platform it was built for. Build on Windows for Windows.
+
+For a small demo plugin:
+9.3 MB with the standard library, 5.4 MB with `--no-stdlib`. The first run of the activity in a
+process, extraction and booting the engine included, takes about 2.4 s (1.2 s with `--no-stdlib`,
+which skips RubyGems); later runs of the activity take a few milliseconds.
 
 ## Platforms
 
