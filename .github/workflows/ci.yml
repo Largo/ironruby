@@ -211,6 +211,68 @@ jobs:
           echo "$out"
           [ "$out" = "fib=6765 hello yaml=a: 1 json=[1] eval=3" ]
 
+      # irubyc --library: one class library that a .NET host loads as a plugin, the way
+      # plugin hosts typically do - Assembly.LoadFile, then GetTypes() before
+      # any of the plugin's code has run.  Two of them in one host, each alone in an
+      # otherwise empty directory, and a host that has already enumerated the encodings
+      # (which pins UTF-7 off for the whole process).
+      - name: irubyc library
+        working-directory: ironruby
+        run: |
+          IRUBYC="./ir.sh -S irubyc"
+          [ "$RUNNER_OS" = Windows ] && IRUBYC="cmd //c ir.cmd -S irubyc"
+          for n in 1 2; do
+            mkdir -p "lib-app$n/lib"
+            cat > "lib-app$n/plugin.rb" <<RUBY
+          require "yaml"
+          require "json"
+          require_relative "lib/helper"
+          def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
+          "plugin$n fib=#{fib(20)} yaml=#{{"a" => $n}.to_yaml.lines.last.strip} json=#{JSON.generate([$n])} eval=#{eval("1 + 2")} #{Helper.name}"
+          RUBY
+            printf 'module Helper\nend\n' > "lib-app$n/lib/helper.rb"
+            cat > "lib-app$n/Plugin.cs" <<CS
+          using IronRuby.Embedded;
+          namespace Plugin$n {
+              public class Plugin {
+                  private Microsoft.Scripting.Hosting.ScriptEngine _engine;
+                  public string Run() {
+                      _engine = RubyHost.CreateEngine();
+                      return RubyHost.RunMain(_engine, null).ToString();
+                  }
+              }
+          }
+          CS
+            $IRUBYC --library -o "Plugin$n" -t lib-out --cs "lib-app$n/Plugin.cs" "lib-app$n/plugin.rb" "lib-app$n/lib/"
+            count=$(ls "lib-out/Plugin$n" | wc -l)
+            [ "$count" -eq 1 ] || { echo "expected exactly one file, got $count"; exit 1; }
+            mkdir -p "$RUNNER_TEMP/lib-alone$n"
+            cp "lib-out/Plugin$n/Plugin$n.dll" "$RUNNER_TEMP/lib-alone$n/"
+          done
+          mkdir -p lib-host
+          cat > lib-host/LibHost.csproj <<XML
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup><TargetFramework>$TFM</TargetFramework><OutputType>Exe</OutputType></PropertyGroup>
+          </Project>
+          XML
+          cat > lib-host/Program.cs <<'CS'
+          using System;
+          using System.IO;
+          using System.Linq;
+          using System.Reflection;
+          Console.Error.WriteLine("encodings: " + System.Text.Encoding.GetEncodings().Length);
+          foreach (string path in args) {
+              Type type = Assembly.LoadFile(Path.GetFullPath(path)).GetTypes().First(t => t.Name == "Plugin");
+              object plugin = Activator.CreateInstance(type);
+              Console.WriteLine(type.GetMethod("Run").Invoke(plugin, null));
+          }
+          CS
+          dotnet build lib-host/LibHost.csproj -o lib-host/out -v quiet
+          out=$(IRUBYC_EXTRACT_BASE_DIR="$RUNNER_TEMP/lib-extract" dotnet lib-host/out/LibHost.dll \
+                "$RUNNER_TEMP/lib-alone1/Plugin1.dll" "$RUNNER_TEMP/lib-alone2/Plugin2.dll" | tr -d '\r')
+          echo "$out"
+          [ "$out" = "$(printf 'plugin1 fib=6765 yaml=a: 1 json=[1] eval=3 Helper\nplugin2 fib=6765 yaml=a: 2 json=[2] eval=3 Helper')" ]
+
       - name: Bridge the bundled standard libraries
         working-directory: ironruby
         run: |
