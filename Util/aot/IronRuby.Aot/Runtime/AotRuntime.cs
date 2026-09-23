@@ -162,6 +162,19 @@ namespace IronRuby.Aot.Runtime {
                 var target = (Func<RubyScope, object, object>)program.GetMethod(info.EntryPoints[i], BindingFlags.Public | BindingFlags.Static)
                     .CreateDelegate(typeof(Func<RubyScope, object, object>));
                 string path = info.Files[i];
+                if (trace != null) {
+                    var inner = target;
+                    target = (scope, self) => {
+                        long t0 = Stopwatch.GetTimestamp();
+                        long jit0 = System.Runtime.JitInfo.GetCompiledMethodCount();
+                        try {
+                            return inner(scope, self);
+                        } finally {
+                            Console.Error.WriteLine($"[aot] {Path.GetFileName(path)} top level ran in {Stopwatch.GetElapsedTime(t0).TotalMilliseconds:F0} ms " +
+                                $"(incl. nested requires; {System.Runtime.JitInfo.GetCompiledMethodCount() - jit0} methods JIT-compiled meanwhile)");
+                        }
+                    };
+                }
                 if (path == info.MainFile) {
                     main = new RubyScriptCode(target, _context.CreateFileUnit(path), TopScopeFactoryKind.Main);
                 } else {
