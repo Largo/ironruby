@@ -335,6 +335,9 @@ namespace IronRuby.Builtins {
             foreach (var info in Encoding.GetEncodings()) {
                 AddEncoding(seen, result, RubyEncoding.GetRubyEncoding(info.CodePage));
             }
+            // GetEncodings() leaves UTF-7 out when the host has not enabled
+            // System.Text.Encoding.EnableUnsafeUTF7Encoding; Ruby always has it.
+            AddEncoding(seen, result, UTF_7);
 
             foreach (var alias in RubyEncoding.Aliases) {
                 try {
