@@ -8276,7 +8276,7 @@ class Data
 
       klass = ::Class.new(self) do
         names.each do |name|
-          define_method(name) { instance_variable_get("@#{name}") }
+          define_method(name) { __ir_hidden_ivar__(name) }
         end
 
         class << self
@@ -8307,21 +8307,22 @@ class Data
           end
         end
       end
-      klass.instance_variable_set(:@__data_members__, names)
+      klass.__send__(:__ir_set_hidden_ivar__, :data_members, names)
       klass.class_eval(&block) if block
       klass
     end
 
     private
 
-    # The member list lives in an ivar on the class Data.define created. A
+    # The member list lives in a hidden ivar (one #instance_variables does not
+    # list) on the class Data.define created. A
     # plain `class Foo < Data` never gets one, and neither does Data itself,
     # which is why .members is defined on the generated class rather than here
     # - `Data.respond_to?(:members)` has to stay false.
     def __data_members__
       klass = self
       while klass
-        names = klass.instance_variable_get(:@__data_members__)
+        names = klass.__send__(:__ir_hidden_ivar__, :data_members)
         return names if names
         klass = klass.superclass
       end
@@ -8346,7 +8347,8 @@ class Data
       ::Kernel.raise(::ArgumentError,
         "missing keyword#{missing.size > 1 ? 's' : ''}: #{missing.map { |n| n.inspect }.join(', ')}")
     end
-    given.each { |name, value| instance_variable_set("@#{name}", value) }
+    # CRuby keeps the members out of the ivar table: #instance_variables is empty
+    given.each { |name, value| __ir_set_hidden_ivar__(name, value) }
     freeze
     unless unknown.empty?
       ::Kernel.raise(::ArgumentError,

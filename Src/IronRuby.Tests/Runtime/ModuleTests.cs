@@ -535,9 +535,9 @@ c.dreport
 ", @"
 3
 1
-#<NameError: instance variable `@c' not defined>
-#<NameError: instance variable `@a' not defined>
-#<NameError: instance variable `@w' not defined>
+#<NameError: instance variable @c not defined>
+#<NameError: instance variable @a not defined>
+#<NameError: instance variable @w not defined>
 nil
 nil
 nil

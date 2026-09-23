@@ -307,14 +307,14 @@ namespace IronRuby.Runtime.Jit {
 
         // ---- instance variables without a scope ------------------------------------------
 
-        public static object GetIVar(RubyContext/*!*/ context, object self, string/*!*/ name) {
-            var data = context.TryGetInstanceData(self);
-            return (data != null) ? data.GetInstanceVariable(name) : null;
+        // Each `@x` in a compiled body has an inline cache of its own: the same shape-checked fast
+        // path as the interpreter's and the DLR compiler's (see RubyInstanceData).
+        public static object GetIVar(RubyContext/*!*/ context, object self, InstanceVariableSite/*!*/ site) {
+            return RubyOps.ReadInstanceVariable(context, self, site);
         }
 
-        public static object SetIVar(RubyContext/*!*/ context, object self, object value, string/*!*/ name) {
-            context.SetInstanceVariable(self, name, value);
-            return value;
+        public static object SetIVar(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
+            return RubyOps.WriteInstanceVariable(context, self, value, site);
         }
 
         // ---- reflection handles the compiler emits ---------------------------------------

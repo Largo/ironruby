@@ -157,7 +157,8 @@ namespace IronRuby.Builtins {
         private bool _isTemporaryName;
 
         // Lazy interlocked init'd.
-        private RubyInstanceData _instanceData;
+        // internal: the instance variable fast path reads it directly (RubyOps.GetInstanceVariable)
+        internal RubyInstanceData _instanceData;
         
         #region Immediate/Singleton/Super Class
 

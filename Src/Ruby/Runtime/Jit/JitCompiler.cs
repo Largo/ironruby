@@ -479,7 +479,7 @@ namespace IronRuby.Runtime.Jit {
             var ivar = node as InstanceVariable;
             if (ivar != null) {
                 type = JT.Obj;
-                return Ast.Call(JitRuntime.M("GetIVar"), Ast.Constant(_context), _self, Ast.Constant(ivar.Name));
+                return Ast.Call(JitRuntime.M("GetIVar"), Ast.Constant(_context), _self, Ast.Constant(new InstanceVariableSite(ivar.Name)));
             }
 
             var self = node as SelfReference;
@@ -555,7 +555,7 @@ namespace IronRuby.Runtime.Jit {
                 var v = Emit(node.Right, out vt);
                 _pure = false;      // an ivar write is observable, so the body may not deopt
                 type = JT.Obj;
-                return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), Ast.Constant(ivarTarget.Name));
+                return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), Ast.Constant(new InstanceVariableSite(ivarTarget.Name)));
             }
 
             var target = node.Left as LocalVariable;

@@ -1276,6 +1276,25 @@ namespace IronRuby.Builtins {
             return value;
         }
 
+        /// <summary>
+        /// Where Data (ruby4.rb) keeps its members' values, and a Data class its member list: in
+        /// instance variables whose names Ruby cannot spell, so that #instance_variables and
+        /// Marshal's instance variable list do not show them - CRuby keeps them outside the ivar
+        /// table - while dup, clone and the shape-based storage treat them like any other.
+        /// </summary>
+        [RubyMethod("__ir_hidden_ivar__", RubyMethodAttributes.PrivateInstance)]
+        public static object GetHiddenInstanceVariable(RubyContext/*!*/ context, object self, [NotNull]RubySymbol/*!*/ name) {
+            object value;
+            context.TryGetInstanceVariable(self, RubyUtils.GetHiddenInstanceVariableName(name.ToString()), out value);
+            return value;
+        }
+
+        [RubyMethod("__ir_set_hidden_ivar__", RubyMethodAttributes.PrivateInstance)]
+        public static object SetHiddenInstanceVariable(RubyContext/*!*/ context, object self, [NotNull]RubySymbol/*!*/ name, object value) {
+            context.SetInstanceVariable(self, RubyUtils.GetHiddenInstanceVariableName(name.ToString()), value);
+            return value;
+        }
+
         [RubyMethod("instance_variable_defined?")]
         public static bool InstanceVariableDefined(ConversionStorage<string>/*!*/ stringCast,
             RubyContext/*!*/ context, object self, object nameArg) {
@@ -1302,7 +1321,7 @@ namespace IronRuby.Builtins {
 
             object value;
             if (!context.TryRemoveInstanceVariable(self, name, out value)) {
-                throw RubyExceptions.CreateNameError("instance variable `{0}' not defined", name);
+                throw RubyExceptions.CreateNameError("instance variable {0} not defined", name);
             }
 
             return value;

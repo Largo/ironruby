@@ -245,8 +245,11 @@ namespace IronRuby.Runtime {
         // Maps objects to InstanceData. The keys store weak references to the objects.
         // Objects are compared by reference (identity). 
         // An entry can be removed as soon as the key object becomes unreachable.
-        private readonly WeakTable<object, RubyInstanceData>/*!*/ _referenceTypeInstanceData;
-        private object/*!*/ ReferenceTypeInstanceDataLock { get { return _referenceTypeInstanceData; } }
+        // A ConditionalWeakTable: reads are lock-free, which matters because every class lookup
+        // of a CLR-backed object (String, Array, Hash...) that may have a singleton asks it.
+        private readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, RubyInstanceData>/*!*/ _referenceTypeInstanceData;
+        private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<object, RubyInstanceData>.CreateValueCallback/*!*/ _CreateInstanceData =
+            _ => new RubyInstanceData();
 
         // Maps values to InstanceData. The keys store value representatives. 
         // All objects that has the same value (value-equality) map to the same InstanceData.
@@ -576,7 +579,7 @@ namespace IronRuby.Runtime {
             _globalVariables = new Dictionary<string, GlobalVariable>();
             _moduleCache = new Dictionary<Type, RubyModule>();
             _namespaceCache = new Dictionary<NamespaceTracker, RubyModule>();
-            _referenceTypeInstanceData = new WeakTable<object, RubyInstanceData>();
+            _referenceTypeInstanceData = new System.Runtime.CompilerServices.ConditionalWeakTable<object, RubyInstanceData>();
             _valueTypeInstanceData = new Dictionary<object, RubyInstanceData>();
             _inputProvider = new RubyInputProvider(this, _options.Arguments, _options.LocaleEncoding);
             _defaultExternalEncoding = _options.DefaultEncoding ?? _options.LocaleEncoding;
@@ -2117,9 +2120,8 @@ namespace IronRuby.Runtime {
         }
 
         internal bool TryGetClrTypeInstanceData(object/*!*/ obj, out RubyInstanceData result) {
-            lock (ReferenceTypeInstanceDataLock) {
-                return _referenceTypeInstanceData.TryGetValue(obj, out result);
-            }
+            // lock-free: ConditionalWeakTable reads take no lock
+            return _referenceTypeInstanceData.TryGetValue(obj, out result);
         }
 
         /// <summary>
@@ -2178,13 +2180,10 @@ namespace IronRuby.Runtime {
                 return result;
             }
 
-            lock (ReferenceTypeInstanceDataLock) {
-                if (!_referenceTypeInstanceData.TryGetValue(obj, out result)) {
-                    _referenceTypeInstanceData.Add(obj, result = new RubyInstanceData());
-                }
+            if (_referenceTypeInstanceData.TryGetValue(obj, out result)) {
+                return result;
             }
-            
-            return result;
+            return _referenceTypeInstanceData.GetValue(obj, _CreateInstanceData);
         }
 
         #endregion
@@ -2260,7 +2259,20 @@ namespace IronRuby.Runtime {
         }
 
         public void SetInstanceVariable(object obj, string/*!*/ name, object value) {
-            (MutateInstanceVariables(obj) ?? GetInstanceData(obj)).SetInstanceVariable(name, value);
+            var rubyObject = obj as IRubyObject;
+            (MutateInstanceVariables(obj) ?? GetInstanceData(obj)).SetInstanceVariable(
+                name, value, rubyObject != null ? rubyObject.ImmediateClass : null, null
+            );
+        }
+
+        /// <summary>
+        /// The slow path of a cached `@x = v` (RubyOps.SetInstanceVariable): fills the site's cache.
+        /// </summary>
+        internal void SetInstanceVariable(object obj, object value, InstanceVariableSite/*!*/ site) {
+            var rubyObject = obj as IRubyObject;
+            (MutateInstanceVariables(obj) ?? GetInstanceData(obj)).SetInstanceVariable(
+                site.Name, value, rubyObject != null ? rubyObject.ImmediateClass : null, site
+            );
         }
 
         public bool TryRemoveInstanceVariable(object obj, string/*!*/ name, out object value) {

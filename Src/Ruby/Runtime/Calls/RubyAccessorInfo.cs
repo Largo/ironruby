@@ -93,7 +93,7 @@ namespace IronRuby.Runtime.Calls {
                 metaBuilder.Result = Methods.GetInstanceVariable.OpCall(
                     AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),
                     AstUtils.Box(args.TargetExpression),
-                    AstUtils.Constant(InstanceVariableName)
+                    AstUtils.Constant(new InstanceVariableSite(InstanceVariableName))
                 );
             }
         }
@@ -131,7 +131,7 @@ namespace IronRuby.Runtime.Calls {
                     AstUtils.Box(args.TargetExpression),
                     AstUtils.Box(actualArgs[0].Expression),
                     AstUtils.Convert(args.MetaScope.Expression, typeof(RubyScope)),
-                    AstUtils.Constant(InstanceVariableName)
+                    AstUtils.Constant(new InstanceVariableSite(InstanceVariableName))
                 );
             }
         }

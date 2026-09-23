@@ -4550,6 +4550,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, IronRuby.Builtins.RubyClass, System.Object>>, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.KernelOps.CloneWithFreeze)
             );
             
+            DefineLibraryMethod(module, "__ir_hidden_ivar__", 0x52, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubySymbol, System.Object>(IronRuby.Builtins.KernelOps.GetHiddenInstanceVariable)
+            );
+            
             DefineLibraryMethod(module, "__ir_inspect__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, IronRuby.Builtins.MutableString>(IronRuby.Builtins.KernelOps.InspectForDisplay)
@@ -4563,6 +4568,11 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__ir_lazy_grep_v__", 0x52, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object, System.Object, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, System.Object, System.Object, System.Object>(IronRuby.Builtins.KernelOps.LazyGrepV)
+            );
+            
+            DefineLibraryMethod(module, "__ir_set_hidden_ivar__", 0x52, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, IronRuby.Builtins.RubySymbol, System.Object, System.Object>(IronRuby.Builtins.KernelOps.SetHiddenInstanceVariable)
             );
             
             DefineLibraryMethod(module, "__method__", 0x52, 

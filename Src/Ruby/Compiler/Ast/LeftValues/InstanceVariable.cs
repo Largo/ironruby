@@ -22,6 +22,7 @@ using MSA = Microsoft.Scripting.Ast;
 using System.Diagnostics;
 using System.Dynamic;
 using Microsoft.Scripting;
+using IronRuby.Runtime;
 using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
@@ -34,11 +35,12 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformReadVariable(AstGenerator/*!*/ gen, bool tryRead) {
-            return Methods.GetInstanceVariable.OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, AstUtils.Constant(Name));
+            // each read and each write gets an inline cache of its own (IronRuby.Runtime.InstanceVariableSite)
+            return Methods.GetInstanceVariable.OpCall(gen.CurrentScopeVariable, gen.CurrentSelfVariable, AstUtils.Constant(new InstanceVariableSite(Name)));
         }
 
         internal override MSA.Expression/*!*/ TransformWriteVariable(AstGenerator/*!*/ gen, MSA.Expression/*!*/ rightValue) {
-            return Methods.SetInstanceVariable.OpCall(gen.CurrentSelfVariable, AstUtils.Box(rightValue), gen.CurrentScopeVariable, AstUtils.Constant(Name));
+            return Methods.SetInstanceVariable.OpCall(gen.CurrentSelfVariable, AstUtils.Box(rightValue), gen.CurrentScopeVariable, AstUtils.Constant(new InstanceVariableSite(Name)));
         }
 
         internal override MSA.Expression TransformDefinedCondition(AstGenerator/*!*/ gen) {

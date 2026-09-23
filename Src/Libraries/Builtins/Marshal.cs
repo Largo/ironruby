@@ -553,9 +553,8 @@ namespace IronRuby.Builtins {
 
             /// <summary>
             /// A Data instance, and the members its class was defined with. Data keeps its values
-            /// in instance variables named after the members, but it is dumped the way a Struct is
-            /// - an 'S' record of member-name/value pairs - so the names go out without the '@'
-            /// and the instance variables are not dumped again alongside them.
+            /// in hidden instance variables (RubyUtils.GetHiddenInstanceVariableName), and it is
+            /// dumped the way a Struct is - an 'S' record of member-name/value pairs.
             /// </summary>
             private bool TryGetDataMembers(object obj, out RubyArray members) {
                 members = null;
@@ -573,7 +572,7 @@ namespace IronRuby.Builtins {
 
                 for (RubyClass klass = theClass; klass != null; klass = klass.SuperClass) {
                     object names;
-                    if (_context.TryGetInstanceVariable(klass, "@__data_members__", out names)) {
+                    if (_context.TryGetInstanceVariable(klass, RubyUtils.GetHiddenInstanceVariableName("data_members"), out names)) {
                         members = names as RubyArray;
                         return members != null;
                     }
@@ -592,7 +591,7 @@ namespace IronRuby.Builtins {
                 foreach (object member in members) {
                     string name = member.ToString();
                     object value;
-                    if (!_context.TryGetInstanceVariable(obj, "@" + name, out value)) {
+                    if (!_context.TryGetInstanceVariable(obj, RubyUtils.GetHiddenInstanceVariableName(name), out value)) {
                         value = null;
                     }
                     WriteSymbol(name, identifierEncoding);
@@ -1351,14 +1350,14 @@ namespace IronRuby.Builtins {
             }
 
             /// <summary>
-            /// The members of an 'S' record whose class is a Data go back into the instance
+            /// The members of an 'S' record whose class is a Data go back into the hidden instance
             /// variables named after them, and the result is frozen - every Data is.
             /// </summary>
             private object/*!*/ ReadData(object/*!*/ instance) {
                 int count = ReadInt32();
                 for (int i = 0; i < count; i++) {
                     string name = ReadIdentifier();
-                    Context.SetInstanceVariable(instance, "@" + name, ReadAnObject(false));
+                    Context.SetInstanceVariable(instance, RubyUtils.GetHiddenInstanceVariableName(name), ReadAnObject(false));
                 }
                 Context.FreezeObject(instance);
                 return instance;

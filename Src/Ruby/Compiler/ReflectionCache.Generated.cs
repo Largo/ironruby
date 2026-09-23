@@ -274,7 +274,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _GetGlobalVariable;
         public static MethodInfo/*!*/ GetInstanceData { get { return _GetInstanceData ?? (_GetInstanceData = GetMethod(typeof(RubyOps), "GetInstanceData")); } }
         private static MethodInfo _GetInstanceData;
-        public static MethodInfo/*!*/ GetInstanceVariable { get { return _GetInstanceVariable ?? (_GetInstanceVariable = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.String, System.Object>(RubyOps.GetInstanceVariable)); } }
+        public static MethodInfo/*!*/ GetInstanceVariable { get { return _GetInstanceVariable ?? (_GetInstanceVariable = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Runtime.InstanceVariableSite, System.Object>(RubyOps.GetInstanceVariable)); } }
         private static MethodInfo _GetInstanceVariable;
         public static MethodInfo/*!*/ GetLambdaUnwinderReturnValue { get { return _GetLambdaUnwinderReturnValue ?? (_GetLambdaUnwinderReturnValue = CallInstruction.CacheFunc<System.Exception, System.Object>(RubyOps.GetLambdaUnwinderReturnValue)); } }
         private static MethodInfo _GetLambdaUnwinderReturnValue;
@@ -534,7 +534,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SetGlobalConstant;
         public static MethodInfo/*!*/ SetGlobalVariable { get { return _SetGlobalVariable ?? (_SetGlobalVariable = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetGlobalVariable)); } }
         private static MethodInfo _SetGlobalVariable;
-        public static MethodInfo/*!*/ SetInstanceVariable { get { return _SetInstanceVariable ?? (_SetInstanceVariable = CallInstruction.CacheFunc<System.Object, System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetInstanceVariable)); } }
+        public static MethodInfo/*!*/ SetInstanceVariable { get { return _SetInstanceVariable ?? (_SetInstanceVariable = CallInstruction.CacheFunc<System.Object, System.Object, IronRuby.Runtime.RubyScope, IronRuby.Runtime.InstanceVariableSite, System.Object>(RubyOps.SetInstanceVariable)); } }
         private static MethodInfo _SetInstanceVariable;
         public static MethodInfo/*!*/ SetLocalVariable { get { return _SetLocalVariable ?? (_SetLocalVariable = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.RubyScope, System.String, System.Object>(RubyOps.SetLocalVariable)); } }
         private static MethodInfo _SetLocalVariable;
