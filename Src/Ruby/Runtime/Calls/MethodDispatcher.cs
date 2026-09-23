@@ -71,6 +71,12 @@ namespace IronRuby.Runtime.Calls {
             // TODO: cache?
             // remove "self":
             var types = funcArgs.GetSlice(firstParameterIndex, parameterCount);
+
+            // Without dynamic code (NativeAOT) only the instantiations the ahead-of-time compiler
+            // saw exist, and over a value type that is rarely the case: build a rule instead.
+            if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported && Array.Exists(types, t => t.IsValueType)) {
+                return null;
+            }
             return Activator.CreateInstance(genericFactories[parameterCount - 1].MakeGenericType(types));
         }
     }

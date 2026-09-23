@@ -314,8 +314,25 @@ namespace IronRuby.Runtime {
             }
         }
 
+        // Files compiled ahead of time into an assembly (Util/aot) that the host registered.
+        private bool _hasPrecompiledFiles;
+
+        /// <summary>
+        /// Makes require/load of <paramref name="fullPath"/> run <paramref name="code"/> instead of
+        /// compiling the file's source. The file is still resolved on the load path as usual.
+        /// </summary>
+        internal void RegisterPrecompiledFile(string/*!*/ fullPath, ScriptCode/*!*/ code) {
+            lock (_compiledFileMutex) {
+                if (_compiledFiles == null) {
+                    _compiledFiles = new Dictionary<string, CompiledFile>();
+                }
+                _compiledFiles[Platform.GetFullPath(fullPath)] = new CompiledFile(code);
+                _hasPrecompiledFiles = true;
+            }
+        }
+
         private bool TryGetCompiledFile(string/*!*/ fullPath, out CompiledFile compiledFile) {
-            if (!_context.RubyOptions.LoadFromDisk) {
+            if (!_context.RubyOptions.LoadFromDisk && !_hasPrecompiledFiles) {
                 compiledFile = default(CompiledFile);
                 return false;
             }

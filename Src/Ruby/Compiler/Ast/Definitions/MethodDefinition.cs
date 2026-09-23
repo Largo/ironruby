@@ -156,7 +156,17 @@ namespace IronRuby.Compiler.Ast {
 
         internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule,
             StrongBox<RefinementActivation> definitionRefinements) {
-            string frameLabel = QualifyFrameLabel(_name, declaringModule);
+            return TransformBody(gen, Ast.Constant(declaringScope, typeof(RubyScope)), Ast.Constant(declaringModule, typeof(RubyModule)),
+                QualifyFrameLabel(_name, declaringModule), definitionRefinements);
+        }
+
+        /// <summary>
+        /// The body with the declaring scope and module given as expressions rather than baked-in
+        /// objects. Ahead-of-time compilation (Util/aot) uses it: there, both are only known when
+        /// the `def' runs, so they are parameters of a factory that builds the body's delegate.
+        /// </summary>
+        internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, MSA.Expression/*!*/ declaringScope, MSA.Expression/*!*/ declaringModule,
+            string/*!*/ frameLabel, StrongBox<RefinementActivation> definitionRefinements) {
             string encodedName = RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode);
 
             AstParameters parameters;
@@ -269,8 +279,8 @@ namespace IronRuby.Compiler.Ast {
                     scope.MakeLocalsStorage(),
                     scope.GetVariableNamesExpression(),
                     Ast.Constant(visiblePrameterCountAndSignatureFlags),
-                    Ast.Constant(declaringScope, typeof(RubyScope)),
-                    Ast.Constant(declaringModule, typeof(RubyModule)), 
+                    declaringScope,
+                    declaringModule,
                     Ast.Constant(_name),
                     selfParameter, blockParameter,
                     EnterInterpretedFrameExpression.Instance

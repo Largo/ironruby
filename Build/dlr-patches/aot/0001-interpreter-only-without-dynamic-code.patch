@@ -1,0 +1,131 @@
+--- a/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/LightLambda.cs
+@@ -44,7 +44,13 @@
+             _delegateCreator = delegateCreator;
+             _closure = closure;
+             _interpreter = delegateCreator.Interpreter;
++#if NET
++            // Without dynamic code (NativeAOT) compiling a lambda only swaps this interpreter for
++            // System.Linq.Expressions' own, slower one: keep interpreting.
++            _compilationThreshold = RuntimeFeature.IsDynamicCodeSupported ? compilationThreshold : int.MaxValue;
++#else
+             _compilationThreshold = compilationThreshold;
++#endif
+         }
+ 
+         private static Func<LightLambda, Delegate> GetRunDelegateCtor(Type delegateType) {
+@@ -142,6 +148,27 @@
+         }
+ 
+         internal Delegate MakeDelegate(Type delegateType) {
++#if NET
++            // Without dynamic code (NativeAOT) the typed Run<T0..Tn> thunks exist only for the
++            // generic instantiations the ahead-of-time compiler happened to see; any other one
++            // throws when it is made. Fall back to the object[] delegate, which System.Linq.Expressions
++            // can build for any delegate type there (it interprets the small wrapper lambda).
++            if (!RuntimeFeature.IsDynamicCodeSupported) {
++                if (!_noNativeCode.ContainsKey(delegateType)) {
++                    try {
++                        Func<LightLambda, Delegate> ctor = GetRunDelegateCtor(delegateType);
++                        if (ctor is not null) {
++                            return ctor(this);
++                        }
++                    } catch (NotSupportedException) {
++                        if (_noNativeCode.TryAdd(delegateType, true) && Environment.GetEnvironmentVariable("DLR_TRACE_AOT_DELEGATES") == "1") {
++                            Console.Error.WriteLine("[dlr] no native code for a typed interpreter thunk; object[] fallback for " + delegateType);
++                        }
++                    }
++                }
++                return _objectArrayCtors.GetOrAdd(delegateType, MakeObjectArrayDelegateCtor)(this);
++            }
++#endif
+             Func<LightLambda, Delegate> fastCtor = GetRunDelegateCtor(delegateType);
+             if (fastCtor is not null) {
+                 return fastCtor(this);
+@@ -150,6 +177,31 @@
+             return CreateCustomDelegate(delegateType);
+         }
+ 
++#if NET
++        private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, bool> _noNativeCode = new();
++        private static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Func<LightLambda, Delegate>> _objectArrayCtors = new();
++
++        /// <summary>
++        /// ll => (a, b, ...) => ll.Run(new object[] { a, b, ... }), compiled once per delegate type.
++        /// Under NativeAOT System.Linq.Expressions interprets it, and makes the inner delegate of
++        /// any type through its object[] delegate thunks - no code is generated.
++        /// </summary>
++        private static Func<LightLambda, Delegate> MakeObjectArrayDelegateCtor(Type delegateType) {
++            var method = delegateType.GetMethod("Invoke");
++            var paramInfos = method.GetParameters();
++            var parameters = new ParameterExpression[paramInfos.Length];
++            var parametersAsObject = new Expression[paramInfos.Length];
++            for (int i = 0; i < paramInfos.Length; i++) {
++                parameters[i] = Expression.Parameter(paramInfos[i].ParameterType, paramInfos[i].Name);
++                parametersAsObject[i] = Expression.Convert(parameters[i], typeof(object));
++            }
++            var self = Expression.Parameter(typeof(LightLambda), "lambda");
++            Expression call = Expression.Call(self, typeof(LightLambda).GetMethod(nameof(LightLambda.Run)), Expression.NewArrayInit(typeof(object), parametersAsObject));
++            Expression body = method.ReturnType == typeof(void) ? Expression.Block(typeof(void), call) : Expression.Convert(call, method.ReturnType);
++            return Expression.Lambda<Func<LightLambda, Delegate>>(Expression.Lambda(delegateType, body, parameters), self).Compile();
++        }
++#endif
++
+         private bool TryGetCompiled() {
+             // Use the compiled delegate if available.
+             if (_delegateCreator.HasCompiled) {
+--- a/src/core/Microsoft.Dynamic/Interpreter/Instructions/ControlFlowInstructions.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Instructions/ControlFlowInstructions.cs
+@@ -433,7 +433,13 @@
+             _loop = loop;
+             _variables = locals.CopyLocals();
+             _closureVariables = locals.ClosureVariables;
++#if NET
++            // Without dynamic code (NativeAOT) a compiled loop would only be run by
++            // System.Linq.Expressions' own interpreter, which is slower than this one.
++            _compilationThreshold = RuntimeFeature.IsDynamicCodeSupported ? compilationThreshold : int.MaxValue;
++#else
+             _compilationThreshold = compilationThreshold;
++#endif
+             _instructionIndex = instructionIndex;
+         }
+ 
+--- a/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Instructions/CallInstruction.cs
+@@ -26,6 +26,20 @@
+         private static readonly Dictionary<MethodInfo, CallInstruction> _cache = new();
+ 
+         /// <exception cref="SecurityException">Instruction can't be created due to insufficient privileges.</exception>
++#if NET
++        private static bool HasValueTypeInSignature(MethodInfo info, ParameterInfo[] parameters) {
++            if (info.ReturnType.IsValueType && info.ReturnType != typeof(void)) {
++                return true;
++            }
++            foreach (ParameterInfo pi in parameters) {
++                if (pi.ParameterType.IsValueType) {
++                    return true;
++                }
++            }
++            return false;
++        }
++#endif
++
+         public static CallInstruction Create(MethodInfo info) {
+             return Create(info, info.GetParameters());
+         }
+@@ -59,6 +73,15 @@
+                 }
+             }
+ 
++#if NET
++            // Without dynamic code (NativeAOT) the typed call instructions exist only for the
++            // generic instantiations the ahead-of-time compiler saw; over a value type that is
++            // rarely the case, and finding out costs a caught exception. Use reflection instead.
++            if (!System.Runtime.CompilerServices.RuntimeFeature.IsDynamicCodeSupported && HasValueTypeInSignature(info, parameters)) {
++                return new MethodInfoCallInstruction(info, argumentCount);
++            }
++#endif
++
+             // see if we've created one w/ a delegate
+             CallInstruction res;
+             if (ShouldCache(info)) {

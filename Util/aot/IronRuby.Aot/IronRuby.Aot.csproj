@@ -1,0 +1,23 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- Prototype: ahead-of-time compilation of Ruby to a saved .NET assembly (see ../README.md).
+       Not part of the main build or solution; it needs .NET 9+ (PersistedAssemblyBuilder), so
+       it targets net10.0 only.  Build:
+         dotnet build Util/aot/IronRuby.Aot -c Release -p:DlrSourceDir=/root/workspace/dlr/src/core -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IronRubyTargetFrameworks>net10.0</IronRubyTargetFrameworks>
+    <OutputType>Exe</OutputType>
+    <AssemblyName>IronRuby.Aot</AssemblyName>
+    <RootNamespace>IronRuby.Aot</RootNamespace>
+    <Nullable>disable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <NoWarn>CS0105;$(NoWarn);CS1591;CS0618;CS8632;CS0162;CS0168;CS0219;SYSLIB0050;SYSLIB0051</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../../Src/Ruby/Ruby.csproj" />
+    <ProjectReference Include="../../../Src/Libraries/IronRuby.Libraries.csproj" />
+    <ProjectReference Include="../../../Src/Prism/IronRuby.Prism.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Scripting/Microsoft.Scripting.csproj" />
+    <ProjectReference Include="$(DlrSourceDir)/Microsoft.Dynamic/Microsoft.Dynamic.csproj" />
+  </ItemGroup>
+</Project>
