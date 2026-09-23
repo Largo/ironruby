@@ -1,0 +1,249 @@
+--- a/src/core/Microsoft.Dynamic/Ast/TryStatementBuilder.cs
++++ b/src/core/Microsoft.Dynamic/Ast/TryStatementBuilder.cs
+@@ -163,32 +163,97 @@
+             // expect. If we get CLR support we'll switch over to real filter
+             // and fault blocks.
+             //
++            // With Utils.RethrowOutsideCatch the exception is rethrown after the
++            // try statement instead, once the catch - and the finally - are done:
++            //   filter -> catch (ExceptionType e) { if (!filter) $pending = e; else ... }
++            //   fault  -> catch (Exception e) { ...; $pending = e }
++            //   if ($pending != null) throw $pending;
++            // A rethrow inside the catch is a dispatch nested in the one being handled,
++            // and a frame that does this for every exception passing through it - every
++            // IronRuby method does - made an exception through n frames O(n^2) on .NET 8,
++            // and overflowed the stack after a thousand or two on .NET 9+. See
++            // Utils.RethrowOutsideCatch.
++            //
++
++            bool outside = Utils.RethrowOutsideCatch;
++            ParameterExpression pending = null;
+ 
+             var handlers = new List<CatchBlock>(_catchBlocks);
+             for (int i = 0, n = handlers.Count; i < n ; i++) {
+                 CatchBlock handler = handlers[i];
+                 if (handler.Filter is not null) {
+-                    handlers[i] = Expression.MakeCatchBlock(
+-                        handler.Test,
+-                        handler.Variable,
+-                        Expression.Condition(
+-                            handler.Filter,
+-                            handler.Body,
+-                            Expression.Rethrow(handler.Body.Type)
+-                        ),
+-                        null
+-                    );
++                    if (outside) {
++                        pending ??= Expression.Variable(typeof(Exception), "$pending");
++                        ParameterExpression variable = handler.Variable ?? Expression.Variable(handler.Test, "$e");
++                        handlers[i] = Expression.MakeCatchBlock(
++                            handler.Test,
++                            variable,
++                            Expression.Condition(
++                                handler.Filter,
++                                handler.Body,
++                                Expression.Block(
++                                    Expression.Assign(pending, variable),
++                                    Utils.Default(handler.Body.Type)
++                                )
++                            ),
++                            null
++                        );
++                    } else {
++                        handlers[i] = Expression.MakeCatchBlock(
++                            handler.Test,
++                            handler.Variable,
++                            Expression.Condition(
++                                handler.Filter,
++                                handler.Body,
++                                Expression.Rethrow(handler.Body.Type)
++                            ),
++                            null
++                        );
++                    }
+                 }
+             }
+ 
+             if (_fault is not null) {
+                 ContractUtils.Requires(handlers.Count == 0, "fault cannot be used with catch or finally clauses");
+-                handlers.Add(Expression.Catch(typeof(Exception), Expression.Block(_fault, Expression.Rethrow(_try.Type))));
++                if (outside) {
++                    pending ??= Expression.Variable(typeof(Exception), "$pending");
++                    ParameterExpression all = Expression.Variable(typeof(Exception), "$e");
++                    handlers.Add(Expression.Catch(all, Expression.Block(_fault, Expression.Assign(pending, all), Utils.Default(_try.Type))));
++                } else {
++                    handlers.Add(Expression.Catch(typeof(Exception), Expression.Block(_fault, Expression.Rethrow(_try.Type))));
++                }
+             }
+ 
+-            var result = Expression.MakeTry(null, _try, _finally, null, handlers);
++            Expression result = Expression.MakeTry(null, _try, _finally, null, handlers);
+             if (_enableJumpsFromFinally) {
+-                return Utils.FinallyFlowControl(result);
++                result = Utils.FinallyFlowControl(result);
++            }
++
++            if (pending is not null) {
++                Expression throwPending = Expression.IfThen(
++                    Expression.NotEqual(pending, Expression.Constant(null, typeof(Exception))),
++                    Expression.Throw(pending)
++                );
++
++                // $pending is cleared on the way in: a block variable keeps its value when a loop
++                // enters the block again.
++                if (result.Type == typeof(void)) {
++                    result = Expression.Block(
++                        new[] { pending },
++                        Expression.Assign(pending, Expression.Constant(null, typeof(Exception))),
++                        result,
++                        throwPending
++                    );
++                } else {
++                    ParameterExpression value = Expression.Variable(result.Type, "$value");
++                    result = Expression.Block(
++                        new[] { pending, value },
++                        Expression.Assign(pending, Expression.Constant(null, typeof(Exception))),
++                        Expression.Assign(value, result),
++                        throwPending,
++                        value
++                    );
++                }
+             }
+             return result;
+         }
+--- a/src/core/Microsoft.Dynamic/Ast/Block.cs
++++ b/src/core/Microsoft.Dynamic/Ast/Block.cs
+@@ -12,6 +12,27 @@
+ 
+ namespace Microsoft.Scripting.Ast {
+     public static partial class Utils {
++        /// <summary>
++        /// When set, an exception a frame intercepts only to let it go on - an emulated filter
++        /// that declines it, a fault block, a finally block in an interpreted frame - is rethrown
++        /// once the CLR catch that intercepted it has been left, rather than with a `rethrow'
++        /// inside it (see TryStatementBuilder.ToExpression and Interpreter.Run).
++        ///
++        /// A rethrow inside a catch is a dispatch nested in the one being handled. When every
++        /// frame does it - every IronRuby method frame catches whatever passes through it, for
++        /// its filter - an exception through n frames costs O(n^2) on .NET 8 (minutes for a
++        /// few thousand frames) and, on .NET 9 and later, keeps the exception-dispatch
++        /// machinery of every one of them on the stack, which overflows it - killing the
++        /// process - after a thousand or two.
++        ///
++        /// The price is the exception's CLR stack trace, which restarts at every such frame
++        /// (ExceptionDispatchInfo would keep it, by copying it at every frame, which is
++        /// quadratic again). Interpreted frames are still recorded by the first frame that
++        /// catches the exception. For a language that builds its own backtrace when an exception
++        /// is first caught; set it before any code is compiled.
++        /// </summary>
++        public static bool RethrowOutsideCatch { get; set; }
++
+ 
+         // Helper to add a variable to a block
+         internal static Expression AddScopedVariable(Expression body, ParameterExpression variable, Expression variableInit) {
+--- a/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/Interpreter.cs
+@@ -84,6 +84,7 @@
+         [SpecialName, MethodImpl(MethodImplOptions.NoInlining)]
+         public void Run(InterpretedFrame frame) {
+             while (true) {
++                Exception rethrow = null;
+                 try {
+                     var instructions = Instructions.Instructions;
+                     int index = frame.InstructionIndex;
+@@ -92,17 +93,50 @@
+                         frame.InstructionIndex = index;
+                     }
+                     return;
+-                } catch (Exception exception) {
+-                    switch (HandleException(frame, exception)) {
+-                        case ExceptionHandlingResult.Rethrow: throw;
++                } catch (Exception exception) when (!Microsoft.Scripting.Ast.Utils.RethrowOutsideCatch || Intercepts(frame, exception)) {
++                    switch (HandleException(frame, exception, out rethrow)) {
++                        case ExceptionHandlingResult.Rethrow:
++                            if (!Microsoft.Scripting.Ast.Utils.RethrowOutsideCatch) {
++                                throw;
++                            }
++                            break;
+                         case ExceptionHandlingResult.Continue: continue;
+                         case ExceptionHandlingResult.Return: return;
+                     }
+                 }
++
++                // Rethrown only once the catch has been left. Every interpreted frame with a finally
++                // or a fault block catches whatever passes through it and rethrows it, and a
++                // `throw;' from inside the catch nests the new dispatch in the one being handled:
++                // the CLR keeps both. On .NET 8 an exception through n interpreted frames was
++                // O(n^2) that way - minutes for a few thousand frames - and on .NET 9+ every
++                // nesting keeps the exception-dispatch machinery on the stack, so a few hundred
++                // interpreted frames overflowed it and killed the process. Out here the previous
++                // dispatch is over and this is an ordinary throw from this frame.
++                //
++                // Opt-in (Utils.RethrowOutsideCatch): a plain throw restarts the CLR stack trace.
++                throw rethrow;
+             }
+         }
+ 
+-        private ExceptionHandlingResult HandleException(InterpretedFrame frame, Exception exception) {
++        /// <summary>
++        /// With Utils.RethrowOutsideCatch, a frame that has neither a handler for the exception
++        /// nor a finally block to run lets it pass rather than catching and rethrowing it: that
++        /// would restart the exception's CLR stack trace before the language has seen it.
++        /// </summary>
++        private bool Intercepts(InterpretedFrame frame, Exception exception) {
++            // The interpreted frames are recorded by the first frame the exception reaches,
++            // whether that one catches it or not: a frame recorded later no longer has this one
++            // in its chain.
++            frame.SaveTraceToException(exception);
++            return frame.HasContinuations || GetBestHandler(frame.InstructionIndex, exception.GetType()) is not null;
++        }
++
++        /// <param name="rethrow">When the result is Rethrow: the exception to rethrow - this one, or
++        /// one a handler raised instead.</param>
++        private ExceptionHandlingResult HandleException(InterpretedFrame frame, Exception exception, out Exception rethrow) {
++            rethrow = null;
++
+             frame.SaveTraceToException(exception);
+             frame.InstructionIndex += GotoHandler(frame, exception, out ExceptionHandler handler);
+ 
+@@ -112,6 +146,7 @@
+ 
+                 // a finally block can throw an exception caught by a handler, which cancels the previous exception:
+                 if (frame.InstructionIndex == RethrowOnReturn) {
++                    rethrow = exception;
+                     return ExceptionHandlingResult.Rethrow;
+                 }
+                 return ExceptionHandlingResult.Return;
+@@ -142,13 +177,18 @@
+                     }
+ 
+                     if (frame.InstructionIndex == RethrowOnReturn) {
++                        rethrow = exception;
+                         return ExceptionHandlingResult.Rethrow;
+                     }
+ 
+                     return ExceptionHandlingResult.Return;
+                 } catch (Exception nestedException) {
+-                    switch (HandleException(frame, nestedException)) {
+-                        case ExceptionHandlingResult.Rethrow: throw;
++                    switch (HandleException(frame, nestedException, out rethrow)) {
++                        case ExceptionHandlingResult.Rethrow:
++                            if (!Microsoft.Scripting.Ast.Utils.RethrowOutsideCatch) {
++                                throw;
++                            }
++                            return ExceptionHandlingResult.Rethrow;
+                         case ExceptionHandlingResult.Continue: continue;
+                         case ExceptionHandlingResult.Return: return ExceptionHandlingResult.Return;
+                         default: throw Assert.Unreachable;
+--- a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+@@ -183,6 +183,9 @@
+ 
+         #region Continuations
+ 
++        /// <summary>Whether a finally block of this frame is pending (its try has been entered).</summary>
++        internal bool HasContinuations => _continuationIndex > 0;
++
+         public void RemoveContinuation() {
+             _continuationIndex--;
+         }

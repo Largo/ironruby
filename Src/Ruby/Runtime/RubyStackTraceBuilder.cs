@@ -45,6 +45,8 @@ namespace IronRuby.Runtime {
         // TracePoint's c_call location needs the frame that really made the call, which inside a
         // core method written in Ruby is that method's own, not its caller's.
         private bool _keepInternalFrames;
+        // The most frames the trace gets; see StackGuard.BacktraceLimit.
+        private int _limit = Int32.MaxValue;
 
         private RubyStackTraceBuilder(RubyContext/*!*/ context) {
             _context = context;
@@ -57,6 +59,9 @@ namespace IronRuby.Runtime {
         
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) 
             : this(context) {
+            if (exception is SystemStackError) {
+                _limit = StackGuard.BacktraceLimit;
+            }
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
             StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
             _interpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
@@ -239,6 +244,10 @@ namespace IronRuby.Runtime {
         private void AddBacktrace(IEnumerable<StackFrame> stackTrace, int skipFrames, bool skipInterpreterRunMethod) {
             if (stackTrace != null) {
                 foreach (var frame in InterpretedFrame.GroupStackFrames(stackTrace)) {
+                    if (_trace.Count >= _limit) {
+                        return;
+                    }
+
                     string methodName, file;
                     int line;
 

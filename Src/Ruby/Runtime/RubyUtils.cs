@@ -1129,6 +1129,9 @@ namespace IronRuby.Runtime {
             }
 
             public IDisposable TrackObject(object obj) {
+                // Every CLR builtin that recurses into its elements (inspect, ==, eql?, hash, <=>)
+                // comes through here: a deeply nested structure raises SystemStackError, as in MRI.
+                StackGuard.Check();
                 obj = CustomStringDictionary.NullToObj(obj);
                 Dictionary<object, bool> tracker = TryPushInfinite(obj);
                 return (tracker == null) ? null : new RecursionHandle(tracker, obj);

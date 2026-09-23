@@ -173,6 +173,10 @@ namespace IronRuby.Runtime {
             RubyScope/*!*/ parentScope, RubyModule/*!*/ declaringModule, string/*!*/ definitionName, 
             object selfObject, Proc blockParameter, InterpretedFrame interpretedFrame) {
 
+            // Method entry checks the stack: deep recursion raises SystemStackError rather than
+            // overflowing the CLR stack, which kills the process.
+            StackGuard.Check();
+
             var scope = new RubyMethodScope(
                 locals, variableNames ?? ArrayUtils.EmptyStrings, visibleParameterCount,
                 parentScope, declaringModule, definitionName, selfObject, blockParameter,
@@ -223,6 +227,9 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static RubyBlockScope/*!*/ CreateBlockScope(MutableTuple locals, string[] variableNames, 
             BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
+
+            // Block entry too: recursion through a block, a lambda or define_method (see StackGuard).
+            StackGuard.Check();
 
             var scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
             if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {

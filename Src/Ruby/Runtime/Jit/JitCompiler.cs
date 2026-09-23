@@ -75,6 +75,10 @@ namespace IronRuby.Runtime.Jit {
         private readonly List<List<MSA.ParameterExpression>>/*!*/ _declared = new List<List<MSA.ParameterExpression>>();
 
         private readonly MSA.ParameterExpression/*!*/ _self;
+
+        // How deep in its own recursion the typed body is: 0 when entered from the stub, one more
+        // on every direct self-call. See JitRuntime.EnterSelfCall.
+        private readonly MSA.ParameterExpression/*!*/ _depth = Ast.Parameter(typeof(int), "#depth");
         private readonly JT[]/*!*/ _paramTypes;
         private readonly string/*!*/[]/*!*/ _paramNames;
 
@@ -297,7 +301,7 @@ namespace IronRuby.Runtime.Jit {
         /// Compiles a typed body for the given parameter types. Returns null when the method
         /// cannot be specialized.
         /// </summary>
-        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes) {
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, string frameName) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
@@ -349,17 +353,27 @@ namespace IronRuby.Runtime.Jit {
 
                 var parameters = new List<MSA.ParameterExpression>(paramTypes.Length + 1);
                 parameters.Add(c._self);
+                parameters.Add(c._depth);
                 var functionScope = new List<MSA.ParameterExpression>(c._declared[0]);
                 for (int i = 0; i < c._paramNames.Length; i++) {
                     var p = c._vars[0][c._paramNames[i]];
                     parameters.Add(p);
                     functionScope.Remove(p);
                 }
+                // A body that calls itself bypasses the generic method entry and its stack check
+                // (RubyOps.CreateMethodScope): it checks here, or a hot recursive method recursing
+                // too deep would crash the process instead of raising SystemStackError. A body
+                // without a self-call calls nothing that can recurse, and pays nothing.
+                if (c._selfCall) {
+                    body = Ast.Block(Ast.Call(JitRuntime.M("EnterSelfCall"), c._depth), body);
+                }
                 if (functionScope.Count > 0) {
                     body = Ast.Block(functionScope, body);
                 }
                 return new JitCode {
-                    Lambda = Ast.Lambda(c._selfDelegateType, body, "jit$" + ast.Name, parameters),
+                    // Named as the generic body is, so that a backtrace through the typed frames -
+                    // a SystemStackError out of a deep recursion - shows the method, not jit$name.
+                    Lambda = Ast.Lambda(c._selfDelegateType, body, frameName ?? ("jit$" + ast.Name), parameters),
                     SelfCell = c._selfCell,
                     ReturnType = actual,
                     ParameterTypes = paramTypes,
@@ -370,17 +384,18 @@ namespace IronRuby.Runtime.Jit {
             return null;
         }
 
-        /// <summary>Func&lt;object self, T1..Tn, TRet&gt;.</summary>
+        /// <summary>Func&lt;object self, int depth, T1..Tn, TRet&gt;.</summary>
         private static Type DelegateType(JT[]/*!*/ ps, JT ret) {
-            var types = new Type[ps.Length + 2];
+            var types = new Type[ps.Length + 3];
             types[0] = typeof(object);
-            for (int i = 0; i < ps.Length; i++) { types[i + 1] = ClrType(ps[i]); }
-            types[ps.Length + 1] = ClrType(ret);
+            types[1] = typeof(int);
+            for (int i = 0; i < ps.Length; i++) { types[i + 2] = ClrType(ps[i]); }
+            types[ps.Length + 2] = ClrType(ret);
             switch (ps.Length) {
-                case 0: return typeof(Func<,>).MakeGenericType(types);
-                case 1: return typeof(Func<,,>).MakeGenericType(types);
-                case 2: return typeof(Func<,,,>).MakeGenericType(types);
-                case 3: return typeof(Func<,,,,>).MakeGenericType(types);
+                case 0: return typeof(Func<,,>).MakeGenericType(types);
+                case 1: return typeof(Func<,,,>).MakeGenericType(types);
+                case 2: return typeof(Func<,,,,>).MakeGenericType(types);
+                case 3: return typeof(Func<,,,,,>).MakeGenericType(types);
                 default: return null;
             }
         }
@@ -821,12 +836,13 @@ namespace IronRuby.Runtime.Jit {
             // Self-recursion: `fib(n - 1)' inside `def fib'. Sound because the entry stub pins
             // the receiver class and the global method version, so no override can slip in.
             if (_ast != null && node.Target == null && !node.IsVariableCall && node.MethodName == _ast.Name && argc == _paramNames.Length) {
-                var callArgs = new MSA.Expression[argc + 1];
+                var callArgs = new MSA.Expression[argc + 2];
                 callArgs[0] = _self;
+                callArgs[1] = Ast.Add(_depth, Ast.Constant(1));
                 for (int i = 0; i < argc; i++) {
                     JT at;
                     var a = Emit(args.Expressions[i], out at);
-                    callArgs[i + 1] = Coerce(a, at, _paramTypes[i]);
+                    callArgs[i + 2] = Coerce(a, at, _paramTypes[i]);
                 }
                 type = _selfReturn;
                 _selfCall = true;

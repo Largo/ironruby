@@ -1733,6 +1733,9 @@ namespace IronRuby.Builtins {
         private static void JoinRecursive(JoinConversionStorage/*!*/ conversions, IList/*!*/ list, List<MutableString/*!*/>/*!*/ parts, 
             ref bool? isBinary, ref Dictionary<object, bool> seen) {
 
+            // [[[...]]].join recurses here, in C#
+            StackGuard.Check();
+
             foreach (object item in list) {
                 if (item == null) {
                     parts.Add(null);

@@ -50,6 +50,7 @@ namespace IronRuby.Runtime.Jit {
         protected readonly RubyModule/*!*/ _declaringModule;
         protected readonly Delegate/*!*/ _generic;
         protected readonly int _arity;
+        private string _frameName;
 
         // profiling feedback
         private int _calls;
@@ -143,7 +144,7 @@ namespace IronRuby.Runtime.Jit {
             }
 
             long start = Stopwatch.GetTimestamp();
-            var code = JitCompiler.TryCompile(_ast, _context, types);
+            var code = JitCompiler.TryCompile(_ast, _context, types, _frameName);
             if (code == null) { return false; }
 
             bool needsClassGuard = code.EmittedSelfCall;
@@ -216,14 +217,15 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            var typedArgs = new MSA.Expression[_arity + 1];
+            var typedArgs = new MSA.Expression[_arity + 2];
             typedArgs[0] = self;
+            typedArgs[1] = Ast.Constant(0);     // recursion depth: see JitRuntime.EnterSelfCall
             for (int i = 0; i < _arity; i++) {
                 switch (code.ParameterTypes[i]) {
-                    case JT.Int: typedArgs[i + 1] = Ast.Unbox(args[i], typeof(int)); break;
-                    case JT.Dbl: typedArgs[i + 1] = Ast.Unbox(args[i], typeof(double)); break;
-                    case JT.Lng: typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), args[i]); break;
-                    default: typedArgs[i + 1] = args[i]; break;
+                    case JT.Int: typedArgs[i + 2] = Ast.Unbox(args[i], typeof(int)); break;
+                    case JT.Dbl: typedArgs[i + 2] = Ast.Unbox(args[i], typeof(double)); break;
+                    case JT.Lng: typedArgs[i + 2] = Ast.Call(JitRuntime.M("ToLong"), args[i]); break;
+                    default: typedArgs[i + 2] = args[i]; break;
                 }
             }
 
@@ -237,8 +239,19 @@ namespace IronRuby.Runtime.Jit {
             }
 
             if (code.CanDeopt) {
-                fast = Ast.TryCatch(fast,
-                    Ast.Catch(typeof(JitDeoptException), GenericCall(self, blk, args)));
+                // The generic body runs after the catch, not inside it: a catch handler runs on
+                // top of the frames the exception is leaving, so a recursive method that
+                // deopts at the bottom of its recursion - and re-runs generically, recursing
+                // into the typed body again, which deopts again - nested one handler per level
+                // and overflowed the stack a few hundred levels down.
+                var result = Ast.Variable(typeof(object), "#result");
+                var deopt = Ast.Variable(typeof(bool), "#deopt");
+                fast = Ast.Block(new[] { result, deopt },
+                    Ast.Assign(deopt, Ast.Constant(false)),
+                    Ast.TryCatch(
+                        Ast.Assign(result, fast),
+                        Ast.Catch(typeof(JitDeoptException), Ast.Block(Ast.Assign(deopt, Ast.Constant(true)), Ast.Default(typeof(object))))),
+                    Ast.Condition(deopt, GenericCall(self, blk, args), result));
             }
 
             var body = Ast.Condition(test, fast, GenericCall(self, blk, args), typeof(object));
@@ -265,7 +278,11 @@ namespace IronRuby.Runtime.Jit {
         /// returns the trampoline that replaces the generic delegate. Returns the generic
         /// delegate unchanged when it is not.
         /// </summary>
-        internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule) {
+        /// <param name="frameName">The generic body's lambda name, which encodes the method's name,
+        /// line and file for backtraces (RubyStackTraceBuilder.EncodeMethodName); the typed body is
+        /// given it too, so that its frames read like the generic body's.</param>
+        internal static Delegate/*!*/ Wrap(Delegate/*!*/ generic, MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule,
+            string frameName) {
             if (JitRuntime.Disabled) { return generic; }
             JitRuntime.HookStats();
 
@@ -296,6 +313,7 @@ namespace IronRuby.Runtime.Jit {
                 case 2: stub = new JitStub2(ast, context, declaringModule, generic); break;
                 default: stub = new JitStub3(ast, context, declaringModule, generic); break;
             }
+            stub._frameName = frameName;
             return stub.Trampoline;
         }
 

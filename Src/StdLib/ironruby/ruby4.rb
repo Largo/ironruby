@@ -12763,15 +12763,16 @@ class Hash
   def hash
     stack = Thread.current[:__hash_hash_stack__]
     if stack
-      throw stack if stack.any? { |o| o.equal?(self) }
-      stack.push(self)
+      throw stack if stack.key?(self)
+      stack[self] = true
       begin
         __hash_digest__
       ensure
-        stack.pop
+        stack.delete(self)
       end
     else
-      stack = [self]
+      stack = {}.compare_by_identity
+      stack[self] = true
       Thread.current[:__hash_hash_stack__] = stack
       begin
         boxed = catch(stack) { [__hash_digest__] }
@@ -12802,19 +12803,22 @@ class Array
   # An array met again while it is being hashed abandons the whole computation,
   # which then answers the one recursive value - so an array that contains itself
   # and an array that merely contains that one, which are #eql?, hash alike. The
-  # stack is the one Hash#hash uses, because the two nest in each other.
+  # stack is the one Hash#hash uses, because the two nest in each other. It is an
+  # identity Hash rather than an Array, so that the check is not a scan: a deeply
+  # nested structure was quadratic in its depth.
   def hash
     stack = Thread.current[:__hash_hash_stack__]
     if stack
-      throw stack if stack.any? { |o| o.equal?(self) }
-      stack.push(self)
+      throw stack if stack.key?(self)
+      stack[self] = true
       begin
         __hash_digest__
       ensure
-        stack.pop
+        stack.delete(self)
       end
     else
-      stack = [self]
+      stack = {}.compare_by_identity
+      stack[self] = true
       Thread.current[:__hash_hash_stack__] = stack
       begin
         boxed = catch(stack) { [__hash_digest__] }

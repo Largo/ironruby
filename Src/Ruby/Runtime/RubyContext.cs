@@ -560,6 +560,7 @@ namespace IronRuby.Runtime {
             }
 
             _runtimeId = Interlocked.Increment(ref _RuntimeIdGenerator);
+            StackGuard.ConfigureDlr();
             _upTime = new Stopwatch();
             _upTime.Start();
             

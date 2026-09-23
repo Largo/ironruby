@@ -9,6 +9,7 @@
 
 using System;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
 using Microsoft.Scripting.Runtime;
 
@@ -288,6 +289,42 @@ namespace IronRuby.Runtime.Jit {
         public static object SetIVar(RubyContext/*!*/ context, object self, object value, string/*!*/ name) {
             context.SetInstanceVariable(self, name, value);
             return value;
+        }
+
+        // ---- recursion ---------------------------------------------------------------------
+
+        /// <summary>
+        /// How deep a typed body may recurse into itself before it raises SystemStackError.
+        ///
+        /// A typed frame is small, so the stack alone would let one recurse to a depth of a
+        /// hundred thousand or more; and on .NET 8 an exception through that many frames of
+        /// dynamically emitted code is quadratic in their number - a SystemStackError out of a
+        /// hot `def f(n) = n == 0 ? 0 : 1 + f(n - 1)' took 80 seconds to reach its rescue; at
+        /// this depth it takes about one. MRI 4.0 stops that method at 10,080 levels.
+        /// </summary>
+        internal const int MaxSelfCallDepth = 12288;
+
+        // The stack is looked at every this many levels; the frames in between are small enough
+        // to fit many times over in the margin StackGuard keeps.
+        private const int SelfCallCheckInterval = 64;
+
+        /// <summary>
+        /// Entry of a typed body that calls itself, with its recursion depth. Nearly free: a test
+        /// of the depth's low bits, and every 64 levels a look at the stack and the depth limit.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static void EnterSelfCall(int depth) {
+            if ((depth & (SelfCallCheckInterval - 1)) == 0) {
+                CheckSelfCall(depth);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void CheckSelfCall(int depth) {
+            StackGuard.Check();
+            if (depth >= MaxSelfCallDepth) {
+                throw new SystemStackError(StackGuard.Message);
+            }
         }
 
         // ---- reflection handles the compiler emits ---------------------------------------

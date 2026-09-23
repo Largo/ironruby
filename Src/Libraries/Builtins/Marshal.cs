@@ -687,6 +687,8 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteAnObject(object obj) {
+                // a deeply nested structure: SystemStackError, not a crash (the recursion is in C#)
+                StackGuard.Check();
                 if (_recursionLimit == 0) {
                     throw RubyExceptions.CreateArgumentError("exceed depth limit");
                 }
@@ -1519,6 +1521,8 @@ namespace IronRuby.Builtins {
             }
 
             private object ReadAnObject(int typeFlag, int reservedRef) {
+                // deeply nested data - a crafted string needs no more than a byte per level
+                StackGuard.Check();
                 _started = true;
                 object obj = null;
                 bool outermost = (reservedRef == NewRef);
