@@ -180,6 +180,37 @@ jobs:
             ./ir.sh smoke.rb
           fi
 
+      # irubyc --single-file: one executable carrying IronRuby, libprism and the stdlib.
+      # Run from an empty directory, so it can only work if everything really is inside it.
+      - name: irubyc single file
+        working-directory: ironruby
+        run: |
+          mkdir -p sf-app/lib
+          cat > sf-app/app.rb <<'RUBY'
+          require "yaml"
+          require "json"
+          require_relative "lib/greeter"
+          def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
+          puts "fib=#{fib(20)} #{Greeter.hello} yaml=#{{"a" => 1}.to_yaml.lines.last.strip} json=#{JSON.generate([1])} eval=#{eval("1 + 2")}"
+          RUBY
+          printf 'module Greeter\n  def self.hello = "hello"\nend\n' > sf-app/lib/greeter.rb
+          if [ "$RUNNER_OS" = Windows ]; then
+            cmd //c ir.cmd -S irubyc --single-file -t sf-out sf-app/app.rb sf-app/lib/
+            exe=app.exe
+          else
+            ./ir.sh -S irubyc --single-file -t sf-out sf-app/app.rb sf-app/lib/
+            exe=app
+          fi
+          ls -la sf-out/app
+          count=$(ls sf-out/app | wc -l)
+          [ "$count" -eq 1 ] || { echo "expected exactly one file, got $count"; exit 1; }
+          mkdir -p "$RUNNER_TEMP/sf-alone" "$RUNNER_TEMP/sf-extract"
+          cp "sf-out/app/$exe" "$RUNNER_TEMP/sf-alone/"
+          cd "$RUNNER_TEMP/sf-alone"
+          out=$(DOTNET_BUNDLE_EXTRACT_BASE_DIR="$RUNNER_TEMP/sf-extract" "./$exe")
+          echo "$out"
+          [ "$out" = "fib=6765 hello yaml=a: 1 json=[1] eval=3" ]
+
       - name: Bridge the bundled standard libraries
         working-directory: ironruby
         run: |

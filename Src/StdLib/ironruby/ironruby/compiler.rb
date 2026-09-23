@@ -33,7 +33,8 @@ module IronRuby
 
     class Options
       attr_accessor :target, :basedir, :prefix, :main, :name, :app_host,
-                    :self_contained, :rid, :stdlib, :verbose, :keep, :configuration
+                    :self_contained, :rid, :stdlib, :verbose, :keep, :configuration,
+                    :single_file
       attr_reader :sources
 
       def initialize
@@ -49,6 +50,7 @@ module IronRuby
         @verbose = false
         @keep = false
         @configuration = "Release"
+        @single_file = false      # --single-file
         @sources = []
       end
     end
@@ -93,6 +95,11 @@ module IronRuby
         opts.on("--self-contained [RID]", "Bundle the .NET runtime too (needs the runtime packs)") do |rid|
           options.self_contained = true
           options.rid = rid
+        end
+        opts.on("--single-file [RID]", "Produce one executable file (implies --exe; RID defaults to this machine's)") do |rid|
+          options.single_file = true
+          options.app_host = true
+          options.rid = rid if rid
         end
         opts.on("--no-stdlib", "Leave out Lib/ruby (the MRI library and gems); keeps the prelude") { options.stdlib = false }
         opts.on("--debug", "Compile the host with the Debug configuration") { options.configuration = "Debug" }
@@ -222,7 +229,7 @@ module IronRuby
     RESOURCE_PREFIX = "irubyc.src/"
 
     def csproj(name, options, resources, bin)
-      refs = REFERENCES.map { |r|
+      refs = references(options, bin).map { |r|
         %(    <Reference Include="#{r}"><HintPath>#{File.join(bin, r + ".dll")}</HintPath></Reference>)
       }.join("\n")
       res = resources.map { |file, logical|
@@ -242,6 +249,7 @@ module IronRuby
             <EnableDefaultEmbeddedResourceItems>false</EnableDefaultEmbeddedResourceItems>
             <GenerateDocumentationFile>false</GenerateDocumentationFile>
             <InvariantGlobalization>false</InvariantGlobalization>
+        #{single_file_properties(options)}
           </PropertyGroup>
           <ItemGroup>
             <!-- Ruby exposes UTF-7, and .NET's flock(2)-based FileShare emulation collides
@@ -258,7 +266,79 @@ module IronRuby
           <ItemGroup>
         #{refs}
           </ItemGroup>
+        #{payload_items(options)}
         </Project>
+      XML
+    end
+
+    # --single-file: one executable, made by the .NET SDK's own bundler.
+    #
+    # Everything the folder layout has next to the assembly - IronRuby's DLLs, the
+    # native libprism and sqlite libraries, and Lib/ - goes into the bundle as content.
+    # IncludeAllContentForSelfExtract makes the first run extract all of it to a
+    # per-app cache directory (DOTNET_BUNDLE_EXTRACT_BASE_DIR, default ~/.net), and
+    # points AppContext.BaseDirectory there.  That is the whole trick: the app host
+    # finds Lib/ through AppContext.BaseDirectory, DllImport finds libprism next to
+    # the assemblies, and load_assembly finds the YAML library by name, all exactly as
+    # in the folder layout - nothing in IronRuby has to know it was bundled.
+    # Extracting managed assemblies too (rather than loading them from the bundle in
+    # memory) also keeps Assembly.Location non-empty, which IronRuby relies on.
+    PAYLOAD_DIR = "payload"
+
+    # The assemblies the host is compiled against.  For --single-file that is every
+    # managed assembly the runtime ships, not just the ones the host calls directly:
+    # as references the SDK resolves and de-duplicates them (a transitive dependency
+    # such as Microsoft.Scripting.Metadata would otherwise arrive twice - NETSDK1152)
+    # and bundles them; the payload is left with only native libraries and Lib/.
+    def references(options, bin)
+      return REFERENCES unless options.single_file
+      (REFERENCES + managed_assemblies(bin)).uniq
+    end
+
+    # The bundle carries this machine's native libraries (libprism, sqlite), so a
+    # single file for another OS or CPU would build fine and then fail to parse Ruby
+    # at all on the target.  Refuse that up front instead.
+    def check_single_file_rid(rid)
+      host = runtime_identifier
+      return if rid == host
+      raise CompileError, "--single-file #{rid}: this machine is #{host}, and the bundle " \
+                          "carries this machine's native libraries (libprism, sqlite). " \
+                          "Run irubyc on #{rid} to build for it."
+    end
+
+    def managed_assemblies(bin)
+      Dir.glob(File.join(bin, "*.dll")).map { |f| File.basename(f, ".dll") }
+         .reject { |n| n == "ir" || n.start_with?("ir.") }   # the console host itself
+         .select { |n| managed_assembly?(File.join(bin, n + ".dll")) }.sort
+    end
+
+    # A native DLL (libprism.dll from a Windows build, say) has no assembly name.
+    def managed_assembly?(path)
+      System::Reflection::AssemblyName.get_assembly_name(path)
+      true
+    rescue StandardError, NameError
+      false
+    end
+
+    def single_file_properties(options)
+      return "" unless options.single_file
+      <<~XML.chomp
+            <PublishSingleFile>true</PublishSingleFile>
+            <IncludeAllContentForSelfExtract>true</IncludeAllContentForSelfExtract>
+            <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+            <DebugType>embedded</DebugType>
+            <!-- the references' .pdb/.xml would otherwise land next to the single file -->
+            <AllowedReferenceRelatedFileExtensions>-</AllowedReferenceRelatedFileExtensions>
+      XML
+    end
+
+    def payload_items(options)
+      return "" unless options.single_file
+      <<~XML.chomp
+          <ItemGroup>
+            <Content Include="#{PAYLOAD_DIR}/**/*" Link="%(RecursiveDir)%(Filename)%(Extension)"
+                     CopyToOutputDirectory="Never" CopyToPublishDirectory="PreserveNewest" />
+          </ItemGroup>
       XML
     end
 
@@ -302,14 +382,23 @@ module IronRuby
       File.write(File.join(work, "apphost.cs"), apphost_source(main_path, resources))
       File.write(File.join(work, "#{name}.csproj"), csproj(name, options, resources, bin))
 
-      run_dotnet(options, work, name, out)
-
-      copy_runtime(options, bin, out)
-      copy_stdlib(options, out)
+      if options.single_file
+        # The runtime and library have to be in the project *before* the publish,
+        # as content the bundler picks up; afterwards is too late.
+        payload = File.join(work, PAYLOAD_DIR)
+        copy_runtime(options, bin, payload, skip: references(options, bin))
+        copy_stdlib(options, payload)
+        FileUtils.rm_rf(out)
+        run_dotnet(options, work, name, out)
+      else
+        run_dotnet(options, work, name, out)
+        copy_runtime(options, bin, out)
+        copy_stdlib(options, out)
+      end
 
       FileUtils.rm_rf(work) unless options.keep
 
-      launcher = options.app_host ? File.join(out, name) : "dotnet #{File.join(out, name + ".dll")}"
+      launcher = options.app_host ? File.join(out, name + RbConfig::CONFIG["EXEEXT"].to_s) : "dotnet #{File.join(out, name + ".dll")}"
       puts "irubyc: wrote #{out}"
       puts "irubyc: run it with #{launcher}"
       if options.keep
@@ -340,7 +429,12 @@ module IronRuby
     def run_dotnet(options, work, name, out)
       project = File.join(work, "#{name}.csproj")
       cmd = [dotnet]
-      if options.self_contained
+      if options.single_file
+        rid = options.rid || runtime_identifier
+        check_single_file_rid(rid)
+        cmd += ["publish", project, "-c", options.configuration, "-r", rid,
+                "--self-contained", options.self_contained ? "true" : "false"]
+      elsif options.self_contained
         rid = options.rid || runtime_identifier
         cmd += ["publish", project, "-c", options.configuration, "-r", rid, "--self-contained", "true"]
       else
@@ -365,12 +459,16 @@ module IronRuby
     # Everything the runtime needs that the SDK did not already copy: the DLLs the
     # host does not reference directly (the YAML library is load_assembly'd from
     # yaml.rb) and libprism, which is a native library.
-    def copy_runtime(options, bin, out)
+    def copy_runtime(options, bin, out, skip: [])
+      FileUtils.mkdir_p(out)
       Dir.glob(File.join(bin, "*")).each do |src|
         next unless File.file?(src)
         base = File.basename(src)
         next unless base =~ /\.(dll|so|dylib)\z/
         next if base.start_with?("ir.")
+        # A referenced assembly is already in the publish output; a second copy as
+        # content would collide with it (NETSDK1152).
+        next if skip.include?(File.basename(base, ".dll"))
         dest = File.join(out, base)
         next if File.file?(dest)
         say options, "copying:     #{base}"

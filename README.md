@@ -232,13 +232,10 @@ whatever `igem` has installed), so `require "json"` and `require "some_gem"` wor
 embedded sources are still parsed and compiled by IronRuby at startup, exactly as
 `ir app.rb` would, so a compiled application starts no faster than the same script run
 from a source tree — what you get is a single deployable directory, not AOT-compiled Ruby.
-Real AOT is blocked on a missing API rather than on effort: the DLR's assembly-saving
-machinery is all still here (`SavableScriptCode`, `ToDiskRewriter`, `AssemblyGen`, the
-`-X:SaveAssemblies` switch, `Loader.SaveCompiledCode`), but every path through it ends at
-`LambdaExpression.CompileToMethod`, which .NET Core dropped and .NET 10 still does not
-have. `PersistedAssemblyBuilder` (new in .NET 9) can *save* an assembly, but nothing in
-.NET Core can turn a DLR expression tree into a `MethodBuilder`; reviving it means
-re-implementing the expression-tree-to-IL compiler that .NET Framework had.
+Real AOT exists as a prototype in [`Util/aot`](Util/aot/README.md): it ports .NET
+Framework's expression-tree compiler onto `PersistedAssemblyBuilder` (.NET 10), so Ruby
+compiles to a saved assembly that runs with no parsing at all, and it builds IronRuby under
+NativeAOT. It is not wired into `irubyc` yet, and has not been run against ruby/spec.
 
 Options, with jrubyc's names kept where they mean the same thing:
 
@@ -251,8 +248,29 @@ Options, with jrubyc's names kept where they mean the same thing:
 | `-o, --output NAME` | name of the application |
 | `--exe` / `--dll` | native launcher (default), or just `<name>.dll` for `dotnet <name>.dll` |
 | `--self-contained [RID]` | bundle the .NET runtime too — runs with no .NET installed |
+| `--single-file [RID]` | produce **one executable file** instead of a directory (combine with `--self-contained`) |
 | `--no-stdlib` | leave out the vendored Ruby 4.0 tree and the gems (30 MB → 19 MB) |
 | `--keep`, `--verbose` | keep the generated C# project / narrate every step |
+
+### One file (`--single-file`)
+
+```console
+$ ./irubyc.sh --single-file -t /tmp/out app.rb lib/
+$ ls /tmp/out/app
+app
+$ ./irubyc.sh --single-file --self-contained -t /tmp/out app.rb lib/   # no .NET needed to run it
+```
+
+This uses the .NET SDK's own single-file bundler. Everything the directory layout has next
+to the assembly — IronRuby's DLLs, the native `libprism` and sqlite libraries, and the
+standard library — goes into the one file, and the first run extracts it to a per-app cache
+(`~/.net/<app>/…`, or `$DOTNET_BUNDLE_EXTRACT_BASE_DIR`). Later runs reuse the cache. Because
+the extracted layout is exactly the directory layout, nothing in IronRuby needs to know it
+was bundled: `require`, `load_assembly`, `eval` and native libraries all behave the same.
+On Linux, for the demo above: **32 MB** framework-dependent, **99 MB** self-contained. The
+file is for the platform it was built on — the bundle carries that machine's native
+libraries — so `irubyc` refuses a RID for another OS or CPU instead of producing a file that
+cannot parse Ruby on its target.
 
 Sizes, for a three-file demo app on Linux: **30 MB** framework-dependent (18 MB of that is
 the standard library, 12 MB IronRuby, the DLR and `libprism`), **101 MB** with
