@@ -1581,6 +1581,18 @@ namespace IronRuby.Builtins {
                 } catch (NotSupportedException) {
                     // A read-only console stream cannot be flushed and needs no flushing.
                 }
+                // Off POSIX (Windows) there is no fstat to call - Posix.TryFStat answers false
+                // with no errno, which used to surface as EBADF from every File#stat, #lstat and
+                // #size on an open file, and so from FileUtils.cp.  Answer from the path the file
+                // was opened with instead, as File.stat does there; a file renamed or deleted
+                // since it was opened cannot be stat'd this way, which is Windows' own limit too.
+                if (!Posix.IsAvailable) {
+                    var file = io as RubyFile;
+                    if (file != null && file.Path != null) {
+                        return Create(io.Context, file.Path);
+                    }
+                }
+
                 int fd = RubyIO.PrimaryDescriptorOf(io.GetStream().BaseStream);
                 if (fd < 0) {
                     // The console streams are not FileStreams, but their descriptors are
