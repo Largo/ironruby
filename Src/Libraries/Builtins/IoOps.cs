@@ -1920,6 +1920,21 @@ namespace IronRuby.Builtins {
                 return (queued == 0 && buffered == 0) ? null : buffer;
             }
 
+            // A Windows pipe: nothing to put into O_NONBLOCK, but PeekNamedPipe says whether a
+            // read would return at once, and a read of what is there does. Without this
+            // #read_nonblock on an empty pipe waited for the writer like #read.
+            var windowsPipe = IoReadiness.GetWindowsPipe(io);
+            if (windowsPipe != null) {
+                if (!IoReadiness.IsWindowsPipeReadable(windowsPipe)) {
+                    if (buffered > 0) {
+                        return buffer;
+                    }
+                    throw NonBlockingError(io.Context, true, "read would block");
+                }
+                int available = io.AppendAvailableBytes(buffer, count);
+                return (available == 0 && buffered == 0) ? null : buffer;
+            }
+
             var pipe = stream.BaseStream as DescriptorStream;
             if (pipe == null) {
                 // No non-blocking read primitive for this stream - a socket, or something with no
