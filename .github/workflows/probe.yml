@@ -1,0 +1,85 @@
+name: Windows probe
+
+# Scratch experiments on a Windows runner against the ci/windows-first-class code.
+on:
+  push:
+    branches: ['probe/windows']
+
+env:
+  DOTNET_NOLOGO: 1
+  DOTNET_CLI_TELEMETRY_OPTOUT: 1
+
+jobs:
+  probe:
+    runs-on: windows-latest
+    timeout-minutes: 40
+    env:
+      TFM: net8.0
+      IR_TFM: net8.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - run: git config --global core.autocrlf input
+      - uses: actions/checkout@v4
+        with:
+          path: probe
+      - uses: actions/checkout@v4
+        with:
+          ref: ci/windows-first-class
+          path: ironruby
+      - uses: actions/checkout@v4
+        with:
+          repository: IronLanguages/dlr
+          path: dlr
+      - uses: actions/checkout@v4
+        with:
+          repository: ruby/prism
+          path: prism
+      - uses: actions/checkout@v4
+        with:
+          repository: ruby/spec
+          ref: 9444bc3cf11894b860a0f07a247ce5e7e44e9b25
+          path: ironruby/spec
+      - uses: actions/checkout@v4
+        with:
+          repository: ruby/mspec
+          ref: b79c65ed28b00f0869ad82b0e3dceef0d943cd58
+          path: ironruby/mspec
+      - name: Patch the DLR
+        run: |
+          for patch in ironruby/Build/dlr-patches/*.patch; do git -C dlr apply "../$patch"; done
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-windows-latest-${{ hashFiles('ironruby/**/*.csproj', 'ironruby/Directory.Build.props', 'dlr/**/*.csproj') }}
+          restore-keys: nuget-windows-latest-
+      - id: prism
+        run: echo "sha=$(git -C prism rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - id: prism-cache
+        uses: actions/cache@v4
+        with:
+          path: prism/build
+          key: prism-windows-latest-${{ steps.prism.outputs.sha }}
+      - if: steps.prism-cache.outputs.cache-hit != 'true'
+        working-directory: prism
+        run: |
+          ruby templates/template.rb
+          mkdir -p build
+          shopt -s nullglob
+          sources=(src/*.c src/*/*.c)
+          gcc -shared -O2 -std=c99 -DPRISM_EXPORT_SYMBOLS -Iinclude -o build/libprism.dll "${sources[@]}"
+      - name: Build
+        working-directory: ironruby
+        run: |
+          ruby Src/Prism/generate.rb
+          dotnet build Src/Console/Ruby.Console.csproj -p:IronRubyTargetFrameworks=$TFM -v quiet
+      - name: Probe
+        working-directory: ironruby
+        run: bash ../probe/probe.sh
