@@ -1569,7 +1569,58 @@ namespace IronRuby.StandardLibrary.Sockets {
             }
         }
 
-        private static ServiceName[] ServiceNames = new[] {
+        /// <summary>
+        /// The services database getservbyname/getservbyport answer from: on Windows the system's
+        /// own (%SystemRoot%\System32\drivers\etc\services), which is what MRI's getservbyport
+        /// reads there - it names port 514/tcp "cmd", where Unix's names it "shell" - and the
+        /// built-in copy of a Unix /etc/services everywhere else, or when that file is missing.
+        /// </summary>
+        // Lazily: the built-in table is a static field declared further down, and field
+        // initializers run in the order they are written.
+        private static ServiceName[] ServiceNames {
+            get { return _serviceNames ?? (_serviceNames = LoadServiceNames()); }
+        }
+        private static ServiceName[] _serviceNames;
+
+        private static ServiceName[]/*!*/ LoadServiceNames() {
+            if (IsWindows) {
+                try {
+                    string path = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "drivers", "etc", "services");
+                    if (File.Exists(path)) {
+                        var primary = new List<ServiceName>();
+                        var aliases = new List<ServiceName>();
+                        foreach (string raw in File.ReadAllLines(path)) {
+                            int hash = raw.IndexOf('#');
+                            string line = (hash >= 0) ? raw.Substring(0, hash) : raw;
+                            string[] fields = line.Split(new[] { ' ', '\t' }, StringSplitOptions.RemoveEmptyEntries);
+                            if (fields.Length < 2) {
+                                continue;
+                            }
+                            int slash = fields[1].IndexOf('/');
+                            int port;
+                            if (slash <= 0 || !Int32.TryParse(fields[1].Substring(0, slash), NumberStyles.None, CultureInfo.InvariantCulture, out port)) {
+                                continue;
+                            }
+                            string protocol = fields[1].Substring(slash + 1).ToLowerInvariant();
+                            primary.Add(new ServiceName(port, protocol, fields[0]));
+                            for (int i = 2; i < fields.Length; i++) {
+                                aliases.Add(new ServiceName(port, protocol, fields[i]));
+                            }
+                        }
+                        if (primary.Count > 0) {
+                            // Aliases after every primary name, so a port finds its primary name first.
+                            primary.AddRange(aliases);
+                            return primary.ToArray();
+                        }
+                    }
+                } catch (Exception) {
+                    // an unreadable database is no worse than the built-in one
+                }
+            }
+            return BuiltinServiceNames;
+        }
+
+        private static readonly ServiceName[] BuiltinServiceNames = new[] {
             new ServiceName(7, "tcp", "echo"),
             new ServiceName(7, "udp", "echo"),
             new ServiceName(9, "tcp", "discard"),
