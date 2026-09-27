@@ -180,6 +180,24 @@ jobs:
             ./ir.sh smoke.rb
           fi
 
+      # A real server: puma (nio4r underneath) on 127.0.0.1 answering GET, POST, a
+      # 2 MB upload, keep-alive and concurrent clients, then stopped through its control
+      # server.  On Windows this is what runs nio4r's Socket.Select backend and IO.select
+      # on sockets at all.
+      - name: puma serves requests
+        working-directory: ironruby
+        timeout-minutes: 10
+        continue-on-error: true
+        run: Util/ci/puma-smoke.sh
+
+      # `gem install` from rubygems.org into an empty GEM_HOME, then the same gem through
+      # Bundler: TLS, the gem package reader and RubyGems' path handling, for real.
+      - name: gem install and Bundler
+        working-directory: ironruby
+        timeout-minutes: 15
+        continue-on-error: true
+        run: Util/ci/gem-smoke.sh
+
       # irubyc --single-file: one executable carrying IronRuby, libprism and the stdlib.
       # Run from an empty directory, so it can only work if everything really is inside it.
       - name: irubyc single file
@@ -401,3 +419,130 @@ jobs:
           RUBY_EXE="$PWD/ir.sh" ./ir.sh -Imspec/lib mspec/bin/mspec-run spec/language \
             2>&1 | tee spec.txt || true
           tail -3 spec.txt
+
+  # ruby/spec on Windows, which is where the platform-specific code lives: processes
+  # (WindowsSpawn), IO.select on pipes and sockets, drive-letter paths, the console.
+  # Every directory runs in its own mspec-run, so one that crashes or hangs cannot take
+  # the others' results with it, and Util/ci/record_formatter.rb notes each failing
+  # example against its spec file.  Util/ci/spec-baseline.rb then compares the lot with
+  # Util/ci/windows-spec-baseline.txt: an example it does not list fails the job, one it
+  # lists that passes now is reported as stale.  ruby/spec and mspec are pinned, so the
+  # baseline names the same examples until someone moves the pin on purpose.
+  ruby-spec-windows:
+    name: ruby/spec windows-latest net8.0
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+      TFM: net8.0
+      IR_TFM: net8.0
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep checkouts byte-identical on Windows
+        run: git config --global core.autocrlf input
+      - uses: actions/checkout@v4
+        with:
+          path: ironruby
+      - uses: actions/checkout@v4
+        with:
+          repository: IronLanguages/dlr
+          path: dlr
+      - uses: actions/checkout@v4
+        with:
+          repository: ruby/prism
+          path: prism
+      - uses: actions/checkout@v4
+        with:
+          repository: ruby/spec
+          ref: 9444bc3cf11894b860a0f07a247ce5e7e44e9b25
+          path: ironruby/spec
+      - uses: actions/checkout@v4
+        with:
+          repository: ruby/mspec
+          ref: b79c65ed28b00f0869ad82b0e3dceef0d943cd58
+          path: ironruby/mspec
+
+      - name: Patch the DLR
+        run: |
+          for patch in ironruby/Build/dlr-patches/*.patch; do
+            echo "applying $patch"
+            git -C dlr apply "../$patch"
+          done
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Cache NuGet packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: nuget-windows-latest-${{ hashFiles('ironruby/**/*.csproj', 'ironruby/Directory.Build.props', 'dlr/**/*.csproj') }}
+          restore-keys: nuget-windows-latest-
+
+      - name: Identify the prism checkout
+        id: prism
+        run: echo "sha=$(git -C prism rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      # Built exactly as the build-and-test job builds it on Windows, so the two share
+      # the cache entry.
+      - name: Cache the prism build
+        id: prism-cache
+        uses: actions/cache@v4
+        with:
+          path: prism/build
+          key: prism-windows-latest-${{ steps.prism.outputs.sha }}
+
+      - name: Build libprism
+        if: steps.prism-cache.outputs.cache-hit != 'true'
+        working-directory: prism
+        run: |
+          ruby templates/template.rb
+          command -v gcc >/dev/null || export PATH="/c/msys64/ucrt64/bin:/c/msys64/mingw64/bin:/c/msys64/usr/bin:$PATH"
+          mkdir -p build
+          shopt -s nullglob
+          sources=(src/*.c src/*/*.c)
+          gcc -shared -O2 -std=c99 -DPRISM_EXPORT_SYMBOLS -Iinclude \
+            -o build/libprism.dll "${sources[@]}"
+
+      - name: Build
+        working-directory: ironruby
+        run: |
+          ruby Src/Prism/generate.rb
+          dotnet build Src/Console/Ruby.Console.csproj -p:IronRubyTargetFrameworks=$TFM
+
+      - name: Run ruby/spec
+        working-directory: ironruby
+        run: |
+          export RUBY_EXE="$(cygpath -w "$PWD/ir.cmd")"
+          mkdir -p spec-results
+          for dir in language \
+                     core/string core/array core/hash core/integer core/file core/dir \
+                     core/io core/process core/kernel core/encoding \
+                     library/stringio library/socket library/yaml library/json; do
+            name=$(echo "$dir" | tr / -)
+            echo "::group::spec/$dir"
+            start=$SECONDS
+            SPEC_RECORD="spec-results/$name.txt" \
+              cmd //c ir.cmd -Imspec/lib mspec/bin/mspec-run --timeout 300 \
+                -f Util/ci/record_formatter.rb "spec/$dir" > "spec-results/$name.log" 2>&1 || true
+            cat "spec-results/$name.log"
+            echo "::endgroup::"
+            echo "spec/$dir: $((SECONDS - start))s: $(tail -1 "spec-results/$name.txt")"
+          done
+
+      - name: Compare with the baseline
+        working-directory: ironruby
+        run: ruby Util/ci/spec-baseline.rb Util/ci/windows-spec-baseline.txt spec-results/*.txt
+
+      - name: Keep the spec output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruby-spec-windows
+          path: ironruby/spec-results
+          if-no-files-found: ignore

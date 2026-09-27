@@ -1,0 +1,7 @@
+# The ruby/spec examples that fail on Windows (windows-latest, net8.0), measured by the
+# ruby-spec-windows job in .github/workflows/ci.yml at the pinned ruby/spec revision.
+# One example per line, "<spec file>: <description>"; "? " marks one that fails only
+# sometimes.  An example that fails and is not listed here fails the job.  Regenerate
+# from a run's spec-results artifact with
+#   ruby Util/ci/spec-baseline.rb --write Util/ci/windows-spec-baseline.txt spec-results/*.txt
+# and look at every line that changes: each one is a real failure, not head-room.
