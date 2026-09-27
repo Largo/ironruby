@@ -345,7 +345,11 @@ nil
 
         /// <summary>
         /// Freezing and module initializers.
+        /// Prism: 'yaml' is psych 5.3.1's own Ruby code now, and the legacy parser stops at its
+        /// first keyword parameter ("syntax error, unexpected label") - the require failed that
+        /// way before it could touch the frozen Object. CRuby 4.0.6 prints the same three lines.
         /// </summary>
+        [Options(Prism = true)]
         public void ModuleFreezing1() {
             if (_driver.PartialTrust) return;
 

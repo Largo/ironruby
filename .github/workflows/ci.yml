@@ -25,23 +25,22 @@ jobs:
         os: [ubuntu-latest, windows-latest]
         tfm: [net8.0, net10.0]
         include:
-          # IronRuby.Tests "> FAILED" line counts, measured on this matrix (run
-          # 35731760445). They are the exact current numbers, not head-room: the
-          # job fails as soon as one more line appears. Windows and Linux fail the
-          # same tests; the two runtimes differ only in Serialization1, which
-          # produces one line on net10.0 and two on net8.0.
+          # IronRuby.Tests "> FAILED" line counts. They are the exact current
+          # numbers, not head-room: the job fails as soon as one more line
+          # appears. 0 since 2026-09-27 (measured on Linux, net8.0 and net10.0):
+          # any failure line fails the job.
           - os: ubuntu-latest
             tfm: net8.0
-            baseline: 19
+            baseline: 0
           - os: ubuntu-latest
             tfm: net10.0
-            baseline: 18
+            baseline: 0
           - os: windows-latest
             tfm: net8.0
-            baseline: 19
+            baseline: 0
           - os: windows-latest
             tfm: net10.0
-            baseline: 18
+            baseline: 0
     env:
       TFM: ${{ matrix.tfm }}
       IR_TFM: ${{ matrix.tfm }}

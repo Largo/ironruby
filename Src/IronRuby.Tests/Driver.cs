@@ -49,6 +49,14 @@ namespace IronRuby.Tests {
         public bool PrivateBinding { get; set; }
         public bool NoRuntime { get; set; }
         public Type Pal { get; set; }
+
+        /// <summary>
+        /// Parse with the prism front end, which ir and irubyc always use, instead of the legacy
+        /// parser the rest of the suite runs on. The legacy grammar stops at Ruby 1.9: it cannot
+        /// parse keyword parameters, so a test that loads today's standard library (psych 5.3.1,
+        /// ruby4.rb) needs this. IR_USE_PRISM=1 runs every test this way.
+        /// </summary>
+        public bool Prism { get; set; }
     }
 
     public class TestRuntime {
@@ -66,6 +74,12 @@ namespace IronRuby.Tests {
         public TestRuntime(Driver/*!*/ driver, TestCase/*!*/ testCase) {
             _driver = driver;
             _testName = testCase.Name;
+
+            // The front end is a process-wide static, so every test sets it, back to the legacy
+            // parser as well, rather than inherit whatever the previous test chose.
+            RubyContext.AlternativeParser = (Driver.UsePrism || testCase.Options != null && testCase.Options.Prism)
+                ? IronRuby.Prism.PrismAstBridge.Parse
+                : null;
 
             if (testCase.Options.NoRuntime) {
                 return;
@@ -144,6 +158,8 @@ namespace IronRuby.Tests {
         private static bool _noAdaptiveCompilation;
         private static int _compilationThreshold;
         private static bool _runPython = true;
+        private static bool? _isPythonConfigured;
+        private static bool _usePrism;
         private readonly string/*!*/ _baseDirectory;
 
         public Driver(string/*!*/ baseDirectory) {
@@ -186,8 +202,40 @@ namespace IronRuby.Tests {
             get { return _compilationThreshold; }
         }
 
+        /// <summary>
+        /// Whether the Python interop tests run: not with /py-, and only when a "python" language
+        /// is configured at all. IronPython is not a dependency of this build and the .NET 8/10
+        /// DLR reads no app.config (no FEATURE_CONFIGURATION), so normally there is none, and
+        /// Runtime.GetEngine("python") would only fail with "Unknown language name".
+        /// </summary>
         public bool RunPython {
-            get { return _runPython; }
+            get { return _runPython && IsPythonConfigured; }
+        }
+
+        private static bool IsPythonConfigured {
+            get {
+                if (_isPythonConfigured == null) {
+                    bool found = false;
+                    foreach (var language in ScriptRuntimeSetup.ReadConfiguration().LanguageSetups) {
+                        foreach (var name in language.Names) {
+                            found |= String.Equals(name, "python", StringComparison.OrdinalIgnoreCase);
+                        }
+                    }
+                    if (!found && _runPython) {
+                        Console.WriteLine("Python interop checks skipped: no \"python\" language is configured.");
+                    }
+                    _isPythonConfigured = found;
+                }
+                return _isPythonConfigured.Value;
+            }
+        }
+
+        /// <summary>
+        /// IR_USE_PRISM=1: every test parses with the prism front end, not only those marked
+        /// [Options(Prism = true)].
+        /// </summary>
+        public static bool UsePrism {
+            get { return _usePrism; }
         }
 
         public string BaseDirectory {
@@ -296,7 +344,7 @@ namespace IronRuby.Tests {
 
             if (Environment.GetEnvironmentVariable("IR_USE_PRISM") == "1") {
                 Console.WriteLine("Using prism front end");
-                IronRuby.Runtime.RubyContext.AlternativeParser = IronRuby.Prism.PrismAstBridge.Parse;
+                _usePrism = true;
             }
 
             if (args.Contains("/partial")) {
