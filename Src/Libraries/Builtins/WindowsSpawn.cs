@@ -143,6 +143,15 @@ namespace IronRuby.Builtins {
         private static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security,
             uint creation, uint flags, IntPtr template);
 
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern IntPtr OpenProcess(int access, bool inheritHandle, int processId);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool TerminateProcess(IntPtr process, uint exitCode);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool GenerateConsoleCtrlEvent(int ctrlEvent, int processGroupId);
+
         #endregion
 
         #region children
@@ -622,9 +631,126 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region kill
+
+        private const int PROCESS_TERMINATE = 0x0001;
+        private const int PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+        private const uint STILL_ACTIVE = 259;
+        private const int ERROR_INVALID_PARAMETER = 87;
+        private const int CTRL_C_EVENT = 0;
+        private const int CTRL_BREAK_EVENT = 1;
+        private const int ESRCH = 3;
+        private const int EPERM = 1;
+
+        /// <summary>
+        /// kill(2) the way MRI's Windows build does it (win32.c): signal 0 asks whether the
+        /// process is there, INT is a console Ctrl+C (Ctrl+Break for anything but group 0, which
+        /// is all a console event can be sent to), KILL is TerminateProcess with exit code 0 -
+        /// which is why a child that kills itself exits "successfully" there - and every other
+        /// signal is EINVAL, there being nothing to deliver it with. Returns 0 or -errno.
+        /// </summary>
+        internal static int Kill(int pid, int signal) {
+            if (pid < 0 || (pid == 0 && signal != 2)) {
+                return -EINVAL;
+            }
+
+            switch (signal) {
+                case 0: {
+                    IntPtr process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                    if (process == IntPtr.Zero) {
+                        return (Marshal.GetLastWin32Error() == ERROR_INVALID_PARAMETER) ? -ESRCH : -EPERM;
+                    }
+                    CloseHandle(process);
+                    return 0;
+                }
+
+                case 2:
+                    if (!GenerateConsoleCtrlEvent(pid == 0 ? CTRL_C_EVENT : CTRL_BREAK_EVENT, pid)) {
+                        return -EPERM;
+                    }
+                    return 0;
+
+                case 9: {
+                    // A child of ours is killed through the handle CreateProcess gave us: its pid
+                    // may already belong to someone else once it has exited.
+                    IntPtr process;
+                    bool ours;
+                    lock (_children) {
+                        ours = _children.TryGetValue(pid, out process);
+                    }
+                    if (!ours) {
+                        process = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
+                        if (process == IntPtr.Zero) {
+                            return (Marshal.GetLastWin32Error() == ERROR_INVALID_PARAMETER) ? -ESRCH : -EPERM;
+                        }
+                    }
+                    try {
+                        uint code;
+                        if (!GetExitCodeProcess(process, out code)) {
+                            return -EPERM;
+                        }
+                        if (code != STILL_ACTIVE) {
+                            return -ESRCH;
+                        }
+                        return TerminateProcess(process, 0) ? 0 : -EPERM;
+                    } finally {
+                        if (!ours) {
+                            CloseHandle(process);
+                        }
+                    }
+                }
+
+                default:
+                    return -EINVAL;
+            }
+        }
+
+        #endregion
+
         #region __waitpid__
 
         private const int WNOHANG = 1;
+
+        /// <summary>
+        /// WaitForSingleObject in slices, looking up between them for an exception Thread#raise or
+        /// Thread#kill has parked for this thread: an INFINITE wait could not be interrupted at all,
+        /// so Timeout.timeout { Process.wait(pid) } waited for the child regardless.
+        /// </summary>
+        private static uint WaitInterruptibly(IntPtr handle, uint timeout) {
+            if (timeout != INFINITE) {
+                return WaitForSingleObject(handle, timeout);
+            }
+            bool wasBlocked = RubyUtils.EnterNativeWait();
+            try {
+                while (true) {
+                    uint waited = WaitForSingleObject(handle, 50);
+                    if (waited != WAIT_TIMEOUT) {
+                        return waited;
+                    }
+                    RubyUtils.CheckAsyncException();
+                }
+            } finally {
+                RubyUtils.ExitNativeWait(wasBlocked);
+            }
+        }
+
+        private static uint WaitInterruptibly(IntPtr[]/*!*/ handles, uint timeout) {
+            if (timeout != INFINITE) {
+                return WaitForMultipleObjects(handles.Length, handles, false, timeout);
+            }
+            bool wasBlocked = RubyUtils.EnterNativeWait();
+            try {
+                while (true) {
+                    uint waited = WaitForMultipleObjects(handles.Length, handles, false, 50);
+                    if (waited != WAIT_TIMEOUT) {
+                        return waited;
+                    }
+                    RubyUtils.CheckAsyncException();
+                }
+            } finally {
+                RubyUtils.ExitNativeWait(wasBlocked);
+            }
+        }
 
         /// <summary>
         /// waitpid(2) over process handles. Returns [pid, status-word], null for a WNOHANG that
@@ -639,7 +765,14 @@ namespace IronRuby.Builtins {
                 if (!Forget(pid, out handle)) {
                     return ScriptingRuntimeHelpers.Int32ToObject(-ECHILD);
                 }
-                uint waited = WaitForSingleObject(handle, timeout);
+                uint waited;
+                try {
+                    waited = WaitInterruptibly(handle, timeout);
+                } catch {
+                    // Interrupted: the child is still ours to wait for later.
+                    Remember(pid, handle);
+                    throw;
+                }
                 if (waited == WAIT_TIMEOUT) {
                     Remember(pid, handle);
                     return null;
@@ -658,7 +791,7 @@ namespace IronRuby.Builtins {
             for (int i = 0; i < children.Length; i++) {
                 handles[i] = children[i].Value;
             }
-            uint index = WaitForMultipleObjects(handles.Length, handles, false, timeout);
+            uint index = WaitInterruptibly(handles, timeout);
             if (index == WAIT_TIMEOUT) {
                 return null;
             }

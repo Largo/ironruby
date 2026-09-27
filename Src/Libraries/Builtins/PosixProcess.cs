@@ -48,12 +48,6 @@ namespace IronRuby.Builtins {
         [DllImport("libc", SetLastError = true, EntryPoint = "setpriority")]
         private static extern int SysSetPriority(int which, int who, int priority);
 
-        [DllImport("libc", SetLastError = true, EntryPoint = "geteuid")]
-        private static extern int SysGetEuid();
-
-        [DllImport("libc", SetLastError = true, EntryPoint = "getegid")]
-        private static extern int SysGetEgid();
-
         [DllImport("libc", SetLastError = true, EntryPoint = "issetugid")]
         private static extern int SysIsSetUgid();
 
@@ -178,12 +172,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("__geteuid__", RubyMethodAttributes.PublicSingleton)]
         public static int GetEuid(RubyModule/*!*/ self) {
-            return SysGetEuid();
+            // 0 where there is no libc to ask, as Process.euid answers and MRI's Windows build does.
+            return Posix.GetEUid();
         }
 
         [RubyMethod("__getegid__", RubyMethodAttributes.PublicSingleton)]
         public static int GetEgid(RubyModule/*!*/ self) {
-            return SysGetEgid();
+            return Posix.GetEGid();
         }
 
         [RubyMethod("__setuid__", RubyMethodAttributes.PublicSingleton)]

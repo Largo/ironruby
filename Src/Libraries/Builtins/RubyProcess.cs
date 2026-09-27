@@ -539,7 +539,8 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                int error = PosixSignals.Kill(target, signal);
+                // Windows has no kill(2); WindowsSpawn does what MRI's win32 layer does instead.
+                int error = IsWindows ? WindowsSpawn.Kill(target, signal) : PosixSignals.Kill(target, signal);
                 if (error < 0) {
                     // Negative means -errno; the prelude's Process.kill turns it into an Errno class.
                     return ScriptingRuntimeHelpers.Int32ToObject(error);
