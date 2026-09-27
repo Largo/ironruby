@@ -1942,7 +1942,11 @@ namespace IronRuby.Builtins {
             [RubyMethod("socket?")]
             public static bool IsSocket(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null && d.FileType == Posix.S_IFSOCK;
+                if (d != null) {
+                    return d.FileType == Posix.S_IFSOCK;
+                }
+                // Windows: a bound AF_UNIX socket is a reparse point of its own kind.
+                return (WindowsFiles.Mode(L(self)) & 0xF000) == 0xC000;
             }
 
             [RubyMethod("symlink?")]

@@ -63,6 +63,31 @@ namespace IronRuby.Builtins {
         [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern bool CreateHardLinkW(string newName, string existingName, IntPtr security);
 
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct WIN32_FIND_DATA {
+            public uint FileAttributes;
+            public System.Runtime.InteropServices.ComTypes.FILETIME CreationTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME LastAccessTime;
+            public System.Runtime.InteropServices.ComTypes.FILETIME LastWriteTime;
+            public uint FileSizeHigh;
+            public uint FileSizeLow;
+            public uint Reserved0;      // the reparse tag, when FILE_ATTRIBUTE_REPARSE_POINT is set
+            public uint Reserved1;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+            public string FileName;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 14)]
+            public string AlternateFileName;
+        }
+
+        [DllImport("kernel32", SetLastError = true, CharSet = CharSet.Unicode)]
+        private static extern IntPtr FindFirstFileW(string name, out WIN32_FIND_DATA data);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool FindClose(IntPtr handle);
+
+        private const uint FILE_ATTRIBUTE_REPARSE_POINT = 0x400;
+        private const uint IO_REPARSE_TAG_AF_UNIX = 0x80000023;
+
         private const uint FILE_READ_ATTRIBUTES = 0x0080;
         private const uint FILE_SHARE_ALL = 0x00000007;    // read | write | delete
         private const uint OPEN_EXISTING = 3;
@@ -112,6 +137,24 @@ namespace IronRuby.Builtins {
 
         #endregion
 
+        #region socket files
+
+        /// <summary>
+        /// Whether <paramref name="path"/> is where an AF_UNIX socket is bound: Windows makes that
+        /// a reparse point tagged IO_REPARSE_TAG_AF_UNIX, and MRI's stat reports it as S_IFSOCK.
+        /// </summary>
+        internal static bool IsUnixSocket(string/*!*/ path) {
+            WIN32_FIND_DATA data;
+            IntPtr find = FindFirstFileW(path, out data);
+            if (find == IntPtr.Zero || find == new IntPtr(-1)) {
+                return false;
+            }
+            FindClose(find);
+            return (data.FileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0 && data.Reserved0 == IO_REPARSE_TAG_AF_UNIX;
+        }
+
+        #endregion
+
         #region mode
 
         /// <summary>
@@ -135,6 +178,8 @@ namespace IronRuby.Builtins {
 
             if (info is DirectoryInfo) {
                 mode |= S_IFDIR | S_IEXEC;
+            } else if ((info.Attributes & FileAttributes.ReparsePoint) != 0 && IsUnixSocket(info.FullName)) {
+                mode |= 0xC000; // S_IFSOCK
             } else {
                 mode |= S_IFREG;
                 string extension = info.Extension;
