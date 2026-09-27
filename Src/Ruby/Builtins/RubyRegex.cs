@@ -144,6 +144,10 @@ namespace IronRuby.Builtins {
 
         public RubyRegex(RubyRegex/*!*/ regex) {
             ContractUtils.RequiresNotNull(regex, "regex");
+            // Regexp.new(re), #dup and #clone: MRI's rb_reg_init_copy checks the original
+            if (!regex.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("uninitialized Regexp");
+            }
             Set(regex.Pattern, regex.Options);
         }
 
@@ -1132,6 +1136,10 @@ namespace IronRuby.Builtins {
 
         public static MatchData SetCurrentMatchData(RubyScope/*!*/ scope, RubyRegex/*!*/ regex, MutableString str) {
             if (str != null) {
+                // MRI's rb_reg_search checks the regexp (rb_reg_check), a nil subject does not
+                if (!regex.IsInitialized) {
+                    throw RubyExceptions.CreateTypeError("uninitialized Regexp");
+                }
                 regex.WarnHistoricalBinaryMatch(scope.RubyContext, str);
             }
             return scope.GetInnerMostClosureScope().CurrentMatch = (str != null) ? regex.Match(str) : null;

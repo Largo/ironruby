@@ -29,7 +29,10 @@ using System.Diagnostics;
 
 namespace IronRuby.Builtins {
 
+    // MRI undefines Module.allocate (object.c: rb_undef_method(rb_singleton_class(rb_cModule),
+    // "allocate")), so a module comes only from Module.new; ClassOps defines Class.allocate again.
     [RubyClass("Module", Extends = typeof(RubyModule), Inherits = typeof(Object), Restrictions = ModuleRestrictions.Builtin | ModuleRestrictions.NoUnderlyingType)]
+    [UndefineMethod("allocate", IsStatic = true)]
     public static class ModuleOps {
 
         #region initialize, initialize_copy

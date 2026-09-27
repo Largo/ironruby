@@ -611,6 +611,12 @@ namespace IronRuby.Tests {
         public void Interpreter3() {
             if (_driver.PartialTrust) return;
 
+            // Thread.Abort throws PlatformNotSupportedException on .NET Core and .NET 5 and later
+            // (SYSLIB0006), so nothing can raise a ThreadAbortException there: Interpreter3_abort
+            // got that exception instead and the tracker never saw an abort. The scenario only
+            // exists on .NET Framework and Mono, which this project no longer targets.
+            if (!ThreadAbortSupported) return;
+
             var label = Ast.Label(typeof(void));
             foreach (var gotoLabel in new Expression[] { Ast.Goto(label), Ast.Empty() }) {
                 var var_tracker = Ast.Parameter(typeof(List<object>));
@@ -668,6 +674,14 @@ namespace IronRuby.Tests {
                     Assert(ReferenceEquals(t[8], t[2]));
                     Assert((ThreadState)t[9] == ThreadState.AbortRequested);
                 }
+            }
+        }
+
+        private static bool ThreadAbortSupported {
+            get {
+                string runtime = System.Runtime.InteropServices.RuntimeInformation.FrameworkDescription;
+                return runtime.StartsWith(".NET Framework", StringComparison.Ordinal)
+                    || runtime.StartsWith("Mono", StringComparison.Ordinal);
             }
         }
 

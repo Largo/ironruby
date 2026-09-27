@@ -407,8 +407,13 @@ System::Reflection::Emit::DynamicMethod.new(""foo"", 1.GetType(), System::Array[
 ");
             Assert(dm.ReturnType == typeof(int));
 
+            // The DLR's ReflectionUtils.CreateDelegate extension, which closes the delegate over a
+            // null target. Written as the extension call `invoke.CreateDelegate(...)` this bound
+            // to MethodInfo.CreateDelegate(Type) once that instance method appeared (.NET 4.5),
+            // and that makes an open-instance delegate, which Action<string> cannot be:
+            // "Cannot bind to the target method because its signature is not compatible".
             var invoke = typeof(TestDelegate).GetMethod("Invoke");
-            var d = invoke.CreateDelegate(typeof(Action<string>));
+            var d = ReflectionUtils.CreateDelegate(invoke, typeof(Action<string>));
             Assert(d is Action<string>);
         }
 
@@ -814,8 +819,18 @@ p I.Mixed(1)
             }
         }
 
+        /// <summary>
+        /// The assembly that defines System.Linq.Enumerable. On .NET Framework that was
+        /// System.Core, which also held Expression - so these tests used to name it by
+        /// typeof(Expression). On .NET Core Expression lives in System.Linq.Expressions and
+        /// Enumerable in System.Linq, and loading the former brings no FirstOrDefault.
+        /// </summary>
+        private static string SystemLinqAssembly {
+            get { return typeof(System.Linq.Enumerable).Assembly.FullName; }
+        }
+
         public void ClrExtensionMethods1() {
-            Context.ObjectClass.SetConstant("SystemCoreAssembly", typeof(Expression).Assembly.FullName);
+            Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
             TestOutput(@"
 load_assembly SystemCoreAssembly
 using_clr_extensions System::Linq
@@ -832,7 +847,7 @@ p a.first_or_default
         /// Loads an assembly that defines more extension methods in the given namespace.
         /// </summary>
         public void ClrExtensionMethods2() {
-            Context.ObjectClass.SetConstant("SystemCoreAssembly", typeof(Expression).Assembly.FullName);
+            Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
             Context.ObjectClass.SetConstant("DummyLinqAssembly", typeof(System.Linq.Dummy).Assembly.FullName);
             TestOutput(@"
 load_assembly DummyLinqAssembly
@@ -850,7 +865,7 @@ p System::Array[Integer].new([1,2,3]).first_or_default
         /// Extension methods not available by default onlty after their declaring namespace is "used".
         /// </summary>
         public void ClrExtensionMethods3() {
-            Context.ObjectClass.SetConstant("SystemCoreAssembly", typeof(Expression).Assembly.FullName);
+            Context.ObjectClass.SetConstant("SystemCoreAssembly", SystemLinqAssembly);
             Context.ObjectClass.SetConstant("DummyLinqAssembly", typeof(System.Linq.Dummy).Assembly.FullName);
             
             TestOutput(@"
@@ -863,9 +878,9 @@ a.first_or_default rescue p $!
 using_clr_extensions System::Linq
 p a.first_or_default
 ", @"
-#<NoMethodError: undefined method `first_or_default' for [1, 2, 3]:System::Int32[]>
+#<NoMethodError: undefined method `first_or_default' for an instance of System::Int32[]>
 1
-");
+");  // names the receiver's class, not its inspect, as CRuby does since 3.3
         }
 
         /// <summary>
@@ -2076,17 +2091,43 @@ $d = D.new { |foo, bar| $foo = foo; $bar = bar; 777 }
             AssertExceptionThrown<LocalJumpError>(() => Engine.Execute(ActionFullName + @".new(&nil)"));
         }
 
+        /// <summary>
+        /// Plays the part of the System.Windows.Forms.Form ClrEvents1 once showed: an
+        /// EventHandler event, a property, and a Close for the handler to call on its sender.
+        /// </summary>
+        public class EventsForm1 {
+            public event EventHandler Shown;
+            public string Text { get; set; }
+            public bool Closed { get; private set; }
+
+            public void Close() {
+                Closed = true;
+            }
+
+            // Application.Run: show the form, then return once it has been closed.
+            public static void Run(EventsForm1/*!*/ form) {
+                var shown = form.Shown;
+                if (shown != null) {
+                    shown(form, EventArgs.Empty);
+                }
+                if (!form.Closed) {
+                    throw new InvalidOperationException("the Shown handler did not close the form");
+                }
+            }
+        }
+
+        /// <summary>
+        /// A block handler for a standard (sender, EventArgs) event, closing over a local and
+        /// calling back into the sender. This used to require WinForms (by its .NET 2.0 strong
+        /// name), show a real Form and run Application.Run on it. WinForms is Windows-only and
+        /// is not referenced by this net8.0/net10.0 project, so it failed with a LoadError on
+        /// every platform; EventsForm1 stands in for the form, and the Ruby side is unchanged.
+        /// </summary>
         public void ClrEvents1() {
-            // TODO:
-            if (_driver.PartialTrust) return;
+            Context.ObjectClass.SetConstant("Form", Context.GetClass(typeof(EventsForm1)));
 
             AssertOutput(delegate() {
                 CompilerTest(@"
-require 'System.Windows.Forms, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089'
-require 'System.Drawing, Version=2.0.0.0, Culture=neutral, PublicKeyToken=b03f5f7f11d50a3a'
-
-Form = System::Windows::Forms::Form
-
 f = Form.new
 
 x = 'outer var'
@@ -2097,11 +2138,14 @@ f.shown do |sender, args|
 end
 
 f.Text = 'hello'
-f.BackColor = System::Drawing::Color.Green
 
-System::Windows::Forms::Application.run f
+Form.run f
+puts f.text
 ");
-            }, "outer var");
+            }, @"
+outer var
+hello
+");
         }
 
         public class ClassWithEvents {
@@ -3354,9 +3398,6 @@ true
         }
 
         public void ClrConversions1() {
-            if (!_driver.RunPython)
-                return;
-
             Runtime.Globals.SetVariable("Inst", new Conversions1());
             Runtime.Globals.SetVariable("Conv", new Convertible1());
 
@@ -3387,7 +3428,9 @@ p Inst.Double(2.0), Inst.Double(4), Inst.Double(System::Byte.new(8)), Inst.Doubl
 29
 ");
             
-            // primitive numerics:
+            // primitive numerics. The Complex parameter is System.Numerics.Complex, which p shows
+            // through its own ToString: "<10; 0>" on .NET 8 and 10, where the "(10+0j)" this once
+            // expected was the Python-style formatting of the DLR's old Complex64.
             TestOutput(@"
 p(*Inst.numerics(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
 ", @"
@@ -3400,7 +3443,7 @@ p(*Inst.numerics(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11))
 7
 8 (UInt64)
 9
-(10+0j)
+" + new Complex(10, 0).ToString() + @"
 Convertible(11)
 ");
                         
@@ -3457,6 +3500,7 @@ p Inst.Foo(a) rescue p $!
             Assert(r1 == 124);
 
             // foreign meta-object conversion:
+            if (!_driver.RunPython) return;
             var py = Runtime.GetEngine("python");
             var scope = Runtime.CreateScope();
             py.Execute(@"def foo(x): return x + 2", scope);

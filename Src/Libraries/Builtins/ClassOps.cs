@@ -49,6 +49,14 @@ namespace IronRuby.Builtins {
             return new RuleGenerator(RuleGenerators.InstanceAllocator);
         }
 
+        // Module.allocate is undefined (see ModuleOps), and Class's singleton class inherits from
+        // Module's: MRI defines allocate once more on Class's singleton class so Class.allocate
+        // still works (object.c: rb_define_method(rb_singleton_class(rb_cClass), "allocate", ...)).
+        [RubyMethod("allocate", RubyMethodAttributes.PublicSingleton)]
+        public static RuleGenerator/*!*/ AllocateClass() {
+            return new RuleGenerator(RuleGenerators.InstanceAllocator);
+        }
+
         [RubyMethod("new")]
         public static RuleGenerator/*!*/ New() {
             return new RuleGenerator(RuleGenerators.InstanceConstructor);
