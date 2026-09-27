@@ -1865,6 +1865,23 @@ namespace IronRuby.Builtins {
         /// bytes are served first - they are already here, so the read cannot block - and a
         /// stream with no descriptor behind it reads as it would blocking.
         /// </summary>
+        /// <summary>
+        /// Whether a read would return at once. poll(2) answers on Unix; Windows has none (and asking
+        /// libc there was a DllNotFoundException, which took Bundler's IO#readpartial of a .gem
+        /// file down with it), so a pipe is asked with PeekNamedPipe and a file is always ready, as
+        /// it is to poll(2).
+        /// </summary>
+        private static bool IsReadableNow(RubyIO/*!*/ io, Stream/*!*/ stream) {
+            if (!RubyIO.HasPoll) {
+                var windowsPipe = IoReadiness.GetWindowsPipe(io);
+                if (windowsPipe != null) {
+                    return IoReadiness.IsWindowsPipeReadable(windowsPipe);
+                }
+                return stream is FileStream;
+            }
+            return DescriptorStream.IsReadableNow(RubyIO.DescriptorOf(stream));
+        }
+
         private static MutableString ReadOnceWithoutWaiting(RubyIO/*!*/ io, int count, MutableString buffer) {
             if (count < 0) {
                 throw RubyExceptions.CreateArgumentError("negative length " + count + " given");
@@ -1910,7 +1927,7 @@ namespace IronRuby.Builtins {
                 // for more: an ordinary read that would block raises EAGAIN out of here, and the
                 // bytes taken out of the buffer would go with it and not be in the descriptor to
                 // be read again.
-                if (buffered > 0 && !DescriptorStream.IsReadableNow(RubyIO.DescriptorOf(stream.BaseStream))) {
+                if (buffered > 0 && !IsReadableNow(io, stream.BaseStream)) {
                     return buffer;
                 }
                 int more = io.AppendBytes(buffer, count);

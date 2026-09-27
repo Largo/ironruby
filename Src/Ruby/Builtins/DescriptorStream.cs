@@ -283,7 +283,8 @@ namespace IronRuby.Builtins {
         /// produced bytes and must not risk an EWOULDBLOCK that would take them with it.
         /// </summary>
         public static bool IsReadableNow(int descriptor) {
-            if (descriptor < 0) {
+            // No poll(2) off Unix (the "descriptor" there is a handle): say no, which never blocks.
+            if (descriptor < 0 || Path.DirectorySeparatorChar != '/') {
                 return false;
             }
             var fds = new PollFd[1];
