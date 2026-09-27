@@ -297,7 +297,8 @@ jobs:
           failures=$(grep -c '^> FAILED' results.txt || true)
           echo "failure lines: $failures (baseline $BASELINE)"
           echo "::group::failing tests"
-          grep -oE '^> FAILED: .*' results.txt | sort | uniq -c | sort -rn
+          # grep exits 1 when nothing matches, which under pipefail would fail a clean run
+          { grep -oE '^> FAILED: .*' results.txt || true; } | sort | uniq -c | sort -rn
           echo "::endgroup::"
           if [ "$failures" -gt "$BASELINE" ]; then
             echo "::group::first failures in detail"
