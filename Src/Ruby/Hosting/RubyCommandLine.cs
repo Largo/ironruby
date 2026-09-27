@@ -157,7 +157,7 @@ namespace IronRuby.Hosting {
                 return 1;
             }
 
-            if (options.LoopOverInput && RubyContext.AlternativeParser == null) {
+            if (options.LoopOverInput && RubyContext.UsesLegacyParser) {
                 // The program has to be read rather than handed to the compiler as a path, so
                 // that the -n loop can be wrapped around it.
                 string path = RubyUtils.CanonicalizePath(fileName);
@@ -243,7 +243,7 @@ namespace IronRuby.Hosting {
         protected override int RunCommand(string/*!*/ command) {
             var options = ((RubyContext)Language).RubyOptions;
             // prism wraps the loop around the parsed program itself (PrismAstBridge).
-            bool wrap = options.LoopOverInput && RubyContext.AlternativeParser == null;
+            bool wrap = options.LoopOverInput && RubyContext.UsesLegacyParser;
             if (wrap) {
                 command = WrapInInputLoop(command, options);
             }
