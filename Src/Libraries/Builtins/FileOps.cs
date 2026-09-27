@@ -705,56 +705,106 @@ namespace IronRuby.Builtins {
             return (rooted ? "/" : "") + rest.Substring(0, slash);
         }
 
+        /// <summary>
+        /// rb_file_dirname as MRI builds it for Windows (DOSISH_DRIVE_LETTER and DOSISH_UNC):
+        /// "\\\\server\\share" is a root that dirname leaves alone - with any extra leading
+        /// separators folded into the two - "C:" and "C:/" are roots too, and "C:foo" is
+        /// drive-relative, whose directory is "C:.". The .NET Path based version this replaces
+        /// took UNC paths apart one component too far.
+        /// </summary>
         private static MutableString/*!*/ WindowsDirName(MutableString/*!*/ path) {
-            string strPath = path.ConvertToString();
-            string directoryName = strPath;
+            string str = path.ConvertToString();
+            int end = str.Length;
+            int name = 0;
+            int root = SkipRoot(str, 0, end);
+            if (root > name + 1 && IsDirSeparator(str[name])) {
+                name = root - 2;
+                root = SkipPrefix(str, name, end);
+            }
 
-            if (IsValidPath(strPath)) {
-                strPath = StripPathCharacters(strPath);
+            int last = LastDirSeparator(str, root, end);
+            int p = (last < 0) ? root : last;
+            if (p == name) {
+                return MutableString.CreateMutable(".", path.Encoding).TaintBy(path);
+            }
 
-                // handle top-level UNC paths
-                directoryName = Path.GetDirectoryName(strPath);
-                if (directoryName == null) {
-                    return MutableString.CreateMutable(strPath, path.Encoding);
-                }
-
-                string fileName = Path.GetFileName(strPath);
-                if (!String.IsNullOrEmpty(fileName)) {
-                    directoryName = StripPathCharacters(strPath.Substring(0, strPath.LastIndexOf(fileName, StringComparison.Ordinal)));
-                }
+            string result;
+            if (HasDriveLetter(str, name) && name + 2 < end && IsDirSeparator(str[name + 2])) {
+                int top = SkipRoot(str, name + 2, end);
+                result = str.Substring(name, 3) + str.Substring(top, Math.Max(p - top, 0));
             } else {
-                if (directoryName.Length > 1) {
-                    directoryName = "//";
-                }
+                result = str.Substring(name, p - name);
             }
-
-            directoryName = String.IsNullOrEmpty(directoryName) ? "." : directoryName;
-            return MutableString.CreateMutable(directoryName, path.Encoding);
+            if (HasDriveLetter(str, name) && root == name + 2 && p - name == 2) {
+                result += ".";
+            }
+            return MutableString.CreateMutable(result, path.Encoding).TaintBy(path);
         }
 
-        private static bool IsValidPath(string path) {
-            foreach (char c in path) {
-                if (c != '/' && c != '\\') {
-                    return true;
-                }
-            }
-            return false;
-
+        private static bool IsDirSeparator(char c) {
+            return c == '/' || c == '\\';
         }
 
-        private static string StripPathCharacters(string path) {
-            int limit = 0;
-            for (int charIndex = path.Length - 1; charIndex > 0; charIndex--) {
-                if (!((path[charIndex] == '/') || (path[charIndex] == '\\')))
-                    break;
-                limit++;
+        private static bool HasDriveLetter(string/*!*/ path, int i) {
+            return i + 1 < path.Length && path[i + 1] == ':' &&
+                ((path[i] >= 'a' && path[i] <= 'z') || (path[i] >= 'A' && path[i] <= 'Z'));
+        }
+
+        // skiproot: past a drive letter and the separators that follow.
+        private static int SkipRoot(string/*!*/ path, int i, int end) {
+            if (i + 2 <= end && HasDriveLetter(path, i)) {
+                i += 2;
             }
-            if (limit > 0) {
-                limit--;
-                if (path.Length == 3 && path[1] == ':') limit--;
-                return path.Substring(0, path.Length - limit - 1);
+            while (i < end && IsDirSeparator(path[i])) {
+                i++;
             }
-            return path;
+            return i;
+        }
+
+        // skipprefix: past "\\\\server\\share" (the separator after it not included), or a drive letter.
+        private static int SkipPrefix(string/*!*/ path, int i, int end) {
+            if (i + 2 <= end && IsDirSeparator(path[i]) && IsDirSeparator(path[i + 1])) {
+                i += 2;
+                while (i < end && IsDirSeparator(path[i])) {
+                    i++;
+                }
+                i = NextDirSeparator(path, i, end);
+                if (i < end && i + 1 < end && !IsDirSeparator(path[i + 1])) {
+                    i = NextDirSeparator(path, i + 1, end);
+                }
+                return i;
+            }
+            if (HasDriveLetter(path, i)) {
+                return i + 2;
+            }
+            return i;
+        }
+
+        private static int NextDirSeparator(string/*!*/ path, int i, int end) {
+            while (i < end && !IsDirSeparator(path[i])) {
+                i++;
+            }
+            return i;
+        }
+
+        // strrdirsep: the start of the last run of separators that something still follows, or -1.
+        private static int LastDirSeparator(string/*!*/ path, int i, int end) {
+            int last = -1;
+            while (i < end) {
+                if (IsDirSeparator(path[i])) {
+                    int run = i++;
+                    while (i < end && IsDirSeparator(path[i])) {
+                        i++;
+                    }
+                    if (i >= end) {
+                        break;
+                    }
+                    last = run;
+                } else {
+                    i++;
+                }
+            }
+            return last;
         }
 
         [RubyMethod("extname", RubyMethodAttributes.PublicSingleton)]
@@ -785,6 +835,12 @@ namespace IronRuby.Builtins {
         /// the end, so "foo." has the extension ".".
         /// </summary>
         private static string/*!*/ FindExtension(string/*!*/ name) {
+            if (IsWindows) {
+                // NTFS ignores trailing dots and spaces in a name - "foo." and "foo" are one file -
+                // and MRI's Windows build skips them when it looks for the extension, so "foo."
+                // has none and "a.rb. " has ".rb".
+                name = name.TrimEnd('.', ' ');
+            }
             int start = 0;
             while (start < name.Length && name[start] == '.') {
                 start++;
@@ -872,23 +928,32 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateArgumentError("can't find user {0}", userName);
             }
 
-            string home = RubyEnvironment.GetVariable(context.Platform, "HOME");
-            if (home == null) {
-                string drive = RubyEnvironment.GetVariable(context.Platform, "HOMEDRIVE");
-                string tail = RubyEnvironment.GetVariable(context.Platform, "HOMEPATH");
-                if (tail != null) {
-                    home = (drive ?? "") + tail;
-                }
-            }
-            if (home == null) {
-                home = RubyEnvironment.GetVariable(context.Platform, "USERPROFILE");
-            }
+            string home = WindowsHomeDirectory(context);
             if (home == null) {
                 throw RubyExceptions.CreateArgumentError("couldn't find HOME environment -- expanding `~'");
             }
-
-            home = home.Replace(AltDirectorySeparatorChar, DirectorySeparatorChar);
             return (rest == null) ? home : home + "/" + rest;
+        }
+
+        /// <summary>
+        /// rb_w32_home_dir: $HOME, then $USERPROFILE, then $HOMEDRIVE + $HOMEPATH, then the
+        /// profile folder Windows itself knows - with forward slashes, which is how Dir.home and
+        /// File.expand_path("~") answer there. Null if there is nothing to go on.
+        /// </summary>
+        internal static string WindowsHomeDirectory(RubyContext/*!*/ context) {
+            string home = RubyEnvironment.GetVariable(context.Platform, "HOME");
+            if (String.IsNullOrEmpty(home)) {
+                home = RubyEnvironment.GetVariable(context.Platform, "USERPROFILE");
+            }
+            if (String.IsNullOrEmpty(home)) {
+                string drive = RubyEnvironment.GetVariable(context.Platform, "HOMEDRIVE");
+                string tail = RubyEnvironment.GetVariable(context.Platform, "HOMEPATH");
+                home = (drive != null && tail != null) ? drive + tail : null;
+            }
+            if (String.IsNullOrEmpty(home)) {
+                home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            }
+            return String.IsNullOrEmpty(home) ? null : home.Replace('\\', '/');
         }
 
         /// <summary>

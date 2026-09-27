@@ -5543,12 +5543,17 @@ class ClosedQueueError < StopIteration; end unless defined?(ClosedQueueError)
 class IO
   # Ruby defines NULL on IO; File inherits it. Defining it on File alone left
   # IO::NULL undefined, which several specs and helpers reference.
-  NULL = "/dev/null" unless const_defined?(:NULL, false)
+  NULL = (::File::ALT_SEPARATOR == "\\" ? "NUL" : "/dev/null") unless const_defined?(:NULL, false)
 end
 
 class << Dir
   # Dir.home / Dir.children / Dir.each_child / Dir.empty? postdate the 1.9 core.
   def home(user = nil)
+    if user.nil? && ::File::ALT_SEPARATOR == "\\"
+      # rb_w32_home_dir: HOME, USERPROFILE, HOMEDRIVE + HOMEPATH, then the profile folder -
+      # the same lookup File.expand_path("~") makes - with forward slashes, in UTF-8.
+      return ::File.expand_path("~").encode(::Encoding::UTF_8)
+    end
     if user.nil?
       dir = ENV['HOME']
       unless dir
