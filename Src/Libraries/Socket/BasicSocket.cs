@@ -1131,9 +1131,13 @@ namespace IronRuby.StandardLibrary.Sockets {
             Assert.NotNull(address);
             if (address.Equals(IPAddress.Any) || address.Equals(IPAddress.Loopback)) {
                 return MakeEntry(address, doNotReverseLookup);
-            } else {
-                return Dns.GetHostEntry(address);
             }
+            IPHostEntry entry = Dns.GetHostEntry(address);
+            if (IsWindows) {
+                // the name getnameinfo gives, as for every other reverse lookup (see WindowsNameInfo)
+                entry.HostName = WindowsNameInfo(address) ?? entry.HostName;
+            }
+            return entry;
         }
 
         // TODO: handle other invalid addresses
@@ -1268,8 +1272,46 @@ namespace IronRuby.StandardLibrary.Sockets {
         internal static string/*!*/ IPAddressToHostName(IPAddress/*!*/ address, bool doNotReverseLookup) {
             if (address.Equals(IPAddress.Any) || doNotReverseLookup) {
                 return address.ToString();
-            } else {
-                return Dns.GetHostEntry(address).HostName;
+            }
+            if (IsWindows) {
+                string name = WindowsNameInfo(address);
+                if (name != null) {
+                    return name;
+                }
+            }
+            return Dns.GetHostEntry(address).HostName;
+        }
+
+        [DllImport("ws2_32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+        private static extern int GetNameInfoW(byte[] address, int addressLength, StringBuilder host, int hostLength,
+            StringBuilder service, int serviceLength, int flags);
+
+        /// <summary>
+        /// getnameinfo(3), which is what MRI's reverse lookups are. .NET's Dns.GetHostEntry(address)
+        /// resolves the name forward again and answers with that entry's name, which on Windows is
+        /// the short host name where getnameinfo gives the fully qualified one ("host.domain" for
+        /// ::1 and the machine's own addresses). Null when winsock does not answer.
+        /// </summary>
+        private static string WindowsNameInfo(IPAddress/*!*/ address) {
+            try {
+                // Touching the socket API is what makes .NET call WSAStartup.
+                if (!Socket.OSSupportsIPv4 && !Socket.OSSupportsIPv6) {
+                    return null;
+                }
+                SocketAddress sockaddr = new IPEndPoint(address, 0).Serialize();
+                byte[] bytes = new byte[sockaddr.Size];
+                for (int i = 0; i < bytes.Length; i++) {
+                    bytes[i] = sockaddr[i];
+                }
+                var host = new StringBuilder(1025);     // NI_MAXHOST
+                if (GetNameInfoW(bytes, bytes.Length, host, host.Capacity, null, 0, 0) != 0) {
+                    return null;
+                }
+                return host.ToString();
+            } catch (DllNotFoundException) {
+                return null;
+            } catch (EntryPointNotFoundException) {
+                return null;
             }
         }
 
