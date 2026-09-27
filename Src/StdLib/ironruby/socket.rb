@@ -2378,6 +2378,9 @@ class Socket
   end
 
   def accept_nonblock(exception: true)
+    # accept(2) on a socket that is not listening is EINVAL, whether or not it would block;
+    # on Windows a poll of such a socket says "not readable", which read as "would block".
+    raise Errno::EINVAL, "accept(2)" unless __ir_listening?
     unless __ir_readable_now?
       raise IO::EAGAINWaitReadable, "accept(2) would block" if exception
       return :wait_readable

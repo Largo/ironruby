@@ -290,6 +290,9 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// </summary>
         [RubyMethod("__ir_raw_socketpair", RubyMethodAttributes.PublicSingleton)]
         public static RubyArray/*!*/ CreateSocketPair(RubyClass/*!*/ self, [DefaultProtocol]int type, [DefaultProtocol]int protocol) {
+            if (IsWindows) {
+                return CreateWindowsSocketPair(self, type);
+            }
             int[] descriptors = new int[2];
             if (PosixMessages.socketpair(UnixAddressFamilyNumber, type, protocol, descriptors) != 0) {
                 throw Posix.Error(Marshal.GetLastWin32Error(), null);
@@ -298,6 +301,85 @@ namespace IronRuby.StandardLibrary.Sockets {
             result.Add(CreateForClass(self, new Socket(new SafeSocketHandle((IntPtr)descriptors[0], true))));
             result.Add(CreateForClass(self, new Socket(new SafeSocketHandle((IntPtr)descriptors[1], true))));
             return result;
+        }
+
+        internal static readonly bool IsWindows = RuntimeInformation.IsOSPlatform(OSPlatform.Windows);
+
+        /// <summary>
+        /// socketpair(2) for AF_UNIX on Windows, which has no such call: MRI's Windows build binds a
+        /// listener on a temporary path, connects to it and accepts (win32.c), and ruby/spec
+        /// describes exactly what that looks like - the first socket (the accepted one) has the
+        /// path as its address and an unnamed peer, the second is unnamed with the path as its
+        /// peer. The file is removed once both ends are connected. Only SOCK_STREAM exists there.
+        /// </summary>
+        private static RubyArray/*!*/ CreateWindowsSocketPair(RubyClass/*!*/ self, int type) {
+            if (type != (int)SocketType.Stream) {
+                throw new SocketException((int)SocketError.ProtocolType);
+            }
+            string path = Path.Combine(Path.GetTempPath(), "ruby-socketpair-" + Guid.NewGuid().ToString("N").Substring(0, 16));
+            var listener = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            Socket client = null;
+            try {
+                listener.Bind(new UnixDomainSocketEndPoint(path));
+                listener.Listen(1);
+                client = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+                client.Connect(new UnixDomainSocketEndPoint(path));
+                Socket accepted = listener.Accept();
+                RubyArray result = new RubyArray(2);
+                result.Add(CreateForClass(self, accepted));
+                result.Add(CreateForClass(self, client));
+                client = null;
+                return result;
+            } finally {
+                if (client != null) {
+                    client.Dispose();
+                }
+                listener.Dispose();
+                try {
+                    File.Delete(path);
+                } catch (Exception) {
+                    // a temporary file left behind is not worth failing the pair over
+                }
+            }
+        }
+
+        /// <summary>
+        /// A buffer for receiving at most <paramref name="length"/> bytes. Winsock does not truncate
+        /// a datagram longer than the buffer the way recv(2) does on Unix - it fails with
+        /// WSAEMSGSIZE, which .NET raises and CRuby does not - so on Windows a datagram socket is
+        /// read into a buffer that holds any datagram, and the caller keeps the first
+        /// <paramref name="length"/> bytes.
+        /// </summary>
+        internal static byte[]/*!*/ ReceiveBuffer(Socket/*!*/ socket, int length) {
+            const int MaxDatagram = 65536;
+            if (IsWindows && length < MaxDatagram && socket.SocketType != SocketType.Stream) {
+                return new byte[MaxDatagram];
+            }
+            return new byte[length];
+        }
+
+        /// <summary>
+        /// Whether the socket is listening for connections, which is what accept(2) needs:
+        /// SO_ACCEPTCONN. A closed socket, or one that cannot say, counts as listening, so that
+        /// the accept itself reports what is wrong.
+        /// </summary>
+        [RubyMethod("__ir_listening?", RubyMethodAttributes.PrivateInstance)]
+        public static bool IsListening(RubyBasicSocket/*!*/ self) {
+            if (self.Closed) {
+                return true;
+            }
+            Socket socket = self.Socket;
+            if (!socket.IsBound) {
+                return false;
+            }
+            try {
+                object value = socket.GetSocketOption(SocketOptionLevel.Socket, SocketOptionName.AcceptConnection);
+                return !(value is int) || (int)value != 0;
+            } catch (SocketException) {
+                return true;
+            } catch (ObjectDisposedException) {
+                return true;
+            }
         }
 
         internal static RubyBasicSocket/*!*/ CreateForClass(RubyClass/*!*/ self, Socket/*!*/ socket) {
@@ -674,8 +756,9 @@ namespace IronRuby.StandardLibrary.Sockets {
 
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
 
-            byte[] buffer = new byte[length];
-            int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.Receive(buffer, 0, length, sFlags));
+            byte[] buffer = ReceiveBuffer(self.Socket, length);
+            int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.Receive(buffer, 0, buffer.Length, sFlags));
+            received = Math.Min(received, length);
 
             MutableString str = MutableString.CreateBinary(received);
             str.Append(buffer, 0, received);
@@ -748,6 +831,9 @@ namespace IronRuby.StandardLibrary.Sockets {
             byte[] data = message.ConvertToBytes();
             byte[] name = (address != null) ? address.ConvertToBytes() : null;
             List<ControlMessage> ancillary = ToControlMessages(controls);
+            if (IsWindows) {
+                return WindowsSendMessage(self, data, flags, address, ancillary, nonBlocking);
+            }
             int descriptor = (int)self.Socket.Handle;
 
             int errno = 0;
@@ -771,6 +857,9 @@ namespace IronRuby.StandardLibrary.Sockets {
             bool nonBlocking) {
 
             Socket socket = self.Socket;
+            if (IsWindows) {
+                return WindowsReceiveMessage(self, maxMessageLength, flags, nonBlocking);
+            }
             int descriptor = (int)socket.Handle;
 
             int errno = 0;
@@ -804,6 +893,115 @@ namespace IronRuby.StandardLibrary.Sockets {
             result.Add(ancillary);
             return result;
         }
+
+        #region sendmsg, recvmsg on Windows
+
+        /// <summary>
+        /// sendmsg(2) where there is no libc: a send, or a sendto when there is an address, through
+        /// .NET. Winsock's WSASendMsg is reached only through a function pointer and carries none
+        /// of the control messages Unix programs send (SCM_RIGHTS, SCM_CREDENTIALS), so ancillary
+        /// data is refused with EOPNOTSUPP rather than silently dropped. Before this, sendmsg and
+        /// recvmsg were a DllNotFoundException for libc on Windows.
+        /// </summary>
+        private static RubyArray/*!*/ WindowsSendMessage(RubyBasicSocket/*!*/ self, byte[]/*!*/ data, int flags,
+            MutableString address, List<ControlMessage> controls, bool nonBlocking) {
+
+            if (controls != null && controls.Count > 0) {
+                return RubyOps.MakeArray2(EOPNOTSUPP, -1);
+            }
+            Socket socket = self.Socket;
+            try {
+                EndPoint target = (address != null) ? CreateEndPoint(address) : null;
+                Func<int> send = () => (target != null)
+                    ? socket.SendTo(data, (SocketFlags)flags, target)
+                    : socket.Send(data, (SocketFlags)flags);
+                int sent = nonBlocking ? WithoutBlocking(socket, send) : Blocking(send);
+                return RubyOps.MakeArray2(0, sent);
+            } catch (SocketException e) {
+                return RubyOps.MakeArray2(ToErrno(e.SocketErrorCode), -1);
+            }
+        }
+
+        /// <summary>
+        /// recvmsg(2) where there is no libc: a recv, or a recvfrom on a datagram socket, through
+        /// .NET. A datagram longer than <paramref name="maxMessageLength"/> is cut to it and
+        /// flagged MSG_TRUNC, as the kernel does on Unix; no control messages come back.
+        /// </summary>
+        private static RubyArray/*!*/ WindowsReceiveMessage(RubyBasicSocket/*!*/ self, int maxMessageLength, int flags, bool nonBlocking) {
+            const int MSG_TRUNC = 0x20;     // the value the libc path reports
+
+            Socket socket = self.Socket;
+            bool datagram = socket.SocketType != SocketType.Stream;
+            byte[] buffer = ReceiveBuffer(socket, maxMessageLength);
+            EndPoint from = datagram ? AnyEndPoint(socket.AddressFamily) : null;
+
+            int received;
+            try {
+                Func<int> receive = () => datagram
+                    ? socket.ReceiveFrom(buffer, 0, buffer.Length, (SocketFlags)flags, ref from)
+                    : socket.Receive(buffer, 0, buffer.Length, (SocketFlags)flags);
+                received = nonBlocking ? WithoutBlocking(socket, receive) : Blocking(socket, SelectMode.SelectRead, receive);
+            } catch (SocketException e) {
+                var failed = new RubyArray(5);
+                failed.Add(ToErrno(e.SocketErrorCode));
+                failed.Add(null);
+                failed.Add(null);
+                failed.Add(0);
+                failed.Add(new RubyArray(0));
+                return failed;
+            }
+
+            int resultFlags = 0;
+            if (received > maxMessageLength) {
+                received = maxMessageLength;
+                resultFlags |= MSG_TRUNC;
+            }
+
+            var result = new RubyArray(5);
+            result.Add(0);
+            var data = MutableString.CreateBinary(received);
+            data.Append(buffer, 0, received);
+            result.Add(data);
+            if (from != null) {
+                SocketAddress sender = from.Serialize();
+                byte[] bytes = new byte[sender.Size];
+                for (int i = 0; i < bytes.Length; i++) {
+                    bytes[i] = sender[i];
+                }
+                result.Add(MutableString.CreateBinary(bytes));
+            } else {
+                result.Add(null);
+            }
+            result.Add(resultFlags);
+            result.Add(new RubyArray(0));
+            return result;
+        }
+
+        private const int EOPNOTSUPP = 95;
+
+        /// <summary>The Linux errno for what winsock reported, which is what the prelude maps.</summary>
+        private static int ToErrno(SocketError error) {
+            switch (error) {
+                case SocketError.WouldBlock: return 11;                    // EAGAIN
+                case SocketError.MessageSize: return 90;                   // EMSGSIZE
+                case SocketError.DestinationAddressRequired: return 89;    // EDESTADDRREQ
+                case SocketError.NotConnected: return 107;                 // ENOTCONN
+                case SocketError.IsConnected: return 106;                  // EISCONN
+                case SocketError.ConnectionReset: return 104;              // ECONNRESET
+                case SocketError.ConnectionAborted: return 103;            // ECONNABORTED
+                case SocketError.ConnectionRefused: return 111;            // ECONNREFUSED
+                case SocketError.NetworkUnreachable: return 101;           // ENETUNREACH
+                case SocketError.HostUnreachable: return 113;              // EHOSTUNREACH
+                case SocketError.AccessDenied: return 13;                  // EACCES
+                case SocketError.Shutdown: return 32;                      // EPIPE
+                case SocketError.OperationNotSupported: return EOPNOTSUPP;
+                case SocketError.AddressFamilyNotSupported: return 97;     // EAFNOSUPPORT
+                case SocketError.NoBufferSpaceAvailable: return 105;       // ENOBUFS
+                default: return 22;                                        // EINVAL
+            }
+        }
+
+        #endregion
 
         private static List<ControlMessage> ToControlMessages(RubyArray controls) {
             if (controls == null || controls.Count == 0) {

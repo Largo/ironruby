@@ -137,7 +137,13 @@ namespace IronRuby.StandardLibrary.Sockets {
         /// client side of a connection and for both ends of a socketpair.
         /// </summary>
         internal static string/*!*/ PathOf(EndPoint endPoint) {
-            return endPoint == null ? "" : endPoint.ToString();
+            string path = endPoint == null ? "" : endPoint.ToString();
+            // Windows reports an unnamed socket as the whole sun_path, zeroed, which .NET reads as
+            // an abstract name ("@" and a hundred NULs). Unnamed is "" there as everywhere.
+            if (path.Length > 0 && path[0] == '@' && path.TrimEnd('\0').Length == 1) {
+                return "";
+            }
+            return path;
         }
 
         internal static MutableString/*!*/ EncodePath(RubyContext/*!*/ context, string/*!*/ path) {
@@ -190,8 +196,8 @@ namespace IronRuby.StandardLibrary.Sockets {
             int length, object/*Numeric*/ flags) {
 
             SocketFlags socketFlags = ConvertToSocketFlag(fixnumCast, flags);
-            byte[] buffer = new byte[length];
             Socket socket = self.Socket;
+            byte[] buffer = ReceiveBuffer(socket, length);
 
             EndPoint from;
             int received;
@@ -205,7 +211,7 @@ namespace IronRuby.StandardLibrary.Sockets {
             }
 
             MutableString str = MutableString.CreateBinary();
-            str.Append(buffer, 0, received);
+            str.Append(buffer, 0, Math.Min(received, length));
             str.IsTainted = true;
             return RubyOps.MakeArray2(str, AddressArray(self.Context, from));
         }

@@ -338,9 +338,10 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static RubyArray/*!*/ ReceiveFrom(ConversionStorage<int>/*!*/ fixnumCast, RubySocket/*!*/ self, 
             int length, object/*Numeric*/ flags) {
             SocketFlags sFlags = ConvertToSocketFlag(fixnumCast, flags);
-            byte[] buffer = new byte[length];
+            byte[] buffer = ReceiveBuffer(self.Socket, length);
             EndPoint fromEP = AnyEndPoint(self.Socket.AddressFamily);
             int received = Blocking(self.Socket, SelectMode.SelectRead, () => self.Socket.ReceiveFrom(buffer, sFlags, ref fromEP));
+            received = Math.Min(received, length);
             MutableString str = MutableString.CreateBinary();
             str.Append(buffer, 0, received);
             str.IsTainted = true;
