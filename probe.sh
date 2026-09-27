@@ -1,7 +1,15 @@
 #!/bin/bash
 # Windows experiments; runs in the ironruby checkout.
-set -x
 export RUBY_EXE="$(cygpath -w "$PWD/ir.cmd")"
+dotnet tool install -g dotnet-stack >/dev/null 2>&1
+export PATH="$PATH:$HOME/.dotnet/tools:/c/Users/runneradmin/.dotnet/tools"
+
+stacks() {
+  for p in $(tasklist //FI "IMAGENAME eq ir.exe" //FO CSV //NH | cut -d, -f2 | tr -d '"'); do
+    echo "=== stacks of ir.exe $p"
+    timeout 60 dotnet-stack report -p "$p" 2>&1 | head -80
+  done
+}
 
 watch() { # seconds command...
   local secs=$1; shift
@@ -12,36 +20,31 @@ watch() { # seconds command...
     sleep 1
   done
   echo "=== STILL RUNNING after ${secs}s"
-  tasklist //v | grep -i -E "ir.exe|cmd.exe|ruby" | head -20
-  wmic process where "name='ir.exe' or name='cmd.exe'" get ProcessId,ParentProcessId,CommandLine 2>/dev/null | head -20
+  tasklist //v | grep -i -E "ir.exe|cmd.exe" | head -20
+  stacks
   kill $pid 2>/dev/null
   taskkill //F //IM ir.exe >/dev/null 2>&1
 }
 
-echo "--- 1. child writing into a closed pipe"
-cat > p1.rb <<'RUBY'
-STDERR.puts "child start"
-begin
-  loop { puts "y" * 100 }
-rescue Exception => e
-  STDERR.puts "child got #{e.class}: #{e.message}"
-  raise
-end
-RUBY
-watch 40 bash -c 'cmd //c ir.cmd p1.rb | head -c 10; echo; echo "pipeline status ${PIPESTATUS[*]}"'
-
-echo "--- 2. IO.popen close while the child writes"
-cat > p2.rb <<'RUBY'
+echo "--- 1. the spec's child: rescue EPIPE, then exit"
+cat > p3.rb <<'RUBY'
 t = Time.now
-cmd = "#{ENV['RUBY_EXE']} p1.rb"
-io = IO.popen(cmd, 'r')
+io = IO.popen("#{ENV['RUBY_EXE']} -e \"r = loop{puts %q(y); 0} rescue 1; STDERR.puts %q(rescued); exit r\"", 'r')
 STDERR.puts "pid #{io.pid}"
-sleep 2
+sleep 3
 STDERR.puts "closing"
 io.close
 STDERR.puts "closed: #{$?.inspect} after #{Time.now - t}"
 RUBY
-watch 60 cmd //c ir.cmd p2.rb
+watch 40 cmd //c ir.cmd p3.rb
 
-echo "--- 3. the spec itself"
-watch 120 cmd //c ir.cmd -Imspec/lib mspec/bin/mspec-run -f s spec/core/io/close_spec.rb
+echo "--- 2. spawn with [cmd.exe, /C]"
+cat > p4.rb <<'RUBY'
+p Process.__spawn_command__([["cmd.exe", "/C"], "/C", "echo", "argv_zero"], nil)
+pid = Process.spawn(["cmd.exe", "/C"], "/C", "echo", "argv_zero")
+Process.wait pid
+p $?
+system("cmd.exe", "/C", "echo", "three")
+p $?
+RUBY
+watch 40 cmd //c ir.cmd p4.rb
