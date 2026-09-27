@@ -386,14 +386,16 @@ namespace IronRuby.Builtins {
             int gid = ToUidGid(context, group, false);
 
             foreach (var path in paths) {
-                string strPath = context.DecodePath(Protocols.CastToPath(toPath, path));
+                // #to_path once per argument, as MRI converts it once.
+                MutableString pathStr = Protocols.CastToPath(toPath, path);
+                string strPath = context.DecodePath(pathStr);
                 if (Posix.IsAvailable) {
                     int errno;
                     int rc = followLinks ? Posix.Chown(strPath, uid, gid, out errno) : Posix.LChown(strPath, uid, gid, out errno);
                     if (rc != 0) {
                         throw Posix.Error(errno, strPath);
                     }
-                } else if (!Exists(context, Protocols.CastToPath(toPath, path))) {
+                } else if (!Exists(context, pathStr)) {
                     throw RubyExceptions.CreateENOENT("No such file or directory - {0}", strPath);
                 }
             }
