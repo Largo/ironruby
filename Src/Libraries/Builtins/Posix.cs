@@ -271,17 +271,19 @@ namespace IronRuby.Builtins {
 
         /// <summary>
         /// crypt(3). Both arguments are C strings, so they are passed with the terminator the
-        /// caller is expected to have left room for. Null when the library is not there or the
-        /// salt is one it does not recognise - crypt sets errno and answers NULL for that.
+        /// caller is expected to have left room for. Null when the salt is one the library does
+        /// not recognise - crypt sets errno and answers NULL for that. Where there is no libcrypt
+        /// at all - Windows - the traditional DES crypt MRI compiles in there (missing/crypt.c)
+        /// answers instead; it was Errno::EINVAL for every call.
         /// </summary>
         internal static string Crypt(byte[]/*!*/ key, byte[]/*!*/ salt) {
             try {
                 IntPtr result = sys_crypt(key, salt);
                 return (result == IntPtr.Zero) ? null : Marshal.PtrToStringAnsi(result);
             } catch (DllNotFoundException) {
-                return null;
+                return UnixCrypt.Crypt(key, salt);
             } catch (EntryPointNotFoundException) {
-                return null;
+                return UnixCrypt.Crypt(key, salt);
             }
         }
 
