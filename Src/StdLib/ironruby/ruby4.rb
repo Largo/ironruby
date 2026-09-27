@@ -5550,9 +5550,13 @@ class << Dir
   # Dir.home / Dir.children / Dir.each_child / Dir.empty? postdate the 1.9 core.
   def home(user = nil)
     if user.nil? && ::File::ALT_SEPARATOR == "\\"
-      # rb_w32_home_dir: HOME, USERPROFILE, HOMEDRIVE + HOMEPATH, then the profile folder -
-      # the same lookup File.expand_path("~") makes - with forward slashes, in UTF-8.
-      return ::File.expand_path("~").encode(::Encoding::UTF_8)
+      # rb_w32_home_dir: HOME, USERPROFILE, HOMEDRIVE + HOMEPATH, then the profile folder
+      # Windows knows, with forward slashes, in UTF-8 - and otherwise as it was set: a HOME of
+      # "/home" is "/home", not expanded against the current drive. File.expand_path("~")
+      # makes the same lookup, and is what answers when no variable is set at all.
+      dir = [ENV['HOME'], ENV['USERPROFILE']].find { |d| d && !d.empty? }
+      dir ||= ENV['HOMEDRIVE'] + ENV['HOMEPATH'] if ENV['HOMEDRIVE'] && ENV['HOMEPATH']
+      return (dir ? dir.tr("\\", "/") : ::File.expand_path("~")).encode(::Encoding::UTF_8)
     end
     if user.nil?
       dir = ENV['HOME']
