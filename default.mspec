@@ -35,3 +35,22 @@ class MSpecScript
   ]
 
 end
+
+# mspec's fixnum_max and fixnum_min know MRI's range (from RbConfig::LIMITS), JRuby's,
+# TruffleRuby's and a few more, and raise for any other engine - which fails every spec
+# at the Fixnum/Bignum boundary in core/integer, core/array and core/string before it
+# has tested anything. IronRuby's immediate integers are System.Int32, and its
+# RbConfig::LIMITS says so; defining the pair here, after the helper file has been
+# loaded, is what a pristine mspec checkout (CI's) needs.
+if RUBY_ENGINE == "ironruby"
+  require 'mspec/helpers/numeric'
+  require 'rbconfig/sizeof'
+
+  def fixnum_max
+    RbConfig::LIMITS['FIXNUM_MAX']
+  end
+
+  def fixnum_min
+    RbConfig::LIMITS['FIXNUM_MIN']
+  end
+end

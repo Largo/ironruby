@@ -65,9 +65,12 @@ class RecordFormatter < DottedFormatter
     File.expand_path(path).tr("\\", "/")
   end
 
+  # A spec tree that is a symlink (as in a worktree sharing one checkout) loads its
+  # files under their real path: fall back to the part from spec/<top level> on.
   def relative(path)
     path = normalize(path)
-    path.downcase.start_with?(@root.downcase) ? path[@root.size..-1] : path
+    return path[@root.size..-1] if path.downcase.start_with?(@root.downcase)
+    path[%r{(?<=/)spec/(?:language|core|library|command_line|security|optional)/.*\z}] || path
   end
 end
 
