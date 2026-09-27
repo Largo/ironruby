@@ -285,7 +285,11 @@ namespace IronRuby.Builtins {
             // meet, and it then strips the first and the last quote of the whole line, which
             // takes the closing quote off the -e argument. With /s cmd strips exactly the
             // first and last character when both are quotes and runs the rest verbatim.
-            if (argv.Count >= 3 && String.Equals(ToStr(argv[1]), "/c", StringComparison.OrdinalIgnoreCase)) {
+            //
+            // Only the prelude's own [shell, "/c", command] is joined that way: a program's argv
+            // that happens to have "/c" second - Process.spawn(["cmd.exe", "/C"], "/C", "echo", "x"),
+            // where "/C" is the argv[0] cmd.exe skips - is an argument list like any other.
+            if (argv.Count == 3 && String.Equals(ToStr(argv[1]), "/c", StringComparison.OrdinalIgnoreCase)) {
                 AppendArgument(result, ToStr(argv[0]));
                 result.Append(" /s /c \"");
                 for (int i = 2; i < argv.Count; i++) {

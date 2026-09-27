@@ -9908,6 +9908,16 @@ module Process
     end
 
     rest = args[1..-1].map { |a| __check_spawn_string__(a, "string") }
+
+    # A cmd.exe built-in is run by cmd.exe whatever form the command came in: MRI's Windows
+    # build asks whether the program is one before it searches PATH at all (win32.c's
+    # internal_cmd_match), so `system("echo", "a b")` is `cmd /c echo "a b"` - quotes and
+    # %VARIABLES% as cmd.exe treats them - and not whatever echo.exe PATH happens to hold.
+    if SPAWN_WINDOWS && SPAWN_CMD_BUILTINS.include?(name.downcase)
+      line = ([argv0] + rest).map { |a| a.empty? || a =~ /[\s"]/ ? "\"#{a.gsub('"', '\"')}\"" : a }.join(" ")
+      return __spawn_shell__(line)
+    end
+
     [__resolve_executable__(name, search_path), [argv0] + rest]
   end
 
