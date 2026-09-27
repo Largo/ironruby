@@ -1625,6 +1625,12 @@ namespace IronRuby.Builtins {
                     if (file != null && file.Path != null) {
                         return Create(io.Context, file.Path);
                     }
+                    // Nothing with a path: the console streams, a pipe, a socket. It is none of
+                    // them a file or a directory, which is what File.directory?(STDIN) and the
+                    // like ask; EBADF would claim the IO is not open.
+                    if (io.ConsoleStreamType != null || io.GetStream().BaseStream is FileStream) {
+                        return new StatInfo(new DeviceInfo(NUL_VALUE));
+                    }
                 }
 
                 int fd = RubyIO.PrimaryDescriptorOf(io.GetStream().BaseStream);
@@ -1810,7 +1816,12 @@ namespace IronRuby.Builtins {
             [RubyMethod("dev")]
             public static object DeviceId(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null ? Protocols.Normalize(d.Dev) : (object)3;
+                if (d != null) {
+                    return Protocols.Normalize(d.Dev);
+                }
+                uint volume, links;
+                ulong index;
+                return WindowsFileId(self, out volume, out index, out links) ? Protocols.Normalize(volume) : (object)3;
             }
 
             [RubyMethod("rdev")]
@@ -1974,22 +1985,24 @@ namespace IronRuby.Builtins {
                 return d != null ? ModeAccess(d, Posix.W_OK, true) : IsWritable(self);
             }
 
+            // Off Unix the mode is the one MRI's Windows build derives from the file attributes,
+            // in which the read bit is always there for "other" and the write bit never is.
             [RubyMethod("world_readable?")]
             public static object IsWorldReadable(FileSystemInfo/*!*/ self) {
-                var d = D(self);
-                if (d == null || (d.Mode & 04) == 0) {
+                int mode = Mode(self);
+                if ((mode & 04) == 0) {
                     return null;
                 }
-                return d.Mode & 0xFFF /* 07777 */;
+                return mode & 0x1FF /* 0777 */;
             }
 
             [RubyMethod("world_writable?")]
             public static object IsWorldWritable(FileSystemInfo/*!*/ self) {
-                var d = D(self);
-                if (d == null || (d.Mode & 02) == 0) {
+                int mode = Mode(self);
+                if ((mode & 02) == 0) {
                     return null;
                 }
-                return d.Mode & 0xFFF /* 07777 */;
+                return mode & 0x1FF /* 0777 */;
             }
 
             [RubyMethod("owned?")]
@@ -2040,6 +2053,13 @@ namespace IronRuby.Builtins {
                 if (a != null && b != null) {
                     return a.Dev == b.Dev && a.Ino == b.Ino;
                 }
+                // Windows: the same volume and file index is the same file, under any of its
+                // names - a hard link included, which comparing paths never saw.
+                uint volumeA, volumeB, links;
+                ulong indexA, indexB;
+                if (WindowsFileId(self, out volumeA, out indexA, out links) && WindowsFileId(other, out volumeB, out indexB, out links)) {
+                    return volumeA == volumeB && indexA == indexB;
+                }
                 return self.Exists && other.Exists && context.Platform.PathComparer.Compare(self.FullName, other.FullName) == 0;
             }
 
@@ -2058,27 +2078,42 @@ namespace IronRuby.Builtins {
             [RubyMethod("ino")]
             public static object Inode(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null ? Protocols.Normalize(d.Ino) : (object)0;
+                if (d != null) {
+                    return Protocols.Normalize(d.Ino);
+                }
+                uint volume, links;
+                ulong index;
+                return WindowsFileId(self, out volume, out index, out links) ? Protocols.Normalize(index) : (object)0;
             }
 
             [RubyMethod("nlink")]
             public static int NumberOfLinks(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                return d != null ? d.Nlink : 1;
+                if (d != null) {
+                    return d.Nlink;
+                }
+                uint volume, links;
+                ulong index;
+                return WindowsFileId(self, out volume, out index, out links) ? (int)links : 1;
+            }
+
+            /// <summary>
+            /// What MRI's Windows build puts in st_dev, st_ino and st_nlink: the volume serial
+            /// number, the NTFS file index and the link count, from GetFileInformationByHandle.
+            /// </summary>
+            private static bool WindowsFileId(FileSystemInfo/*!*/ self, out uint volume, out ulong index, out uint links) {
+                volume = 0;
+                index = 0;
+                links = 0;
+                var legacy = L(self);
+                return !IsUnixPlatform && (legacy is FileInfo || legacy is DirectoryInfo)
+                    && WindowsFiles.TryGetFileId(legacy.FullName, out volume, out index, out links);
             }
 
             [RubyMethod("mode")]
             public static int Mode(FileSystemInfo/*!*/ self) {
                 var d = D(self);
-                if (d != null) {
-                    return d.Mode;
-                }
-                int mode = (L(self) is FileInfo) ? 0x8000 : 0x4000;
-                mode |= 0x100; // S_IREAD;
-                if ((L(self).Attributes & FileAttributes.ReadOnly) == 0) {
-                    mode |= 0x80; // S_IWRITE;
-                }
-                return mode;
+                return d != null ? d.Mode : WindowsFiles.Mode(L(self));
             }
 
             [RubyMethod("size")]
