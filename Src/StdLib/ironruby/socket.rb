@@ -1115,7 +1115,13 @@ class Socket
               else Integer(onoff)
               end
       new(Socket::AF_UNSPEC, Socket::SOL_SOCKET, Socket::SO_LINGER,
-          [onoff, Integer(secs)].pack("i2"))
+          [onoff, Integer(secs)].pack(__ir_linger_format))
+    end
+
+    # struct linger is two ints, except on Windows, where winsock declares it as two
+    # u_shorts - which is also the size getsockopt(SO_LINGER) hands back there.
+    def self.__ir_linger_format # :nodoc:
+      ::File::ALT_SEPARATOR == "\\" ? "S2" : "i2"
     end
 
     def __ir_check_size(expected, what) # :nodoc:
@@ -1129,7 +1135,10 @@ class Socket
       @data.unpack("i")[0]
     end
 
+    # A single byte is a boolean too: winsock answers getsockopt for BOOLEAN options -
+    # TCP_NODELAY, IPV6_V6ONLY - with one, and CRuby's sockopt_bool takes it.
     def bool
+      return @data.getbyte(0) != 0 if @data.bytesize == 1
       __ir_check_size(4, "int")
       @data.unpack("i")[0] != 0
     end
@@ -1138,8 +1147,9 @@ class Socket
       unless @level == Socket::SOL_SOCKET && @optname == Socket::SO_LINGER
         raise TypeError, "linger socket option expected"
       end
-      __ir_check_size(8, "struct linger")
-      onoff, secs = @data.unpack("i2")
+      format = Option.__ir_linger_format
+      __ir_check_size(format == "S2" ? 4 : 8, "struct linger")
+      onoff, secs = @data.unpack(format)
       [onoff != 0, secs]
     end
 

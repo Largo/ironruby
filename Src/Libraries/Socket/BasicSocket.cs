@@ -606,8 +606,10 @@ namespace IronRuby.StandardLibrary.Sockets {
         public static MutableString GetSocketOption(ConversionStorage<int>/*!*/ conversionStorage, RubyContext/*!*/ context,
             RubyBasicSocket/*!*/ self, [DefaultProtocol]int level, [DefaultProtocol]int optname) {
             Protocols.CheckSafeLevel(context, 2, "getsockopt");
-            // struct linger is two ints; everything else the specs ask about is one.
-            int size = (level == (int)SocketOptionLevel.Socket && optname == (int)SocketOptionName.Linger) ? 8 : 4;
+            // struct linger is two ints (two u_shorts in winsock); everything else the specs ask
+            // about is one.
+            bool linger = level == (int)SocketOptionLevel.Socket && optname == (int)SocketOptionName.Linger;
+            int size = linger ? (IsWindows ? 4 : 8) : 4;
             byte[] value = self.Socket.GetSocketOption((SocketOptionLevel)level, (SocketOptionName)optname, size);
             return MutableString.CreateBinary(value);
         }
