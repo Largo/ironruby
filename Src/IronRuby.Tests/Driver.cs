@@ -79,7 +79,7 @@ namespace IronRuby.Tests {
             // parser as well, rather than inherit whatever the previous test chose.
             RubyContext.AlternativeParser = (Driver.UsePrism || testCase.Options != null && testCase.Options.Prism)
                 ? IronRuby.Prism.PrismAstBridge.Parse
-                : null;
+                : RubyContext.LegacyParser;
 
             if (testCase.Options.NoRuntime) {
                 return;

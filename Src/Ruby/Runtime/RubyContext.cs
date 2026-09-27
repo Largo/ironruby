@@ -3479,17 +3479,54 @@ namespace IronRuby.Runtime {
 #endif
 
         /// <summary>
-        /// Experimental: alternative front end (e.g. the Prism bridge). When non-null it replaces
-        /// the built-in parser for all source units.
+        /// The front end a host chose, or null for the default. The default is the prism bridge
+        /// whenever IronRuby.Prism can be loaded - it is what ir, irubyc's hosts and the test suite's
+        /// prism mode use, and the only front end that parses Ruby 3 and 4 (ruby4.rb included) - and the
+        /// legacy 1.9-era parser only when it cannot. Before, null meant the legacy parser, so a host
+        /// that embedded IronRuby with Ruby.CreateEngine() and set nothing got a 1.9 parser without
+        /// any sign of it. Set this to <see cref="LegacyParser"/> to ask for the old parser explicitly.
         /// </summary>
         public static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> AlternativeParser;
+
+        /// <summary>The built-in 1.9-era parser, for hosts (and the legacy test mode) that want it.</summary>
+        public static readonly Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> LegacyParser =
+            (sourceUnit, options, errorSink) => new Parser().Parse(sourceUnit, options, errorSink);
+
+        private static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> _defaultParser;
+
+        /// <summary>The front end in effect: the one a host set, or else the default.</summary>
+        public static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> EffectiveParser {
+            get { return AlternativeParser ?? (_defaultParser ?? (_defaultParser = ResolveDefaultParser())); }
+        }
+
+        /// <summary>True when source is parsed by the legacy parser (which cannot wrap -n/-p itself).</summary>
+        public static bool UsesLegacyParser {
+            get { return EffectiveParser == LegacyParser; }
+        }
+
+        // IronRuby.Prism references IronRuby, so IronRuby cannot reference it back: find it by name.
+        // A missing IronRuby.Prism means the legacy parser; a present one whose native libprism is
+        // missing fails at the first parse with DllNotFoundException - a deployment error that is
+        // better reported than papered over with a parser that cannot read the prelude.
+        private static Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree> ResolveDefaultParser() {
+            try {
+                Type bridge = Type.GetType("IronRuby.Prism.PrismAstBridge, IronRuby.Prism", false);
+                MethodInfo parse = (bridge != null) ? bridge.GetMethod("Parse", BindingFlags.Public | BindingFlags.Static, null,
+                    new[] { typeof(SourceUnit), typeof(RubyCompilerOptions), typeof(ErrorSink) }, null) : null;
+                if (parse != null) {
+                    return (Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>)parse.CreateDelegate(typeof(Func<SourceUnit, RubyCompilerOptions, ErrorSink, SourceUnitTree>));
+                }
+            } catch (Exception) {
+                // not deployed, or not loadable here: fall back below
+            }
+            return LegacyParser;
+        }
+
 
         internal MSA.Expression<T> ParseSourceCode<T>(SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options, ErrorSink/*!*/ errorSink) {
             Debug.Assert(sourceUnit.LanguageContext == this);
 
-            SourceUnitTree ast = (AlternativeParser != null)
-                ? AlternativeParser(sourceUnit, options, errorSink)
-                : new Parser().Parse(sourceUnit, options, errorSink);
+            SourceUnitTree ast = EffectiveParser(sourceUnit, options, errorSink);
 
             if (ast == null) {
                 return null;
