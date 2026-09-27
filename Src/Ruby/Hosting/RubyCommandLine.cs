@@ -385,10 +385,6 @@ namespace IronRuby.Hosting {
 
         /// <summary>The number of the signal an uncaught SignalException stands for, or 0.</summary>
         private int GetSignalToRaise(Exception/*!*/ e) {
-            if (Path.DirectorySeparatorChar != '/') {
-                return 0;
-            }
-
             var context = (RubyContext)Language;
 
             // SignalException and its #signo both live in the library assembly, which this one
@@ -417,6 +413,13 @@ namespace IronRuby.Hosting {
             var context = (RubyContext)Language;
             Flush(context.StandardOutput);
             Flush(context.StandardErrorOutput);
+            if (Path.DirectorySeparatorChar != '/') {
+                // MRI's Windows build re-raises through the C runtime, whose default action for
+                // every signal it knows is _exit(3): a Windows parent sees a SignalException that
+                // nobody rescued as exit status 3, not as the generic failure an error report
+                // would be.
+                Environment.Exit(3);
+            }
             SysSignal(signal, IntPtr.Zero);   // SIG_DFL
             SysRaise(signal);
         }

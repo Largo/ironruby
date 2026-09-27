@@ -9407,12 +9407,19 @@ module Process
   {
     WNOHANG: 1, WUNTRACED: 2,
     PRIO_PROCESS: 0, PRIO_PGRP: 1, PRIO_USER: 2,
-    RLIMIT_CPU: 0, RLIMIT_FSIZE: 1, RLIMIT_DATA: 2, RLIMIT_STACK: 3,
-    RLIMIT_CORE: 4, RLIMIT_RSS: 5, RLIMIT_NPROC: 6, RLIMIT_NOFILE: 7,
-    RLIMIT_MEMLOCK: 8, RLIMIT_AS: 9, RLIMIT_LOCKS: 10, RLIMIT_SIGPENDING: 11,
-    RLIMIT_MSGQUEUE: 12, RLIMIT_NICE: 13, RLIMIT_RTPRIO: 14, RLIMIT_RTTIME: 15,
-    RLIM_INFINITY: 2**64 - 1, RLIM_SAVED_CUR: 2**64 - 1, RLIM_SAVED_MAX: 2**64 - 1,
   }.each { |name, value| const_set(name, value) unless const_defined?(name) }
+
+  # Windows has no resource limits: MRI defines none of these there, and code that asks
+  # const_defined?(:RLIMIT_NOFILE) before calling setrlimit must be told no.
+  unless ::File::ALT_SEPARATOR == "\\"
+    {
+      RLIMIT_CPU: 0, RLIMIT_FSIZE: 1, RLIMIT_DATA: 2, RLIMIT_STACK: 3,
+      RLIMIT_CORE: 4, RLIMIT_RSS: 5, RLIMIT_NPROC: 6, RLIMIT_NOFILE: 7,
+      RLIMIT_MEMLOCK: 8, RLIMIT_AS: 9, RLIMIT_LOCKS: 10, RLIMIT_SIGPENDING: 11,
+      RLIMIT_MSGQUEUE: 12, RLIMIT_NICE: 13, RLIMIT_RTPRIO: 14, RLIMIT_RTTIME: 15,
+      RLIM_INFINITY: 2**64 - 1, RLIM_SAVED_CUR: 2**64 - 1, RLIM_SAVED_MAX: 2**64 - 1,
+    }.each { |name, value| const_set(name, value) unless const_defined?(name) }
+  end
 
   # Process.times returns this; MRI names the struct under Process as well as Struct.
   Tms = Struct::Tms unless const_defined?(:Tms)
@@ -9594,10 +9601,12 @@ module Process
   # re-quoted. A file action is applied by posix_spawn in the child between fork and
   # exec, which is exactly where MRI does the same work.
 
-  SPAWN_OPTION_KEYS = [
+  # Windows has neither process groups in the setpgid sense nor resource limits, and MRI
+  # built there does not know those options: "wrong exec option symbol: pgroup".
+  SPAWN_OPTION_KEYS = ([
     :unsetenv_others, :close_others, :pgroup, :new_pgroup, :chdir, :umask,
     :in, :out, :err, :rlimit_core, :rlimit_cpu, :rlimit_fsize, :exception,
-  ].freeze
+  ] - (::File::ALT_SEPARATOR == "\\" ? [:pgroup, :rlimit_core, :rlimit_cpu, :rlimit_fsize] : [])).freeze
 
   # File action opcodes, shared with the C# side.
   SPAWN_DUP2  = 0
@@ -10028,6 +10037,19 @@ module Process
     end
   end
 
+  if ::File::ALT_SEPARATOR == "\\"
+    # MRI's rb_f_notimplement: defined, raising, and not respond_to? (see NOT_IMPLEMENTED_METHODS).
+    def getrlimit(*)
+      raise NotImplementedError, "getrlimit() function is unimplemented on this machine"
+    end
+    module_function :getrlimit
+
+    def setrlimit(*)
+      raise NotImplementedError, "setrlimit() function is unimplemented on this machine"
+    end
+    module_function :setrlimit
+  end
+
   unless respond_to?(:getrlimit)
     def getrlimit(resource)
       resource = __rlimit_resource__(resource)
@@ -10255,7 +10277,9 @@ module Process
   # on platforms that cannot do it too, as the function that raises NotImplementedError,
   # and that function is exactly the case respond_to? answers false for - so portable
   # code asks whether the feature is there rather than whether the name is.
-  NOT_IMPLEMENTED_METHODS = [:daemon, :fork, :_fork].freeze unless const_defined?(:NOT_IMPLEMENTED_METHODS)
+  NOT_IMPLEMENTED_METHODS = (
+    [:daemon, :fork, :_fork] + (::File::ALT_SEPARATOR == "\\" ? [:getrlimit, :setrlimit] : [])
+  ).freeze unless const_defined?(:NOT_IMPLEMENTED_METHODS)
 
   unless respond_to?(:daemon)
     def daemon(nochdir = nil, noclose = nil)
