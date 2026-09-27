@@ -198,14 +198,38 @@ namespace IronRuby.Builtins {
         /// which is a redirection that cannot be carried out.
         /// </summary>
         internal static IntPtr HandleOf(RubyContext/*!*/ context, int descriptor) {
-            switch (descriptor) {
-                case 0: return GetStdHandle(STD_INPUT_HANDLE);
-                case 1: return GetStdHandle(STD_OUTPUT_HANDLE);
-                case 2: return GetStdHandle(STD_ERROR_HANDLE);
+            if (descriptor >= 0 && descriptor <= 2) {
+                return StandardHandleOf(context, descriptor);
             }
 
             Stream stream = context.GetStream(descriptor);
             return HandleOfStream(stream);
+        }
+
+        /// <summary>
+        /// What descriptor 0, 1 or 2 is now. There is no dup2 here, so STDOUT.reopen(file)
+        /// points IronRuby's own table entry at the file's stream instead - and a child has to
+        /// be handed that file, not the console this process started with, or everything a
+        /// program redirects its standard streams around (mspec's output_to_fd, a daemon's log
+        /// file, `$stderr.reopen` before system) still reaches the terminal. A standard stream
+        /// that was never reopened is a console stream with no handle of its own: the process's
+        /// standard handle is what it writes to.
+        /// </summary>
+        private static IntPtr StandardHandleOf(RubyContext/*!*/ context, int descriptor) {
+            IntPtr handle = IntPtr.Zero;
+            try {
+                handle = HandleOfStream(context.GetStream(descriptor));
+            } catch (Exception) {
+                // closed, or never there: the process's own handle below
+            }
+            if (handle != IntPtr.Zero) {
+                return handle;
+            }
+            switch (descriptor) {
+                case 0: return GetStdHandle(STD_INPUT_HANDLE);
+                case 1: return GetStdHandle(STD_OUTPUT_HANDLE);
+                default: return GetStdHandle(STD_ERROR_HANDLE);
+            }
         }
 
         private static IntPtr HandleOfStream(Stream stream) {
@@ -390,9 +414,9 @@ namespace IronRuby.Builtins {
         /// </summary>
         private static Redirections/*!*/ Plan(RubyContext/*!*/ context, RubyArray actions, IntPtr stdOut) {
             var plan = new Redirections {
-                StdIn = GetStdHandle(STD_INPUT_HANDLE),
-                StdOut = (stdOut != IntPtr.Zero) ? stdOut : GetStdHandle(STD_OUTPUT_HANDLE),
-                StdErr = GetStdHandle(STD_ERROR_HANDLE),
+                StdIn = StandardHandleOf(context, 0),
+                StdOut = (stdOut != IntPtr.Zero) ? stdOut : StandardHandleOf(context, 1),
+                StdErr = StandardHandleOf(context, 2),
             };
             if (actions == null) {
                 return plan;
