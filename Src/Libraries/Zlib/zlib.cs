@@ -163,7 +163,7 @@ namespace IronRuby.StandardLibrary.Zlib {
         public const int FINISH = 4;
 
         [RubyConstant("ZLIB_VERSION")]
-        public static string ZLIB_VERSION = LibZ.Version;
+        public static string ZLIB_VERSION = ZNative.Version;
 
         // The version of the `zlib` gem whose API this implements, not libz's own version.
         [RubyConstant("VERSION")]
@@ -292,7 +292,7 @@ namespace IronRuby.StandardLibrary.Zlib {
         [RubyMethod("zlib_version", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("zlib_version", RubyMethodAttributes.PrivateInstance)]
         public static MutableString/*!*/ ZlibVersion(object self) {
-            return MutableString.CreateAscii(LibZ.Version);
+            return MutableString.CreateAscii(ZNative.Version);
         }
 
         [RubyMethod("crc32", RubyMethodAttributes.PublicSingleton)]
@@ -321,13 +321,25 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             byte[] bytes = (str != null) ? str.ToByteArray() : null;
-            uint length = (bytes != null) ? (uint)bytes.Length : 0;
+            return Protocols.Normalize(adler ? Adler32(seed, bytes) : Crc32(seed, bytes));
+        }
 
-            UIntPtr result = adler
-                ? LibZ.adler32((UIntPtr)seed, bytes, length)
-                : LibZ.crc32((UIntPtr)seed, bytes, length);
+        /// <summary>
+        /// adler32(seed, bytes) from whichever zlib is in use; with no bytes it is the initial
+        /// value whatever the seed, as libz answers for a null buffer.
+        /// </summary>
+        internal static uint Adler32(uint seed, byte[] bytes) {
+            if (ZNative.UsesRuntimeZlib) {
+                return (bytes == null) ? 1u : ManagedChecksums.Adler32(seed, bytes, 0, bytes.Length);
+            }
+            return (uint)LibZ.adler32((UIntPtr)seed, bytes, (bytes != null) ? (uint)bytes.Length : 0);
+        }
 
-            return Protocols.Normalize((uint)result);
+        internal static uint Crc32(uint seed, byte[] bytes) {
+            if (ZNative.UsesRuntimeZlib) {
+                return (bytes == null) ? 0u : ManagedChecksums.Crc32(seed, bytes, 0, bytes.Length);
+            }
+            return (uint)LibZ.crc32((UIntPtr)seed, bytes, (bytes != null) ? (uint)bytes.Length : 0);
         }
 
         [RubyMethod("crc32_combine", RubyMethodAttributes.PublicSingleton)]
@@ -335,10 +347,11 @@ namespace IronRuby.StandardLibrary.Zlib {
         public static object CrcCombine(ConversionStorage<IntegerValue>/*!*/ integerConversion, object self,
             object crc1, object crc2, [DefaultProtocol]int length) {
 
-            return Protocols.Normalize((uint)LibZ.crc32_combine(
-                (UIntPtr)Protocols.CastToUInt32Unchecked(integerConversion, crc1),
-                (UIntPtr)Protocols.CastToUInt32Unchecked(integerConversion, crc2),
-                length));
+            uint a = Protocols.CastToUInt32Unchecked(integerConversion, crc1);
+            uint b = Protocols.CastToUInt32Unchecked(integerConversion, crc2);
+            return Protocols.Normalize(ZNative.UsesRuntimeZlib
+                ? ManagedChecksums.Crc32Combine(a, b, length)
+                : (uint)LibZ.crc32_combine((UIntPtr)a, (UIntPtr)b, length));
         }
 
         [RubyMethod("adler32_combine", RubyMethodAttributes.PublicSingleton)]
@@ -346,20 +359,26 @@ namespace IronRuby.StandardLibrary.Zlib {
         public static object AdlerCombine(ConversionStorage<IntegerValue>/*!*/ integerConversion, object self,
             object adler1, object adler2, [DefaultProtocol]int length) {
 
-            return Protocols.Normalize((uint)LibZ.adler32_combine(
-                (UIntPtr)Protocols.CastToUInt32Unchecked(integerConversion, adler1),
-                (UIntPtr)Protocols.CastToUInt32Unchecked(integerConversion, adler2),
-                length));
+            uint a = Protocols.CastToUInt32Unchecked(integerConversion, adler1);
+            uint b = Protocols.CastToUInt32Unchecked(integerConversion, adler2);
+            return Protocols.Normalize(ZNative.UsesRuntimeZlib
+                ? ManagedChecksums.Adler32Combine(a, b, length)
+                : (uint)LibZ.adler32_combine((UIntPtr)a, (UIntPtr)b, length));
         }
 
         [RubyMethod("crc_table", RubyMethodAttributes.PublicSingleton)]
         [RubyMethod("crc_table", RubyMethodAttributes.PrivateInstance)]
         public static RubyArray/*!*/ CrcTable(object self) {
             // get_crc_table() hands back 256 z_crc_t (uint32 since zlib 1.2.7) entries.
-            IntPtr table = LibZ.get_crc_table();
             var result = new RubyArray(256);
             var entries = new int[256];
-            Marshal.Copy(table, entries, 0, 256);
+            if (ZNative.UsesRuntimeZlib) {
+                for (int i = 0; i < entries.Length; i++) {
+                    entries[i] = unchecked((int)ManagedChecksums.CrcTable[i]);
+                }
+            } else {
+                Marshal.Copy(LibZ.get_crc_table(), entries, 0, 256);
+            }
             for (int i = 0; i < entries.Length; i++) {
                 result.Add(Protocols.Normalize(unchecked((uint)entries[i])));
             }
@@ -424,8 +443,8 @@ namespace IronRuby.StandardLibrary.Zlib {
             /// </summary>
             internal const int ChunkSize = 16384;
 
-            /// <summary>z_stream, unmanaged because libz stores a pointer to it in its own state.</summary>
-            private IntPtr _z;
+            /// <summary>The native stream - libz's z_stream, or the .NET runtime's (ZlibBackends.cs).</summary>
+            private ZNative _z;
 
             internal readonly bool _isInflate;
             private bool _ended;
@@ -456,10 +475,7 @@ namespace IronRuby.StandardLibrary.Zlib {
 
             internal ZStream(bool isInflate) {
                 _isInflate = isInflate;
-                _z = Marshal.AllocHGlobal(LibZ.StreamSize);
-                for (int i = 0; i < LibZ.StreamSize; i++) {
-                    Marshal.WriteByte(_z, i, 0);
-                }
+                _z = ZNative.Create();
             }
 
             ~ZStream() {
@@ -478,27 +494,27 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             private void DisposeNoLock() {
-                if (_z != IntPtr.Zero) {
+                if (_z != null) {
                     if (!_ended) {
-                        if (_isInflate) {
-                            LibZ.inflateEnd(_z);
-                        } else {
-                            LibZ.deflateEnd(_z);
-                        }
+                        _z.End(_isInflate);
                         _ended = true;
                     }
-                    Marshal.FreeHGlobal(_z);
-                    _z = IntPtr.Zero;
+                    _z.Free();
+                    _z = null;
                 }
             }
 
-            internal LibZ.ZStreamRec Rec {
+            /// <summary>
+            /// The native stream for reading what z_stream records (totals, adler, msg); it stays
+            /// readable after #end, as the struct did, until the stream is disposed.
+            /// </summary>
+            internal ZNative Rec {
                 get {
                     lock (_lock) {
-                        if (_z == IntPtr.Zero) {
+                        if (_z == null) {
                             throw new Error("stream is not ready");
                         }
-                        return (LibZ.ZStreamRec)Marshal.PtrToStructure(_z, typeof(LibZ.ZStreamRec));
+                        return _z;
                     }
                 }
             }
@@ -507,7 +523,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             /// Runs a native call on the stream with the stream lock held, so that it cannot race
             /// a run, an #end or a #reset on another thread.
             /// </summary>
-            internal int Native(Func<IntPtr, int>/*!*/ call) {
+            internal int Native(Func<ZNative, int>/*!*/ call) {
                 lock (_lock) {
                     return call(Handle);
                 }
@@ -532,13 +548,9 @@ namespace IronRuby.StandardLibrary.Zlib {
                 }
             }
 
-            private void SetRec(LibZ.ZStreamRec value) {
-                Marshal.StructureToPtr(value, _z, false);
-            }
-
-            internal IntPtr Handle {
+            internal ZNative Handle {
                 get {
-                    if (_z == IntPtr.Zero || _ended) {
+                    if (_z == null || _ended) {
                         throw new Error("stream is not ready");
                     }
                     return _z;
@@ -615,23 +627,17 @@ namespace IronRuby.StandardLibrary.Zlib {
                     while (true) {
                         // Fetched on every pass: the block yielded to below may have closed
                         // the stream, and libz must not be handed an ended z_stream.
-                        IntPtr handle = Handle;
-                        var z = Rec;
-                        z.next_in = inBase + consumed;
-                        z.avail_in = (uint)(pending.Length - consumed);
-                        z.next_out = outBase;
-                        z.avail_out = (uint)ChunkSize;
-                        SetRec(z);
+                        ZNative handle = Handle;
+                        uint availIn, availOut;
+                        err = handle.Process(_isInflate, inBase + consumed, (uint)(pending.Length - consumed),
+                            outBase, (uint)ChunkSize, flush, out availIn, out availOut);
 
-                        err = _isInflate ? LibZ.inflate(handle, flush) : LibZ.deflate(handle, flush);
-
-                        z = Rec;
-                        int produced = ChunkSize - (int)z.avail_out;
+                        int produced = ChunkSize - (int)availOut;
                         for (int i = 0; i < produced; i++) {
                             _output.Add(scratch[i]);
                         }
-                        consumed = pending.Length - (int)z.avail_in;
-                        _availOut = (int)z.avail_out;
+                        consumed = pending.Length - (int)availIn;
+                        _availOut = (int)availOut;
 
                         if (block != null && YieldChunks(block, ref blockResult)) {
                             broke = true;
@@ -645,10 +651,10 @@ namespace IronRuby.StandardLibrary.Zlib {
                         if (err != LibZ.Z_OK && err != LibZ.Z_BUF_ERROR) {
                             break;
                         }
-                        if (z.avail_out > 0) {
+                        if (availOut > 0) {
                             break;
                         }
-                        if (z.avail_in == 0 && _isInflate) {
+                        if (availIn == 0 && _isInflate) {
                             // inflate() answers Z_BUF_ERROR once it is out of input; deflate()
                             // can still have output pending in its own state, so only inflate
                             // gets to stop here.
@@ -656,8 +662,8 @@ namespace IronRuby.StandardLibrary.Zlib {
                         }
                     }
                 } finally {
-                    if (_z != IntPtr.Zero) {
-                        ClearPointers();
+                    if (_z != null) {
+                        _z.ClearPointers();
                     }
                     inHandle.Free();
                     outHandle.Free();
@@ -672,7 +678,7 @@ namespace IronRuby.StandardLibrary.Zlib {
                 }
 
                 if (err != LibZ.Z_OK && err != LibZ.Z_STREAM_END) {
-                    throw MakeError(err, Rec.msg);
+                    throw MakeError(err, Rec.Message);
                 }
 
                 return null;
@@ -685,20 +691,6 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             /// <summary>
-            /// libz remembers next_in/next_out across calls; the buffers they point at are
-            /// pinned only for the duration of a run, so they have to be dropped afterwards -
-            /// deflateParams() in particular will happily write through a stale next_out.
-            /// </summary>
-            private void ClearPointers() {
-                var z = Rec;
-                z.next_in = IntPtr.Zero;
-                z.avail_in = 0;
-                z.next_out = IntPtr.Zero;
-                z.avail_out = 0;
-                SetRec(z);
-            }
-
-            /// <summary>
             /// MRI's zstream_passthrough_input: once the stream has ended, whatever input libz
             /// did not take is not compressed data any more, so it becomes output verbatim.
             /// </summary>
@@ -708,36 +700,29 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             /// <summary>
-            /// Runs a libz entry point that produces output but takes no input - deflateParams().
+            /// deflateParams(), which takes no input but may flush what the old level buffered.
             /// </summary>
-            internal int RunWithOutputBuffer(Func<IntPtr, int>/*!*/ call) {
+            internal int RunParams(int level, int strategy) {
                 lock (_lock) {
                     if (_inProgress) {
                         throw new InProgressError("zlib stream is in progress");
                     }
-                    return RunWithOutputBufferNoLock(call);
+                    return RunParamsNoLock(level, strategy);
                 }
             }
 
-            private int RunWithOutputBufferNoLock(Func<IntPtr, int>/*!*/ call) {
+            private int RunParamsNoLock(int level, int strategy) {
                 var scratch = new byte[ChunkSize];
                 GCHandle outHandle = GCHandle.Alloc(scratch, GCHandleType.Pinned);
+                ZNative handle = Handle;
                 int err;
                 try {
                     IntPtr outBase = outHandle.AddrOfPinnedObject();
-                    IntPtr handle = Handle;
                     while (true) {
-                        var z = Rec;
-                        z.next_in = IntPtr.Zero;
-                        z.avail_in = 0;
-                        z.next_out = outBase;
-                        z.avail_out = (uint)ChunkSize;
-                        SetRec(z);
+                        uint availOut;
+                        err = handle.Params(level, strategy, outBase, (uint)ChunkSize, out availOut);
 
-                        err = call(handle);
-
-                        z = Rec;
-                        int produced = ChunkSize - (int)z.avail_out;
+                        int produced = ChunkSize - (int)availOut;
                         for (int i = 0; i < produced; i++) {
                             _output.Add(scratch[i]);
                         }
@@ -746,7 +731,7 @@ namespace IronRuby.StandardLibrary.Zlib {
                         }
                     }
                 } finally {
-                    ClearPointers();
+                    handle.ClearPointers();
                     outHandle.Free();
                 }
                 return err;
@@ -799,14 +784,10 @@ namespace IronRuby.StandardLibrary.Zlib {
 
             internal void End() {
                 lock (_lock) {
-                    if (_z == IntPtr.Zero || _ended) {
+                    if (_z == null || _ended) {
                         return;
                     }
-                    if (_isInflate) {
-                        LibZ.inflateEnd(_z);
-                    } else {
-                        LibZ.deflateEnd(_z);
-                    }
+                    _z.End(_isInflate);
                     _ended = true;
                 }
             }
@@ -821,9 +802,9 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             private void ResetStreamNoLock() {
-                int err = _isInflate ? LibZ.inflateReset(Handle) : LibZ.deflateReset(Handle);
+                int err = Handle.Reset(_isInflate);
                 if (err != LibZ.Z_OK) {
-                    throw MakeError(err, Rec.msg);
+                    throw MakeError(err, Rec.Message);
                 }
                 _input.Clear();
                 _output.Clear();
@@ -843,7 +824,7 @@ namespace IronRuby.StandardLibrary.Zlib {
 
             [RubyMethod("adler")]
             public static object Adler(ZStream/*!*/ self) {
-                return Protocols.Normalize((uint)self.Rec.adler);
+                return Protocols.Normalize(self.Rec.Adler);
             }
 
             [RubyMethod("avail_in")]
@@ -897,7 +878,7 @@ namespace IronRuby.StandardLibrary.Zlib {
 
             [RubyMethod("data_type")]
             public static int DataType(ZStream/*!*/ self) {
-                return self.Rec.data_type;
+                return self.Rec.DataType;
             }
 
             [RubyMethod("flush_next_in")]
@@ -919,12 +900,12 @@ namespace IronRuby.StandardLibrary.Zlib {
 
             [RubyMethod("total_in")]
             public static object TotalIn(ZStream/*!*/ self) {
-                return Protocols.Normalize((ulong)self.Rec.total_in);
+                return Protocols.Normalize(self.Rec.TotalIn);
             }
 
             [RubyMethod("total_out")]
             public static object TotalOut(ZStream/*!*/ self) {
-                return Protocols.Normalize((ulong)self.Rec.total_out);
+                return Protocols.Normalize(self.Rec.TotalOut);
             }
 
             #endregion
@@ -945,9 +926,7 @@ namespace IronRuby.StandardLibrary.Zlib {
             return (str != null) ? str.ToByteArray() : Utils.EmptyBytes;
         }
 
-        internal static Exception/*!*/ MakeError(int err, IntPtr msgPtr) {
-            string message = (msgPtr != IntPtr.Zero) ? Marshal.PtrToStringAnsi(msgPtr) : null;
-
+        internal static Exception/*!*/ MakeError(int err, string message) {
             switch (err) {
                 case LibZ.Z_STREAM_END: return new StreamEnd(message ?? "stream end");
                 case LibZ.Z_NEED_DICT: return new NeedDict(message ?? "need dictionary");
@@ -972,9 +951,9 @@ namespace IronRuby.StandardLibrary.Zlib {
             internal Inflate(int windowBits)
                 : base(true) {
 
-                int err = LibZ.inflateInit2_(Handle, windowBits, LibZ.Version, LibZ.StreamSize);
+                int err = Handle.InitInflate(windowBits);
                 if (err != LibZ.Z_OK) {
-                    throw MakeError(err, Rec.msg);
+                    throw MakeError(err, Rec.Message);
                 }
             }
 
@@ -1007,7 +986,7 @@ namespace IronRuby.StandardLibrary.Zlib {
                     return Run(data, flush, block, out broke);
                 } catch (NeedDict) {
                     byte[] dictionary;
-                    if (_dictionaries == null || !_dictionaries.TryGetValue((uint)Rec.adler, out dictionary)) {
+                    if (_dictionaries == null || !_dictionaries.TryGetValue(Rec.Adler, out dictionary)) {
                         throw;
                     }
                     SetDictionary(dictionary);
@@ -1016,9 +995,9 @@ namespace IronRuby.StandardLibrary.Zlib {
             }
 
             internal void SetDictionary(byte[]/*!*/ dictionary) {
-                int err = Native(h => LibZ.inflateSetDictionary(h, dictionary, (uint)dictionary.Length));
+                int err = Native(h => h.SetDictionary(true, dictionary));
                 if (err != LibZ.Z_OK) {
-                    throw MakeError(err, Rec.msg);
+                    throw MakeError(err, Rec.Message);
                 }
             }
 
@@ -1083,18 +1062,18 @@ namespace IronRuby.StandardLibrary.Zlib {
                 if (self._dictionaries == null) {
                     self._dictionaries = new Dictionary<uint, byte[]>();
                 }
-                self._dictionaries[(uint)LibZ.adler32(LibZ.adler32(UIntPtr.Zero, null, 0), bytes, (uint)bytes.Length)] = bytes;
+                self._dictionaries[Adler32(Adler32(0, null), bytes)] = bytes;
                 return dictionary;
             }
 
             [RubyMethod("sync_point?")]
             public static bool IsSyncPoint(Inflate/*!*/ self) {
-                int err = self.Native(LibZ.inflateSyncPoint);
+                int err = self.Native(h => h.SyncPoint());
                 if (err == 1) {
                     return true;
                 }
                 if (err != LibZ.Z_OK) {
-                    throw MakeError(err, self.Rec.msg);
+                    throw MakeError(err, self.Rec.Message);
                 }
                 return false;
             }
@@ -1130,10 +1109,9 @@ namespace IronRuby.StandardLibrary.Zlib {
             internal Deflate(int level, int windowBits, int memLevel, int strategy)
                 : base(false) {
 
-                int err = LibZ.deflateInit2_(Handle, level, LibZ.Z_DEFLATED, windowBits, memLevel, strategy,
-                    LibZ.Version, LibZ.StreamSize);
+                int err = Handle.InitDeflate(level, windowBits, memLevel, strategy);
                 if (err != LibZ.Z_OK) {
-                    throw MakeError(err, Rec.msg);
+                    throw MakeError(err, Rec.Message);
                 }
             }
 
@@ -1206,10 +1184,10 @@ namespace IronRuby.StandardLibrary.Zlib {
 
                 // Changing the level mid-stream makes libz flush what it has buffered, so this
                 // needs an output buffer just as much as deflate() does.
-                int err = self.RunWithOutputBuffer(handle => LibZ.deflateParams(handle, newLevel, newStrategy));
+                int err = self.RunParams(newLevel, newStrategy);
 
                 if (err != LibZ.Z_OK) {
-                    throw MakeError(err, self.Rec.msg);
+                    throw MakeError(err, self.Rec.Message);
                 }
                 return null;
             }
@@ -1217,9 +1195,9 @@ namespace IronRuby.StandardLibrary.Zlib {
             [RubyMethod("set_dictionary")]
             public static MutableString/*!*/ SetDictionary(Deflate/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ dictionary) {
                 byte[] bytes = dictionary.ToByteArray();
-                int err = self.Native(h => LibZ.deflateSetDictionary(h, bytes, (uint)bytes.Length));
+                int err = self.Native(h => h.SetDictionary(false, bytes));
                 if (err != LibZ.Z_OK) {
-                    throw MakeError(err, self.Rec.msg);
+                    throw MakeError(err, self.Rec.Message);
                 }
                 return dictionary;
             }
