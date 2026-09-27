@@ -105,8 +105,19 @@ namespace IronRuby.Builtins {
             return new RuleGenerator(RuleGenerators.InstanceConstructor);
         }
 
+        /// <summary>
+        /// MRI's rb_reg_check: a Regexp.allocate that was never initialized has no pattern, and
+        /// everything that needs one - source, to_s, ==, hash, matching - is a TypeError.
+        /// </summary>
+        private static void RequireInitialized(RubyRegex/*!*/ self) {
+            if (!self.IsInitialized) {
+                throw RubyExceptions.CreateTypeError("uninitialized Regexp");
+            }
+        }
+
         [RubyMethod("timeout")]
         public static object GetTimeout(RubyRegex/*!*/ self) {
+            RequireInitialized(self);
             double? timeout = self.Timeout;
             return timeout == null ? null : (object)timeout.Value;
         }
@@ -193,6 +204,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
         public static RubyRegex/*!*/ Reinitialize(RubyContext/*!*/ context, RubyRegex/*!*/ self, [NotNull]RubyRegex/*!*/ other) {
             RequireUninitialized(context, self);
+            RequireInitialized(other);
             self.Set(other.Pattern, other.Options);
             return self;
         }
@@ -367,18 +379,23 @@ namespace IronRuby.Builtins {
         [RubyMethod("to_s")]
         public static MutableString/*!*/ ToS(RubyRegex/*!*/ self) {
             // Ruby: doesn't wrap if there is a single embedded expression that evaluates to non-nil:
-            // puts(/#{nil}#{/a/}#{nil}/) 
+            // puts(/#{nil}#{/a/}#{nil}/)
             // We don't do that.
 
+            RequireInitialized(self);
             return self.ToMutableString();
         }
 
         /// <summary>
         /// Returns "/{pattern-with-forward-slash-escaped}/"
         /// Doesn't escape forward slashes that are already escaped.
+        /// An uninitialized Regexp shows as a plain object, "#&lt;Regexp:0x...&gt;", as in MRI.
         /// </summary>
         [RubyMethod("inspect")]
-        public static MutableString/*!*/ Inspect(RubyRegex/*!*/ self) {
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, RubyRegex/*!*/ self) {
+            if (!self.IsInitialized) {
+                return RubyUtils.ObjectToMutableString(context, self);
+            }
             return self.Inspect();
         }
 
@@ -401,11 +418,13 @@ namespace IronRuby.Builtins {
         /// </summary>
         [RubyMethod("fixed_encoding?")]
         public static bool IsFixedEncoding(RubyRegex/*!*/ self) {
-            return self.IsFixedEncoding;
+            // an uninitialized Regexp has no flags at all (MRI reads the FIXEDENCODING bit)
+            return self.IsInitialized && self.IsFixedEncoding;
         }
 
         [RubyMethod("names")]
         public static RubyArray/*!*/ GetNames(RubyRegex/*!*/ self) {
+            RequireInitialized(self);
             var result = new RubyArray();
             var seen = new List<string>();
             foreach (var name in self.GetGroupNames()) {
@@ -419,6 +438,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("named_captures")]
         public static Hash/*!*/ GetNamedCaptures(RubyContext/*!*/ context, RubyRegex/*!*/ self) {
+            RequireInitialized(self);
             var result = new Hash(context);
             var names = self.GetGroupNames();
             for (int i = 0; i < names.Length; i++) {
@@ -438,6 +458,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("casefold?")]
         public static bool IsCaseInsensitive(RubyRegex/*!*/ self) {
+            RequireInitialized(self);
             return (self.Options & RubyRegexOptions.IgnoreCase) != 0;
         }
 
@@ -502,6 +523,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("hash")]
         public static int GetHash(RubyRegex/*!*/ self) {
+            RequireInitialized(self);
             return self.GetHashCode();
         }
 
@@ -512,6 +534,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("=="), RubyMethod("eql?")]
         public static bool Equals(RubyContext/*!*/ context, RubyRegex/*!*/ self, [NotNull]RubyRegex/*!*/ other) {
+            if (ReferenceEquals(self, other)) {
+                return true;
+            }
+            RequireInitialized(self);
+            RequireInitialized(other);
             return self.Equals(other);
         }
 
@@ -557,6 +584,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("source")]
         public static MutableString/*!*/ Source(RubyRegex/*!*/ self) {
+            RequireInitialized(self);
             // The source carries the regexp's own encoding, not the encoding of whatever string it
             // was built from: Regexp.new("abc") is US-ASCII even when "abc" was BINARY.
             var result = self.Pattern.Clone();

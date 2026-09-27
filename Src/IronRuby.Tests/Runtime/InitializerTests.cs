@@ -244,6 +244,12 @@ end
 ");
         }
 
+        /// <summary>
+        /// What CRuby 4.0.6 prints for the same code: it undefines MatchData.allocate and
+        /// Module.allocate (Class.allocate is defined again on Class itself), an uninitialized
+        /// Regexp inspects as a plain object, and an anonymous Struct class is left out of its
+        /// instances' inspect. ("?" matches CRuby's quote and IronRuby's backtick alike.)
+        /// </summary>
         public void RubyAllocators1() {
             AssertOutput(delegate() {
                 CompilerTest(@"
@@ -252,9 +258,9 @@ p Hash.allocate
 p Range.allocate
 p Regexp.allocate
 p String.allocate
-p MatchData.allocate
+p MatchData.allocate rescue p $!
 p Object.allocate
-p Module.allocate
+p Module.allocate rescue p $!
 p Class.allocate
 p Struct.new(:f,:g).allocate
 p Exception.allocate
@@ -275,13 +281,13 @@ p Proc.allocate rescue p $!
 []
 {}
 nil..nil
-//
+#<Regexp:*>
 """"
-#<MatchData:*>
+#<NoMethodError: undefined method ?allocate' for class MatchData>
 #<Object:*>
-#<Module:*>
+#<NoMethodError: undefined method ?allocate' for class Module>
 #<Class:*>
-#<struct #<Class:*> f=nil, g=nil>
+#<struct f=nil, g=nil>
 #<Exception: Exception>
 #<IO:*>
 #<TypeError: allocator undefined for Binding>

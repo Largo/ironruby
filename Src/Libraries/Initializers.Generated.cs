@@ -742,6 +742,8 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadClass_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineRuleGenerator(module, "allocate", 0x61, IronRuby.Builtins.ClassOps.AllocateClass());
+            
         }
         
         private static void LoadComparable_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -6522,6 +6524,7 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadModule_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
+            module.UndefineMethodNoEvent("allocate");
             DefineLibraryMethod(module, "constants", 0x61, 
                 0x00000000U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.ModuleOps.GetGlobalConstants), 
@@ -7582,7 +7585,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "inspect", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Builtins.RubyRegex, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RegexpOps.Inspect)
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyRegex, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RegexpOps.Inspect)
             );
             
             DefineLibraryMethod(module, "match", 0x51, 
