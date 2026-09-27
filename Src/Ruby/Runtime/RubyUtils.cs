@@ -1604,6 +1604,7 @@ namespace IronRuby.Runtime {
                 // nothing else we can do; the exception stays parked until the thread reaches a safe point
             } catch (ThreadStateException) {
             }
+            CancelNativeIo(thread);
         }
 
         public static void ExitThread(Thread/*!*/ thread) {
@@ -1628,6 +1629,14 @@ namespace IronRuby.Runtime {
                 }
             } catch (PlatformNotSupportedException) {
             } catch (ThreadStateException) {
+            }
+            CancelNativeIo(thread);
+        }
+
+        private static void CancelNativeIo(Thread/*!*/ thread) {
+            var canceller = NativeIoCanceller;
+            if (canceller != null) {
+                canceller(thread);
             }
         }
 
@@ -1833,6 +1842,14 @@ namespace IronRuby.Runtime {
         /// poll(2) says so through this rather than through a managed wait it does not need.
         /// </summary>
         public static Func<bool, bool> NativeWaitHook;
+
+        /// <summary>
+        /// Wakes a thread out of a blocking operating-system call that neither a close nor
+        /// Thread.Interrupt reaches - Windows' synchronous ReadFile on an anonymous pipe - so that
+        /// it gets to look at the exception just parked for it. Installed by what makes such calls
+        /// (WindowsPipeStream); Thread#raise and Thread#kill call it.
+        /// </summary>
+        public static Action<Thread> NativeIoCanceller;
 
         /// <summary>Marks the current thread blocked; pass the answer to ExitNativeWait.</summary>
         public static bool EnterNativeWait() {
