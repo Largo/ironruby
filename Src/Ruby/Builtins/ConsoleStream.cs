@@ -146,7 +146,16 @@ namespace IronRuby.Builtins {
             }
 
             var name = stream.GetType().FullName;
-            if (name == null || !name.EndsWith("ConsoleStream", StringComparison.Ordinal)) {
+            bool consoleStream = name != null && name.EndsWith("ConsoleStream", StringComparison.Ordinal);
+
+            // On Windows .NET checks at startup that the standard handle can be written to - with a
+            // zero-byte WriteFile - and hands out Stream.Null when it cannot, which is what a pipe
+            // whose reader has already gone looks like. A child IO.popen'ed and closed at once then
+            // wrote into nothing, successfully, for ever. The handle still says EPIPE.
+            bool brokenAtStart = windows && stream == Stream.Null &&
+                WindowsStandardStream.IsBroken(output ? WindowsStandardStream.STD_OUTPUT_HANDLE : WindowsStandardStream.STD_ERROR_HANDLE);
+
+            if (!consoleStream && !brokenAtStart) {
                 return null;
             }
 
@@ -193,7 +202,24 @@ namespace IronRuby.Builtins {
         [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
         private static extern bool WriteFile(IntPtr handle, IntPtr buffer, int count, out int written, IntPtr overlapped);
 
+        [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true, EntryPoint = "WriteFile")]
+        private static extern bool WriteFileProbe(IntPtr handle, byte[] buffer, int count, out int written, IntPtr overlapped);
+
         private readonly int _which;
+
+        /// <summary>Whether a write to the standard handle fails - .NET's own test, a zero-byte WriteFile.</summary>
+        internal static bool IsBroken(int which) {
+            try {
+                IntPtr handle = GetStdHandle(which);
+                if (handle == IntPtr.Zero || handle == new IntPtr(-1)) {
+                    return false;
+                }
+                int written;
+                return !WriteFileProbe(handle, new byte[1], 0, out written, IntPtr.Zero);
+            } catch (Exception) {
+                return false;
+            }
+        }
 
         internal WindowsStandardStream(int which) {
             _which = which;
