@@ -1143,9 +1143,16 @@ namespace IronRuby.StandardLibrary.Sockets {
                 return MakeEntry(IPAddress.Any, doNotReverseLookup);
             } else if (hostNameOrAddress == IPAddress.Loopback.ToString()) {
                 return MakeEntry(IPAddress.Loopback, doNotReverseLookup);
-            } else {
-                return Dns.GetHostEntry(hostNameOrAddress);
             }
+            // A numeric address is its own answer, as getaddrinfo(3) gives it back without a
+            // lookup. Dns.GetHostEntry(string) instead resolves the name the address maps back to
+            // and answers with *that* name's addresses - on Windows "::1" came back as the
+            // machine's link-local fe80:: address.
+            IPAddress literal;
+            if (IPAddress.TryParse(hostNameOrAddress, out literal)) {
+                return MakeEntry(literal, doNotReverseLookup);
+            }
+            return Dns.GetHostEntry(hostNameOrAddress);
         }
 
         internal static IPAddress/*!*/ GetHostAddress(string/*!*/ hostNameOrAddress) {
