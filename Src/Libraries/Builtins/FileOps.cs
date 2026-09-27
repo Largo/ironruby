@@ -1099,7 +1099,7 @@ namespace IronRuby.Builtins {
         public static object FileLock(RubyFile/*!*/ self, [DefaultProtocol]int operation) {
             self.RequireInitialized();
             if (!Posix.IsAvailable) {
-                throw new IronRuby.Builtins.NotImplementedError("flock() function is unimplemented on this machine");
+                return WindowsFileLock(self, operation);
             }
 
             int fd = GetNativeFileDescriptor(self);
@@ -1129,6 +1129,34 @@ namespace IronRuby.Builtins {
             }
         }
 
+        /// <summary>
+        /// File#flock on Windows, which MRI implements with LockFileEx (win32.c's flock_winnt):
+        /// Bundler's and RubyGems' install locks, and anything else that serializes on a lock
+        /// file, used to raise NotImplementedError there. Waiting is done the way the Unix branch
+        /// does it, in managed sleeps, so the thread stays interruptible and reports "sleep".
+        /// </summary>
+        private static object WindowsFileLock(RubyFile/*!*/ self, int operation) {
+            self.RequireOpen();
+            var file = self.GetStream().BaseStream as FileStream;
+            if (file == null || file.SafeFileHandle.IsInvalid) {
+                throw RubyExceptions.CreateEBADF();
+            }
+            bool nonBlocking = (operation & Posix.LOCK_NB) != 0;
+            while (true) {
+                int errno = WindowsFiles.TryLock(file.SafeFileHandle, operation);
+                if (errno == 0) {
+                    return 0;
+                }
+                if (errno != Posix.EWOULDBLOCK) {
+                    throw Posix.Error(errno, self.Path);
+                }
+                if (nonBlocking) {
+                    return false;
+                }
+                System.Threading.Thread.Sleep(10);
+            }
+        }
+
         [RubyMethod("readlink", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static MutableString/*!*/ Readlink(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path) {
             string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
@@ -1148,11 +1176,17 @@ namespace IronRuby.Builtins {
         public static int Link(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object oldPath, object newPath) {
             string strOld = self.Context.DecodePath(Protocols.CastToPath(toPath, oldPath));
             string strNew = self.Context.DecodePath(Protocols.CastToPath(toPath, newPath));
-            if (!Posix.IsAvailable) {
-                throw new IronRuby.Builtins.NotImplementedError("link() function is unimplemented on this machine");
-            }
 
             int errno;
+            if (!Posix.IsAvailable) {
+                // CreateHardLink, as MRI's Windows build does - NTFS has had hard links all along.
+                errno = WindowsFiles.HardLink(strOld, strNew);
+                if (errno != 0) {
+                    throw Posix.Error(errno, errno == Posix.EEXIST ? strOld + " or " + strNew : strOld);
+                }
+                return 0;
+            }
+
             if (Posix.Link(strOld, strNew, out errno) != 0) {
                 throw Posix.Error(errno, errno == Posix.EEXIST ? strOld + " or " + strNew : strOld);
             }
