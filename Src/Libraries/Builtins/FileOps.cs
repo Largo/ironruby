@@ -2250,6 +2250,11 @@ namespace IronRuby.Builtins {
             }
 
             private static string FormatDev(object dev) {
+                // A Windows volume serial number is often past Int32.MaxValue, so a Bignum here.
+                if (dev is System.Numerics.BigInteger) {
+                    string hex = ((System.Numerics.BigInteger)dev).ToString("x").TrimStart('0');
+                    return "0x" + (hex.Length == 0 ? "0" : hex);
+                }
                 return dev is int ? "0x" + ((int)dev).ToString("x") : dev.ToString();
             }
 
