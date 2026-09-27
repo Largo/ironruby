@@ -523,7 +523,7 @@ jobs:
           for dir in language \
                      core/string core/array core/hash core/integer core/file core/dir \
                      core/io core/process core/kernel core/encoding \
-                     library/stringio library/socket library/yaml; do
+                     library/stringio library/socket library/yaml library/zlib; do
             name=$(echo "$dir" | tr / -)
             echo "::group::spec/$dir"
             start=$SECONDS
