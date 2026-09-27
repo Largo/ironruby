@@ -182,7 +182,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("fchdir", RubyMethodAttributes.PublicSingleton)]
         public static object ChangeDirectoryToDescriptor(BlockParam block, RubyClass/*!*/ self, [DefaultProtocol]int fd) {
             if (!Posix.IsAvailable) {
-                throw new NotImplementedException("fchdir");
+                throw new NotImplementedError("fchdir() function is unimplemented on this machine");
             }
 
             var pal = self.Context.Platform;
@@ -248,9 +248,36 @@ namespace IronRuby.Builtins {
             try {
                 self.Context.Platform.DeleteDirectory(strDir, false);
             } catch (Exception ex) {
-                throw ToRubyException(ex, strDir, DirectoryOperation.Delete);
+                // Windows will not remove a directory with the read-only attribute - which is
+                // what Dir.mkdir(path, 0555) gives it there - and MRI's rmdir clears the
+                // attribute and tries again (win32.c's wrmdir). So does this.
+                if (!TryRemoveReadOnlyDirectory(self.Context, strDir)) {
+                    throw ToRubyException(ex, strDir, DirectoryOperation.Delete);
+                }
             }
             return 0;
+        }
+
+        private static bool TryRemoveReadOnlyDirectory(RubyContext/*!*/ context, string/*!*/ path) {
+            if (Path.DirectorySeparatorChar == '/') {
+                return false;
+            }
+            try {
+                var info = new DirectoryInfo(path);
+                if (!info.Exists || (info.Attributes & FileAttributes.ReadOnly) == 0) {
+                    return false;
+                }
+                info.Attributes &= ~FileAttributes.ReadOnly;
+                try {
+                    context.Platform.DeleteDirectory(path, false);
+                    return true;
+                } catch (Exception) {
+                    info.Attributes |= FileAttributes.ReadOnly;
+                    return false;
+                }
+            } catch (Exception) {
+                return false;
+            }
         }
 
         [RubyMethod("entries", RubyMethodAttributes.PublicSingleton)]
@@ -447,7 +474,8 @@ namespace IronRuby.Builtins {
                 
             // The permission argument is not decoration: Dir.mkdir(path, 01755) has to
             // reach mkdir(2) for the setuid/setgid/sticky bits to survive.
-            if (permissions != Missing.Value && permissions != null && Posix.IsAvailable) {
+            bool hasPermissions = permissions != Missing.Value && permissions != null;
+            if (hasPermissions && Posix.IsAvailable) {
                 int mode = Protocols.CastToFixnum(fixnumCast, permissions);
                 int errno;
                 if (Posix.MkDir(strDir, mode, out errno) != 0) {
@@ -456,10 +484,24 @@ namespace IronRuby.Builtins {
                 return 0;
             }
 
+            // Windows: MRI creates the directory and then _wchmod's it, and all a mode can say
+            // there is whether the owner may write - a mode without 0200 is the read-only
+            // attribute. The argument is still converted (#to_int, TypeError) either way.
+            int windowsMode = hasPermissions ? Protocols.CastToFixnum(fixnumCast, permissions) : 0x1FF;
+
             try {
                 platform.CreateDirectory(strDir);
             } catch (Exception ex) {
                 throw ToRubyException(ex, strDir, DirectoryOperation.Create);
+            }
+
+            if ((windowsMode & 0x80 /* S_IWRITE */) == 0) {
+                try {
+                    var info = new DirectoryInfo(strDir);
+                    info.Attributes |= FileAttributes.ReadOnly;
+                } catch (Exception) {
+                    // the directory is there; a mode that did not take is not worth failing over
+                }
             }
             return 0;
         }
@@ -507,7 +549,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("for_fd", RubyMethodAttributes.PublicSingleton)]
         public static RubyDir/*!*/ ForFileDescriptor(RubyClass/*!*/ self, [DefaultProtocol]int fd) {
             if (!Posix.IsAvailable) {
-                throw new NotImplementedException("Dir.for_fd");
+                throw new NotImplementedError("fdopendir() function is unimplemented on this machine");
             }
 
             // There is no fdopendir here, so the descriptor is turned back into the path it
@@ -651,7 +693,7 @@ namespace IronRuby.Builtins {
                 return _fd;
             }
             if (!Posix.IsAvailable) {
-                throw new NotImplementedException("Dir#fileno");
+                throw new NotImplementedError("dirfd() function is unimplemented on this machine");
             }
 
             string path = ImmediateClass.Context.DecodePath(_dirName);
