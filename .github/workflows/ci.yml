@@ -186,7 +186,6 @@ jobs:
       - name: puma serves requests
         working-directory: ironruby
         timeout-minutes: 10
-        continue-on-error: true
         run: Util/ci/puma-smoke.sh
 
       # `gem install` from rubygems.org into an empty GEM_HOME, then the same gem through
@@ -194,7 +193,6 @@ jobs:
       - name: gem install and Bundler
         working-directory: ironruby
         timeout-minutes: 15
-        continue-on-error: true
         run: Util/ci/gem-smoke.sh
 
       # irubyc --single-file: one executable carrying IronRuby, libprism and the stdlib.
