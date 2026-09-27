@@ -61,8 +61,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("size")]
         public static int Size(int self) {
-            // the size of MRI's fixnum on a 64-bit machine: a C long
-            return sizeof(long);
+            // MRI answers sizeof(long) for a fixnum: 8 on LP64 Unix, but 4 on Windows, which is
+            // LLP64 even on x64 (RbConfig::SIZEOF["long"] says the same).
+            return (RubyFileOps.IsWindows || IntPtr.Size == 4) ? 4 : 8;
         }
     }
 }
