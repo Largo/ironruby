@@ -44,6 +44,7 @@ namespace IronRuby.Builtins {
         }
 
         private const int ENXIO = 6;
+        private const int ERROR_INVALID_NAME = 123;
 
         public static Stream/*!*/ OpenFileStream(RubyContext/*!*/ context, string/*!*/ path, IOMode mode) {
             ContractUtils.RequiresNotNull(path, "path");
@@ -68,6 +69,12 @@ namespace IronRuby.Builtins {
             // even though the Ruby-level mode stays read-only.
             bool truncateReadOnly = (mode & IOMode.Truncate) != 0 && (access & FileAccess.Write) == 0;
             if (truncateReadOnly) {
+                // Not on Windows, though: the C runtime MRI opens files with there refuses
+                // O_TRUNC without write access outright, so File.open(path, File::TRUNC) is
+                // Errno::EINVAL whether or not the file exists.
+                if (System.IO.Path.DirectorySeparatorChar != '/') {
+                    throw RubyExceptions.CreateEINVAL(path);
+                }
                 access |= FileAccess.Write;
             }
 
@@ -100,6 +107,12 @@ namespace IronRuby.Builtins {
                     // a bare IOException would have surfaced as IOError.
                     if (e.HResult == ENXIO && System.IO.Path.DirectorySeparatorChar == '/') {
                         throw RubyExceptions.CreateENXIO(path);
+                    }
+                    // Windows: a name with a character NTFS does not allow in one - "|echo ok",
+                    // which is no longer a command since Ruby 4.0 - is ERROR_INVALID_NAME, and
+                    // Errno::EINVAL in MRI, not an IOError.
+                    if (System.IO.Path.DirectorySeparatorChar != '/' && (e.HResult & 0xFFFF) == ERROR_INVALID_NAME) {
+                        throw RubyExceptions.CreateEINVAL(path);
                     }
                     throw;
                 } catch (UnauthorizedAccessException) {
