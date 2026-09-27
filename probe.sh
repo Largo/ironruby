@@ -2,41 +2,46 @@
 # Windows experiments; runs in the ironruby checkout.
 export RUBY_EXE="$(cygpath -w "$PWD/ir.cmd")"
 
-cat > udp.rb <<'RUBY'
-require "socket"
-require "timeout"
-def step(what)
-  t = Time.now
-  r = Timeout.timeout(5) { yield }
-  puts "#{what}: #{r.inspect} (#{(Time.now - t).round(3)}s)"
-rescue Timeout::Error
-  puts "#{what}: TIMED OUT"
-rescue Exception => e
-  puts "#{what}: #{e.class}: #{e.message}"
-end
+mkdir -p udpprobe && cd udpprobe
+cat > udpprobe.csproj <<'XML'
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup><OutputType>Exe</OutputType><TargetFramework>net8.0</TargetFramework></PropertyGroup>
+</Project>
+XML
+cat > Program.cs <<'CS'
+using System;
+using System.Net;
+using System.Net.Sockets;
 
-server = UDPSocket.new(Socket::AF_INET)
-client = UDPSocket.new(Socket::AF_INET)
-server.bind("127.0.0.1", 0)
-client.connect("127.0.0.1", server.connect_address.ip_port)
-client.write("hello")
-step("peek recvfrom(2, MSG_PEEK)") { server.recvfrom(2, Socket::MSG_PEEK) }
-step("select after peek") { IO.select([server], nil, nil, 1) }
-step("recvfrom(2)") { server.recvfrom(2) }
-client.write("world")
-step("recv(2, MSG_PEEK)") { server.recv(2, Socket::MSG_PEEK) }
-step("recv(2)") { server.recv(2) }
-client.write("again")
-step("recvfrom(10, MSG_PEEK)") { server.recvfrom(10, Socket::MSG_PEEK) }
-step("recvfrom(10)") { server.recvfrom(10) }
-
-r, w = IO.pipe
-step("read_nonblock empty pipe") { r.read_nonblock(5) }
-w.write "abc"
-step("read_nonblock with data") { r.read_nonblock(5) }
-RUBY
-
-echo "--- CRuby"
-ruby udp.rb
-echo "--- IronRuby"
-timeout 120 cmd //c ir.cmd udp.rb
+class Program {
+    static void Main() {
+        foreach (int size in new[] { 2, 65536 }) {
+            foreach (bool from in new[] { true, false }) {
+                var server = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                server.Bind(new IPEndPoint(IPAddress.Loopback, 0));
+                var client = new Socket(AddressFamily.InterNetwork, SocketType.Dgram, ProtocolType.Udp);
+                client.Connect(server.LocalEndPoint);
+                client.Send(new byte[] { 104, 101, 108, 108, 111 });
+                System.Threading.Thread.Sleep(50);
+                var buffer = new byte[size];
+                try {
+                    int n;
+                    if (from) {
+                        EndPoint ep = new IPEndPoint(IPAddress.Any, 0);
+                        n = server.ReceiveFrom(buffer, SocketFlags.Peek, ref ep);
+                    } else {
+                        n = server.Receive(buffer, SocketFlags.Peek);
+                    }
+                    Console.WriteLine($"size {size} {(from ? "ReceiveFrom" : "Receive")} Peek -> {n}");
+                } catch (SocketException e) {
+                    Console.WriteLine($"size {size} {(from ? "ReceiveFrom" : "Receive")} Peek -> {e.SocketErrorCode}");
+                }
+                Console.WriteLine($"   then Poll(0, SelectRead) = {server.Poll(0, SelectMode.SelectRead)}, Available = {server.Available}");
+                server.Dispose();
+                client.Dispose();
+            }
+        }
+    }
+}
+CS
+dotnet run -c Release 2>&1 | tail -12
