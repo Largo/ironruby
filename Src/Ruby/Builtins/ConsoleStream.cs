@@ -140,7 +140,8 @@ namespace IronRuby.Builtins {
         /// .NET opened (an embedder that redirected SharedIO keeps its own stream) and is redirected.
         /// </summary>
         private static Stream GetUnbufferedStream(Stream/*!*/ stream, bool output) {
-            if (Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX) {
+            bool windows = Path.DirectorySeparatorChar == '\\';
+            if (!windows && Environment.OSVersion.Platform != PlatformID.Unix && Environment.OSVersion.Platform != PlatformID.MacOSX) {
                 return null;
             }
 
@@ -159,12 +160,79 @@ namespace IronRuby.Builtins {
                     // standard error have both been redirected to the same file they share one
                     // open file description, and FileStream's positional writes would have each
                     // of them overwrite the other instead of appending.
-                    cache = new DescriptorStream(output ? 1 : 2, false, true, false);
+                    //
+                    // Windows' console stream swallows ERROR_NO_DATA and ERROR_BROKEN_PIPE just
+                    // the same, so a child printing into a pipe its parent has closed - IO.popen
+                    // closed early, `| more` quit - never found out and printed for ever, and the
+                    // parent's close waited for it for ever. WriteFile on the handle says so.
+                    cache = windows
+                        ? (Stream)new WindowsStandardStream(output ? WindowsStandardStream.STD_OUTPUT_HANDLE : WindowsStandardStream.STD_ERROR_HANDLE)
+                        : new DescriptorStream(output ? 1 : 2, false, true, false);
                 } catch (Exception) {
                     return null;
                 }
             }
             return cache;
+        }
+    }
+
+    /// <summary>
+    /// A redirected standard output or error handle on Windows, written with WriteFile. Sequential
+    /// (no offsets, so a file shared by stdout and stderr is appended to, not overwritten) and
+    /// reporting a reader that has gone as EPIPE, the way DescriptorStream reports it on Unix.
+    /// </summary>
+    internal sealed class WindowsStandardStream : Stream {
+        internal const int STD_OUTPUT_HANDLE = -11;
+        internal const int STD_ERROR_HANDLE = -12;
+        private const int ERROR_BROKEN_PIPE = 109;
+        private const int ERROR_NO_DATA = 232;
+
+        [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
+        private static extern IntPtr GetStdHandle(int which);
+
+        [System.Runtime.InteropServices.DllImport("kernel32", SetLastError = true)]
+        private static extern bool WriteFile(IntPtr handle, IntPtr buffer, int count, out int written, IntPtr overlapped);
+
+        private readonly int _which;
+
+        internal WindowsStandardStream(int which) {
+            _which = which;
+        }
+
+        public override bool CanRead { get { return false; } }
+        public override bool CanSeek { get { return false; } }
+        public override bool CanWrite { get { return true; } }
+        public override long Length { get { throw new NotSupportedException(); } }
+        public override long Position {
+            get { throw new NotSupportedException(); }
+            set { throw new NotSupportedException(); }
+        }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) { throw new NotSupportedException(); }
+        public override long Seek(long offset, SeekOrigin origin) { throw new NotSupportedException(); }
+        public override void SetLength(long value) { throw new NotSupportedException(); }
+
+        public override void Write(byte[]/*!*/ buffer, int offset, int count) {
+            // Asked every time: STDOUT.reopen does not SetStdHandle, but a host may.
+            IntPtr handle = GetStdHandle(_which);
+            var pinned = System.Runtime.InteropServices.GCHandle.Alloc(buffer, System.Runtime.InteropServices.GCHandleType.Pinned);
+            try {
+                IntPtr start = pinned.AddrOfPinnedObject();
+                while (count > 0) {
+                    int written;
+                    if (!WriteFile(handle, IntPtr.Add(start, offset), count, out written, IntPtr.Zero)) {
+                        int error = System.Runtime.InteropServices.Marshal.GetLastWin32Error();
+                        if (error == ERROR_NO_DATA || error == ERROR_BROKEN_PIPE) {
+                            throw new IOException("write failed", DescriptorStream.EPIPE);
+                        }
+                        throw new IOException("write failed", error);
+                    }
+                    offset += written;
+                    count -= written;
+                }
+            } finally {
+                pinned.Free();
+            }
         }
     }
 }
