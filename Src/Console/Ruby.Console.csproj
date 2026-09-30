@@ -5,6 +5,25 @@
     <AssemblyName>ir</AssemblyName>
     <RootNamespace>IronRuby.Hosting</RootNamespace>
   </PropertyGroup>
+  <!-- Windows Forms and WPF are not part of .NET but of the Windows Desktop runtime,
+       Microsoft.WindowsDesktop.App. On .NET Framework every machine had them in the GAC;
+       on .NET 8 an app sees them only when its host references that framework, and
+       System.Windows.Forms.rb, PresentationCore.rb and PresentationFramework.rb load them
+       by name. So ir references it whenever the build targets Windows: a win-* RID, or no
+       RID on a Windows machine. A self-contained build (the release archive) then carries
+       it; a framework-dependent one needs it installed, which every Windows .NET SDK does.
+       The TFM stays net8.0 - only UseWindowsForms/UseWPF insist on net8.0-windows - so the
+       bin paths the launchers and scripts hardcode stay what they are.
+       Build without it: -p:IronRubyWindowsDesktop=false. -->
+  <PropertyGroup>
+    <IronRubyWindowsDesktop Condition="'$(IronRubyWindowsDesktop)' == '' and $(RuntimeIdentifier.StartsWith('win'))">true</IronRubyWindowsDesktop>
+    <IronRubyWindowsDesktop Condition="'$(IronRubyWindowsDesktop)' == '' and '$(RuntimeIdentifier)' == '' and $([MSBuild]::IsOSPlatform('Windows'))">true</IronRubyWindowsDesktop>
+    <!-- cross-publishing win-x64 from Linux or macOS: the SDK refuses a Windows-only framework there otherwise -->
+    <EnableWindowsTargeting Condition="'$(IronRubyWindowsDesktop)' == 'true'">true</EnableWindowsTargeting>
+  </PropertyGroup>
+  <ItemGroup Condition="'$(IronRubyWindowsDesktop)' == 'true'">
+    <FrameworkReference Include="Microsoft.WindowsDesktop.App" />
+  </ItemGroup>
   <ItemGroup>
     <!-- Ruby exposes UTF-7; must be set before any encoding is used (AppContext latches early in a console host) -->
     <RuntimeHostConfigurationOption Include="System.Text.Encoding.EnableUnsafeUTF7Encoding" Value="true" />
