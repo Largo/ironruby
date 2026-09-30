@@ -171,12 +171,6 @@ namespace IronRuby.Tests {
             return tokens;
         }        
 
-        private static int domainId = 0;
-
-        private static AppDomain CreateDomain() {
-            return AppDomain.CreateDomain("RemoteScripts" + domainId++);
-        }
-
         [Flags]
         enum OutputFlags {
             None = 0,
