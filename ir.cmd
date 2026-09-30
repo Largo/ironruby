@@ -11,6 +11,9 @@ if "%IR_ROOT:~-1%"=="\" set "IR_ROOT=%IR_ROOT:~0,-1%"
 
 rem IR_CONFIG=Release runs the optimized build instead. Debug stays the default,
 rem exactly as in ir.sh.
+rem A binary release (Util/package-release.sh) ships only the Release build: when
+rem IR_CONFIG is not set and there is no Debug build, run that one.
+if "%IR_CONFIG%"=="" if not exist "%IR_ROOT%\Src\Console\bin\Debug\" if exist "%IR_ROOT%\Src\Console\bin\Release\" set "IR_CONFIG=Release"
 if "%IR_CONFIG%"=="" set "IR_CONFIG=Debug"
 
 rem IR_TFM picks the target framework out of the multi-targeted build (net8.0;net10.0),

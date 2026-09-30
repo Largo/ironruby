@@ -26,6 +26,7 @@
 require "optparse"
 require "fileutils"
 require "rbconfig"
+require "json"
 require_relative "compiler/library"
 
 module IronRuby
@@ -324,9 +325,27 @@ module IronRuby
     end
 
     def managed_assemblies(bin)
+      runtime = runtime_pack_files(bin)
       Dir.glob(File.join(bin, "*.dll")).map { |f| File.basename(f, ".dll") }
          .reject { |n| n == "ir" || n.start_with?("ir.") }   # the console host itself
+         .reject { |n| runtime.include?(n + ".dll") }
          .select { |n| managed_assembly?(File.join(bin, n + ".dll")) }.sort
+    end
+
+    # A self-contained ir (a binary release) has the whole .NET runtime next to it:
+    # System.Private.CoreLib, libcoreclr and ~180 more.  Referencing those from the
+    # generated host fails to compile (CS0433, every type twice), and the app gets its
+    # runtime from the SDK anyway, so they are neither referenced nor copied.  ir.deps.json
+    # lists them under the runtime pack; a framework-dependent build has no such entry.
+    def runtime_pack_files(bin)
+      deps = JSON.parse(File.read(File.join(bin, "ir.deps.json")))
+      deps["targets"].values.flat_map do |libraries|
+        libraries.select { |name, _| name.start_with?("runtimepack.") }.values
+      end.flat_map do |files|
+        (files["runtime"] || {}).keys + (files["native"] || {}).keys
+      end.map { |f| File.basename(f) }
+    rescue Errno::ENOENT, JSON::ParserError
+      []
     end
 
     # A native DLL (libprism.dll from a Windows build, say) has no assembly name.
@@ -519,11 +538,13 @@ module IronRuby
     # yaml.rb) and libprism, which is a native library.
     def copy_runtime(options, bin, out, skip: [])
       FileUtils.mkdir_p(out)
+      runtime = runtime_pack_files(bin)
       Dir.glob(File.join(bin, "*")).each do |src|
         next unless File.file?(src)
         base = File.basename(src)
         next unless base =~ /\.(dll|so|dylib)\z/
         next if base.start_with?("ir.")
+        next if runtime.include?(base)
         # A referenced assembly is already in the publish output; a second copy as
         # content would collide with it (NETSDK1152).
         next if skip.include?(File.basename(base, ".dll"))
