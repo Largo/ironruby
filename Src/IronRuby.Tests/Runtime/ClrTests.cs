@@ -1667,6 +1667,67 @@ System::Reflection::AmbiguousMatchException
 ");
         }
 
+        public static class OverloadSelection4 {
+            public static string F(string a) { return "F(String)"; }
+            public static string F(bool a) { return "F(Boolean)"; }
+        }
+
+        /// <summary>
+        /// A Ruby string has an explicit conversion to System::String and any object converts to System::Boolean, String is preferred.
+        /// </summary>
+        public void ClrOverloadSelection4() {
+            Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(OverloadSelection4)));
+
+            TestOutput(@"
+puts C.f('foo')
+puts C.f('foo'.freeze)
+puts C.f('')
+puts C.f('foo'.to_clr_string)
+puts C.f(true)
+puts C.f(false)
+puts C.f(1)
+puts C.f(Object.new)
+C.f(nil) rescue p $!.class
+C.f(:foo) rescue p $!.class
+", @"
+F(String)
+F(String)
+F(String)
+F(String)
+F(Boolean)
+F(Boolean)
+F(Boolean)
+F(Boolean)
+System::Reflection::AmbiguousMatchException
+System::Reflection::AmbiguousMatchException
+");
+
+            // BinaryWriter#Write has Boolean, Byte[], Char and String overloads a Ruby string converts to, and no Object one:
+            TestOutput(@"
+def written(value)
+  stream = System::IO::MemoryStream.new
+  writer = System::IO::BinaryWriter.new(stream)
+  writer.write(value)
+  writer.flush
+  stream.to_array
+end
+
+p written('abc')
+p written('abc'.to_clr_string)
+p written(true)
+p written(System::Array[System::Byte].new([1, 2]))
+p written(System::Char.new('a'))
+written(nil) rescue p $!.class
+", @"
+[3 (Byte), 97 (Byte), 98 (Byte), 99 (Byte)]
+[3 (Byte), 97 (Byte), 98 (Byte), 99 (Byte)]
+[1 (Byte)]
+[1 (Byte), 2 (Byte)]
+[97 (Byte)]
+System::Reflection::AmbiguousMatchException
+");
+        }
+
         public class ClassWithSlot1 {
             public int Foo() {
                 return 1;
