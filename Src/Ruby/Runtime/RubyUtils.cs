@@ -1481,12 +1481,14 @@ namespace IronRuby.Runtime {
                 string message = String.Format("Class {0} does not have a valid deserializing constructor", baseType.FullName);
                     throw new NotSupportedException(message);
                 }
+#pragma warning disable SYSLIB0050 // Marshal.load hands the instance variables to the deserialization constructor; no formatter involved
                 SerializationInfo info = new SerializationInfo(baseType, new FormatterConverter());
                 info.AddValue(SerializationInfoClassKey, theclass);
                 foreach (var pair in attributes) {
                     info.AddValue(pair.Key, pair.Value);
                 }
                 obj = ci.Invoke(new object[2] { info, new StreamingContext(StreamingContextStates.Other, theclass) });
+#pragma warning restore SYSLIB0050
             } else {
                 obj = CreateObject(theclass);
                 foreach (var pair in attributes) {

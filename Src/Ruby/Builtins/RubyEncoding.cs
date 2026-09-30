@@ -191,7 +191,9 @@ namespace IronRuby.Builtins {
         }
 
         [Serializable]
+#pragma warning disable SYSLIB0050 // IObjectReference: BinaryFormatter gets the RubyEncoding singleton back (net8.0, Serialization1)
         internal sealed class Deserializer : ISerializable, IObjectReference {
+#pragma warning restore SYSLIB0050
             private readonly int _codePage;
             
             private Deserializer(SerializationInfo/*!*/ info, StreamingContext context) {
