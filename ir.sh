@@ -24,7 +24,15 @@ S="$IR_ROOT/Src/StdLib"
 # too - and it passes the same specs and the same IronRuby.Tests.  Util/run-tests.sh and
 # regen-initializers.sh read IR_CONFIG as well, so one export covers a whole session.
 # Debug stays the default because every worktree and every agent script builds it.
-: "${IR_CONFIG:=Debug}"
+# A binary release (Util/package-release.sh) ships only the Release build: when
+# IR_CONFIG is not set and there is no Debug build, run that one.
+if [ -z "$IR_CONFIG" ]; then
+  IR_CONFIG=Debug
+  if [ ! -x "$IR_ROOT/Src/Console/bin/Debug/${IR_TFM:-net8.0}/ir" ] &&
+     [ -x "$IR_ROOT/Src/Console/bin/Release/${IR_TFM:-net8.0}/ir" ]; then
+    IR_CONFIG=Release
+  fi
+fi
 
 # IR_TFM picks the target framework, the same way IR_CONFIG picks the configuration.  The
 # tree multi-targets net8.0;net10.0 (Directory.Build.props), so one `dotnet build` leaves

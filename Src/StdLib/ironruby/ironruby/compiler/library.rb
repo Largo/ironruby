@@ -102,8 +102,10 @@ module IronRuby
         # Native libraries: only this platform's.  A Linux build directory can hold a
         # Windows libprism.dll as well; it would be dead weight here.
         native_ext = native_extension
+        runtime = Compiler.runtime_pack_files(@bin)
         Dir.glob(File.join(@bin, "*")).each do |src|
           next unless File.file?(src) && File.extname(src) == native_ext
+          next if runtime.include?(File.basename(src))
           next if assemblies.include?(File.basename(src, ".dll"))
           next if native_ext == ".dll" && Compiler.managed_assembly?(src)
           say "native:      #{File.basename(src)}"

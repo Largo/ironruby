@@ -362,6 +362,28 @@ Linux is the primary target and the one the numbers above are measured on. **Win
 readline are not implemented on Windows; `IO.console` is nil, so irb falls back to its ANSI
 input path. macOS is untested.
 
+## Binary releases
+
+[Releases](https://github.com/Largo/ironruby/releases) carry a ready-to-run IronRuby for
+Linux x64, Windows x64 and macOS arm64 (untested). They are self-contained, so no .NET has
+to be installed. Unpack one and run the launchers in it:
+
+```console
+$ tar xzf ironruby-<version>-linux-x64.tar.gz && cd ironruby-<version>-linux-x64
+$ ./ir.sh -e 'puts RUBY_DESCRIPTION'
+$ ./irb.sh
+$ ./igem.sh install rack
+```
+
+On Windows, unzip it and use `ir.cmd`, `irb.cmd` and `igem.cmd`. The archive has the same
+layout as a checkout, with the Release build in `Src/Console/bin/Release/net8.0`, so
+everything above applies to it unchanged. `irubyc` works too, but it still needs the
+.NET SDK to compile the application.
+
+`Util/package-release.sh <rid>` builds such an archive from a checkout, and
+`.github/workflows/release.yml` builds all three and publishes them when a `v*` tag is
+pushed.
+
 ## Building
 
 Requires the .NET SDK, plus Ruby and a C compiler to build prism.
@@ -460,5 +482,5 @@ table, so such a redirection is refused with `EINVAL`), and the Unix-only half o
 
 ## License
 
-Apache License 2.0, as the original. See `Public/License.html`.
+Apache License 2.0, as the original. See [`Src/Public`](Src/Public/LICENSE.APACHE.html).
 The original content description is preserved in [`README.txt`](README.txt).
