@@ -812,5 +812,71 @@ puts ArrayList
 ");
             }, @"System::Collections::ArrayList");
         }
+
+        /// <summary>
+        /// Time._load hands a dumped zone name to the class's find_timezone. As in MRI, a StandardError from the
+        /// lookup leaves the name and anything else goes through; only bytes that are not a time are a TypeError.
+        /// </summary>
+        public void Time_LoadZone1() {
+            TestOutput(@"
+class Zone
+  attr_reader :name
+  def initialize(name); @name = name; end
+  def utc_to_local(t); t + 3600; end
+  def local_to_utc(t); t - 3600; end
+end
+
+class ZTime < Time
+  def self.find_timezone(name)
+    $lookup.call(name)
+  end
+end
+
+class ZoneMissing < StandardError; end
+class ZoneFailure < Exception; end
+
+xst = Zone.new('XST')
+dump = Marshal.dump(ZTime.new(2000, 1, 1, 12, 0, 0, xst))
+
+$lookup = lambda { |name| xst }
+t = Marshal.load(dump)
+p t, t.zone.equal?(xst)
+
+$lookup = lambda { |name| raise ArgumentError, 'unknown zone' }
+t = Marshal.load(dump)
+p t, t.zone, t.zone.frozen?
+
+$lookup = lambda { |name| raise ZoneMissing }
+p Marshal.load(dump).zone
+
+$lookup = lambda { |name| throw :zone, name }
+p catch(:zone) { Marshal.load(dump) }
+
+$lookup = lambda { |name| raise ZoneFailure }
+begin
+  Marshal.load(dump)
+rescue ZoneFailure => e
+  p e.class
+end
+
+# 2000-16-01: the month is out of range
+bad = [0x80000000 | (100 << 14) | (15 << 10) | (1 << 5), 0].pack('VV')
+begin
+  Time.send(:_load, bad)
+rescue TypeError => e
+  p e.message
+end
+", @"
+2000-01-01 12:00:00 +0100
+true
+2000-01-01 12:00:00 +0100
+""XST""
+true
+""XST""
+""XST""
+ZoneFailure
+""marshaled time format differ""
+");
+        }
     }
 }

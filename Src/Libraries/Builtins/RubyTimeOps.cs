@@ -957,9 +957,15 @@ namespace IronRuby.Builtins {
                 zoneName != null ? zoneName.Clone().Freeze() : null);
 
             // A class that knows how to look a zone up by name gets the object back rather than
-            // the bare name - the dump only ever carried the name.
+            // the bare name - the dump only ever carried the name. MRI rescues a StandardError
+            // from the lookup and keeps the name; throw, Thread#kill and other exceptions go on.
             if (zoneName != null && RespondTo(context, owner, "find_timezone")) {
-                object found = Invoke(context, ref _findTimezoneSite, "find_timezone", owner, zoneName);
+                object found;
+                try {
+                    found = Invoke(context, ref _findTimezoneSite, "find_timezone", owner, zoneName);
+                } catch (Exception e) when (!(e is StackUnwinder) && context.IsInstanceOf(e, context.StandardErrorClass)) {
+                    found = null;
+                }
                 if (found != null) {
                     result.ZoneObject = found;
                 }
@@ -1059,21 +1065,24 @@ namespace IronRuby.Builtins {
                 int second = (int)((dword2 >> 20) & 0x3f);
                 int usec = (int)(dword2 & 0xfffff);
 
+                ExactNum seconds = ExactNum.FromInteger(second)
+                    + ExactNum.Make(usec, RubyTime.MicrosecondsPerSecond) + extraSubsec;
+
+                // The components are the reading in UTC whether or not the time was a UTC
+                // one - the flag and the offset only say how it is to be shown again. Read
+                // as local they would name a different instant, an hour or nine out.
+                // Components out of range mean the bytes are not a time. Only this is guarded:
+                // it runs no Ruby code, unlike the zone lookup below.
+                RubyTime instant;
                 try {
-                    ExactNum seconds = ExactNum.FromInteger(second)
-                        + ExactNum.Make(usec, RubyTime.MicrosecondsPerSecond) + extraSubsec;
-
-                    // The components are the reading in UTC whether or not the time was a UTC
-                    // one - the flag and the offset only say how it is to be shown again. Read
-                    // as local they would name a different instant, an hour or nine out.
-                    var instant = AssembleTime(context, year, month, day, hour, minute, seconds,
+                    instant = AssembleTime(context, year, month, day, hour, minute, seconds,
                         RubyTimeZoneKind.Utc, ExactNum.Zero, null, false);
-
-                    return CopyExtraIVars(context, time,
-                        isUtc ? instant : WithLoadedZone(context, self, instant, hasOffset, offsetSeconds, zoneName));
-                } catch (Exception e) when (!(e is RubyTime)) {
+                } catch (Exception) {
                     throw RubyExceptions.CreateTypeError("marshaled time format differ");
                 }
+
+                return CopyExtraIVars(context, time,
+                    isUtc ? instant : WithLoadedZone(context, self, instant, hasOffset, offsetSeconds, zoneName));
             }
         }
 
