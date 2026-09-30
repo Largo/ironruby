@@ -25,64 +25,46 @@ using IronRuby.Runtime;
 
 namespace IronRuby.Builtins {
 
-    [RubyException("NoMemoryError"), Serializable]
+    [RubyException("NoMemoryError")]
     public class NoMemoryError : Exception {
         public NoMemoryError() : this(null, null) { }
         public NoMemoryError(string message): this(message, null) { }
         public NoMemoryError(string message, Exception inner) : base(message ?? "NoMemoryError", inner) { }
-
-        protected NoMemoryError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
-            : base(info, context) { }
     }
 
-    [RubyException("EOFError"), Serializable]
+    [RubyException("EOFError")]
     public class EOFError : IOException {
         public EOFError() : this(null, null) { }
         public EOFError(string message): this(message, null) { }
         public EOFError(string message, Exception inner) : base(message ?? "EOFError", inner) { }
-
-        protected EOFError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
-            : base(info, context) { }
     }
 
-    [RubyException("FloatDomainError"), Serializable]
+    [RubyException("FloatDomainError")]
     public class FloatDomainError : ArgumentOutOfRangeException {
         public FloatDomainError() : this(null, null) { }
         public FloatDomainError(string message) : this(message, null) { }
         public FloatDomainError(string message, Exception inner) : base(message ?? "FloatDomainError", inner) { }
-
-        protected FloatDomainError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
-            : base(info, context) { }
     }
 
-    [RubyException("ThreadError"), Serializable]
+    [RubyException("ThreadError")]
     public class ThreadError : SystemException {
         public ThreadError() : this(null, null) { }
         public ThreadError(string message): this(message, null) { }
         public ThreadError(string message, Exception inner) : base(message ?? "ThreadError", inner) { }
-
-        protected ThreadError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
-            : base(info, context) { }
     }
 
-    [RubyException("StopIteration"), Serializable]
+    [RubyException("StopIteration")]
     public class StopIteration : IndexError {
         public StopIteration() : this(null, null) { }
         public StopIteration(string message): this(message, null) { }
         public StopIteration(string message, Exception inner) : base(message ?? "StopIteration", inner) { }
-
-        protected StopIteration(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
     }
 
-    [RubyException("ClosedQueueError"), Serializable]
+    [RubyException("ClosedQueueError")]
     public class ClosedQueueError : StopIteration {
         public ClosedQueueError() : this(null, null) { }
         public ClosedQueueError(string message): this(message, null) { }
         public ClosedQueueError(string message, Exception inner) : base(message ?? "ClosedQueueError", inner) { }
-
-        protected ClosedQueueError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
-            : base(info, context) { }
     }
 
     [RubyException("SystemExit", Extends = typeof(SystemExit))]
@@ -176,24 +158,18 @@ namespace IronRuby.Builtins {
         }
     }
 
-    [RubyException("SignalException"), Serializable]
+    [RubyException("SignalException")]
     public class SignalException : Exception {
         public SignalException() : this(null, null) { }
         public SignalException(string message): this(message, null) { }
         public SignalException(string message, Exception inner) : base(message ?? "SignalException", inner) { }
-
-        protected SignalException(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
-            : base(info, context) { }
     }
 
-    [RubyException("Interrupt", Inherits = typeof(SignalException)), Serializable]
+    [RubyException("Interrupt", Inherits = typeof(SignalException))]
     public class Interrupt : Exception { 
         public Interrupt() : this(null, null) { }
         public Interrupt(string message): this(message, null) { }
         public Interrupt(string message, Exception inner) : base(message ?? "Interrupt", inner) { }
-
-        protected Interrupt(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context) 
-            : base(info, context) { }
     }
 
     [RubyException("LocalJumpError", Extends = typeof(LocalJumpError))]

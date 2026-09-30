@@ -23,7 +23,6 @@ using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Serialization;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
@@ -403,44 +402,39 @@ namespace IronRuby.StandardLibrary.MessagePack {
 
         #region errors
 
-        [RubyException("UnpackError"), Serializable]
+        [RubyException("UnpackError")]
         public class UnpackError : SystemException {
             public UnpackError() : this(null, null) { }
             public UnpackError(string message) : this(message, null) { }
             public UnpackError(string message, Exception inner) : base(message ?? "MessagePack::UnpackError", inner) { }
-            protected UnpackError(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("MalformedFormatError"), Serializable]
+        [RubyException("MalformedFormatError")]
         public class MalformedFormatError : UnpackError {
             public MalformedFormatError() : this(null, null) { }
             public MalformedFormatError(string message) : this(message, null) { }
             public MalformedFormatError(string message, Exception inner) : base(message ?? "MessagePack::MalformedFormatError", inner) { }
-            protected MalformedFormatError(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("StackError"), Serializable]
+        [RubyException("StackError")]
         public class StackError : UnpackError {
             public StackError() : this(null, null) { }
             public StackError(string message) : this(message, null) { }
             public StackError(string message, Exception inner) : base(message ?? "MessagePack::StackError", inner) { }
-            protected StackError(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("UnexpectedTypeError"), Serializable]
+        [RubyException("UnexpectedTypeError")]
         public class UnexpectedTypeError : UnpackError {
             public UnexpectedTypeError() : this(null, null) { }
             public UnexpectedTypeError(string message) : this(message, null) { }
             public UnexpectedTypeError(string message, Exception inner) : base(message ?? "MessagePack::UnexpectedTypeError", inner) { }
-            protected UnexpectedTypeError(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("UnknownExtTypeError"), Serializable]
+        [RubyException("UnknownExtTypeError")]
         public class UnknownExtTypeError : UnpackError {
             public UnknownExtTypeError() : this(null, null) { }
             public UnknownExtTypeError(string message) : this(message, null) { }
             public UnknownExtTypeError(string message, Exception inner) : base(message ?? "MessagePack::UnknownExtTypeError", inner) { }
-            protected UnknownExtTypeError(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
         #endregion

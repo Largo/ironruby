@@ -200,6 +200,7 @@ namespace IronRuby.Builtins {
         /// <summary>
         /// Whether rules for calls to library methods report :c_call and :c_return.
         /// </summary>
+        [CLSCompliant(false)] // a volatile field is not CLS-compliant
         public static volatile bool CCallTracing;
 
         #endregion

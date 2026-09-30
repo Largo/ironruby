@@ -57,20 +57,20 @@ jobs:
         run: git config --global core.autocrlf input
 
       - name: Check out IronRuby
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           path: ironruby
 
       # The modern DLR is referenced as source projects from a sibling directory,
       # and prism supplies the parser itself.
       - name: Check out the DLR
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
           path: dlr
 
       - name: Check out prism
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ruby/prism
           path: prism
@@ -86,7 +86,7 @@ jobs:
 
       # Both runtimes are installed on every matrix entry: the SDK builds either
       # target framework, but running the net8.0 output needs the .NET 8 runtime.
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x
@@ -97,7 +97,7 @@ jobs:
           ruby-version: '3.3'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-${{ matrix.os }}-${{ hashFiles('ironruby/**/*.csproj', 'ironruby/Directory.Build.props', 'dlr/**/*.csproj') }}
@@ -109,7 +109,7 @@ jobs:
 
       - name: Cache the prism build
         id: prism-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: prism/build
           key: prism-${{ matrix.os }}-${{ steps.prism.outputs.sha }}
@@ -310,7 +310,7 @@ jobs:
       # The full transcript, for looking at a failure that is inside the baseline.
       - name: Keep the test output
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: ironruby-tests-${{ matrix.os }}-${{ matrix.tfm }}
           path: ironruby/Src/IronRuby.Tests/bin/Debug/${{ matrix.tfm }}/results.txt
@@ -327,22 +327,22 @@ jobs:
       TFM: ${{ matrix.tfm }}
       IR_TFM: ${{ matrix.tfm }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: ironruby
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
           path: dlr
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ruby/prism
           path: prism
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ruby/spec
           path: ironruby/spec
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ruby/mspec
           path: ironruby/mspec
@@ -355,7 +355,7 @@ jobs:
             git -C dlr apply "../$patch"
           done
 
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x
@@ -365,7 +365,7 @@ jobs:
           ruby-version: '3.3'
 
       - name: Cache NuGet packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.nuget/packages
           key: nuget-ubuntu-latest-${{ hashFiles('ironruby/**/*.csproj', 'ironruby/Directory.Build.props', 'dlr/**/*.csproj') }}
@@ -377,7 +377,7 @@ jobs:
 
       - name: Cache the prism build
         id: prism-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: prism/build
           key: prism-ubuntu-latest-${{ steps.prism.outputs.sha }}

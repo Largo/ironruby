@@ -335,7 +335,7 @@ namespace IronRuby.Runtime.Calls {
             if (bindingTarget.Success) {
                 // TODO: create a custom overload info:
                 if (ReferenceEquals(bindingTarget.Overload.ReflectionInfo, Methods.CreateDefaultInstance)) {
-                    Debug.Assert(args.TargetClass.TypeTracker.Type.IsValueType());
+                    Debug.Assert(args.TargetClass.TypeTracker.Type.IsValueType);
                     metaBuilder.Result = Ast.New(args.TargetClass.TypeTracker.Type);
                 } else if (args.Signature.IsVirtualCall && bindingTarget.Overload.IsVirtual) {
                     // Virtual methods that have been detached from the CLR type and 

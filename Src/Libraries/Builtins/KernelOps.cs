@@ -2653,21 +2653,15 @@ namespace IronRuby.Builtins {
 
         #region rand, srand
 #if FEATURE_CRYPTOGRAPHY
-        private static RNGCryptoServiceProvider _RNGCryptoServiceProvider;
-
         [RubyMethod("srand", RubyMethodAttributes.PrivateInstance, BuildConfig = "FEATURE_CRYPTOGRAPHY")]
         [RubyMethod("srand", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_CRYPTOGRAPHY")]
         public static object SeedRandomNumberGenerator(RubyContext/*!*/ context, object self) {
             // This should use a combination of the time, the process id, and a sequence number.
 
-            if (_RNGCryptoServiceProvider == null) {
-                _RNGCryptoServiceProvider = new RNGCryptoServiceProvider();
-            }
-
             int secureRandomNumber = 0;
             do {
                 byte[] b = new byte[4];
-                _RNGCryptoServiceProvider.GetBytes(b);
+                RandomNumberGenerator.Fill(b);
                 secureRandomNumber = ((int)b[0] << 24) | ((int)b[1] << 16) | ((int)b[2] << 8) | b[3];
             } while (secureRandomNumber == 0);
             return SeedRandomNumberGenerator(context, self, secureRandomNumber);

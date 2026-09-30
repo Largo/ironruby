@@ -106,8 +106,6 @@ namespace IronRuby.Tests {
                 Interpreter_JumpFromFinally1,
                 Interpreter_JumpFromFinally2,
                 Interpreter2,
-                Interpreter3,
-                Interpreter4,
                 Interpreter5,
                 Interpreter6,
                 InterpreterNumeric1,

@@ -20,9 +20,7 @@ using System.Runtime.InteropServices;
 
 
 namespace IronRuby.Builtins {
-    [Serializable]
     public class LocalJumpError : SystemException {
-        [NonSerialized]
         private readonly RuntimeFlowControl _skipFrame;
 
         /// <summary>
@@ -32,10 +30,8 @@ namespace IronRuby.Builtins {
             get { return _skipFrame; }
         }
 
-        [NonSerialized]
         private readonly string _reason;
 
-        [NonSerialized]
         private readonly object _exitValue;
 
         /// <summary>
@@ -74,14 +70,8 @@ namespace IronRuby.Builtins {
         public LocalJumpError() : this(null, (Exception)null) { }
         public LocalJumpError(string message) : this(message, (Exception)null) { }
         public LocalJumpError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected LocalJumpError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class SystemExit : Exception {
         private int _status;
 
@@ -107,129 +97,68 @@ namespace IronRuby.Builtins {
         public SystemExit() : this(null, null) { }
         public SystemExit(string message) : this(message, null) { }
         public SystemExit(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected SystemExit(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class ScriptError : Exception {
         public ScriptError() : this(null, null) { }
         public ScriptError(string message) : this(message, null) { }
         public ScriptError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected ScriptError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class NotImplementedError : ScriptError {
         public NotImplementedError() : this(null, null) { }
         public NotImplementedError(string message) : this(message, null) { }
         public NotImplementedError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected NotImplementedError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class LoadError : ScriptError {
         public LoadError() : this(null, null) { }
         public LoadError(string message) : this(message, null) { }
         public LoadError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected LoadError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class SystemStackError : SystemException {
         public SystemStackError() : this(null, null) { }
         public SystemStackError(string message) : this(message, null) { }
         public SystemStackError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected SystemStackError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
     /// <summary>
     /// Ruby's IndexError. Not System.IndexOutOfRangeException, which is sealed: KeyError and
     /// StopIteration (and Ruby classes) have to be able to subclass it.
     /// </summary>
-    [Serializable]
     public class IndexError : SystemException {
         public IndexError() : this(null, null) { }
         public IndexError(string message) : this(message, null) { }
         public IndexError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected IndexError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class RegexpError : SystemException {
         public RegexpError() : this(null, null) { }
         public RegexpError(string message) : this(message, null) { }
         public RegexpError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected RegexpError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class EncodingError : SystemException {
         public EncodingError() : this(null, null) { }
         public EncodingError(string message) : this(message, null) { }
         public EncodingError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected EncodingError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class EncodingCompatibilityError : EncodingError {
         public EncodingCompatibilityError() : this(null, null) { }
         public EncodingCompatibilityError(string message) : this(message, null) { }
         public EncodingCompatibilityError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected EncodingCompatibilityError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class UndefinedConversionError : EncodingError {
         public UndefinedConversionError() : this(null, null) { }
         public UndefinedConversionError(string message) : this(message, null) { }
         public UndefinedConversionError(string message, Exception inner) : base(message, inner) { }
 
-#if FEATURE_SERIALIZATION
-        protected UndefinedConversionError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
-
         /// <summary>The encoding the failing conversion stage read from. May be null.</summary>
-        [NonSerialized]
         private RubyEncoding _sourceEncoding, _destinationEncoding;
 
-        [NonSerialized]
         private byte[] _errorCharBytes;
 
         public RubyEncoding SourceEncoding { get { return _sourceEncoding; } set { _sourceEncoding = value; } }
@@ -239,26 +168,17 @@ namespace IronRuby.Builtins {
         public byte[] ErrorCharBytes { get { return _errorCharBytes; } set { _errorCharBytes = value; } }
     }
 
-    [Serializable]
     public class InvalidByteSequenceError : EncodingError {
         public InvalidByteSequenceError() : this(null, null) { }
         public InvalidByteSequenceError(string message) : this(message, null) { }
         public InvalidByteSequenceError(string message, Exception inner) : base(message, inner) { }
 
-#if FEATURE_SERIALIZATION
-        protected InvalidByteSequenceError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
-
-        [NonSerialized]
         private RubyEncoding _sourceEncoding, _destinationEncoding;
 
-        [NonSerialized]
         private byte[] _errorBytes, _readAgainBytes;
 
         // Nullable: an error object that was not produced by a conversion has not been told
         // either way, and MRI's #incomplete_input? answers nil for it.
-        [NonSerialized]
         private bool? _incompleteInput;
 
         public RubyEncoding SourceEncoding { get { return _sourceEncoding; } set { _sourceEncoding = value; } }
@@ -274,28 +194,16 @@ namespace IronRuby.Builtins {
         public bool? IncompleteInput { get { return _incompleteInput; } set { _incompleteInput = value; } }
     }
 
-    [Serializable]
     public class ConverterNotFoundError : EncodingError {
         public ConverterNotFoundError() : this(null, null) { }
         public ConverterNotFoundError(string message) : this(message, null) { }
         public ConverterNotFoundError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected ConverterNotFoundError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class RuntimeError : SystemException {
         public RuntimeError() : this(null, null) { }
         public RuntimeError(string message) : this(message, null) { }
         public RuntimeError(string message, Exception inner) : base(message, inner) { }
-
-#if FEATURE_SERIALIZATION
-        protected RuntimeError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
     /// <summary>
@@ -316,7 +224,6 @@ namespace IronRuby.Builtins {
     /// KernelOps.Throw's counterpart in the core needs it; the registration is the usual
     /// one-liner in Src/Libraries/Builtins/Exceptions.cs.
     /// </summary>
-    [Serializable]
     public class UncaughtThrowError : ArgumentException {
         private readonly object _tag;
         private readonly object _value;
@@ -339,7 +246,6 @@ namespace IronRuby.Builtins {
         }
     }
 
-    [Serializable]
     public class FrozenError : RuntimeError {
         private object _receiver;
         private bool _hasReceiver;
@@ -364,14 +270,8 @@ namespace IronRuby.Builtins {
             _hasReceiver = true;
             return this;
         }
-
-#if FEATURE_SERIALIZATION
-        protected FrozenError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class SyntaxError : ScriptError {
         private readonly string _file;
         private readonly string _lineSourceCode;
@@ -414,14 +314,8 @@ namespace IronRuby.Builtins {
             _lineSourceCode = lineSourceCode;
             _hasLineInfo = true;
         }
-
-#if FEATURE_SERIALIZATION
-        protected SyntaxError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class ExistError : ExternalException {
         private const string/*!*/ M = "File exists";
 
@@ -429,14 +323,8 @@ namespace IronRuby.Builtins {
         public ExistError(string message) : this(message, null) { }
         public ExistError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
         public ExistError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-        protected ExistError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class BadFileDescriptorError : ExternalException {
         private const string/*!*/ M = "Bad file descriptor";
 
@@ -444,11 +332,6 @@ namespace IronRuby.Builtins {
         public BadFileDescriptorError(string message) : this(message, null) { }
         public BadFileDescriptorError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
         public BadFileDescriptorError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-        protected BadFileDescriptorError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
     /// <summary>
@@ -456,7 +339,6 @@ namespace IronRuby.Builtins {
     /// directory throws UnauthorizedAccessException, which maps to EACCES -- so the
     /// runtime needs a type of its own to raise. Registered in Errno.cs.
     /// </summary>
-    [Serializable]
     public class DirectoryIsError : ExternalException {
         private const string/*!*/ M = "Is a directory";
 
@@ -464,14 +346,8 @@ namespace IronRuby.Builtins {
         public DirectoryIsError(string message) : this(message, null) { }
         public DirectoryIsError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
         public DirectoryIsError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-        protected DirectoryIsError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class ExecFormatError : ExternalException {
         private const string/*!*/ M = "Exec format error";
 
@@ -479,11 +355,6 @@ namespace IronRuby.Builtins {
         public ExecFormatError(string message) : this(message, null) { }
         public ExecFormatError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
         public ExecFormatError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-        protected ExecFormatError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
     /// <summary>
@@ -491,7 +362,6 @@ namespace IronRuby.Builtins {
     /// /dev/tty, a FIFO opened for writing with no reader - as a bare IOException, which
     /// would otherwise surface as IOError. Registered in Errno.cs.
     /// </summary>
-    [Serializable]
     public class NoSuchDeviceOrAddressError : ExternalException {
         private const string/*!*/ M = "No such device or address";
 
@@ -499,14 +369,8 @@ namespace IronRuby.Builtins {
         public NoSuchDeviceOrAddressError(string message) : this(message, null) { }
         public NoSuchDeviceOrAddressError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
         public NoSuchDeviceOrAddressError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-        protected NoSuchDeviceOrAddressError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 
-    [Serializable]
     public class InvalidError : ExternalException {
         private const string/*!*/ M = "Invalid argument";
 
@@ -514,11 +378,6 @@ namespace IronRuby.Builtins {
         public InvalidError(string message) : this(message, null) { }
         public InvalidError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
         public InvalidError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-        protected InvalidError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-            : base(info, context) { }
-#endif
     }
 }
 

@@ -75,11 +75,11 @@ namespace IronRuby.Runtime.Conversions {
                     return Convertibility.NotConvertible;
                 }
 
-                if (toType.IsGenericType() && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
+                if (toType.IsGenericType && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
                     return Convertibility.AlwaysConvertible;
                 }
 
-                if (!toType.IsValueType()) {
+                if (!toType.IsValueType) {
                     // null convertible to any reference type:
                     return Convertibility.AlwaysConvertible;
                 } else if (toType == typeof(bool)) {
@@ -176,7 +176,7 @@ namespace IronRuby.Runtime.Conversions {
             }
 
             // A COM object can potentially be converted to the given interface, but might also be not so use this only as the last resort:
-            if (TypeUtils.IsComObjectType(fromType) && toType.IsInterface()) {
+            if (TypeUtils.IsComObjectType(fromType) && toType.IsInterface) {
                 return Convertibility.AlwaysConvertible;
             }
 
@@ -244,7 +244,7 @@ namespace IronRuby.Runtime.Conversions {
 
             if (toType == typeof(bool)) {
                 Debug.Assert(fromType != typeof(bool));
-                return fromType.IsValueType() ? AstUtils.Constant(true) : Ast.NotEqual(expr, AstUtils.Constant(null));
+                return fromType.IsValueType ? AstUtils.Constant(true) : Ast.NotEqual(expr, AstUtils.Constant(null));
             }
 
             // TODO:

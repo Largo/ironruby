@@ -171,12 +171,6 @@ namespace IronRuby.Tests {
             return tokens;
         }        
 
-        private static int domainId = 0;
-
-        private static AppDomain CreateDomain() {
-            return AppDomain.CreateDomain("RemoteScripts" + domainId++);
-        }
-
         [Flags]
         enum OutputFlags {
             None = 0,
@@ -290,13 +284,13 @@ namespace IronRuby.Tests {
                 f();
             } else {
                 MemoryStream stream = new MemoryStream();
-                Runtime.IO.SetOutput(stream, StringUtils.DefaultEncoding);
+                Runtime.IO.SetOutput(stream, Encoding.Default);
                 Runtime.IO.SetErrorOutput(Console.OpenStandardError(), Console.Error);
 
                 try {
                     f();
                 } finally {
-                    output.Write(StringUtils.DefaultEncoding.GetString(stream.ToArray()));
+                    output.Write(Encoding.Default.GetString(stream.ToArray()));
                     Runtime.IO.RedirectToConsole();
                 }
             }

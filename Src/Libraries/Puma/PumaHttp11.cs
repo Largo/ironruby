@@ -29,7 +29,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Runtime.Serialization;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -40,7 +39,7 @@ namespace IronRuby.StandardLibrary.Puma {
     [RubyModule("Puma")]
     public static class PumaModule {
 
-        [RubyException("HttpParserError"), Serializable]
+        [RubyException("HttpParserError")]
         public class HttpParserError : SystemException {
             public HttpParserError() : this(null, null) { }
             public HttpParserError(string message) : this(message, null) { }

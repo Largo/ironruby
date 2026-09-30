@@ -48,16 +48,16 @@ jobs:
         if: runner.os == 'Windows'
         run: git config --global core.autocrlf input
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           path: ironruby
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: IronLanguages/dlr
           path: dlr
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           repository: ruby/prism
           ref: ${{ env.PRISM_REF }}
@@ -72,7 +72,7 @@ jobs:
 
       # The DLR multi-targets up to net9.0, so the build needs the .NET 10 SDK; the
       # release itself targets net8.0.
-      - uses: actions/setup-dotnet@v4
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: |
             8.0.x
@@ -118,7 +118,7 @@ jobs:
           fi
           Util/package-release.sh "${{ matrix.rid }}" "$GITHUB_WORKSPACE/dist"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ironruby-${{ matrix.rid }}
           path: |
@@ -134,7 +134,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

@@ -16,6 +16,7 @@
 using System;
 using System.Linq;
 using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -80,7 +81,7 @@ namespace IronRuby.Runtime {
         private readonly Dictionary<string, Thread>/*!*/ _unfinishedFiles;
 
         // lazy init
-        private SynchronizedDictionary<string, Scope> _loadedScripts;
+        private ConcurrentDictionary<string, Scope> _loadedScripts;
 
 #if FEATURE_FILESYSTEM
         // TODO: static
@@ -127,7 +128,7 @@ namespace IronRuby.Runtime {
             get {
                 if (_loadedScripts == null) {
                     Interlocked.CompareExchange(ref _loadedScripts, 
-                        new SynchronizedDictionary<string, Scope>(new Dictionary<string, Scope>(DomainManager.Platform.PathComparer)), null
+                        new ConcurrentDictionary<string, Scope>(DomainManager.Platform.PathComparer), null
                     );
                 }
                 return _loadedScripts;

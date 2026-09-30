@@ -1862,7 +1862,7 @@ namespace IronRuby.Builtins {
         public MutableString[]/*!*/ Split(char[]/*!*/ separators, int maxComponents, StringSplitOptions options) {
             // TODO:
             // TODO (encoding):
-            return MakeArray(StringUtils.Split(_content.ConvertToString(), separators, maxComponents, options), _encoding);
+            return MakeArray(_content.ConvertToString().Split(separators, maxComponents, options), _encoding);
         }
         
         #endregion

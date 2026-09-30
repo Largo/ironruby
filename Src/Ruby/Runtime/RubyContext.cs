@@ -217,8 +217,9 @@ namespace IronRuby.Runtime {
         private readonly RubyInputProvider/*!*/ _inputProvider;
         private Proc _traceListener;
 
+        // Set while the trace proc runs on this thread, so that what the proc does is not traced itself.
         [ThreadStatic]
-        private bool _traceListenerSuspended;
+        private static bool _traceListenerSuspended;
         
         private readonly Stopwatch _upTime;
 
