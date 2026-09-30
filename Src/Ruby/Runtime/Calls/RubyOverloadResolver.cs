@@ -499,6 +499,17 @@ namespace IronRuby.Runtime.Calls {
                 } else if (typeTwo == actualType) {
                     return Candidate.Two;
                 }
+
+                // prefer String over Byte[] for a Ruby string (both are explicit conversions, e.g. Assembly.Load(String/Byte[])):
+                if (typeof(MutableString).IsAssignableFrom(actualType)) {
+                    if (typeOne == typeof(string) && typeTwo == typeof(byte[])) {
+                        return Candidate.One;
+                    }
+
+                    if (typeOne == typeof(byte[]) && typeTwo == typeof(string)) {
+                        return Candidate.Two;
+                    }
+                }
             }
 
             // prefer integer type over enum:

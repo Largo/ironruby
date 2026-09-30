@@ -1615,6 +1615,58 @@ puts m.overload(System::Array[Object]).arity
 ");
         }
 
+        public static class OverloadSelection3 {
+            public static string F(string a) { return "F(String)"; }
+            public static string F(byte[] a) { return "F(Byte[])"; }
+        }
+
+        /// <summary>
+        /// A Ruby string has explicit conversions to both System::String and System::Byte[], String is preferred.
+        /// </summary>
+        public void ClrOverloadSelection3() {
+            Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(OverloadSelection3)));
+
+            TestOutput(@"
+class S < String; end
+
+puts C.f('foo')
+puts C.f('foo'.freeze)
+puts C.f(S.new('foo'))
+puts C.f('foo'.to_clr_string)
+puts C.f(System::Array[System::Byte].new(0))
+C.f(nil) rescue p $!.class
+", @"
+F(String)
+F(String)
+F(String)
+F(String)
+F(Byte[])
+System::Reflection::AmbiguousMatchException
+");
+
+            // BCL overloads on String/Byte[] and methods that only take one of them:
+            TestOutput(@"
+corlib = System::Object.to_clr_type.assembly
+p System::Reflection::Assembly.load(""#{corlib.full_name}"") == corlib
+p System::AppDomain.current_domain.load(""#{corlib.full_name}"") == corlib
+puts System::Guid.new('00000000-0000-0000-0000-000000000001')
+puts System::Text::Encoding.UTF8.get_string('abc')
+p System::Convert.from_base64_string('YWJj')
+puts System::Convert.to_base64_string('abc')
+System::Reflection::Assembly.load(System::Array[System::Byte].new(0)) rescue p $!.class
+System::Reflection::Assembly.load(nil) rescue p $!.class
+", @"
+true
+true
+00000000-0000-0000-0000-000000000001
+abc
+[97 (Byte), 98 (Byte), 99 (Byte)]
+YWJj
+System::BadImageFormatException
+System::Reflection::AmbiguousMatchException
+");
+        }
+
         public class ClassWithSlot1 {
             public int Foo() {
                 return 1;

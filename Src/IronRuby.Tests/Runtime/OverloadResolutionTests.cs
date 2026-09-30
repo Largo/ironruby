@@ -158,6 +158,10 @@ namespace IronRuby.Tests {
 
             public void N1(string a) { }
             public void N2(char a) { }
+
+            // MutableString has explicit conversions to both, String is preferred (e.g. Assembly.Load):
+            public void O1(string a) { }
+            public void O2(byte[] a) { }
         }
 
         public void OverloadResolution_Numeric1() {
@@ -210,6 +214,11 @@ namespace IronRuby.Tests {
 
                 // N
                 new { Args = new[] { MO(MutableString.CreateAscii("x")) }, Overloads = "N*", Result = "N1" },
+
+                // O
+                new { Args = new[] { MO(MutableString.CreateAscii("x")) }, Overloads = "O*", Result = "O1" },
+                new { Args = new[] { MO("x") }, Overloads = "O*", Result = "O1" },
+                new { Args = new[] { MO(new byte[] { 1 }) }, Overloads = "O*", Result = "O2" },
             };
 
             for (int i = 0; i < cases.Length; i++) {
