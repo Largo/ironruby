@@ -1627,7 +1627,10 @@ module Kernel
   end
 end
 
-RUBY_ENGINE_VERSION = RUBY_VERSION unless defined?(RUBY_ENGINE_VERSION)
+# IronRuby's own version, without the pre-release suffix: 4.0.0 for 4.0.0-preview1.
+# IronRuby's major.minor is the Ruby version it implements (CurrentVersion.cs), so this
+# agrees with RUBY_VERSION up to IronRuby's own release counter, as it does in CRuby.
+RUBY_ENGINE_VERSION = IRONRUBY_VERSION[/\A\d+\.\d+\.\d+/].freeze unless defined?(RUBY_ENGINE_VERSION)
 RUBY_COPYRIGHT = "ironruby - Apache License, Version 2.0".freeze unless defined?(RUBY_COPYRIGHT)
 RUBY_DESCRIPTION = "ironruby #{RUBY_VERSION} (.NET)".freeze unless defined?(RUBY_DESCRIPTION)
 
