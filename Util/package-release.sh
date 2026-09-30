@@ -3,7 +3,7 @@
 #
 #   Util/package-release.sh linux-x64            # -> dist/ironruby-<version>-linux-x64.tar.gz
 #   Util/package-release.sh win-x64 out          # -> out/ironruby-<version>-win-x64.zip
-#   IR_VERSION=1.2.0-preview1 Util/package-release.sh osx-arm64
+#   IR_VERSION=4.0.0-preview1 Util/package-release.sh osx-arm64
 #
 # The archive keeps the source tree's layout - the launchers at the top, the build in
 # Src/Console/bin/Release/<tfm>, the standard library in Src/StdLib - so ir.sh/ir.cmd,
