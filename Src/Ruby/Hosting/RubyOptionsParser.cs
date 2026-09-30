@@ -304,10 +304,10 @@ namespace IronRuby.Hosting {
         }
 
         private static string[] GetPaths(string input) {
-            string[] paths = StringUtils.Split(input, new char[] { Path.PathSeparator }, Int32.MaxValue, StringSplitOptions.RemoveEmptyEntries);
+            string[] paths = input.Split(new char[] { Path.PathSeparator }, Int32.MaxValue, StringSplitOptions.RemoveEmptyEntries);
             for (int i = 0; i < paths.Length; i++) {
                 // Trim any occurrances of "
-                string[] parts = StringUtils.Split(paths[i], new char[] { '"' }, Int32.MaxValue, StringSplitOptions.RemoveEmptyEntries);
+                string[] parts = paths[i].Split(new char[] { '"' }, Int32.MaxValue, StringSplitOptions.RemoveEmptyEntries);
                 paths[i] = String.Concat(parts);
             }
             return paths;

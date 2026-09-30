@@ -422,7 +422,7 @@ namespace IronRuby.Compiler.Generation {
         private readonly int _index;
 
         private ReturnFixer(LocalBuilder/*!*/ reference, ParameterInfo/*!*/ parameter, int index) {
-            Debug.Assert(reference.LocalType.IsGenericType() && reference.LocalType.GetGenericTypeDefinition() == typeof(StrongBox<>));
+            Debug.Assert(reference.LocalType.IsGenericType && reference.LocalType.GetGenericTypeDefinition() == typeof(StrongBox<>));
             Debug.Assert(parameter.ParameterType.IsByRef);
 
             _parameter = parameter;

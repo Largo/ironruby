@@ -1276,7 +1276,7 @@ namespace IronRuby.Builtins {
 
                 case MethodAttributes.Family:
                 case MethodAttributes.FamORAssem:
-                    return declaringType != null && declaringType.IsVisible() && !declaringType.IsSealed();
+                    return declaringType != null && declaringType.IsVisible && !declaringType.IsSealed;
             }
 
             return true;
@@ -1292,7 +1292,7 @@ namespace IronRuby.Builtins {
             }
 
             if (field.IsProtected()) {
-                return field.DeclaringType != null && field.DeclaringType.IsVisible() && !field.DeclaringType.IsSealed();
+                return field.DeclaringType != null && field.DeclaringType.IsVisible && !field.DeclaringType.IsSealed;
             }
 
             return true;
@@ -1542,7 +1542,7 @@ namespace IronRuby.Builtins {
                     // TODO: handle protected constructors
                     constructionOverloads = GetConstructors(type == typeof(object) ? typeof(RubyObject) : type).ToArray();
 
-                    if (type.IsValueType()) {
+                    if (type.IsValueType) {
                         if (constructionOverloads.Length == 0 || GetConstructor(type) == null) {
                             constructionOverloads = ArrayUtils.Append(constructionOverloads, new ReflectionOverloadInfo(Methods.CreateDefaultInstance));
                         }
@@ -1669,7 +1669,7 @@ namespace IronRuby.Builtins {
                 return Ast.New(ctor);
             }
 
-            if (type.IsValueType() && type != typeof(int) && type != typeof(double)) {
+            if (type.IsValueType && type != typeof(int) && type != typeof(double)) {
                 return Ast.New(type);
             }
 
