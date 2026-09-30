@@ -332,7 +332,7 @@ namespace IronRuby.Runtime {
             methodName = method.Name;
 
             fileName = (_hasFileAccessPermission) ? GetFileName(frame) : null;
-            var sourceLine = line = PlatformAdaptationLayer.IsCompactFramework ? 0 : frame.GetFileLineNumber();
+            var sourceLine = line = frame.GetFileLineNumber();
 
             if (TryParseRubyMethodName(ref methodName, ref fileName, ref line)) {
                 if (sourceLine == 0) {
