@@ -511,6 +511,7 @@ namespace IronRuby.Tests {
                 ClrGenericParametersInference1,
                 ClrOverloadSelection1,
                 ClrOverloadSelection2,
+                ClrOverloadSelection3,
                 ClrNewSlot1,
                 ClrInterfaces1,
                 ClrExplicitInterfaces1,
