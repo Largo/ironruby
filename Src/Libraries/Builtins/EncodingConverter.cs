@@ -329,7 +329,7 @@ namespace IronRuby.Builtins {
                 string chars = value.ToString();
                 try {
                     return EncodeStageDestination.StrictEncoding.GetBytes(chars);
-                } catch (EncoderFallbackException e) {
+                } catch (EncoderFallbackException) {
                     throw new UndefinedConversionError("replacement character setup failed");
                 }
             }

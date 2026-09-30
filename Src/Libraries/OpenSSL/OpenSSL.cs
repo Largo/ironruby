@@ -468,8 +468,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 }
 
                 byte[] data = new byte[length];
-                var generator = new Crypto.RNGCryptoServiceProvider();
-                generator.GetBytes(data);
+                Crypto.RandomNumberGenerator.Fill(data);
 
                 return MutableString.CreateBinary(data);
             }
@@ -489,8 +488,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             [RubyMethod("rand", RubyMethodAttributes.PublicSingleton)]
             public static BigInteger/*!*/ Rand(RubyClass/*!*/ self, [DefaultProtocol]int bits, [DefaultProtocol, Optional]int someFlag, [Optional]bool otherFlag) { // TODO: figure out someFlag and otherFlag
                 byte[] data = new byte[bits >> 3];
-                var generator = new Crypto.RNGCryptoServiceProvider();
-                generator.GetBytes(data);
+                Crypto.RandomNumberGenerator.Fill(data);
 
                 uint[] transformed = new uint[data.Length >> 2];
                 int j = 0;
@@ -685,8 +683,10 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     return null;
                 }
                 switch (self._ssl.SslProtocol) {
+#pragma warning disable SYSLIB0039 // TLS 1.0 and 1.1 are obsolete, but a connection can still have negotiated one
                     case SslProtocols.Tls: return MutableString.CreateAscii("TLSv1");
                     case SslProtocols.Tls11: return MutableString.CreateAscii("TLSv1.1");
+#pragma warning restore SYSLIB0039
                     case SslProtocols.Tls12: return MutableString.CreateAscii("TLSv1.2");
                     case SslProtocols.Tls13: return MutableString.CreateAscii("TLSv1.3");
                     default: return MutableString.CreateAscii(self._ssl.SslProtocol.ToString());

@@ -784,7 +784,6 @@ namespace IronRuby.StandardLibrary.Nio4r {
             internal int _readiness;
             internal Selector _selector;
             internal object _value;
-            private bool _initialized;
 
             public Monitor(RubyClass/*!*/ rubyClass) : base(rubyClass) {
             }
@@ -806,7 +805,6 @@ namespace IronRuby.StandardLibrary.Nio4r {
                 _io = io;
                 _interests = value;
                 _selector = selector;
-                _initialized = true;
             }
 
             [RubyConstructor]

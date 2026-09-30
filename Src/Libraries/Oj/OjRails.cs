@@ -153,8 +153,6 @@ namespace IronRuby.StandardLibrary.Oj {
                     state.RailsArrayOpt = on;
                 } else if (ReferenceEquals(arg, context.GetClass(typeof(double)))) {
                     state.RailsFloatOpt = on;
-                } else if (ReferenceEquals(arg, state.StringWriterClass)) {
-                    state.StringWriterOptimized = on;
                 } else {
                     ROpt ro = rot.Get(arg);
                     if (ro == null && arg is RubyModule) {

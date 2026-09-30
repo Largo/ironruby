@@ -1071,7 +1071,7 @@ namespace IronRuby.Builtins {
 
                     return CopyExtraIVars(context, time,
                         isUtc ? instant : WithLoadedZone(context, self, instant, hasOffset, offsetSeconds, zoneName));
-                } catch (Exception e) when (!(e is RubyTime)) {
+                } catch (Exception) {
                     throw RubyExceptions.CreateTypeError("marshaled time format differ");
                 }
             }
