@@ -10,7 +10,7 @@ Ruby 1.9 grammar it shipped with in 2011.
 ```console
 $ ./irb.sh
 irb(main):001> RUBY_DESCRIPTION
-=> "IronRuby 1.2.0-dev (4.0.0) on .NET 8.0.31 [x86_64-linux]"
+=> "IronRuby 4.0.0-preview1 (4.0.0) on .NET 8.0.31 [x86_64-linux]"
 irb(main):002> def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
 => :fib
 irb(main):003> (1..10).map { fib(_1) }
@@ -57,6 +57,17 @@ def connect(host:, port: 5432, **opts) = Client.new(host, port, **opts)
 
 users&.filter_map { it.name if it.active? }
 ```
+
+## Version numbers
+
+IronRuby's version follows the Ruby version it implements: **IronRuby 4.0 is Ruby 4.0**,
+and it becomes 4.1 when it moves to Ruby 4.1. The last number counts IronRuby's own
+releases for that Ruby version (4.0.0, 4.0.1, ...) and is not CRuby's patch level; the
+release notes say which CRuby release the specs were checked against. The last release of
+the original project was 1.1.3, for Ruby 1.9.2, in 2011.
+
+`IRONRUBY_VERSION` is the full version (`4.0.0-preview1`), `RUBY_ENGINE_VERSION` the same
+without the pre-release suffix, and `RUBY_VERSION` the Ruby version (`4.0.0`).
 
 ## What changed
 
@@ -440,7 +451,7 @@ Windows machine, keeping the same relative layout (`ir.cmd` finds the binaries u
 ```
 C:\ir> set IR_CONFIG=Release
 C:\ir> ir.cmd -e "puts RUBY_DESCRIPTION"
-IronRuby 1.2.0-dev (4.0.0) on .NET 8.0.31 [x64-mswin64]
+IronRuby 4.0.0-preview1 (4.0.0) on .NET 8.0.31 [x64-mswin64]
 C:\ir> irb.cmd
 C:\ir> set RUBY_EXE=C:\ir\ir.cmd
 C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
