@@ -500,13 +500,14 @@ namespace IronRuby.Runtime.Calls {
                     return Candidate.Two;
                 }
 
-                // prefer String over Byte[] for a Ruby string (both are explicit conversions, e.g. Assembly.Load(String/Byte[])):
+                // prefer String over Byte[] and Boolean for a Ruby string (explicit conversions and the any-to-Boolean one, all on level 2,
+                // e.g. Assembly.Load(String/Byte[]), BinaryWriter#Write(String/Byte[]/Boolean/Char); PreferConvert orders String over Char):
                 if (typeof(MutableString).IsAssignableFrom(actualType)) {
-                    if (typeOne == typeof(string) && typeTwo == typeof(byte[])) {
+                    if (typeOne == typeof(string) && (typeTwo == typeof(byte[]) || typeTwo == typeof(bool))) {
                         return Candidate.One;
                     }
 
-                    if (typeOne == typeof(byte[]) && typeTwo == typeof(string)) {
+                    if ((typeOne == typeof(byte[]) || typeOne == typeof(bool)) && typeTwo == typeof(string)) {
                         return Candidate.Two;
                     }
                 }

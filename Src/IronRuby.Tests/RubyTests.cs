@@ -512,6 +512,7 @@ namespace IronRuby.Tests {
                 ClrOverloadSelection1,
                 ClrOverloadSelection2,
                 ClrOverloadSelection3,
+                ClrOverloadSelection4,
                 ClrNewSlot1,
                 ClrInterfaces1,
                 ClrExplicitInterfaces1,
