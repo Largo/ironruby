@@ -25,7 +25,6 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using System.Runtime.InteropServices;
-using System.Runtime.Serialization;
 using System.Text;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -137,220 +136,193 @@ namespace IronRuby.StandardLibrary.Sqlite3 {
         /// and read by attr_readers in Src/StdLib/ironruby/sqlite3/errors.rb, the way
         /// KeyError#key is done in the core (see StringFormatter.CreateKeyError).
         /// </summary>
-        [RubyException("Exception"), Serializable]
+        [RubyException("Exception")]
         public class SqliteException : SystemException {
             public SqliteException() : this(null, null) { }
             public SqliteException(string message) : this(message, null) { }
             public SqliteException(string message, Exception inner) : base(message ?? "SQLite3::Exception", inner) { }
-            protected SqliteException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("SQLException"), Serializable]
+        [RubyException("SQLException")]
         public class SQLException : SqliteException {
             public SQLException() : this(null, null) { }
             public SQLException(string message) : this(message, null) { }
             public SQLException(string message, Exception inner) : base(message ?? "SQLException", inner) { }
-            protected SQLException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("InternalException"), Serializable]
+        [RubyException("InternalException")]
         public class InternalException : SqliteException {
             public InternalException() : this(null, null) { }
             public InternalException(string message) : this(message, null) { }
             public InternalException(string message, Exception inner) : base(message ?? "InternalException", inner) { }
-            protected InternalException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("PermissionException"), Serializable]
+        [RubyException("PermissionException")]
         public class PermissionException : SqliteException {
             public PermissionException() : this(null, null) { }
             public PermissionException(string message) : this(message, null) { }
             public PermissionException(string message, Exception inner) : base(message ?? "PermissionException", inner) { }
-            protected PermissionException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("AbortException"), Serializable]
+        [RubyException("AbortException")]
         public class AbortException : SqliteException {
             public AbortException() : this(null, null) { }
             public AbortException(string message) : this(message, null) { }
             public AbortException(string message, Exception inner) : base(message ?? "AbortException", inner) { }
-            protected AbortException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("BusyException"), Serializable]
+        [RubyException("BusyException")]
         public class BusyException : SqliteException {
             public BusyException() : this(null, null) { }
             public BusyException(string message) : this(message, null) { }
             public BusyException(string message, Exception inner) : base(message ?? "BusyException", inner) { }
-            protected BusyException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("LockedException"), Serializable]
+        [RubyException("LockedException")]
         public class LockedException : SqliteException {
             public LockedException() : this(null, null) { }
             public LockedException(string message) : this(message, null) { }
             public LockedException(string message, Exception inner) : base(message ?? "LockedException", inner) { }
-            protected LockedException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("MemoryException"), Serializable]
+        [RubyException("MemoryException")]
         public class MemoryException : SqliteException {
             public MemoryException() : this(null, null) { }
             public MemoryException(string message) : this(message, null) { }
             public MemoryException(string message, Exception inner) : base(message ?? "MemoryException", inner) { }
-            protected MemoryException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("ReadOnlyException"), Serializable]
+        [RubyException("ReadOnlyException")]
         public class ReadOnlyException : SqliteException {
             public ReadOnlyException() : this(null, null) { }
             public ReadOnlyException(string message) : this(message, null) { }
             public ReadOnlyException(string message, Exception inner) : base(message ?? "ReadOnlyException", inner) { }
-            protected ReadOnlyException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("InterruptException"), Serializable]
+        [RubyException("InterruptException")]
         public class InterruptException : SqliteException {
             public InterruptException() : this(null, null) { }
             public InterruptException(string message) : this(message, null) { }
             public InterruptException(string message, Exception inner) : base(message ?? "InterruptException", inner) { }
-            protected InterruptException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("IOException"), Serializable]
+        [RubyException("IOException")]
         public class IOException : SqliteException {
             public IOException() : this(null, null) { }
             public IOException(string message) : this(message, null) { }
             public IOException(string message, Exception inner) : base(message ?? "IOException", inner) { }
-            protected IOException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("CorruptException"), Serializable]
+        [RubyException("CorruptException")]
         public class CorruptException : SqliteException {
             public CorruptException() : this(null, null) { }
             public CorruptException(string message) : this(message, null) { }
             public CorruptException(string message, Exception inner) : base(message ?? "CorruptException", inner) { }
-            protected CorruptException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("NotFoundException"), Serializable]
+        [RubyException("NotFoundException")]
         public class NotFoundException : SqliteException {
             public NotFoundException() : this(null, null) { }
             public NotFoundException(string message) : this(message, null) { }
             public NotFoundException(string message, Exception inner) : base(message ?? "NotFoundException", inner) { }
-            protected NotFoundException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("FullException"), Serializable]
+        [RubyException("FullException")]
         public class FullException : SqliteException {
             public FullException() : this(null, null) { }
             public FullException(string message) : this(message, null) { }
             public FullException(string message, Exception inner) : base(message ?? "FullException", inner) { }
-            protected FullException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("CantOpenException"), Serializable]
+        [RubyException("CantOpenException")]
         public class CantOpenException : SqliteException {
             public CantOpenException() : this(null, null) { }
             public CantOpenException(string message) : this(message, null) { }
             public CantOpenException(string message, Exception inner) : base(message ?? "CantOpenException", inner) { }
-            protected CantOpenException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("ProtocolException"), Serializable]
+        [RubyException("ProtocolException")]
         public class ProtocolException : SqliteException {
             public ProtocolException() : this(null, null) { }
             public ProtocolException(string message) : this(message, null) { }
             public ProtocolException(string message, Exception inner) : base(message ?? "ProtocolException", inner) { }
-            protected ProtocolException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("EmptyException"), Serializable]
+        [RubyException("EmptyException")]
         public class EmptyException : SqliteException {
             public EmptyException() : this(null, null) { }
             public EmptyException(string message) : this(message, null) { }
             public EmptyException(string message, Exception inner) : base(message ?? "EmptyException", inner) { }
-            protected EmptyException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("SchemaChangedException"), Serializable]
+        [RubyException("SchemaChangedException")]
         public class SchemaChangedException : SqliteException {
             public SchemaChangedException() : this(null, null) { }
             public SchemaChangedException(string message) : this(message, null) { }
             public SchemaChangedException(string message, Exception inner) : base(message ?? "SchemaChangedException", inner) { }
-            protected SchemaChangedException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("TooBigException"), Serializable]
+        [RubyException("TooBigException")]
         public class TooBigException : SqliteException {
             public TooBigException() : this(null, null) { }
             public TooBigException(string message) : this(message, null) { }
             public TooBigException(string message, Exception inner) : base(message ?? "TooBigException", inner) { }
-            protected TooBigException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("ConstraintException"), Serializable]
+        [RubyException("ConstraintException")]
         public class ConstraintException : SqliteException {
             public ConstraintException() : this(null, null) { }
             public ConstraintException(string message) : this(message, null) { }
             public ConstraintException(string message, Exception inner) : base(message ?? "ConstraintException", inner) { }
-            protected ConstraintException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("MismatchException"), Serializable]
+        [RubyException("MismatchException")]
         public class MismatchException : SqliteException {
             public MismatchException() : this(null, null) { }
             public MismatchException(string message) : this(message, null) { }
             public MismatchException(string message, Exception inner) : base(message ?? "MismatchException", inner) { }
-            protected MismatchException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("MisuseException"), Serializable]
+        [RubyException("MisuseException")]
         public class MisuseException : SqliteException {
             public MisuseException() : this(null, null) { }
             public MisuseException(string message) : this(message, null) { }
             public MisuseException(string message, Exception inner) : base(message ?? "MisuseException", inner) { }
-            protected MisuseException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("UnsupportedException"), Serializable]
+        [RubyException("UnsupportedException")]
         public class UnsupportedException : SqliteException {
             public UnsupportedException() : this(null, null) { }
             public UnsupportedException(string message) : this(message, null) { }
             public UnsupportedException(string message, Exception inner) : base(message ?? "UnsupportedException", inner) { }
-            protected UnsupportedException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("AuthorizationException"), Serializable]
+        [RubyException("AuthorizationException")]
         public class AuthorizationException : SqliteException {
             public AuthorizationException() : this(null, null) { }
             public AuthorizationException(string message) : this(message, null) { }
             public AuthorizationException(string message, Exception inner) : base(message ?? "AuthorizationException", inner) { }
-            protected AuthorizationException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("FormatException"), Serializable]
+        [RubyException("FormatException")]
         public class FormatException : SqliteException {
             public FormatException() : this(null, null) { }
             public FormatException(string message) : this(message, null) { }
             public FormatException(string message, Exception inner) : base(message ?? "FormatException", inner) { }
-            protected FormatException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("RangeException"), Serializable]
+        [RubyException("RangeException")]
         public class RangeException : SqliteException {
             public RangeException() : this(null, null) { }
             public RangeException(string message) : this(message, null) { }
             public RangeException(string message, Exception inner) : base(message ?? "RangeException", inner) { }
-            protected RangeException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
-        [RubyException("NotADatabaseException"), Serializable]
+        [RubyException("NotADatabaseException")]
         public class NotADatabaseException : SqliteException {
             public NotADatabaseException() : this(null, null) { }
             public NotADatabaseException(string message) : this(message, null) { }
             public NotADatabaseException(string message, Exception inner) : base(message ?? "NotADatabaseException", inner) { }
-            protected NotADatabaseException(SerializationInfo info, StreamingContext context) : base(info, context) { }
         }
 
         /// <summary>

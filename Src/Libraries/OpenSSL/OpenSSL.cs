@@ -61,17 +61,12 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         public class Digest {
             // MRI's class for "this is not a digest OpenSSL knows"; code rescues it
             // by name, so it has to be this class and not its OpenSSLError parent.
-            [RubyException("DigestError"), Serializable]
+            [RubyException("DigestError")]
             public class DigestError : OpenSSLError {
                 public DigestError() : this(null, null) { }
                 public DigestError(string message) : this(message, null) { }
                 public DigestError(string message, Exception inner) : base(message ?? "DigestError", inner) { }
                 public DigestError(MutableString message) : base(message.ConvertToString()) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-                protected DigestError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                    : base(info, context) { }
-#endif
             }
 
             private string/*!*/ _name = "SHA1";
@@ -421,7 +416,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             }
         }
 
-        [RubyException("KDFError"), Serializable]
+        [RubyException("KDFError")]
         public class KDFError : OpenSSLError {
             public KDFError() : this(null, null) { }
             public KDFError(string message) : this(message, null) { }
@@ -543,17 +538,12 @@ namespace IronRuby.StandardLibrary.OpenSsl {
 
         // MRI's OpenSSL exceptions are plain StandardErrors: the message is exactly what was given,
         // not the "<base> - <message>" form of SystemCallError.
-        [RubyException("OpenSSLError"), Serializable]
+        [RubyException("OpenSSLError")]
         public class OpenSSLError : SystemException {
             public OpenSSLError() : this(null, null) { }
             public OpenSSLError(string message) : this(message, null) { }
             public OpenSSLError(string message, Exception inner) : base(message ?? "OpenSSLError", inner) { }
             public OpenSSLError(MutableString message) : base(message.ConvertToString()) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected OpenSSLError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
         [RubyModule("SSL")]
@@ -710,17 +700,12 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         }
 #endif
 
-            [RubyException("SSLError"), Serializable]
+            [RubyException("SSLError")]
             public class SSLError : OpenSSLError {
                 public SSLError() : this(null, null) { }
                 public SSLError(string message) : this(message, null) { }
                 public SSLError(string message, Exception inner) : base(message ?? "SSLError", inner) { }
                 public SSLError(MutableString message) : base(message.ConvertToString()) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-                protected SSLError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                    : base(info, context) { }
-#endif
             }
         }
     }

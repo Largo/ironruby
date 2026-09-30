@@ -31,7 +31,6 @@ using System.Net.Sockets;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
-using System.Runtime.Serialization;
 using System.Threading;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
@@ -948,21 +947,21 @@ namespace IronRuby.StandardLibrary.Nio4r {
                 return new ByteBuffer(ImmediateClass.NominalClass);
             }
 
-            [RubyException("OverflowError"), Serializable]
+            [RubyException("OverflowError")]
             public class OverflowError : System.IO.IOException {
                 public OverflowError() : this(null, null) { }
                 public OverflowError(string message) : this(message, null) { }
                 public OverflowError(string message, Exception inner) : base(message ?? "OverflowError", inner) { }
             }
 
-            [RubyException("UnderflowError"), Serializable]
+            [RubyException("UnderflowError")]
             public class UnderflowError : System.IO.IOException {
                 public UnderflowError() : this(null, null) { }
                 public UnderflowError(string message) : this(message, null) { }
                 public UnderflowError(string message, Exception inner) : base(message ?? "UnderflowError", inner) { }
             }
 
-            [RubyException("MarkUnsetError"), Serializable]
+            [RubyException("MarkUnsetError")]
             public class MarkUnsetError : System.IO.IOException {
                 public MarkUnsetError() : this(null, null) { }
                 public MarkUnsetError(string message) : this(message, null) { }

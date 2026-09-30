@@ -1243,94 +1243,67 @@ namespace IronRuby.StandardLibrary.Zlib {
 
         #region Exceptions
 
-        [RubyException("Error"), Serializable]
+        [RubyException("Error")]
         public class Error : SystemException {
             public Error() : this(null, null) { }
             public Error(string message) : this(message, null) { }
             public Error(string message, Exception inner) : base(message ?? "Error", inner) { }
-
-            protected Error(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
         }
 
-        [RubyException("StreamEnd"), Serializable]
+        [RubyException("StreamEnd")]
         public class StreamEnd : Error {
             public StreamEnd() : this(null, null) { }
             public StreamEnd(string message) : this(message, null) { }
             public StreamEnd(string message, Exception inner) : base(message ?? "StreamEnd", inner) { }
-
-            protected StreamEnd(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
         }
 
-        [RubyException("NeedDict"), Serializable]
+        [RubyException("NeedDict")]
         public class NeedDict : Error {
             public NeedDict() : this(null, null) { }
             public NeedDict(string message) : this(message, null) { }
             public NeedDict(string message, Exception inner) : base(message ?? "NeedDict", inner) { }
-
-            protected NeedDict(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
         }
 
-        [RubyException("DataError"), Serializable]
+        [RubyException("DataError")]
         public class DataError : Error {
             public DataError() : this(null, null) { }
             public DataError(string message) : this(message, null) { }
             public DataError(string message, Exception inner) : base(message ?? "DataError", inner) { }
-
-            protected DataError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
         }
 
-        [RubyException("BufError"), Serializable]
+        [RubyException("BufError")]
         public class BufError : Error {
             public BufError() : this(null, null) { }
             public BufError(string message) : this(message, null) { }
             public BufError(string message, Exception inner) : base(message ?? "BufError", inner) { }
-
-            protected BufError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
         }
 
-        [RubyException("MemError"), Serializable]
+        [RubyException("MemError")]
         public class MemError : Error {
             public MemError() : this(null, null) { }
             public MemError(string message) : this(message, null) { }
             public MemError(string message, Exception inner) : base(message ?? "MemError", inner) { }
-
-            protected MemError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
         }
 
-        [RubyException("VersionError"), Serializable]
+        [RubyException("VersionError")]
         public class VersionError : Error {
             public VersionError() : this(null, null) { }
             public VersionError(string message) : this(message, null) { }
             public VersionError(string message, Exception inner) : base(message ?? "VersionError", inner) { }
-
-            protected VersionError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
         }
 
-        [RubyException("InProgressError"), Serializable]
+        [RubyException("InProgressError")]
         public class InProgressError : Error {
             public InProgressError() : this(null, null) { }
             public InProgressError(string message) : this(message, null) { }
             public InProgressError(string message, Exception inner) : base(message ?? "InProgressError", inner) { }
-
-            protected InProgressError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
         }
 
-        [RubyException("StreamError"), Serializable]
+        [RubyException("StreamError")]
         public class StreamError : Error {
             public StreamError() : this(null, null) { }
             public StreamError(string message) : this(message, null) { }
             public StreamError(string message, Exception inner) : base(message ?? "StreamError", inner) { }
-
-            protected StreamError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
         }
 
         #endregion
