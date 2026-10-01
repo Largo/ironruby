@@ -698,6 +698,7 @@ namespace IronRuby.Tests {
 
                 Scenario_ModuleOps_Methods,
                 Scenario_MainSingleton,
+                Time_DumpLoadedZone1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,
