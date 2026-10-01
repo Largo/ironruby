@@ -23,7 +23,9 @@ self-contained: unpack one and run it, there is no .NET to install.
 [release notes](https://github.com/Largo/ironruby/releases/tag/v4.0.0) ·
 [all releases](https://github.com/Largo/ironruby/releases) · [getting started](#binary-releases)
 
-[![IronRuby 4.0, the 55-second launch video](media/launch/poster.jpg)](https://github.com/Largo/ironruby/releases/download/v4.0.0/ironruby-4-launch.mp4)
+[![IronRuby 4.0 launch video: the title, an irb session, Windows Forms and the Notepad sample](media/launch/teaser.webp)](https://github.com/Largo/ironruby/releases/download/v4.0.0/ironruby-4-launch.mp4)
+
+▶ **[Watch the whole launch video](https://github.com/Largo/ironruby/releases/download/v4.0.0/ironruby-4-launch.mp4)** (55 s, MP4)
 
 ## Highlights
 
