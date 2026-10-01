@@ -180,6 +180,23 @@ jobs:
             ./ir.sh smoke.rb
           fi
 
+      # Samples/Notepad, a Windows Forms application, driven by its own test with nobody
+      # at the keyboard. A dialog that never closes would wait forever, hence the limit.
+      - name: Notepad sample
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        working-directory: ironruby
+        run: NOTEPAD_SCREENSHOTS="$RUNNER_TEMP/notepad" cmd //c ir.cmd Samples/Notepad/test_notepad.rb
+
+      # What each window looked like, to look at a failure without a Windows machine.
+      - name: Keep the Notepad screenshots
+        if: always() && runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: notepad-screenshots-${{ matrix.tfm }}
+          path: ${{ runner.temp }}/notepad
+          if-no-files-found: ignore
+
       # irubyc --single-file: one executable carrying IronRuby, libprism and the stdlib.
       # Run from an empty directory, so it can only work if everything really is inside it.
       - name: irubyc single file

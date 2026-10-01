@@ -374,6 +374,8 @@ readline are not implemented on Windows; `IO.console` is nil, so irb falls back 
 input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
 come from the Windows Desktop runtime, which `ir` references whenever it is built for Windows
 (`-p:IronRubyWindowsDesktop=false` leaves it out); on Linux and macOS they do not exist.
+[`Samples/Notepad`](Samples/Notepad/notepad.rb) is Windows Notepad written that way, in Ruby
+(`Samples\Notepad\notepad.cmd`); its test drives it with nobody at the keyboard and runs in CI.
 macOS is untested.
 
 ## Binary releases
