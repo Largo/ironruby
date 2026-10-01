@@ -11,19 +11,19 @@ namespace IronRuby {
         public const int Major = 4;
         public const int Minor = 0;
         public const int Micro = 0;
-        public const string ReleaseLevel = "preview";
-        public const int ReleaseSerial = 1;
+        public const string ReleaseLevel = "final";
+        public const int ReleaseSerial = 0;
 
-        public const string ShortReleaseLevel = "preview";
+        public const string ShortReleaseLevel = "final";
 
         public const string Series = "4.0";
-        public const string DisplayVersion = "4.0.0-preview1";
-        public const string DisplayName = "IronRuby 4.0.0-preview1";
+        public const string DisplayVersion = "4.0.0";
+        public const string DisplayName = "IronRuby 4.0.0";
 
         public const string AssemblyVersion = "4.0.0.0";
 
         public const string AssemblyFileVersion = "4.0.0.0";
-        public const string AssemblyInformationalVersion = "IronRuby 4.0.0 preview 1";
+        public const string AssemblyInformationalVersion = "IronRuby 4.0.0";
 
         public static readonly Version Version = new Version(Major, Minor, Micro);
     }

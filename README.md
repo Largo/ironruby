@@ -1,16 +1,61 @@
 # IronRuby, modernized
 
-[![CI](https://github.com/Largo/ironruby/actions/workflows/ci.yml/badge.svg?branch=modernize)](https://github.com/Largo/ironruby/actions/workflows/ci.yml)
+[![CI](https://github.com/Largo/ironruby/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Largo/ironruby/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Largo/ironruby)](https://github.com/Largo/ironruby/releases/latest)
+
+![IronRuby 4.0: Ruby 4.0 on .NET 8 and 10. IronRuby is back.](media/social/twitter-card.png)
 
 A fork of [IronRuby](https://github.com/IronLanguages/ironruby) — Ruby on the .NET CLR —
-brought back to life: it **builds and runs on .NET 8**, and it parses Ruby with
+brought back to life: it **builds and runs on .NET 8 and 10**, and it parses Ruby with
 **[prism](https://github.com/ruby/prism), CRuby's own parser**, instead of the hand-ported
 Ruby 1.9 grammar it shipped with in 2011.
+
+**IronRuby 4.0.0 is the first stable release since 1.1.3 in 2011.** The downloads are
+self-contained: unpack one and run it, there is no .NET to install.
+
+| | Download | |
+|---|---|---|
+| **Windows** x64 | [ironruby-4.0.0-win-x64.zip](https://github.com/Largo/ironruby/releases/download/v4.0.0/ironruby-4.0.0-win-x64.zip) | with Windows Forms, WPF and the Notepad sample |
+| **Linux** x64 | [ironruby-4.0.0-linux-x64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.0/ironruby-4.0.0-linux-x64.tar.gz) | |
+| **macOS** arm64 | [ironruby-4.0.0-osx-arm64.tar.gz](https://github.com/Largo/ironruby/releases/download/v4.0.0/ironruby-4.0.0-osx-arm64.tar.gz) | untested |
+
+[SHA256SUMS](https://github.com/Largo/ironruby/releases/download/v4.0.0/SHA256SUMS) ·
+[release notes](https://github.com/Largo/ironruby/releases/tag/v4.0.0) ·
+[all releases](https://github.com/Largo/ironruby/releases) · [getting started](#binary-releases)
+
+[![IronRuby 4.0, the 55-second launch video](media/launch/poster.jpg)](https://github.com/Largo/ironruby/releases/download/v4.0.0/ironruby-4-launch.mp4)
+
+## Highlights
+
+- **Ruby 4.0, parsed by prism**: pattern matching, endless methods, `it`, keyword
+  arguments, `...` forwarding — the syntax CRuby 4.0 accepts, read by CRuby's own parser.
+- **[ruby/spec](#status) at CRuby 4.0.6**: `spec/language` (2,934 examples) and
+  `spec/library` (6,398) pass with **0 failures**; `spec/core` has 21 of 23,136, 20 of them
+  `ObjectSpace.each_object`.
+- **[A method JIT and OSR](#performance)**, on by default: integer and float loops, `fib`
+  and `mandelbrot` run in **0.27–0.74×** CRuby's time. Over all 50 benchmarks the geomean
+  is 3.25×; calls, strings and arrays are where the work is.
+- **irb 1.16 + reline**, **RubyGems 4.0.16 and Bundler** over real TLS, and Ruby 4.0's
+  standard library and bundled gems.
+- **[Rails 8.1 boots](#rails)** and serves requests through Rack (with nokogiri stubbed).
+- **.NET is right there**: `require "System.Windows.Forms"`, and Windows Forms and WPF load
+  from the Windows download. [`irubyc`](#packaging-an-application-irubyc) turns a Ruby
+  program into one executable, or into a plugin DLL for a .NET host.
+
+![IronRuby Notepad, a Windows Notepad written in Ruby, editing its own source](media/launch/assets/images/notepad.png)
+
+*[`Samples/Notepad`](Samples/Notepad/notepad.rb) is Windows Notepad in 1,365 lines of Ruby:
+encodings and line endings that survive a save byte for byte, find and replace, go to,
+zoom, printing, the status bar. Here it edits its own source. It ships in the Windows
+download (`Samples\Notepad\notepad.cmd`), and [its test](Samples/Notepad/test_notepad.rb)
+drives it in CI with nobody at the keyboard.*
+
+## A first look
 
 ```console
 $ ./irb.sh
 irb(main):001> RUBY_DESCRIPTION
-=> "IronRuby 4.0.0-preview1 (4.0.0) on .NET 8.0.31 [x86_64-linux]"
+=> "IronRuby 4.0.0 (4.0.0) on .NET 8.0.31 [x86_64-linux]"
 irb(main):002> def fib(n) = n < 2 ? n : fib(n - 1) + fib(n - 2)
 => :fib
 irb(main):003> (1..10).map { fib(_1) }
@@ -66,8 +111,9 @@ releases for that Ruby version (4.0.0, 4.0.1, ...) and is not CRuby's patch leve
 release notes say which CRuby release the specs were checked against. The last release of
 the original project was 1.1.3, for Ruby 1.9.2, in 2011.
 
-`IRONRUBY_VERSION` is the full version (`4.0.0-preview1`), `RUBY_ENGINE_VERSION` the same
-without the pre-release suffix, and `RUBY_VERSION` the Ruby version (`4.0.0`).
+`IRONRUBY_VERSION` is the full version (`4.0.0`, or `4.0.0-preview1` for a pre-release),
+`RUBY_ENGINE_VERSION` the same without the pre-release suffix, and `RUBY_VERSION` the Ruby
+version (`4.0.0`).
 
 ## What changed
 
@@ -381,26 +427,28 @@ macOS is untested.
 ## Binary releases
 
 [Releases](https://github.com/Largo/ironruby/releases) carry a ready-to-run IronRuby for
-Linux x64, Windows x64 and macOS arm64 (untested). They are self-contained, so no .NET has
-to be installed. Unpack one and run the launchers in it:
+Linux x64, Windows x64 and macOS arm64 (untested); the [table at the top](#ironruby-modernized)
+links the ones for 4.0.0. They are self-contained, so no .NET has to be installed. Unpack
+one and run the launchers in it:
 
 ```console
-$ tar xzf ironruby-<version>-linux-x64.tar.gz && cd ironruby-<version>-linux-x64
+$ tar xzf ironruby-4.0.0-linux-x64.tar.gz && cd ironruby-4.0.0-linux-x64
 $ ./ir.sh -e 'puts RUBY_DESCRIPTION'
 $ ./irb.sh
 $ ./igem.sh install rack
 ```
 
-On Windows, unzip it and use `ir.cmd`, `irb.cmd` and `igem.cmd`. The archive has the same
-layout as a checkout, with the Release build in `Src/Console/bin/Release/net8.0`, so
-everything above applies to it unchanged. `irubyc` works too, but it still needs the
-.NET SDK to compile the application. The Windows archive also carries the Windows Desktop
-runtime, for Windows Forms and WPF. `License/` holds IronRuby's licenses and, for each .NET
-framework an archive bundles, Microsoft's license and third-party notices.
+On Windows, unzip it and use `ir.cmd`, `irb.cmd` and `igem.cmd`, or double-click
+`Samples\Notepad\notepad.cmd`. The archive has the same layout as a checkout, with the
+Release build in `Src/Console/bin/Release/net8.0`, so everything above applies to it
+unchanged. `irubyc` works too, but it still needs the .NET SDK to compile the application.
+The Windows archive also carries the Windows Desktop runtime, for Windows Forms and WPF, and
+`Samples/`. `License/` holds IronRuby's licenses and, for each .NET framework an archive
+bundles, Microsoft's license and third-party notices.
 
 `Util/package-release.sh <rid>` builds such an archive from a checkout, and
-`.github/workflows/release.yml` builds all three and publishes them when a `v*` tag is
-pushed.
+`.github/workflows/release.yml` builds all three, renders the [launch video](media/launch)
+and publishes them when a `v*` tag is pushed.
 
 ## Building
 
@@ -458,7 +506,7 @@ Windows machine, keeping the same relative layout (`ir.cmd` finds the binaries u
 ```
 C:\ir> set IR_CONFIG=Release
 C:\ir> ir.cmd -e "puts RUBY_DESCRIPTION"
-IronRuby 4.0.0-preview1 (4.0.0) on .NET 8.0.31 [x64-mswin64]
+IronRuby 4.0.0 (4.0.0) on .NET 8.0.31 [x64-mswin64]
 C:\ir> irb.cmd
 C:\ir> set RUBY_EXE=C:\ir\ir.cmd
 C:\ir> ir.cmd -Imspec/lib mspec/bin/mspec-run spec/language
