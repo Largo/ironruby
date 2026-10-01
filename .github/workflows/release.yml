@@ -5,7 +5,8 @@ name: Release
 # tag v* publishes them as a GitHub release (a pre-release while the version has a
 # suffix such as -preview1), with Docs/releases/<tag>.md as the notes when there is one;
 # running the workflow by hand, or a pull request that changes the packaging or the
-# video, only keeps them as workflow artifacts.
+# video, only keeps them as workflow artifacts. Run by hand with video_for set to a tag,
+# it renders only the video and replaces it, and its SHA256SUMS line, on that release.
 on:
   push:
     tags: ['v*']
@@ -15,6 +16,11 @@ on:
       - Util/package-release.sh
       - media/launch/**
   workflow_dispatch:
+    inputs:
+      video_for:
+        description: Render only the launch video and replace it on this release (a tag, such as v4.0.0)
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -31,6 +37,7 @@ env:
 jobs:
   package:
     name: ${{ matrix.rid }}
+    if: github.event_name != 'workflow_dispatch' || inputs.video_for == ''
     runs-on: ${{ matrix.os }}
     # macOS is untested (README, Platforms): a failure there does not hold the release back.
     continue-on-error: ${{ matrix.experimental }}
@@ -142,7 +149,8 @@ jobs:
     name: launch video
     runs-on: ubuntu-latest
     continue-on-error: true
-    timeout-minutes: 45
+    # A render takes about 7 minutes; a failed one can leave hyperframes waiting.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 
@@ -152,6 +160,10 @@ jobs:
 
       - name: FFmpeg
         run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      # The music is not in the repository; the script fetches the pinned recording.
+      - name: Music
+        run: bash media/launch/tools/fetch-music.sh --profile
 
       # lint is static and must pass; check also audits layout and contrast in the
       # browser and only warns here. The version is pinned in package.json.
@@ -219,3 +231,31 @@ jobs:
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --title "IronRuby ${GITHUB_REF_NAME#v}" \
             "${notes[@]}" --generate-notes $prerelease
+
+  # By hand: a new render of the video on a release that is already out. Only the video
+  # and its line in SHA256SUMS change; the archives stay as they were published.
+  replace-video:
+    name: replace the video on ${{ inputs.video_for }}
+    if: github.event_name == 'workflow_dispatch' && inputs.video_for != ''
+    needs: video
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: ironruby-launch-video
+          path: dist
+
+      - name: Upload
+        working-directory: dist
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.video_for }}
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --pattern SHA256SUMS
+          sum=$(sha256sum ironruby-4-launch.mp4)
+          { grep -v ' ironruby-4-launch.mp4$' SHA256SUMS; echo "$sum"; } > SHA256SUMS.new
+          mv SHA256SUMS.new SHA256SUMS
+          cat SHA256SUMS
+          gh release upload "$TAG" ironruby-4-launch.mp4 SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"
