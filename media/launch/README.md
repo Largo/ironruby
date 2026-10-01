@@ -2,8 +2,10 @@
 
 The source of the launch video. The rendered film lives on the
 [v4.0.0 release](https://github.com/Largo/ironruby/releases/tag/v4.0.0) as
-`ironruby-4-launch.mp4`, so the repository carries no renders; `poster.jpg` is its title
-frame, for the README.
+`ironruby-4-launch.mp4`, so the repository carries no full renders. What the README and
+the release notes show is small: `teaser.webp` plays inline in the README (GitHub does
+not play an MP4 there unless it was uploaded through its web editor), and `poster.jpg` is
+the title frame.
 
 | File | What it is |
 | --- | --- |
@@ -11,6 +13,7 @@ frame, for the README.
 | `assets/fonts/` | Inter and JetBrains Mono (SIL Open Font License, the licences beside them), so a render needs no network for fonts |
 | `assets/images/notepad.png` | [`Samples/Notepad`](../../Samples/Notepad) editing its own source, captured on Windows 11 at 200 % |
 | `poster.jpg` | The title frame with a play button |
+| `teaser.webp` | 23 s of the film at 960x540 and 10 fps: the title, the irb session, .NET and the Notepad, the end card. Frames seeked from `index.html` in Chrome, encoded with ImageMagick (`magick -delay 10 -loop 0 f*.png -resize 960x540 -quality 72 teaser.webp`), 1.3 MB |
 
 Every figure on screen comes from the project README (ruby/spec counts, benchmark ratios,
 versions), and every line of code runs on IronRuby 4.0. Change the README, change the film.
