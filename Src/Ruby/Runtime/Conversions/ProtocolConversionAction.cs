@@ -87,7 +87,7 @@ namespace IronRuby.Runtime.Conversions {
             // nullable int (see Array#fill, Sockets:ConvertToSocketFlag, Kernel#open(perm=nil), File.chown, IO#read)
 
             // TODO: do we want to use a default protocol for enums?
-            if (parameterType.IsEnum()) {
+            if (parameterType.IsEnum) {
                 return null;
             }
 
@@ -423,7 +423,7 @@ namespace IronRuby.Runtime.Conversions {
         }
 
         private static Expression/*!*/ ConvertResult(Expression/*!*/ expression, Type/*!*/ resultType) {
-            if (resultType.IsGenericType() && resultType.GetGenericTypeDefinition() == typeof(Union<,>)) {
+            if (resultType.IsGenericType && resultType.GetGenericTypeDefinition() == typeof(Union<,>)) {
                 var args = resultType.GetGenericArguments();
                 var ctor = resultType.GetConstructor(args);
                 if (args[0].IsAssignableFrom(expression.Type)) {

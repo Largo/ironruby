@@ -150,8 +150,7 @@ namespace IronRuby.Runtime {
             // _dict might be a new Dictionary after Cleanup(),
             // so use the field directly
 
-            // CF throws doesn't support long weak references (NotSuportedException is thrown)
-            _dict.Add(new WeakReference(key, !PlatformAdaptationLayer.IsCompactFramework), value);
+            _dict.Add(new WeakReference(key, trackResurrection: true), value);
         }
     }
 

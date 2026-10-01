@@ -36,7 +36,7 @@ namespace IronRuby.Builtins {
             return new UnauthorizedAccessException(message, inner);
         }
 
-        [RubyClass("EAGAIN"), Serializable]
+        [RubyClass("EAGAIN")]
         public class ResourceTemporarilyUnavailableError : ExternalException {
             private const string/*!*/ M = "Resource temporarily unavailable";
 
@@ -44,14 +44,9 @@ namespace IronRuby.Builtins {
             public ResourceTemporarilyUnavailableError(string message) : this(message, null) { }
             public ResourceTemporarilyUnavailableError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public ResourceTemporarilyUnavailableError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected ResourceTemporarilyUnavailableError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("EINTR"), Serializable]
+        [RubyClass("EINTR")]
         public class InterruptedError : ExternalException {
             private const string/*!*/ M = "Interrupted function call";
 
@@ -59,14 +54,9 @@ namespace IronRuby.Builtins {
             public InterruptedError(string message) : this(message, null) { }
             public InterruptedError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public InterruptedError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected InterruptedError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("EDOM"), Serializable]
+        [RubyClass("EDOM")]
         public class DomainError : ExternalException {
             private const string/*!*/ M = "Domain error";
 
@@ -74,11 +64,6 @@ namespace IronRuby.Builtins {
             public DomainError(string message) : this(message, null) { }
             public DomainError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public DomainError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected DomainError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
         [RubyClass("EINVAL", Extends = typeof(InvalidError), Inherits = typeof(ExternalException))]
@@ -122,7 +107,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyClass("ECHILD"), Serializable]
+        [RubyClass("ECHILD")]
         public class ChildError : ExternalException {
             private const string/*!*/ M = "No child processes";
 
@@ -130,11 +115,6 @@ namespace IronRuby.Builtins {
             public ChildError(string message) : this(message, null) { }
             public ChildError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public ChildError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected ChildError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
         [RubyClass("EISDIR", Extends = typeof(DirectoryIsError), Inherits = typeof(ExternalException))]
@@ -187,7 +167,7 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyClass("EPERM"), Serializable]
+        [RubyClass("EPERM")]
         public class OperationNotPermittedError : ExternalException {
             private const string/*!*/ M = "Operation not permitted";
 
@@ -195,14 +175,9 @@ namespace IronRuby.Builtins {
             public OperationNotPermittedError(string message) : this(message, null) { }
             public OperationNotPermittedError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public OperationNotPermittedError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected OperationNotPermittedError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("ELOOP"), Serializable]
+        [RubyClass("ELOOP")]
         public class TooManySymbolicLinksError : ExternalException {
             private const string/*!*/ M = "Too many levels of symbolic links";
 
@@ -210,14 +185,9 @@ namespace IronRuby.Builtins {
             public TooManySymbolicLinksError(string message) : this(message, null) { }
             public TooManySymbolicLinksError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public TooManySymbolicLinksError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected TooManySymbolicLinksError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("ENOTEMPTY"), Serializable]
+        [RubyClass("ENOTEMPTY")]
         public class DirectoryNotEmptyError : ExternalException {
             private const string/*!*/ M = "Directory not empty";
 
@@ -225,14 +195,9 @@ namespace IronRuby.Builtins {
             public DirectoryNotEmptyError(string message) : this(message, null) { }
             public DirectoryNotEmptyError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public DirectoryNotEmptyError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected DirectoryNotEmptyError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("ENAMETOOLONG"), Serializable]
+        [RubyClass("ENAMETOOLONG")]
         public class NameTooLongError : ExternalException {
             private const string/*!*/ M = "File name too long";
 
@@ -240,14 +205,9 @@ namespace IronRuby.Builtins {
             public NameTooLongError(string message) : this(message, null) { }
             public NameTooLongError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public NameTooLongError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected NameTooLongError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("EPIPE"), Serializable]
+        [RubyClass("EPIPE")]
         public class PipeError : ExternalException {
             private const string/*!*/ M = "Broken pipe";
 
@@ -255,15 +215,10 @@ namespace IronRuby.Builtins {
             public PipeError(string message) : this(message, null) { }
             public PipeError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public PipeError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected PipeError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
 
-        [RubyClass("EXDEV"), Serializable]
+        [RubyClass("EXDEV")]
         public class ImproperLinkError : ExternalException {
             private const string/*!*/ M = "Improper link";
 
@@ -271,14 +226,9 @@ namespace IronRuby.Builtins {
             public ImproperLinkError(string message) : this(message, null) { }
             public ImproperLinkError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public ImproperLinkError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected ImproperLinkError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("ESPIPE"), Serializable]
+        [RubyClass("ESPIPE")]
         public class InvalidSeekError : ExternalException {
             private const string/*!*/ M = "Invalid seek";
 
@@ -286,18 +236,13 @@ namespace IronRuby.Builtins {
             public InvalidSeekError(string message) : this(message, null) { }
             public InvalidSeekError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public InvalidSeekError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected InvalidSeekError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
         #region Socket Errors
 
         // TODO: generate 
 
-        [RubyClass("EWOULDBLOCK"), Serializable]
+        [RubyClass("EWOULDBLOCK")]
         public class WouldBlockError : ExternalException {
             private const string/*!*/ M = "A non-blocking socket operation could not be completed immediately.";
             public override int ErrorCode { get { return 10035; } }
@@ -306,14 +251,9 @@ namespace IronRuby.Builtins {
             public WouldBlockError(string message) : this(message, null) { }
             public WouldBlockError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public WouldBlockError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected WouldBlockError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("EADDRINUSE"), Serializable]
+        [RubyClass("EADDRINUSE")]
         public class AddressInUseError : ExternalException {
             private const string/*!*/ M = "Only one usage of each socket address (protocol/network address/port) is normally permitted.";
             public override int ErrorCode { get { return 10048; } }
@@ -322,14 +262,9 @@ namespace IronRuby.Builtins {
             public AddressInUseError(string message) : this(message, null) { }
             public AddressInUseError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public AddressInUseError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected AddressInUseError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("ECONNABORTED"), Serializable]
+        [RubyClass("ECONNABORTED")]
         public class ConnectionAbortedError : ExternalException {
             private const string/*!*/ M = "An established connection was aborted by the software in your host machine.";
             public override int ErrorCode { get { return 10053; } }
@@ -338,14 +273,9 @@ namespace IronRuby.Builtins {
             public ConnectionAbortedError(string message) : this(message, null) { }
             public ConnectionAbortedError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public ConnectionAbortedError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected ConnectionAbortedError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("ECONNRESET"), Serializable]
+        [RubyClass("ECONNRESET")]
         public class ConnectionResetError : ExternalException {
             private const string/*!*/ M = "An existing connection was forcibly closed by the remote host.";
             public override int ErrorCode { get { return 10054; } }
@@ -354,14 +284,9 @@ namespace IronRuby.Builtins {
             public ConnectionResetError(string message) : this(message, null) { }
             public ConnectionResetError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public ConnectionResetError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected ConnectionResetError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("ENOTCONN"), Serializable]
+        [RubyClass("ENOTCONN")]
         public class NotConnectedError : ExternalException {
             private const string/*!*/ M = "A request to send or receive data was disallowed because the socket is not connected and (when sending on a datagram socket using a sendto call) no address was supplied.";
             public override int ErrorCode { get { return 10057; } }
@@ -370,14 +295,9 @@ namespace IronRuby.Builtins {
             public NotConnectedError(string message) : this(message, null) { }
             public NotConnectedError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public NotConnectedError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected NotConnectedError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
-        [RubyClass("ECONNREFUSED"), Serializable]
+        [RubyClass("ECONNREFUSED")]
         public class ConnectionRefusedError : ExternalException {
             private const string/*!*/ M = "No connection could be made because the target machine actively refused it.";
             public override int ErrorCode { get { return 10061; } }
@@ -386,14 +306,9 @@ namespace IronRuby.Builtins {
             public ConnectionRefusedError(string message) : this(message, null) { }
             public ConnectionRefusedError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public ConnectionRefusedError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected ConnectionRefusedError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
         
-        [RubyClass("EHOSTDOWN"), Serializable]
+        [RubyClass("EHOSTDOWN")]
         public class HostDownError : ExternalException {
             private const string/*!*/ M = "A socket operation failed because the destination host was down.";
             public override int ErrorCode { get { return 10064; } }
@@ -402,11 +317,6 @@ namespace IronRuby.Builtins {
             public HostDownError(string message) : this(message, null) { }
             public HostDownError(string message, Exception inner) : base(RubyExceptions.MakeMessage(message, M), inner) { }
             public HostDownError(MutableString message) : base(RubyExceptions.MakeMessage(ref message, M)) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected HostDownError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
         #endregion

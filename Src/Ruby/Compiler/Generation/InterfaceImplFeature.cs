@@ -49,7 +49,7 @@ namespace IronRuby.Compiler.Generation {
 
         private static void AddInterface(List<Type/*!*/>/*!*/ types, Type/*!*/ type) {
             Assert.NotNull(type);
-            Assert.Equals(true, type.IsInterface() && !type.ContainsGenericParameters());
+            Assert.Equals(true, type.IsInterface && !type.ContainsGenericParameters);
 
             for (int i = 0; i < types.Count; i++) {
                 Type t = types[i];

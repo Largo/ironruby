@@ -35,15 +35,11 @@ namespace IronRuby.StandardLibrary.StringScanner {
     [RubyClass("StringScanner")]
     public sealed class StringScanner : RubyObject {
 
-        [RubyException("Error"), Serializable]
+        [RubyException("Error")]
         public class Error : SystemException {
             public Error() : this(null, null) { }
             public Error(string message) : this(message, null) { }
             public Error(string message, Exception inner) : base(message ?? "Error", inner) { }
-
-#if FEATURE_SERIALIZATION
-            protected Error(SerializationInfo info, StreamingContext context) : base(info, context) { }
-#endif
         }
 
         private MutableString/*!*/ _scanString;

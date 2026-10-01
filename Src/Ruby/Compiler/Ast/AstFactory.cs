@@ -109,7 +109,7 @@ namespace IronRuby.Compiler.Ast {
 
             // We prefer to peek inside the delegate and call the target method directly. However, we need to
             // exclude DynamicMethods since Delegate.Method returns a dummy MethodInfo, and we cannot emit a call to it.
-            if (methodInfo.DeclaringType == null || !methodInfo.DeclaringType.IsPublic() || !methodInfo.IsPublic) {
+            if (methodInfo.DeclaringType == null || !methodInfo.DeclaringType.IsPublic || !methodInfo.IsPublic) {
                 // do not inline:
                 return Ast.Call(AstUtils.Constant(method), method.GetType().GetMethod("Invoke"), arguments);
             } 

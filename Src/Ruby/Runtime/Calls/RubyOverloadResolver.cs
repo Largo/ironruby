@@ -486,7 +486,7 @@ namespace IronRuby.Runtime.Calls {
                 if (typeOne == actualType) {
                     if (typeTwo == actualType) {
                         // prefer non-nullable reference type over nullable:
-                        if (!actualType.IsValueType()) {
+                        if (!actualType.IsValueType) {
                             if (candidateOne.ProhibitNull) {
                                 return Candidate.One;
                             } else if (candidateTwo.ProhibitNull) {
@@ -500,24 +500,25 @@ namespace IronRuby.Runtime.Calls {
                     return Candidate.Two;
                 }
 
-                // prefer String over Byte[] for a Ruby string (both are explicit conversions, e.g. Assembly.Load(String/Byte[])):
+                // prefer String over Byte[] and Boolean for a Ruby string (explicit conversions and the any-to-Boolean one, all on level 2,
+                // e.g. Assembly.Load(String/Byte[]), BinaryWriter#Write(String/Byte[]/Boolean/Char); PreferConvert orders String over Char):
                 if (typeof(MutableString).IsAssignableFrom(actualType)) {
-                    if (typeOne == typeof(string) && typeTwo == typeof(byte[])) {
+                    if (typeOne == typeof(string) && (typeTwo == typeof(byte[]) || typeTwo == typeof(bool))) {
                         return Candidate.One;
                     }
 
-                    if (typeOne == typeof(byte[]) && typeTwo == typeof(string)) {
+                    if ((typeOne == typeof(byte[]) || typeOne == typeof(bool)) && typeTwo == typeof(string)) {
                         return Candidate.Two;
                     }
                 }
             }
 
             // prefer integer type over enum:
-            if (typeOne.IsEnum() && Enum.GetUnderlyingType(typeOne) == typeTwo) {
+            if (typeOne.IsEnum && Enum.GetUnderlyingType(typeOne) == typeTwo) {
                 return Candidate.Two;
             }
 
-            if (typeTwo.IsEnum() && Enum.GetUnderlyingType(typeTwo) == typeOne) {
+            if (typeTwo.IsEnum && Enum.GetUnderlyingType(typeTwo) == typeOne) {
                 return Candidate.One;
             }
 
@@ -552,7 +553,7 @@ namespace IronRuby.Runtime.Calls {
 
             if (restrictedType != null) {
                 if (restrictedType == typeof(DynamicNull)) {
-                    if (!toType.IsValueType() || toType.IsGenericType() && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
+                    if (!toType.IsValueType || toType.IsGenericType && toType.GetGenericTypeDefinition() == typeof(Nullable<>)) {
                         return AstUtils.Constant(null, toType);
                     } else if (toType == typeof(bool)) {
                         return AstUtils.Constant(false);
@@ -817,7 +818,7 @@ namespace IronRuby.Runtime.Calls {
         /// Array" into something no Ruby programmer would recognise.
         /// </summary>
         private string/*!*/ GetConversionTargetName(Type/*!*/ type) {
-            if (type.IsGenericType() && type.GetGenericTypeDefinition() == typeof(Union<,>)) {
+            if (type.IsGenericType && type.GetGenericTypeDefinition() == typeof(Union<,>)) {
                 var g = type.GetGenericArguments();
                 return GetConversionTargetName(g[0]) + " or " + GetConversionTargetName(g[1]);
             }
@@ -843,7 +844,7 @@ namespace IronRuby.Runtime.Calls {
                                     return Methods.CreateArgumentsErrorForProc.OpCall(AstUtils.Constant(cr.GetArgumentTypeName(Binder)));
                                 }
 
-                                Debug.Assert(typeof(BlockParam).IsSealed());
+                                Debug.Assert(typeof(BlockParam).IsSealed);
                                 if (cr.To == typeof(BlockParam)) {
                                     return Methods.CreateArgumentsErrorForMissingBlock.OpCall();
                                 }

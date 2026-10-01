@@ -24,7 +24,6 @@ using Microsoft.Scripting.Generation;
 using System.Globalization;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
-using Microsoft.Scripting.Runtime;
 
 namespace IronRuby.Builtins {
 

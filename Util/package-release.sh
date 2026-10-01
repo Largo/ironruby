@@ -47,9 +47,34 @@ cp -R "$IR_ROOT/Src/StdLib" "$STAGE/Src/"
 rm -f "$STAGE/Src/StdLib/StdLib.rbproj"
 cp -R "$IR_ROOT/Src/Public" "$STAGE/License"
 
-# A quick check that the unpacked tree starts, before it is archived.
+# The archive carries Microsoft's runtime - .NET, and for Windows also the Windows
+# Desktop runtime with Windows Forms and WPF - so it carries their license and
+# third-party notices too, from the runtime packs the publish took the files from.
+# ir.runtimeconfig.json names each framework and version it bundled.
+packs=${NUGET_PACKAGES:-$HOME/.nuget/packages}
+grep -oE '"(name|version)": *"[^"]*"' "$STAGE/Src/Console/bin/Release/$IR_TFM/ir.runtimeconfig.json" |
+  sed -E 's/.*"([^"]*)"$/\1/' | paste - - |
+  while read -r framework version; do
+    pack="$packs/$(echo "$framework.Runtime.$RID" | tr '[:upper:]' '[:lower:]')/$version"
+    mkdir -p "$STAGE/License/$framework"
+    found=
+    for f in "$pack"/*; do
+      case "$(basename "$f" | tr '[:upper:]' '[:lower:]')" in
+        license*|third-party-notices*) cp "$f" "$STAGE/License/$framework/"; found=1 ;;
+      esac
+    done
+    if [ -z "$found" ]; then
+      echo "package-release.sh: no license file in $pack" >&2
+      exit 1
+    fi
+  done
+
+# A quick check that the unpacked tree starts, before it is archived - and on Windows
+# that Windows Forms and WPF load from it, which a missing framework reference breaks
+# without breaking anything else.
 case "$RID" in
-  win-*) (cd "$STAGE" && cmd //c ir.cmd -e 'puts RUBY_DESCRIPTION') ;;
+  win-*) (cd "$STAGE" && cmd //c ir.cmd -e 'puts RUBY_DESCRIPTION' &&
+          cmd //c ir.cmd "$(cygpath -w "$IR_ROOT/Util/windows-desktop-check.rb")") ;;
   *)     "$STAGE/ir.sh" -e 'puts RUBY_DESCRIPTION' ;;
 esac
 

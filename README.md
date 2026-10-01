@@ -371,7 +371,10 @@ Linux is the primary target and the one the numbers above are measured on. **Win
 `core/file`, fork and signals in `core/process`, and `IO.select`/`IO#wait` on pipes (which is
 `poll(2)`, so `core/io` and the socket suites hang rather than fail). `zlib`, Win32OLE and
 readline are not implemented on Windows; `IO.console` is nil, so irb falls back to its ANSI
-input path. macOS is untested.
+input path. Windows Forms and WPF (`require "System.Windows.Forms"`, `"PresentationFramework"`)
+come from the Windows Desktop runtime, which `ir` references whenever it is built for Windows
+(`-p:IronRubyWindowsDesktop=false` leaves it out); on Linux and macOS they do not exist.
+macOS is untested.
 
 ## Binary releases
 
@@ -389,7 +392,9 @@ $ ./igem.sh install rack
 On Windows, unzip it and use `ir.cmd`, `irb.cmd` and `igem.cmd`. The archive has the same
 layout as a checkout, with the Release build in `Src/Console/bin/Release/net8.0`, so
 everything above applies to it unchanged. `irubyc` works too, but it still needs the
-.NET SDK to compile the application.
+.NET SDK to compile the application. The Windows archive also carries the Windows Desktop
+runtime, for Windows Forms and WPF. `License/` holds IronRuby's licenses and, for each .NET
+framework an archive bundles, Microsoft's license and third-party notices.
 
 `Util/package-release.sh <rid>` builds such an archive from a checkout, and
 `.github/workflows/release.yml` builds all three and publishes them when a `v*` tag is

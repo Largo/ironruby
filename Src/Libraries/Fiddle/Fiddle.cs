@@ -31,7 +31,6 @@
 using System;
 using System.Numerics;
 using System.Runtime.InteropServices;
-using System.Runtime.Serialization;
 using IronRuby.Builtins;
 using IronRuby.Runtime;
 using Microsoft.Scripting.Runtime;
@@ -55,35 +54,26 @@ namespace IronRuby.StandardLibrary.Fiddle {
 
         #region Exceptions
 
-        [RubyException("Error"), Serializable]
+        [RubyException("Error")]
         public class FiddleError : SystemException {
             public FiddleError() : this(null, null) { }
             public FiddleError(string message) : this(message, null) { }
             public FiddleError(string message, Exception inner) : base(message ?? "Fiddle::Error", inner) { }
-#if FEATURE_SERIALIZATION
-            protected FiddleError(SerializationInfo info, StreamingContext context) : base(info, context) { }
-#endif
         }
 
-        [RubyException("DLError"), Serializable]
+        [RubyException("DLError")]
         public class DLError : FiddleError {
             public DLError() : this(null, null) { }
             public DLError(string message) : this(message, null) { }
             public DLError(string message, Exception inner) : base(message ?? "Fiddle::DLError", inner) { }
-#if FEATURE_SERIALIZATION
-            protected DLError(SerializationInfo info, StreamingContext context) : base(info, context) { }
-#endif
         }
 
-        [RubyException("ClearedReferenceError"), Serializable]
+        [RubyException("ClearedReferenceError")]
         public class ClearedReferenceError : FiddleError {
             public ClearedReferenceError() : this(null, null) { }
             public ClearedReferenceError(string message) : this(message, null) { }
             public ClearedReferenceError(string message, Exception inner)
                 : base(message ?? "Fiddle::ClearedReferenceError", inner) { }
-#if FEATURE_SERIALIZATION
-            protected ClearedReferenceError(SerializationInfo info, StreamingContext context) : base(info, context) { }
-#endif
         }
 
         #endregion

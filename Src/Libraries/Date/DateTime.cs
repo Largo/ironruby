@@ -426,13 +426,13 @@ namespace IronRuby.StandardLibrary.Date {
         #region formatting
 
         [RubyMethod("to_s")]
-        public static MutableString/*!*/ ToS(RubyDate/*!*/ self) {
+        public static new MutableString/*!*/ ToS(RubyDate/*!*/ self) {
             return MutableString.CreateAscii(DateFormatter.Format(self, "%Y-%m-%dT%H:%M:%S%:z"));
         }
 
         /// <summary>DateTime#strftime defaults to the full ISO form, not Date's "%F".</summary>
         [RubyMethod("strftime")]
-        public static MutableString/*!*/ Strftime(RubyDate/*!*/ self,
+        public static new MutableString/*!*/ Strftime(RubyDate/*!*/ self,
             [DefaultProtocol, DefaultParameterValue(null)]MutableString format) {
             if (format == null) {
                 return ToS(self);

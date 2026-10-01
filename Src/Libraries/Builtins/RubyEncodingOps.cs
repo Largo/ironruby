@@ -182,7 +182,9 @@ namespace IronRuby.Builtins {
         // TODO: lazy encoding load?
 
         [RubyConstant]
+#pragma warning disable SYSLIB0001 // UTF-7 is obsolete in .NET, and still one of Ruby's encodings
         public static readonly RubyEncoding UTF_7 = RubyEncoding.GetRubyEncoding(Encoding.UTF7);
+#pragma warning restore SYSLIB0001
 
         // UTF-16 and UTF-32 without an endianness suffix are dummy encodings that carry a BOM.
         // They are distinct from UTF-16LE/BE and UTF-32LE/BE, which are not dummy.

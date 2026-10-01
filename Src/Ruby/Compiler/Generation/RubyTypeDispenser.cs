@@ -101,7 +101,7 @@ namespace IronRuby.Compiler.Generation {
 
         private static Type CreateType(TypeDescription/*!*/ typeInfo) {
             Type baseType = typeInfo.BaseType;
-            if (baseType.IsSealed()) {
+            if (baseType.IsSealed) {
                 throw new NotSupportedException(
                     String.Format(CultureInfo.InvariantCulture, "Can't inherit from a sealed type {0}.",
                     RubyContext.GetQualifiedNameNoLock(baseType, null, false))

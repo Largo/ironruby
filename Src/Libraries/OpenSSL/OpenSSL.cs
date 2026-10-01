@@ -61,17 +61,12 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         public class Digest {
             // MRI's class for "this is not a digest OpenSSL knows"; code rescues it
             // by name, so it has to be this class and not its OpenSSLError parent.
-            [RubyException("DigestError"), Serializable]
+            [RubyException("DigestError")]
             public class DigestError : OpenSSLError {
                 public DigestError() : this(null, null) { }
                 public DigestError(string message) : this(message, null) { }
                 public DigestError(string message, Exception inner) : base(message ?? "DigestError", inner) { }
                 public DigestError(MutableString message) : base(message.ConvertToString()) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-                protected DigestError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                    : base(info, context) { }
-#endif
             }
 
             private string/*!*/ _name = "SHA1";
@@ -421,7 +416,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             }
         }
 
-        [RubyException("KDFError"), Serializable]
+        [RubyException("KDFError")]
         public class KDFError : OpenSSLError {
             public KDFError() : this(null, null) { }
             public KDFError(string message) : this(message, null) { }
@@ -468,8 +463,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 }
 
                 byte[] data = new byte[length];
-                var generator = new Crypto.RNGCryptoServiceProvider();
-                generator.GetBytes(data);
+                Crypto.RandomNumberGenerator.Fill(data);
 
                 return MutableString.CreateBinary(data);
             }
@@ -489,8 +483,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             [RubyMethod("rand", RubyMethodAttributes.PublicSingleton)]
             public static BigInteger/*!*/ Rand(RubyClass/*!*/ self, [DefaultProtocol]int bits, [DefaultProtocol, Optional]int someFlag, [Optional]bool otherFlag) { // TODO: figure out someFlag and otherFlag
                 byte[] data = new byte[bits >> 3];
-                var generator = new Crypto.RNGCryptoServiceProvider();
-                generator.GetBytes(data);
+                Crypto.RandomNumberGenerator.Fill(data);
 
                 uint[] transformed = new uint[data.Length >> 2];
                 int j = 0;
@@ -545,17 +538,12 @@ namespace IronRuby.StandardLibrary.OpenSsl {
 
         // MRI's OpenSSL exceptions are plain StandardErrors: the message is exactly what was given,
         // not the "<base> - <message>" form of SystemCallError.
-        [RubyException("OpenSSLError"), Serializable]
+        [RubyException("OpenSSLError")]
         public class OpenSSLError : SystemException {
             public OpenSSLError() : this(null, null) { }
             public OpenSSLError(string message) : this(message, null) { }
             public OpenSSLError(string message, Exception inner) : base(message ?? "OpenSSLError", inner) { }
             public OpenSSLError(MutableString message) : base(message.ConvertToString()) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-            protected OpenSSLError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
         }
 
         [RubyModule("SSL")]
@@ -685,8 +673,10 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     return null;
                 }
                 switch (self._ssl.SslProtocol) {
+#pragma warning disable SYSLIB0039 // TLS 1.0 and 1.1 are obsolete, but a connection can still have negotiated one
                     case SslProtocols.Tls: return MutableString.CreateAscii("TLSv1");
                     case SslProtocols.Tls11: return MutableString.CreateAscii("TLSv1.1");
+#pragma warning restore SYSLIB0039
                     case SslProtocols.Tls12: return MutableString.CreateAscii("TLSv1.2");
                     case SslProtocols.Tls13: return MutableString.CreateAscii("TLSv1.3");
                     default: return MutableString.CreateAscii(self._ssl.SslProtocol.ToString());
@@ -710,17 +700,12 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         }
 #endif
 
-            [RubyException("SSLError"), Serializable]
+            [RubyException("SSLError")]
             public class SSLError : OpenSSLError {
                 public SSLError() : this(null, null) { }
                 public SSLError(string message) : this(message, null) { }
                 public SSLError(string message, Exception inner) : base(message ?? "SSLError", inner) { }
                 public SSLError(MutableString message) : base(message.ConvertToString()) { RubyExceptionData.InitializeException(this, message); }
-
-#if FEATURE_SERIALIZATION
-                protected SSLError(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                    : base(info, context) { }
-#endif
             }
         }
     }

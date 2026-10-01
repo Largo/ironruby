@@ -3923,7 +3923,6 @@ namespace IronRuby.Runtime {
                 } else if (fieldCount <= 64) {
                     return typeof(MutableTuple<object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object>);
                 } else {
-                    Debug.Assert(!PlatformAdaptationLayer.IsCompactFramework);
                     return MakeObjectTupleType128();
                 }
             }
@@ -3957,7 +3956,6 @@ namespace IronRuby.Runtime {
             } else if (fieldCount <= 64) {
                 return new MutableTuple<object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object, object>();
             } else {
-                Debug.Assert(!PlatformAdaptationLayer.IsCompactFramework);
                 return CreateObjectTuple128();
             }
         }

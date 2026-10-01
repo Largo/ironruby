@@ -375,26 +375,10 @@ namespace IronRuby.Runtime {
             return newException;
         }
 
-#if FEATURE_THREAD && FEATURE_EXCEPTION_STATE
-        public static void ActiveExceptionHandled(Exception visibleException) {
-            Debug.Assert(RubyUtils.GetVisibleException(visibleException) == visibleException);
-
-            RubyExceptionData data = RubyExceptionData.GetInstance(visibleException);
-            if (data._exception != visibleException) {
-                // The exception was raised asynchronously with Thread.Abort. We can not just catch and ignore 
-                // the ThreadAbortException as the CLR keeps trying to re-raise it unless ResetAbort is called.
-                //
-                // Note that ResetAbort can cause ThreadAbortException.ExceptionState to be cleared (though it may 
-                // not be cleared under some circustances), and we use that to squirrel away the Ruby exception 
-                // that the user is expecting. Hence, ResetAbort should only be called when 
-                // ThreadAbortException.ExceptionState no longer needs to be accessed. 
-                if ((Thread.CurrentThread.ThreadState & System.Threading.ThreadState.AbortRequested) != 0) {
-                    Thread.ResetAbort();
-                }
-            }
-        }
-#else
+        // A handled exception used to leave a pending Thread.Abort behind when Thread#raise had delivered it
+        // that way, and Thread.ResetAbort cancelled it here. Thread#raise no longer aborts the target thread
+        // (see RubyUtils.RaiseAsyncException) and Thread.ResetAbort only throws on .NET Core, so there is
+        // nothing left to do.
         public static void ActiveExceptionHandled(Exception visibleException) {}
-#endif
     }
 }

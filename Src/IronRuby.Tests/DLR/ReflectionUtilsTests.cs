@@ -93,6 +93,7 @@ namespace IronRuby.Tests {
 
             // fields
 
+#pragma warning disable 169, 649 // fields for GetMembers to find by reflection; nothing reads or writes them
             public static int A_PublicStaticField;
             private static int A_PrivateStaticField;
             protected static int A_ProtectedStaticField;
@@ -102,6 +103,7 @@ namespace IronRuby.Tests {
             private int A_PrivateField;
             protected int A_ProtectedField;
             internal int A_InternalField;
+#pragma warning restore 169, 649
 
             public int PublicField;
 
@@ -181,6 +183,7 @@ namespace IronRuby.Tests {
 
             // fields
 
+#pragma warning disable 169, 649 // fields for GetMembers to find by reflection; nothing reads or writes them
             public static int B_PublicStaticField;
             private static int B_PrivateStaticField;
             protected static int B_ProtectedStaticField;
@@ -190,6 +193,7 @@ namespace IronRuby.Tests {
             private int B_PrivateField;
             protected int B_ProtectedField;
             internal int B_InternalField;
+#pragma warning restore 169, 649
             
             public new int PublicField;
 

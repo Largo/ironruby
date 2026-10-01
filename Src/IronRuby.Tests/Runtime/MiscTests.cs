@@ -878,5 +878,43 @@ ZoneFailure
 ""marshaled time format differ""
 ");
         }
+
+        /// <summary>
+        /// A time loaded from a dump keeps the zone name as a String when no find_timezone makes an object of it. As in
+        /// MRI, dumping it again writes the name as it is, and strftime's %Z prints it; the fixed offset has no name.
+        /// </summary>
+        public void Time_DumpLoadedZone1() {
+            TestOutput(@"
+class Zone
+  attr_reader :name
+  def initialize(name); @name = name; end
+  def utc_to_local(t); t + 3600; end
+  def local_to_utc(t); t - 3600; end
+end
+
+class NoZoneTime < Time
+  def self.find_timezone(name); nil; end
+end
+
+xst = Zone.new('XST')
+t = Time.new(2000, 1, 1, 12, 0, 0, xst)
+
+twice = Marshal.load(Marshal.dump(Marshal.load(Marshal.dump(t))))
+p twice, twice.zone, twice.utc_offset, twice == t
+p twice.strftime('%H:%M %z %Z'), (twice + 60).strftime('%H:%M %z %Z')
+
+t = Marshal.load(Marshal.dump(Marshal.load(Marshal.dump(NoZoneTime.new(2000, 1, 1, 12, 0, 0, xst)))))
+p t.zone, t.strftime('%Z')
+", @"
+2000-01-01 12:00:00 +0100
+""XST""
+3600
+true
+""12:00 +0100 XST""
+""12:01 +0100 XST""
+""XST""
+""XST""
+");
+        }
     }
 }

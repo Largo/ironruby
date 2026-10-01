@@ -244,16 +244,11 @@ namespace IronRuby.StandardLibrary.Iconv {
             return string.Format(CultureInfo.InvariantCulture, "{0} {1}", KernelOps.ToS(arg2), KernelOps.ToS(arg3));
         }
 
-        [RubyException("BrokenLibrary"), Includes(typeof(Failure)), Serializable]
+        [RubyException("BrokenLibrary"), Includes(typeof(Failure))]
         public class BrokenLibrary : RuntimeError {
             public BrokenLibrary() : this(null, null) { }
             public BrokenLibrary(string message) : this(message, null) { }
             public BrokenLibrary(string message, Exception inner) : base(message ?? "BrokenLibrary", inner) { }
-
-#if FEATURE_SERIALIZATION
-            protected BrokenLibrary(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
 
             [RubyConstructor]
             public static BrokenLibrary/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {
@@ -263,16 +258,11 @@ namespace IronRuby.StandardLibrary.Iconv {
             }
         }
 
-        [RubyException("InvalidEncoding"), Includes(typeof(Failure)), Serializable]
+        [RubyException("InvalidEncoding"), Includes(typeof(Failure))]
         public class InvalidEncoding : ArgumentException {
             public InvalidEncoding() : this(null, null) { }
             public InvalidEncoding(string message) : this(message, null) { }
             public InvalidEncoding(string message, Exception inner) : base(message ?? "InvalidEncoding", inner) { }
-
-#if FEATURE_SERIALIZATION
-            protected InvalidEncoding(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
 
             [RubyConstructor]
             public static InvalidEncoding/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {
@@ -282,16 +272,11 @@ namespace IronRuby.StandardLibrary.Iconv {
             }
         }
 
-        [RubyException("InvalidCharacter"), Includes(typeof(Failure)), Serializable]
+        [RubyException("InvalidCharacter"), Includes(typeof(Failure))]
         public class InvalidCharacter : ArgumentException {
             public InvalidCharacter() : this(null, null) { }
             public InvalidCharacter(string message) : this(message, null) { }
             public InvalidCharacter(string message, Exception inner) : base(message ?? "InvalidCharacter", inner) { }
-
-#if FEATURE_SERIALIZATION
-            protected InvalidCharacter(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
 
             [RubyConstructor]
             public static InvalidCharacter/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {
@@ -301,16 +286,11 @@ namespace IronRuby.StandardLibrary.Iconv {
             }
         }
 
-        [RubyException("IllegalSequence"), Includes(typeof(Failure)), Serializable]
+        [RubyException("IllegalSequence"), Includes(typeof(Failure))]
         public class IllegalSequence : ArgumentException {
             public IllegalSequence() : this(null, null) { }
             public IllegalSequence(string message) : this(message, null) { }
             public IllegalSequence(string message, Exception inner) : base(message ?? "IllegalSequence", inner) { }
-
-#if FEATURE_SERIALIZATION
-            protected IllegalSequence(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
 
             [RubyConstructor]
             public static IllegalSequence/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {
@@ -320,16 +300,11 @@ namespace IronRuby.StandardLibrary.Iconv {
             }
         }
 
-        [RubyException("OutOfRange"), Includes(typeof(Failure)), Serializable]
+        [RubyException("OutOfRange"), Includes(typeof(Failure))]
         public class OutOfRange : RuntimeError {
             public OutOfRange() : this(null, null) { }
             public OutOfRange(string message) : this(message, null) { }
             public OutOfRange(string message, Exception inner) : base(message ?? "OutOfRange", inner) { }
-
-#if FEATURE_SERIALIZATION
-            protected OutOfRange(System.Runtime.Serialization.SerializationInfo info, System.Runtime.Serialization.StreamingContext context)
-                : base(info, context) { }
-#endif
 
             [RubyConstructor]
             public static OutOfRange/*!*/ Factory(RubyClass/*!*/ self, object arg1, object arg2, object arg3) {

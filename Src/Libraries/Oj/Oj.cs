@@ -194,7 +194,6 @@ namespace IronRuby.StandardLibrary.Oj {
         internal bool EscapeHtml = true;
         internal bool XmlTime = true;
         internal object ActiveRecordBase;
-        internal object StringWriterClass;
 
         // mimic_JSON
         internal object JsonParserErrorOverride;

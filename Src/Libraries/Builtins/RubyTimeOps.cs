@@ -916,7 +916,11 @@ namespace IronRuby.Builtins {
                     context.SetInstanceVariable(result, "offset", Protocols.Normalize(offset.Numerator));
                 }
 
-                if (self.ZoneObject != null) {
+                if (self.ZoneObject is MutableString) {
+                    // A time loaded from a dump that no find_timezone turned into an object keeps
+                    // the bare name, and MRI writes the name out again as it is.
+                    context.SetInstanceVariable(result, "zone", self.ZoneObject);
+                } else if (self.ZoneObject != null) {
                     // A timezone object names itself. One that cannot - no #name method - takes
                     // the whole time down with it, which is what MRI does too.
                     context.SetInstanceVariable(result, "zone",
@@ -1597,6 +1601,11 @@ namespace IronRuby.Builtins {
         /// <summary>The name %Z should print: a timezone object's #abbr wins over the zone name.</summary>
         internal static string GetZoneAbbreviation(RubyContext/*!*/ context, RubyTime/*!*/ self) {
             object zoneObject = self.ZoneObject;
+            // A zone name loaded from a dump is what MRI prints; the time's fixed offset has none.
+            var zoneName = zoneObject as MutableString;
+            if (zoneName != null) {
+                return zoneName.ConvertToString();
+            }
             if (zoneObject != null && RespondTo(context, zoneObject, "abbr")) {
                 var abbr = Invoke(context, ref _abbrSite, "abbr", zoneObject, self) as MutableString;
                 if (abbr != null) {
