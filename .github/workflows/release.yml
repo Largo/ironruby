@@ -149,7 +149,8 @@ jobs:
     name: launch video
     runs-on: ubuntu-latest
     continue-on-error: true
-    timeout-minutes: 45
+    # A render takes about 7 minutes; a failed one can leave hyperframes waiting.
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
 

@@ -306,9 +306,10 @@
         tl.to(state, { v: value, duration: dur, ease: "power2.out", onUpdate: () => { el.textContent = Math.round(state.v).toLocaleString("en-US"); } }, at);
       }
 
-      // Music: the opening fades out under the cut, the orchestra is there with the title.
-      tl.fromTo("#music-intro", { volume: 0 }, { volume: 3.5, duration: 0.8, ease: "none" }, 0);
-      tl.to("#music-intro", { volume: 0, duration: 0.6, ease: "none" }, 5.3);
+      // Music: the orchestra is there with the title, and fades out at the very end. The
+      // opening keeps its static data-volume (3.5, +11 dB): a volume tween is a media
+      // element's volume, which only goes from 0 to 1, and the render fails beyond that.
+      // It needs no fade either: the recording begins in silence, and the cut covers its end.
       tl.fromTo("#music-main", { volume: 0 }, { volume: 1, duration: 0.25, ease: "none" }, 5.3);
       tl.to("#music-main", { volume: 0, duration: 1.2, ease: "none" }, 53.8);
 
