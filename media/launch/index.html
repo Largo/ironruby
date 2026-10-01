@@ -143,6 +143,12 @@
   </head>
   <body>
     <div id="root" data-composition-id="main" data-start="0" data-width="1920" data-height="1080" data-duration="55">
+      <!-- Grieg, In the Hall of the Mountain King (public domain; tools/fetch-music.sh fetches
+           it for the render). The quiet opening plays under 2011; at the title the film cuts
+           into the full orchestra, placed so that the piece's last chord falls on the end card. -->
+      <audio id="music-intro" src="assets/music/mountain-king.mp3" data-start="0" data-duration="5.9" data-media-start="0" data-track-index="10"></audio>
+      <audio id="music-main" src="assets/music/mountain-king.mp3" data-start="5.3" data-duration="49.7" data-media-start="95" data-track-index="11"></audio>
+
       <div id="backdrop" class="clip" data-start="0" data-duration="55" data-track-index="0">
         <div class="grid" id="grid"></div>
         <div class="glow" id="glow-ruby"></div>
@@ -296,6 +302,12 @@
         const state = { v: 0 };
         tl.to(state, { v: value, duration: dur, ease: "power2.out", onUpdate: () => { el.textContent = Math.round(state.v).toLocaleString("en-US"); } }, at);
       }
+
+      // Music: the opening fades out under the cut, the orchestra is there with the title.
+      tl.fromTo("#music-intro", { volume: 0 }, { volume: 1, duration: 0.8, ease: "none" }, 0);
+      tl.to("#music-intro", { volume: 0, duration: 0.6, ease: "none" }, 5.3);
+      tl.fromTo("#music-main", { volume: 0 }, { volume: 1, duration: 0.25, ease: "none" }, 5.3);
+      tl.to("#music-main", { volume: 0, duration: 1.2, ease: "none" }, 53.8);
 
       // The backdrop drifts through the whole film.
       tl.fromTo("#glow-ruby", { x: 0, y: 0 }, { x: 260, y: 140, duration: 55, ease: "sine.inOut" }, 0);
