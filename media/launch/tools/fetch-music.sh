@@ -15,7 +15,7 @@
 set -euo pipefail
 
 URL='https://www.quantumdigitalmedia.de/Classicals-Music/Music/MO%20Collection/Classicals.de%20-%20Grieg%20-%20Peer%20Gynt%20Suite%20No.%201%2C%20Op.%2046%20-%20IV.%20In%20the%20Hall%20Of%20The%20Mountain%20King.zip'
-SHA256=''  # of the zip; empty until the first download has been checked
+SHA256='78ef3c248c376997d0175ef534ab3243677e4323f4a8ff3cb07f698a3441cd7a'  # of the zip, 2024-10-27
 
 here=$(cd "$(dirname "$0")/.." && pwd)
 out="$here/assets/music/mountain-king.mp3"
@@ -33,7 +33,8 @@ elif [ "$actual" != "$SHA256" ]; then
 fi
 
 unzip -l "$tmp/music.zip"
-mp3=$(unzip -Z1 "$tmp/music.zip" | grep -i '\.mp3$' | head -1)
+# The zip also holds a macOS resource fork (__MACOSX/._<name>.mp3), which is not audio.
+mp3=$(unzip -Z1 "$tmp/music.zip" | grep -v '^__MACOSX/' | grep -i '\.mp3$' | head -1)
 if [ -z "$mp3" ]; then
   echo "fetch-music.sh: no MP3 in the download" >&2
   exit 1
