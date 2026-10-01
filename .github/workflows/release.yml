@@ -1,10 +1,11 @@
 name: Release
 
 # Binary builds: a self-contained IronRuby for each platform, made by
-# Util/package-release.sh. Pushing a tag v* publishes them as a GitHub release
-# (a pre-release while the version has a suffix such as -preview1);
-# running the workflow by hand, or a pull request that changes the packaging, only
-# keeps them as workflow artifacts.
+# Util/package-release.sh, and the launch video, rendered from media/launch. Pushing a
+# tag v* publishes them as a GitHub release (a pre-release while the version has a
+# suffix such as -preview1), with Docs/releases/<tag>.md as the notes when there is one;
+# running the workflow by hand, or a pull request that changes the packaging or the
+# video, only keeps them as workflow artifacts.
 on:
   push:
     tags: ['v*']
@@ -12,6 +13,7 @@ on:
     paths:
       - .github/workflows/release.yml
       - Util/package-release.sh
+      - media/launch/**
   workflow_dispatch:
 
 permissions:
@@ -118,6 +120,14 @@ jobs:
           fi
           Util/package-release.sh "${{ matrix.rid }}" "$GITHUB_WORKSPACE/dist"
 
+      # The Windows archive carries Samples/Notepad: drive it from the unpacked tree, on
+      # the Release build the archive ships. package-release.sh leaves the tree in dist/.
+      - name: Notepad sample, from the archive
+        if: runner.os == 'Windows'
+        timeout-minutes: 5
+        working-directory: dist
+        run: cd ironruby-*-win-x64 && cmd //c ir.cmd Samples/Notepad/test_notepad.rb
+
       - uses: actions/upload-artifact@v7
         with:
           name: ironruby-${{ matrix.rid }}
@@ -126,17 +136,70 @@ jobs:
             dist/*.zip
           if-no-files-found: error
 
+  # media/launch is a HyperFrames composition (media/launch/README.md). A video that
+  # does not render does not hold the archives back.
+  video:
+    name: launch video
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: FFmpeg
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg
+
+      # lint is static and must pass; check also audits layout and contrast in the
+      # browser and only warns here. The version is pinned in package.json.
+      - name: Check and render
+        working-directory: media/launch
+        env:
+          HYPERFRAMES_SKIP_SKILLS: 1
+        run: |
+          hf="npx --yes hyperframes@$(sed -n 's/.*hyperframes@\([0-9.]*\).*/\1/p' package.json | head -1)"
+          $hf telemetry disable
+          $hf lint
+          $hf browser ensure
+          $hf check || echo "::warning::hyperframes check reported findings"
+          mkdir -p "$GITHUB_WORKSPACE/dist"
+          $hf render --fps 60 --quality high --output "$GITHUB_WORKSPACE/dist/ironruby-4-launch.mp4"
+          $hf snapshot --frames 12
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ironruby-launch-video
+          path: dist/ironruby-4-launch.mp4
+          if-no-files-found: error
+
+      # Stills across the film, to look at a render without downloading it.
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: launch-video-frames
+          path: media/launch/snapshots
+          if-no-files-found: ignore
+
   release:
     name: GitHub release
     if: github.ref_type == 'tag'
-    needs: package
+    needs: [package, video]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: Docs/releases
+
+      # ironruby-* only: the archives and the video, not the review stills.
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          pattern: ironruby-*
           merge-multiple: true
 
       - name: Checksums
@@ -149,6 +212,10 @@ jobs:
         run: |
           prerelease=""
           case "$GITHUB_REF_NAME" in *-*) prerelease="--prerelease" ;; esac
+          notes=()
+          if [ -f "Docs/releases/$GITHUB_REF_NAME.md" ]; then
+            notes=(--notes-file "Docs/releases/$GITHUB_REF_NAME.md")
+          fi
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" --title "IronRuby ${GITHUB_REF_NAME#v}" \
-            --generate-notes $prerelease
+            "${notes[@]}" --generate-notes $prerelease

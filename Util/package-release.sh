@@ -46,6 +46,10 @@ done
 cp -R "$IR_ROOT/Src/StdLib" "$STAGE/Src/"
 rm -f "$STAGE/Src/StdLib/StdLib.rbproj"
 cp -R "$IR_ROOT/Src/Public" "$STAGE/License"
+# Samples/Notepad is a Windows Forms application, so only the Windows archive has it.
+case "$RID" in
+  win-*) cp -R "$IR_ROOT/Samples" "$STAGE/" ;;
+esac
 
 # The archive carries Microsoft's runtime - .NET, and for Windows also the Windows
 # Desktop runtime with Windows Forms and WPF - so it carries their license and
