@@ -175,6 +175,7 @@ jobs:
           RUBY
           if [ "$RUNNER_OS" = Windows ]; then
             cmd //c ir.cmd smoke.rb
+            cmd //c ir.cmd Util/windows-desktop-check.rb
           else
             ./ir.sh smoke.rb
           fi
