@@ -111,7 +111,10 @@ namespace IronRuby.Builtins {
         private static extern int SysFileActionsAddChdir(IntPtr actions, IntPtr path);
 
         private const short POSIX_SPAWN_SETPGROUP = 0x02;
-        private const int O_CLOEXEC = 0x80000;
+        // The value differs by kernel: Linux's 0x80000 is not O_CLOEXEC on macOS, whose
+        // pipe2 rejects it with EINVAL - which broke every pipe to a child there.
+        private static readonly int O_CLOEXEC =
+            RuntimeInformation.IsOSPlatform(OSPlatform.OSX) ? 0x1000000 : 0x80000;
         private const int F_GETFD = 1;
         private const int F_SETFD = 2;
         private const int FD_CLOEXEC = 1;
