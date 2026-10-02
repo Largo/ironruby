@@ -20,7 +20,7 @@ set -euo pipefail
 BIN=${1:?usage: Util/build-e_sqlite3.sh <dir holding libe_sqlite3.so>}
 VERSION=3530300  # 3.53.3
 URL="https://sqlite.org/2026/sqlite-amalgamation-$VERSION.zip"
-SHA256=''        # of the zip; empty until the first download has been checked
+SHA256='646421e12aac110282ef8cc68f1a62d4bb15fc7b8f09da0b53e29ee690500431'  # of the zip
 SOURCE_ID='2026-06-26 20:14:12 d4c0e51e4aeb96955b99185ab9cde75c339e2c29c3f3f12428d364a10d782c62'
 
 # SQLitePCLRaw's set (bld/cb.cs, add_basic_sqlite3_defines and add_linux_sqlite3_defines),
