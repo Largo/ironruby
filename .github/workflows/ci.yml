@@ -180,6 +180,20 @@ jobs:
             ./ir.sh smoke.rb
           fi
 
+      # IO#write_nonblock on a socket claims only what the kernel took (#14). On Linux the
+      # send buffer fills part-way through a write, which is where the bug lost bytes;
+      # Winsock takes a non-blocking send whole or refuses it, so Windows checks that the
+      # claimed bytes still all arrive.
+      - name: Socket write_nonblock
+        timeout-minutes: 2
+        working-directory: ironruby
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            cmd //c ir.cmd Util/socket-write-nonblock-check.rb
+          else
+            ./ir.sh Util/socket-write-nonblock-check.rb
+          fi
+
       # Samples/Notepad, a Windows Forms application, driven by its own test with nobody
       # at the keyboard. A dialog that never closes would wait forever, hence the limit.
       - name: Notepad sample
