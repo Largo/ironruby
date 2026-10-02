@@ -59,9 +59,13 @@ fi
 
 # -S searches RUBYPATH before PATH; Src/StdLib/bin holds the executables the
 # bundled library ships (irb), so `./ir.sh -S irb` runs IronRuby's own rather
-# than whatever binstub happens to be on PATH.  An existing RUBYPATH still wins
-# for anything not shipped here.
-RUBYPATH="$S/bin${RUBYPATH:+:$RUBYPATH}"
+# than whatever binstub happens to be on PATH.  The directory ir itself is in
+# is RubyGems' bindir here (RbConfig's bindir), where `igem install` writes the
+# binstubs of installed gems; it comes next, so `./ir.sh -S <gem executable>`
+# finds the binstub written for IronRuby before a host Ruby's version of the
+# same command - or a version manager's shim, which is a native executable and
+# not a script at all.  An existing RUBYPATH still wins for anything not here.
+RUBYPATH="$S/bin:$(dirname "$IR_BIN")${RUBYPATH:+:$RUBYPATH}"
 export RUBYPATH
 
 exec "$IR_BIN" -X:UsePrism \
