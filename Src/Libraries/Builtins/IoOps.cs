@@ -1679,7 +1679,7 @@ namespace IronRuby.Builtins {
                 return put;
             }
 
-            var pipe = io.GetStream().BaseStream as DescriptorStream;
+            var pipe = io.GetStream().BaseStream as INonBlockingWriteStream;
             if (pipe == null) {
                 // MRI's write_nonblock is a bare write(2): nothing of it stays in a buffer.
                 int all = Write(io, val);
