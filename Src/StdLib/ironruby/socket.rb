@@ -107,7 +107,7 @@ class Addrinfo
   def __ir_init_from_packed(bytes, family) # :nodoc:
     bytes = bytes.dup.force_encoding(Encoding::BINARY)
     raise SocketError, "too short sockaddr" if bytes.bytesize < 2
-    case bytes.unpack("S")[0]
+    case Socket.__ir_sockaddr_family(bytes)
     when 1
       @afamily = Socket::AF_UNIX
       path = bytes.byteslice(2, bytes.bytesize - 2)
@@ -125,7 +125,7 @@ class Addrinfo
       @ip_port = bytes.byteslice(2, 2).unpack("n")[0]
       @ip_address = Socket.__ir_unpack_ipv6(bytes.byteslice(8, 16))
     else
-      raise SocketError, "unknown address family: #{bytes.unpack("S")[0]}"
+      raise SocketError, "unknown address family: #{Socket.__ir_sockaddr_family(bytes)}"
     end
     # Without an explicit family a packed sockaddr leaves the protocol family
     # unspecified -- the family is already carried by the bytes themselves.
@@ -803,7 +803,7 @@ class Socket
     return nil if bytes.nil? || bytes.bytesize < 8
     bytes = bytes.dup.force_encoding(Encoding::BINARY)
     port = bytes.byteslice(2, 2).unpack("n")[0]
-    case bytes.unpack("S")[0]
+    case __ir_sockaddr_family(bytes)
     when 2
       ip = bytes.byteslice(4, 4).unpack("C4").join(".")
     when 10, 23, 28, 30
@@ -1048,6 +1048,17 @@ class Socket
       words = left.map { |g| g.to_i(16) } + [0] * fill + right.map { |g| g.to_i(16) }
       raise ArgumentError, "invalid IPv6 address: #{address}" unless words.size == 8
       words.pack("n8")
+    end
+
+    # Where a packed sockaddr keeps its family. Linux and Windows start it with a
+    # 16-bit sa_family; macOS and the BSDs start it with a one-byte sa_len and
+    # follow that with a one-byte sa_family, so reading 16 bits there gives
+    # (family << 8) | length -- 7708 for AF_INET6 -- and no sockaddr the
+    # kernel hands back (getsockname, accept, recvfrom) is recognized.
+    BSD_SOCKADDR = RUBY_PLATFORM.match?(/darwin|bsd|dragonfly/) # :nodoc:
+
+    def __ir_sockaddr_family(bytes) # :nodoc:
+      BSD_SOCKADDR ? bytes.getbyte(1) : bytes.unpack("S")[0]
     end
 
     def __ir_unpack_ipv6(bytes) # :nodoc:
