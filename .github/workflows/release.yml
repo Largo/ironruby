@@ -116,6 +116,12 @@ jobs:
           ruby generate.rb ../../../prism/config.yml "$RUNNER_TEMP/prism-gen"
           diff -r --strip-trailing-cr Generated "$RUNNER_TEMP/prism-gen"
 
+      # package-release.sh rebuilds libe_sqlite3.so for the Linux archive (gcc, unzip) and
+      # checks it with the system's libsqlite3 preloaded, the case SQLitePCL.raw#682 is about.
+      - name: SQLite for the Linux archive
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libsqlite3-0 unzip
+
       - name: Package
         working-directory: ironruby
         run: |

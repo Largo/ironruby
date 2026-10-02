@@ -73,6 +73,41 @@ grep -oE '"(name|version)": *"[^"]*"' "$STAGE/Src/Console/bin/Release/$IR_TFM/ir
     fi
   done
 
+# Linux: SQLitePCLRaw's libe_sqlite3.so crashes once another SQLite is in the global
+# symbol scope (SQLitePCL.raw#682), so the archive carries one rebuilt -Bsymbolic
+# (Util/build-e_sqlite3.sh). SQLite must report the same version, source id and compile
+# options from both, and the rebuilt one must survive the system's libsqlite3 preloaded,
+# which is how the issue reproduces it.
+case "$RID" in
+  linux-*)
+    bin="$STAGE/Src/Console/bin/Release/$IR_TFM"
+    check="$IR_ROOT/Util/sqlite-options.rb"
+    report=$(mktemp -d)
+    system_sqlite=$(ldconfig -p 2>/dev/null | awk '/libsqlite3\.so\.0 /{print $NF; exit}')
+    "$STAGE/ir.sh" "$check" > "$report/shipped.txt"
+    if [ -n "$system_sqlite" ]; then
+      if LD_PRELOAD="$system_sqlite" "$STAGE/ir.sh" "$check" > /dev/null 2>&1; then
+        echo "package-release.sh: the shipped libe_sqlite3.so survives $system_sqlite preloaded"
+      else
+        echo "package-release.sh: the shipped libe_sqlite3.so fails with $system_sqlite preloaded"
+      fi
+    fi
+    bash "$IR_ROOT/Util/build-e_sqlite3.sh" "$bin"
+    "$STAGE/ir.sh" "$check" > "$report/rebuilt.txt"
+    diff "$report/shipped.txt" "$report/rebuilt.txt"
+    if [ -n "$system_sqlite" ]; then
+      # Not only no crash: it must still be the bundled SQLite answering, not the system's.
+      LD_PRELOAD="$system_sqlite" "$STAGE/ir.sh" "$check" > "$report/preloaded.txt"
+      diff "$report/rebuilt.txt" "$report/preloaded.txt"
+      echo "package-release.sh: the rebuilt libe_sqlite3.so survives $system_sqlite preloaded," \
+        "and answers as $(head -1 "$report/rebuilt.txt")"
+    else
+      echo "package-release.sh: no system libsqlite3.so.0 here to preload against the rebuilt one" >&2
+    fi
+    rm -rf "$report"
+    ;;
+esac
+
 # A quick check that the unpacked tree starts, before it is archived - and on Windows
 # that Windows Forms and WPF load from it, which a missing framework reference breaks
 # without breaking anything else.
