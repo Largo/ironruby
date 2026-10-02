@@ -28,7 +28,15 @@ namespace IronRuby.Builtins {
         int Descriptor { get; }
     }
 
-    public sealed class DescriptorStream : Stream, IDescriptorStream {
+    /// <summary>
+    /// A stream that can make one write the kernel may cut short, and say how much it took -
+    /// what #write_nonblock is. Negative means nothing fit.
+    /// </summary>
+    public interface INonBlockingWriteStream {
+        int WriteNonBlocking(byte[]/*!*/ buffer, int offset, int count);
+    }
+
+    public sealed class DescriptorStream : Stream, IDescriptorStream, INonBlockingWriteStream {
         [StructLayout(LayoutKind.Sequential)]
         private struct PollFd {
             public int fd;
