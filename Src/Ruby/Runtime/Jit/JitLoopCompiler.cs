@@ -69,10 +69,11 @@ namespace IronRuby.Runtime.Jit {
         /// Builds a typed entry for a loop, or returns null when the loop is not the shape
         /// this can specialize. <paramref name="args"/> are the locals tuples the site passes,
         /// one per lexical depth; they carry the live values the types are read from, which is
-        /// a type profile a loop that is already running gets for free.
+        /// a type profile a loop that is already running gets for free. The loop's self is
+        /// args[<paramref name="selfArgIndex"/>], or there is none if that is negative.
         /// </summary>
         internal static Func<object[], object> TryCompile(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
-            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args) {
+            int scopeDepth, Dictionary<int, int>/*!*/ tupleArgIndex, object[]/*!*/ args, int selfArgIndex) {
 
             if (JitRuntime.Disabled || context.HasRefinements) { return null; }
 
@@ -149,9 +150,24 @@ namespace IronRuby.Runtime.Jit {
                 };
             };
 
+            // The loop's self, which its instance variable reads go through. The live object is a
+            // profile as well: what one of its variables holds when the loop turns hot is the type
+            // a numeric use of the variable is specialized for (JitCompiler.NumericIVar).
+            MSA.ParameterExpression self = null;
+            Func<string, JT> ivarProfile = null;
+            if (selfArgIndex >= 0 && selfArgIndex < args.Length) {
+                object liveSelf = args[selfArgIndex];
+                self = Ast.Parameter(typeof(object), "#self");
+                ivarProfile = name => {
+                    object value;
+                    if (!context.TryGetInstanceVariable(liveSelf, name, out value)) { return JT.Obj; }
+                    return (value is int) ? JT.Int : (value is long) ? JT.Lng : (value is double) ? JT.Dbl : JT.Obj;
+                };
+            }
+
             List<JitLoopSlot> slots;
             bool canDeopt;
-            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, out slots, out canDeopt);
+            MSA.Expression body = JitCompiler.TryCompileLoop(loop, context, scopeDepth, bind, self, ivarProfile, out slots, out canDeopt);
             if (body == null || slots.Count == 0) {
                 if (OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   emitter gave up (body={0} slots={1})", body != null, slots == null ? -1 : slots.Count); }
                 return null;
@@ -160,6 +176,9 @@ namespace IronRuby.Runtime.Jit {
             var locals = new List<MSA.ParameterExpression>(tuples.Values);
             var probe = Ast.Parameter(typeof(object), "#probe");
             locals.Add(probe);
+            if (self != null) {
+                locals.Add(self);
+            }
 
             // The scope this loop belongs to always makes tuples of the same shape, but nothing
             // in the type system says so: check before the cast rather than let an unexpected
@@ -169,6 +188,9 @@ namespace IronRuby.Runtime.Jit {
                 prologue.Add(Ast.IfThen(guard, Ast.Return(exit, Ast.Constant(OsrLoopSite.Retry, typeof(object)))));
             }
             prologue.AddRange(tupleInit);
+            if (self != null) {
+                prologue.Add(Ast.Assign(self, Ast.ArrayIndex(argsParameter, Ast.Constant(selfArgIndex))));
+            }
 
             // Nothing may have redefined Integer#+ (or anything else) since the types were
             // read: one global version covers every def, undef, alias and include.

@@ -317,6 +317,25 @@ namespace IronRuby.Runtime.Jit {
             return RubyOps.WriteInstanceVariable(context, self, value, site);
         }
 
+        // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):
+        // unboxed while it holds the type it held when the loop was compiled, a deopt once it does not.
+
+        public static int GuardInt(object value) {
+            if (value is int) { return (int)value; }
+            throw Deopt();
+        }
+
+        public static long GuardLong(object value) {
+            if (value is int) { return (int)value; }
+            if (value is long) { return (long)value; }
+            throw Deopt();
+        }
+
+        public static double GuardDouble(object value) {
+            if (value is double) { return (double)value; }
+            throw Deopt();
+        }
+
         // ---- reflection handles the compiler emits ---------------------------------------
 
         internal static MethodInfo/*!*/ M(string/*!*/ name) {

@@ -139,8 +139,13 @@ namespace IronRuby.Runtime.Jit {
         private readonly List<JitLoopSlot> _slots;
         private MSA.LabelTarget _breakLabel, _continueLabel;
 
+        // Loop mode: what an instance variable of the loop's self holds right now, as a type
+        // (see NumericIVar). Null when the loop was entered without its self, which is then
+        // unbound and the loop may not touch self or an instance variable.
+        private readonly Func<string, JT> _ivarProfile;
+
         private JitCompiler(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context, int scopeDepth,
-            Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot) {
+            Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self, Func<string, JT> ivarProfile) {
             _ast = null;
             _loop = loop;
             _context = context;
@@ -149,21 +154,30 @@ namespace IronRuby.Runtime.Jit {
             _slots = new List<JitLoopSlot>();
             _paramTypes = new JT[0];
             _paramNames = new string[0];
-            _self = Ast.Parameter(typeof(object), "#self");
+            _self = self ?? Ast.Parameter(typeof(object), "#self");
+            _ivarProfile = (self != null) ? ivarProfile : null;
             PushScope();
         }
 
         /// <summary>
         /// Emits a typed body for one `while' loop. The slots it bound - the scope locals it
         /// touched, and the type each of them held when the loop turned hot - come back in
-        /// <paramref name="slots"/>; the caller loads and stores them.
+        /// <paramref name="slots"/>; the caller loads and stores them. <paramref name="self"/> is
+        /// the variable the caller loads the loop's self into (null if it has none), and
+        /// <paramref name="ivarProfile"/> what self's instance variables hold right now.
         /// </summary>
         internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
             int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, out List<JitLoopSlot> slots, out bool canDeopt) {
+            return TryCompileLoop(loop, context, scopeDepth, bindSlot, null, null, out slots, out canDeopt);
+        }
+
+        internal static MSA.Expression TryCompileLoop(WhileLoopExpression/*!*/ loop, RubyContext/*!*/ context,
+            int scopeDepth, Func<LocalVariable, JT, JitLoopSlot>/*!*/ bindSlot, MSA.ParameterExpression self,
+            Func<string, JT> ivarProfile, out List<JitLoopSlot> slots, out bool canDeopt) {
 
             slots = null;
             canDeopt = false;
-            var c = new JitCompiler(loop, context, scopeDepth, bindSlot);
+            var c = new JitCompiler(loop, context, scopeDepth, bindSlot, self, ivarProfile);
             MSA.Expression body;
             try {
                 JT type;
@@ -478,12 +492,14 @@ namespace IronRuby.Runtime.Jit {
 
             var ivar = node as InstanceVariable;
             if (ivar != null) {
+                if (_loop != null && _ivarProfile == null) { throw Bail("instance variable in a loop entered without self"); }
                 type = JT.Obj;
                 return Ast.Call(JitRuntime.M("GetIVar"), Ast.Constant(_context), _self, Ast.Constant(new InstanceVariableSite(ivar.Name)));
             }
 
             var self = node as SelfReference;
             if (self != null) {
+                if (_loop != null && _ivarProfile == null) { throw Bail("self in a loop entered without it"); }
                 type = JT.Obj;
                 return _self;
             }
@@ -551,6 +567,9 @@ namespace IronRuby.Runtime.Jit {
             var ivarTarget = node.Left as InstanceVariable;
             if (ivarTarget != null) {
                 if (op != null) { throw JitBailout.Instance; }
+                // A write can raise (FrozenError), and an exception leaving an outlined loop
+                // part way through would leave the scope's locals as they were on entry.
+                if (_loop != null) { throw Bail("instance variable write in an outlined loop"); }
                 JT vt;
                 var v = Emit(node.Right, out vt);
                 _pure = false;      // an ivar write is observable, so the body may not deopt
@@ -576,6 +595,7 @@ namespace IronRuby.Runtime.Jit {
             if (op != null) {
                 // `x op= v'  ->  `x = x op v'
                 if (!known) { throw JitBailout.Instance; }
+                rhs = NumericIVar(node.Right, rhs, ref rhsType);
                 if (!IsNumeric(lt) || !IsNumeric(rhsType)) { throw JitBailout.Instance; }
                 rhs = EmitBinary(op, (_loop != null) ? LoadLoopSlot(p) : p, lt, rhs, rhsType, out rhsType);
             }
@@ -852,6 +872,8 @@ namespace IronRuby.Runtime.Jit {
                 JT lt, rt;
                 var l = Emit(node.Target, out lt);
                 var r = Emit(args.Expressions[0], out rt);
+                l = NumericIVar(node.Target, l, ref lt);
+                r = NumericIVar(args.Expressions[0], r, ref rt);
                 if (IsNumeric(lt) && IsNumeric(rt)) {
                     return EmitBinary(node.MethodName, l, lt, r, rt, out type);
                 }
@@ -862,6 +884,28 @@ namespace IronRuby.Runtime.Jit {
 
         private static bool IsNumeric(JT t) {
             return t == JT.Int || t == JT.Lng || t == JT.Dbl;
+        }
+
+        /// <summary>
+        /// An instance variable read used as a numeric operand - `sum += @x', `@n * 2'. An
+        /// outlined loop is compiled with its self at hand, so what the variable holds right now
+        /// is a type profile: an Integer or a Float there is read through a guard that unboxes it
+        /// while it still is one and deopts when it is not, and the generic loop then does
+        /// whatever the operator does with whatever the variable holds. Reads are not
+        /// observable, so this keeps a body restartable. Anything else stays an object.
+        /// </summary>
+        private MSA.Expression/*!*/ NumericIVar(RExpr/*!*/ node, MSA.Expression/*!*/ e, ref JT type) {
+            var ivar = node as InstanceVariable;
+            if (type != JT.Obj || ivar == null || _ivarProfile == null) { return e; }
+            string guard;
+            switch (_ivarProfile(ivar.Name)) {
+                case JT.Int: type = JT.Int; guard = "GuardInt"; break;
+                case JT.Lng: type = JT.Lng; guard = "GuardLong"; break;
+                case JT.Dbl: type = JT.Dbl; guard = "GuardDouble"; break;
+                default: return e;
+            }
+            _canDeopt = true;
+            return Ast.Call(JitRuntime.M(guard), e);
         }
 
         /// <summary>The two representations of a Ruby Integer the specialized code carries.</summary>
