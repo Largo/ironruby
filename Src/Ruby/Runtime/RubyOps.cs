@@ -2023,6 +2023,57 @@ namespace IronRuby.Runtime {
             return value;
         }
 
+        /// <summary>
+        /// GetGlobalVariable through the site's cached variable: an ordinary global is one
+        /// version check and a field read, with no lookup and no lock.
+        /// </summary>
+        [Emitted]
+        public static object GetCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
+            var context = scope.RubyContext;
+            var variable = site.GetVariable(context);
+            var plain = variable as GlobalVariableInfo;
+            if (plain != null) {
+                return plain.Value;
+            }
+            return (variable != null) ? context.GetGlobalVariableValue(variable, scope) : null;
+        }
+
+        /// <summary>ReadGlobalVariable through the site's cached variable.</summary>
+        [Emitted]
+        public static object ReadCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
+            var context = scope.RubyContext;
+            var variable = site.GetVariable(context);
+            var plain = variable as GlobalVariableInfo;
+            if (plain != null) {
+                return plain.Value;
+            }
+            if (variable != null) {
+                return context.GetGlobalVariableValue(variable, scope);
+            }
+            if (context.Verbose is bool && (bool)context.Verbose) {
+                context.ReportWarning(String.Format("global variable '${0}' not initialized", site.Name), true);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// SetGlobalVariable through the site's cached variable. An ordinary global is assigned
+        /// in place; everything else - a new global, a special or read-only one - takes the
+        /// general path, which validates and creates.
+        /// </summary>
+        [Emitted]
+        public static object SetCachedGlobalVariable(object value, RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
+            var context = scope.RubyContext;
+            var plain = site.GetVariable(context) as GlobalVariableInfo;
+            if (plain != null) {
+                plain.Assign(value);
+                context.GlobalVariableAssigned(scope, site.Name, value);
+            } else {
+                context.SetGlobalVariable(scope, site.Name, value);
+            }
+            return value;
+        }
+
         [Emitted]
         public static bool IsDefinedGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             GlobalVariable variable;

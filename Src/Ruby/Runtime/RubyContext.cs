@@ -161,6 +161,19 @@ namespace IronRuby.Runtime {
         private readonly Dictionary<string/*!*/, GlobalVariable>/*!*/ _globalVariables;
         public object/*!*/ GlobalVariablesLock { get { return _globalVariables; } }
 
+        /// <summary>
+        /// Changes whenever a name starts or stops denoting a GlobalVariable object - a define,
+        /// an alias, a delete, the first assignment of a new global - but not when a value is
+        /// assigned. A GlobalVariableSite keeps the object it found until this moves.
+        /// Written under GlobalVariablesLock (or before any Ruby code runs).
+        /// </summary>
+        private volatile int _globalVariablesVersion = GlobalVariableSite.NextVersion();
+        internal int GlobalVariablesVersion { get { return _globalVariablesVersion; } }
+
+        private void GlobalVariablesChanged() {
+            _globalVariablesVersion = GlobalVariableSite.NextVersion();
+        }
+
         // not thread safe: use GlobalVariablesLock to synchronize access to the variables:
         public IEnumerable<KeyValuePair<string, GlobalVariable>>/*!*/ GlobalVariables {
             get { return _globalVariables; }
@@ -811,6 +824,7 @@ namespace IronRuby.Runtime {
                 } else {
                     _globalVariables["-i"] = new GlobalVariableInfo(null);
                 }
+                GlobalVariablesChanged();
 
                 // Hash
                 // SCRIPT_LINES__
@@ -2499,12 +2513,14 @@ namespace IronRuby.Runtime {
         public void DefineGlobalVariable(string/*!*/ name, object value) {
             lock (GlobalVariablesLock) {
                 _globalVariables[name] = new GlobalVariableInfo(value);
+                GlobalVariablesChanged();
             }
         }
 
         public void DefineReadOnlyGlobalVariable(string/*!*/ name, object value) {
             lock (GlobalVariablesLock) {
                 _globalVariables[name] = new ReadOnlyGlobalVariableInfo(value);
+                GlobalVariablesChanged();
             }
         }
 
@@ -2512,15 +2528,18 @@ namespace IronRuby.Runtime {
             ContractUtils.RequiresNotNull(variable, "variable");
             lock (GlobalVariablesLock) {
                 _globalVariables[name] = variable;
+                GlobalVariablesChanged();
             }
         }
 
         internal void DefineGlobalVariableNoLock(string/*!*/ name, GlobalVariable/*!*/ variable) {
             _globalVariables[name] = variable;
+            GlobalVariablesChanged();
         }
 
         public bool DeleteGlobalVariable(string/*!*/ name) {
             lock (GlobalVariablesLock) {
+                GlobalVariablesChanged();
                 return _globalVariables.Remove(name);
             }
         }
@@ -2532,6 +2551,7 @@ namespace IronRuby.Runtime {
                     DefineGlobalVariableNoLock(oldName, existing = new GlobalVariableInfo(null, false));
                 }
                 _globalVariables[newName] = existing;
+                GlobalVariablesChanged();
             }
         }
 
@@ -2544,6 +2564,7 @@ namespace IronRuby.Runtime {
                     global.SetValue(this, scope, name, value);
                 } else {
                     _globalVariables[name] = new GlobalVariableInfo(value);
+                    GlobalVariablesChanged();
                 }
             }
 
@@ -2572,6 +2593,36 @@ namespace IronRuby.Runtime {
         internal bool TryGetGlobalVariable(string/*!*/ name, out GlobalVariable variable) {
             lock (GlobalVariablesLock) {
                 return _globalVariables.TryGetValue(name, out variable);
+            }
+        }
+
+        /// <summary>The variable the name denotes and the version of the name table it was found at.</summary>
+        internal bool TryGetGlobalVariable(string/*!*/ name, out GlobalVariable variable, out int version) {
+            lock (GlobalVariablesLock) {
+                version = _globalVariablesVersion;
+                return _globalVariables.TryGetValue(name, out variable);
+            }
+        }
+
+        /// <summary>
+        /// The value of a variable a GlobalVariableSite found: what TryGetGlobalVariable would
+        /// answer for its name, minus the lookup. An ordinary global is a field read; anything
+        /// else (a special or read-only variable, or one a library defined) keeps running under
+        /// the lock.
+        /// </summary>
+        internal object GetGlobalVariableValue(GlobalVariable/*!*/ variable, RubyScope scope) {
+            lock (GlobalVariablesLock) {
+                return variable.GetValue(this, scope);
+            }
+        }
+
+        /// <summary>
+        /// Runs the Kernel#trace_var handlers of a global that has just been assigned outside
+        /// SetGlobalVariable (which runs them itself).
+        /// </summary>
+        internal void GlobalVariableAssigned(RubyScope scope, string/*!*/ name, object value) {
+            if (_anyGlobalVariableTraced) {
+                FireGlobalVariableTraces(scope, name, value);
             }
         }
 
