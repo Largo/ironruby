@@ -156,8 +156,19 @@ namespace IronRuby.Compiler.Ast {
 
         internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule,
             StrongBox<RefinementActivation> definitionRefinements) {
-            return TransformBody(gen, Ast.Constant(declaringScope, typeof(RubyScope)), Ast.Constant(declaringModule, typeof(RubyModule)),
+            return TransformBody(gen, ExactConstant(declaringScope, typeof(RubyScope)), ExactConstant(declaringModule, typeof(RubyModule)),
                 QualifyFrameLabel(_name, declaringModule), definitionRefinements);
+        }
+
+        /// <summary>
+        /// A compiled lambda keeps its object constants in an object[] and casts each one back on
+        /// every load. Typed as their base class the declaring scope (a top-level, module or method
+        /// scope) and module (a class, mostly) miss the inline exact-type check and go to the
+        /// runtime's class-cast helper, twice per call of the method; typed as what they are, the
+        /// cast is one compare, and the up-cast to the parameter type is free.
+        /// </summary>
+        private static MSA.Expression/*!*/ ExactConstant(object/*!*/ value, Type/*!*/ type) {
+            return AstUtils.Convert(Ast.Constant(value, value.GetType()), type);
         }
 
         /// <summary>

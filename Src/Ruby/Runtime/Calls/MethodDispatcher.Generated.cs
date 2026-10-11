@@ -171,8 +171,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke(CallSite/*!*/ callSite, object self /*$Parameters*/) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null /*$Arguments*/);
             } else {
                 return ((CallSite<Func<CallSite, object /*$GenericParams*/, object>>)callSite).
@@ -189,8 +188,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self /*$Parameters*/) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null /*$Arguments*/);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object /*$GenericParams*/, object>>)callSite).
@@ -207,8 +205,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc /*$Parameters*/) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc /*$Arguments*/);
             } else {
@@ -227,8 +224,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, TProc proc /*$Parameters*/) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc /*$Arguments*/);
             } else {
@@ -246,8 +242,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke(CallSite/*!*/ callSite, object self ,T0 arg0) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0);
             } else {
                 return ((CallSite<Func<CallSite, object , T0, object>>)callSite).
@@ -264,8 +259,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self ,T0 arg0) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object , T0, object>>)callSite).
@@ -282,8 +276,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc ,T0 arg0) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0);
             } else {
@@ -302,8 +295,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, TProc proc ,T0 arg0) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0);
             } else {
@@ -318,8 +310,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke(CallSite/*!*/ callSite, object self ,T0 arg0, T1 arg1) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0, arg1);
             } else {
                 return ((CallSite<Func<CallSite, object , T0 , T1, object>>)callSite).
@@ -336,8 +327,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self ,T0 arg0, T1 arg1) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0, arg1);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object , T0 , T1, object>>)callSite).
@@ -354,8 +344,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc ,T0 arg0, T1 arg1) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0, arg1);
             } else {
@@ -374,8 +363,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, TProc proc ,T0 arg0, T1 arg1) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0, arg1);
             } else {
@@ -390,8 +378,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke(CallSite/*!*/ callSite, object self ,T0 arg0, T1 arg1, T2 arg2) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0, arg1, arg2);
             } else {
                 return ((CallSite<Func<CallSite, object , T0 , T1 , T2, object>>)callSite).
@@ -408,8 +395,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self ,T0 arg0, T1 arg1, T2 arg2) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0, arg1, arg2);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object , T0 , T1 , T2, object>>)callSite).
@@ -426,8 +412,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc ,T0 arg0, T1 arg1, T2 arg2) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0, arg1, arg2);
             } else {
@@ -446,8 +431,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, TProc proc ,T0 arg0, T1 arg1, T2 arg2) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0, arg1, arg2);
             } else {
@@ -462,8 +446,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke(CallSite/*!*/ callSite, object self ,T0 arg0, T1 arg1, T2 arg2, T3 arg3) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0, arg1, arg2, arg3);
             } else {
                 return ((CallSite<Func<CallSite, object , T0 , T1 , T2 , T3, object>>)callSite).
@@ -480,8 +463,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self ,T0 arg0, T1 arg1, T2 arg2, T3 arg3) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0, arg1, arg2, arg3);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object , T0 , T1 , T2 , T3, object>>)callSite).
@@ -498,8 +480,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc ,T0 arg0, T1 arg1, T2 arg2, T3 arg3) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0, arg1, arg2, arg3);
             } else {
@@ -518,8 +499,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, TProc proc ,T0 arg0, T1 arg1, T2 arg2, T3 arg3) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0, arg1, arg2, arg3);
             } else {
@@ -534,8 +514,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke(CallSite/*!*/ callSite, object self ,T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0, arg1, arg2, arg3, arg4);
             } else {
                 return ((CallSite<Func<CallSite, object , T0 , T1 , T2 , T3 , T4, object>>)callSite).
@@ -552,8 +531,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self ,T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 return Method(self, null ,arg0, arg1, arg2, arg3, arg4);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object , T0 , T1 , T2 , T3 , T4, object>>)callSite).
@@ -570,8 +548,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TProc>(CallSite/*!*/ callSite, object self, TProc proc ,T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0, arg1, arg2, arg3, arg4);
             } else {
@@ -590,8 +567,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope, TProc>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, TProc proc ,T0 arg0, T1 arg1, T2 arg2, T3 arg3, T4 arg4) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
+            if (IsCurrentFor(self)) {
                 // Dispatching to a Ruby method - the method scope sets the proc's converter to itself, hence we don't need to do it here:
                 return Method(self, (Proc)(object)proc ,arg0, arg1, arg2, arg3, arg4);
             } else {

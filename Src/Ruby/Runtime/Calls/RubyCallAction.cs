@@ -108,9 +108,12 @@ namespace IronRuby.Runtime.Calls {
         #region Precompiled Rules
 
         protected override object BindPrecompiled(Type/*!*/ delegateType, object[]/*!*/ args) {
-            if (Context == null || 
+            // IsVariableCall only decides which error a call that finds no method raises; a dispatcher
+            // is only made for a method that was found, and hands every other case back to the
+            // binder. Leaving it out of the mask sent every bare `foo` to a rule of its own.
+            if (Context == null ||
                 Signature.ResolveOnly ||
-                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock)) != 0) {
+                (Signature.Flags & ~(RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasScope | RubyCallFlags.HasBlock | RubyCallFlags.HasRhsArgument | RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall)) != 0) {
                 return null;
             }
 
