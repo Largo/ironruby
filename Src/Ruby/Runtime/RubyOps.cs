@@ -1698,6 +1698,66 @@ namespace IronRuby.Runtime {
             return hash != null && hash.IsKeywordArguments;
         }
 
+        // The keyword-parameter prologue (see PrismAstBridge.BindKeywordsFrom) reads the hash a
+        // keyword call passed with the helpers below rather than with Ruby-level Hash calls. MRI
+        // binds keywords without dispatching to Hash methods either, so a redefined Hash#[] or
+        // Hash#key? has no say in it. The hash is the one the call site built (or a copy of a
+        // splatted one), so it is a plain Hash with the default comparer.
+
+        /// <summary>
+        /// True when <paramref name="keywords"/> holds every required keyword - the first
+        /// <paramref name="requiredCount"/> of <paramref name="names"/> - and, unless the method
+        /// takes **rest, no keyword it does not declare. False means the prologue has an
+        /// ArgumentError to word, which it does the slow way.
+        /// </summary>
+        [Emitted]
+        public static bool KeywordArgumentsMatch(object keywords, RubySymbol/*!*/[]/*!*/ names, int requiredCount, bool acceptsRest) {
+            var hash = keywords as Hash;
+            if (hash == null) {
+                return false;
+            }
+
+            int count = hash.Count;
+            if (count == 0) {
+                return requiredCount == 0;
+            }
+
+            int found = 0;
+            for (int i = 0; i < names.Length; i++) {
+                if (hash.ContainsKey(names[i])) {
+                    found++;
+                } else if (i < requiredCount) {
+                    return false;
+                }
+            }
+            return acceptsRest || found == count;
+        }
+
+        /// <summary>
+        /// The value the call passed for keyword <paramref name="name"/>, or
+        /// <see cref="DefaultArgument"/> if it passed none.
+        /// </summary>
+        [Emitted]
+        public static object GetKeywordArgument(object keywords, RubySymbol/*!*/ name) {
+            var hash = keywords as Hash;
+            object value;
+            return (hash != null && hash.TryGetValue(name, out value)) ? value : DefaultArgument;
+        }
+
+        /// <summary>
+        /// The **rest parameter: a new hash with whatever the call passed beyond the declared
+        /// <paramref name="names"/>. It is a copy, so the method may change it freely.
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordRest(object keywords, RubySymbol/*!*/[]/*!*/ names) {
+            var hash = (Hash)keywords;
+            var result = new Hash(hash);
+            for (int i = 0; i < names.Length && result.Count > 0; i++) {
+                result.Remove(names[i]);
+            }
+            return result;
+        }
+
         /// <summary>
         /// The argument a parameter of a method that declares no keyword parameters is about to
         /// be given. `f(a: 1)` there is a call that passes a positional Hash - Ruby 3 has no
