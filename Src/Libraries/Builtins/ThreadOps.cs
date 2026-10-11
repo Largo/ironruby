@@ -39,7 +39,7 @@ namespace IronRuby.Builtins {
     /// and this will not be an issue then.
     /// </summary>
     [RubyClass("Thread", Extends = typeof(Thread), Inherits = typeof(object), BuildConfig = "FEATURE_THREAD")]
-    public static class ThreadOps {
+    public static partial class ThreadOps {
         static bool _globalAbortOnException;
         static bool _globalReportOnException = true;
 

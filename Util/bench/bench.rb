@@ -324,6 +324,29 @@ bench("fiber_switch") do
   while i < m; f.resume; i += 1; end
 end
 
+# Enumerator#next over an Array, over a generator block, and Fiber creation.
+bench("enum_next_array") do
+  a = Array.new(1_000) { |k| k }
+  e = a.each
+  i = 0; m = n(100_000)
+  while i < m
+    e.next
+    i += 1
+    e.rewind if i % 1_000 == 0
+  end
+end
+
+bench("enum_next_gen") do
+  e = Enumerator.new { |y| k = 0; loop { y << k; k += 1 } }
+  i = 0; m = n(50_000)
+  while i < m; e.next; i += 1; end
+end
+
+bench("fiber_new") do
+  i = 0; m = n(5_000)
+  while i < m; Fiber.new { i }.resume; i += 1; end
+end
+
 bench("proc_new_call") do
   i = 0; m = n(500_000)
   while i < m; (proc { |x| x }).call(i); i += 1; end
