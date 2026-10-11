@@ -258,6 +258,11 @@ namespace IronRuby.Runtime {
         private readonly Dictionary<object, RubyInstanceData>/*!*/ _valueTypeInstanceData;
         private object/*!*/ ValueTypeInstanceDataLock { get { return _valueTypeInstanceData; } }
 
+        // The number of entries in _valueTypeInstanceData, published after each add. Entries are
+        // never removed, so zero means there is nothing to find: then a lookup - every
+        // `1.is_a?(Hash)` asks for the immediate class of an Integer - takes no lock.
+        private int _valueTypeInstanceDataCount;
+
         // not thread-safe: 
         private readonly RubyInstanceData/*!*/ _nilInstanceData = new RubyInstanceData(RubyUtils.NilObjectId);
 
@@ -2110,6 +2115,9 @@ namespace IronRuby.Runtime {
 
             RubyInstanceData result;
             if (!RubyUtils.HasObjectState(obj) && !(obj is BigInteger)) {
+                if (Volatile.Read(ref _valueTypeInstanceDataCount) == 0) {
+                    return null;
+                }
                 lock (ValueTypeInstanceDataLock) {
                     _valueTypeInstanceData.TryGetValue(obj, out result);
                 }
@@ -2176,6 +2184,7 @@ namespace IronRuby.Runtime {
                 lock (ValueTypeInstanceDataLock) {
                     if (!_valueTypeInstanceData.TryGetValue(obj, out result)) {
                         _valueTypeInstanceData.Add(obj, result = new RubyInstanceData());
+                        Volatile.Write(ref _valueTypeInstanceDataCount, _valueTypeInstanceData.Count);
                     }
                 }
                 return result;

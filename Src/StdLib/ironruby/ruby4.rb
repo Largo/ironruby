@@ -13027,9 +13027,10 @@ class << Struct
 end
 
 class Struct
-  alias_method :__struct_initialize__, :initialize
-
-  def initialize(*args)
+  # Struct#initialize is RubyStructOps.Initialize: it stores one positional value per member
+  # itself and hands every other call here, the arguments in one array. __struct_initialize__
+  # is the plain store.
+  def __struct_initialize_slow__(args)
     # self.class.members, not members: a struct may have a member called "members"
     klass = self.class
     names = klass.members
@@ -13070,7 +13071,7 @@ class Struct
       __struct_initialize__(*values)
     end
   end
-  private :initialize
+  private :__struct_initialize_slow__
 end
 
 # --------------------------------------------------------------------------
