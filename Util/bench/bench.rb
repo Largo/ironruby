@@ -424,6 +424,23 @@ bench("select_loop") do
   r.times { a.select { |x| x > 500 } }
 end
 
+bench("any_loop") do
+  a = (0...1000).to_a; r = n(2_000)
+  r.times { a.any? { |x| x > 5000 } }
+end
+
+class CallTarget
+  def yield_upto(k)
+    i = 0
+    while i < k; yield i; i += 1; end
+  end
+end
+
+bench("yield_loop") do
+  o = CallTarget.new; s = 0; r = n(2_000)
+  r.times { o.yield_upto(1000) { |x| s += x } }
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"

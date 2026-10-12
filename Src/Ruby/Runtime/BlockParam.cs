@@ -326,6 +326,21 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>
+        /// A yield site that runs again in the same frame - a loop around `yield` - yields to the same
+        /// proc every time, and its BlockParam is only looked at right after each yield returns
+        /// (MethodYield/BlockYield), so the site hands the previous one back with its flow-control
+        /// state cleared instead of allocating another.
+        /// </summary>
+        [Emitted]
+        public static BlockParam/*!*/ ReuseBfcForYield(BlockParam previous, Proc proc) {
+            if (previous != null && previous.Proc == proc) {
+                previous.SetFlowControl(BlockReturnReason.Undefined, null, ProcKind.Block);
+                return previous;
+            }
+            return CreateBfcForYield(proc);
+        }
+
         [Emitted]
         public static BlockParam/*!*/ CreateBfcForProcCall(Proc/*!*/ proc) {
             Assert.NotNull(proc);

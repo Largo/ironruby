@@ -59,7 +59,7 @@ namespace IronRuby.Compiler.Ast {
             return new AstBlock {
                 gen.DebugMarker("#RB: yield begin"),
 
-                Ast.Assign(bfcVariable, Methods.CreateBfcForYield.OpCall(gen.MakeMethodBlockParameterRead())),
+                Ast.Assign(bfcVariable, Methods.ReuseBfcForYield.OpCall(bfcVariable, gen.MakeMethodBlockParameterRead())),
 
                 Ast.Assign(
                     resultVariable, 
