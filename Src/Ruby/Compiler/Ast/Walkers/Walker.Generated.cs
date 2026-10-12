@@ -45,6 +45,8 @@ namespace IronRuby.Compiler.Ast {
         public virtual void Exit(KeywordParameterRead/*!*/ node) { }
         public virtual bool Enter(SplatParameterRead/*!*/ node) { return true; }
         public virtual void Exit(SplatParameterRead/*!*/ node) { }
+        public virtual bool Enter(KeywordSplatMerge/*!*/ node) { return true; }
+        public virtual void Exit(KeywordSplatMerge/*!*/ node) { }
 
         // declarations:
         public virtual bool Enter(ClassDefinition/*!*/ node) { return true; }

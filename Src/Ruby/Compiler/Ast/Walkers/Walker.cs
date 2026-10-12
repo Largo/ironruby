@@ -77,6 +77,15 @@ namespace IronRuby.Compiler.Ast {
             Exit(node);
         }
 
+        internal protected virtual void Walk(KeywordSplatMerge/*!*/ node) {
+            if (Enter(node)) {
+                node.Hash.Walk(this);
+                node.Splatted.Walk(this);
+                node.Converted.Walk(this);
+            }
+            Exit(node);
+        }
+
         internal protected virtual void Walk(SplatParameterRead/*!*/ node) {
             if (Enter(node)) {
                 node.Arguments.Walk(this);
