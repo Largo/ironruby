@@ -217,9 +217,14 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            return MethodDispatcher.CreateRubyObjectDispatcher(
-                delegateType, GetDelegate(), Parameters.Mandatory.Length, signature.HasScope, signature.HasBlock, version
+            var method = GetDelegate();
+            var dispatcher = MethodDispatcher.CreateRubyObjectDispatcher(
+                delegateType, method, Parameters.Mandatory.Length, signature.HasScope, signature.HasBlock, version
             );
+            if (dispatcher != null && !_isModuleFunctionCopy) {
+                _body.RegisterDispatcher(dispatcher, method);
+            }
+            return dispatcher;
         }
 
         internal override void BuildCallNoFlow(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, string/*!*/ name) {

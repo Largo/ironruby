@@ -118,6 +118,13 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal abstract void Initialize(Delegate/*!*/ method, int version);
+
+        /// <summary>
+        /// Points the dispatcher at the compiled form of the body it was made for (see
+        /// RubyMethodBody.RegisterDispatcher). Either delegate runs the same body, so a call racing
+        /// with this may use either one.
+        /// </summary>
+        internal abstract void SetMethod(Delegate/*!*/ method);
     }
 
     public abstract class MethodDispatcher<TRubyFunc> : MethodDispatcher {
@@ -127,6 +134,12 @@ namespace IronRuby.Runtime.Calls {
             Assert.NotNull(method);
             Method = (TRubyFunc)(object)method;
             Version = version;
+        }
+
+        internal override void SetMethod(Delegate/*!*/ method) {
+            if (method is TRubyFunc typed) {
+                Method = typed;
+            }
         }
     }
 
