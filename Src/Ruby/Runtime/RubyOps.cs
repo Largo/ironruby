@@ -1615,6 +1615,15 @@ namespace IronRuby.Runtime {
         /// is only emitted for argument hashes that actually contain a `**` splat.
         /// The result is fed to the ordinary splatting machinery, so it is either [] or [hash].
         /// </summary>
+        /// <summary>
+        /// `f(**h)` with h a Hash or nil: what <see cref="SplatKeywordHash"/> makes of it. Null for
+        /// anything else, which the call site first converts with #to_hash (by way of Hash#merge).
+        /// </summary>
+        [Emitted]
+        public static RubyArray SplatKeywordHashIfHash(RubyScope/*!*/ scope, object hash) {
+            return (hash == null || hash is Hash) ? SplatKeywordHash(scope, hash) : null;
+        }
+
         [Emitted]
         public static RubyArray/*!*/ SplatKeywordHash(RubyScope/*!*/ scope, object hash) {
             // `f(**nil)` passes no keywords at all
@@ -1819,9 +1828,7 @@ namespace IronRuby.Runtime {
             var list = (RubyArray)args;
             int last = list.Count - 1;
             if (last >= 0 && IsKeywordArgumentsHash(list[last])) {
-                var result = (Hash)list[last];
-                list.RemoveAt(last);
-                return result;
+                return (Hash)list.TakeLast();
             }
             return MakeHash0(scope);
         }
@@ -1859,13 +1866,7 @@ namespace IronRuby.Runtime {
         /// <summary>The next positional argument; nil if there is none left (a block's).</summary>
         [Emitted]
         public static object ShiftSplatArgument(object args) {
-            var list = (RubyArray)args;
-            if (list.Count == 0) {
-                return null;
-            }
-            object result = list[0];
-            list.RemoveAt(0);
-            return result;
+            return ((RubyArray)args).TakeFirst();
         }
 
         /// <summary>
@@ -1875,12 +1876,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object ShiftOptionalSplatArgument(object args, int postCount) {
             var list = (RubyArray)args;
-            if (list.Count <= postCount) {
-                return DefaultArgument;
-            }
-            object result = list[0];
-            list.RemoveAt(0);
-            return result;
+            return (list.Count <= postCount) ? DefaultArgument : list.TakeFirst();
         }
 
         /// <summary>
@@ -1890,12 +1886,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static RubyArray/*!*/ ShiftRestSplatArguments(object args, int postCount) {
             var list = (RubyArray)args;
-            int count = Math.Max(0, list.Count - postCount);
-            var result = new RubyArray(list, 0, count);
-            if (count > 0) {
-                list.RemoveRange(0, count);
-            }
-            return result;
+            return list.TakeFirst(Math.Max(0, list.Count - postCount));
         }
 
         /// <summary>
@@ -1904,12 +1895,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static Hash/*!*/ MakeKeywordRest(object keywords, RubySymbol/*!*/[]/*!*/ names) {
-            var hash = (Hash)keywords;
-            var result = new Hash(hash);
-            for (int i = 0; i < names.Length && result.Count > 0; i++) {
-                result.Remove(names[i]);
-            }
-            return result;
+            return ((Hash)keywords).CopyWithoutKeywords(names);
         }
 
         /// <summary>

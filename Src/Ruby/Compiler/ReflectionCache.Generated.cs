@@ -592,6 +592,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _SplatAppend;
         public static MethodInfo/*!*/ SplatKeywordHash { get { return _SplatKeywordHash ?? (_SplatKeywordHash = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyArray>(RubyOps.SplatKeywordHash)); } }
         private static MethodInfo _SplatKeywordHash;
+        public static MethodInfo/*!*/ SplatKeywordHashIfHash { get { return _SplatKeywordHashIfHash ?? (_SplatKeywordHashIfHash = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, IronRuby.Builtins.RubyArray>(RubyOps.SplatKeywordHashIfHash)); } }
+        private static MethodInfo _SplatKeywordHashIfHash;
         public static MethodInfo/*!*/ SplatPair { get { return _SplatPair ?? (_SplatPair = CallInstruction.CacheFunc<System.Object, System.Collections.IList, System.Object>(RubyOps.SplatPair)); } }
         private static MethodInfo _SplatPair;
         public static MethodInfo/*!*/ SplatRuby2Keywords { get { return _SplatRuby2Keywords ?? (_SplatRuby2Keywords = CallInstruction.CacheFunc<System.Collections.IList, System.Collections.IList>(RubyOps.SplatRuby2Keywords)); } }

@@ -1519,6 +1519,15 @@ namespace IronRuby.Prism {
                     if (block == null && fwdBlock != null) {
                         block = new BlockReference(fwdBlock, Span(arg));
                     }
+                } else if (arg is Pm.KeywordHashNode single && single.Elements.Length == 1 &&
+                    single.Elements[0] is Pm.AssocSplatNode singleSplat) {
+                    // `f(**opts)`: a Hash (or nil) is splatted as it is; only anything else goes
+                    // through the `{}.merge(opts)` HashExpression would build, for #to_hash
+                    var span = Span(arg);
+                    var temp = NewTemp(singleSplat.Value != null ? Expr(singleSplat.Value) : AnonymousParameter(AnonymousKeywordRestName, singleSplat),
+                        span, out var assignment);
+                    exprs.Add(new KeywordArgumentSplat(assignment, new MethodCall(new HashConstructor(new Maplet[0], true, span), "merge",
+                        new Arguments(new OrExpression(temp, new HashConstructor(new Maplet[0], span), span)), span)));
                 } else if (IsSplattedKeywordHash(arg)) {
                     // `f(**opts)` must pass nothing when opts is empty - see KeywordArgumentSplat.
                     exprs[i] = new KeywordArgumentSplat(Argument(arg));
@@ -2269,9 +2278,14 @@ namespace IronRuby.Prism {
             // Everything below consumes ?args? destructively, so a parameterless `super`
             // inside the body would find nothing left to forward. Keep the list as it
             // arrived - trailing keyword hash included - and let SuperCall splat that.
-            var superArgs = CurrentScope.AddVariable("?superargs?", span);
-            statements.Add(new SimpleAssignmentExpression(superArgs,
-                SplatParameterRead.Copy(args, span), null, span));
+            // Only a method needs it: a `super` in a block forwards the arguments of the
+            // method the block is in (SuperCall reads gen.CurrentMethod.Parameters).
+            LocalVariable superArgs = null;
+            if (isMethod) {
+                superArgs = CurrentScope.AddVariable("?superargs?", span);
+                statements.Add(new SimpleAssignmentExpression(superArgs,
+                    SplatParameterRead.Copy(args, span), null, span));
+            }
 
             // A trailing Hash is how a keyword call arrives here, since keywords have no
             // calling-convention slot of their own. But when a block auto-splats a single
