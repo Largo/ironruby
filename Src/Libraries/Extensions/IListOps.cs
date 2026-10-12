@@ -1127,6 +1127,18 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each")]
         public static object Each([NotNull]BlockParam/*!*/ block, IList/*!*/ self) {
+            var array = self as RubyArray;
+            if (array != null) {
+                // the same loop, without an interface call for Count and the element every time round
+                for (int i = 0; i < array.Count; i++) {
+                    object result;
+                    if (block.Yield(array[i], out result)) {
+                        return result;
+                    }
+                }
+                return self;
+            }
+
             for (int i = 0; i < self.Count; i++) {
                 object result;
                 if (block.Yield(self[i], out result)) {
@@ -1135,6 +1147,60 @@ namespace IronRuby.Builtins {
             }
             return self;
         }
+
+        #region map, collect, select
+
+        // Array's own, as in MRI (rb_ary_collect, rb_ary_select): they walk the array rather than
+        // run Enumerable's versions, which call #each with a block of their own that yields to the
+        // given block - two block invocations and a packed argument array per element. Like MRI's,
+        // they do not call an #each that a subclass defines.
+
+        [RubyMethod("collect")]
+        [RubyMethod("map")]
+        public static Enumerator/*!*/ GetMapEnumerator(IList/*!*/ self) {
+            return new Enumerator(self, "map");
+        }
+
+        [RubyMethod("collect")]
+        [RubyMethod("map")]
+        public static object Map([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
+            var result = new RubyArray(self.Count);
+            var array = self as RubyArray;
+            for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
+                object blockResult;
+                if (collector.Yield(array != null ? array[i] : self[i], out blockResult)) {
+                    return blockResult;
+                }
+                result.Add(blockResult);
+            }
+            return result;
+        }
+
+        [RubyMethod("filter")]
+        [RubyMethod("select")]
+        public static Enumerator/*!*/ GetSelectEnumerator(IList/*!*/ self) {
+            return new Enumerator(self, "select");
+        }
+
+        [RubyMethod("filter")]
+        [RubyMethod("select")]
+        public static object Select([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
+            var result = new RubyArray();
+            var array = self as RubyArray;
+            for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
+                object blockResult;
+                if (predicate.Yield(array != null ? array[i] : self[i], out blockResult)) {
+                    return blockResult;
+                }
+                if (Protocols.IsTrue(blockResult)) {
+                    // MRI adds the element as it is once the block has run (rb_ary_elt)
+                    result.Add(i < self.Count ? self[i] : null);
+                }
+            }
+            return result;
+        }
+
+        #endregion
 
         [RubyMethod("each_index")]
         public static Enumerator/*!*/ EachIndex(IList/*!*/ self) {

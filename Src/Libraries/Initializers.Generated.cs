@@ -9093,6 +9093,12 @@ namespace IronRuby.Builtins {
                 new Func<System.Collections.IList, System.Collections.IList>(IronRuby.Builtins.IListOps.Clear)
             );
             
+            DefineLibraryMethod(module, "collect", 0x51, 
+                0x00000000U, 0x00000001U, 
+                new Func<System.Collections.IList, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.IListOps.GetMapEnumerator), 
+                new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Map)
+            );
+            
             DefineLibraryMethod(module, "collect!", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.CollectInPlace)
@@ -9186,6 +9192,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.ConversionStorage<System.Int32>, IronRuby.Runtime.BlockParam, System.Collections.IList, IronRuby.Builtins.Range, System.Object>(IronRuby.Builtins.IListOps.Fill)
             );
             
+            DefineLibraryMethod(module, "filter", 0x51, 
+                0x00000000U, 0x00000001U, 
+                new Func<System.Collections.IList, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.IListOps.GetSelectEnumerator), 
+                new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Select)
+            );
+            
             DefineLibraryMethod(module, "find_index", 0x51, 
                 0x00000000U, 0x00000001U, 0x00000000U, 
                 new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.IListOps.GetFindIndexEnumerator), 
@@ -9267,6 +9279,12 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "length", 0x51, 
                 0x00000000U, 
                 new Func<System.Collections.IList, System.Int32>(IronRuby.Builtins.IListOps.Length)
+            );
+            
+            DefineLibraryMethod(module, "map", 0x51, 
+                0x00000000U, 0x00000001U, 
+                new Func<System.Collections.IList, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.IListOps.GetMapEnumerator), 
+                new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Map)
             );
             
             DefineLibraryMethod(module, "map!", 0x51, 
@@ -9353,6 +9371,12 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.IListOps.GetReverseIndexEnumerator), 
                 new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.ReverseIndex), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object, System.Object>(IronRuby.Builtins.IListOps.ReverseIndex)
+            );
+            
+            DefineLibraryMethod(module, "select", 0x51, 
+                0x00000000U, 0x00000001U, 
+                new Func<System.Collections.IList, IronRuby.Builtins.Enumerator>(IronRuby.Builtins.IListOps.GetSelectEnumerator), 
+                new Func<IronRuby.Runtime.BlockParam, System.Collections.IList, System.Object>(IronRuby.Builtins.IListOps.Select)
             );
             
             DefineLibraryMethod(module, "shift", 0x51, 
