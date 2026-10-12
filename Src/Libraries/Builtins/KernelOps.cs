@@ -743,7 +743,10 @@ namespace IronRuby.Builtins {
                 return RubyExceptionData.InitializeException(new RuntimeError(message.ToClrString()), message);
             }
 
-            if (!Protocols.RespondTo(respondToStorage, obj, "exception")) {
+            // the symbol comes from the context's identifier cache: interning it anew was most of
+            // what this check cost
+            var respondTo = respondToStorage.GetCallSite();
+            if (!RubyOps.IsTrue(respondTo.Target(respondTo, obj, respondToStorage.Context.StringifyIdentifier("exception")))) {
                 throw RubyExceptions.CreateTypeError("exception class/object expected");
             }
 
