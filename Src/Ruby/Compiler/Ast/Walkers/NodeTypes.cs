@@ -31,6 +31,7 @@ namespace IronRuby.Compiler.Ast {
         SplattedArgument,
         KeywordArgumentsTest,
         KeywordParameterRead,
+        SplatParameterRead,
 
         // definitions:
         ClassDefinition,
@@ -121,6 +122,7 @@ namespace IronRuby.Compiler.Ast {
     public partial class SplattedArgument { public override NodeTypes NodeType { get { return NodeTypes.SplattedArgument; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class KeywordArgumentsTest { public override NodeTypes NodeType { get { return NodeTypes.KeywordArgumentsTest; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class KeywordParameterRead { public override NodeTypes NodeType { get { return NodeTypes.KeywordParameterRead; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
+    public partial class SplatParameterRead { public override NodeTypes NodeType { get { return NodeTypes.SplatParameterRead; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
 
     public partial class ClassDefinition { public override NodeTypes NodeType { get { return NodeTypes.ClassDefinition; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
     public partial class ModuleDefinition { public override NodeTypes NodeType { get { return NodeTypes.ModuleDefinition; } } internal protected override void Walk(Walker/*!*/ walker) { walker.Walk(this); } }
