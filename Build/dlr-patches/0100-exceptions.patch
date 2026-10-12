@@ -1,3 +1,35 @@
+diff --git a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+index 1a32e58..0a97958 100644
+--- a/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
++++ b/src/core/Microsoft.Dynamic/Interpreter/InterpretedFrame.cs
+@@ -146,10 +146,26 @@ namespace Microsoft.Scripting.Interpreter {
+ 
+         internal void SaveTraceToException(Exception exception) {
+             if (exception.GetData(typeof(InterpretedFrameInfo)) is null) {
+-                exception.SetData(typeof(InterpretedFrameInfo), GetStackTraceDebugInfo().ToArray());
++                exception.SetData(typeof(InterpretedFrameInfo), GetStackTraceDebugInfoArray());
+             }
+         }
+ 
++        // GetStackTraceDebugInfo().ToArray() without the iterator and the list it grows: every
++        // exception that passes an interpreted frame takes this snapshot of the whole chain.
++        private InterpretedFrameInfo[] GetStackTraceDebugInfoArray() {
++            int count = 0;
++            for (var frame = this; frame is not null; frame = frame.Parent) {
++                count++;
++            }
++
++            var result = new InterpretedFrameInfo[count];
++            int i = 0;
++            for (var frame = this; frame is not null; frame = frame.Parent) {
++                result[i++] = new InterpretedFrameInfo(frame.Name, frame.GetDebugInfo(frame.InstructionIndex));
++            }
++            return result;
++        }
++
+         public static InterpretedFrameInfo[] GetExceptionStackTrace(Exception exception) {
+             return exception.GetData(typeof(InterpretedFrameInfo)) as InterpretedFrameInfo[];
+         }
 diff --git a/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs b/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
 index 7176c59..047827a 100644
 --- a/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
