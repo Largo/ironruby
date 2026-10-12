@@ -1503,6 +1503,21 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Enumerator, System.Object>(IronRuby.Builtins.Enumerator.GetTarget)
             );
             
+            DefineLibraryMethod(module, "__ir_array_cursor__", 0x52, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Enumerator, IronRuby.Builtins.Enumerator.ArrayCursor>(IronRuby.Builtins.Enumerator.GetArrayCursor)
+            );
+            
+            DefineLibraryMethod(module, "__ir_array_cursor_next__", 0x52, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.Enumerator, IronRuby.Builtins.Enumerator.ArrayCursor, System.Object>(IronRuby.Builtins.Enumerator.ArrayCursorNext)
+            );
+            
+            DefineLibraryMethod(module, "__ir_array_cursor_source__", 0x52, 
+                0x00000002U, 
+                new Func<IronRuby.Builtins.Enumerator, IronRuby.Builtins.Enumerator.ArrayCursor, IronRuby.Builtins.RubyArray>(IronRuby.Builtins.Enumerator.ArrayCursorSource)
+            );
+            
             DefineLibraryMethod(module, "each", 0x51, 
                 0x80000000U, 
                 new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, IronRuby.Builtins.Proc, System.Collections.IList, System.Object>>, IronRuby.Runtime.RubyScope, IronRuby.Runtime.BlockParam, IronRuby.Builtins.Enumerator, System.Object[], System.Object>(IronRuby.Builtins.Enumerator.EachFromCaller)
@@ -10010,6 +10025,31 @@ namespace IronRuby.Builtins {
             DefineLibraryMethod(module, "__backtrace_limit__", 0x62, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, System.Object, System.Int32>(IronRuby.Builtins.ThreadOps.GetBacktraceLimit)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_current__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.GetCurrentFiber)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_current_set__", 0x61, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, System.Object, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.SetCurrentFiber)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_mailbox__", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberMailbox>(IronRuby.Builtins.ThreadOps.CreateFiberMailbox)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_post__", 0x61, 
+                0x00000002U, 
+                new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberMailbox, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.FiberPost)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_take__", 0x61, 
+                0x00000006U, 
+                new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberMailbox, System.Threading.Thread, System.Object>(IronRuby.Builtins.ThreadOps.FiberTake)
             );
             
             DefineLibraryMethod(module, "__set_fiber_owner__", 0x61, 

@@ -2397,9 +2397,10 @@ end
 # .NET has no coroutines, so every Fiber is backed by a dedicated thread plus a
 # one-slot mailbox. Thread.new marks CLR threads IsBackground, so an abandoned
 # fiber can never keep the process alive. Exactly one fiber of a group ever
-# runs: switching means "post to the target's mailbox, then block on my own",
-# which is the SemaphoreSlim handshake spelled with Queue (Queue is a
-# Monitor-based blocking queue here, so the wait is a real kernel wait).
+# runs: switching means "post to the target's mailbox, then block on my own".
+# The mailbox is a C# FiberMailbox (Src/Libraries/Builtins/ThreadOps.Fiber.cs),
+# which spins for a few microseconds before it falls back to a Monitor wait, so
+# a quick resume / Fiber.yield round trip does not cost two kernel wake-ups.
 #
 # resume / Fiber.yield / transfer / kill / raise / storage / scheduler follow
 # MRI, including the rule that a fiber which was entered by #transfer returns,
@@ -2430,9 +2431,10 @@ unless defined?(Fiber)
       ::Kernel.raise(cls, msg)
     end
 
+    # A C# FiberMailbox (Src/Libraries/Builtins/ThreadOps.Fiber.cs): a one-slot handoff
+    # whose take spins briefly before it blocks.
     def self.__mailbox__
-      require 'thread' unless defined?(::Queue)
-      ::Queue.new
+      ::Thread.__fiber_mailbox__
     end
 
     # Storage keys are Symbols; anything with #to_str (but not #to_sym) is
@@ -2473,23 +2475,28 @@ unless defined?(Fiber)
 
     # ---- the root fiber of a thread --------------------------------------
 
+    # Thread.__fiber_current__ is a thread-static copy of Thread.current[:__ir_fiber_current__]
+    # (a fiber never leaves its CLR thread); __fiber_current_set__ writes both.
     def self.current
-      Thread.current[:__ir_fiber_current__] || __root__
+      ::Thread.__fiber_current__ || __root__
     end
 
     def self.__root__
       t = Thread.current
-      f = t[:__ir_fiber_root__]
+      f = t[:__ir_fiber_current__]
       unless f
-        f = allocate
-        f.__init_root__
-        # A thread's root fiber starts with the storage of the fiber that created the
-        # thread; Thread.new leaves that fiber here for us.
-        parent = t[:__ir_fiber_parent__]
-        f.__inherit_storage__(parent) if parent
-        t[:__ir_fiber_root__] = f
-        t[:__ir_fiber_current__] = f
+        f = t[:__ir_fiber_root__]
+        unless f
+          f = allocate
+          f.__init_root__
+          # A thread's root fiber starts with the storage of the fiber that created the
+          # thread; Thread.new leaves that fiber here for us.
+          parent = t[:__ir_fiber_parent__]
+          f.__inherit_storage__(parent) if parent
+          t[:__ir_fiber_root__] = f
+        end
       end
+      ::Thread.__fiber_current_set__(f)
       f
     end
 
@@ -2552,7 +2559,7 @@ unless defined?(Fiber)
     def __set_status__(s); @status = s; end
     def __set_blocking__(b); @blocking = b; end
     def __set_transferred__; @transferred = true; end
-    def __post__(msg); @mailbox.push(msg); end
+    def __post__(msg); ::Thread.__fiber_post__(@mailbox, msg); end
     def __scheduler_get__; @scheduler; end
     def __scheduler_set__(s); @scheduler = s; end
 
@@ -2759,7 +2766,7 @@ unless defined?(Fiber)
       fiber = self
       owner = @root_fiber.__thread__
       @thread = Thread.new do
-        Thread.current[:__ir_fiber_current__] = fiber
+        ::Thread.__fiber_current_set__(fiber)
         # Ruby ownership (Mutex, deadlock detection) is per thread, not per fiber
         Thread.__set_fiber_owner__(owner) if owner
         fiber.__run__
@@ -2767,9 +2774,10 @@ unless defined?(Fiber)
       self
     end
 
+    # Takes the next message and makes this CLR thread the one that runs on behalf of the
+    # group's owner (Thread.__set_fiber_owner__).
     def __await__
-      msg = @mailbox.pop
-      Thread.__set_fiber_owner__(@root_fiber.__thread__)
+      msg = ::Thread.__fiber_take__(@mailbox, @root_fiber.__thread__)
       @status = :resumed
       msg
     end
@@ -6683,6 +6691,14 @@ class Enumerator
   def __iter_advance__
     return if @__peeked__
     __iter_stop__ if @__iter_done__
+    # The built-in Array#each over an Array needs no fiber: a cursor walks it by
+    # index the way #each would (Enumerator#__ir_array_cursor__ says when).
+    cursor = @__iter_cursor__
+    if cursor.nil? && @__fiber__.nil?
+      cursor = @__iter_cursor__ = __ir_array_cursor__
+      @__iter_started__ = false
+    end
+    return __iter_cursor_advance__(cursor) if cursor
     fiber = __iter_fiber__
     fed = nil
     # A fed value is what the suspended yield returns, so it waits while the
@@ -6711,6 +6727,27 @@ class Enumerator
     end
   end
   private :__iter_advance__
+
+  def __iter_cursor_advance__(cursor)
+    values = __ir_array_cursor_next__(cursor)
+    # false: the iteration belongs to another thread, as a fiber would
+    ::Kernel.raise(::FiberError, "fiber called across threads") if values.equal?(false)
+    if @__iter_started__
+      @__feed__ = nil
+      @__has_feed__ = false
+    end
+    @__iter_started__ = true
+    if values
+      @__peek__ = values
+      @__peeked__ = true
+    else
+      @__iter_done__ = true
+      @__iter_result__ = __ir_array_cursor_source__(cursor)
+      @__iter_cursor__ = nil
+      __iter_stop__
+    end
+  end
+  private :__iter_cursor_advance__
 
   def next_values
     __iter_advance__
@@ -6746,6 +6783,7 @@ class Enumerator
   def rewind
     fiber = @__fiber__
     @__fiber__ = nil
+    @__iter_cursor__ = nil
     @__iter_done__ = false
     @__iter_result__ = nil
     @__peeked__ = false
