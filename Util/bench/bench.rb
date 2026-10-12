@@ -391,6 +391,16 @@ bench("string_build") do
   end
 end
 
+bench("map_loop") do
+  a = (0...1000).to_a; r = n(2_000)
+  r.times { a.map { |x| x + 1 } }
+end
+
+bench("select_loop") do
+  a = (0...1000).to_a; r = n(2_000)
+  r.times { a.select { |x| x > 500 } }
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"
