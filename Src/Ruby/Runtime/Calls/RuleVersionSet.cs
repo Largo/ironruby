@@ -41,6 +41,12 @@ namespace IronRuby.Runtime.Calls {
         private int[] _slots;
         private int _count;
 
+        /// <summary>
+        /// The version added last. A rule that runs hot mostly runs for the class (state) it was last bound for,
+        /// so its test compares with this field before it looks in the set.
+        /// </summary>
+        public int LastVersion;
+
         // stop growing: further classes get rules of their own
         private const int MaxCount = 4096;
 
@@ -74,7 +80,7 @@ namespace IronRuby.Runtime.Calls {
         }
 
         /// <summary>
-        /// Adds a version the rule has been verified to hold for. Returns false if the set is full.
+        /// Adds a version the rule has been verified to hold for. Returns false if the set already holds it or is full.
         /// </summary>
         internal bool TryAdd(int version) {
             if (version == 0) {
@@ -83,7 +89,7 @@ namespace IronRuby.Runtime.Calls {
 
             lock (this) {
                 if (Contains(version)) {
-                    return true;
+                    return false;
                 }
 
                 if (_count >= MaxCount) {
@@ -104,6 +110,7 @@ namespace IronRuby.Runtime.Calls {
                     Insert(slots, version);
                 }
                 _count++;
+                LastVersion = version;
                 return true;
             }
         }
@@ -123,12 +130,19 @@ namespace IronRuby.Runtime.Calls {
 
         private static MethodInfo _IsValidMethod;
 
+        private static FieldInfo _LastVersionField;
+
         /// <summary>
-        /// (#{versionExpression}) in #{set}
+        /// #{versionExpression} == #{set}.LastVersion || (#{versionExpression}) in #{set}
         /// </summary>
         internal Expression/*!*/ MakeTest(Expression/*!*/ versionExpression) {
             var method = _IsValidMethod ?? (_IsValidMethod = CallInstruction.CacheFunc<RuleVersionSet, int, bool>(IsValid));
-            return Expression.Call(method, AstUtils.Constant(this), versionExpression);
+            var lastVersion = _LastVersionField ?? (_LastVersionField = typeof(RuleVersionSet).GetField("LastVersion"));
+            var set = AstUtils.Constant(this);
+            return Expression.OrElse(
+                Expression.Equal(versionExpression, Expression.Field(set, lastVersion)),
+                Expression.Call(method, set, versionExpression)
+            );
         }
     }
 }

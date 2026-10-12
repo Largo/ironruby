@@ -310,7 +310,7 @@ namespace IronRuby.Runtime.Calls {
             // singleton nil:
             if (target == null) {
                 AddRestriction(Ast.Equal(targetParameter, AstUtils.Constant(null)));
-                AddVersionTest(context.NilClass);
+                AddVersionTest(context.NilClass, versionSet);
                 return;
             }
 
@@ -348,7 +348,7 @@ namespace IronRuby.Runtime.Calls {
 
                 // no: there is no singleton subclass of target class that defines any method being called:
                 AddTypeRestriction(target.GetType(), targetParameter);
-                AddVersionTest(targetClass);
+                AddVersionTest(targetClass, versionSet);
 
             } else if (targetClass.IsSingletonClass) {
 
@@ -390,6 +390,15 @@ namespace IronRuby.Runtime.Calls {
 
             // check for module version (do not burn a module reference to the rule):
             AddCondition(Ast.Equal(Ast.Field(AstUtils.Constant(cls.Version), Fields.VersionHandle_Method), AstUtils.Constant(cls.Version.Method)));
+        }
+
+        private void AddVersionTest(RubyClass/*!*/ cls, RuleVersionSet versionSet) {
+            if (versionSet != null && versionSet.TryAdd(cls.Version.Method)) {
+                // #{cls.Version}.Method in #{versionSet}
+                AddCondition(versionSet.MakeTest(Ast.Field(AstUtils.Constant(cls.Version), Fields.VersionHandle_Method)));
+            } else {
+                AddVersionTest(cls);
+            }
         }
 
         internal void AddSplattedArgumentTest(IList/*!*/ value, Expression/*!*/ expression, out int listLength, out ParameterExpression/*!*/ listVariable) {

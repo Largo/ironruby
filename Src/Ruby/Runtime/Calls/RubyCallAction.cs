@@ -224,15 +224,7 @@ namespace IronRuby.Runtime.Calls {
         [ThreadStatic]
         private static RubyCallAction _PendingVersionSetOwner;
 
-        // The shared rule last handed out on this thread. A site that comes right back for another rule didn't match it
-        // (its arguments are of other types, say) and gets a rule of its own.
-        [ThreadStatic]
-        private static SharedRule _LastSharedRule;
-
         internal override T BindShared<T>(object[]/*!*/ args) {
-            var lastShared = _LastSharedRule;
-            _LastSharedRule = null;
-
             RubyContext context = Context;
             if (context == null || Signature.ResolveOnly || (Signature.Flags & ~SharableCallFlags) != 0 ||
                 context.HasRefinements || TracePoint.CCallTracing) {
@@ -249,9 +241,16 @@ namespace IronRuby.Runtime.Calls {
                 target = args[0];
             }
 
-            // The type test of a Ruby object is only a version check (see MetaObjectBuilder.AddTargetTypeTest):
-            if (!(target is IRubyObject)) {
+            // The type test of a Ruby object is only a version check (see MetaObjectBuilder.AddTargetTypeTest), and so is that of nil
+            // and of a CLR object whose class has neither singletons nor instances of a Ruby subclass. Not true/false: they are 
+            // told apart by value.
+            Type targetType;
+            if (target == null) {
+                targetType = typeof(DynamicNull);
+            } else if (target is bool) {
                 return null;
+            } else {
+                targetType = target.GetType();
             }
 
             // an object of another runtime:
@@ -264,6 +263,9 @@ namespace IronRuby.Runtime.Calls {
             MethodResolutionResult method;
             using (context.ClassHierarchyLocker()) {
                 targetClass.InitializeMethodsNoLock();
+                if (target != null && !(target is IRubyObject) && !HasPlainClrTypeTest(targetClass, _methodName)) {
+                    return null;
+                }
                 version = targetClass.Version.Method;
                 method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope), MethodLookup.Default);
             }
@@ -275,7 +277,6 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
-            Type targetType = target.GetType();
             SharedRule shared = null;
             var sharedRules = _sharedRules;
             if (sharedRules != null) {
@@ -307,12 +308,24 @@ namespace IronRuby.Runtime.Calls {
                 return BindSharedRule<T>(shared, args);
             }
 
-            if (lastShared == shared || !shared.Versions.TryAdd(version)) {
+            // The shared rule is handed out for a version it does not hold yet, and only then: a call that comes here although
+            // the rule holds its version didn't match the rule (its arguments are of other types, say) and gets a rule of its own.
+            if (!shared.Versions.TryAdd(version)) {
                 return null;
             }
 
-            _LastSharedRule = shared;
             return (T)sharedRule;
+        }
+
+        // MetaObjectBuilder.AddTargetTypeTest tests a CLR object's type and its class version - and nothing else - in this case:
+        private static bool HasPlainClrTypeTest(RubyClass/*!*/ targetClass, string/*!*/ methodName) {
+            if (targetClass.IsSingletonClass || targetClass.GetNonSingletonClass().IsRubyClass) {
+                return false;
+            }
+            var nominalClass = targetClass.NominalClass;
+            var singletonMethods = nominalClass.ClrSingletonMethods;
+            return !nominalClass.HasAdoptedInstances && (singletonMethods == null ||
+                !singletonMethods.ContainsKey(methodName) && !singletonMethods.ContainsKey(Symbols.MethodMissing));
         }
 
         private T/*!*/ BindSharedRule<T>(SharedRule/*!*/ shared, object[]/*!*/ args) where T : class {
