@@ -2939,10 +2939,32 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
+        // thread-safe without the class hierarchy lock: is_a?, kind_of? and Module#=== call this on
+        // every check, and the lock plus the closure ForEachAncestor needs were most of their cost.
+        // The walk only reads _prepends and _mixins, which are replaced, never mutated in place, under
+        // the lock, and the superclass chain; an include/prepend running concurrently is seen or not,
+        // just as with the lock, which only orders this check before or after it.
         public bool HasAncestor(RubyModule/*!*/ module) {
-            using (Context.ClassHierarchyLocker()) {
-                return HasAncestorNoLock(module);
+            RubyClass cls = this as RubyClass;
+            if (cls == null) {
+                return IsDeclaredAncestor(module);
             }
+            for (RubyClass c = cls; c != null; c = c.SuperClass) {
+                if (c.IsDeclaredAncestor(module)) return true;
+            }
+            return false;
+        }
+
+        // The modules ForEachDeclaredAncestor visits, read without the lock (see HasAncestor).
+        private bool IsDeclaredAncestor(RubyModule/*!*/ module) {
+            if (this == module) return true;
+            foreach (RubyModule p in _prepends) {
+                if (p == module) return true;
+            }
+            foreach (RubyModule m in _mixins) {
+                if (m == module) return true;
+            }
+            return false;
         }
 
         public bool HasAncestorNoLock(RubyModule/*!*/ module) {

@@ -20,6 +20,7 @@ using MSA = Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
@@ -1054,6 +1055,7 @@ namespace IronRuby.Runtime {
         internal void ReplaceModuleInCacheNoLock(Type/*!*/ type, RubyModule/*!*/ module) {
             Assert.NotNull(type, module);
             _moduleCache[type] = module;
+            _classReadCache.TryRemove(type, out _);
         }
 
         internal void AddNamespaceToCacheNoLock(NamespaceTracker/*!*/ namespaceTracker, RubyModule/*!*/ module) {
@@ -1108,9 +1110,21 @@ namespace IronRuby.Runtime {
             }
         }
 
+        // Lock-free read side of GetOrCreateClass. Every call on an Integer, Float or other CLR value
+        // asks for its class (GetClassOf), and taking ModuleCacheLock for a dictionary probe each time
+        // was a third or more of numeric code. A CLR type's class, once created, is only replaced by
+        // ReplaceModuleInCacheNoLock, which evicts the type here; entries are written under the lock.
+        private readonly ConcurrentDictionary<Type, RubyClass>/*!*/ _classReadCache = new ConcurrentDictionary<Type, RubyClass>();
+
         internal RubyClass/*!*/ GetOrCreateClass(Type/*!*/ type) {
+            RubyClass result;
+            if (_classReadCache.TryGetValue(type, out result)) {
+                return result;
+            }
             lock (ModuleCacheLock) {
-                return GetOrCreateClassNoLock(type);
+                result = GetOrCreateClassNoLock(type);
+                _classReadCache[type] = result;
+                return result;
             }
         }
 
