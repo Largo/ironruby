@@ -1700,11 +1700,88 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        // `f(a: x)`, `f(a: x, b: y)` and `f(a: x, b: y, c: z)` with Symbol literals for keys, the
+        // usual keyword call: no item array to allocate, and none of the conversions
+        // SetHashElement applies to a String or nil key. A repeated key keeps the last value, as
+        // in MRI (and SetHashElements).
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash1(RubyScope/*!*/ scope, object key1, object value1) {
+            var result = new Hash(scope.RubyContext.EqualityComparer, 1);
+            result.IsKeywordArguments = true;
+            result[key1] = value1;
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash2(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2) {
+            var result = new Hash(scope.RubyContext.EqualityComparer, 2);
+            result.IsKeywordArguments = true;
+            result[key1] = value1;
+            result[key2] = value2;
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash3(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2,
+            object key3, object value3) {
+            var result = new Hash(scope.RubyContext.EqualityComparer, 3);
+            result.IsKeywordArguments = true;
+            result[key1] = value1;
+            result[key2] = value2;
+            result[key3] = value3;
+            return result;
+        }
+
         /// <summary>True for the hash a call site built out of keyword syntax.</summary>
         [Emitted]
         public static bool IsKeywordArgumentsHash(object obj) {
             var hash = obj as Hash;
             return hash != null && hash.IsKeywordArguments;
+        }
+
+        // The keyword-parameter prologue (see PrismAstBridge.BindKeywordsFrom) reads the hash a
+        // keyword call passed with the helpers below rather than with Ruby-level Hash calls. MRI
+        // binds keywords without dispatching to Hash methods either, so a redefined Hash#[] or
+        // Hash#key? has no say in it. The hash is the one the call site built (or a copy of a
+        // splatted one), so it is a plain Hash with the default comparer.
+
+        /// <summary>
+        /// True when <paramref name="keywords"/> holds every required keyword - the first
+        /// <paramref name="requiredCount"/> of <paramref name="names"/> - and, unless the method
+        /// takes **rest, no keyword it does not declare. False means the prologue has an
+        /// ArgumentError to word, which it does the slow way.
+        /// </summary>
+        [Emitted]
+        public static bool KeywordArgumentsMatch(object keywords, RubySymbol/*!*/[]/*!*/ names, int requiredCount, bool acceptsRest) {
+            var hash = keywords as Hash;
+            return hash != null && hash.HasKeywords(names, requiredCount, acceptsRest);
+        }
+
+        /// <summary>
+        /// The value the call passed for keyword <paramref name="name"/>, or
+        /// <see cref="DefaultArgument"/> if it passed none. <paramref name="position"/> is where the
+        /// method declares the keyword, which is where a call usually puts it too.
+        /// </summary>
+        [Emitted]
+        public static object GetKeywordArgument(object keywords, RubySymbol/*!*/ name, int position) {
+            var hash = keywords as Hash;
+            object value;
+            return (hash != null && hash.TryGetValueByIdentity(name, position, out value)) ? value : DefaultArgument;
+        }
+
+        /// <summary>
+        /// The **rest parameter: a new hash with whatever the call passed beyond the declared
+        /// <paramref name="names"/>. It is a copy, so the method may change it freely.
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordRest(object keywords, RubySymbol/*!*/[]/*!*/ names) {
+            var hash = (Hash)keywords;
+            var result = new Hash(hash);
+            for (int i = 0; i < names.Length && result.Count > 0; i++) {
+                result.Remove(names[i]);
+            }
+            return result;
         }
 
         /// <summary>

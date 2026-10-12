@@ -67,6 +67,16 @@ namespace IronRuby.Compiler.Ast {
             Exit(node);
         }
 
+        internal protected virtual void Walk(KeywordParameterRead/*!*/ node) {
+            if (Enter(node)) {
+                node.Keywords.Walk(this);
+                if (node.DefaultValue != null) {
+                    node.DefaultValue.Walk(this);
+                }
+            }
+            Exit(node);
+        }
+
         internal protected virtual void Walk(BlockReference/*!*/ node) {
             if (Enter(node)) {
                 node.Expression.Walk(this);

@@ -2445,6 +2445,7 @@ namespace IronRuby.Prism {
             var prologue = new List<Expression>();
             var names = new List<string>();
             var requiredNames = new List<string>();
+            var optionalNames = new List<string>();
 
             foreach (var keyword in node.Keywords) {
                 var kwSpan = Span(keyword);
@@ -2454,18 +2455,16 @@ namespace IronRuby.Prism {
                         requiredNames.Add(required.Name);
                         var local = CurrentScope.ResolveOrAddVariable(required.Name, kwSpan);
                         prologue.Add(new SimpleAssignmentExpression(local,
-                            new MethodCall(kwVar, "[]", new Arguments(new SymbolLiteral(required.Name, _encoding, kwSpan)), kwSpan),
+                            KeywordParameterRead.Value(kwVar, required.Name, names.Count - 1, null, _encoding, kwSpan),
                             null, kwSpan));
                         break;
                     }
                     case Pm.OptionalKeywordParameterNode optKeyword: {
                         names.Add(optKeyword.Name);
+                        optionalNames.Add(optKeyword.Name);
                         var local = CurrentScope.ResolveOrAddVariable(optKeyword.Name, kwSpan);
                         prologue.Add(new SimpleAssignmentExpression(local,
-                            new ConditionalExpression(
-                                new MethodCall(kwVar, "key?", new Arguments(new SymbolLiteral(optKeyword.Name, _encoding, kwSpan)), kwSpan),
-                                new MethodCall(kwVar, "[]", new Arguments(new SymbolLiteral(optKeyword.Name, _encoding, kwSpan)), kwSpan),
-                                Expr(optKeyword.Value), kwSpan),
+                            KeywordParameterRead.Value(kwVar, optKeyword.Name, names.Count - 1, Expr(optKeyword.Value), _encoding, kwSpan),
                             null, kwSpan));
                         break;
                     }
@@ -2478,21 +2477,17 @@ namespace IronRuby.Prism {
                 var kwSpan = Span(node.KeywordRest);
                 var restLocal = CurrentScope.ResolveOrAddVariable(keywordRest.Name ?? AnonymousKeywordRestName, kwSpan);
                 prologue.Add(new SimpleAssignmentExpression(restLocal,
-                    new MethodCall(kwVar, "dup", null, kwSpan), null, kwSpan));
-                foreach (var name in names) {
-                    prologue.Add(new MethodCall(restLocal, "delete",
-                        new Arguments(new SymbolLiteral(name, _encoding, kwSpan)), kwSpan));
-                }
+                    KeywordParameterRead.Rest(kwVar, names.ToArray(), _encoding, kwSpan), null, kwSpan));
             }
 
             // MRI reports every missing keyword in one error, and does so before complaining
             // about keywords it does not know; a signature with **rest knows them all.
             //
             // Both errors are spelled with an array difference, which allocates three arrays and
-            // builds a set to say "nothing is wrong" - on every call. Each one therefore sits
-            // behind a test that costs nothing and can only be true when there is nothing to
+            // builds a set to say "nothing is wrong" - on every call. So they sit behind one
+            // runtime call that allocates nothing and is true exactly when there is nothing to
             // report; the array difference runs only to word the error.
-            var checks = new List<Expression>();
+            var checks = new Statements();
             if (requiredNames.Count > 0) {
                 // Every required keyword is there, or something is missing and the list says what.
                 Expression allPresent = null;
@@ -2526,8 +2521,18 @@ namespace IronRuby.Prism {
                             new Arguments(SymbolArray(names, span)), span),
                         "unknown keyword: ", "unknown keywords: ", span)), null, span));
             }
-            checks.AddRange(prologue);
-            return checks;
+
+            var result = new List<Expression>();
+            if (checks.Count > 0) {
+                var ordered = new List<string>(requiredNames);
+                ordered.AddRange(optionalNames);
+                result.Add(new UnlessExpression(
+                    KeywordParameterRead.Match(kwVar, ordered.ToArray(), requiredNames.Count,
+                        node.KeywordRest is Pm.KeywordRestParameterNode, _encoding, span),
+                    checks, null, span));
+            }
+            result.AddRange(prologue);
+            return result;
         }
 
         private Expression/*!*/ SymbolArray(List<string>/*!*/ names, SourceSpan span) {
