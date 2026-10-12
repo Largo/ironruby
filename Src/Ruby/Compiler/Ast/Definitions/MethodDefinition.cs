@@ -261,7 +261,7 @@ namespace IronRuby.Compiler.Ast {
             // see RubyScope.GetActiveRefinements:
             MSA.Expression recordRefinements = (definitionRefinements != null)
                 ? (MSA.Expression)Ast.Assign(
-                    Ast.Field(scopeVariable, typeof(RubyMethodScope).GetField("DefinitionRefinements")),
+                    Ast.Property(scopeVariable, typeof(RubyMethodScope).GetProperty("DefinitionRefinements")),
                     Ast.Constant(definitionRefinements, typeof(StrongBox<RefinementActivation>)))
                 : AstUtils.Empty();
 

@@ -13,6 +13,10 @@
  *
  * ***************************************************************************/
 
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+
 namespace IronRuby.Builtins {
 
     /// <summary>
@@ -24,6 +28,48 @@ namespace IronRuby.Builtins {
     /// </summary>
     public partial class Hash {
         private const int IdentityScanLimit = 8;
+
+        /// <summary>
+        /// An empty keyword-call hash with room for <paramref name="capacity"/> Symbol keys, to be
+        /// filled with <see cref="AppendUnlinked"/>. Binding keyword parameters only scans the
+        /// entries (<see cref="TryGetValueByIdentity"/>, <see cref="HasKeywords"/>), so such a hash
+        /// gets no bucket array unless something probes it later (LinkPendingBuckets).
+        /// </summary>
+        internal static Hash/*!*/ CreateKeywordArguments(IEqualityComparer<object>/*!*/ comparer, int capacity) {
+            var result = new Hash(comparer, 0);
+            int size = GetPrime(capacity);
+            result._entries = new Entry[size];
+            result._fastModMultiplier = UInt64.MaxValue / (uint)size + 1;
+            result.IsKeywordArguments = true;
+            return result;
+        }
+
+        /// <summary>
+        /// Adds a Symbol key to a hash made by <see cref="CreateKeywordArguments"/>, within the
+        /// capacity it was made with. A Symbol is equal only to itself, so a repeated key is found by
+        /// identity and, as an insert would, keeps its position and takes the new value. The hash
+        /// code is taken now, as an insert would take it, so linking the buckets later asks nothing
+        /// of the keys.
+        /// </summary>
+        internal void AppendUnlinked(object/*!*/ key, object value) {
+            Debug.Assert(_buckets == null && _count < _entries.Length);
+            Entry[] entries = _entries;
+            for (int i = 0; i < _count; i++) {
+                if (entries[i].Key == key) {
+                    entries[i].Value = value;
+                    _stamp++;
+                    return;
+                }
+            }
+            ref Entry e = ref entries[_count++];
+            e.HashCode = _comparer.GetHashCode(key);
+            e.Next = -1;
+            e.Key = key;
+            e.Value = value;
+            _liveCount++;
+            _version++;
+            _stamp++;
+        }
 
         /// <summary>
         /// A copy of this hash - default value or proc and comparer included, as the copy

@@ -1753,29 +1753,26 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Hash/*!*/ MakeKeywordArgumentsHash1(RubyScope/*!*/ scope, object key1, object value1) {
-            var result = new Hash(scope.RubyContext.EqualityComparer, 1);
-            result.IsKeywordArguments = true;
-            result[key1] = value1;
+            var result = Hash.CreateKeywordArguments(scope.RubyContext.EqualityComparer, 1);
+            result.AppendUnlinked(key1, value1);
             return result;
         }
 
         [Emitted]
         public static Hash/*!*/ MakeKeywordArgumentsHash2(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2) {
-            var result = new Hash(scope.RubyContext.EqualityComparer, 2);
-            result.IsKeywordArguments = true;
-            result[key1] = value1;
-            result[key2] = value2;
+            var result = Hash.CreateKeywordArguments(scope.RubyContext.EqualityComparer, 2);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
             return result;
         }
 
         [Emitted]
         public static Hash/*!*/ MakeKeywordArgumentsHash3(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2,
             object key3, object value3) {
-            var result = new Hash(scope.RubyContext.EqualityComparer, 3);
-            result.IsKeywordArguments = true;
-            result[key1] = value1;
-            result[key2] = value2;
-            result[key3] = value3;
+            var result = Hash.CreateKeywordArguments(scope.RubyContext.EqualityComparer, 3);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            result.AppendUnlinked(key3, value3);
             return result;
         }
 
