@@ -57,11 +57,21 @@ namespace IronRuby.Prism {
         public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
             int frozenStringLiteral, Encoding/*!*/ sourceEncoding, string encodingName, byte commandLine, bool mainScript,
             bool encodingLocked) {
+            return Parse(source, path, startLine, outerLocals, frozenStringLiteral, sourceEncoding, encodingName, commandLine,
+                mainScript, encodingLocked, false);
+        }
+
+        /// <summary>
+        /// <paramref name="lazyDefBodies"/> leaves method bodies in prism's buffer (see PrismLoader.LoadParse).
+        /// </summary>
+        public static PrismParseResult/*!*/ Parse(string/*!*/ source, string path, int startLine, IList<string> outerLocals,
+            int frozenStringLiteral, Encoding/*!*/ sourceEncoding, string encodingName, byte commandLine, bool mainScript,
+            bool encodingLocked, bool lazyDefBodies) {
 
             byte[] sourceBytes = sourceEncoding.GetBytes(source);
             PrismParseResult result = PrismLoader.LoadParse(
                 ParseSerializedBytes(sourceBytes, BuildOptionsData(path, startLine, outerLocals, frozenStringLiteral, encodingName,
-                    commandLine, mainScript, encodingLocked)));
+                    commandLine, mainScript, encodingLocked)), lazyDefBodies);
             result.DataOffset = ComputeDataOffset(result.DataLocation, sourceBytes);
             return result;
         }

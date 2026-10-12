@@ -79,6 +79,21 @@ namespace IronRuby.Compiler.Ast {
             _parameters = parameters ?? Parameters.Empty;
         }
 
+        /// <summary>
+        /// A method whose body the front end builds when it is first asked for - normally when the method
+        /// is first called. Building it adds the body's locals to <paramref name="definedScope"/>.
+        /// </summary>
+        public MethodDefinition(LexicalScope/*!*/ definedScope, Expression target, string/*!*/ name, Parameters parameters,
+            Func<Body>/*!*/ bodyFactory, SourceSpan location)
+            : base(definedScope, bodyFactory, location) {
+            Assert.NotNull(name);
+            Debug.Assert(parameters == null || parameters.Unsplat == null || parameters.Unsplat is LocalVariable);
+
+            _target = target;
+            _name = name;
+            _parameters = parameters ?? Parameters.Empty;
+        }
+
         private ScopeBuilder/*!*/ DefineLocals(out AstParameters/*!*/ parameters) {
             // Method signature:
             // <self>, &<block>, <leading-mandatory>, <trailing-mandatory>, <optional>, *<unsplat>
@@ -169,6 +184,9 @@ namespace IronRuby.Compiler.Ast {
             string/*!*/ frameLabel, StrongBox<RefinementActivation> definitionRefinements) {
             string encodedName = RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode);
 
+            // a body built on demand adds its locals to the scope: build it before they are allocated
+            Body methodBody = Body;
+
             AstParameters parameters;
             ScopeBuilder scope = DefineLocals(out parameters);
 
@@ -251,7 +269,7 @@ namespace IronRuby.Compiler.Ast {
                 profileStart,
                 _parameters.TransformOptionalsInitialization(gen),
                 traceCall,
-                Body.TransformResult(gen, ResultOperation.Return)
+                methodBody.TransformResult(gen, ResultOperation.Return)
             ).Filter(unwinder = Ast.Parameter(typeof(Exception), "#u"), Methods.IsMethodUnwinderTargetFrame.OpCall(scopeVariable, unwinder),
                 Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder))
             ).Finally(  
