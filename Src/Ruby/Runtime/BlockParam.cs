@@ -103,7 +103,8 @@ namespace IronRuby.Runtime {
         // Friend: RubyOps
         internal readonly bool _isLibProcConverter;
 
-        // the thread the call taking the block runs on; a break cannot reach that call from another
+        // the thread the call taking the block runs on; a break cannot reach that call from another.
+        // 0 for a yield or a Proc#call, which run the block on the thread that made the BlockParam.
         private readonly int _threadId;
 
         // the block is the body of a Thread (see RubyBlockScope.IsClosureScope)
@@ -165,6 +166,13 @@ namespace IronRuby.Runtime {
             _isLibProcConverter = isLibProcConverter;
         }
 
+        // A BlockParam that is only ever used on the thread creating it, for the duration of a call:
+        // a yield or a Proc#call. There the thread check in Break always passes, so skip it.
+        internal BlockParam(Proc/*!*/ proc, BlockCallerKind callerKind) {
+            _callerKind = callerKind;
+            _proc = proc;
+        }
+
         internal void SetFlowControl(BlockReturnReason reason, RuntimeFlowControl targetFrame, ProcKind sourceProcKind) {
             Debug.Assert((reason == BlockReturnReason.Break) == (targetFrame != null));
 
@@ -189,6 +197,11 @@ namespace IronRuby.Runtime {
         /// A library method that creates a block yet doesn't take one needs to manage RFC on its own.
         /// </remarks>
         internal bool BlockJumped(object returnValue) {
+            // the block finished normally (no break/return/retry), which is what nearly every yield does:
+            if (_returnReason == BlockReturnReason.Undefined) {
+                return false;
+            }
+
             // if this method is a proc converter then the current frame is Proc.Converter, otherwise it is not available:
             return RubyOps.MethodYieldRfc(_isLibProcConverter ? _proc.Converter : null, this, returnValue);
         }
@@ -226,7 +239,7 @@ namespace IronRuby.Runtime {
 
             // proc whose home frame is gone (e.g. Proc#call on an orphaned block), or one running
             // on another thread than the call it would break out of (Thread.new { break }):
-            if (_proc.Converter == null || _threadId != Environment.CurrentManagedThreadId) {
+            if (_proc.Converter == null || (_threadId != 0 && _threadId != Environment.CurrentManagedThreadId)) {
                 throw new LocalJumpError("break from proc-closure", "break", returnValue);
             }
 
@@ -307,7 +320,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static BlockParam/*!*/ CreateBfcForYield(Proc proc) {
             if (proc != null) {
-                return new BlockParam(proc, BlockCallerKind.Yield, false);
+                return new BlockParam(proc, BlockCallerKind.Yield);
             } else {
                 throw RubyExceptions.NoBlockGiven();
             }
@@ -316,7 +329,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static BlockParam/*!*/ CreateBfcForProcCall(Proc/*!*/ proc) {
             Assert.NotNull(proc);
-            return new BlockParam(proc, BlockCallerKind.Call, false) { IsActiveLambdaCall = proc.Kind == ProcKind.Lambda };
+            return new BlockParam(proc, BlockCallerKind.Call) { IsActiveLambdaCall = proc.Kind == ProcKind.Lambda };
         }
         
         [Emitted]
