@@ -50,8 +50,15 @@ namespace IronRuby.Runtime.Calls {
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         internal bool IsCurrentFor(object self) {
-            if (self != null && self.GetType() == typeof(RubyObject)) {
-                return Unsafe.As<RubyObject>(self).ImmediateClass.Version.Method == Version;
+            if (self != null) {
+                Type type = self.GetType();
+                if (type == typeof(RubyObject)) {
+                    return Unsafe.As<RubyObject>(self).ImmediateClass.Version.Method == Version;
+                }
+                // a class or module receiver - Foo.new, Math.sqrt, any class method:
+                if (type == typeof(RubyClass) || type == typeof(RubyModule)) {
+                    return Unsafe.As<RubyModule>(self).ImmediateClass.Version.Method == Version;
+                }
             }
             IRubyObject obj = self as IRubyObject;
             return obj != null && obj.ImmediateClass.Version.Method == Version;
@@ -169,6 +176,11 @@ namespace IronRuby.Runtime.Calls {
                 var obj = Unsafe.As<RubyObject>(self);
                 cls = obj.ImmediateClass;
                 return obj;
+            }
+            if (self != null && (self.GetType() == typeof(RubyClass) || self.GetType() == typeof(RubyModule))) {
+                var module = Unsafe.As<RubyModule>(self);
+                cls = module.ImmediateClass;
+                return module;
             }
             IRubyObject result = self as IRubyObject;
             cls = (result != null) ? result.ImmediateClass : null;
