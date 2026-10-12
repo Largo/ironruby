@@ -240,7 +240,10 @@ namespace IronRuby.Runtime {
 
         // TracePoint hooks; emitted code only calls them when TracePoint.ActiveEvents has the event.
 
-        [Emitted]
+        // Emitted behind a test of TracePoint.ActiveEvents in front of every statement: kept out of
+        // line, the never-taken branch is one call; inlined, it was a few hundred bytes of machine
+        // code per statement in every compiled method body.
+        [Emitted, MethodImpl(MethodImplOptions.NoInlining)]
         public static void TraceLineEvent(RubyScope scope, string path, int line) {
             // objspace's allocation tracing forces this event on and takes the allocation site of
             // every object created by the statement from here.
