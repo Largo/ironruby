@@ -173,6 +173,13 @@ namespace IronRuby.Runtime.Jit {
                 return null;
             }
 
+            // Bind self only if the body reads it (an instance variable, `self'): an unused #self
+            // local loaded in the prologue cost the JIT's register allocation of the loop itself -
+            // `while i < m; i += 1; end' ran 1.4x slower per iteration with it.
+            if (self != null && !UsesParameter.In(body, self)) {
+                self = null;
+            }
+
             var locals = new List<MSA.ParameterExpression>(tuples.Values);
             var probe = Ast.Parameter(typeof(object), "#probe");
             locals.Add(probe);
@@ -271,6 +278,33 @@ namespace IronRuby.Runtime.Jit {
             } catch (Exception) {
                 return null;
             }
+        }
+    }
+
+    /// <summary>Whether an expression tree references a given parameter or variable.</summary>
+    internal sealed class UsesParameter : MSA.ExpressionVisitor {
+        private readonly MSA.ParameterExpression/*!*/ _parameter;
+        private bool _found;
+
+        private UsesParameter(MSA.ParameterExpression/*!*/ parameter) {
+            _parameter = parameter;
+        }
+
+        internal static bool In(MSA.Expression/*!*/ tree, MSA.ParameterExpression/*!*/ parameter) {
+            var finder = new UsesParameter(parameter);
+            finder.Visit(tree);
+            return finder._found;
+        }
+
+        public override MSA.Expression Visit(MSA.Expression node) {
+            return _found ? node : base.Visit(node);
+        }
+
+        protected override MSA.Expression VisitParameter(MSA.ParameterExpression/*!*/ node) {
+            if (node == _parameter) {
+                _found = true;
+            }
+            return node;
         }
     }
 }
