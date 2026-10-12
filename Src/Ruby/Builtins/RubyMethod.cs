@@ -167,6 +167,33 @@ namespace IronRuby.Builtins {
             Assert.NotNull(metaBuilder, args);
             Debug.Assert(args.Target == this);
 
+            // A call to these methods depends on the method, the name it is called by and the arguments (self included), not on
+            // which Method object holds them. Each `instance_method(:m).bind(obj).call` makes a new Method, so a rule that took 
+            // the Method and its receiver as constants was bound and compiled anew for every call of such a site.
+            if (_methodMissingName == null && IsReceiverIndependent(_info)) {
+                var method = Ast.Convert(args.TargetExpression, typeof(RubyMethod));
+                var receiver = Ast.Property(method, TargetProperty);
+
+                // The receiver's CLR type is restricted here: the overload resolver takes self for granted.
+                metaBuilder.AddRestriction(Ast.AndAlso(
+                    Ast.TypeIs(args.TargetExpression, typeof(RubyMethod)),
+                    Ast.AndAlso(
+                        Ast.AndAlso(
+                            Ast.Equal(Ast.Property(method, InfoProperty), AstUtils.Constant(_info, typeof(RubyMemberInfo))),
+                            Ast.Equal(Ast.Property(method, NameProperty), AstUtils.Constant(_name))
+                        ),
+                        Ast.AndAlso(
+                            Ast.Not(Ast.Property(method, IsMethodMissingProperty)),
+                            (_target == null) ? (Expression)Ast.Equal(receiver, AstUtils.Constant(null)) : Ast.TypeEqual(receiver, _target.GetType())
+                        )
+                    )
+                ));
+
+                args.SetTarget(receiver, _target);
+                _info.BuildCall(metaBuilder, args, _name);
+                return;
+            }
+
             // first argument must be this method:
             metaBuilder.AddRestriction(Ast.Equal(args.TargetExpression, AstUtils.Constant(this)));
 
@@ -191,6 +218,16 @@ namespace IronRuby.Builtins {
                 _info.BuildCall(metaBuilder, args, _name);
             }
         }
+
+        private static bool IsReceiverIndependent(RubyMemberInfo/*!*/ info) {
+            Type type = info.GetType();
+            return type == typeof(RubyLibraryMethodInfo) || type == typeof(RubyMethodInfo) || type == typeof(RubyLambdaMethodInfo);
+        }
+
+        private static readonly System.Reflection.PropertyInfo/*!*/ InfoProperty = typeof(RubyMethod).GetProperty("Info");
+        private static readonly System.Reflection.PropertyInfo/*!*/ NameProperty = typeof(RubyMethod).GetProperty("Name");
+        private static readonly System.Reflection.PropertyInfo/*!*/ TargetProperty = typeof(RubyMethod).GetProperty("Target");
+        private static readonly System.Reflection.PropertyInfo/*!*/ IsMethodMissingProperty = typeof(RubyMethod).GetProperty("IsMethodMissing");
 
         #endregion
 
