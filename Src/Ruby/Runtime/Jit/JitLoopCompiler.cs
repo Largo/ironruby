@@ -200,10 +200,12 @@ namespace IronRuby.Runtime.Jit {
             }
 
             // Nothing may have redefined Integer#+ (or anything else) since the types were
-            // read: one global version covers every def, undef, alias and include.
+            // read: one global version covers every def, undef, alias and include. A copy that
+            // fails it fails it on every later entry, so it asks to be rebuilt under the new
+            // version rather than counting as one more deopt towards retiring the loop.
             prologue.Add(Ast.IfThen(
                 Ast.Not(Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(RubyModule.GlobalMethodVersion))),
-                Ast.Return(exit, Ast.Call(JitRuntime.M("OsrGuardFailed"), Ast.Constant("method version")))
+                Ast.Return(exit, Ast.Call(JitRuntime.M("OsrVersionStale")))
             ));
 
             var storeCurrent = new List<MSA.Expression>();

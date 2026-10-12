@@ -91,13 +91,19 @@ namespace IronRuby.Builtins {
         // interlocked
         internal static int _globalMethodVersion = 0;
 
+        // interlocked; bumped only where a class's method version is (IncrementMethodVersion)
+        private static int _methodTableVersion = 0;
+
         /// <summary>
-        /// Read by JIT-compiled code as its one global guard: every method table change anywhere
-        /// bumps it, so a specialization that snapshots it is invalidated by any def, undef,
-        /// alias, include, extend or singleton-method definition.
+        /// Read by JIT-compiled code as its one global guard: every method table change that can
+        /// alter a resolution call sites depend on bumps it, so a specialization that snapshots it is
+        /// invalidated by any def, undef, alias, include, extend or singleton-method definition that
+        /// overrides something. Creating a class or module does not: a new module changes no existing
+        /// class's resolution, and Class.new, Struct.new or a fresh singleton class after a method
+        /// had been specialized would otherwise send that method down the generic path for good.
         /// </summary>
         public static int GlobalMethodVersion {
-            get { return System.Threading.Volatile.Read(ref _globalMethodVersion); }
+            get { return System.Threading.Volatile.Read(ref _methodTableVersion); }
         }
         internal static int _globalModuleId = 0;
 
@@ -986,6 +992,7 @@ namespace IronRuby.Builtins {
         private void IncrementMethodVersion() {
             if (IsClass) {
                 Version.Method = Interlocked.Increment(ref _globalMethodVersion);
+                Interlocked.Increment(ref _methodTableVersion);
             }
         }
 

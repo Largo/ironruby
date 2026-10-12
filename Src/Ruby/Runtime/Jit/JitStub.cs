@@ -129,6 +129,28 @@ namespace IronRuby.Runtime.Jit {
             _calls = 0;
         }
 
+        // How many times a method is specialized again after a method table change made its entry
+        // stale. A program that keeps defining methods (a `def obj.x' per object, define_method in
+        // a loop) would otherwise pay a compile every Threshold calls for as long as it runs.
+        private const int MaxRespecializations = 8;
+        private int _respecializations;
+
+        /// <summary>
+        /// Called by the entry when the global method version no longer matches its snapshot. That
+        /// guard can never pass again, so leaving the entry installed would send every later call
+        /// through the failed guard into the generic body: profile again and specialize under the
+        /// new version instead, or settle on the generic body once that has happened too often.
+        /// </summary>
+        internal void VersionChanged() {
+            if (_givenUp) { return; }
+            if (++_respecializations > MaxRespecializations) {
+                _givenUp = true;
+                Install(_generic);
+                return;
+            }
+            Invalidate();
+        }
+
         private bool TrySpecialize() {
             if (JitRuntime.Disabled || _context.HasRefinements) { return false; }
 
@@ -200,19 +222,19 @@ namespace IronRuby.Runtime.Jit {
                 args[i] = Ast.Parameter(typeof(object), "a" + i);
             }
 
-            MSA.Expression test = Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version));
+            MSA.Expression test = null;
             if (pinnedClass != null) {
-                test = Ast.AndAlso(test, Ast.ReferenceEqual(
+                test = And(test, Ast.ReferenceEqual(
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
                     Ast.Constant(pinnedClass, typeof(RubyClass))));
             }
             for (int i = 0; i < _arity; i++) {
                 switch (code.ParameterTypes[i]) {
-                    case JT.Int: test = Ast.AndAlso(test, Ast.TypeIs(args[i], typeof(int))); break;
-                    case JT.Dbl: test = Ast.AndAlso(test, Ast.TypeIs(args[i], typeof(double))); break;
+                    case JT.Int: test = And(test, Ast.TypeIs(args[i], typeof(int))); break;
+                    case JT.Dbl: test = And(test, Ast.TypeIs(args[i], typeof(double))); break;
                     // An Integer parameter carried as a long accepts either representation: a
                     // value in Int32 range arrives as an Int32 and only a larger one as an Int64.
-                    case JT.Lng: test = Ast.AndAlso(test, Ast.Call(JitRuntime.M("IsIntegral"), args[i])); break;
+                    case JT.Lng: test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), args[i])); break;
                 }
             }
 
@@ -241,13 +263,29 @@ namespace IronRuby.Runtime.Jit {
                     Ast.Catch(typeof(JitDeoptException), GenericCall(self, blk, args)));
             }
 
-            var body = Ast.Condition(test, fast, GenericCall(self, blk, args), typeof(object));
+            MSA.Expression body = (test != null) ? Ast.Condition(test, fast, GenericCall(self, blk, args), typeof(object)) : fast;
+
+            // A stale version fails this guard on every later call; the stub takes the entry down
+            // (JitStub.VersionChanged) and this one call runs the generic body.
+            body = Ast.Condition(
+                Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version)),
+                body,
+                Ast.Block(
+                    Ast.Call(JitRuntime.M("EntryStale"), Ast.Constant(this, typeof(object))),
+                    GenericCall(self, blk, args)
+                ),
+                typeof(object)
+            );
 
             var all = new MSA.ParameterExpression[_arity + 2];
             all[0] = self;
             all[1] = blk;
             Array.Copy(args, 0, all, 2, _arity);
             return Ast.Lambda(_generic.GetType(), body, "jitentry$" + _ast.Name, all);
+        }
+
+        private static MSA.Expression/*!*/ And(MSA.Expression left, MSA.Expression/*!*/ right) {
+            return (left != null) ? Ast.AndAlso(left, right) : right;
         }
 
         private MSA.Expression/*!*/ GenericCall(MSA.ParameterExpression/*!*/ self, MSA.ParameterExpression/*!*/ blk, MSA.ParameterExpression[]/*!*/ args) {

@@ -278,6 +278,17 @@ namespace IronRuby.Runtime.Jit {
             return !Disabled && RubyModule.GlobalMethodVersion == snapshot;
         }
 
+        /// <summary>A method entry's VersionOk failed: it is stale for good (see JitStub.VersionChanged).</summary>
+        public static void EntryStale(object/*!*/ stub) {
+            ((JitStub)stub).VersionChanged();
+        }
+
+        /// <summary>An outlined loop was compiled under an older method version; build it again.</summary>
+        public static object OsrVersionStale() {
+            if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   guard failed: method version"); }
+            return Osr.OsrLoopSite.Retype;
+        }
+
         /// <summary>An entry guard of an outlined loop did not hold; hand the loop back.</summary>
         public static object OsrGuardFailed(string/*!*/ what) {
             if (Osr.OsrLoopSite.Verbose) { Console.Error.WriteLine("[osr]   guard failed: {0}", what); }
