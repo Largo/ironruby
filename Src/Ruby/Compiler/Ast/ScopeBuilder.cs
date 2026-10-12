@@ -110,6 +110,15 @@ namespace IronRuby.Compiler.Ast {
             get { return _lexicalScope.Depth; }
         }
 
+        // whether anything in the scope reads an outer scope's locals (see GetClosure)
+        internal bool HasClosures {
+            get { return _closures != null; }
+        }
+
+        internal MSA.ParameterExpression/*!*/ LocalsTupleVariable {
+            get { return _localsTuple; }
+        }
+
         internal ScopeBuilder Parent {
             get { return _parent; }
         }
