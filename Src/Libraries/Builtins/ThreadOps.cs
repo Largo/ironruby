@@ -137,6 +137,13 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            /// <summary>Forgets every fiber-local, for a fiber thread that goes back to the pool.</summary>
+            internal void ClearLocals() {
+                lock (_threadLocalStorage) {
+                    _threadLocalStorage.Clear();
+                }
+            }
+
             internal bool HasKey(RubySymbol/*!*/ key) {
                 lock (_threadLocalStorage) {
                     return _threadLocalStorage.ContainsKey(key);
@@ -188,6 +195,12 @@ namespace IronRuby.Builtins {
             /// </summary>
             internal volatile string BlockedLabel;
             internal volatile Thread ActiveFiberThread;
+
+            /// <summary>
+            /// A fiber thread parked in the pool between two fibers (ThreadOps.Fiber.cs). It is no
+            /// Ruby thread of anybody's while it waits, so the thread lists leave it out.
+            /// </summary>
+            internal volatile bool IsIdleFiberWorker;
 
             /// <summary>
             /// MRI's Thread#priority is a small integer clamped to -3..3 that outlives the thread;
@@ -267,7 +280,7 @@ namespace IronRuby.Builtins {
                     lock (_mapping) {
                         List<RubyThreadInfo> result = new List<RubyThreadInfo>(_mapping.Count);
                         foreach (KeyValuePair<int, RubyThreadInfo> entry in _mapping) {
-                            if (entry.Value.Thread.IsAlive) {
+                            if (entry.Value.Thread.IsAlive && !entry.Value.IsIdleFiberWorker) {
                                 result.Add(entry.Value);
                             }
                         }

@@ -2761,15 +2761,23 @@ unless defined?(Fiber)
       cur.__act__(cur.__await__)
     end
 
+    # A fiber runs on a thread of its own: one whose last fiber has finished if one is
+    # parked (Thread.__fiber_reuse__, ThreadOps.Fiber.cs), a new one otherwise. A thread
+    # goes back to the pool when its fiber is done (Thread.__fiber_park__), clean of that
+    # fiber's locals, and ends when nobody wants it for a while.
     def __start__
       return self if @thread
       fiber = self
-      owner = @root_fiber.__thread__
-      @thread = Thread.new do
-        ::Thread.__fiber_current_set__(fiber)
-        # Ruby ownership (Mutex, deadlock detection) is per thread, not per fiber
-        Thread.__set_fiber_owner__(owner) if owner
-        fiber.__run__
+      @thread = ::Thread.__fiber_reuse__(fiber) || Thread.new do
+        while fiber
+          ::Thread.__fiber_current_set__(fiber)
+          # Ruby ownership (Mutex, deadlock detection) is per thread, not per fiber
+          owner = fiber.__root_fiber__.__thread__
+          Thread.__set_fiber_owner__(owner) if owner
+          fiber.__run__
+          fiber = nil
+          fiber = ::Thread.__fiber_park__
+        end
       end
       self
     end
@@ -2868,6 +2876,9 @@ unless defined?(Fiber)
       # The program has ended and this fiber was killed with its thread: the
       # fiber that resumed it is suspended, and stays that way (as in MRI).
       return if ::Thread.__terminating__
+      # What the end of this thread does for the mutexes the fiber still holds,
+      # done before the fiber we hand control to can run and lock.
+      ::Thread.__fiber_release_locks__
       target = @prev
       if target
         @prev = nil
