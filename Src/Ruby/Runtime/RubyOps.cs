@@ -1578,6 +1578,15 @@ namespace IronRuby.Runtime {
         /// is only emitted for argument hashes that actually contain a `**` splat.
         /// The result is fed to the ordinary splatting machinery, so it is either [] or [hash].
         /// </summary>
+        /// <summary>
+        /// `f(**h)` with h a Hash or nil: what <see cref="SplatKeywordHash"/> makes of it. Null for
+        /// anything else, which the call site first converts with #to_hash (by way of Hash#merge).
+        /// </summary>
+        [Emitted]
+        public static RubyArray SplatKeywordHashIfHash(RubyScope/*!*/ scope, object hash) {
+            return (hash == null || hash is Hash) ? SplatKeywordHash(scope, hash) : null;
+        }
+
         [Emitted]
         public static RubyArray/*!*/ SplatKeywordHash(RubyScope/*!*/ scope, object hash) {
             // `f(**nil)` passes no keywords at all
