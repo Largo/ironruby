@@ -169,7 +169,7 @@ namespace IronRuby.Compiler {
 
                 default:
                     Debug.Assert(args.Count > Runtime.RubyOps.OptimizedOpCallParamCount);
-                    return Methods.MakeArrayN.OpCall(AstUtils.NewArrayHelper(typeof(object), args));
+                    return Methods.MakeArrayOwned.OpCall(AstUtils.NewArrayHelper(typeof(object), args));
             }
         }
 

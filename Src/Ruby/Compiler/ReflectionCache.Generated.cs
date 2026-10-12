@@ -450,6 +450,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MakeArray5;
         public static MethodInfo/*!*/ MakeArrayN { get { return _MakeArrayN ?? (_MakeArrayN = CallInstruction.CacheFunc<System.Object[], IronRuby.Builtins.RubyArray>(RubyOps.MakeArrayN)); } }
         private static MethodInfo _MakeArrayN;
+        public static MethodInfo/*!*/ MakeArrayOwned { get { return _MakeArrayOwned ?? (_MakeArrayOwned = CallInstruction.CacheFunc<System.Object[], IronRuby.Builtins.RubyArray>(RubyOps.MakeArrayOwned)); } }
+        private static MethodInfo _MakeArrayOwned;
         public static MethodInfo/*!*/ MakeClrProtectedMethodCalledError { get { return _MakeClrProtectedMethodCalledError ?? (_MakeClrProtectedMethodCalledError = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Exception>(RubyOps.MakeClrProtectedMethodCalledError)); } }
         private static MethodInfo _MakeClrProtectedMethodCalledError;
         public static MethodInfo/*!*/ MakeClrVirtualMethodCalledError { get { return _MakeClrVirtualMethodCalledError ?? (_MakeClrVirtualMethodCalledError = CallInstruction.CacheFunc<IronRuby.Runtime.RubyContext, System.Object, System.String, System.Exception>(RubyOps.MakeClrVirtualMethodCalledError)); } }

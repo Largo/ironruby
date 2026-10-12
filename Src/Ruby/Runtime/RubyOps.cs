@@ -1675,47 +1675,35 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray1(object item1) {
-            RubyArray result = new RubyArray(1);
-            result.Add(item1);
-            return result;
+            return new RubyArray(new object[] { item1, null, null, null }, 0, 1);
         }
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray2(object item1, object item2) {
-            RubyArray result = new RubyArray(2);
-            result.Add(item1);
-            result.Add(item2);
-            return result;
+            return new RubyArray(new object[] { item1, item2, null, null }, 0, 2);
         }
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray3(object item1, object item2, object item3) {
-            RubyArray result = new RubyArray(3);
-            result.Add(item1);
-            result.Add(item2);
-            result.Add(item3);
-            return result;
+            return new RubyArray(new object[] { item1, item2, item3, null }, 0, 3);
         }
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray4(object item1, object item2, object item3, object item4) {
-            RubyArray result = new RubyArray(4);
-            result.Add(item1);
-            result.Add(item2);
-            result.Add(item3);
-            result.Add(item4);
-            return result;
+            return new RubyArray(new object[] { item1, item2, item3, item4 }, 0, 4);
         }
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray5(object item1, object item2, object item3, object item4, object item5) {
-            RubyArray result = new RubyArray(5);
-            result.Add(item1);
-            result.Add(item2);
-            result.Add(item3);
-            result.Add(item4);
-            result.Add(item5);
-            return result;
+            return new RubyArray(new object[] { item1, item2, item3, item4, item5 }, 0, 5);
+        }
+
+        // The elements of an array literal of more than five, in an array built for it alone
+        // (ReflectionCache.MakeArrayOpCall): the Array takes it over instead of copying it.
+        [Emitted]
+        public static RubyArray/*!*/ MakeArrayOwned(object[]/*!*/ items) {
+            Debug.Assert(items.Length >= Utils.MinListSize);
+            return new RubyArray(items, 0, items.Length);
         }
 
         [Emitted]
