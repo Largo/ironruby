@@ -46,6 +46,7 @@ namespace IronRuby.Compiler.Ast {
         private readonly Expression/*!*/ _keywords;
         private readonly string/*!*/[]/*!*/ _names;
         private readonly RubyEncoding/*!*/ _encoding;
+        // Match: how many of the names are required; Value: where the keyword is declared
         private readonly int _requiredCount;
         private readonly bool _acceptsRest;
         private readonly Expression _defaultValue;
@@ -81,12 +82,13 @@ namespace IronRuby.Compiler.Ast {
         }
 
         /// <summary>
-        /// The value the call passed for keyword <paramref name="name"/>. If it passed none,
-        /// <paramref name="defaultValue"/> is evaluated instead, or nil if there is none.
+        /// The value the call passed for keyword <paramref name="name"/>, the method's keyword number
+        /// <paramref name="position"/>. If it passed none, <paramref name="defaultValue"/> is evaluated
+        /// instead, or nil if there is none.
         /// </summary>
-        public static KeywordParameterRead/*!*/ Value(Expression/*!*/ keywords, string/*!*/ name, Expression defaultValue,
+        public static KeywordParameterRead/*!*/ Value(Expression/*!*/ keywords, string/*!*/ name, int position, Expression defaultValue,
             RubyEncoding/*!*/ encoding, SourceSpan location) {
-            return new KeywordParameterRead(ReadKind.Value, keywords, new[] { name }, encoding, 0, false, defaultValue, location);
+            return new KeywordParameterRead(ReadKind.Value, keywords, new[] { name }, encoding, position, false, defaultValue, location);
         }
 
         /// <summary>
@@ -129,7 +131,8 @@ namespace IronRuby.Compiler.Ast {
                         Ast.Equal(
                             Ast.Assign(value, Methods.GetKeywordArgument.OpCall(
                                 AstUtils.Box(_keywords.TransformRead(gen)),
-                                AstUtils.Constant(gen.Context.CreateSymbol(_names[0], _encoding))
+                                AstUtils.Constant(gen.Context.CreateSymbol(_names[0], _encoding)),
+                                AstUtils.Constant(_requiredCount)
                             )),
                             Ast.Field(null, Fields.DefaultArgument)
                         ),

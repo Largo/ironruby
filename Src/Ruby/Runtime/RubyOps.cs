@@ -1691,6 +1691,39 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        // `f(a: x)`, `f(a: x, b: y)` and `f(a: x, b: y, c: z)` with Symbol literals for keys, the
+        // usual keyword call: no item array to allocate, and none of the conversions
+        // SetHashElement applies to a String or nil key. A repeated key keeps the last value, as
+        // in MRI (and SetHashElements).
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash1(RubyScope/*!*/ scope, object key1, object value1) {
+            var result = new Hash(scope.RubyContext.EqualityComparer, 1);
+            result.IsKeywordArguments = true;
+            result[key1] = value1;
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash2(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2) {
+            var result = new Hash(scope.RubyContext.EqualityComparer, 2);
+            result.IsKeywordArguments = true;
+            result[key1] = value1;
+            result[key2] = value2;
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash3(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2,
+            object key3, object value3) {
+            var result = new Hash(scope.RubyContext.EqualityComparer, 3);
+            result.IsKeywordArguments = true;
+            result[key1] = value1;
+            result[key2] = value2;
+            result[key3] = value3;
+            return result;
+        }
+
         /// <summary>True for the hash a call site built out of keyword syntax.</summary>
         [Emitted]
         public static bool IsKeywordArgumentsHash(object obj) {
@@ -1713,35 +1746,19 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static bool KeywordArgumentsMatch(object keywords, RubySymbol/*!*/[]/*!*/ names, int requiredCount, bool acceptsRest) {
             var hash = keywords as Hash;
-            if (hash == null) {
-                return false;
-            }
-
-            int count = hash.Count;
-            if (count == 0) {
-                return requiredCount == 0;
-            }
-
-            int found = 0;
-            for (int i = 0; i < names.Length; i++) {
-                if (hash.ContainsKey(names[i])) {
-                    found++;
-                } else if (i < requiredCount) {
-                    return false;
-                }
-            }
-            return acceptsRest || found == count;
+            return hash != null && hash.HasKeywords(names, requiredCount, acceptsRest);
         }
 
         /// <summary>
         /// The value the call passed for keyword <paramref name="name"/>, or
-        /// <see cref="DefaultArgument"/> if it passed none.
+        /// <see cref="DefaultArgument"/> if it passed none. <paramref name="position"/> is where the
+        /// method declares the keyword, which is where a call usually puts it too.
         /// </summary>
         [Emitted]
-        public static object GetKeywordArgument(object keywords, RubySymbol/*!*/ name) {
+        public static object GetKeywordArgument(object keywords, RubySymbol/*!*/ name, int position) {
             var hash = keywords as Hash;
             object value;
-            return (hash != null && hash.TryGetValue(name, out value)) ? value : DefaultArgument;
+            return (hash != null && hash.TryGetValueByIdentity(name, position, out value)) ? value : DefaultArgument;
         }
 
         /// <summary>

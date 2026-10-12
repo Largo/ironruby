@@ -2378,7 +2378,7 @@ namespace IronRuby.Prism {
                         requiredNames.Add(required.Name);
                         var local = CurrentScope.ResolveOrAddVariable(required.Name, kwSpan);
                         prologue.Add(new SimpleAssignmentExpression(local,
-                            KeywordParameterRead.Value(kwVar, required.Name, null, _encoding, kwSpan),
+                            KeywordParameterRead.Value(kwVar, required.Name, names.Count - 1, null, _encoding, kwSpan),
                             null, kwSpan));
                         break;
                     }
@@ -2387,7 +2387,7 @@ namespace IronRuby.Prism {
                         optionalNames.Add(optKeyword.Name);
                         var local = CurrentScope.ResolveOrAddVariable(optKeyword.Name, kwSpan);
                         prologue.Add(new SimpleAssignmentExpression(local,
-                            KeywordParameterRead.Value(kwVar, optKeyword.Name, Expr(optKeyword.Value), _encoding, kwSpan),
+                            KeywordParameterRead.Value(kwVar, optKeyword.Name, names.Count - 1, Expr(optKeyword.Value), _encoding, kwSpan),
                             null, kwSpan));
                         break;
                     }
