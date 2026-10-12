@@ -130,6 +130,45 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            /// <summary>
+            /// Take without spinning, giving up after <paramref name="milliseconds"/>; for the pool.
+            /// </summary>
+            internal bool TryTake(int milliseconds, out object message) {
+                long deadline = Environment.TickCount64 + milliseconds;
+                while (true) {
+                    bool interrupted = false;
+                    lock (_lock) {
+                        if (_count == 0) {
+                            int left = (int)(deadline - Environment.TickCount64);
+                            if (left <= 0) {
+                                message = null;
+                                return false;
+                            }
+                            _blocked = true;
+                            try {
+                                Monitor.Wait(_lock, left);
+                            } catch (ThreadInterruptedException) {
+                                interrupted = true;
+                            } finally {
+                                _blocked = false;
+                            }
+                        }
+
+                        if (!interrupted && _count != 0) {
+                            message = _message;
+                            int count = _count - 1;
+                            _message = (count > 0) ? _overflow.Dequeue() : null;
+                            _count = count;
+                            return true;
+                        }
+                    }
+
+                    if (interrupted) {
+                        RubyUtils.TranslateThreadInterrupt();
+                    }
+                }
+            }
+
             private bool Spin() {
                 long start = Stopwatch.GetTimestamp();
                 int round = 0;
@@ -170,6 +209,123 @@ namespace IronRuby.Builtins {
         private static object _currentFiber;
         [ThreadStatic]
         private static RubyContext _currentFiberContext;
+
+        #region the pool of fiber threads
+
+        // Starting a CLR thread waits until the OS has scheduled it, which is most of what creating
+        // a fiber cost. The thread of a fiber that has finished therefore parks here for a while,
+        // and the next fiber to start runs on it. Before it parks it does for the finished fiber
+        // what the end of the thread would have done (drop its mutexes and any undelivered
+        // Thread#raise), and it forgets the fiber's locals, so the next fiber starts as on a new
+        // thread. A parked thread is left out of Thread.list and ThreadGroup#list.
+        private sealed class FiberWorker {
+            internal readonly Thread/*!*/ Thread;
+            internal readonly FiberMailbox/*!*/ Jobs = new FiberMailbox();
+
+            internal FiberWorker(Thread/*!*/ thread) {
+                Thread = thread;
+            }
+        }
+
+        private static readonly List<FiberWorker>/*!*/ _idleFiberWorkers = new List<FiberWorker>();
+        private const int MaxIdleFiberWorkers = 8;
+        private const int FiberWorkerIdleMilliseconds = 2000;
+
+        [ThreadStatic]
+        private static FiberWorker _fiberWorker;
+
+        /// <summary>
+        /// Hands <paramref name="fiber"/> to a parked fiber thread and answers that thread, or nil when
+        /// none is parked (the fiber then gets a new thread).
+        /// </summary>
+        [RubyMethod("__fiber_reuse__", RubyMethodAttributes.PublicSingleton)]
+        public static Thread ReuseFiberThread(object self, object fiber) {
+            FiberWorker worker;
+            while (true) {
+                lock (_idleFiberWorkers) {
+                    int last = _idleFiberWorkers.Count - 1;
+                    if (last < 0) {
+                        return null;
+                    }
+                    worker = _idleFiberWorkers[last];
+                    _idleFiberWorkers.RemoveAt(last);
+                }
+                if (worker.Thread.IsAlive) {
+                    break;
+                }
+            }
+
+            // The thread now runs a fiber of the current thread's, as a new one would have.
+            RubyThreadInfo info = RubyThreadInfo.FromThread(worker.Thread);
+            info.Group = RubyThreadInfo.FromThread(Thread.CurrentThread).Group;
+            info.IsIdleFiberWorker = false;
+            worker.Jobs.Post(fiber);
+            return worker.Thread;
+        }
+
+        /// <summary>
+        /// Called on a fiber thread whose fiber has finished: cleans up after the fiber and waits
+        /// for the next one. Nil means the thread should end (the pool is full, nobody came in
+        /// time, or the program is ending).
+        /// </summary>
+        [RubyMethod("__fiber_park__", RubyMethodAttributes.PublicSingleton)]
+        public static object ParkFiberThread(object self) {
+            Thread current = Thread.CurrentThread;
+            IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(current);
+            RubyUtils.GetPendingAsyncException(current);
+            RubyThreadInfo info = RubyThreadInfo.FromThread(current);
+            info.ClearLocals();
+            _currentFiber = null;
+            _currentFiberContext = null;
+
+            FiberWorker worker = _fiberWorker ?? (_fiberWorker = new FiberWorker(current));
+            lock (_idleFiberWorkers) {
+                if (_terminating || _idleFiberWorkers.Count >= MaxIdleFiberWorkers) {
+                    return null;
+                }
+                info.IsIdleFiberWorker = true;
+                _idleFiberWorkers.Add(worker);
+            }
+
+            bool parked = true;
+            try {
+                object fiber;
+                if (worker.Jobs.TryTake(FiberWorkerIdleMilliseconds, out fiber)) {
+                    parked = false;
+                    return fiber;
+                }
+                lock (_idleFiberWorkers) {
+                    if (_idleFiberWorkers.Remove(worker)) {
+                        // retired; stays hidden until the thread is gone
+                        parked = false;
+                        return null;
+                    }
+                }
+                // ReuseFiberThread took this thread just now: its fiber is on the way
+                parked = false;
+                return worker.Jobs.Take();
+            } finally {
+                if (parked) {
+                    // left by an exception (Thread#kill): nobody may hand this thread a fiber now
+                    lock (_idleFiberWorkers) {
+                        _idleFiberWorkers.Remove(worker);
+                    }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Releases the mutexes the fiber running on this thread still holds, as the end of the
+        /// thread would. Called by a fiber that has finished, before it hands control back: the
+        /// fiber it hands it to may run (and lock) right away, while this thread is still alive.
+        /// </summary>
+        [RubyMethod("__fiber_release_locks__", RubyMethodAttributes.PublicSingleton)]
+        public static object ReleaseFiberLocks(object self) {
+            IronRuby.StandardLibrary.Threading.RubyMutex.ReleaseLocksOf(Thread.CurrentThread);
+            return null;
+        }
+
+        #endregion
 
         [RubyMethod("__fiber_mailbox__", RubyMethodAttributes.PublicSingleton)]
         public static FiberMailbox/*!*/ CreateFiberMailbox(object self) {

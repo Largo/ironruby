@@ -10066,9 +10066,24 @@ namespace IronRuby.Builtins {
                 new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberMailbox>(IronRuby.Builtins.ThreadOps.CreateFiberMailbox)
             );
             
+            DefineLibraryMethod(module, "__fiber_park__", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.ThreadOps.ParkFiberThread)
+            );
+            
             DefineLibraryMethod(module, "__fiber_post__", 0x61, 
                 0x00000002U, 
                 new Func<System.Object, IronRuby.Builtins.ThreadOps.FiberMailbox, System.Object, System.Object>(IronRuby.Builtins.ThreadOps.FiberPost)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_release_locks__", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, System.Object>(IronRuby.Builtins.ThreadOps.ReleaseFiberLocks)
+            );
+            
+            DefineLibraryMethod(module, "__fiber_reuse__", 0x61, 
+                0x00000000U, 
+                new Func<System.Object, System.Object, System.Threading.Thread>(IronRuby.Builtins.ThreadOps.ReuseFiberThread)
             );
             
             DefineLibraryMethod(module, "__fiber_take__", 0x61, 
