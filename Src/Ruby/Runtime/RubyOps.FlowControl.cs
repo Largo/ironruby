@@ -377,6 +377,9 @@ namespace IronRuby.Runtime {
         /// <returns>True if the method should terminate returning the result of yield.</returns>
         [Emitted]
         public static bool MethodYield(RubyScope/*!*/ scope, BlockParam/*!*/ yieldedBlockFlowControl, object returnValue) {
+            if (yieldedBlockFlowControl.ReturnReason == BlockReturnReason.Undefined) {
+                return false;
+            }
             return MethodYieldRfc(scope.FlowControlScope, yieldedBlockFlowControl, returnValue);
         }
 

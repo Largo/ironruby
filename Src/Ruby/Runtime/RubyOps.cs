@@ -513,7 +513,16 @@ namespace IronRuby.Runtime {
         /// only the positional arguments against a lambda, and `|**nil|` refuses keywords in a
         /// proc as well as in a lambda.
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void RequireLambdaArity(Proc/*!*/ proc, int argCount, object lastArg) {
+            // A plain block takes any arguments - the common case, so it does not make the call:
+            // only a lambda, or a signature with keywords or **nil, has anything to check.
+            if (proc.Kind == ProcKind.Lambda || proc.Dispatcher.ChecksKeywords) {
+                CheckLambdaArity(proc, argCount, lastArg);
+            }
+        }
+
+        private static void CheckLambdaArity(Proc/*!*/ proc, int argCount, object lastArg) {
             var signature = proc.Dispatcher.ParameterSignature;
             if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
                 var keywords = argCount > 0 ? lastArg as Hash : null;
