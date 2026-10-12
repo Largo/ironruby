@@ -277,6 +277,11 @@ namespace IronRuby.Runtime.Calls {
                 return null;
             }
 
+            // respond_to?(:sym) and send(:sym) rules are specialized on the receiver's class (DispatchIntrinsics):
+            if (DispatchIntrinsics.MaySpecialize(method.Info)) {
+                return null;
+            }
+
             SharedRule shared = null;
             var sharedRules = _sharedRules;
             if (sharedRules != null) {

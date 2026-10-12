@@ -169,5 +169,13 @@ namespace IronRuby.Runtime.Calls {
             sentName = symbol.ToString();
             return true;
         }
+
+        /// <summary>
+        /// The rules TryBuildRespondTo and TryBuildSend build depend on the receiver's class, not only on the
+        /// method, so RubyCallAction.BindShared must not hand them to receivers of other classes.
+        /// </summary>
+        internal static bool MaySpecialize(RubyMemberInfo/*!*/ method) {
+            return IsKernelMethod(method, ref _respondTo, "RespondTo") || IsSendMethod(method);
+        }
     }
 }
