@@ -33,18 +33,18 @@ namespace IronRuby.Builtins {
         /// Taking spins for a few microseconds before it blocks. A resume / Fiber.yield round trip
         /// whose other side answers quickly - Enumerator#next over a generator, a fiber that yields
         /// in a loop - then costs two cache-line transfers instead of two kernel wake-ups, which is
-        /// most of what a switch used to cost. The spin budget adapts per mailbox: it doubles while
-        /// answers arrive in time and halves when one does not, so a fiber that is resumed rarely
-        /// soon stops burning a core on it. Single-core machines never spin.
+        /// most of what a switch used to cost. The spin budget adapts per mailbox: it goes back to
+        /// the cap whenever the message arrived shortly after the spin gave up, and halves when it
+        /// took long, so a fiber that is resumed rarely soon stops burning a core on it. Single-core
+        /// machines never spin.
         ///
         /// A blocked take is a Monitor wait, so Thread#kill / Thread#raise (delivered with
         /// Thread.Interrupt) wake it exactly as they wake Queue#pop, which the mailbox used to be.
         /// </summary>
         public sealed class FiberMailbox {
-            private const long MinSpinTicks = 0;
-            private static readonly long _maxSpinTicks = Stopwatch.Frequency / 20000;       // 50us
-            private static readonly long _initialSpinTicks = Stopwatch.Frequency / 50000;   // 20us
-            private static readonly long _spinStepTicks = Stopwatch.Frequency / 500000;     // 2us
+            // How long a take spins before it blocks: between a step and the cap, adapted per mailbox.
+            private static readonly long _maxSpinTicks = Stopwatch.Frequency / 25000;      // 40us
+            private static readonly long _minSpinTicks = Stopwatch.Frequency / 1000000;    // 1us
             private static readonly bool _canSpin = Environment.ProcessorCount > 1;
 
             private readonly object/*!*/ _lock = new object();
@@ -57,7 +57,7 @@ namespace IronRuby.Builtins {
             // The receiver is parked in Monitor.Wait (guarded by _lock).
             private bool _blocked;
 
-            private long _spinTicks = _initialSpinTicks;
+            private long _spinTicks = _maxSpinTicks;
 
             // The fiber group's owner, and its RubyThreadInfo, cached for FiberTake.
             private Thread _owner;
@@ -82,8 +82,10 @@ namespace IronRuby.Builtins {
             }
 
             public object Take() {
+                long spinStart = 0;
                 if (_count == 0 && _canSpin) {
-                    Spin();
+                    spinStart = Stopwatch.GetTimestamp();
+                    Spin(spinStart);
                 }
 
                 while (true) {
@@ -97,6 +99,16 @@ namespace IronRuby.Builtins {
                                 interrupted = true;
                             } finally {
                                 _blocked = false;
+                            }
+
+                            if (spinStart != 0) {
+                                // The spin gave up. If the message came soon after, a longer spin would
+                                // have caught it; if it took long, the other side does real work (or
+                                // waits for something) between switches, and spinning is wasted.
+                                long waited = Stopwatch.GetTimestamp() - spinStart;
+                                long budget = _spinTicks;
+                                _spinTicks = (waited < _maxSpinTicks) ? _maxSpinTicks : Math.Max(_minSpinTicks, budget / 2);
+                                spinStart = 0;
                             }
                         }
 
@@ -117,27 +129,16 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            private void Spin() {
+            private void Spin(long start) {
                 long budget = _spinTicks;
-                if (budget <= MinSpinTicks) {
-                    // Recent answers all came too late to catch. Try again every now and then, the
-                    // fiber may have changed its rhythm.
-                    _spinTicks = _spinStepTicks;
-                    return;
-                }
-
-                long start = Stopwatch.GetTimestamp();
                 while (true) {
-                    for (int i = 0; i < 8; i++) {
-                        Thread.SpinWait(4);
+                    for (int i = 0; i < 4; i++) {
+                        Thread.SpinWait(2);
                         if (_count != 0) {
-                            long next = budget * 2;
-                            _spinTicks = (next > _maxSpinTicks) ? _maxSpinTicks : next;
                             return;
                         }
                     }
                     if (Stopwatch.GetTimestamp() - start > budget) {
-                        _spinTicks = budget / 2 > _spinStepTicks ? budget / 2 : MinSpinTicks;
                         return;
                     }
                 }
