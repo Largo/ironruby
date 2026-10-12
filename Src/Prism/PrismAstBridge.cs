@@ -1526,8 +1526,8 @@ namespace IronRuby.Prism {
                     var span = Span(arg);
                     var temp = NewTemp(singleSplat.Value != null ? Expr(singleSplat.Value) : AnonymousParameter(AnonymousKeywordRestName, singleSplat),
                         span, out var assignment);
-                    exprs.Add(new KeywordArgumentSplat(assignment, new MethodCall(new HashConstructor(new Maplet[0], true, span), "merge",
-                        new Arguments(new OrExpression(temp, new HashConstructor(new Maplet[0], span), span)), span)));
+                    exprs[i] = new KeywordArgumentSplat(assignment, new MethodCall(new HashConstructor(new Maplet[0], true, span), "merge",
+                        new Arguments(new OrExpression(temp, new HashConstructor(new Maplet[0], span), span)), span));
                 } else if (IsSplattedKeywordHash(arg)) {
                     // `f(**opts)` must pass nothing when opts is empty - see KeywordArgumentSplat.
                     exprs[i] = new KeywordArgumentSplat(Argument(arg));
