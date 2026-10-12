@@ -30,21 +30,24 @@ namespace IronRuby.Builtins {
         /// own and exactly one fiber of a group runs at a time, so a switch is "post to the target's
         /// mailbox, then take from my own".
         ///
-        /// Taking spins for a few microseconds before it blocks. A resume / Fiber.yield round trip
-        /// whose other side answers quickly - Enumerator#next over a generator, a fiber that yields
-        /// in a loop - then costs two cache-line transfers instead of two kernel wake-ups, which is
-        /// most of what a switch used to cost. The spin budget adapts per mailbox: it goes back to
-        /// the cap whenever the message arrived shortly after the spin gave up, and halves when it
-        /// took long, so a fiber that is resumed rarely soon stops burning a core on it. Single-core
-        /// machines never spin.
+        /// Taking spins for a while before it blocks. A resume / Fiber.yield round trip whose other
+        /// side answers quickly - Enumerator#next over a generator, a fiber that yields in a loop -
+        /// then costs two cache-line transfers instead of two kernel wake-ups, which is most of what
+        /// a switch used to cost. A wake-up costs tens of microseconds on a busy machine, so the spin
+        /// may run about as long before it gives up. Two misses in a row pause spinning for that
+        /// mailbox - a fiber that is resumed rarely, or threads that cannot run side by side, would
+        /// only burn a core on it - and every 32nd take tries again. The spin yields the CPU now and
+        /// then, in case the thread it waits for is queued behind it. Single-core machines never
+        /// spin.
         ///
         /// A blocked take is a Monitor wait, so Thread#kill / Thread#raise (delivered with
         /// Thread.Interrupt) wake it exactly as they wake Queue#pop, which the mailbox used to be.
         /// </summary>
         public sealed class FiberMailbox {
-            // How long a take spins before it blocks: between a step and the cap, adapted per mailbox.
-            private static readonly long _maxSpinTicks = Stopwatch.Frequency / 25000;      // 40us
-            private static readonly long _minSpinTicks = Stopwatch.Frequency / 1000000;    // 1us
+            // How long a take spins before it blocks, and how spinning is paused and probed.
+            private static readonly long _spinTicks = Stopwatch.Frequency / 10000;          // 100us
+            private const int SpinMissesToPause = 2;
+            private const int PausedTakesPerProbe = 32;
             private static readonly bool _canSpin = Environment.ProcessorCount > 1;
 
             private readonly object/*!*/ _lock = new object();
@@ -57,7 +60,10 @@ namespace IronRuby.Builtins {
             // The receiver is parked in Monitor.Wait (guarded by _lock).
             private bool _blocked;
 
-            private long _spinTicks = _maxSpinTicks;
+            // Spin misses in a row; takes since spinning was paused (spinning is paused while
+            // _misses has reached SpinMissesToPause).
+            private int _misses;
+            private int _pausedTakes;
 
             // The fiber group's owner, and its RubyThreadInfo, cached for FiberTake.
             private Thread _owner;
@@ -82,10 +88,15 @@ namespace IronRuby.Builtins {
             }
 
             public object Take() {
-                long spinStart = 0;
                 if (_count == 0 && _canSpin) {
-                    spinStart = Stopwatch.GetTimestamp();
-                    Spin(spinStart);
+                    if (_misses < SpinMissesToPause || ++_pausedTakes >= PausedTakesPerProbe) {
+                        _pausedTakes = 0;
+                        if (Spin()) {
+                            _misses = 0;
+                        } else if (_misses < SpinMissesToPause) {
+                            _misses++;
+                        }
+                    }
                 }
 
                 while (true) {
@@ -99,16 +110,6 @@ namespace IronRuby.Builtins {
                                 interrupted = true;
                             } finally {
                                 _blocked = false;
-                            }
-
-                            if (spinStart != 0) {
-                                // The spin gave up. If the message came soon after, a longer spin would
-                                // have caught it; if it took long, the other side does real work (or
-                                // waits for something) between switches, and spinning is wasted.
-                                long waited = Stopwatch.GetTimestamp() - spinStart;
-                                long budget = _spinTicks;
-                                _spinTicks = (waited < _maxSpinTicks) ? _maxSpinTicks : Math.Max(_minSpinTicks, budget / 2);
-                                spinStart = 0;
                             }
                         }
 
@@ -129,17 +130,24 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            private void Spin(long start) {
-                long budget = _spinTicks;
+            private bool Spin() {
+                long start = Stopwatch.GetTimestamp();
+                int round = 0;
                 while (true) {
                     for (int i = 0; i < 4; i++) {
                         Thread.SpinWait(2);
                         if (_count != 0) {
-                            return;
+                            return true;
                         }
                     }
-                    if (Stopwatch.GetTimestamp() - start > budget) {
-                        return;
+                    if ((++round & 7) == 0) {
+                        Thread.Yield();
+                        if (_count != 0) {
+                            return true;
+                        }
+                    }
+                    if (Stopwatch.GetTimestamp() - start > _spinTicks) {
+                        return false;
                     }
                 }
             }
