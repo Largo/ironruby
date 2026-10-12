@@ -1,0 +1,96 @@
+diff --git a/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs b/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
+index 7176c59..fec49a4 100644
+--- a/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
++++ b/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
+@@ -30,6 +30,91 @@ namespace Microsoft.Scripting.Utils {
+         public static void RemoveData(this Exception e, object key) {
+             e.Data.Remove(key);
+         }
++#elif NETCOREAPP
++        // Exception.Data, as on the desktop: languages attach data to every exception they see go
++        // by (the interpreter its frames, IronRuby its exception state), several times per raise.
++        // The ConditionalWeakTable below costs a dependent handle per exception, which every GC has
++        // to scan, and a global lock plus a LINQ scan per lookup. Exception.Data's dictionary is not
++        // thread-safe, hence the lock on it - uncontended in practice. An exception type whose Data
++        // is not writable gets the table instead.
++        public static object GetData(this Exception e, object key) {
++            var data = e.Data;
++            if (data is null || data.IsReadOnly) {
++                return GetTableData(e, key);
++            }
++            lock (data) {
++                return data[key];
++            }
++        }
++
++        public static void SetData(this Exception e, object key, object value) {
++            var data = e.Data;
++            if (data is null || data.IsReadOnly) {
++                SetTableData(e, key, value);
++                return;
++            }
++            lock (data) {
++                data[key] = value;
++            }
++        }
++
++        public static void RemoveData(this Exception e, object key) {
++            var data = e.Data;
++            if (data is null || data.IsReadOnly) {
++                RemoveTableData(e, key);
++                return;
++            }
++            lock (data) {
++                data.Remove(key);
++            }
++        }
++
++        private static ConditionalWeakTable<Exception, List<KeyValuePair<object, object>>> _exceptionData;
++
++        private static void SetTableData(Exception e, object key, object value) {
++            if (_exceptionData is null) {
++                Interlocked.CompareExchange(ref _exceptionData, new ConditionalWeakTable<Exception, List<KeyValuePair<object, object>>>(), null);
++            }
++
++            lock (_exceptionData) {
++                var data = _exceptionData.GetOrCreateValue(e);
++                int index = data.FindIndex(entry => entry.Key == key);
++                if (index >= 0) {
++                    data[index] = new KeyValuePair<object, object>(key, value);
++                } else {
++                    data.Add(new KeyValuePair<object, object>(key, value));
++                }
++            }
++        }
++
++        private static object GetTableData(Exception e, object key) {
++            if (_exceptionData is null) {
++                return null;
++            }
++
++            lock (_exceptionData) {
++                if (!_exceptionData.TryGetValue(e, out List<KeyValuePair<object, object>> data)) {
++                    return null;
++                }
++                return data.FirstOrDefault(entry => entry.Key == key).Value;
++            }
++        }
++
++        private static void RemoveTableData(Exception e, object key) {
++            if (_exceptionData is null) {
++                return;
++            }
++
++            lock (_exceptionData) {
++                if (!_exceptionData.TryGetValue(e, out List<KeyValuePair<object, object>> data)) {
++                    return;
++                }
++                int index = data.FindIndex(entry => entry.Key == key);
++                if (index >= 0) {
++                    data.RemoveAt(index);
++                }
++            }
++        }
+ #else
+         private static ConditionalWeakTable<Exception, List<KeyValuePair<object, object>>> _exceptionData;
+ 

@@ -69,6 +69,12 @@ namespace IronRuby.Runtime {
         // it (see CaptureExceptionTrace). Only ever set while _backtrace is null.
         [NonSerialized]
         private RubyStackTraceBuilder.CapturedTrace _capturedTrace;
+
+        // The catch-site walk of the interpreted frame that last caught an exception on this thread.
+        [ThreadStatic]
+        private static WeakReference<InterpretedFrame> _lastCatchFrame;
+        [ThreadStatic]
+        private static StackTrace _lastCatchSiteTrace;
 #endif
 
         // Exception#cause; _hasCause tells "decided" from "not raised yet", see TrySetCause.
@@ -146,8 +152,37 @@ namespace IronRuby.Runtime {
             if (!HasBacktrace) {
                 var context = scope.RubyContext;
 #if FEATURE_STACK_TRACE
-                StackTrace catchSiteTrace = RubyStackTraceBuilder.GetClrStackTrace(null,
-                    context.DomainManager.Configuration.DebugMode);
+                bool debugMode = context.DomainManager.Configuration.DebugMode;
+
+                // The catch-site walk is the expensive part of a raise: the whole CLR stack, every frame's
+                // method resolved. All but its top - the frames this one sees the exception from - lies
+                // below the catching frame, and nothing below a frame changes while the frame lives. So an
+                // interpreted frame that keeps catching (a loop around begin/rescue) reuses the walk it
+                // took the first time. Interpreted frames because their identity is that of a single
+                // invocation (a scope is not: eval code runs in the scope of its binding); not in the modes
+                // that report CLR frames, which would show the top of the walk too.
+                StackTrace catchSiteTrace = null;
+                InterpretedFrame frame = scope.InterpretedFrame;
+                WeakReference<InterpretedFrame> lastFrame = _lastCatchFrame;
+                bool reusable = frame != null && !debugMode && !context.Options.ExceptionDetail &&
+                    frame == InterpretedFrame.CurrentFrame.Value;
+
+                InterpretedFrame last;
+                if (reusable && lastFrame != null && lastFrame.TryGetTarget(out last) && last == frame) {
+                    catchSiteTrace = _lastCatchSiteTrace;
+                }
+
+                if (catchSiteTrace == null) {
+                    catchSiteTrace = RubyStackTraceBuilder.GetClrStackTrace(null, debugMode);
+                    if (reusable && RubyStackTraceBuilder.IsReusableCatchSiteTrace(catchSiteTrace)) {
+                        _lastCatchSiteTrace = catchSiteTrace;
+                        if (lastFrame != null) {
+                            lastFrame.SetTarget(frame);
+                        } else {
+                            _lastCatchFrame = new WeakReference<InterpretedFrame>(frame);
+                        }
+                    }
+                }
 
                 // formatted on first use, see Backtrace:
                 _capturedTrace = new RubyStackTraceBuilder.CapturedTrace(context, _exception, catchSiteTrace, scope.InterpretedFrame != null);

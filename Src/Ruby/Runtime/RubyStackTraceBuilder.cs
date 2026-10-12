@@ -262,6 +262,37 @@ namespace IronRuby.Runtime {
             return exception != null ? new StackTrace(exception, needFileInfo) : new StackTrace(needFileInfo);
         }
 
+        /// <summary>
+        /// Whether a catch-site walk taken in an interpreted frame (see RubyExceptionData.CaptureExceptionTrace)
+        /// can stand for the walk of any other exception the frame catches: whether it shows the frame
+        /// once. While the interpreter runs a frame's finally blocks on the way out of an exception it
+        /// re-enters the frame's Run method from HandleException, and the walk then has two runs of it.
+        /// </summary>
+        internal static bool IsReusableCatchSiteTrace(StackTrace/*!*/ trace) {
+            var frames = trace.GetFrames();
+            int i = 0;
+            while (i < frames.Length && !IsInterpreterRunFrame(frames[i])) {
+                i++;
+            }
+            if (i == frames.Length) {
+                return false;
+            }
+            var interpreterType = frames[i].GetMethod().DeclaringType;
+            while (i < frames.Length && IsInterpreterRunFrame(frames[i])) {
+                i++;
+            }
+            if (i == frames.Length) {
+                return false;
+            }
+            var next = frames[i].GetMethod();
+            return next != null && !(next.DeclaringType == interpreterType && next.Name == "HandleException");
+        }
+
+        private static bool IsInterpreterRunFrame(StackFrame/*!*/ frame) {
+            var method = frame.GetMethod();
+            return method != null && InterpretedFrame.IsInterpretedFrame(method);
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)] // CF
         private static string GetFileName(StackFrame/*!*/ frame) {
             return frame.GetFileName();
