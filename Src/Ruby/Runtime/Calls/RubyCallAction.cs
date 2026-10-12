@@ -206,6 +206,15 @@ namespace IronRuby.Runtime.Calls {
                     return true;
                 }
 
+                if (DispatchIntrinsics.TryBuildRespondTo(metaBuilder, args, method.Info)) {
+                    return true;
+                }
+
+                string sentName;
+                if (defaultFallback && callClrMethods && DispatchIntrinsics.TryBuildSend(metaBuilder, args, method.Info, out sentName)) {
+                    return BuildCall(metaBuilder, sentName, args, defaultFallback, callClrMethods);
+                }
+
                 method.Info.BuildCall(metaBuilder, args, methodName);
 
                 // MRI 3.4+: a block passed to a method that never uses it may be ignored
