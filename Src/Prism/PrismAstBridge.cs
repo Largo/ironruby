@@ -22,7 +22,12 @@ namespace IronRuby.Prism {
         private readonly string/*!*/ _source;
         private readonly string _path;
         private readonly int _lineOffset;
-        private readonly List<int>/*!*/ _lineStarts;
+        // the offset each line starts at; the first _lineCount entries are used
+        private readonly int[]/*!*/ _lineStarts;
+        private readonly int _lineCount;
+        // the line the last location was found on: nodes come in source order, so the next
+        // lookup is almost always on that line or a few lines further down
+        private int _lineHint;
 
         // The line the first line of this source is reported as. 1 for a file; whatever
         // eval/module_eval/Binding#eval was told for a string, which is what makes __LINE__
@@ -52,10 +57,12 @@ namespace IronRuby.Prism {
             _lineOffset = RubyUtils.DecodeEvalLineOffset(ref path);
             _path = path;
             _encoding = encoding;
-            _lineStarts = new List<int> { 0 };
-            for (int i = 0; i < source.Length; i++) {
-                if (source[i] == '\n') _lineStarts.Add(i + 1);
+            var lineStarts = new List<int> { 0 };
+            for (int i = source.IndexOf('\n'); i >= 0; i = source.IndexOf('\n', i + 1)) {
+                lineStarts.Add(i + 1);
             }
+            _lineStarts = lineStarts.ToArray();
+            _lineCount = _lineStarts.Length;
         }
 
         public static SourceUnitTree Parse(SourceUnit/*!*/ sourceUnit, RubyCompilerOptions/*!*/ options, ErrorSink/*!*/ errorSink) {
@@ -259,11 +266,19 @@ namespace IronRuby.Prism {
         // ---- helpers ----
 
         private SourceSpan Span(Pm.PmNode node) {
-            return new SourceSpan(Location(node.StartOffset), Location(node.StartOffset + node.Length));
+            return Span(node.StartOffset, node.Length);
         }
 
         private SourceSpan Span(Pm.PmLocation location) {
-            return new SourceSpan(Location(location.Start), Location(location.Start + location.Length));
+            return Span(location.Start, location.Length);
+        }
+
+        private SourceSpan Span(int start, int length) {
+            int startLine = FindLine(start);
+            // the end is at or after the start: search on from the start's line
+            int end = start + length;
+            int endLine = FindLineFrom(end, startLine);
+            return new SourceSpan(MakeLocation(start, startLine), MakeLocation(end, endLine));
         }
 
         private string/*!*/ IdentifierText(string/*!*/ name) {
@@ -279,10 +294,45 @@ namespace IronRuby.Prism {
         }
 
         private SourceLocation Location(int index) {
-            int line = _lineStarts.BinarySearch(index);
-            if (line < 0) line = ~line - 1;
+            return MakeLocation(index, FindLine(index));
+        }
+
+        private SourceLocation MakeLocation(int index, int line) {
             if (index > _source.Length) index = _source.Length;
             return new SourceLocation(index, line + _startLine, index - _lineStarts[line] + 1);
+        }
+
+        /// <summary>
+        /// The last line that starts at or before <paramref name="index"/> (what a binary search of
+        /// the line starts finds), looked for from the line the previous lookup ended on.
+        /// </summary>
+        private int FindLine(int index) {
+            int hint = _lineHint;
+            int line = (_lineStarts[hint] <= index) ? FindLineFrom(index, hint) : FindLineFrom(index, 0);
+            _lineHint = line;
+            return line;
+        }
+
+        // the same, given a line that starts at or before index
+        private int FindLineFrom(int index, int line) {
+            int[] starts = _lineStarts;
+            int count = _lineCount;
+            for (int i = 0; i < 4; i++) {
+                if (line + 1 >= count || starts[line + 1] > index) {
+                    return line;
+                }
+                line++;
+            }
+            int lo = line, hi = count - 1;
+            while (lo < hi) {
+                int mid = lo + ((hi - lo + 1) >> 1);
+                if (starts[mid] <= index) {
+                    lo = mid;
+                } else {
+                    hi = mid - 1;
+                }
+            }
+            return lo;
         }
 
         private Exception Unsupported(Pm.PmNode node) {
@@ -970,12 +1020,36 @@ namespace IronRuby.Prism {
                 return;
             }
             string text = System.Text.Encoding.UTF8.GetString(pattern);
+            if (!MayHaveNestedQuantifier(text)) {
+                return;
+            }
             var warnings = RegexpTransformer.GetWarnings(text);
             if (warnings != null) {
                 foreach (var warning in warnings) {
                     _errorSink.Add(_sourceUnit, warning + ": /" + text + "/", span, Errors.RuntimeWarning, Severity.Warning);
                 }
             }
+        }
+
+        /// <summary>
+        /// The only warnings RegexpTransformer reports are about a quantifier applied directly to
+        /// another (`a**`, `a{2}*`, `a*{0,1}`), which needs two quantifier characters in a row. Whitespace
+        /// or a comment may sit between them in extended mode, so a pattern with either is always checked.
+        /// </summary>
+        private static bool MayHaveNestedQuantifier(string/*!*/ pattern) {
+            for (int i = 0; i < pattern.Length; i++) {
+                char c = pattern[i];
+                if (c == '#' || Char.IsWhiteSpace(c)) {
+                    return true;
+                }
+                if ((c == '?' || c == '*' || c == '+' || c == '}') && i + 1 < pattern.Length) {
+                    char d = pattern[i + 1];
+                    if (d == '?' || d == '*' || d == '+' || d == '{') {
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
 
         private Expression/*!*/ BigIntegerLiteral(BigInteger value, SourceSpan span) {
@@ -1427,24 +1501,27 @@ namespace IronRuby.Prism {
         /// </summary>
         private Arguments/*!*/ BuildArguments(Pm.PmNode argumentsNode, ref Block block) {
             if (argumentsNode == null) return new Arguments();
-            var exprs = new List<Expression>();
-            foreach (var arg in ((Pm.ArgumentsNode)argumentsNode).Arguments) {
+            var arguments = ((Pm.ArgumentsNode)argumentsNode).Arguments;
+            // each argument maps to exactly one expression
+            var exprs = new Expression[arguments.Length];
+            for (int i = 0; i < arguments.Length; i++) {
+                var arg = arguments[i];
                 if (arg is Pm.ForwardingArgumentsNode) {
                     var rest = CurrentScope.ResolveVariable(ForwardingRestName);
                     var fwdBlock = CurrentScope.ResolveVariable(ForwardingBlockName);
                     if (rest == null) throw Unsupported(arg);
-                    exprs.Add(new SplattedArgument(rest));
+                    exprs[i] = new SplattedArgument(rest);
                     if (block == null && fwdBlock != null) {
                         block = new BlockReference(fwdBlock, Span(arg));
                     }
                 } else if (IsSplattedKeywordHash(arg)) {
                     // `f(**opts)` must pass nothing when opts is empty - see KeywordArgumentSplat.
-                    exprs.Add(new KeywordArgumentSplat(Argument(arg)));
+                    exprs[i] = new KeywordArgumentSplat(Argument(arg));
                 } else {
-                    exprs.Add(Argument(arg));
+                    exprs[i] = Argument(arg);
                 }
             }
-            return new Arguments(exprs.ToArray());
+            return new Arguments(exprs);
         }
 
         /// <summary>
