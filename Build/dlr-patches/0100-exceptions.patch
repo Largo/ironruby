@@ -1,22 +1,26 @@
 diff --git a/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs b/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
-index 7176c59..fec49a4 100644
+index 7176c59..047827a 100644
 --- a/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
 +++ b/src/core/Microsoft.Dynamic/Utils/ExceptionUtils.cs
-@@ -30,6 +30,91 @@ namespace Microsoft.Scripting.Utils {
+@@ -30,6 +30,131 @@ namespace Microsoft.Scripting.Utils {
          public static void RemoveData(this Exception e, object key) {
              e.Data.Remove(key);
          }
 +#elif NETCOREAPP
-+        // Exception.Data, as on the desktop: languages attach data to every exception they see go
-+        // by (the interpreter its frames, IronRuby its exception state), several times per raise.
-+        // The ConditionalWeakTable below costs a dependent handle per exception, which every GC has
-+        // to scan, and a global lock plus a LINQ scan per lookup. Exception.Data's dictionary is not
-+        // thread-safe, hence the lock on it - uncontended in practice. An exception type whose Data
-+        // is not writable gets the table instead.
++        // Exception.Data's dictionary, as on the desktop: languages attach data to every exception they
++        // see go by (the interpreter its frames, IronRuby its exception state), several times per raise.
++        // The ConditionalWeakTable below costs a dependent handle per exception, which every GC has to
++        // scan, and a global lock plus a LINQ scan per lookup. The dictionary is not thread-safe, hence
++        // the lock on it - uncontended in practice.
++        //
++        // The dictionary is reached through Exception's own field where the runtime has it: the Data
++        // property is virtual, and the subclasses a language generates for its own exception classes
++        // override every virtual member to dispatch to the language first (IronRuby's do), which made a
++        // Data lookup cost microseconds. An exception type whose Data is not writable gets the table.
 +        public static object GetData(this Exception e, object key) {
-+            var data = e.Data;
-+            if (data is null || data.IsReadOnly) {
-+                return GetTableData(e, key);
++            var data = GetDictionary(e, false);
++            if (data is null) {
++                return _hasTableData ? GetTableData(e, key) : null;
 +            }
 +            lock (data) {
 +                return data[key];
@@ -24,8 +28,8 @@ index 7176c59..fec49a4 100644
 +        }
 +
 +        public static void SetData(this Exception e, object key, object value) {
-+            var data = e.Data;
-+            if (data is null || data.IsReadOnly) {
++            var data = GetDictionary(e, true);
++            if (data is null) {
 +                SetTableData(e, key, value);
 +                return;
 +            }
@@ -35,9 +39,11 @@ index 7176c59..fec49a4 100644
 +        }
 +
 +        public static void RemoveData(this Exception e, object key) {
-+            var data = e.Data;
-+            if (data is null || data.IsReadOnly) {
-+                RemoveTableData(e, key);
++            var data = GetDictionary(e, false);
++            if (data is null) {
++                if (_hasTableData) {
++                    RemoveTableData(e, key);
++                }
 +                return;
 +            }
 +            lock (data) {
@@ -45,9 +51,43 @@ index 7176c59..fec49a4 100644
 +            }
 +        }
 +
++        // null: no dictionary yet (and create is false), or one that cannot be written to
++        private static System.Collections.IDictionary GetDictionary(Exception e, bool create) {
++#if NET8_0_OR_GREATER
++            if (_dataFieldAvailable) {
++                try {
++                    ref System.Collections.IDictionary field = ref DataField(e);
++                    var dictionary = field;
++                    if (dictionary is null) {
++                        if (!create) {
++                            return null;
++                        }
++                        Interlocked.CompareExchange(ref field, new System.Collections.Specialized.ListDictionary(), null);
++                        dictionary = field;
++                    }
++                    return dictionary.IsReadOnly ? null : dictionary;
++                } catch (MissingFieldException) {
++                    _dataFieldAvailable = false;
++                }
++            }
++#endif
++            var data = e.Data;
++            return (data is null || data.IsReadOnly) ? null : data;
++        }
++
++#if NET8_0_OR_GREATER
++        [UnsafeAccessor(UnsafeAccessorKind.Field, Name = "_data")]
++        private static extern ref System.Collections.IDictionary DataField(Exception e);
++
++        private static bool _dataFieldAvailable = true;
++#endif
++
++        private static volatile bool _hasTableData;
++
 +        private static ConditionalWeakTable<Exception, List<KeyValuePair<object, object>>> _exceptionData;
 +
 +        private static void SetTableData(Exception e, object key, object value) {
++            _hasTableData = true;
 +            if (_exceptionData is null) {
 +                Interlocked.CompareExchange(ref _exceptionData, new ConditionalWeakTable<Exception, List<KeyValuePair<object, object>>>(), null);
 +            }
