@@ -93,6 +93,12 @@ namespace IronRuby.Runtime.Calls {
         public ParameterExpression BfcVariable { get; set; }
 
         /// <summary>
+        /// Set if the rule being built is to be shared by receivers of several classes (see <see cref="RuleVersionSet"/>).
+        /// Taken by the first target type test of a method call.
+        /// </summary>
+        internal RuleVersionSet TargetVersionSet { get; set; }
+
+        /// <summary>
         /// A rule builder sets this up if the resulting rule is required to be wrapped in a non-local control flow handler.
         /// This delegate must be called exactly once (<see cref="BuildControlFlow"/> method).
         /// </summary>
@@ -246,6 +252,15 @@ namespace IronRuby.Runtime.Calls {
 
         public void AddTargetTypeTest(object target, RubyClass/*!*/ targetClass, Expression/*!*/ targetParameter, DynamicMetaObject/*!*/ metaContext,
             IEnumerable<string>/*!*/ resolvedNames) {
+            AddTargetTypeTest(target, targetClass, targetParameter, metaContext, resolvedNames, null);
+        }
+
+        /// <summary>
+        /// If <paramref name="versionSet"/> is given and the target is a Ruby object the rule tests the class version against the set
+        /// (and the current version is added to it) instead of against a constant: see <see cref="RuleVersionSet"/>.
+        /// </summary>
+        internal void AddTargetTypeTest(object target, RubyClass/*!*/ targetClass, Expression/*!*/ targetParameter, DynamicMetaObject/*!*/ metaContext,
+            IEnumerable<string>/*!*/ resolvedNames, RuleVersionSet versionSet) {
 
             // no changes to the module's class hierarchy while building the test:
             targetClass.Context.RequiresClassHierarchyLock();
@@ -262,6 +277,14 @@ namespace IronRuby.Runtime.Calls {
                 // Ruby objects (get the method directly to prevent interface dispatch):
                 MethodInfo classGetter = type.GetMethod(Methods.IRubyObject_get_ImmediateClass.Name, BindingFlags.Public | BindingFlags.Instance);
                 if (type.IsVisible && classGetter != null && classGetter.ReturnType == typeof(RubyClass)) {
+                    if (versionSet != null && versionSet.TryAdd(targetClass.Version.Method)) {
+                        // (#{type})target.ImmediateClass.Version.Method in #{versionSet}
+                        AddCondition(versionSet.MakeTest(
+                            Ast.Field(Ast.Field(Ast.Call(Ast.Convert(targetParameter, type), classGetter), Fields.RubyModule_Version), Fields.VersionHandle_Method)
+                        ));
+                        return;
+                    }
+
                     AddCondition(
                         // (#{type})target.ImmediateClass.Version.Method == #{immediateClass.Version.Method}
                         Ast.Equal(

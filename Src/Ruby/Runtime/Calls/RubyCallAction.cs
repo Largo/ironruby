@@ -178,12 +178,174 @@ namespace IronRuby.Runtime.Calls {
 
         #endregion
 
+        #region Shared Rules
+
+        // A rule that serves receivers of several classes, or of one class in several states, that resolve the call to the same method.
+        // The first rule bound for a method is an ordinary one (tests a constant version); the second class (version) to resolve the call
+        // to that method gets a rule that tests the class version against a set (see RuleVersionSet), and every further one is added to
+        // the set once the call has been resolved for it again - with no rule built or compiled.
+        private sealed class SharedRule {
+            internal readonly RubyMemberInfo/*!*/ Member;
+            internal readonly Type/*!*/ TargetType;
+            internal readonly Type/*!*/ DelegateType;
+            internal readonly int FirstVersion;
+
+            // null until the shared rule is built:
+            internal RuleVersionSet Versions;
+            internal volatile object Rule;
+
+            internal SharedRule(RubyMemberInfo/*!*/ member, Type/*!*/ targetType, Type/*!*/ delegateType, int firstVersion) {
+                Member = member;
+                TargetType = targetType;
+                DelegateType = delegateType;
+                FirstVersion = firstVersion;
+            }
+        }
+
+        private const int MaxSharedRules = 16;
+
+        private const RubyCallFlags SharableCallFlags = RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasRhsArgument |
+            RubyCallFlags.HasBlock | RubyCallFlags.HasImplicitSelf | RubyCallFlags.IsVariableCall | RubyCallFlags.HasSourceBlock;
+
+        private static readonly object _SharedRulesLock = new object();
+        private SharedRule[] _sharedRules;
+
+        // Handed from BindSharedRule to Build of the same binder:
+        [ThreadStatic]
+        private static RuleVersionSet _PendingVersionSet;
+        [ThreadStatic]
+        private static RubyCallAction _PendingVersionSetOwner;
+
+        // The shared rule last handed out on this thread. A site that comes right back for another rule didn't match it
+        // (its arguments are of other types, say) and gets a rule of its own.
+        [ThreadStatic]
+        private static SharedRule _LastSharedRule;
+
+        internal override T BindShared<T>(object[]/*!*/ args) {
+            var lastShared = _LastSharedRule;
+            _LastSharedRule = null;
+
+            RubyContext context = Context;
+            if (context == null || Signature.ResolveOnly || (Signature.Flags & ~SharableCallFlags) != 0 ||
+                context.HasRefinements || TracePoint.CCallTracing) {
+                return null;
+            }
+
+            RubyScope scope;
+            object target;
+            if (Signature.HasScope) {
+                scope = (RubyScope)args[0];
+                target = args[1];
+            } else {
+                scope = context.EmptyScope;
+                target = args[0];
+            }
+
+            // The type test of a Ruby object is only a version check (see MetaObjectBuilder.AddTargetTypeTest):
+            if (!(target is IRubyObject)) {
+                return null;
+            }
+
+            // an object of another runtime:
+            RubyClass targetClass = context.GetImmediateClassOf(target);
+            if (targetClass.Context != context) {
+                return null;
+            }
+
+            int version;
+            MethodResolutionResult method;
+            using (context.ClassHierarchyLocker()) {
+                targetClass.InitializeMethodsNoLock();
+                version = targetClass.Version.Method;
+                method = targetClass.ResolveMethodForSiteNoLock(_methodName, GetVisibilityContext(Signature, scope), MethodLookup.Default);
+            }
+
+            // Rules calling these methods depend on nothing but the method, the call signature and the arguments.
+            // A protected method's rule also tests the caller's class.
+            if (!method.Found || method.Info.IsProtected ||
+                method.Info.GetType() != typeof(RubyLibraryMethodInfo) && method.Info.GetType() != typeof(RubyMethodInfo)) {
+                return null;
+            }
+
+            Type targetType = target.GetType();
+            SharedRule shared = null;
+            var sharedRules = _sharedRules;
+            if (sharedRules != null) {
+                foreach (var rule in sharedRules) {
+                    if (rule.Member == method.Info && rule.TargetType == targetType && rule.DelegateType == typeof(T)) {
+                        shared = rule;
+                        break;
+                    }
+                }
+            }
+
+            if (shared == null) {
+                lock (_SharedRulesLock) {
+                    sharedRules = _sharedRules;
+                    if (sharedRules == null || sharedRules.Length < MaxSharedRules) {
+                        _sharedRules = ArrayUtils.Append(sharedRules ?? new SharedRule[0], new SharedRule(method.Info, targetType, typeof(T), version));
+                    }
+                }
+                return null;
+            }
+
+            object sharedRule = shared.Rule;
+            if (sharedRule == null) {
+                // the first rule bound for the method didn't match for some other reason than its class version:
+                if (version == shared.FirstVersion) {
+                    return null;
+                }
+
+                return BindSharedRule<T>(shared, args);
+            }
+
+            if (lastShared == shared || !shared.Versions.TryAdd(version)) {
+                return null;
+            }
+
+            _LastSharedRule = shared;
+            return (T)sharedRule;
+        }
+
+        private T/*!*/ BindSharedRule<T>(SharedRule/*!*/ shared, object[]/*!*/ args) where T : class {
+            var versionSet = new RuleVersionSet();
+            T result;
+
+            _PendingVersionSet = versionSet;
+            _PendingVersionSetOwner = this;
+            try {
+                result = this.LightBind<T>(args, Context.Options.CompilationThreshold);
+            } finally {
+                _PendingVersionSet = null;
+                _PendingVersionSetOwner = null;
+            }
+            CacheTarget(result);
+
+            // The rule tests the version set iff Build has taken it and bound it to a version the method was resolved for:
+            if (versionSet.Member == shared.Member) {
+                lock (_SharedRulesLock) {
+                    if (shared.Rule == null) {
+                        shared.Versions = versionSet;
+                        shared.Rule = result;
+                    }
+                }
+            }
+            return result;
+        }
+
+        #endregion
+
         private static bool RequiresUnusedBlockCheck(RubyMemberInfo/*!*/ method) {
             var rubyMethod = method as RubyMethodInfo;
             return rubyMethod != null && !rubyMethod.UsesBlock;
         }
 
         protected override bool Build(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, bool defaultFallback) {
+            if (_PendingVersionSetOwner == this) {
+                metaBuilder.TargetVersionSet = _PendingVersionSet;
+                _PendingVersionSet = null;
+                _PendingVersionSetOwner = null;
+            }
             return BuildCall(metaBuilder, _methodName, args, defaultFallback, true);
         }
 
@@ -290,8 +452,11 @@ namespace IronRuby.Runtime.Calls {
             var visibilityContext = GetVisibilityContext(args.Signature, args.Scope);
             RefinementActivation refinements = null;
             using (targetClass.Context.ClassHierarchyLocker()) {
+                var versionSet = metaBuilder.TargetVersionSet;
+                metaBuilder.TargetVersionSet = null;
+
                 metaBuilder.AddTargetTypeTest(args.Target, targetClass, args.TargetExpression, args.MetaContext, 
-                    new[] { methodName, Symbols.MethodMissing }
+                    new[] { methodName, Symbols.MethodMissing }, versionSet
                 );
 
                 // Refinements are lexically scoped, so resolution has to consult the scope the call site was
@@ -314,6 +479,11 @@ namespace IronRuby.Runtime.Calls {
                     methodMissing = targetClass.ResolveMethodMissingForSite(methodName, method.IncompatibleVisibility);
                 } else {
                     methodMissing = null;
+                }
+
+                // the version the test was bound against resolves to this method:
+                if (versionSet != null && versionSet.Count > 0) {
+                    versionSet.Member = method.Found ? method.Info : null;
                 }
             }
 
