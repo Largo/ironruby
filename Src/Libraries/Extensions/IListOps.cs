@@ -233,15 +233,9 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateTypeError("{0}#allocate should return IList", cls.Name);
         }
 
-        internal static IEnumerable<Int32>/*!*/ ReverseEnumerateIndexes(IList/*!*/ collection) {
-            for (int originalSize = collection.Count, i = originalSize - 1; i >= 0; i--) {
-                yield return i;
-                if (collection.Count < originalSize) {
-                    i = originalSize - (originalSize - collection.Count);
-                    originalSize = collection.Count;
-                }
-            }
-        }
+        // The reverse walks below are MRI's (rb_ary_reverse_each, rb_ary_rindex): index Count - 1
+        // down to 0, and when the block has shrunk the array below the index just visited, on from
+        // its new end - elements appended meanwhile are not visited, and none is visited twice.
 
         #endregion
 
@@ -1228,10 +1222,14 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("reverse_each")]
         public static object ReverseEach([NotNull]BlockParam/*!*/ block, RubyArray/*!*/ self) {
-            foreach (int index in IListOps.ReverseEnumerateIndexes(self)) {
+            for (int i = self.Count; i-- > 0; ) {
                 object result;
-                if (block.Yield(self[index], out result)) {
+                if (block.Yield(self[i], out result)) {
                     return result;
+                }
+                int count = self.Count;
+                if (count < i) {
+                    i = count;
                 }
             }
             return self;
@@ -1702,7 +1700,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("rindex")]
         public static object ReverseIndex([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
-            foreach (int i in IListOps.ReverseEnumerateIndexes(self)) {
+            for (int i = self.Count; i-- > 0; ) {
                 object blockResult;
                 if (predicate.Yield(self[i], out blockResult)) {
                     return blockResult;
@@ -1710,6 +1708,10 @@ namespace IronRuby.Builtins {
 
                 if (Protocols.IsTrue(blockResult)) {
                     return ScriptingRuntimeHelpers.Int32ToObject(i);
+                }
+                int count = self.Count;
+                if (count < i) {
+                    i = count;
                 }
             }
             return null;
@@ -1721,9 +1723,13 @@ namespace IronRuby.Builtins {
                 equals.Context.ReportWarning("given block not used");
             } 
             
-            foreach (int i in IListOps.ReverseEnumerateIndexes(self)) {
+            for (int i = self.Count; i-- > 0; ) {
                 if (Protocols.IsEqual(equals, self[i], item)) {
                     return ScriptingRuntimeHelpers.Int32ToObject(i);
+                }
+                // an == that shrank the array below the next index ends the search, as in MRI
+                if (i > self.Count) {
+                    break;
                 }
             }
             return null;
