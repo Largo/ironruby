@@ -57,7 +57,7 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
-            if (_isKeywordArguments && _maplets.Length >= 1 && _maplets.Length <= 3 && HasSymbolLiteralKeys()) {
+            if (_isKeywordArguments && _maplets.Length <= 3 && HasSymbolLiteralKeys()) {
                 return TransformKeywordArguments(gen);
             }
             var items = gen.TransformMapletsToExpressions(_maplets);
@@ -83,6 +83,8 @@ namespace IronRuby.Compiler.Ast {
                 args.Add(AstUtils.Box(maplet.Value.TransformRead(gen)));
             }
             switch (_maplets.Length) {
+                // the default of the hidden keyword parameter: no keywords passed
+                case 0: return Methods.MakeKeywordArgumentsHash0.OpCall(gen.CurrentScopeVariable);
                 case 1: return Methods.MakeKeywordArgumentsHash1.OpCall(args);
                 case 2: return Methods.MakeKeywordArgumentsHash2.OpCall(args);
                 default: return Methods.MakeKeywordArgumentsHash3.OpCall(args);
