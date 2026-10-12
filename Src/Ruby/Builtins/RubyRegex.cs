@@ -28,6 +28,9 @@ namespace IronRuby.Builtins {
         // 1.9: correctly encoded, switched to characters 
         // 1.8: k-coded binary data, if _options specify encoding, or raw binary data otherwise.
         private MutableString/*!*/ _pattern;
+        // HasNonAsciiEscape(_pattern) - the pattern is frozen, so it is worked out once: -1 not yet,
+        // 0 none, 1 a byte escape, 2 a \u escape. Encoding and IsFixedEncoding ask on every match.
+        private int _nonAsciiEscape = -1;
         private RubyRegexOptions _options;
         private bool _hasGAnchor;
 
@@ -160,6 +163,7 @@ namespace IronRuby.Builtins {
             _options = options & ~RubyRegexOptions.Once;
             _cachedRegex = null;
             _cachedAstralRegex = null;
+            _nonAsciiEscape = -1;
 
             RubyEncoding encoding = RubyEncoding.GetRegexEncoding(options);
             if (encoding != null) {
@@ -435,14 +439,14 @@ namespace IronRuby.Builtins {
                     // above 7 bits without /n is "invalid multibyte escape" in MRI; we don't raise,
                     // and the pattern's own encoding is as good an answer as any.)
                     bool isUnicode;
-                    if (HasNonAsciiEscape(_pattern, out isUnicode)) {
+                    if (PatternHasNonAsciiEscape(out isUnicode)) {
                         return isUnicode ? RubyEncoding.UTF8 : _pattern.Encoding;
                     }
 
                     return RubyEncoding.Ascii;
                 }
 
-                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !HasNonAsciiEscape(_pattern)) {
+                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !PatternHasNonAsciiEscape(out _)) {
                     return RubyEncoding.Ascii;
                 }
 
@@ -570,6 +574,16 @@ namespace IronRuby.Builtins {
         /// written with byte escapes would silently lose its encoding when unioned with a plain
         /// ASCII string.
         /// </summary>
+        private bool PatternHasNonAsciiEscape(out bool isUnicode) {
+            int cached = _nonAsciiEscape;
+            if (cached < 0) {
+                cached = HasNonAsciiEscape(_pattern, out isUnicode) ? (isUnicode ? 2 : 1) : 0;
+                _nonAsciiEscape = cached;
+            }
+            isUnicode = cached == 2;
+            return cached != 0;
+        }
+
         public static bool HasNonAsciiEscape(MutableString/*!*/ pattern) {
             bool isUnicode;
             return HasNonAsciiEscape(pattern, out isUnicode);
@@ -656,7 +670,8 @@ namespace IronRuby.Builtins {
                     // /n on its own says nothing - /abc/n matches any ASCII compatible string. It
                     // pins the encoding only once the pattern really compiles to non-ASCII bytes,
                     // which it does for a byte escape as much as for a literal non-ASCII character.
-                    return !_pattern.IsAscii() || HasNonAsciiEscape(_pattern);
+                    bool isUnicode;
+                    return !_pattern.IsAscii() || PatternHasNonAsciiEscape(out isUnicode);
                 }
 
                 return (_options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0
