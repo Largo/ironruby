@@ -401,6 +401,11 @@ bench("select_loop") do
   r.times { a.select { |x| x > 500 } }
 end
 
+bench("any_loop") do
+  a = (0...1000).to_a; r = n(2_000)
+  r.times { a.any? { |x| x > 5000 } }
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"
