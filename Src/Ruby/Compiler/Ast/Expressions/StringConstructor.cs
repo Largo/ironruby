@@ -292,7 +292,7 @@ namespace IronRuby.Compiler.Ast {
 
             // finish trailing literals:
             if (concat.Count > 0) {
-                merged.Add(StringLiteral.Transform(concat.GetValue(), concat.Encoding));
+                merged.Add(TransformLiteralPart(concat.GetValue(), concat.Encoding));
             }
 
             if (merged.Count <= RubyOps.MakeStringParamCount) {
@@ -305,6 +305,16 @@ namespace IronRuby.Compiler.Ast {
                 // TODO: we should emit Append calls directly, and not create an array first
                 return factory.CreateExpressionN(gen, merged);
             } 
+        }
+
+        // The literal text between interpolations. Every CreateMutableString*, CreateSymbol* and
+        // CreateRegex* helper the parts go to copies out of them, so one instance made here serves
+        // every evaluation instead of a new string each time; frozen, so that a helper which ever
+        // kept a part rather than copying it would fail loudly instead of sharing it.
+        private static MSA.Expression/*!*/ TransformLiteralPart(object/*!*/ value, RubyEncoding/*!*/ encoding) {
+            var str = value as string;
+            var part = (str != null) ? MutableString.Create(str, encoding) : MutableString.CreateBinary((byte[])value, encoding);
+            return AstUtils.Constant(part.Freeze(), typeof(MutableString));
         }
 
         //
@@ -336,7 +346,7 @@ namespace IronRuby.Compiler.Ast {
                     }
                 } else {
                     if (concat.Count > 0) {
-                        result.Add(StringLiteral.Transform(concat.GetValue(), concat.Encoding));
+                        result.Add(TransformLiteralPart(concat.GetValue(), concat.Encoding));
                         concat.Clear();
                     }
 

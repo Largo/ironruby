@@ -2675,17 +2675,42 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding) {
-            return MutableString.CreateInternal(str1, encoding).Append(str2);
+            var result = MutableString.CreateInternal(str1, encoding);
+            AppendInterpolatedPart(result, str2);
+            return result;
+        }
+
+        /// <summary>
+        /// MRI's rb_str_concat_literals: append, and a result that is still US-ASCII takes the encoding
+        /// of the first part that is not - "#{1}a" in a UTF-8 file is UTF-8, "#{y}#{bin}" is binary.
+        /// </summary>
+        private static void AppendInterpolatedPart(MutableString/*!*/ result, MutableString part) {
+            if (part != null) {
+                result.Append(part);
+                if (part.Encoding != RubyEncoding.Ascii && result.Encoding == RubyEncoding.Ascii) {
+                    result.ForceEncoding(part.Encoding);
+                }
+            }
         }
 
         // TODO: we should emit Append calls directly, and not create an array first
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringN(MutableString/*!*/[]/*!*/ parts) {
             Debug.Assert(parts.Length > 0);
-            var result = MutableString.CreateMutable(RubyEncoding.Ascii);
+            // room for all of it up front rather than a regrowth per part (a part counts its
+            // characters or its bytes, whichever it holds, which is what a capacity hint needs)
+            int capacity = 0;
+            for (int i = 0; i < parts.Length; i++) {
+                if (parts[i] != null) {
+                    capacity += parts[i].Length;
+                }
+            }
+            // MRI's rb_str_concat_literals starts from the first part's encoding: "a#{1}b" in a UTF-8
+            // file is UTF-8, though every part is ASCII and the Integer's is US-ASCII
+            var result = MutableString.CreateMutable(capacity, (parts[0] != null) ? parts[0].Encoding : RubyEncoding.Ascii);
 
             for (int i = 0; i < parts.Length; i++) {
-                result.Append(parts[i]);
+                AppendInterpolatedPart(result, parts[i]);
             }
 
             return result;
