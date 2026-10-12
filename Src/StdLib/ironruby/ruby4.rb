@@ -9286,25 +9286,25 @@ module Math
   module_function :__flt__, :__dom__
   private_class_method :__flt__, :__dom__
 
-  def acos(x)
+  def __ir_acos__(x)
     x = __flt__(x)
     return x if x.nan?
     __dom__("acos") if x < -1.0 || x > 1.0
     ::System::Math.Acos(x)
   end
 
-  def asin(x)
+  def __ir_asin__(x)
     x = __flt__(x)
     return x if x.nan?
     __dom__("asin") if x < -1.0 || x > 1.0
     ::System::Math.Asin(x)
   end
 
-  def atan(x)
+  def __ir_atan__(x)
     ::System::Math.Atan(__flt__(x))
   end
 
-  def atan2(y, x)
+  def __ir_atan2__(y, x)
     y = __flt__(y)
     x = __flt__(x)
     return y if y.nan?
@@ -9319,7 +9319,7 @@ module Math
     ::System::Math.Acosh(x)
   end
 
-  def asinh(x)
+  def __ir_asinh__(x)
     ::System::Math.Asinh(__flt__(x))
   end
 
@@ -9332,40 +9332,40 @@ module Math
     ::System::Math.Atanh(x)
   end
 
-  def cos(x)
+  def __ir_cos__(x)
     ::System::Math.Cos(__flt__(x))
   end
 
-  def sin(x)
+  def __ir_sin__(x)
     ::System::Math.Sin(__flt__(x))
   end
 
-  def tan(x)
+  def __ir_tan__(x)
     ::System::Math.Tan(__flt__(x))
   end
 
-  def cosh(x)
+  def __ir_cosh__(x)
     ::System::Math.Cosh(__flt__(x))
   end
 
-  def sinh(x)
+  def __ir_sinh__(x)
     ::System::Math.Sinh(__flt__(x))
   end
 
-  def tanh(x)
+  def __ir_tanh__(x)
     ::System::Math.Tanh(__flt__(x))
   end
 
-  def exp(x)
+  def __ir_exp__(x)
     ::System::Math.Exp(__flt__(x))
   end
 
   # pow(x, 1/3.0) is NaN for every negative x; cbrt is defined there.
-  def cbrt(x)
+  def __ir_cbrt__(x)
     ::System::Math.Cbrt(__flt__(x))
   end
 
-  def sqrt(x)
+  def __ir_sqrt__(x)
     x = __flt__(x)
     return x if x.nan?
     __dom__("sqrt") if x < 0.0
@@ -9461,7 +9461,7 @@ module Math
     __ir_erfc__(__flt__(x))
   end
 
-  def hypot(x, y)
+  def __ir_hypot__(x, y)
     x = __flt__(x).abs
     y = __flt__(y).abs
     # An infinity wins over a NaN, which is what C's hypot() promises.
@@ -9548,10 +9548,20 @@ module Math
   end
 
   module_function :frexp
-  module_function :acos, :acosh, :asin, :asinh, :atan, :atan2, :atanh, :cbrt,
-                  :cos, :cosh, :erf, :erfc, :exp, :expm1, :gamma, :hypot,
-                  :ldexp, :lgamma, :log, :log10, :log1p, :log2, :sin, :sinh,
-                  :sqrt, :tan, :tanh
+  module_function :acosh, :atanh, :erf, :erfc, :expm1, :gamma,
+                  :ldexp, :lgamma, :log, :log10, :log1p, :log2
+  # complex18.rb (the 1.9 Complex still loaded at boot) redefined most of these to return
+  # Complex numbers and kept the C# originals as name!. Put the C# methods - RubyMath, whose
+  # Float/Fixnum fast path falls back to the __ir_<name>__ definitions above - back in place.
+  %i[acos asin atan atan2 cos sin tan cosh sinh tanh asinh exp sqrt].each do |name|
+    bang = :"#{name}!"
+    alias_method name, bang if private_method_defined?(bang) || method_defined?(bang)
+  end
+  module_function :acos, :asin, :atan, :atan2, :cos, :sin, :tan, :cosh, :sinh, :tanh, :asinh, :exp, :cbrt,
+                  :sqrt, :hypot
+  # The Float/Fixnum fast path of these is C# (RubyMath); their general Ruby half:
+  module_function :__ir_acos__, :__ir_asin__, :__ir_atan__, :__ir_atan2__, :__ir_cos__, :__ir_sin__, :__ir_tan__, :__ir_cosh__, :__ir_sinh__, :__ir_tanh__, :__ir_asinh__, :__ir_exp__, :__ir_cbrt__, :__ir_sqrt__, :__ir_hypot__
+  private_class_method :__ir_acos__, :__ir_asin__, :__ir_atan__, :__ir_atan2__, :__ir_cos__, :__ir_sin__, :__ir_tan__, :__ir_cosh__, :__ir_sinh__, :__ir_tanh__, :__ir_asinh__, :__ir_exp__, :__ir_cbrt__, :__ir_sqrt__, :__ir_hypot__
 end
 
 # `ruby2_keywords' written at the top level is Object.ruby2_keywords. MRI defines it on

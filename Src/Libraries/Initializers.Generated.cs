@@ -5642,8 +5642,8 @@ namespace IronRuby.Builtins {
         
         private static void LoadMath_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "acos", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Acos)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Acos)
             );
             
             DefineLibraryMethod(module, "acosh", 0x52, 
@@ -5652,23 +5652,23 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "asin", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Asin)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Asin)
             );
             
             DefineLibraryMethod(module, "asinh", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Asinh)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Asinh)
             );
             
             DefineLibraryMethod(module, "atan", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Atan)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Atan)
             );
             
             DefineLibraryMethod(module, "atan2", 0x52, 
-                0x00030000U, 
-                new Func<System.Object, System.Double, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Atan2)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Atan2)
             );
             
             DefineLibraryMethod(module, "atanh", 0x52, 
@@ -5677,18 +5677,18 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "cbrt", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.CubeRoot)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.CubeRoot)
             );
             
             DefineLibraryMethod(module, "cos", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Cos)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Cos)
             );
             
             DefineLibraryMethod(module, "cosh", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Cosh)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Cosh)
             );
             
             DefineLibraryMethod(module, "erf", 0x52, 
@@ -5702,8 +5702,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "exp", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Exp)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Exp)
             );
             
             DefineLibraryMethod(module, "frexp", 0x52, 
@@ -5717,8 +5717,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "hypot", 0x52, 
-                0x00030000U, 
-                new Func<System.Object, System.Double, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Hypot)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Hypot)
             );
             
             DefineLibraryMethod(module, "ldexp", 0x52, 
@@ -5747,36 +5747,36 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "sin", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Sin)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Sin)
             );
             
             DefineLibraryMethod(module, "sinh", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Sinh)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Sinh)
             );
             
             DefineLibraryMethod(module, "sqrt", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Sqrt)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Sqrt)
             );
             
             DefineLibraryMethod(module, "tan", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Tan)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Tan)
             );
             
             DefineLibraryMethod(module, "tanh", 0x52, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Tanh)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Tanh)
             );
             
         }
         
         private static void LoadMath_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "acos", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Acos)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Acos)
             );
             
             DefineLibraryMethod(module, "acosh", 0x61, 
@@ -5785,23 +5785,23 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "asin", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Asin)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Asin)
             );
             
             DefineLibraryMethod(module, "asinh", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Asinh)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Asinh)
             );
             
             DefineLibraryMethod(module, "atan", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Atan)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Atan)
             );
             
             DefineLibraryMethod(module, "atan2", 0x61, 
-                0x00030000U, 
-                new Func<System.Object, System.Double, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Atan2)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Atan2)
             );
             
             DefineLibraryMethod(module, "atanh", 0x61, 
@@ -5810,18 +5810,18 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "cbrt", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.CubeRoot)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.CubeRoot)
             );
             
             DefineLibraryMethod(module, "cos", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Cos)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Cos)
             );
             
             DefineLibraryMethod(module, "cosh", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Cosh)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Cosh)
             );
             
             DefineLibraryMethod(module, "erf", 0x61, 
@@ -5835,8 +5835,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "exp", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Exp)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Exp)
             );
             
             DefineLibraryMethod(module, "frexp", 0x61, 
@@ -5850,8 +5850,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "hypot", 0x61, 
-                0x00030000U, 
-                new Func<System.Object, System.Double, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Hypot)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Hypot)
             );
             
             DefineLibraryMethod(module, "ldexp", 0x61, 
@@ -5880,28 +5880,28 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "sin", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Sin)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Sin)
             );
             
             DefineLibraryMethod(module, "sinh", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Sinh)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Sinh)
             );
             
             DefineLibraryMethod(module, "sqrt", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Sqrt)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Sqrt)
             );
             
             DefineLibraryMethod(module, "tan", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Tan)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Tan)
             );
             
             DefineLibraryMethod(module, "tanh", 0x61, 
-                0x00010000U, 
-                new Func<System.Object, System.Double, System.Double>(IronRuby.Builtins.RubyMath.Tanh)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMath.Tanh)
             );
             
         }
