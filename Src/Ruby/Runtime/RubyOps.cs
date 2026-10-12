@@ -1782,9 +1782,7 @@ namespace IronRuby.Runtime {
             var list = (RubyArray)args;
             int last = list.Count - 1;
             if (last >= 0 && IsKeywordArgumentsHash(list[last])) {
-                var result = (Hash)list[last];
-                list.RemoveAt(last);
-                return result;
+                return (Hash)list.TakeLast();
             }
             return MakeHash0(scope);
         }
@@ -1822,13 +1820,7 @@ namespace IronRuby.Runtime {
         /// <summary>The next positional argument; nil if there is none left (a block's).</summary>
         [Emitted]
         public static object ShiftSplatArgument(object args) {
-            var list = (RubyArray)args;
-            if (list.Count == 0) {
-                return null;
-            }
-            object result = list[0];
-            list.RemoveAt(0);
-            return result;
+            return ((RubyArray)args).TakeFirst();
         }
 
         /// <summary>
@@ -1838,12 +1830,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static object ShiftOptionalSplatArgument(object args, int postCount) {
             var list = (RubyArray)args;
-            if (list.Count <= postCount) {
-                return DefaultArgument;
-            }
-            object result = list[0];
-            list.RemoveAt(0);
-            return result;
+            return (list.Count <= postCount) ? DefaultArgument : list.TakeFirst();
         }
 
         /// <summary>
@@ -1853,12 +1840,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static RubyArray/*!*/ ShiftRestSplatArguments(object args, int postCount) {
             var list = (RubyArray)args;
-            int count = Math.Max(0, list.Count - postCount);
-            var result = new RubyArray(list, 0, count);
-            if (count > 0) {
-                list.RemoveRange(0, count);
-            }
-            return result;
+            return list.TakeFirst(Math.Max(0, list.Count - postCount));
         }
 
         /// <summary>
@@ -1867,12 +1849,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static Hash/*!*/ MakeKeywordRest(object keywords, RubySymbol/*!*/[]/*!*/ names) {
-            var hash = (Hash)keywords;
-            var result = new Hash(hash);
-            for (int i = 0; i < names.Length && result.Count > 0; i++) {
-                result.Remove(names[i]);
-            }
-            return result;
+            return ((Hash)keywords).CopyWithoutKeywords(names);
         }
 
         /// <summary>

@@ -26,6 +26,35 @@ namespace IronRuby.Builtins {
         private const int IdentityScanLimit = 8;
 
         /// <summary>
+        /// A copy of this hash - default value or proc and comparer included, as the copy
+        /// constructor makes it - without the keys among <paramref name="names"/>, which are
+        /// compared by identity (see <see cref="TryGetValueByIdentity"/>): a **rest parameter.
+        /// </summary>
+        internal Hash/*!*/ CopyWithoutKeywords(object/*!*/[]/*!*/ names) {
+            var result = new Hash(_comparer, _liveCount);
+            result._defaultProc = _defaultProc;
+            result._defaultValue = DefaultValue;
+            result._comparesByIdentity = _comparesByIdentity;
+
+            Entry[] entries = _entries;
+            int count = _count;
+            for (int i = _start; i < count; i++) {
+                if (entries[i].Next == TombstoneNext) {
+                    continue;
+                }
+                object key = entries[i].Key;
+                int j = 0;
+                while (j < names.Length && names[j] != key) {
+                    j++;
+                }
+                if (j == names.Length) {
+                    result[key] = entries[i].Value;
+                }
+            }
+            return result;
+        }
+
+        /// <summary>
         /// The value stored under <paramref name="key"/>, which must be a key that is equal only to
         /// itself (a Symbol). Entry <paramref name="hint"/> is tried first: callers mostly pass
         /// keywords in the order they are declared in.

@@ -573,6 +573,50 @@ namespace IronRuby.Builtins {
             RemoveRange(index, 1);
         }
 
+        // Taking an array apart from the ends without RemoveRange's reallocation, which it does to
+        // shrink a small array on nearly every removal. For the splat of a lowered parameter list,
+        // which is consumed and then dropped (RubyOps.ShiftSplatArgument and its neighbours).
+
+        /// <summary>Removes and returns the first element; nil if there is none.</summary>
+        internal object TakeFirst() {
+            if (_count == 0) {
+                return null;
+            }
+            Mutate();
+            object result = _content[_start];
+            _content[_start] = null;
+            _start++;
+            _count--;
+            ObjectInvariant();
+            return result;
+        }
+
+        /// <summary>Removes the first <paramref name="count"/> elements and returns them as a new array.</summary>
+        internal RubyArray/*!*/ TakeFirst(int count) {
+            ContractUtils.RequiresArrayRange(_count, 0, count, "index", "count");
+            var result = new RubyArray(this, 0, count);
+            if (count > 0) {
+                Mutate();
+                Utils.Fill(_content, _start, null, count);
+                _start += count;
+                _count -= count;
+                ObjectInvariant();
+            }
+            return result;
+        }
+
+        /// <summary>Removes and returns the last element, of which there must be one.</summary>
+        internal object TakeLast() {
+            Debug.Assert(_count > 0);
+            Mutate();
+            int last = _start + _count - 1;
+            object result = _content[last];
+            _content[last] = null;
+            _count--;
+            ObjectInvariant();
+            return result;
+        }
+
         public bool Remove(object item) {
             int index = IndexOf(item);
             if (index >= 0) {
