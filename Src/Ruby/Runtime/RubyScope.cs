@@ -1445,10 +1445,11 @@ var closureScope = scope as RubyClosureScope;
                 if (context.RubyOptions.RequirePaths != null) {
                     bool first = true;
                     foreach (var path in context.RubyOptions.RequirePaths) {
-                        context.Loader.LoadFile(globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
                         // the first is the core prelude (gem_prelude.rb or ruby4.rb)
                         if (first && (path == "gem_prelude.rb" || path == "ruby4.rb")) {
-                            context.Loader.ProvideCoreFeatures();
+                            context.Loader.LoadCorePrelude(globalScope, rubyGlobalScope.MainObject, path);
+                        } else {
+                            context.Loader.LoadFile(globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
                         }
                         first = false;
                     }
