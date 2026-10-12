@@ -130,6 +130,9 @@ namespace IronRuby.Compiler.Ast {
                     }
                 }
                 osrSite.TupleArgIndex = tupleArgIndex;
+                // and self, which the instance variables the loop reads belong to
+                osrSite.SelfArgIndex = tupleArguments.Count;
+                tupleArguments.Add(AstUtils.Box(gen.CurrentSelfVariable));
                 osrArguments = Ast.NewArrayInit(typeof(object), tupleArguments);
             }
 

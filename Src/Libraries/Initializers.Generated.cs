@@ -8403,6 +8403,11 @@ namespace IronRuby.Builtins {
         }
         
         private static void LoadStruct_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "__struct_initialize__", 0x52, 
+                0x80000000U, 
+                new Action<IronRuby.Builtins.RubyStruct, System.Object[]>(IronRuby.Builtins.RubyStructOps.Reinitialize)
+            );
+            
             DefineLibraryMethod(module, "[]", 0x51, 
                 0x00000000U, 0x00000002U, 0x00000002U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyStruct, System.Int32, System.Object>(IronRuby.Builtins.RubyStructOps.GetValue), 
@@ -8446,7 +8451,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "initialize", 0x52, 
                 0x80000000U, 
-                new Action<IronRuby.Builtins.RubyStruct, System.Object[]>(IronRuby.Builtins.RubyStructOps.Reinitialize)
+                new Func<IronRuby.Runtime.CallSiteStorage<Func<System.Runtime.CompilerServices.CallSite, System.Object, System.Object, System.Object>>, IronRuby.Builtins.RubyStruct, System.Object[], System.Object>(IronRuby.Builtins.RubyStructOps.Initialize)
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
