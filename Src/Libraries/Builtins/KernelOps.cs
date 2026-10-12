@@ -641,7 +641,7 @@ namespace IronRuby.Builtins {
             // An exception raised before whose backtrace was since set to nil gets a new one, as in
             // MRI. The interpreter keeps the frames of the first throw on the exception and would
             // hand those back again.
-            if (RubyExceptionData.GetInstance(exception).Backtrace == null) {
+            if (!RubyExceptionData.GetInstance(exception).HasBacktrace) {
                 exception.RemoveData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo));
             }
 
@@ -721,7 +721,7 @@ namespace IronRuby.Builtins {
             // An exception with no backtrace - new, or cleared by set_backtrace(nil) - gets one from
             // where it is raised now. The interpreter keeps the frames of the first throw on the
             // exception and would otherwise report those again.
-            if (RubyExceptionData.GetInstance(exception).Backtrace == null) {
+            if (!RubyExceptionData.GetInstance(exception).HasBacktrace) {
                 exception.SetData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo), null);
             }
             return exception;

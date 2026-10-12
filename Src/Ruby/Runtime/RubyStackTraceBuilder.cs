@@ -46,21 +46,34 @@ namespace IronRuby.Runtime {
         // core method written in Ruby is that method's own, not its caller's.
         private bool _keepInternalFrames;
 
-        private RubyStackTraceBuilder(RubyContext/*!*/ context) {
+        private RubyStackTraceBuilder(RubyContext/*!*/ context)
+            : this(context, context.GetPathEncoding()) {
+        }
+
+        private RubyStackTraceBuilder(RubyContext/*!*/ context, RubyEncoding/*!*/ encoding) {
             _context = context;
             _needsClrFileInfo = NeedsClrFileInfo(context);
             _hasFileAccessPermission = _needsClrFileInfo && DetectFileAccessPermissions();
             _exceptionDetail = context.Options.ExceptionDetail;
-            _encoding = context.GetPathEncoding();
+            _encoding = encoding;
             _trace = new RubyArray();
         }
-        
-        internal RubyStackTraceBuilder(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) 
+
+        internal RubyStackTraceBuilder(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted)
             : this(context) {
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
             StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
             _interpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+            AddExceptionBacktrace(throwSiteTrace, catchSiteTrace, isCatchSiteInterpreted);
+        }
 
+        private RubyStackTraceBuilder(CapturedTrace/*!*/ captured)
+            : this(captured.Context, captured.Encoding) {
+            _interpretedFrames = captured.InterpretedFrames;
+            AddExceptionBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace, captured.IsCatchSiteInterpreted);
+        }
+
+        private void AddExceptionBacktrace(StackTrace/*!*/ throwSiteTrace, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
             AddBacktrace(throwSiteTrace.GetFrames(), 0, false);
 
             // Compiled trace: contains frames above and including the first Ruby filter/catch site that the exception was caught by:
@@ -68,6 +81,39 @@ namespace IronRuby.Runtime {
                 // Interpreted: skip one interpreter Run method frame - is was already matched with the last processed interpreted frame:
                 // Compiled: skip one frame - the catch-site frame is already included
                 AddBacktrace(catchSiteTrace.GetFrames(), isCatchSiteInterpreted ? 0 : 1, isCatchSiteInterpreted);
+            }
+        }
+
+        /// <summary>
+        /// What the backtrace of a raised exception is made of, taken where the first Ruby frame saw
+        /// the exception go by - the stack walks, and the interpreted frames the interpreter saved on
+        /// the exception - but not yet turned into strings. Most exceptions are rescued and dropped
+        /// without anyone asking for their backtrace, and formatting it (resolving every frame's
+        /// method, parsing the encoded names, building a string per frame) is most of what a raise
+        /// used to cost. <see cref="Build"/> does it on first use and yields exactly what building it
+        /// eagerly yielded: everything it reads is either captured here or fixed for the context.
+        /// </summary>
+        internal sealed class CapturedTrace {
+            internal readonly RubyContext/*!*/ Context;
+            internal readonly RubyEncoding/*!*/ Encoding;
+            internal readonly StackTrace/*!*/ ThrowSiteTrace;
+            internal readonly StackTrace CatchSiteTrace;
+            internal readonly IList<InterpretedFrameInfo> InterpretedFrames;
+            internal readonly bool IsCatchSiteInterpreted;
+
+            internal CapturedTrace(RubyContext/*!*/ context, Exception/*!*/ exception, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
+                Context = context;
+                Encoding = context.GetPathEncoding();
+                // the exception's own trace grows as it is rethrown, and a raise of it starts it over:
+                ThrowSiteTrace = GetClrStackTrace(exception, NeedsClrFileInfo(context));
+                // the interpreter's frames are saved on the exception once, and raise clears them:
+                InterpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+                CatchSiteTrace = catchSiteTrace;
+                IsCatchSiteInterpreted = isCatchSiteInterpreted;
+            }
+
+            internal RubyArray/*!*/ Build() {
+                return new RubyStackTraceBuilder(this).RubyTrace;
             }
         }
 
