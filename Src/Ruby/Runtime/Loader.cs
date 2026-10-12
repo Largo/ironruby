@@ -1208,6 +1208,38 @@ namespace IronRuby.Runtime {
 
         #endregion
 
+        // The thread running ruby4.rb as the host's core prelude (--disable-gems), while it does. The
+        // only Ruby code on its stack then is the prelude's own, which backtraces leave out.
+        private Thread _corePreludeThread;
+
+        /// <summary>
+        /// True while this thread runs ruby4.rb as the core prelude, loaded by the host itself: a
+        /// backtrace taken now has no frame in it (they are all the prelude's, which backtraces
+        /// skip), so a caller that only wants the innermost location need not walk the CLR stack.
+        /// </summary>
+        internal bool IsLoadingCorePrelude {
+            get { return _corePreludeThread == Thread.CurrentThread; }
+        }
+
+        /// <summary>
+        /// Requires the core prelude - gem_prelude.rb, or ruby4.rb under --disable-gems - and then
+        /// lists the features MRI has in $" from the start.
+        /// </summary>
+        internal void LoadCorePrelude(Scope/*!*/ globalScope, object self, string/*!*/ path) {
+            bool direct = path == "ruby4.rb";
+            if (direct) {
+                _corePreludeThread = Thread.CurrentThread;
+            }
+            try {
+                LoadFile(globalScope, self, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
+            } finally {
+                if (direct) {
+                    _corePreludeThread = null;
+                }
+            }
+            ProvideCoreFeatures();
+        }
+
         // Features the core prelude loaded: kept out of $" (MRI's own Ruby-defined core is not in
         // it either) but still loaded, so that requiring one again does nothing.
         private readonly HashSet<string>/*!*/ _hiddenLoadedFiles = new HashSet<string>(StringComparer.Ordinal);
