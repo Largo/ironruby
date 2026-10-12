@@ -41,6 +41,22 @@ namespace IronRuby.Runtime.Calls {
 
         public abstract object/*!*/ CreateDelegate(bool isUntyped);
 
+        /// <summary>
+        /// The guard a precompiled dispatcher runs on every call: the receiver is a Ruby object
+        /// whose class has not had a method table change since the dispatcher was made.
+        /// RubyObject is the class of nearly every such receiver, and an exact type test is two
+        /// instructions inline, where the IRubyObject cast it saves is a call to the runtime's
+        /// interface-cast helper. Any other IRubyObject goes the old way.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool IsCurrentFor(object self) {
+            if (self != null && self.GetType() == typeof(RubyObject)) {
+                return Unsafe.As<RubyObject>(self).ImmediateClass.Version.Method == Version;
+            }
+            IRubyObject obj = self as IRubyObject;
+            return obj != null && obj.ImmediateClass.Version.Method == Version;
+        }
+
         internal static object CreateDispatcher(Type/*!*/ func, int mandatoryParamCount, bool hasScope, bool hasBlock, int version,
             Func<MethodDispatcher> parameterlessFactory, Type[] genericFactories) {
             Type[] funcArgs = func.GetGenericArguments();
