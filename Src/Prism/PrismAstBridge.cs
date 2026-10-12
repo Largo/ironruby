@@ -2124,9 +2124,14 @@ namespace IronRuby.Prism {
             // Everything below consumes ?args? destructively, so a parameterless `super`
             // inside the body would find nothing left to forward. Keep the list as it
             // arrived - trailing keyword hash included - and let SuperCall splat that.
-            var superArgs = CurrentScope.AddVariable("?superargs?", span);
-            statements.Add(new SimpleAssignmentExpression(superArgs,
-                SplatParameterRead.Copy(args, span), null, span));
+            // Only a method needs it: a `super` in a block forwards the arguments of the
+            // method the block is in (SuperCall reads gen.CurrentMethod.Parameters).
+            LocalVariable superArgs = null;
+            if (isMethod) {
+                superArgs = CurrentScope.AddVariable("?superargs?", span);
+                statements.Add(new SimpleAssignmentExpression(superArgs,
+                    SplatParameterRead.Copy(args, span), null, span));
+            }
 
             // A trailing Hash is how a keyword call arrives here, since keywords have no
             // calling-convention slot of their own. But when a block auto-splats a single
