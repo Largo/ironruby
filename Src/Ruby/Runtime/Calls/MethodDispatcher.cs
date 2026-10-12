@@ -158,6 +158,22 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal abstract void Initialize(string/*!*/ name, int version);
+
+        /// <summary>
+        /// The receiver as an IRubyObject and its class, or null: an exact RubyObject is told apart
+        /// inline, without the interface cast (see MemberDispatcher.IsCurrentFor).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static IRubyObject GetRubyObject(object self, out RubyClass cls) {
+            if (self != null && self.GetType() == typeof(RubyObject)) {
+                var obj = Unsafe.As<RubyObject>(self);
+                cls = obj.ImmediateClass;
+                return obj;
+            }
+            IRubyObject result = self as IRubyObject;
+            cls = (result != null) ? result.ImmediateClass : null;
+            return result;
+        }
     }
 
     public sealed class RubyObjectAttributeReaderDispatcherWithScope : AttributeDispatcher {
@@ -174,9 +190,10 @@ namespace IronRuby.Runtime.Calls {
         }
         
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
-                return RubyOps.ReadInstanceVariable(obj.ImmediateClass.Context, obj, Site);
+            RubyClass cls;
+            IRubyObject obj = GetRubyObject(self, out cls);
+            if (obj != null && cls.Version.Method == Version) {
+                return RubyOps.ReadInstanceVariable(cls.Context, obj, Site);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object, object>>)callSite).Update(callSite, scope, self);
             }
@@ -197,9 +214,10 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, T0 arg0) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
-                return RubyOps.WriteInstanceVariable(obj.ImmediateClass.Context, obj, (object)arg0, Site);
+            RubyClass cls;
+            IRubyObject obj = GetRubyObject(self, out cls);
+            if (obj != null && cls.Version.Method == Version) {
+                return RubyOps.WriteInstanceVariable(cls.Context, obj, (object)arg0, Site);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object, T0, object>>)callSite).Update(callSite, scope, self, arg0);
             }
