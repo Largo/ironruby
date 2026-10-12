@@ -238,6 +238,30 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
+        /// <summary>
+        /// The entry of a block whose body never uses its scope (see BlockDefinition.IsScopeFreeBody):
+        /// the safe point, and the scope only if a TracePoint wants the call event. Null otherwise; a
+        /// TracePoint hook enabled later makes it then (<see cref="CreateBlockScopeLazy"/>).
+        /// </summary>
+        [Emitted]
+        public static RubyBlockScope CreateBlockScopeIfTraced(MutableTuple locals, string[] variableNames,
+            BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
+
+            RubyUtils.SafePoint();
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {
+                var scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
+                TracePoint.OnBlockCall(scope);
+                return scope;
+            }
+            return null;
+        }
+
+        [Emitted]
+        public static RubyBlockScope/*!*/ CreateBlockScopeLazy(MutableTuple locals, string[] variableNames,
+            BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
+            return new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
+        }
+
         // TracePoint hooks; emitted code only calls them when TracePoint.ActiveEvents has the event.
 
         [Emitted]
@@ -438,11 +462,11 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Proc InstantiateBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
-            return (dispatcher.Method != null) ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+            return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
         }
         [Emitted]
         public static Proc InstantiateLambda(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
-            return (dispatcher.Method != null) ? new Proc(ProcKind.Lambda, self, scope, dispatcher) : null;
+            return dispatcher.HasMethod ? new Proc(ProcKind.Lambda, self, scope, dispatcher) : null;
         }
 
         [Emitted]
@@ -524,7 +548,8 @@ namespace IronRuby.Runtime {
 
         private static void CheckLambdaArity(Proc/*!*/ proc, int argCount, object lastArg) {
             var signature = proc.Dispatcher.ParameterSignature;
-            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+            // = signature != null && (signature.TakesKeywords || signature.RefusesKeywords), cached
+            if (proc.Dispatcher.ChecksKeywords) {
                 var keywords = argCount > 0 ? lastArg as Hash : null;
                 if (keywords != null && !keywords.IsKeywordArguments) {
                     keywords = null;

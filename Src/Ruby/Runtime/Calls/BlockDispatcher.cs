@@ -31,6 +31,7 @@ using IronRuby.Builtins;
 using System.Collections.ObjectModel;
 using System.Collections;
 using System.Diagnostics;
+using System.Threading;
 
 namespace IronRuby.Runtime.Calls {
     using Ast = Expression;
@@ -74,6 +75,7 @@ namespace IronRuby.Runtime.Calls {
             // Note: this might potentially be executed by multiple threads. So we can assert that _block == null here.
             // It's ok if the delegate is overwritten multiple times since all the target methods are equivalent.
             _block = (T)method;
+            Volatile.Write(ref _hasMethod, true);
 
             // A block defined in interpreted code gets the interpreter's delegate, which keeps going
             // through LightLambda.RunN - a check and a cast - on every call even once the lambda has
@@ -237,6 +239,13 @@ namespace IronRuby.Runtime.Calls {
         // Includes anonymous parameter.
         public abstract int ParameterCount { get; }
         public abstract Delegate/*!*/ Method { get; }
+
+        // Method != null, without the virtual call: InstantiateBlock asks on every call with a literal block
+        private protected bool _hasMethod;
+
+        internal bool HasMethod {
+            get { return Volatile.Read(ref _hasMethod); }
+        }
         internal abstract BlockDispatcher/*!*/ SetMethod(object/*!*/ method);
 
         public string SourcePath { get { return _sourcePath; } }
