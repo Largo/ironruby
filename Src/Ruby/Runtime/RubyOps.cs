@@ -1579,6 +1579,27 @@ namespace IronRuby.Runtime {
         /// The result is fed to the ordinary splatting machinery, so it is either [] or [hash].
         /// </summary>
         /// <summary>
+        /// `f(k: v, **h)`: h's entries added to the keyword hash being built for the call - the
+        /// call's own, so it is filled in place - which is returned; nil adds nothing. Null if h is
+        /// anything else: that goes through Hash#merge, for #to_hash.
+        /// </summary>
+        [Emitted]
+        public static object MergeKeywordSplat(RubyScope/*!*/ scope, object keywords, object splatted) {
+            if (splatted == null) {
+                return keywords;
+            }
+            var source = splatted as Hash;
+            var target = keywords as Hash;
+            if (source == null || target == null) {
+                return null;
+            }
+            foreach (var entry in source) {
+                RubyUtils.SetHashElement(scope.RubyContext, target, entry.Key, entry.Value);
+            }
+            return target;
+        }
+
+        /// <summary>
         /// `f(**h)` with h a Hash or nil: what <see cref="SplatKeywordHash"/> makes of it. Null for
         /// anything else, which the call site first converts with #to_hash (by way of Hash#merge).
         /// </summary>

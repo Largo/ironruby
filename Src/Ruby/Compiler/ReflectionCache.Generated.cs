@@ -506,6 +506,8 @@ namespace IronRuby.Compiler {
         private static MethodInfo _MatchLastInputLine;
         public static MethodInfo/*!*/ MatchString { get { return _MatchString ?? (_MatchString = CallInstruction.CacheFunc<IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyRegex, IronRuby.Runtime.RubyScope, System.Object>(RubyOps.MatchString)); } }
         private static MethodInfo _MatchString;
+        public static MethodInfo/*!*/ MergeKeywordSplat { get { return _MergeKeywordSplat ?? (_MergeKeywordSplat = CallInstruction.CacheFunc<IronRuby.Runtime.RubyScope, System.Object, System.Object, System.Object>(RubyOps.MergeKeywordSplat)); } }
+        private static MethodInfo _MergeKeywordSplat;
         public static MethodInfo/*!*/ MethodBreak { get { return _MethodBreak ?? (_MethodBreak = CallInstruction.CacheAction<System.Object>(RubyOps.MethodBreak)); } }
         private static MethodInfo _MethodBreak;
         public static MethodInfo/*!*/ MethodNext { get { return _MethodNext ?? (_MethodNext = CallInstruction.CacheAction<IronRuby.Runtime.RubyScope, System.Object>(RubyOps.MethodNext)); } }

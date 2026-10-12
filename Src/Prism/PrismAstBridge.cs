@@ -1269,6 +1269,10 @@ namespace IronRuby.Prism {
                     case Pm.AssocNode assoc:
                         maplets.Add(new Maplet(Expr(assoc.Key), Expr(assoc.Value), Span(assoc)));
                         break;
+                    case Pm.AssocSplatNode splat when isKeywordArguments:
+                        result = MergeKeywordSplat(MergeHash(result, maplets, isKeywordArguments, span) ?? new HashConstructor(new Maplet[0], true, span),
+                            splat.Value != null ? Expr(splat.Value) : AnonymousParameter(AnonymousKeywordRestName, splat), span);
+                        break;
                     case Pm.AssocSplatNode splat:
                         result = MergeHash(result, maplets, isKeywordArguments, span);
                         // `**nil` contributes nothing (Ruby 3.4); it is only known at run time
@@ -1291,7 +1295,23 @@ namespace IronRuby.Prism {
             if (maplets.Count == 0) return result;
             var ctor = new HashConstructor(maplets.ToArray(), isKeywordArguments, span);
             maplets.Clear();
+            if (result != null && isKeywordArguments) {
+                return MergeKeywordSplat(result, ctor, span);
+            }
             return result == null ? (Expression)ctor : new MethodCall(result, "merge", new Arguments(ctor), span);
+        }
+
+        /// <summary>
+        /// `hash.merge(splatted || {})` for keyword arguments, where the hash is the call's own: a
+        /// Hash (or nil) is copied into it in place, and only anything else takes the merge, which
+        /// applies #to_hash - see KeywordSplatMerge.
+        /// </summary>
+        private Expression/*!*/ MergeKeywordSplat(Expression/*!*/ hash, Expression/*!*/ splatted, SourceSpan span) {
+            var hashTemp = NewTemp(hash, span, out var hashAssignment);
+            var splatTemp = NewTemp(splatted, span, out var splatAssignment);
+            return new KeywordSplatMerge(hashAssignment, splatAssignment,
+                new MethodCall(hashTemp, "merge", new Arguments(
+                    new OrExpression(splatTemp, new HashConstructor(new Maplet[0], span), span)), span), span);
         }
 
         // ---- calls ----
