@@ -149,11 +149,16 @@ namespace IronRuby.Prism {
                 encodingName = kcode.Name;
             }
 
+            // Method bodies are mapped when the method is first called (see Def) - most methods a file
+            // defines never are. Not for eval'd code, seldom around long enough to pay that back, nor while
+            // Coverage measures: its walk of the tree wants every body.
+            bool deferBodies = !isEval && context != null && context.Coverage == null;
+
             // A UTF-8 source may hold bytes that are not UTF-8, read in as escapes (see
             // RubyContext.GetSourceReader); the escaping encoding gives prism those bytes back.
             PrismParseResult result = PrismParser.Parse(code, path, startLine <= 0 ? 1 : startLine, outerLocalNames,
                 frozenStringLiteral, sourceEncoding == RubyEncoding.UTF8 ? sourceEncoding.EscapingEncoding : sourceEncoding.Encoding,
-                encodingName, commandLine, mainScript, evalSourceEncoding != null && declaredEncodingName == null);
+                encodingName, commandLine, mainScript, evalSourceEncoding != null && declaredEncodingName == null, deferBodies);
 
             // An eval'd string without a magic comment is in the string's own encoding, which its
             // literals and __ENCODING__ then carry (MRI), rather than in UTF-8 as a file would be.
@@ -1793,6 +1798,18 @@ namespace IronRuby.Prism {
                         }
                         parameters = BuildParameters(parametersNode, false, true, out prologue);
                     }
+                    if (node.DeferredBodyLoader != null) {
+                        // A body that holds nothing reported at parse time is mapped when first asked for.
+                        // What mapping it now would have set _usesBlock to the skim has noted.
+                        if ((node.BodyContents & PrismLoader.ContentsEager) == 0) {
+                            var deferred = new DeferredMethodBody(this, node, scope, span, prologue, _zsuperArguments);
+                            return new MethodDefinition(scope, target, node.Name, parameters, deferred.Materialize, span) {
+                                UsesBlock = _usesBlock || (node.BodyContents & PrismLoader.ContentsUsesBlock) != 0
+                            };
+                        }
+                        node.Body = node.DeferredBodyLoader.LoadDeferredBody(node);
+                        node.DeferredBodyLoader = null;
+                    }
                     var body = DefinitionBody(node.Body, span, prologue);
                     return new MethodDefinition(scope, target, node.Name, parameters, body, span) { UsesBlock = _usesBlock };
                 } finally {
@@ -1801,6 +1818,57 @@ namespace IronRuby.Prism {
             } finally {
                 _scopes.Pop();
                 _usesBlock = enclosingUsesBlock;
+            }
+        }
+
+        /// <summary>
+        /// A method body left in prism's buffer, mapped the first time the method's AST body is asked
+        /// for - normally when the method is first called and compiled. It is mapped as Def would have
+        /// mapped it: in the method's own scope, after its parameters, with the same super arguments.
+        /// </summary>
+        private sealed class DeferredMethodBody {
+            private readonly PrismAstBridge/*!*/ _bridge;
+            private readonly Pm.DefNode/*!*/ _node;
+            private readonly LexicalScope/*!*/ _scope;
+            private readonly SourceSpan _span;
+            private readonly Statements _prologue;
+            private readonly Arguments _zsuperArguments;
+
+            public DeferredMethodBody(PrismAstBridge/*!*/ bridge, Pm.DefNode/*!*/ node, LexicalScope/*!*/ scope, SourceSpan span,
+                Statements prologue, Arguments zsuperArguments) {
+                _bridge = bridge;
+                _node = node;
+                _scope = scope;
+                _span = span;
+                _prologue = prologue;
+                _zsuperArguments = zsuperArguments;
+            }
+
+            public Body/*!*/ Materialize() {
+                return _bridge.MaterializeBody(_node, _scope, _span, _prologue, _zsuperArguments);
+            }
+        }
+
+        private Body/*!*/ MaterializeBody(Pm.DefNode/*!*/ node, LexicalScope/*!*/ scope, SourceSpan span, Statements prologue,
+            Arguments zsuperArguments) {
+            // the bridge keeps state while it maps; methods of one file may be first called on different threads
+            lock (this) {
+                Pm.PmNode bodyNode = node.DeferredBodyLoader.LoadDeferredBody(node);
+                var enclosingUsesBlock = _usesBlock;
+                var enclosingZSuperArguments = _zsuperArguments;
+                _scopes.Push(scope);
+                _usesBlock = false;
+                _zsuperArguments = zsuperArguments;
+                try {
+                    var body = DefinitionBody(bodyNode, span, prologue);
+                    // the skim has to have seen what mapping the body sees
+                    System.Diagnostics.Debug.Assert(_usesBlock == ((node.BodyContents & PrismLoader.ContentsUsesBlock) != 0));
+                    return body;
+                } finally {
+                    _scopes.Pop();
+                    _usesBlock = enclosingUsesBlock;
+                    _zsuperArguments = enclosingZSuperArguments;
+                }
             }
         }
 
