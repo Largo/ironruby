@@ -1761,6 +1761,106 @@ namespace IronRuby.Runtime {
             return (hash != null && hash.TryGetValueByIdentity(name, position, out value)) ? value : DefaultArgument;
         }
 
+        // A signature that mixes keywords with optional, rest or post positionals is lowered to a
+        // single splat that its prologue takes apart (PrismAstBridge.LowerGeneralParameters) with
+        // the helpers below rather than with Ruby-level Array calls. The splat is the array the
+        // call made for this call - or, for a block that auto-splats an Array argument, a copy of
+        // it (see AutoSplatArgument) - so consuming it changes nothing anyone else can see.
+
+        /// <summary>The arguments as they arrived, kept aside for a parameterless `super`.</summary>
+        [Emitted]
+        public static RubyArray/*!*/ CopySplatArguments(object args) {
+            return new RubyArray((RubyArray)args);
+        }
+
+        /// <summary>
+        /// Takes the hash a keyword call passed off the end of the arguments, or makes an empty one
+        /// if the call passed no keywords.
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ PopKeywordArguments(RubyScope/*!*/ scope, object args) {
+            var list = (RubyArray)args;
+            int last = list.Count - 1;
+            if (last >= 0 && IsKeywordArgumentsHash(list[last])) {
+                var result = (Hash)list[last];
+                list.RemoveAt(last);
+                return result;
+            }
+            return MakeHash0(scope);
+        }
+
+        /// <summary>A block's single Array argument, which it auto-splats.</summary>
+        [Emitted]
+        public static bool IsAutoSplatArgument(object args) {
+            var list = (RubyArray)args;
+            return list.Count == 1 && list[0] is RubyArray;
+        }
+
+        /// <summary>
+        /// The arguments a block that auto-splats its single Array argument binds: a copy of the
+        /// array, which the prologue consumes - the caller's array is left as it was.
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ AutoSplatArgument(object args) {
+            return new RubyArray((RubyArray)((RubyArray)args)[0]);
+        }
+
+        /// <summary>
+        /// The arity check of a method or lambda whose positionals are in the splat. A negative
+        /// <paramref name="maximum"/> means a rest parameter took the cap off.
+        /// </summary>
+        [Emitted]
+        public static void CheckSplatArity(object args, int minimum, int maximum) {
+            int count = ((RubyArray)args).Count;
+            if (count < minimum || (maximum >= 0 && count > maximum)) {
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                throw (minimum == maximum) ? MakeWrongNumberOfArgumentsError(count, minimum)
+                    : MakeWrongNumberOfArgumentsErrorN(count, minimum.ToString(inv) + (maximum < 0 ? "+" : ".." + maximum.ToString(inv)));
+            }
+        }
+
+        /// <summary>The next positional argument; nil if there is none left (a block's).</summary>
+        [Emitted]
+        public static object ShiftSplatArgument(object args) {
+            var list = (RubyArray)args;
+            if (list.Count == 0) {
+                return null;
+            }
+            object result = list[0];
+            list.RemoveAt(0);
+            return result;
+        }
+
+        /// <summary>
+        /// The argument of an optional parameter: the next one if the <paramref name="postCount"/>
+        /// post parameters leave one, <see cref="DefaultArgument"/> otherwise.
+        /// </summary>
+        [Emitted]
+        public static object ShiftOptionalSplatArgument(object args, int postCount) {
+            var list = (RubyArray)args;
+            if (list.Count <= postCount) {
+                return DefaultArgument;
+            }
+            object result = list[0];
+            list.RemoveAt(0);
+            return result;
+        }
+
+        /// <summary>
+        /// What the rest parameter takes: everything the <paramref name="postCount"/> post parameters
+        /// leave - nothing if a block was given too few arguments to fill even those.
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ ShiftRestSplatArguments(object args, int postCount) {
+            var list = (RubyArray)args;
+            int count = Math.Max(0, list.Count - postCount);
+            var result = new RubyArray(list, 0, count);
+            if (count > 0) {
+                list.RemoveRange(0, count);
+            }
+            return result;
+        }
+
         /// <summary>
         /// The **rest parameter: a new hash with whatever the call passed beyond the declared
         /// <paramref name="names"/>. It is a copy, so the method may change it freely.

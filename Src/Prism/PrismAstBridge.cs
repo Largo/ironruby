@@ -2126,31 +2126,23 @@ namespace IronRuby.Prism {
             // arrived - trailing keyword hash included - and let SuperCall splat that.
             var superArgs = CurrentScope.AddVariable("?superargs?", span);
             statements.Add(new SimpleAssignmentExpression(superArgs,
-                new MethodCall(args, "dup", null, span), null, span));
+                SplatParameterRead.Copy(args, span), null, span));
 
             // A trailing Hash is how a keyword call arrives here, since keywords have no
             // calling-convention slot of their own. But when a block auto-splats a single
             // Array argument no keywords were passed, so the Hash stays positional
             // (Ruby 3 keyword separation).
             var popKeywords = new SimpleAssignmentExpression(kwVar,
-                new ConditionalExpression(
-                    new KeywordArgumentsTest(new MethodCall(args, "last", null, span), span),
-                    new MethodCall(args, "pop", null, span),
-                    new HashConstructor(new Maplet[0], span), span),
-                null, span);
+                SplatParameterRead.PopKeywords(args, span), null, span);
 
             int formalCount = node.Requireds.Length + node.Optionals.Length + postCount + (node.Rest != null ? 1 : 0);
             if (autoSplat && formalCount > 1) {
+                // the Array is copied: taking it apart must not empty the caller's array
                 statements.Add(new IfExpression(
-                    new AndExpression(
-                        new MethodCall(new MethodCall(args, "size", null, span), "==",
-                            new Arguments(Literal.Integer(1, span)), span),
-                        CaseEqual(new ConstantVariable("Array", span),
-                            new MethodCall(args, "[]", new Arguments(Literal.Integer(0, span)), span), span),
-                        span),
+                    SplatParameterRead.IsAutoSplat(args, span),
                     MakeStatements(
                         new SimpleAssignmentExpression(args,
-                            new MethodCall(args, "[]", new Arguments(Literal.Integer(0, span)), span), null, span),
+                            SplatParameterRead.AutoSplat(args, span), null, span),
                         new SimpleAssignmentExpression(kwVar, new HashConstructor(new Maplet[0], span), null, span)),
                     new List<ElseIfClause> { new ElseIfClause(null, MakeStatements(popKeywords), span) },
                     span));
@@ -2179,26 +2171,18 @@ namespace IronRuby.Prism {
                 var optParam = (Pm.OptionalParameterNode)opt;
                 var local = CurrentScope.ResolveOrAddVariable(optParam.Name, Span(opt));
                 statements.Add(new SimpleAssignmentExpression(local,
-                    new ConditionalExpression(
-                        new MethodCall(new MethodCall(args, "size", null, span), ">",
-                            new Arguments(Literal.Integer(postCount, span)), span),
-                        new MethodCall(args, "shift", null, span),
-                        Expr(optParam.Value), span),
+                    SplatParameterRead.ShiftOptional(args, postCount, Expr(optParam.Value), span),
                     null, span));
             }
 
             if (node.Rest is Pm.RestParameterNode rest && (rest.Name != null || isMethod)) {
                 var local = CurrentScope.ResolveOrAddVariable(rest.Name ?? Symbols.RestArgsLocal, Span(node.Rest));
                 statements.Add(new SimpleAssignmentExpression(local,
-                    new MethodCall(args, "shift", new Arguments(
-                        new MethodCall(new MethodCall(args, "size", null, span), "-",
-                            new Arguments(Literal.Integer(postCount, span)), span)), span),
+                    SplatParameterRead.ShiftRest(args, postCount, span),
                     null, span));
             } else if (node.Rest != null && postCount > 0) {
                 // anonymous rest still has to consume what the posts do not take
-                statements.Add(new MethodCall(args, "shift", new Arguments(
-                    new MethodCall(new MethodCall(args, "size", null, span), "-",
-                        new Arguments(Literal.Integer(postCount, span)), span)), span));
+                statements.Add(SplatParameterRead.ShiftRest(args, postCount, span));
             }
 
             foreach (var post in node.Posts) {
@@ -2230,7 +2214,7 @@ namespace IronRuby.Prism {
         /// take; handing one to SimpleAssignmentExpression trips its Debug.Assert.
         /// </summary>
         private Expression/*!*/ AssignNext(Pm.PmNode/*!*/ target, LocalVariable/*!*/ args, SourceSpan span) {
-            var shift = new MethodCall(args, "shift", null, span);
+            var shift = SplatParameterRead.Shift(args, span);
             var lhs = Target(target);
             return lhs is CompoundLeftValue compound
                 ? (Expression)new DestructuringAssignmentExpression(compound, shift, span)
@@ -2331,27 +2315,7 @@ namespace IronRuby.Prism {
         /// took the cap off, which MRI reports as "expected N+".
         /// </summary>
         private Expression/*!*/ ArityCheck(LocalVariable/*!*/ args, int minimum, int maximum, SourceSpan span) {
-            Expression condition = new MethodCall(new MethodCall(args, "size", null, span), "<",
-                new Arguments(Literal.Integer(minimum, span)), span);
-
-            if (maximum >= 0) {
-                condition = new OrExpression(condition,
-                    new MethodCall(new MethodCall(args, "size", null, span), ">",
-                        new Arguments(Literal.Integer(maximum, span)), span), span);
-            }
-
-            string expected = maximum < 0 ? minimum + "+" :
-                minimum == maximum ? minimum.ToString() : minimum + ".." + maximum;
-
-            Expression message = new MethodCall(
-                new MethodCall(new StringLiteral("wrong number of arguments (given ", _encoding, span), "+",
-                    new Arguments(new MethodCall(new MethodCall(args, "size", null, span), "to_s", null, span)), span),
-                "+", new Arguments(new StringLiteral(", expected " + expected + ")", _encoding, span)), span);
-
-            return new IfExpression(condition, new Statements(
-                new MethodCall(null, "raise", new Arguments(new Expression[] {
-                    new ConstantVariable("ArgumentError", span), message
-                }), span)), new List<ElseIfClause>(), span);
+            return SplatParameterRead.CheckArity(args, minimum, maximum, span);
         }
 
         private Expression/*!*/ RaiseArityError(int given, int expected, SourceSpan span) {
