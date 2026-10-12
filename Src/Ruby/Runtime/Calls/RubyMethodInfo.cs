@@ -209,8 +209,22 @@ namespace IronRuby.Runtime.Calls {
         #region Dynamic Sites
 
         internal override MemberDispatcher GetDispatcher(Type/*!*/ delegateType, RubyCallSignature signature, object target, int version) {
-            if (Parameters.Unsplat != null || Parameters.Optional.Length > 0) {
+            if (Parameters.Unsplat != null) {
                 return null;
+            }
+
+            // The keywords of a method that declares nothing but mandatory positionals besides them
+            // were lowered onto one trailing optional parameter (see PrismAstBridge.LowerKeywords and
+            // RefuseKeywords). A call that fills it - a keyword call - passes the keyword hash to it
+            // unchanged, which is all the rule would do (BuildCallNoFlow leaves the trailing hash of a
+            // method that takes or refuses keywords alone). A call that omits it still gets a rule:
+            // CreateDispatcher refuses a site whose argument count differs.
+            int parameterCount = Parameters.Mandatory.Length;
+            if (Parameters.Optional.Length > 0) {
+                if (!TakesOrRefusesKeywords) {
+                    return null;
+                }
+                parameterCount += Parameters.Optional.Length;
             }
 
             if (!(target is IRubyObject)) {
@@ -218,7 +232,7 @@ namespace IronRuby.Runtime.Calls {
             }
 
             return MethodDispatcher.CreateRubyObjectDispatcher(
-                delegateType, GetDelegate(), Parameters.Mandatory.Length, signature.HasScope, signature.HasBlock, version
+                delegateType, GetDelegate(), parameterCount, signature.HasScope, signature.HasBlock, version
             );
         }
 

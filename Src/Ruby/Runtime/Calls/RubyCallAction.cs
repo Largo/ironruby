@@ -123,10 +123,13 @@ namespace IronRuby.Runtime.Calls {
             // Nor can it hold RubyMethodInfo.BuildCallNoFlow's unmarking of a keyword-arguments
             // hash handed to a method that declares no keywords. A call site's syntax decides
             // whether it passes keywords, so seeing one here means every call at this site
-            // passes one: hand the site to the rule builder instead of precompiling it.
+            // passes one: unless the method takes keywords (checked below), hand the site to the
+            // rule builder instead of precompiling it.
+            bool passesKeywords = false;
             for (int i = 0; i < args.Length; i++) {
                 if (RubyOps.IsKeywordArgumentsHash(args[i])) {
-                    return null;
+                    passesKeywords = true;
+                    break;
                 }
             }
 
@@ -160,6 +163,11 @@ namespace IronRuby.Runtime.Calls {
             // a call through an alias has to tell the method its name (see RubyMethodInfo.BuildCallNoFlow)
             var rubyMethod = method.Info as RubyMethodInfo;
             if (rubyMethod != null && rubyMethod.DefinitionName != _methodName) {
+                return null;
+            }
+
+            // a method that takes or refuses keywords reads the hash as it is - nothing to unmark
+            if (passesKeywords && (rubyMethod == null || !rubyMethod.TakesOrRefusesKeywords)) {
                 return null;
             }
 
