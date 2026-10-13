@@ -56,6 +56,15 @@ namespace IronRuby.Runtime.Jit {
         private readonly int _positional;     // delegate parameters that are positional parameters
         private readonly int _typedCount;     // parameters of the typed body
 
+        // A specialized keyword method's entry for JitKeywordCall: (self, p0, p1, k0, k1, k2) with the
+        // keyword values in declaration order and unused slots null. Answers JitKeywordCall.NoDirect
+        // when a guard fails. Null when the method is not specialized.
+        private volatile Func<object, object, object, object, object, object, object> _direct;
+
+        internal Func<object, object, object, object, object, object, object> Direct { get { return _direct; } }
+        internal JitKeywords Keywords { get { return _keywords; } }
+        internal int Positional { get { return _positional; } }
+
         // profiling feedback
         private int _calls;
         private readonly int[]/*!*/ _argKind;       // 0 = unseen, 1 = int, 2 = double, 3 = other/mixed, 4 = long
@@ -140,12 +149,14 @@ namespace IronRuby.Runtime.Jit {
                 Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen)",
                     _declaringModule.Name ?? "main", _ast.Name, _arity);
             }
+            _direct = null;
             Install(_generic);
         }
 
         /// <summary>Deoptimize: drop the specialized entry and let profiling start over.</summary>
         internal void Invalidate() {
             JitRuntime.Invalidations++;
+            _direct = null;
             // A method that was already declined must not fall back into profiling here.
             Install(_givenUp ? _generic : null);
             _calls = 0;
@@ -167,6 +178,7 @@ namespace IronRuby.Runtime.Jit {
             if (_givenUp) { return; }
             if (++_respecializations > MaxRespecializations) {
                 _givenUp = true;
+                _direct = null;
                 Install(_generic);
                 return;
             }
@@ -213,6 +225,10 @@ namespace IronRuby.Runtime.Jit {
 
             var entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null);
             Install(entry.Compile());
+            if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
+                _keywords.Count <= JitKeywordCall.MaxKeywords) {
+                _direct = BuildDirectEntry(code, callee, version).Compile();
+            }
 
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
             JitRuntime.Specialized++;
@@ -343,6 +359,72 @@ namespace IronRuby.Runtime.Jit {
             all[1] = blk;
             Array.Copy(args, 0, all, 2, _arity);
             return Ast.Lambda(_generic.GetType(), body, "jitentry$" + _ast.Name, all);
+        }
+
+        /// <summary>
+        /// The entry JitKeywordCall calls with the keyword values already bound (and the defaults of the
+        /// ones the call left out filled in): the same guards as BuildEntry's, but a failed one - or a
+        /// deopt - answers NoDirect, and the caller then makes the call the ordinary way.
+        /// </summary>
+        private MSA.Expression<Func<object, object, object, object, object, object, object>>/*!*/ BuildDirectEntry(JitCode/*!*/ code,
+            MSA.Expression/*!*/ callee, int version) {
+
+            var self = Ast.Parameter(typeof(object), "self");
+            var slots = new MSA.ParameterExpression[JitKeywordCall.MaxPositional + JitKeywordCall.MaxKeywords];
+            for (int i = 0; i < slots.Length; i++) {
+                slots[i] = Ast.Parameter(typeof(object), "s" + i);
+            }
+            var values = new MSA.Expression[_typedCount];
+            for (int i = 0; i < _positional; i++) {
+                values[i] = slots[i];
+            }
+            for (int j = 0; j < _keywords.Count; j++) {
+                values[_positional + j] = slots[JitKeywordCall.MaxPositional + j];
+            }
+
+            MSA.Expression test = Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version));
+            // the separation check on the last positional, as in BuildEntry
+            if (_positional > 0 && code.ParameterTypes[_positional - 1] == JT.Obj) {
+                test = And(test, Ast.Not(Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), values[_positional - 1])));
+            }
+            var typedArgs = new MSA.Expression[_typedCount + 1];
+            typedArgs[0] = self;
+            for (int i = 0; i < _typedCount; i++) {
+                switch (code.ParameterTypes[i]) {
+                    case JT.Int:
+                        test = And(test, Ast.TypeIs(values[i], typeof(int)));
+                        typedArgs[i + 1] = Ast.Unbox(values[i], typeof(int));
+                        break;
+                    case JT.Dbl:
+                        test = And(test, Ast.TypeIs(values[i], typeof(double)));
+                        typedArgs[i + 1] = Ast.Unbox(values[i], typeof(double));
+                        break;
+                    case JT.Lng:
+                        test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), values[i]));
+                        typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), values[i]);
+                        break;
+                    default:
+                        typedArgs[i + 1] = values[i];
+                        break;
+                }
+            }
+
+            MSA.Expression fast = Ast.Invoke(callee, typedArgs);
+            if (code.ReturnType == JT.Lng) {
+                fast = Ast.Call(JitRuntime.M("NarrowLong"), fast);
+            } else if (fast.Type != typeof(object)) {
+                fast = Ast.Convert(fast, typeof(object));
+            }
+            var noDirect = Ast.Field(null, typeof(JitKeywordCall).GetField("NoDirect"));
+            if (code.CanDeopt) {
+                fast = Ast.TryCatch(fast, Ast.Catch(typeof(JitDeoptException), noDirect));
+            }
+            var body = Ast.Condition(test, fast, noDirect, typeof(object));
+
+            var all = new MSA.ParameterExpression[slots.Length + 1];
+            all[0] = self;
+            Array.Copy(slots, 0, all, 1, slots.Length);
+            return Ast.Lambda<Func<object, object, object, object, object, object, object>>(body, "jitdirect$" + _ast.Name, all);
         }
 
         private static MSA.Expression/*!*/ And(MSA.Expression left, MSA.Expression/*!*/ right) {
