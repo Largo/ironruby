@@ -441,6 +441,20 @@ bench("yield_loop") do
   r.times { o.yield_upto(1000) { |x| s += x } }
 end
 
+# ---------------- keyword parameters ----------------
+
+class KwPoint
+  def initialize(x:, y: 0)
+    @x = x
+    @y = y
+  end
+end
+
+bench("new_kwargs") do
+  i = 0; m = n(1_000_000)
+  while i < m; KwPoint.new(x: i, y: 2); i += 1; end
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"

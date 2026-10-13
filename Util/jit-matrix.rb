@@ -528,6 +528,32 @@ kt('kw default reads a parameter') { [no_kw_default_expr(a: 1), no_kw_default_ex
 warm { |i| no_kw_default_string(a: i) }
 kt('kw String default') { no_kw_default_string(a: 1) }
 
+# A keyword initializer: an instance variable store is a typed body too.
+class KwIvars
+  def initialize(x:, y: 0)
+    @x = x
+    @y = y
+  end
+
+  def pair
+    [@x, @y]
+  end
+end
+class KwIvarsSub < KwIvars
+  def initialize(x:, z: 5)
+    super(x: x, y: z)
+  end
+end
+
+warm { |i| KwIvars.new(x: i) }
+kt('kw initialize') { KwIvars.new(x: 1, y: 2).pair }
+kt('kw initialize with the default') { KwIvars.new(x: 1).pair }
+kt('kw initialize with Float and String') { KwIvars.new(x: 1.5, y: 'b').pair }
+kt('kw initialize missing') { KwIvars.new(y: 1) }
+kt('kw initialize unknown') { KwIvars.new(x: 1, w: 1) }
+kt('kw initialize of a frozen object') { o = KwIvars.new(x: 1).freeze; o.send(:initialize, x: 2) }
+kt('kw initialize via super') { KwIvarsSub.new(x: 3).pair }
+
 def sp_kw_add(left:, right:)
   left - right
 end
