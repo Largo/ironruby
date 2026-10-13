@@ -1,6 +1,6 @@
 # Differential checks for block scope reuse together with literal-block procs (block-pass):
 # break/next/return through reused scopes, scopes kept on the BlockParam (in its break-target
-# slot) and on the proc (from its third single call), proc identity, escaped procs and bindings,
+# slot), separate yields of one block (a BlockParam each), proc identity, escaped procs and bindings,
 # threads and fibers. Every block body here makes calls, so it takes the reuse path; the output
 # must match CRuby, with and without -X:NoJIT -X:NoOSR:
 #
@@ -73,7 +73,7 @@ show :eval, loop_yield(3) { |x| eval("ev = x * 2; ev") + (defined?(ev) ? 1 : 0) 
 show :lv, loop_yield(2) { |x| r1 = local_variables.sort; nn = 1; [r1, local_variables.sort] }
 def four(x) [yield(x), yield(x + 1), yield(x + 2), yield(x + 3)]; end
 def five_sep(x) a = yield(x); b = yield(x + 1); c = yield(x + 2); d = yield(x + 3); e = yield(x + 4); [a, b, c, d, e]; end
-# parked scope on the proc (third single call on) then reuse
+# separate yields of one block: each yield has a BlockParam of its own
 show :four, four(1) { |y| q = defined?(q).inspect; z = y * 2; [q, z] }
 show :five_sep, five_sep(1) { |y| w = (w || :nil); w2 = y; [w, w2.to_s] }
 bnd = []

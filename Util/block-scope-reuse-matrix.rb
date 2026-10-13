@@ -279,7 +279,7 @@ def locals_part
 end
 locals_part
 
-# one proc called through many BlockParams: the scope is kept on the proc, for its thread
+# one proc called through many BlockParams (each call makes its own scope)
 class ReuseD
   define_method(:dbl) { |x| y = x * 2; y + (z ||= 0) }
   define_method(:bnd) { |x| y = x * 3; binding }

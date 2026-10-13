@@ -257,35 +257,52 @@ namespace IronRuby.Runtime {
         }
 
         /// <summary>
-        /// The entry of a block whose body needs its scope but does not define a closure over it: the
-        /// scope a finished call left on the BlockParam (each, map, times, a yield in a loop) or, for
-        /// a BlockParam of a single call (Proc#call, a plain yield), on the proc is reused, unless
-        /// something captured it (see RubyScope.IsCaptured). <see cref="LeaveReusableBlockScope"/>
-        /// hands it back. Only the thread whose call kept a scope on a proc takes it off, so a proc called on
-        /// several threads needs no lock; a scope is taken while its call runs, and a nested call
-        /// of the same block makes its own.
+        /// The first step of the entry of a block whose body needs its scope but does not define a closure
+        /// over it: the safe point, then the scope the last finished call through this BlockParam left there
+        /// (each, map, times, a yield in a loop; see BlockParam.ParkScope) unless something captured it, or null.
+        /// The scope comes off the BlockParam here, after the safe point (which can run a trap handler or a
+        /// finalizer) and together with its locals tuple: a call that starts in between finds nothing kept and
+        /// makes a scope and tuple of its own, and a call that does not finish normally keeps nothing.
+        /// The block reuses the scope's tuple (see <see cref="GetReusableLocals"/>) and hands the scope to
+        /// <see cref="CreateReusableBlockScope"/>; <see cref="LeaveReusableBlockScope"/> parks it again.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static RubyBlockScope TakeReusableBlockScope(BlockParam/*!*/ blockParam) {
+            // Block entry too: `n.times { }` and `each { }` loop in C#, where no back edge is emitted.
+            RubyUtils.SafePoint();
+
+            if (blockParam.MayHaveReusableScope) {
+                var scope = blockParam.ReusableScope;
+                if (scope != null && !scope.IsCaptured) {
+                    blockParam.TakeReusableScope();
+                    return scope;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The locals tuple of a scope <see cref="TakeReusableBlockScope"/> took, for the block to reuse (the
+        /// last call cleared it); null if it took none.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static MutableTuple GetReusableLocals(RubyBlockScope reusable) {
+            return (reusable != null) ? reusable._locals : null;
+        }
+
+        /// <summary>
+        /// The scope of a block call that <see cref="TakeReusableBlockScope"/> began: the scope it took, made the
+        /// scope of this call, or a new one.
         /// </summary>
         [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static RubyBlockScope/*!*/ CreateReusableBlockScope(MutableTuple locals, string[] variableNames,
-            BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
+            BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame, RubyBlockScope reusable) {
 
-            RubyUtils.SafePoint();
-
-            // A block called once finds nothing kept on its BlockParam or proc, and a block called repeatedly
-            // through one BlockParam (each, times, a yield in a loop) finds the scope there: both inline.
-            RubyBlockScope scope = null;
-            if (blockParam.MayHaveReusableScope) {
-                scope = blockParam.ReusableScope;
-                if (scope != null && !scope.IsCaptured) {
-                    blockParam.TakeReusableScope();
-                    scope.Reinitialize(locals, blockParam, selfObject, interpretedFrame);
-                } else {
-                    scope = TakeReusableProcScope(locals, blockParam, selfObject, interpretedFrame);
-                }
-            } else if (blockParam.Proc.ReusableScope != null) {
-                scope = TakeReusableProcScope(locals, blockParam, selfObject, interpretedFrame);
-            }
-            if (scope == null) {
+            RubyBlockScope scope;
+            if (reusable != null) {
+                scope = reusable;
+                scope.Reinitialize(locals, blockParam, selfObject, interpretedFrame);
+            } else {
                 scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
             }
 
@@ -296,82 +313,19 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
-        // Out of line: the path of a scope kept on the proc, not the BlockParam's own.
-        // (a scope that something captured after its call had returned is not reused either)
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static RubyBlockScope TakeReusableProcScope(MutableTuple locals, BlockParam/*!*/ blockParam,
-            object selfObject, InterpretedFrame interpretedFrame) {
-
-            // The block passes the locals TakeReusableLocals found on the proc's scope - which it
-            // checked just now - or a tuple of its own; one without a reusable tuple, null or a new one.
-            var proc = blockParam.Proc;
-            var scope = proc.ReusableScope;
-            if (scope != null && (locals != null && scope.Locals == locals || IsReusableBlockScope(scope))) {
-                proc.TakeReusableScope();
-            } else {
-                return null;
-            }
-
-            scope.Reinitialize(locals, blockParam, selfObject, interpretedFrame);
-            return scope;
-        }
-
-        /// <summary>
-        /// The locals tuple of the scope <see cref="CreateReusableBlockScope"/> is about to reuse, for the
-        /// block to clear and keep instead of allocating another; null if there is no such scope.
-        /// </summary>
-        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static MutableTuple TakeReusableLocals(BlockParam/*!*/ blockParam) {
-            if (blockParam.MayHaveReusableScope) {
-                var scope = blockParam.ReusableScope;
-                if (scope != null && !scope.IsCaptured) {
-                    return scope.Locals;
-                }
-            } else if (blockParam.Proc.ReusableScope == null) {
-                return null;
-            }
-            return GetReusableProcLocals(blockParam);
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static MutableTuple GetReusableProcLocals(BlockParam/*!*/ blockParam) {
-            var scope = blockParam.Proc.ReusableScope;
-            return (scope != null && IsReusableBlockScope(scope)) ? scope.Locals : null;
-        }
-
-        // Out of line: the path of a scope kept on the proc, not the BlockParam's own.
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static bool IsReusableBlockScope(RubyBlockScope/*!*/ scope) {
-            return scope.OwnerThreadId == Environment.CurrentManagedThreadId && !scope.IsCaptured;
-        }
-
         /// <summary>
         /// The normal exit of a block that made its scope by <see cref="CreateReusableBlockScope"/>.
         /// An exception leaving the body skips this, and the scope is simply not reused. True if the
-        /// scope was kept, with its locals tuple when <paramref name="keepLocals"/>: the block then
-        /// clears the tuple, so that the next call finds its locals nil. The first call through a
-        /// BlockParam and the first two of a proc keep nothing (see BlockParam.ParkScope, Proc.KeepReusableScope):
-        /// a block called once pays no more than a flag.
+        /// scope was kept on the BlockParam, with its locals tuple when <paramref name="keepLocals"/>: the
+        /// block then clears the tuple, so that the next call finds its locals nil. The first call through
+        /// a BlockParam keeps nothing (see BlockParam.ParkScope): a block called once pays no more than a flag.
         /// </summary>
         [Emitted]
         public static bool LeaveReusableBlockScope(RubyBlockScope/*!*/ scope, bool keepLocals) {
             if (scope.IsCaptured) {
                 return false;
             }
-            var blockParam = scope.BlockFlowControl;
-            if (!blockParam.IsSingleCall) {
-                return blockParam.ParkScope(scope);
-            }
-            if (!blockParam.Proc.KeepReusableScope()) {
-                return false;
-            }
-            return ReleaseToProc(scope, keepLocals);
-        }
-
-        [MethodImpl(MethodImplOptions.NoInlining)]
-        private static bool ReleaseToProc(RubyBlockScope/*!*/ scope, bool keepLocals) {
-            scope.Release(keepLocals);
-            return true;
+            return scope.BlockFlowControl.ParkScope(scope);
         }
 
         [Emitted]

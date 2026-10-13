@@ -95,12 +95,10 @@ namespace IronRuby.Runtime {
         private readonly Proc/*!*/ _proc;
         // The small state is packed into bytes, which keeps a BlockParam at 48 bytes: one is allocated for every
         // call of a library method with a block, and for every yield and Proc#call.
-        // bit 0: BlockCallerKind.Call; bit 1: the library method call taking this BlockParam is a proc converter;
-        // bit 2: made for a single call of the block (a yield or a Proc#call; see RubyOps.LeaveReusableBlockScope).
-        private byte _callerFlags;
+        // bit 0: BlockCallerKind.Call; bit 1: the library method call taking this BlockParam is a proc converter.
+        private readonly byte _callerFlags;
         private const int CallFlag = 1;
         private const int LibProcConverterFlag = 2;
-        internal const int SingleCallFlag = 4;
 
         // filled by module_eval: if not null than method definition uses the module
         private RubyModule _methodLookupModule;
@@ -124,9 +122,6 @@ namespace IronRuby.Runtime {
         private RuntimeFlowControl _targetFrame;
 
         internal BlockCallerKind CallerKind { get { return (_callerFlags & CallFlag) != 0 ? BlockCallerKind.Call : BlockCallerKind.Yield; } }
-
-        // Made for a single call of the block: a scope it leaves is kept on the proc instead.
-        internal bool IsSingleCall { get { return (_callerFlags & SingleCallFlag) != 0; } }
 
         /// <summary>
         /// The scope ParkScope kept, or null.
@@ -215,19 +210,17 @@ namespace IronRuby.Runtime {
 
         // A BlockParam that is only ever used on the thread creating it, for the duration of a call:
         // a yield or a Proc#call. There the thread check in Break always passes, so skip it.
-        internal BlockParam(Proc/*!*/ proc, BlockCallerKind callerKind, int flags) {
-            _callerFlags = (byte)((callerKind == BlockCallerKind.Call ? CallFlag : 0) | flags);
+        internal BlockParam(Proc/*!*/ proc, BlockCallerKind callerKind) {
+            _callerFlags = (byte)(callerKind == BlockCallerKind.Call ? CallFlag : 0);
             _proc = proc;
         }
 
-        // ReuseBfcForYield: the flow-control state is cleared, but the scope the last call kept (see ParkScope) stays,
-        // and the calls through this BlockParam are no longer a single call.
+        // ReuseBfcForYield: the flow-control state is cleared, but the scope the last call kept (see ParkScope) stays.
         internal void ResetForNextYield() {
             if ((_flow & ~CalledFlag) != 0) {
                 _targetFrame = null;
             }
             _flow = CalledFlag;
-            _callerFlags &= unchecked((byte)~SingleCallFlag);
         }
 
         internal void SetFlowControl(BlockReturnReason reason, RuntimeFlowControl targetFrame, ProcKind sourceProcKind) {
@@ -376,7 +369,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static BlockParam/*!*/ CreateBfcForYield(Proc proc) {
             if (proc != null) {
-                return new BlockParam(proc, BlockCallerKind.Yield, BlockParam.SingleCallFlag);
+                return new BlockParam(proc, BlockCallerKind.Yield);
             } else {
                 throw RubyExceptions.NoBlockGiven();
             }
@@ -400,7 +393,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static BlockParam/*!*/ CreateBfcForProcCall(Proc/*!*/ proc) {
             Assert.NotNull(proc);
-            return new BlockParam(proc, BlockCallerKind.Call, BlockParam.SingleCallFlag) { IsActiveLambdaCall = proc.Kind == ProcKind.Lambda };
+            return new BlockParam(proc, BlockCallerKind.Call) { IsActiveLambdaCall = proc.Kind == ProcKind.Lambda };
         }
         
         [Emitted]

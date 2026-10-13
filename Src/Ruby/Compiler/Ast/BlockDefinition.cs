@@ -272,15 +272,31 @@ namespace IronRuby.Compiler.Ast {
                 );
             }
 
-            body = scope.CreateScope(
-                scopeVariable,
-                (lazyScope != null ? Methods.CreateBlockScopeIfTraced : reuseScope ? Methods.CreateReusableBlockScope : Methods.CreateBlockScope).OpCall(new AstExpressions {
-                    reuseScope ? scope.MakeReusableLocalsStorage(blockParameter) : scope.MakeLocalsStorage(),
+            MSA.Expression enterScope;
+            if (reuseScope) {
+                // the scope to reuse is taken first, its tuple from it (see RubyOps.TakeReusableBlockScope)
+                var reusableScope = scope.DefineHiddenVariable("#reusable", typeof(RubyBlockScope));
+                enterScope = Methods.CreateReusableBlockScope.OpCall(new AstExpressions {
+                    scope.MakeReusableLocalsStorage(blockParameter, reusableScope),
+                    scope.GetVariableNamesExpression(),
+                    blockParameter,
+                    selfParameter,
+                    EnterInterpretedFrameExpression.Instance,
+                    reusableScope
+                });
+            } else {
+                enterScope = (lazyScope != null ? Methods.CreateBlockScopeIfTraced : Methods.CreateBlockScope).OpCall(new AstExpressions {
+                    scope.MakeLocalsStorage(),
                     scope.GetVariableNamesExpression(),
                     blockParameter, 
                     selfParameter,
                     EnterInterpretedFrameExpression.Instance
-                }),
+                });
+            }
+
+            body = scope.CreateScope(
+                scopeVariable,
+                enterScope,
                 body
             );
 

@@ -106,7 +106,7 @@ namespace IronRuby.Compiler {
         private static MethodInfo _CreateBlockScopeIfTraced;
         public static MethodInfo/*!*/ CreateBlockScopeLazy { get { return _CreateBlockScopeLazy ?? (_CreateBlockScopeLazy = CallInstruction.CacheFunc<Microsoft.Scripting.MutableTuple, System.String[], IronRuby.Runtime.BlockParam, System.Object, Microsoft.Scripting.Interpreter.InterpretedFrame, IronRuby.Runtime.RubyBlockScope>(RubyOps.CreateBlockScopeLazy)); } }
         private static MethodInfo _CreateBlockScopeLazy;
-        public static MethodInfo/*!*/ CreateReusableBlockScope { get { return _CreateReusableBlockScope ?? (_CreateReusableBlockScope = CallInstruction.CacheFunc<Microsoft.Scripting.MutableTuple, System.String[], IronRuby.Runtime.BlockParam, System.Object, Microsoft.Scripting.Interpreter.InterpretedFrame, IronRuby.Runtime.RubyBlockScope>(RubyOps.CreateReusableBlockScope)); } }
+        public static MethodInfo/*!*/ CreateReusableBlockScope { get { return _CreateReusableBlockScope ?? (_CreateReusableBlockScope = CallInstruction.CacheFunc<Microsoft.Scripting.MutableTuple, System.String[], IronRuby.Runtime.BlockParam, System.Object, Microsoft.Scripting.Interpreter.InterpretedFrame, IronRuby.Runtime.RubyBlockScope, IronRuby.Runtime.RubyBlockScope>(RubyOps.CreateReusableBlockScope)); } }
         private static MethodInfo _CreateReusableBlockScope;
         public static MethodInfo/*!*/ CreateBoundMember { get { return _CreateBoundMember ?? (_CreateBoundMember = CallInstruction.CacheFunc<System.Object, IronRuby.Runtime.Calls.RubyMemberInfo, System.String, IronRuby.Builtins.RubyMethod>(RubyOps.CreateBoundMember)); } }
         private static MethodInfo _CreateBoundMember;
@@ -426,8 +426,10 @@ namespace IronRuby.Compiler {
         private static MethodInfo _LeaveLoop;
         public static MethodInfo/*!*/ LeaveReusableBlockScope { get { return _LeaveReusableBlockScope ?? (_LeaveReusableBlockScope = CallInstruction.CacheFunc<IronRuby.Runtime.RubyBlockScope, System.Boolean, System.Boolean>(RubyOps.LeaveReusableBlockScope)); } }
         private static MethodInfo _LeaveReusableBlockScope;
-        public static MethodInfo/*!*/ TakeReusableLocals { get { return _TakeReusableLocals ?? (_TakeReusableLocals = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, Microsoft.Scripting.MutableTuple>(RubyOps.TakeReusableLocals)); } }
-        private static MethodInfo _TakeReusableLocals;
+        public static MethodInfo/*!*/ TakeReusableBlockScope { get { return _TakeReusableBlockScope ?? (_TakeReusableBlockScope = CallInstruction.CacheFunc<IronRuby.Runtime.BlockParam, IronRuby.Runtime.RubyBlockScope>(RubyOps.TakeReusableBlockScope)); } }
+        private static MethodInfo _TakeReusableBlockScope;
+        public static MethodInfo/*!*/ GetReusableLocals { get { return _GetReusableLocals ?? (_GetReusableLocals = CallInstruction.CacheFunc<IronRuby.Runtime.RubyBlockScope, Microsoft.Scripting.MutableTuple>(RubyOps.GetReusableLocals)); } }
+        private static MethodInfo _GetReusableLocals;
         public static MethodInfo/*!*/ LeaveMethodFrame { get { return _LeaveMethodFrame ?? (_LeaveMethodFrame = CallInstruction.CacheAction<IronRuby.Runtime.RuntimeFlowControl>(RubyOps.LeaveMethodFrame)); } }
         private static MethodInfo _LeaveMethodFrame;
         public static MethodInfo/*!*/ LeaveProcCall { get { return _LeaveProcCall ?? (_LeaveProcCall = CallInstruction.CacheAction<IronRuby.Runtime.BlockParam>(RubyOps.LeaveProcCall)); } }

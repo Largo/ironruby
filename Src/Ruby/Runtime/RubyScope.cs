@@ -93,7 +93,7 @@ namespace IronRuby.Runtime {
 
         // Set once something may hold on to this scope after the call it belongs to has returned: a
         // Proc, Binding, method or nested scope made in it, a TracePoint event. A block scope that is
-        // not captured is reused for the next call of its proc (see RubyOps.CreateReusableBlockScope).
+        // not captured is reused for the next call of its block (see RubyOps.TakeReusableBlockScope).
         internal bool IsCaptured;
 
         // Libraries call this for a scope they keep after returning.
@@ -239,7 +239,7 @@ namespace IronRuby.Runtime {
             // Perf note: Initialization is performed completely in the most derived scope classes to improve perf.
         }
 
-        // The per-call state of a scope reused for another call of its proc, as a new scope has it.
+        // The per-call state of a scope reused for another call of its block, as a new scope has it.
         internal void ResetForReuse(MutableTuple locals, object selfObject, InterpretedFrame interpretedFrame) {
             _activeFlowControlScope = _parent.FlowControlScope;
             InLoop = false;
@@ -250,18 +250,6 @@ namespace IronRuby.Runtime {
             _methodAttributes = RubyMethodAttributes.PublicInstance;
             _rare = null;
             InterpretedFrame = interpretedFrame;
-        }
-
-        // Drops what the finished call referred to, so that a scope kept on its proc holds on to no values.
-        internal void ClearForReuse(bool keepLocals) {
-            _activeFlowControlScope = null;
-            if (!keepLocals) {
-                _locals = null;
-            }
-            _selfObject = null;
-            _selfImmediateClass = null;
-            _rare = null;
-            InterpretedFrame = null;
         }
 
         public virtual RubyModule Module {
@@ -1347,9 +1335,6 @@ var closureScope = scope as RubyClosureScope;
     public sealed class RubyBlockScope : RubyClosureScope {
         private BlockParam/*!*/ _blockFlowControl;
 
-        // The thread whose call kept the scope on its proc, the only one that may reuse it (see RubyOps.CreateReusableBlockScope).
-        internal int OwnerThreadId;
-
         // The block a thread runs keeps its own $~ and $_, as MRI's thread root frame does; any
         // other block shares them with the method it is in.
         protected override bool IsClosureScope {
@@ -1409,25 +1394,13 @@ var closureScope = scope as RubyClosureScope;
             _blockFlowControl = blockFlowControl;
         }
 
-        // Makes this scope, which nothing has captured, the scope of another call of its proc.
+        // Makes this scope, which nothing has captured, the scope of another call of its block.
         internal void Reinitialize(MutableTuple locals, BlockParam/*!*/ blockFlowControl, object selfObject, InterpretedFrame interpretedFrame) {
             _blockFlowControl = blockFlowControl;
             ResetForReuse(locals, selfObject, interpretedFrame);
             CurrentMatch = null;
             LastInputLine = null;
             LambdaReturnState = 0;
-        }
-
-        // The call has finished and nothing captured the scope: keep it, cleared, on the proc.
-        internal void Release(bool keepLocals) {
-            Proc proc = _blockFlowControl.Proc;
-            ClearForReuse(keepLocals);
-            CurrentMatch = null;
-            LastInputLine = null;
-            _blockFlowControl = null;
-            // the thread that ran the call, the only one that may reuse it
-            OwnerThreadId = Environment.CurrentManagedThreadId;
-            proc.ReusableScope = this;
         }
     }
 
