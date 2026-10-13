@@ -60,6 +60,7 @@ namespace IronRuby.Runtime.Calls {
 
             _body = body;
             _declaringScope = declaringScope;
+            declaringScope.MarkCaptured();
         }
 
         protected internal override RubyMemberInfo/*!*/ Copy(RubyMemberFlags flags, RubyModule/*!*/ module) {

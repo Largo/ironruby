@@ -249,18 +249,57 @@ namespace IronRuby.Compiler.Ast {
                 Ast.Empty()
             );
 
-            body = scope.CreateScope(
-                scopeVariable,
-                (lazyScope != null ? Methods.CreateBlockScopeIfTraced : Methods.CreateBlockScope).OpCall(new AstExpressions {
+            // A body that needs its scope but defines no closure over it can reuse the scope of the
+            // previous call of the block, unless something captured that (see RubyScope.IsCaptured).
+            // A nested block literal is a Proc over the scope on every call: nothing to reuse.
+            bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
+                !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
+
+            body = gen.Traceable
+                ? new TraceReturnExpression(lazyScope ?? scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
+                : gen.AddReturnTarget(body);
+
+            if (reuseScope) {
+                // the body stays in statement position: as a call argument it would have to be spilled
+                var result = scope.DefineHiddenVariable("#result", typeof(object));
+                bool keepLocals = scope.HasReusableLocals;
+                MSA.Expression leave = Methods.LeaveReusableBlockScope.OpCall(scopeVariable, AstUtils.Constant(keepLocals));
+                if (keepLocals) {
+                    leave = Ast.IfThen(leave, scope.MakeClearLocals());
+                }
+                body = Ast.Block(
+                    Ast.Assign(result, AstUtils.Convert(body, typeof(object))),
+                    leave,
+                    result
+                );
+            }
+
+            MSA.Expression enterScope;
+            if (reuseScope) {
+                // the scope to reuse is taken first, its tuple from it (see RubyOps.TakeReusableBlockScope)
+                var reusableScope = scope.DefineHiddenVariable("#reusable", typeof(RubyBlockScope));
+                enterScope = Methods.CreateReusableBlockScope.OpCall(new AstExpressions {
+                    scope.MakeReusableLocalsStorage(blockParameter, reusableScope),
+                    scope.GetVariableNamesExpression(),
+                    blockParameter,
+                    selfParameter,
+                    EnterInterpretedFrameExpression.Instance,
+                    reusableScope
+                });
+            } else {
+                enterScope = (lazyScope != null ? Methods.CreateBlockScopeIfTraced : Methods.CreateBlockScope).OpCall(new AstExpressions {
                     scope.MakeLocalsStorage(),
                     scope.GetVariableNamesExpression(),
                     blockParameter, 
                     selfParameter,
                     EnterInterpretedFrameExpression.Instance
-                }),
-                gen.Traceable
-                    ? new TraceReturnExpression(lazyScope ?? scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
-                    : gen.AddReturnTarget(body)
+                });
+            }
+
+            body = scope.CreateScope(
+                scopeVariable,
+                enterScope,
+                body
             );
 
             gen.LeaveBlockDefinition();

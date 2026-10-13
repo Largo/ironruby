@@ -91,6 +91,18 @@ namespace IronRuby.Runtime {
         internal bool InLoop;
         internal bool InRescue;
 
+        // Set once something may hold on to this scope after the call it belongs to has returned: a
+        // Proc, Binding, method or nested scope made in it, a TracePoint event. A block scope that is
+        // not captured is reused for the next call of its block (see RubyOps.TakeReusableBlockScope).
+        internal bool IsCaptured;
+
+        // Libraries call this for a scope they keep after returning.
+        public void MarkCaptured() {
+            if (!IsCaptured) {
+                IsCaptured = true;
+            }
+        }
+
         // closure:
         internal /*and protected*/ MutableTuple _locals; // null if there are no variables
         internal /*and protected*/ string/*!*/[] _variableNames; // empty if there are no variables
@@ -225,6 +237,19 @@ namespace IronRuby.Runtime {
 
         internal RubyScope() {
             // Perf note: Initialization is performed completely in the most derived scope classes to improve perf.
+        }
+
+        // The per-call state of a scope reused for another call of its block, as a new scope has it.
+        internal void ResetForReuse(MutableTuple locals, object selfObject, InterpretedFrame interpretedFrame) {
+            _activeFlowControlScope = _parent.FlowControlScope;
+            InLoop = false;
+            InRescue = false;
+            _locals = locals;
+            _selfObject = selfObject;
+            _selfImmediateClass = null;
+            _methodAttributes = RubyMethodAttributes.PublicInstance;
+            _rare = null;
+            InterpretedFrame = interpretedFrame;
         }
 
         public virtual RubyModule Module {
@@ -1202,6 +1227,7 @@ var closureScope = scope as RubyClosureScope;
 
         internal RubyModuleScope(RubyScope/*!*/ parent, RubyModule/*!*/ module) {
             Assert.NotNull(parent, module);
+            parent.MarkCaptured();
 
             // RuntimeFlowControl:
             _activeFlowControlScope = parent.FlowControlScope;
@@ -1257,6 +1283,7 @@ var closureScope = scope as RubyClosureScope;
 
         internal RubyModuleEvalScope(RubyScope/*!*/ parent, RubyModule module, object selfObject) {
             Assert.NotNull(parent);
+            parent.MarkCaptured();
 
             // RuntimeFlowControl:
             _activeFlowControlScope = parent.FlowControlScope;
@@ -1284,6 +1311,8 @@ var closureScope = scope as RubyClosureScope;
         public override bool InheritsLocalVariables { get { return false; } }
 
         internal RubyFileInitializerScope(MutableTuple locals, string[]/*!*/ variableNames, RubyScope/*!*/ parent) {
+            parent.MarkCaptured();
+
             // RuntimeFlowControl:
             _activeFlowControlScope = parent.FlowControlScope;
 
@@ -1304,7 +1333,7 @@ var closureScope = scope as RubyClosureScope;
     }
 
     public sealed class RubyBlockScope : RubyClosureScope {
-        private readonly BlockParam/*!*/ _blockFlowControl;
+        private BlockParam/*!*/ _blockFlowControl;
 
         // The block a thread runs keeps its own $~ and $_, as MRI's thread root frame does; any
         // other block shares them with the method it is in.
@@ -1364,6 +1393,15 @@ var closureScope = scope as RubyClosureScope;
             // RubyBlockScope:
             _blockFlowControl = blockFlowControl;
         }
+
+        // Makes this scope, which nothing has captured, the scope of another call of its block.
+        internal void Reinitialize(MutableTuple locals, BlockParam/*!*/ blockFlowControl, object selfObject, InterpretedFrame interpretedFrame) {
+            _blockFlowControl = blockFlowControl;
+            ResetForReuse(locals, selfObject, interpretedFrame);
+            CurrentMatch = null;
+            LastInputLine = null;
+            LambdaReturnState = 0;
+        }
     }
 
     /// <summary>
@@ -1380,6 +1418,8 @@ var closureScope = scope as RubyClosureScope;
         // No module of its own: lexical walks (Module.nesting, constant lookup) pass through to the parent.
 
         public RubyBindingCopyScope(RubyScope/*!*/ parent, object selfObject) {
+            parent.MarkCaptured();
+
             // RuntimeFlowControl:
             _activeFlowControlScope = parent.FlowControlScope;
 

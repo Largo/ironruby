@@ -111,16 +111,60 @@ namespace IronRuby.Runtime {
         public bool IsThreadRoot { get; set; }
         
         // -- out --
-        // bits 0-1: BlockReturnReason; bits 2-3: the ProcKind of the block that set it
+        // bits 0-1: BlockReturnReason; bits 2-3: the ProcKind of the block that set it;
+        // bit 4: a call of the block through this BlockParam has finished (see ParkScope)
         private byte _flow;
+        private const int CalledFlag = 16;
+
+        // The break target while ReturnReason is Break. While it is Undefined: null, or the scope of the last
+        // call of the block that nothing captured, for the next call through this BlockParam to reuse (see
+        // ReusableScope) - no field of its own, a BlockParam is allocated for every call with a block.
         private RuntimeFlowControl _targetFrame;
 
         internal BlockCallerKind CallerKind { get { return (_callerFlags & CallFlag) != 0 ? BlockCallerKind.Call : BlockCallerKind.Yield; } }
 
+        /// <summary>
+        /// The scope ParkScope kept, or null.
+        /// </summary>
+        internal RubyBlockScope ReusableScope {
+            get { return ((_flow & 3) == (int)BlockReturnReason.Undefined) ? (RubyBlockScope)_targetFrame : null; }
+        }
+
+        // False if there is no ReusableScope; a quick test for the common case.
+        internal bool MayHaveReusableScope {
+            get { return _targetFrame != null; }
+        }
+
+        // The scope is taken for a call of the block (it was the ReusableScope).
+        internal void TakeReusableScope() {
+            _targetFrame = null;
+        }
+
+        /// <summary>
+        /// Keeps the scope of a call of the block that finished normally, for the next call to reuse; not on the
+        /// first call through this BlockParam, which most often is the only one (a library method calling its
+        /// block once), nor after a break/return/retry, which use the target frame, nor if something captured it.
+        /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
+        internal bool ParkScope(RubyBlockScope/*!*/ scope) {
+            int flow = _flow;
+            if (flow == CalledFlag) {
+                if (scope.IsCaptured) {
+                    return false;
+                }
+                _targetFrame = scope;
+                return true;
+            }
+            if (flow == 0) {
+                _flow = CalledFlag;
+            }
+            return false;
+        }
+
         // True while a lambda called through Proc#call (or as a define_method body) is running, so
         // a return in a block nested in it can unwind to that call.
         internal bool IsActiveLambdaCall;
-        internal ProcKind SourceProcKind { get { return (ProcKind)(_flow >> 2); } }
+        internal ProcKind SourceProcKind { get { return (ProcKind)((_flow >> 2) & 3); } }
         internal BlockReturnReason ReturnReason { get { return (BlockReturnReason)(_flow & 3); } set { _flow = (byte)((_flow & ~3) | (int)value); } }
         internal RuntimeFlowControl TargetFrame { get { return _targetFrame; } }
         internal RubyModule MethodLookupModule { get { return _methodLookupModule; } set { _methodLookupModule = value; } }
@@ -173,6 +217,14 @@ namespace IronRuby.Runtime {
         internal BlockParam(Proc/*!*/ proc, BlockCallerKind callerKind) {
             _callerFlags = (byte)(callerKind == BlockCallerKind.Call ? CallFlag : 0);
             _proc = proc;
+        }
+
+        // ReuseBfcForYield: the flow-control state is cleared, but the scope the last call kept (see ParkScope) stays.
+        internal void ResetForNextYield() {
+            if ((_flow & ~CalledFlag) != 0) {
+                _targetFrame = null;
+            }
+            _flow = CalledFlag;
         }
 
         internal void SetFlowControl(BlockReturnReason reason, RuntimeFlowControl targetFrame, ProcKind sourceProcKind) {
@@ -336,7 +388,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static BlockParam/*!*/ ReuseBfcForYield(BlockParam previous, Proc proc) {
             if (previous != null && previous.Proc == proc) {
-                previous.SetFlowControl(BlockReturnReason.Undefined, null, ProcKind.Block);
+                previous.ResetForNextYield();
                 return previous;
             }
             return CreateBfcForYield(proc);
