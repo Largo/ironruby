@@ -419,7 +419,93 @@ namespace IronRuby.Runtime.Jit {
             if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
                 throw JitBailout.Instance;
             }
-            return EmitStatements(body.Statements, out type);
+            return EmitInitialIVars(body.Statements, out type) ?? EmitStatements(body.Statements, out type);
+        }
+
+        // ---- an initializer's opening run of `@x = v' --------------------------------------
+        // `def initialize(a, b) @a = a; @b = b; @n = 0 ...': a fresh object gets every one of these
+        // variables at once - one slot array, already in its final shape, published with one CAS -
+        // rather than one shape transition (and interlocked operation) per variable. Only for a run
+        // of writes of distinct variables whose values have no effect and read no instance variable
+        // (a parameter, a literal, self), so that doing all the stores together is the same as doing
+        // them one by one. Any object that is not a fresh RubyObject takes the writes one by one.
+
+        private const int MinInitialIVars = 2;
+
+        private MSA.Expression EmitInitialIVars(Statements statements, out JT type) {
+            type = JT.None;
+            if (_loop != null || statements == null) { return null; }
+
+            var run = new List<SimpleAssignmentExpression>();
+            var names = new List<string>();
+            foreach (var statement in statements) {
+                var assign = statement as SimpleAssignmentExpression;
+                var ivar = (assign != null && assign.Operation == null) ? assign.Left as InstanceVariable : null;
+                if (ivar == null || names.Contains(ivar.Name) || !IsInitialIVarValue(assign.Right)) { break; }
+                run.Add(assign);
+                names.Add(ivar.Name);
+            }
+            if (run.Count < MinInitialIVars) { return null; }
+
+            var site = JitRuntime.InitialIVarsSite.TryCreate(names.ToArray());
+            if (site == null) { return null; }
+
+            var temps = new MSA.ParameterExpression[run.Count];
+            var parts = new List<MSA.Expression>();
+            var stores = new List<MSA.Expression>();
+            var oneByOne = new List<MSA.Expression>();
+            var slots = Ast.Variable(typeof(object[]), "#slots");
+            for (int i = 0; i < run.Count; i++) {
+                ++_nodes;
+                JT vt;
+                var v = Emit(run[i].Right, out vt);
+                temps[i] = Ast.Variable(typeof(object), "#iv" + i);
+                parts.Add(Ast.Assign(temps[i], Coerce(v, vt, JT.Obj)));
+                stores.Add(Ast.Assign(Ast.ArrayAccess(slots, Ast.Constant(i + 1)), temps[i]));
+                oneByOne.Add(Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, temps[i], Ast.Constant(new InstanceVariableSite(names[i]))));
+            }
+            _pure = false;
+            _ivarWrite = true;
+
+            stores.Add(Ast.Call(JitRuntime.M("CommitInitialIVars"), _self, slots));
+            parts.Add(Ast.Assign(slots, Ast.Call(JitRuntime.M("BeginInitialIVars"), _self, Ast.Constant(site))));
+            parts.Add(Ast.IfThen(
+                Ast.Not(Ast.AndAlso(Ast.NotEqual(slots, Ast.Constant(null, typeof(object[]))), Ast.Block(typeof(bool), stores))),
+                Ast.Block(typeof(void), oneByOne)
+            ));
+
+            int rest = statements.Count - run.Count;
+            if (rest == 0) {
+                // the value of the last assignment is the method's
+                type = JT.Obj;
+                parts.Add(temps[run.Count - 1]);
+            } else {
+                int skip = run.Count;
+                JT t = JT.Obj;
+                int k = 0;
+                foreach (var statement in statements) {
+                    if (k++ < skip) { continue; }
+                    parts.Add(Emit(statement, out t));
+                }
+                type = t;
+            }
+
+            var variables = new List<MSA.ParameterExpression>(temps);
+            variables.Add(slots);
+            return Ast.Block(ClrType(type), variables, parts);
+        }
+
+        /// <summary>A value an opening run of instance variable writes may have: see EmitInitialIVars.</summary>
+        private bool IsInitialIVarValue(RExpr/*!*/ value) {
+            if (value is SelfReference) { return true; }
+            var literal = value as Literal;
+            if (literal != null) {
+                object v = literal.Value;
+                return v == null || v is bool || v is int || v is long || v is double;
+            }
+            // Nothing before the run assigns a local, so a parameter still holds its argument.
+            var local = value as LocalVariable;
+            return local != null && local.DefinitionLexicalDepth == _scopeDepth && Array.IndexOf(_paramNames, local.Name) >= 0;
         }
 
         private MSA.Expression/*!*/ EmitStatements(Statements statements, out JT type) {

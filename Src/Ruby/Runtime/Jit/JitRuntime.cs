@@ -341,6 +341,68 @@ namespace IronRuby.Runtime.Jit {
             return value;
         }
 
+        /// <summary>
+        /// The opening run of instance variable writes of a specialized method (JitCompiler.
+        /// EmitInitialIVars): the shape a fresh object has after all of them.
+        /// </summary>
+        public sealed class InitialIVarsSite {
+            internal readonly InstanceVariableShape/*!*/ Shape;
+
+            private InitialIVarsSite(InstanceVariableShape/*!*/ shape) {
+                Shape = shape;
+            }
+
+            /// <summary>Null if the variables would make an object too complex for shapes.</summary>
+            internal static InitialIVarsSite TryCreate(string/*!*/[]/*!*/ names) {
+                var shape = InstanceVariableShape.Root;
+                foreach (var name in names) {
+                    shape = shape.GetChild(name);
+                    if (shape == null) { return null; }
+                }
+                return new InitialIVarsSite(shape);
+            }
+        }
+
+        /// <summary>
+        /// The slot array a fresh object would get the run's variables in - element 0 already the
+        /// final shape, the values to be stored by the caller - or null if self is not a RubyObject
+        /// without instance variables, or is frozen: then the writes are made one by one.
+        /// </summary>
+        public static object[] BeginInitialIVars(object self, InitialIVarsSite/*!*/ site) {
+            var obj = self as RubyObject;
+            if (obj == null) { return null; }
+            var data = obj._instanceData;
+            if (data != null && (data._frozen || data._ivars != InstanceVariableShape.EmptySlots)) { return null; }
+            int count = site.Shape.Count;
+            var result = new object[Math.Max(count, obj.ImmediateClass.InstanceVariableCapacity) + 1];
+            result[0] = site.Shape;
+            return result;
+        }
+
+        /// <summary>
+        /// Publishes the array BeginInitialIVars made and the caller filled. False if the object
+        /// got variables, or was frozen, in the meantime: the caller then makes the writes one by one.
+        /// </summary>
+        public static bool CommitInitialIVars(object self, object[]/*!*/ slots) {
+            var obj = (RubyObject)self;
+            var data = obj._instanceData;
+            if (data == null) {
+                var fresh = new RubyInstanceData();
+                fresh._ivars = slots;
+                if (System.Threading.Interlocked.CompareExchange(ref obj._instanceData, fresh, null) == null) {
+                    RubyInstanceData.UpdateCapacityHint(obj.ImmediateClass, ((InstanceVariableShape)slots[0]).Count);
+                    return true;
+                }
+                data = obj._instanceData;
+            }
+            if (data._frozen) { return false; }
+            if (System.Threading.Interlocked.CompareExchange(ref data._ivars, slots, InstanceVariableShape.EmptySlots) == InstanceVariableShape.EmptySlots) {
+                RubyInstanceData.UpdateCapacityHint(obj.ImmediateClass, ((InstanceVariableShape)slots[0]).Count);
+                return true;
+            }
+            return false;
+        }
+
         // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):
         // unboxed while it holds the type it held when the loop was compiled, a deopt once it does not.
 
