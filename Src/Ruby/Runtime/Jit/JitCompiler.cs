@@ -621,6 +621,9 @@ namespace IronRuby.Runtime.Jit {
             var ret = node as ReturnStatement;
             if (ret != null) { return EmitReturn(ret, out type); }
 
+            var arrayLiteral = node as ArrayConstructor;
+            if (arrayLiteral != null) { return EmitArrayLiteral(arrayLiteral, out type); }
+
             var body = node as Body;
             if (body != null) {
                 if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
@@ -630,6 +633,26 @@ namespace IronRuby.Runtime.Jit {
             }
 
             throw Bail("node: " + node.GetType().Name);
+        }
+
+        /// <summary>
+        /// `[a, b]': a new Array of boxed values, made by the helper the generic body calls. Building
+        /// one has no effect anything could observe, so it is no obstacle to a deopt. A splat (or
+        /// anything else Emit does not know) among the elements bails as usual.
+        /// </summary>
+        internal const int MaxArrayLiteral = 5;
+
+        private MSA.Expression/*!*/ EmitArrayLiteral(ArrayConstructor/*!*/ node, out JT type) {
+            var items = node.Arguments.Expressions;
+            if (items.Length > MaxArrayLiteral) { throw Bail("array literal of " + items.Length); }
+            var values = new List<MSA.Expression>(items.Length);
+            foreach (var item in items) {
+                JT t;
+                var e = Emit(item, out t);
+                values.Add(Coerce(e, t, JT.Obj));
+            }
+            type = JT.Obj;
+            return IronRuby.Compiler.Methods.MakeArrayOpCall(values);
         }
 
         private MSA.Expression/*!*/ EmitLiteral(Literal/*!*/ literal, out JT type) {
@@ -1399,6 +1422,16 @@ namespace IronRuby.Runtime.Jit {
                 if (retArgs == null || retArgs.Expressions.Length == 0) { return true; }
                 if (retArgs.Expressions.Length != 1) { return No(node); }
                 return Walk(retArgs.Expressions[0]);
+            }
+
+            var arrayLiteral = node as ArrayConstructor;
+            if (arrayLiteral != null) {
+                var items = arrayLiteral.Arguments.Expressions;
+                if (items.Length > JitCompiler.MaxArrayLiteral) { return No(node); }
+                foreach (var item in items) {
+                    if (!Walk(item)) { return false; }
+                }
+                return true;
             }
 
             // break/next are only emitted in loop mode, which a method body never is, so they
