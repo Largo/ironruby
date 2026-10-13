@@ -2417,9 +2417,13 @@ namespace IronRuby.Prism {
 
             var prologue = new Statements();
             // blocks and lambdas pass nil for parameters the caller omitted, so the
-            // optional-parameter default above does not fire for them
-            prologue.Add(new SimpleAssignmentExpression(kwVar,
-                new HashConstructor(new Maplet[0], true, span), "||", span));
+            // optional-parameter default above does not fire for them. A method gets the
+            // default whenever the caller omitted it, so a nil there is one the caller passed
+            // positionally - `m(nil)' - which the separation check below has to refuse.
+            if (!isMethod) {
+                prologue.Add(new SimpleAssignmentExpression(kwVar,
+                    new HashConstructor(new Maplet[0], true, span), "||", span));
+            }
 
             if (strict) {
                 foreach (var check in KeywordSeparationChecks(kwVar, mandatory, true, span)) {

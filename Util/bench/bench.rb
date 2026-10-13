@@ -476,6 +476,20 @@ bench("object_new_init") do
   while i < m; x = NewTarget.new(x, nil); x = nil if i % 64 == 0; i += 1; end
 end
 
+# ---------------- keyword parameters ----------------
+
+class KwPoint
+  def initialize(x:, y: 0)
+    @x = x
+    @y = y
+  end
+end
+
+bench("new_kwargs") do
+  i = 0; m = n(1_000_000)
+  while i < m; KwPoint.new(x: i, y: 2); i += 1; end
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"

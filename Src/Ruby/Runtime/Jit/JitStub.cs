@@ -45,6 +45,7 @@ namespace IronRuby.Runtime.Jit {
         internal const int Threshold = 40;
         internal const int MaxArity = 6;
         internal const string EntryNamePrefix = "jitentry$";
+        internal const string DirectEntryNamePrefix = "jitdirect$";
 
         // What a typed body's call evaluates to in the entry when it deopted.
         private static readonly object Deopted = new object();
@@ -54,6 +55,20 @@ namespace IronRuby.Runtime.Jit {
         protected readonly RubyModule/*!*/ _declaringModule;
         protected readonly Delegate/*!*/ _generic;
         protected readonly int _arity;
+        // A method with keyword parameters (see JitKeywords): its last delegate parameter is the
+        // keyword hash, and the typed body takes the keyword values instead, after the positionals.
+        protected readonly JitKeywords _keywords;
+        private readonly int _positional;     // delegate parameters that are positional parameters
+        private readonly int _typedCount;     // parameters of the typed body
+
+        // A specialized keyword method's entry for JitKeywordCall: (self, p0, p1, k0, k1, k2) with the
+        // keyword values in declaration order and unused slots null. Answers JitKeywordCall.NoDirect
+        // when a guard fails. Null when the method is not specialized.
+        private volatile Func<object, object, object, object, object, object, object> _direct;
+
+        internal Func<object, object, object, object, object, object, object> Direct { get { return _direct; } }
+        internal JitKeywords Keywords { get { return _keywords; } }
+        internal int Positional { get { return _positional; } }
 
         // Optional parameters (after the mandatory ones, as in the generic delegate) have a literal
         // default; a call that omits one passes RubyOps.DefaultArgument in its place, which the
@@ -72,13 +87,17 @@ namespace IronRuby.Runtime.Jit {
         private bool _polymorphicReceiver;
         private volatile bool _givenUp;
 
-        protected JitStub(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule, Delegate/*!*/ generic, int arity) {
+        protected JitStub(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule, Delegate/*!*/ generic, int arity,
+            JitKeywords keywords) {
             _ast = ast;
             _context = context;
             _declaringModule = declaringModule;
             _generic = generic;
             _arity = arity;
-            _argKind = new int[arity];
+            _keywords = keywords;
+            _positional = (keywords != null) ? arity - 1 : arity;
+            _typedCount = (keywords != null) ? _positional + keywords.Count : arity;
+            _argKind = new int[_typedCount];
         }
 
         protected abstract void Install(Delegate/*!*/ entry);
@@ -88,19 +107,20 @@ namespace IronRuby.Runtime.Jit {
         protected void Profile(object self, object[] args) {
             if (_givenUp) { return; }
 
-            for (int i = 0; i < _arity; i++) {
+            if (_keywords != null) {
+                // what the prologue binds the keywords to, if it binds them at all
+                object kw = args[_positional];
+                if (_keywords.Matches(kw)) {
+                    for (int j = 0; j < _keywords.Count; j++) {
+                        Observe(_positional + j, _keywords.Value(kw, j));
+                    }
+                }
+            }
+            for (int i = 0; i < _positional; i++) {
                 if (_hasDefault != null && _hasDefault[i] && args[i] == RubyOps.DefaultArgument) {
                     args[i] = _defaults[i];
                 }
-                int k = (args[i] is int) ? 1 : (args[i] is double) ? 2 : (args[i] is long) ? 4 : 3;
-                if (_argKind[i] == 0) {
-                    _argKind[i] = k;
-                } else if (_argKind[i] != k) {
-                    // int and long are one Ruby class seen in two representations, so a
-                    // parameter that has been both is still an Integer: carry it as a long.
-                    bool bothIntegral = (k == 1 || k == 4) && (_argKind[i] == 1 || _argKind[i] == 4);
-                    _argKind[i] = bothIntegral ? 4 : 3;
-                }
+                Observe(i, args[i]);
             }
 
             RubyClass cls = JitRuntime.ClassOf(_context, self);
@@ -115,6 +135,18 @@ namespace IronRuby.Runtime.Jit {
                 }
             } catch (Exception) {
                 GiveUp();
+            }
+        }
+
+        private void Observe(int i, object arg) {
+            int k = (arg is int) ? 1 : (arg is double) ? 2 : (arg is long) ? 4 : 3;
+            if (_argKind[i] == 0) {
+                _argKind[i] = k;
+            } else if (_argKind[i] != k) {
+                // int and long are one Ruby class seen in two representations, so a
+                // parameter that has been both is still an Integer: carry it as a long.
+                bool bothIntegral = (k == 1 || k == 4) && (_argKind[i] == 1 || _argKind[i] == 4);
+                _argKind[i] = bothIntegral ? 4 : 3;
             }
         }
 
@@ -135,12 +167,14 @@ namespace IronRuby.Runtime.Jit {
                 Console.Error.WriteLine("[jit] declined {0}/{1} arity {2} (passed the pre-screen)",
                     _declaringModule.Name ?? "main", _ast.Name, _arity);
             }
+            _direct = null;
             Install(_generic);
         }
 
         /// <summary>Deoptimize: drop the specialized entry and let profiling start over.</summary>
         internal void Invalidate() {
             JitRuntime.Invalidations++;
+            _direct = null;
             // A method that was already declined must not fall back into profiling here.
             Install(_givenUp ? _generic : null);
             _calls = 0;
@@ -162,6 +196,7 @@ namespace IronRuby.Runtime.Jit {
             if (_givenUp) { return; }
             if (++_respecializations > MaxRespecializations) {
                 _givenUp = true;
+                _direct = null;
                 Install(_generic);
                 return;
             }
@@ -171,8 +206,8 @@ namespace IronRuby.Runtime.Jit {
         private bool TrySpecialize() {
             if (JitRuntime.Disabled || _context.HasRefinements) { return false; }
 
-            var types = new JT[_arity];
-            for (int i = 0; i < _arity; i++) {
+            var types = new JT[_typedCount];
+            for (int i = 0; i < _typedCount; i++) {
                 if (_storedOnly != null && _storedOnly[i]) { types[i] = JT.Obj; continue; }
                 switch (_argKind[i]) {
                     case 1: types[i] = JT.Int; break;
@@ -183,7 +218,7 @@ namespace IronRuby.Runtime.Jit {
             }
 
             long start = Stopwatch.GetTimestamp();
-            var code = JitCompiler.TryCompile(_ast, _context, types);
+            var code = JitCompiler.TryCompile(_ast, _context, types, _keywords);
             if (code == null) { return false; }
 
             bool needsClassGuard = code.EmittedSelfCall;
@@ -209,6 +244,10 @@ namespace IronRuby.Runtime.Jit {
 
             var entry = BuildEntry(code, callee, version, needsClassGuard ? _receiverClass : null);
             Install(entry.Compile());
+            if (_keywords != null && !needsClassGuard && _positional <= JitKeywordCall.MaxPositional &&
+                _keywords.Count <= JitKeywordCall.MaxKeywords) {
+                _direct = BuildDirectEntry(code, callee, version).Compile();
+            }
 
             JitRuntime.CompileTicks += Stopwatch.GetTimestamp() - start;
             JitRuntime.Specialized++;
@@ -240,16 +279,18 @@ namespace IronRuby.Runtime.Jit {
                 args[i] = Ast.Parameter(typeof(object), "a" + i);
             }
 
-            // What the typed body sees of each argument: an omitted optional one is its default.
-            // The generic body is still handed the arguments as they came.
-            var values = new MSA.ParameterExpression[_arity];
+            // The values the typed parameters are made of: the positional arguments - an omitted
+            // optional one being its default - then, for a method with keywords, what the prologue
+            // would bind each keyword to. The generic body is still handed the arguments as they came.
+            var values = new MSA.Expression[_typedCount];
             var defaulted = new List<MSA.ParameterExpression>();
             var fillDefaults = new List<MSA.Expression>();
-            for (int i = 0; i < _arity; i++) {
+            for (int i = 0; i < _positional; i++) {
                 if (_hasDefault != null && _hasDefault[i]) {
-                    values[i] = Ast.Variable(typeof(object), "v" + i);
-                    defaulted.Add(values[i]);
-                    fillDefaults.Add(Ast.Assign(values[i], Ast.Condition(
+                    var v = Ast.Variable(typeof(object), "v" + i);
+                    values[i] = v;
+                    defaulted.Add(v);
+                    fillDefaults.Add(Ast.Assign(v, Ast.Condition(
                         Ast.ReferenceEqual(args[i], Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"))),
                         Ast.Constant(_defaults[i], typeof(object)),
                         args[i]
@@ -265,7 +306,37 @@ namespace IronRuby.Runtime.Jit {
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
                     Ast.Constant(pinnedClass, typeof(RubyClass))));
             }
-            for (int i = 0; i < _arity; i++) {
+
+            MSA.ParameterExpression[] keywordValues = null;
+            if (_keywords != null) {
+                MSA.Expression kw = args[_positional];
+                // the separation check on the last positional: `m("a" => 1)' gave it the keywords
+                if (_positional > 0 && code.ParameterTypes[_positional - 1] == JT.Obj) {
+                    test = And(test, Ast.Not(Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), args[_positional - 1])));
+                }
+                keywordValues = new MSA.ParameterExpression[_keywords.Count];
+                for (int j = 0; j < keywordValues.Length; j++) {
+                    values[_positional + j] = keywordValues[j] = Ast.Variable(typeof(object), "kw" + j);
+                }
+                var info = Ast.Constant(_keywords, typeof(object));
+                if (keywordValues.Length <= 3) {
+                    // match and bind in one call, the values coming back through out parameters
+                    var readArgs = new MSA.Expression[keywordValues.Length + 2];
+                    readArgs[0] = info;
+                    readArgs[1] = kw;
+                    Array.Copy(keywordValues, 0, readArgs, 2, keywordValues.Length);
+                    test = And(test, Ast.Call(JitRuntime.M("KeywordsRead" + keywordValues.Length), readArgs));
+                } else {
+                    test = And(test, Ast.Call(JitRuntime.M("KeywordsMatch"), info, kw));
+                    for (int j = 0; j < keywordValues.Length; j++) {
+                        test = And(test, Ast.Block(
+                            Ast.Assign(keywordValues[j], Ast.Call(JitRuntime.M("KeywordValue"), info, kw, Ast.Constant(j))),
+                            Ast.Constant(true)));
+                    }
+                }
+            }
+
+            for (int i = 0; i < _typedCount; i++) {
                 switch (code.ParameterTypes[i]) {
                     case JT.Int: test = And(test, Ast.TypeIs(values[i], typeof(int))); break;
                     case JT.Dbl: test = And(test, Ast.TypeIs(values[i], typeof(double))); break;
@@ -275,9 +346,9 @@ namespace IronRuby.Runtime.Jit {
                 }
             }
 
-            var typedArgs = new MSA.Expression[_arity + 1];
+            var typedArgs = new MSA.Expression[_typedCount + 1];
             typedArgs[0] = self;
-            for (int i = 0; i < _arity; i++) {
+            for (int i = 0; i < _typedCount; i++) {
                 switch (code.ParameterTypes[i]) {
                     case JT.Int: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(int)); break;
                     case JT.Dbl: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(double)); break;
@@ -311,6 +382,9 @@ namespace IronRuby.Runtime.Jit {
             }
 
             MSA.Expression body = (test != null) ? Ast.Condition(test, fast, GenericCall(self, blk, args), typeof(object)) : fast;
+            if (keywordValues != null) {
+                body = Ast.Block(typeof(object), keywordValues, body);
+            }
             if (defaulted.Count > 0) {
                 fillDefaults.Add(body);
                 body = Ast.Block(typeof(object), defaulted, fillDefaults);
@@ -333,6 +407,72 @@ namespace IronRuby.Runtime.Jit {
             all[1] = blk;
             Array.Copy(args, 0, all, 2, _arity);
             return Ast.Lambda(_generic.GetType(), body, EntryNamePrefix + _ast.Name, all);
+        }
+
+        /// <summary>
+        /// The entry JitKeywordCall calls with the keyword values already bound (and the defaults of the
+        /// ones the call left out filled in): the same guards as BuildEntry's, but a failed one - or a
+        /// deopt - answers NoDirect, and the caller then makes the call the ordinary way.
+        /// </summary>
+        private MSA.Expression<Func<object, object, object, object, object, object, object>>/*!*/ BuildDirectEntry(JitCode/*!*/ code,
+            MSA.Expression/*!*/ callee, int version) {
+
+            var self = Ast.Parameter(typeof(object), "self");
+            var slots = new MSA.ParameterExpression[JitKeywordCall.MaxPositional + JitKeywordCall.MaxKeywords];
+            for (int i = 0; i < slots.Length; i++) {
+                slots[i] = Ast.Parameter(typeof(object), "s" + i);
+            }
+            var values = new MSA.Expression[_typedCount];
+            for (int i = 0; i < _positional; i++) {
+                values[i] = slots[i];
+            }
+            for (int j = 0; j < _keywords.Count; j++) {
+                values[_positional + j] = slots[JitKeywordCall.MaxPositional + j];
+            }
+
+            MSA.Expression test = Ast.Call(JitRuntime.M("VersionOk"), Ast.Constant(version));
+            // the separation check on the last positional, as in BuildEntry
+            if (_positional > 0 && code.ParameterTypes[_positional - 1] == JT.Obj) {
+                test = And(test, Ast.Not(Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), values[_positional - 1])));
+            }
+            var typedArgs = new MSA.Expression[_typedCount + 1];
+            typedArgs[0] = self;
+            for (int i = 0; i < _typedCount; i++) {
+                switch (code.ParameterTypes[i]) {
+                    case JT.Int:
+                        test = And(test, Ast.TypeIs(values[i], typeof(int)));
+                        typedArgs[i + 1] = Ast.Unbox(values[i], typeof(int));
+                        break;
+                    case JT.Dbl:
+                        test = And(test, Ast.TypeIs(values[i], typeof(double)));
+                        typedArgs[i + 1] = Ast.Unbox(values[i], typeof(double));
+                        break;
+                    case JT.Lng:
+                        test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), values[i]));
+                        typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), values[i]);
+                        break;
+                    default:
+                        typedArgs[i + 1] = values[i];
+                        break;
+                }
+            }
+
+            MSA.Expression fast = Ast.Invoke(callee, typedArgs);
+            if (code.ReturnType == JT.Lng) {
+                fast = Ast.Call(JitRuntime.M("NarrowLong"), fast);
+            } else if (fast.Type != typeof(object)) {
+                fast = Ast.Convert(fast, typeof(object));
+            }
+            var noDirect = Ast.Field(null, typeof(JitKeywordCall).GetField("NoDirect"));
+            if (code.CanDeopt) {
+                fast = Ast.TryCatch(fast, Ast.Catch(typeof(JitDeoptException), noDirect));
+            }
+            var body = Ast.Condition(test, fast, noDirect, typeof(object));
+
+            var all = new MSA.ParameterExpression[slots.Length + 1];
+            all[0] = self;
+            Array.Copy(slots, 0, all, 1, slots.Length);
+            return Ast.Lambda<Func<object, object, object, object, object, object, object>>(body, DirectEntryNamePrefix + _ast.Name, all);
         }
 
         private static MSA.Expression/*!*/ And(MSA.Expression left, MSA.Expression/*!*/ right) {
@@ -370,9 +510,12 @@ namespace IronRuby.Runtime.Jit {
             // An optional parameter is taken when its default is a literal the typed body could
             // have produced itself - nil, true, false, a Fixnum or a Float: evaluating it has no
             // effect and cannot see the other parameters, so the entry may fill it in up front.
+            // Keyword parameters arrive in one trailing optional parameter (see JitKeywords); a method
+            // with keywords has no other optional one (PrismAstBridge lowers that mix to a splat).
+            JitKeywords keywords = null;
             bool[] hasDefault = null;
             object[] defaults = null;
-            if (ps.Optional.Length > 0) {
+            if (ps.Optional.Length > 0 && (keywords = JitKeywords.TryRecognize(ast, context)) == null) {
                 hasDefault = new bool[arity];
                 defaults = new object[arity];
                 for (int i = 0; i < ps.Optional.Length; i++) {
@@ -394,29 +537,33 @@ namespace IronRuby.Runtime.Jit {
             // call on every call for the life of the process.
             string rejectedBy;
             HashSet<string> otherUses;
-            if (!JitScreen.CanEverCompile(ast, out rejectedBy, out otherUses)) {
+            if (!JitScreen.CanEverCompile(ast, keywords, out rejectedBy, out otherUses)) {
                 JitRuntime.RecordScreenRejection(rejectedBy);
                 return generic;
             }
 
+            // over the typed body's parameters: the positionals, then a keyword method's keyword locals
+            int typedCount = mandatoryCount + ((keywords != null) ? keywords.Count : ps.Optional.Length);
             bool[] storedOnly = null;
-            for (int i = 0; i < arity; i++) {
-                var lv = (LocalVariable)((i < mandatoryCount) ? ps.Mandatory[i] : ps.Optional[i - mandatoryCount].Left);
-                if (!otherUses.Contains(lv.Name)) {
-                    if (storedOnly == null) { storedOnly = new bool[arity]; }
+            for (int i = 0; i < typedCount; i++) {
+                string name = (i < mandatoryCount) ? ((LocalVariable)ps.Mandatory[i]).Name
+                    : (keywords != null) ? keywords.LocalNames[i - mandatoryCount]
+                    : ((LocalVariable)ps.Optional[i - mandatoryCount].Left).Name;
+                if (!otherUses.Contains(name)) {
+                    if (storedOnly == null) { storedOnly = new bool[typedCount]; }
                     storedOnly[i] = true;
                 }
             }
 
             JitStub stub;
             switch (arity) {
-                case 0: stub = new JitStub0(ast, context, declaringModule, generic); break;
-                case 1: stub = new JitStub1(ast, context, declaringModule, generic); break;
-                case 2: stub = new JitStub2(ast, context, declaringModule, generic); break;
-                case 3: stub = new JitStub3(ast, context, declaringModule, generic); break;
-                case 4: stub = new JitStub4(ast, context, declaringModule, generic); break;
-                case 5: stub = new JitStub5(ast, context, declaringModule, generic); break;
-                default: stub = new JitStub6(ast, context, declaringModule, generic); break;
+                case 0: stub = new JitStub0(ast, context, declaringModule, generic, keywords); break;
+                case 1: stub = new JitStub1(ast, context, declaringModule, generic, keywords); break;
+                case 2: stub = new JitStub2(ast, context, declaringModule, generic, keywords); break;
+                case 3: stub = new JitStub3(ast, context, declaringModule, generic, keywords); break;
+                case 4: stub = new JitStub4(ast, context, declaringModule, generic, keywords); break;
+                case 5: stub = new JitStub5(ast, context, declaringModule, generic, keywords); break;
+                default: stub = new JitStub6(ast, context, declaringModule, generic, keywords); break;
             }
             stub._hasDefault = hasDefault;
             stub._defaults = defaults;
@@ -435,8 +582,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object>/*!*/ _gen;
         private readonly Func<object, Proc, object>/*!*/ _tramp;
 
-        internal JitStub0(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 0) {
+        internal JitStub0(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 0, keywords) {
             _gen = (Func<object, Proc, object>)generic;
             _tramp = Call;
         }
@@ -458,8 +605,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object>/*!*/ _tramp;
 
-        internal JitStub1(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 1) {
+        internal JitStub1(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 1, keywords) {
             _gen = (Func<object, Proc, object, object>)generic;
             _tramp = Call;
         }
@@ -481,8 +628,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object>/*!*/ _tramp;
 
-        internal JitStub2(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 2) {
+        internal JitStub2(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 2, keywords) {
             _gen = (Func<object, Proc, object, object, object>)generic;
             _tramp = Call;
         }
@@ -504,8 +651,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object>/*!*/ _tramp;
 
-        internal JitStub3(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 3) {
+        internal JitStub3(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 3, keywords) {
             _gen = (Func<object, Proc, object, object, object, object>)generic;
             _tramp = Call;
         }
@@ -527,8 +674,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object, object>/*!*/ _tramp;
 
-        internal JitStub4(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 4) {
+        internal JitStub4(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 4, keywords) {
             _gen = (Func<object, Proc, object, object, object, object, object>)generic;
             _tramp = Call;
         }
@@ -550,8 +697,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object, object, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object, object, object>/*!*/ _tramp;
 
-        internal JitStub5(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 5) {
+        internal JitStub5(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 5, keywords) {
             _gen = (Func<object, Proc, object, object, object, object, object, object>)generic;
             _tramp = Call;
         }
@@ -573,8 +720,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object, object, object, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object, object, object, object>/*!*/ _tramp;
 
-        internal JitStub6(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 6) {
+        internal JitStub6(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 6, keywords) {
             _gen = (Func<object, Proc, object, object, object, object, object, object, object>)generic;
             _tramp = Call;
         }
