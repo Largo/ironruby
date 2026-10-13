@@ -74,6 +74,9 @@ namespace IronRuby.Builtins {
         // The proc is its own converter: a call it was the literal block of converted it (see Converter).
         private const int SelfConverterFlag = 4;
 
+        // A single call of the proc (a yield or Proc#call) has finished (see KeepReusableScope).
+        private const int CalledFlag = 8;
+
         /// <summary>
         /// The state few procs have, out of line: a Proc is allocated for every call with a literal block.
         /// </summary>
@@ -81,6 +84,9 @@ namespace IronRuby.Builtins {
             public RubyLambdaMethodInfo Method;
             public RefinementActivation RefinementOverride;
             public string SymbolName;
+            // The scope of a finished call of this proc that nothing captured, for the next call on the
+            // same thread to reuse (see RubyOps.CreateReusableBlockScope).
+            public RubyBlockScope ReusableScope;
         }
 
         private RareState _rare;
@@ -121,6 +127,37 @@ namespace IronRuby.Builtins {
             get { return (ProcKind)(_kind & KindMask); }
             // friend: RuntimeFlowControl
             internal set { _kind = (_kind & ~KindMask) | (int)value; }
+        }
+
+        /// <summary>
+        /// The scope a finished call kept (see KeepReusableScope), or null.
+        /// </summary>
+        internal RubyBlockScope ReusableScope {
+            get { var r = _rare; return (r != null) ? r.ReusableScope : null; }
+            set {
+                // (another thread may be making the rare state too: keep the one that is there)
+                var r = _rare ?? System.Threading.Interlocked.CompareExchange(ref _rare, new RareState(), null) ?? _rare;
+                r.ReusableScope = value;
+            }
+        }
+
+        // The ReusableScope is taken for a call of the proc.
+        internal void TakeReusableScope() {
+            _rare.ReusableScope = null;
+        }
+
+        /// <summary>
+        /// Whether a single call of the proc that has finished keeps its scope for the next call: not on the first
+        /// call, which most often is the only one - a literal block is a new Proc for every call it is passed to.
+        /// The flag is only ever set: the kind and converter bits are written before the proc's first call.
+        /// </summary>
+        internal bool KeepReusableScope() {
+            int kind = _kind;
+            if ((kind & CalledFlag) != 0) {
+                return true;
+            }
+            _kind = kind | CalledFlag;
+            return false;
         }
 
         internal RubyLambdaMethodInfo Method {
@@ -176,6 +213,7 @@ namespace IronRuby.Builtins {
             _self = self;
             _scope = scope;
             _dispatcher = dispatcher;
+            scope.MarkCaptured();
         }
 
         protected Proc(Proc/*!*/ proc)

@@ -249,18 +249,39 @@ namespace IronRuby.Compiler.Ast {
                 Ast.Empty()
             );
 
+            // A body that needs its scope but defines no closure over it can reuse the scope of the
+            // previous call of the block, unless something captured that (see RubyScope.IsCaptured).
+            bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
+
+            body = gen.Traceable
+                ? new TraceReturnExpression(lazyScope ?? scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
+                : gen.AddReturnTarget(body);
+
+            if (reuseScope) {
+                // the body stays in statement position: as a call argument it would have to be spilled
+                var result = scope.DefineHiddenVariable("#result", typeof(object));
+                bool keepLocals = scope.HasReusableLocals;
+                MSA.Expression leave = Methods.LeaveReusableBlockScope.OpCall(scopeVariable, AstUtils.Constant(keepLocals));
+                if (keepLocals) {
+                    leave = Ast.IfThen(leave, scope.MakeClearLocals());
+                }
+                body = Ast.Block(
+                    Ast.Assign(result, AstUtils.Convert(body, typeof(object))),
+                    leave,
+                    result
+                );
+            }
+
             body = scope.CreateScope(
                 scopeVariable,
-                (lazyScope != null ? Methods.CreateBlockScopeIfTraced : Methods.CreateBlockScope).OpCall(new AstExpressions {
-                    scope.MakeLocalsStorage(),
+                (lazyScope != null ? Methods.CreateBlockScopeIfTraced : reuseScope ? Methods.CreateReusableBlockScope : Methods.CreateBlockScope).OpCall(new AstExpressions {
+                    reuseScope ? scope.MakeReusableLocalsStorage(blockParameter) : scope.MakeLocalsStorage(),
                     scope.GetVariableNamesExpression(),
                     blockParameter, 
                     selfParameter,
                     EnterInterpretedFrameExpression.Instance
                 }),
-                gen.Traceable
-                    ? new TraceReturnExpression(lazyScope ?? scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
-                    : gen.AddReturnTarget(body)
+                body
             );
 
             gen.LeaveBlockDefinition();

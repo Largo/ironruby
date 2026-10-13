@@ -219,6 +219,38 @@ namespace IronRuby.Compiler.Ast {
             return result;
         }
 
+        /// <summary>
+        /// Whether a block that reuses its scope (see RubyOps.CreateReusableBlockScope) reuses the
+        /// scope's locals tuple too: one of up to 8 locals, cleared when the call finishes.
+        /// </summary>
+        internal bool HasReusableLocals {
+            get {
+                int count = LiftedVisibleVariableCount;
+                return count > 0 && count <= 8 && _parameters == null;
+            }
+        }
+
+        public MSA.Expression/*!*/ MakeReusableLocalsStorage(MSA.Expression/*!*/ blockParameter) {
+            if (!HasReusableLocals) {
+                return MakeLocalsStorage();
+            }
+            return Ast.Assign(_localsTuple, Ast.Coalesce(
+                Ast.TypeAs(Methods.TakeReusableLocals.OpCall(blockParameter), _localsTuple.Type),
+                Ast.New(_localsTuple.Type)
+            ));
+        }
+
+        public MSA.Expression/*!*/ MakeClearLocals() {
+            Debug.Assert(HasReusableLocals);
+            int count = LiftedVisibleVariableCount;
+            var result = new AstExpressions(count + 1);
+            for (int i = 0; i < count; i++) {
+                result.Add(Ast.Assign(GetVariableAccessor(_localsTuple, i), AstUtils.Constant(null)));
+            }
+            result.Add(AstUtils.Empty());
+            return Ast.Block(result);
+        }
+
         public MSA.Expression/*!*/ GetVariableNamesExpression() {
             if (LiftedVisibleVariableCount == 0) {
                 return Ast.Constant(null, typeof(string[]));

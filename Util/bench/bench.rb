@@ -490,6 +490,24 @@ bench("new_kwargs") do
   while i < m; KwPoint.new(x: i, y: 2); i += 1; end
 end
 
+# ---------------- single-call blocks whose body makes a call ----------------
+
+class YieldOnce
+  def one(x); yield x; end
+end
+
+# a Ruby method yielding once to a new literal block (block scope reuse must cost it nothing)
+bench("yield_once_call") do
+  o = YieldOnce.new; i = 0; m = n(2_000_000)
+  while i < m; o.one(i) { |y| y * 2 }; i += 1; end
+end
+
+# a library method calling a new literal block once
+bench("then_call") do
+  i = 0; m = n(2_000_000)
+  while i < m; i.then { |y| y * 2 }; i += 1; end
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"

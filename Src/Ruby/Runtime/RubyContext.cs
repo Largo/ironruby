@@ -2670,6 +2670,9 @@ namespace IronRuby.Runtime {
             public GlobalVariableTraceCommand(MutableString/*!*/ code, RubyScope scope, object self) {
                 Code = code;
                 Scope = scope;
+                if (scope != null) {
+                    scope.MarkCaptured();
+                }
                 Self = self;
             }
         }
