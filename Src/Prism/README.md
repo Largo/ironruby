@@ -79,7 +79,7 @@ Build the native library first:
 
 ```sh
 git clone https://github.com/ruby/prism ../../../prism
-cd ../../../prism && git checkout 531cd5e~1
+cd ../../../prism && git checkout cd76b0d1
 ruby templates/template.rb && make shared        # -> build/libprism.so
 ```
 
@@ -89,9 +89,13 @@ serializes its nodes differently and the loader walks off the end of the
 buffer - the symptom is a mid-parse `ArgumentError: Offset and length were
 out of bounds` or `TypeError: Unknown prism node type: 0` in whichever
 stdlib file trips over the changed node first, not a clean version error.
-The tree as it stands matches prism just before
-[`531cd5e`](https://github.com/ruby/prism/commit/531cd5e) ("Make
-`SymbolNode#value_loc` non-optional"), which is v1.9.0 plus a few commits.
+The tree as it stands matches prism
+[`cd76b0d1`](https://github.com/ruby/prism/commit/cd76b0d1), v1.9.0 plus the
+commits up to 2026-10-12 - including `attach_comments`, which added a byte to
+the options blob and a comment-attachment list to the serialized header
+without changing the serialization version, so `PrismParser.BuildOptionsData`
+and `PrismLoader.Load` had to follow by hand. `release.yml`'s `PRISM_REF`
+names the same commit.
 To check a checkout instead of guessing, regenerate into a scratch
 directory and diff - identical output means the shared library from that
 checkout is safe:

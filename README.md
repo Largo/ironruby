@@ -489,7 +489,7 @@ that has only the **runtime** installed. Build prism with the RubyInstaller DevK
 
 ```
 C:\> git clone https://github.com/ruby/prism C:\prism
-C:\> cd C:\prism && git checkout 531cd5e~1
+C:\> cd C:\prism && git checkout cd76b0d1
 C:\prism> ruby templates\template.rb
 C:\prism> ridk exec make shared -j4          :: -> C:\prism\build\libprism.dll
 ```
