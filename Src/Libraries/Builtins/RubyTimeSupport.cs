@@ -515,7 +515,22 @@ namespace IronRuby.Builtins {
 
         internal static RubyTimeZone FromId(string/*!*/ id) {
             TzFile file = TzFile.TryLoad(id);
-            return (file != null) ? new RubyTimeZone(file, null, 0, id) : null;
+            if (file != null) {
+                return new RubyTimeZone(file, null, 0, id);
+            }
+
+            // Windows has no zoneinfo files, but its TimeZoneInfo knows both the Windows ids
+            // ("W. Europe Standard Time") and, through ICU, the Olson ones ("Europe/Zurich").
+            if (RubyFileOps.IsWindows) {
+                try {
+                    return FromTimeZoneInfo(TimeZoneInfo.FindSystemTimeZoneById(id));
+                } catch (TimeZoneNotFoundException) {
+                } catch (InvalidTimeZoneException) {
+                } catch (System.Security.SecurityException) {
+                } catch (ArgumentException) {
+                }
+            }
+            return null;
         }
 
         /// <summary>The machine's zone, used when TZ is unset.</summary>
