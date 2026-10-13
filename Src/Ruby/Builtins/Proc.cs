@@ -67,7 +67,12 @@ namespace IronRuby.Builtins {
         private readonly BlockDispatcher/*!*/ _dispatcher;
 
         // TODO: can we remove _kind and use _method and Converter fields intead?
-        private ProcKind _kind;
+        // The ProcKind in the low bits, and SelfConverterFlag.
+        private int _kind;
+        private const int KindMask = 3;
+
+        // The proc is its own converter: a call it was the literal block of converted it (see Converter).
+        private const int SelfConverterFlag = 4;
 
         /// <summary>
         /// The state few procs have, out of line: a Proc is allocated for every call with a literal block.
@@ -84,13 +89,38 @@ namespace IronRuby.Builtins {
             get { return _rare ?? (_rare = new RareState()); }
         }
 
-        // The frame that converted this block to a proc:
-        internal RuntimeFlowControl Converter { get; set; }
+        /// <summary>
+        /// The frame that converted this block to a proc. No field of its own: a proc is only ever active as a
+        /// frame (RuntimeFlowControl) while it is its own converter, so the base class's field holds any other
+        /// converter, and SelfConverterFlag says the converter is this proc - active or not.
+        /// </summary>
+        internal RuntimeFlowControl Converter {
+            get {
+                var converter = _activeFlowControlScope;
+                return (converter != null) ? converter : ((_kind & SelfConverterFlag) != 0) ? this : null;
+            }
+            set {
+                if (value == this) {
+                    _kind |= SelfConverterFlag;
+                } else {
+                    _kind &= ~SelfConverterFlag;
+                    _activeFlowControlScope = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// The call this literal block is passed to converts it: the proc becomes that call's active frame.
+        /// </summary>
+        internal void ConvertAsFrame() {
+            _kind = (int)ProcKind.Proc | SelfConverterFlag;
+            _activeFlowControlScope = this;
+        }
 
         public ProcKind Kind {
-            get { return _kind; }
+            get { return (ProcKind)(_kind & KindMask); }
             // friend: RuntimeFlowControl
-            internal set { _kind = value; }
+            internal set { _kind = (_kind & ~KindMask) | (int)value; }
         }
 
         internal RubyLambdaMethodInfo Method {
@@ -142,7 +172,7 @@ namespace IronRuby.Builtins {
         internal Proc(ProcKind kind, object self, RubyScope/*!*/ scope, BlockDispatcher/*!*/ dispatcher) {
             Assert.NotNull(scope, dispatcher);
             Debug.Assert(dispatcher.Method != null);
-            _kind = kind;
+            _kind = (int)kind;
             _self = self;
             _scope = scope;
             _dispatcher = dispatcher;
@@ -273,7 +303,7 @@ namespace IronRuby.Builtins {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
             try {
                 // lambda calls are weird:
-                var result = (_kind == ProcKind.Lambda) ?
+                var result = (Kind == ProcKind.Lambda) ?
                     RubyOps.YieldNoAutoSplat1(arg1, procArg, _self, blockParam) :
                     RubyOps.Yield1(arg1, procArg, _self, blockParam);
 
@@ -462,7 +492,7 @@ namespace IronRuby.Builtins {
         #endregion
 
         public override string/*!*/ ToString() {
-            return String.Format("{0}: {1}:{2}", _kind, SourcePath ?? "(unknown)", SourceLine);
+            return String.Format("{0}: {1}:{2}", Kind, SourcePath ?? "(unknown)", SourceLine);
         }
     }
 }

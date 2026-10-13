@@ -355,9 +355,7 @@ namespace IronRuby.Runtime {
 
             if (proc.Kind == ProcKind.Block) {
                 // the literal block is new for this call: it is the call's flow-control frame (see CreateRfcForMethod)
-                proc._activeFlowControlScope = proc;
-                proc.Converter = proc;
-                proc.Kind = ProcKind.Proc;
+                proc.ConvertAsFrame();
                 isProcConverter = true;
             } else {
                 isProcConverter = false;

@@ -35,9 +35,7 @@ namespace IronRuby.Runtime {
         [Emitted]
         public static RuntimeFlowControl/*!*/ CreateRfcForMethod(Proc proc) {
             if (proc != null && proc.Kind == ProcKind.Block) {
-                proc._activeFlowControlScope = proc;
-                proc.Kind = ProcKind.Proc;
-                proc.Converter = proc;
+                proc.ConvertAsFrame();
                 return proc;
             }
             return InactiveRfc;
