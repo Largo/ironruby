@@ -349,3 +349,27 @@ def proc_part
   p (1..4).map { |i| pk.call(i) }, $keep.map { |b| b.local_variable_get(:zz) }
 end
 proc_part
+
+# procs over a block's scope made without a block literal in it: eval, Method#to_proc,
+# Symbol#to_proc, instance_eval/class_eval strings, a define_method'd method's binding
+def capture_part
+  r = []
+  [1, 2, 3].each { |x| y = x * 4; r << eval("proc { [x, y] }") }
+  p r.map(&:call)
+  r = []
+  [1, 2, 3].each { |x| y = x * 5; r << [method(:p).to_proc, y] }
+  p r.map { |m, y| [m.lambda?, y] }
+  r = []
+  [1, 2, 3].each { |x| y = x.to_s; r << [y.method(:upcase).to_proc, :succ.to_proc, y] }
+  p r.map { |up, su, y| [up.call, su.call(y), y] }
+  r = []
+  %w[a b c].each { |s| t = s * 2; r << s.instance_eval("proc { [self, t] }") }
+  p r.map(&:call)
+  r = []
+  [1, 2, 3].each { |x| w = x * 6; r << Object.class_eval("lambda { w + x }") }
+  p r.map(&:call)
+  r = []
+  [1, 2, 3].each { |x| v = x * 7; r << eval("binding") }
+  p r.map { |b| [b.local_variable_get(:x), b.local_variable_get(:v)] }
+end
+capture_part

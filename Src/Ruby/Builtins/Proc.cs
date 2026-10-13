@@ -176,7 +176,8 @@ namespace IronRuby.Builtins {
             _self = self;
             _scope = scope;
             _dispatcher = dispatcher;
-            scope.MarkCaptured();
+            // (no RubyScope.MarkCaptured here: a literal block makes a Proc over its enclosing scope on every
+            // call, and a block with a nested block literal never reuses its scope - see BlockDefinition)
         }
 
         protected Proc(Proc/*!*/ proc)
@@ -457,6 +458,7 @@ namespace IronRuby.Builtins {
 
             // MRI's symbol proc is a lambda: it reports #lambda? true, arity -2 and
             // [[:req], [:rest]] for #parameters
+            scope.MarkCaptured();
             return new Proc(ProcKind.Lambda, scope.SelfObject, scope, procDispatcher) { SymbolName = methodName };
         }
 

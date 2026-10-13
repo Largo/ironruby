@@ -158,6 +158,7 @@ namespace IronRuby.Builtins {
             // method, both of which are lambda behaviour, so MRI's Method#to_proc answers
             // #lambda? with true. Its self is the method's receiver rather than whatever self
             // the to_proc call happened under, which is what #binding hands back.
+            scope.MarkCaptured();
             return new Proc(ProcKind.Lambda, _target, scope, _procDispatcher);
         }
 

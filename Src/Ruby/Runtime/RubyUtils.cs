@@ -1323,6 +1323,9 @@ namespace IronRuby.Runtime {
             RubyModule lexicalConstantModule, MutableString file, int line) {
             Assert.NotNull(code, targetScope);
 
+            // the code can make a Proc, Binding or method over the scope (a block scope is then not reused)
+            targetScope.MarkCaptured();
+
             RubyContext context = targetScope.RubyContext;
             RubyMethodScope methodScope = targetScope.GetInnerMostMethodScope();
 
