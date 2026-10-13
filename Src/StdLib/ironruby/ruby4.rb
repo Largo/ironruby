@@ -3051,6 +3051,12 @@ module Kernel
     private :__ir_Integer__
 
     def Integer(arg, base = nil, exception: true)
+      # The common case - a String, no base, failures raised - is what the block below
+      # does first anyway; going straight there skips the block and its rescue frame,
+      # which cost many times the parse itself.
+      if base.nil? && true.equal?(exception) && !arg.nil? && arg.is_a?(::String)
+        return __ir_Integer__(arg)
+      end
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         if arg.nil?
@@ -3112,6 +3118,10 @@ module Kernel
     private :__ir_Float__
 
     def Float(arg, exception: true)
+      # A String with failures raised goes to the C# parser below in any case; see Integer.
+      if true.equal?(exception) && !arg.nil? && ::String === arg
+        return __ir_Float__(arg)
+      end
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         raise ::TypeError, "can't convert nil into Float" if arg.nil?

@@ -53,6 +53,11 @@ namespace IronRuby.Builtins {
         private Regex _cachedAnchoredRegex;
         private Regex _cachedAnchoredSource;
 
+        // How many matches _cachedRegex and _cachedAnchoredRegex have run while still interpreted.
+        // A regex that keeps being used is rebuilt with RegexOptions.Compiled (see TierUp).
+        private int _cachedRegexUses;
+        private int _cachedAnchoredUses;
+
         // Ruby 1.8: match operations use KCODE encoding so we need to remember the one for which we have cached CLR Regex.
         private RubyRegexOptions _cachedKCode;
 
@@ -229,6 +234,15 @@ namespace IronRuby.Builtins {
         /// a whole pair.
         /// </summary>
         private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput, out bool astral) {
+            return Transform(ref encoding, input, start, out strInput, out astral, true);
+        }
+
+        /// <summary>
+        /// <paramref name="countUse"/> is false when the caller is not going to match with the
+        /// regex it gets back (MatchWindow, which derives an anchored one from it), so that only
+        /// the regex that actually runs works its way up to being compiled.
+        /// </summary>
+        private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput, out bool astral, bool countUse) {
             ContractUtils.RequiresNotNull(input, "input");
 
             RequireMatchableEncoding(input);
@@ -289,7 +303,7 @@ namespace IronRuby.Builtins {
                 astral = input.HasSurrogatePairs();
             }
 
-            return astral ? TransformAstralPattern(encoding, kc) : TransformPattern(encoding, kc);
+            return astral ? TransformAstralPattern(encoding, kc) : TransformPattern(encoding, kc, countUse);
         }
 
         private Regex/*!*/ TransformAstralPattern(RubyEncoding encoding, RubyRegexOptions kc) {
@@ -319,11 +333,19 @@ namespace IronRuby.Builtins {
         }
 
         private Regex/*!*/ TransformPattern(RubyEncoding encoding, RubyRegexOptions kc) {
+            return TransformPattern(encoding, kc, false);
+        }
+
+        private Regex/*!*/ TransformPattern(RubyEncoding encoding, RubyRegexOptions kc, bool countUse) {
             // We can reuse cached CLR regex if it was created for the same k-coding and the
             // same timeout:
             TimeSpan timeout = EffectiveTimeout;
-            if (_cachedRegex != null && kc == _cachedKCode && timeout == _cachedTimeout) {
-                return _cachedRegex;
+            Regex cached = _cachedRegex;
+            if (cached != null && kc == _cachedKCode && timeout == _cachedTimeout) {
+                if (countUse && (cached.Options & RegexOptions.Compiled) == 0 && ++_cachedRegexUses >= CompileThreshold) {
+                    _cachedRegex = cached = TierUp(cached);
+                }
+                return cached;
             }
 
             string pattern = GetClrPatternSource(encoding, kc);
@@ -337,8 +359,30 @@ namespace IronRuby.Builtins {
 
             _cachedTimeout = timeout;
             _cachedKCode = kc;
+            _cachedRegexUses = 0;
             _cachedRegex = result;
             return result;
+        }
+
+        /// <summary>
+        /// Matches a regex runs before it is compiled. The CLR interprets a Regex unless told to
+        /// compile it, and compiling costs a millisecond or more - about what the compiled code
+        /// then saves over ten thousand matches of a typical pattern - so only a regex that has
+        /// already shown it is hot pays for it: one in a loop over a large input, a tokenizer's.
+        /// </summary>
+        private const int CompileThreshold = 10000;
+
+        /// <summary>
+        /// The same CLR regex compiled to IL. Compiled and interpreted regexes are the same
+        /// engine and the same pattern tree and match identically; only the speed differs. If it
+        /// cannot be built for any reason, the interpreted one is kept.
+        /// </summary>
+        private static Regex/*!*/ TierUp(Regex/*!*/ regex) {
+            try {
+                return new Regex(regex.ToString(), regex.Options | RegexOptions.Compiled, regex.MatchTimeout);
+            } catch (Exception) {
+                return regex;
+            }
         }
 
         /// <summary>
@@ -909,7 +953,7 @@ namespace IronRuby.Builtins {
             string str;
             RubyEncoding kcode = null;
             bool astral;
-            Regex regex = Transform(ref kcode, input, 0, out str, out astral);
+            Regex regex = Transform(ref kcode, input, 0, out str, out astral, !anchored);
 
             // Under a k-coding the offsets are bytes, and "start" only indexes the converted
             // string directly when that coding spells every character in one byte - which the
@@ -917,7 +961,7 @@ namespace IronRuby.Builtins {
             int offset = 0;
             if (kcode != null && !kcode.IsSingleByteCharacterSet) {
                 kcode = null;
-                regex = Transform(ref kcode, input, start, out str, out astral);
+                regex = Transform(ref kcode, input, start, out str, out astral, !anchored);
                 offset = (start < 0) ? start + input.GetByteCount() : start;
                 start = 0;
             }
@@ -953,8 +997,12 @@ namespace IronRuby.Builtins {
         /// the caller falls back to searching: slower, never wrong.
         /// </summary>
         private Regex/*!*/ AnchorAtSearchStart(Regex/*!*/ regex) {
-            if (_cachedAnchoredSource == regex && _cachedAnchoredRegex != null) {
-                return _cachedAnchoredRegex;
+            Regex cached = _cachedAnchoredRegex;
+            if (_cachedAnchoredSource == regex && cached != null) {
+                if ((cached.Options & RegexOptions.Compiled) == 0 && ++_cachedAnchoredUses >= CompileThreshold) {
+                    _cachedAnchoredRegex = cached = TierUp(cached);
+                }
+                return cached;
             }
 
             Regex result;
@@ -969,6 +1017,7 @@ namespace IronRuby.Builtins {
             }
 
             _cachedAnchoredSource = regex;
+            _cachedAnchoredUses = 0;
             _cachedAnchoredRegex = result;
             return result;
         }
