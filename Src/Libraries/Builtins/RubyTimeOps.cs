@@ -927,9 +927,11 @@ namespace IronRuby.Builtins {
                         Invoke(context, ref _nameSite, "name", self.ZoneObject));
                 } else {
                     // A time made with a numeric offset has no zone to name, and MRI writes nil.
+                    // On Windows the name is the localized one ("Mitteleuropäische Zeit"), as in #zone.
                     string zoneName = self.HasFixedOffset ? null : self.GetZoneName();
-                    context.SetInstanceVariable(result, "zone",
-                        zoneName != null ? MutableString.CreateAscii(zoneName).Freeze() : null);
+                    context.SetInstanceVariable(result, "zone", zoneName == null ? null : (zoneName.IsAscii()
+                        ? MutableString.CreateAscii(zoneName)
+                        : MutableString.Create(zoneName, context.GetPathEncoding())).Freeze());
                 }
             }
 
