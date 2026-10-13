@@ -441,6 +441,24 @@ bench("yield_loop") do
   r.times { o.yield_upto(1000) { |x| s += x } }
 end
 
+# A tokenizer's inner loop: StringScanner scan/skip with Regexps and Strings, group access.
+bench("strscan_tokens") do
+  require "strscan"
+  src = (%q({"name": "Team \\"A\\"", "score": [1, 22.5, -3e2], "ok": true, "x": null}, ) * 200).b
+  r = n(60)
+  r.times do
+    s = StringScanner.new(src)
+    until s.eos?
+      if s.skip(/\s+/) then next
+      elsif s.scan(/"((?:[^"\\]|\\.)*)"/n) then s[1]
+      elsif s.scan(/-?\d+(\.\d+)?([eE][-+]?\d+)?/) then (s[1] || s[2]) ? Float(s[0]) : Integer(s[0])
+      elsif s.skip("true") || s.skip("null") then nil
+      else s.getch
+      end
+    end
+  end
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"
