@@ -985,6 +985,103 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// A match MatchWindowBounds found, whose MatchData has not been made yet. Most scanning
+        /// operations only want to know where the match is, and building the CLR Match with its
+        /// groups and the MatchData around it costs more than finding the match does.
+        /// <see cref="Complete"/> makes the MatchData MatchWindow would have made, by running the
+        /// same CLR regex over the same immutable text again - so a later change to the subject
+        /// does not change the groups, as it does not in MRI either.
+        /// </summary>
+        public struct PendingMatch {
+            internal RubyRegex _owner;
+            internal Regex _regex;
+            internal MutableString _input;
+            internal string _text;
+            internal RubyEncoding _kcode;
+            internal int _start;
+            internal MatchData _data;
+
+            public bool IsEmpty {
+                get { return _owner == null; }
+            }
+
+            public MatchData/*!*/ Complete() {
+                if (_data != null) {
+                    return _data;
+                }
+                Match match = _regex.Match(_text, _start, _text.Length - _start);
+                Debug.Assert(match.Success);
+                return MatchData.Create(match, _input, false, _text, _kcode, 0, _owner, false);
+            }
+        }
+
+        /// <summary>
+        /// MatchWindow without a frozen copy of the input, answering the byte offsets of the whole
+        /// match and a <see cref="PendingMatch"/> for its groups. Where one CLR character stands
+        /// for one byte of the input - a binary or single-byte k-coding, or a subject whose
+        /// characters are all single bytes - the match is found without building any match
+        /// objects at all; anything else goes through MatchWindow.
+        /// </summary>
+        public bool MatchWindowBounds(MutableString/*!*/ input, int start, bool anchored,
+            out int matchStart, out int matchEnd, out PendingMatch pending) {
+
+            matchStart = matchEnd = 0;
+            pending = default(PendingMatch);
+
+            string str;
+            RubyEncoding kcode = null;
+            bool astral;
+            Regex regex = Transform(ref kcode, input, 0, out str, out astral, !anchored);
+
+            bool bytesAreChars = (kcode != null) ? kcode.IsSingleByteCharacterSet : input.DetectSingleByteCharacters();
+            if (astral || !bytesAreChars) {
+                MatchData data = MatchWindow(input, start, anchored, false);
+                if (data == null || !data.TryGetGroupByteOffsets(0, out matchStart, out matchEnd)) {
+                    return false;
+                }
+                pending._owner = this;
+                pending._data = data;
+                return true;
+            }
+
+            if (str == null) {
+                return false;
+            }
+            if (start < 0) {
+                start += str.Length;
+            }
+            if (start < 0 || start > str.Length) {
+                return false;
+            }
+
+            if (anchored) {
+                regex = AnchorAtSearchStart(regex);
+            }
+
+            // A span cut at "start" is the window Match(str, start, length) searches: \A, ^, \G
+            // and lookbehind all stop at its first character.
+            foreach (ValueMatch match in regex.EnumerateMatches(str.AsSpan(start))) {
+                int clrStart = start + match.Index;
+                // MatchData's offsets: the CLR offset is the byte offset, capped at the subject
+                matchStart = Math.Min(clrStart, str.Length);
+                matchEnd = Math.Min(clrStart + match.Length, str.Length);
+                if (kcode == null) {
+                    int byteCount = input.GetByteCount();
+                    matchStart = Math.Min(matchStart, byteCount);
+                    matchEnd = Math.Min(matchEnd, byteCount);
+                }
+                pending._owner = this;
+                pending._regex = regex;
+                pending._input = input;
+                pending._text = str;
+                pending._kcode = kcode;
+                pending._start = start;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// The same pattern with a \G in front of it, which in a forward CLR match stands for the
         /// position the search was told to start at. The body goes in a non-capturing group so that
         /// a top-level alternation still binds inside the anchor, and group numbers do not move.
@@ -1144,7 +1241,24 @@ namespace IronRuby.Builtins {
             RubyEncoding kcode = null;
             bool astral;
             Regex regex = Transform(ref kcode, input, 0, out str, out astral);
-            IList<Match> matches = astral ? MatchesOverPairs(regex, str) : (IList<Match>)regex.Matches(str);
+            IList<Match> matches;
+            if (astral) {
+                matches = MatchesOverPairs(regex, str);
+            } else {
+                // Match and NextMatch are what Regex.Matches is defined as; asking for the first
+                // one directly answers "no match" - the usual outcome of a #gsub over a short
+                // string - without the collection.
+                Match match = regex.Match(str);
+                if (!match.Success) {
+                    return Array.Empty<MatchData>();
+                }
+                var list = new List<Match>();
+                do {
+                    list.Add(match);
+                    match = match.NextMatch();
+                } while (match.Success);
+                matches = list;
+            }
 
             var result = new MatchData[matches.Count];
             if (result.Length > 0 && inputMayMutate) {

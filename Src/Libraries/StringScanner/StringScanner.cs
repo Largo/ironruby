@@ -65,6 +65,13 @@ namespace IronRuby.StandardLibrary.StringScanner {
         /// </summary>
         private MatchData _match;
 
+        /// <summary>
+        /// A regexp match whose MatchData is only made when its groups are asked for (see
+        /// CurrentMatch): the operations that answer a length or a position (#skip, #match?,
+        /// #exist?, #skip_until) rarely have their groups read.
+        /// </summary>
+        private RubyRegex.PendingMatch _pendingMatch;
+
         /// <summary>The byte offset _match's own offsets are relative to.</summary>
         private int _matchBase;
 
@@ -100,6 +107,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
             _matchStart = other._matchStart;
             _matchEnd = other._matchEnd;
             _match = other._match;
+            _pendingMatch = other._pendingMatch;
             _matchBase = other._matchBase;
         }
 
@@ -243,6 +251,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
         private void ClearMatch() {
             _matched = false;
             _match = null;
+            _pendingMatch = default(RubyRegex.PendingMatch);
             _matchBase = 0;
             _matchStart = 0;
             _matchEnd = 0;
@@ -275,14 +284,48 @@ namespace IronRuby.StandardLibrary.StringScanner {
         }
 
         private bool Match(object/*!*/ pattern, bool anchored, bool advance) {
+            return Match(pattern, anchored, advance, false);
+        }
+
+        /// <param name="lazyGroups">The caller answers a length or a position, not text: the
+        /// MatchData can wait until something asks for a group.</param>
+        private bool Match(object/*!*/ pattern, bool anchored, bool advance, bool lazyGroups) {
             var regex = pattern as RubyRegex;
             return (regex != null)
-                ? MatchRegex(regex, anchored, advance)
+                ? MatchRegex(regex, anchored, advance, lazyGroups)
                 : MatchLiteral((MutableString)pattern, anchored, advance);
         }
 
-        private bool MatchRegex(RubyRegex/*!*/ pattern, bool anchored, bool advance) {
+        /// <summary>
+        /// The MatchData of the last regexp match, made now if the match left it pending; null
+        /// when the last match had no pattern.
+        /// </summary>
+        private MatchData CurrentMatch {
+            get {
+                if (_match == null && !_pendingMatch.IsEmpty) {
+                    _match = _pendingMatch.Complete();
+                    _pendingMatch = default(RubyRegex.PendingMatch);
+                }
+                return _match;
+            }
+        }
+
+        private bool MatchRegex(RubyRegex/*!*/ pattern, bool anchored, bool advance, bool lazyGroups) {
             ClearMatch();
+
+            if (lazyGroups && !_fixedAnchor) {
+                int boundsStart, boundsEnd;
+                RubyRegex.PendingMatch pending;
+                if (!pattern.MatchWindowBounds(_scanString, CharIndexOf(_position), anchored, out boundsStart, out boundsEnd, out pending)) {
+                    return false;
+                }
+                if (anchored && boundsStart != _position) {
+                    return false;
+                }
+                _pendingMatch = pending;
+                _matchBase = 0;
+                return Matched(boundsStart, boundsEnd, advance);
+            }
 
             MatchData match;
             int matchBase = 0;
@@ -319,6 +362,21 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         private bool MatchLiteral(MutableString/*!*/ pattern, bool anchored, bool advance) {
             ClearMatch();
+
+            if (anchored && pattern.IsAscii()) {
+                // The usual #skip("{"): an ASCII pattern's characters are its bytes, so it can be
+                // compared where it stands instead of being copied out to a byte array first.
+                int length = pattern.GetByteCount();
+                if (_position + length > ByteLength) {
+                    return false;
+                }
+                for (int i = 0; i < length; i++) {
+                    if (_scanString.GetByte(_position + i) != pattern.GetByte(i)) {
+                        return false;
+                    }
+                }
+                return Matched(_position, _position + length, advance);
+            }
 
             byte[] needle = pattern.ToByteArray();
             int start = -1;
@@ -385,10 +443,10 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 }
                 // A match with no pattern behind it has no named groups at all, so every name
                 // is undefined rather than merely unmatched.
-                if (self._match == null || !self._match.HasNamedGroup(name)) {
+                if (self.CurrentMatch == null || !self.CurrentMatch.HasNamedGroup(name)) {
                     throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", name);
                 }
-                int[] named = self._match.GetGroupOffsets(name, true);
+                int[] named = self.CurrentMatch.GetGroupOffsets(name, true);
                 return (named == null) ? null : self.ByteSlice(self._matchBase + named[0], named[1] - named[0]);
             }
 
@@ -397,11 +455,11 @@ namespace IronRuby.StandardLibrary.StringScanner {
             if (!self._matched) {
                 return null;
             }
-            if (self._match == null) {
+            if (self.CurrentMatch == null) {
                 return (subgroup == 0) ? self.ByteSlice(self._matchStart, self._matchEnd - self._matchStart) : null;
             }
 
-            int count = self._match.GroupCount;
+            int count = self.CurrentMatch.GroupCount;
             if (subgroup < 0) {
                 subgroup += count;
             }
@@ -409,7 +467,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 return null;
             }
             int start, end;
-            return self._match.TryGetGroupByteOffsets(subgroup, out start, out end)
+            return self.CurrentMatch.TryGetGroupByteOffsets(subgroup, out start, out end)
                 ? self.ByteSlice(self._matchBase + start, end - start)
                 : null;
         }
@@ -429,11 +487,11 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 return null;
             }
             var result = new RubyArray();
-            if (self._match == null) {
+            if (self.CurrentMatch == null) {
                 return result;
             }
-            for (int i = 1; i < self._match.GroupCount; i++) {
-                int[] offsets = self._match.GetGroupOffsets(i, true);
+            for (int i = 1; i < self.CurrentMatch.GroupCount; i++) {
+                int[] offsets = self.CurrentMatch.GetGroupOffsets(i, true);
                 result.Add((offsets == null) ? null : self.ByteSlice(self._matchBase + offsets[0], offsets[1] - offsets[0]));
             }
             return result;
@@ -454,11 +512,11 @@ namespace IronRuby.StandardLibrary.StringScanner {
         [RubyMethod("named_captures")]
         public static Hash/*!*/ NamedCaptures(RubyContext/*!*/ context, StringScanner/*!*/ self) {
             var result = new Hash(context);
-            if (!self._matched || self._match == null) {
+            if (!self._matched || self.CurrentMatch == null) {
                 return result;
             }
-            foreach (var name in self._match.GetGroupNames()) {
-                int[] offsets = self._match.GetGroupOffsets(name, true);
+            foreach (var name in self.CurrentMatch.GetGroupNames()) {
+                int[] offsets = self.CurrentMatch.GetGroupOffsets(name, true);
                 result[MutableString.CreateAscii(name).Freeze()] =
                     (offsets == null) ? null : self.ByteSlice(self._matchBase + offsets[0], offsets[1] - offsets[0]);
             }
@@ -470,7 +528,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
             if (!self._matched) {
                 return null;
             }
-            return (self._match != null) ? self._match.GroupCount : 1;
+            return (self.CurrentMatch != null) ? self.CurrentMatch.GroupCount : 1;
         }
 
         [RubyMethod("fixed_anchor?")]
@@ -502,7 +560,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         [RubyMethod("exist?")]
         public static int? Exist(ConversionStorage<MutableString>/*!*/ stringCast, StringScanner/*!*/ self, object pattern) {
-            if (!self.Match(ToPattern(stringCast, pattern), false, false)) {
+            if (!self.Match(ToPattern(stringCast, pattern), false, false, true)) {
                 return null;
             }
             return self._matchEnd - self._position;
@@ -563,7 +621,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         [RubyMethod("match?")]
         public static int? Match(ConversionStorage<MutableString>/*!*/ stringCast, StringScanner/*!*/ self, object pattern) {
-            if (!self.Match(ToPattern(stringCast, pattern), true, false)) {
+            if (!self.Match(ToPattern(stringCast, pattern), true, false, true)) {
                 return null;
             }
             return self._matchEnd - self._matchStart;
@@ -702,7 +760,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         [RubyMethod("skip")]
         public static int? Skip(ConversionStorage<MutableString>/*!*/ stringCast, StringScanner/*!*/ self, object pattern) {
-            if (!self.Match(ToPattern(stringCast, pattern), true, true)) {
+            if (!self.Match(ToPattern(stringCast, pattern), true, true, true)) {
                 return null;
             }
             return self._position - self._previousPosition;
@@ -710,7 +768,7 @@ namespace IronRuby.StandardLibrary.StringScanner {
 
         [RubyMethod("skip_until")]
         public static int? SkipUntil(ConversionStorage<MutableString>/*!*/ stringCast, StringScanner/*!*/ self, object pattern) {
-            if (!self.Match(ToPattern(stringCast, pattern), false, true)) {
+            if (!self.Match(ToPattern(stringCast, pattern), false, true, true)) {
                 return null;
             }
             return self._position - self._previousPosition;
