@@ -320,11 +320,8 @@ namespace IronRuby.Runtime {
         /// block then clears the tuple, so that the next call finds its locals nil. The first call through
         /// a BlockParam keeps nothing (see BlockParam.ParkScope): a block called once pays no more than a flag.
         /// </summary>
-        [Emitted]
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool LeaveReusableBlockScope(RubyBlockScope/*!*/ scope, bool keepLocals) {
-            if (scope.IsCaptured) {
-                return false;
-            }
             return scope.BlockFlowControl.ParkScope(scope);
         }
 

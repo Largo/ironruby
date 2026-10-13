@@ -143,11 +143,15 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// Keeps the scope of a call of the block that finished normally, for the next call to reuse; not on the
         /// first call through this BlockParam, which most often is the only one (a library method calling its
-        /// block once), nor after a break/return/retry, which use the target frame.
+        /// block once), nor after a break/return/retry, which use the target frame, nor if something captured it.
         /// </summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.AggressiveInlining)]
         internal bool ParkScope(RubyBlockScope/*!*/ scope) {
             int flow = _flow;
             if (flow == CalledFlag) {
+                if (scope.IsCaptured) {
+                    return false;
+                }
                 _targetFrame = scope;
                 return true;
             }
