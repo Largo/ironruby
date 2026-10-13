@@ -64,7 +64,9 @@ fi
 # binstubs of installed gems; it comes next, so `./ir.sh -S <gem executable>`
 # finds the binstub written for IronRuby before a host Ruby's version of the
 # same command - or a version manager's shim, which is a native executable and
-# not a script at all.  An existing RUBYPATH still wins for anything not here.
+# not a script at all.  An existing RUBYPATH is searched after both - IronRuby's
+# own commands come first, as they always have for Src/StdLib/bin - and still
+# beats PATH for anything not found here.  ir.cmd uses the same order.
 RUBYPATH="$S/bin:$(dirname "$IR_BIN")${RUBYPATH:+:$RUBYPATH}"
 export RUBYPATH
 
