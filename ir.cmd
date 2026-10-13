@@ -33,7 +33,12 @@ if not exist "%IR_BIN%" (
 set "S=%IR_ROOT%\Src\StdLib"
 
 rem -S searches RUBYPATH before PATH, so `ir.cmd -S irb` runs the irb shipped here.
-if "%RUBYPATH%"=="" (set "RUBYPATH=%S%\bin") else (set "RUBYPATH=%S%\bin;%RUBYPATH%")
+rem The directory ir.exe is in comes next: it is RubyGems' bindir (RbConfig's bindir),
+rem where `igem install` writes the binstubs of installed gems, so `ir.cmd -S <gem
+rem executable>` finds the one written for IronRuby before a host Ruby's - as in ir.sh.
+for %%I in ("%IR_BIN%") do set "IR_BINDIR=%%~dpI"
+set "IR_BINDIR=%IR_BINDIR:~0,-1%"
+if "%RUBYPATH%"=="" (set "RUBYPATH=%S%\bin;%IR_BINDIR%") else (set "RUBYPATH=%S%\bin;%IR_BINDIR%;%RUBYPATH%")
 
 rem -X:StdLib is split on Path.PathSeparator, which is ';' on Windows - a ':' list would
 rem be cut apart at every drive letter.
