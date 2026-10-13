@@ -1098,7 +1098,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("flock", BuildConfig = "FEATURE_FILESYSTEM")]
         public static object FileLock(RubyFile/*!*/ self, [DefaultProtocol]int operation) {
             self.RequireInitialized();
-            if (!Posix.IsAvailable) {
+            if (!Posix.IsFlockAvailable) {
                 throw new IronRuby.Builtins.NotImplementedError("flock() function is unimplemented on this machine");
             }
 
@@ -1118,7 +1118,7 @@ namespace IronRuby.Builtins {
                 if (Posix.Flock(fd, operation | Posix.LOCK_NB, out errno) == 0) {
                     return 0;
                 }
-                if (errno != Posix.EWOULDBLOCK) {
+                if (errno != Posix.EWouldBlock) {
                     throw Posix.Error(errno, self.Path);
                 }
                 if (nonBlocking) {
