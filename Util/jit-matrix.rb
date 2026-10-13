@@ -495,6 +495,7 @@ kt('kw opt a nil') { sp_kw_opt(a: nil) }
 kt('kw opt unknown') { sp_kw_opt(c: 1) }
 kt('kw opt positional') { sp_kw_opt(1) }
 kt('kw opt positional Hash') { sp_kw_opt({ a: 1 }) }
+kt('kw opt nil') { sp_kw_opt(nil) }
 warm { |i| sp_kw_opt }
 kt('kw opt hot without keywords') { sp_kw_opt }
 kt('kw opt hot without keywords, given one') { sp_kw_opt(b: 4) }
@@ -506,6 +507,7 @@ t('kw mixed missing positional') { sp_kw_mixed(k: 1) }
 kt('kw mixed missing keyword') { sp_kw_mixed(5) }
 t('kw mixed extra positional') { sp_kw_mixed(5, 6, k: 1) }
 t('kw mixed positional Hash') { sp_kw_mixed(5, { k: 1 }) }
+t('kw mixed nil for the keywords') { sp_kw_mixed(5, nil) }
 kt('kw mixed overflow') { sp_kw_mixed(-2**62, k: 2**62, j: 2) }
 
 warm { |i| sp_kw_obj('x', k: i) }

@@ -7,7 +7,6 @@
  * PrismAstBridge.LowerKeywords turns `def m(a, k:, j: 1)' into `def m(a, ?kw? = {})' plus a
  * prologue that binds the keyword locals out of that hash:
  *
- *   ?kw? ||= {}
  *   raise ArgumentError, ... if KeywordArgumentsTest(a)             # separation checks
  *   raise ArgumentError, ... unless KeywordArgumentsTest(?kw?)
  *   unless KeywordArgumentsMatch(?kw?, [:k, :j], 1, false)          # missing / unknown
@@ -72,11 +71,12 @@ namespace IronRuby.Runtime.Jit {
             int n = statements.Count;
             int i = 0;
 
-            // ?kw? ||= {}
+            // ?kw? ||= {} (a block's prologue starts with it; a method's does not)
             if (i >= n) { return null; }
             var reset = statements[i] as SimpleAssignmentExpression;
-            if (reset == null || reset.Operation != "||" || !IsVar(reset.Left, kwVar) || !(reset.Right is HashConstructor)) { return null; }
-            i++;
+            if (reset != null && reset.Operation == "||" && IsVar(reset.Left, kwVar) && reset.Right is HashConstructor) {
+                i++;
+            }
 
             // The separation checks: an if/unless on KeywordArgumentsTest whose body only raises.
             while (i < n) {
