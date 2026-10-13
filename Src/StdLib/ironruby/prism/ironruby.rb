@@ -44,8 +44,7 @@ module Prism
 
     # Mirror the Prism.dump_file API by using the serialization API.
     def dump_file(filepath, **options)
-      options[:filepath] = filepath
-      dump_common(read_file(filepath), options)
+      dump_common(read_file(filepath, options), options)
     end
 
     # Mirror the Prism.lex API by using the serialization API.
@@ -55,8 +54,7 @@ module Prism
 
     # Mirror the Prism.lex_file API by using the serialization API.
     def lex_file(filepath, **options)
-      options[:filepath] = filepath
-      source = read_file(filepath)
+      source = read_file(filepath, options)
       lex_common(source, source, options)
     end
 
@@ -67,8 +65,7 @@ module Prism
 
     # Mirror the Prism.parse_file API by using the serialization API.
     def parse_file(filepath, **options)
-      options[:filepath] = filepath
-      source = read_file(filepath)
+      source = read_file(filepath, options)
       parse_common(source, source, options)
     end
 
@@ -86,8 +83,7 @@ module Prism
 
     # Mirror the Prism.parse_file_comments API by using the serialization API.
     def parse_file_comments(filepath, **options)
-      options[:filepath] = filepath
-      source = read_file(filepath)
+      source = read_file(filepath, options)
       parse_comments_common(source, source, options)
     end
 
@@ -98,8 +94,7 @@ module Prism
 
     # Mirror the Prism.parse_lex_file API by using the serialization API.
     def parse_lex_file(filepath, **options)
-      options[:filepath] = filepath
-      source = read_file(filepath)
+      source = read_file(filepath, options)
       parse_lex_common(source, source, options)
     end
 
@@ -115,8 +110,7 @@ module Prism
 
     # Mirror the Prism.parse_file_success? API by using the serialization API.
     def parse_file_success?(filepath, **options)
-      options[:filepath] = filepath
-      parse_success_common(read_file(filepath), options)
+      parse_success_common(read_file(filepath, options), options)
     end
 
     # Mirror the Prism.parse_file_failure? API by using the serialization API.
@@ -132,8 +126,7 @@ module Prism
 
     # Mirror the Prism.profile_file API by using the serialization API.
     def profile_file(filepath, **options)
-      options[:filepath] = filepath
-      LibRubyParser.serialize_parse(read_file(filepath), dump_options(options))
+      LibRubyParser.serialize_parse(read_file(filepath, options), dump_options(options))
       nil
     end
 
@@ -147,8 +140,15 @@ module Prism
 
     # Upstream maps the file through pm_source_mapped_init, which raises
     # Errno::EISDIR for a directory and a SystemCallError otherwise; File.binread
-    # raises the same errors.
-    def read_file(filepath)
+    # raises the same errors.  Like upstream's PrismSource.with_file, a Pathname
+    # (or anything else with to_path or to_str) is accepted and the String it
+    # stands for is what goes into options[:filepath].
+    def read_file(filepath, options)
+      unless filepath.is_a?(String)
+        filepath = filepath.to_path if filepath.respond_to?(:to_path)
+        filepath = filepath.to_str if filepath.respond_to?(:to_str)
+      end
+      options[:filepath] = filepath
       raise TypeError unless filepath.is_a?(String)
       File.binread(filepath)
     end
@@ -326,7 +326,7 @@ module Prism
     # The set of options that are understood by the parsing APIs. Note that
     # raise_error is not listed here because it is deleted from the options
     # hash by raise_error_format_type before the options are dumped.
-    DUMP_OPTIONS_KEYS = [:command_line, :encoding, :filepath, :freeze, :frozen_string_literal, :line, :main_script, :partial_script, :scopes, :version].freeze
+    DUMP_OPTIONS_KEYS = [:attach_comments, :command_line, :encoding, :filepath, :freeze, :frozen_string_literal, :line, :main_script, :partial_script, :scopes, :version].freeze
     private_constant :DUMP_OPTIONS_KEYS
 
     # Convert the given options into a serialized options string.
@@ -377,6 +377,9 @@ module Prism
 
       template << "C"
       values << (options.fetch(:freeze, false) ? 1 : 0)
+
+      template << "C"
+      values << (options.fetch(:attach_comments, false) ? 1 : 0)
 
       template << "L"
       if (scopes = options[:scopes])
