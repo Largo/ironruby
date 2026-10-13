@@ -2892,7 +2892,10 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static void LeaveMethodFrame(RuntimeFlowControl/*!*/ rfc) {
-            rfc.LeaveMethod();
+            // no write to a frame that is not active: CreateRfcForMethod's shared inactive frame stays untouched
+            if (rfc._activeFlowControlScope != null) {
+                rfc.LeaveMethod();
+            }
         }
         
         /// <summary>
