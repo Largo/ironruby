@@ -2506,14 +2506,26 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        // A literal without substitutions is built once and cached in its site's box, so every
+        // later evaluation only reads the box. The construction is split off: the delegate it
+        // makes captures the parameters, and a closure over parameters is allocated on entry to
+        // the method that declares them - on every evaluation, even one that never needs it.
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexB(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
+            return regexpCache.Value ?? CreateRegexBWorker(bytes, encoding, options, regexpCache);
+        }
+
+        private static RubyRegex/*!*/ CreateRegexBWorker(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
             Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringB(bytes, encoding), options); };
             return CreateRegexWorker(options, regexpCache, true, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexL(string/*!*/ str1, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
+            return regexpCache.Value ?? CreateRegexLWorker(str1, encoding, options, regexpCache);
+        }
+
+        private static RubyRegex/*!*/ CreateRegexLWorker(string/*!*/ str1, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
             Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringL(str1, encoding), options); };
             return CreateRegexWorker(options, regexpCache, true, createRegex);
         }
