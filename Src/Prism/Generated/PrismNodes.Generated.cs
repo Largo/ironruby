@@ -1016,7 +1016,7 @@ namespace IronRuby.Prism.Ast {
 
     public sealed class SymbolNode : PmNode {
         public PmLocation? OpeningLoc;
-        public PmLocation? ValueLoc;
+        public PmLocation ContentLoc;
         public PmLocation? ClosingLoc;
         public byte[] Unescaped;
     }

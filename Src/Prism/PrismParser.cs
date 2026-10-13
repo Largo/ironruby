@@ -178,6 +178,7 @@ namespace IronRuby.Prism {
                 writer.Write((byte)(mainScript ? 1 : 0));  // main script
                 writer.Write((byte)0);      // partial script
                 writer.Write((byte)0);      // freeze
+                writer.Write((byte)0);      // attach comments
                 if (outerLocals != null) {
                     writer.Write(1);        // one scope
                     writer.Write(outerLocals.Count);
