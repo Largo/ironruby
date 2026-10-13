@@ -271,10 +271,19 @@ namespace IronRuby.Runtime {
 
             RubyUtils.SafePoint();
 
-            // a block called once finds nothing kept on its BlockParam or proc: the test stays small for that
+            // A block called once finds nothing kept on its BlockParam or proc, and a block called repeatedly
+            // through one BlockParam (each, times, a yield in a loop) finds the scope there: both inline.
             RubyBlockScope scope = null;
-            if (blockParam.MayHaveReusableScope || blockParam.Proc.ReusableScope != null) {
-                scope = TakeReusableBlockScope(locals, blockParam, selfObject, interpretedFrame);
+            if (blockParam.MayHaveReusableScope) {
+                scope = blockParam.ReusableScope;
+                if (scope != null && !scope.IsCaptured) {
+                    blockParam.TakeReusableScope();
+                    scope.Reinitialize(locals, blockParam, selfObject, interpretedFrame);
+                } else {
+                    scope = TakeReusableProcScope(locals, blockParam, selfObject, interpretedFrame);
+                }
+            } else if (blockParam.Proc.ReusableScope != null) {
+                scope = TakeReusableProcScope(locals, blockParam, selfObject, interpretedFrame);
             }
             if (scope == null) {
                 scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
@@ -287,24 +296,20 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
+        // Out of line: the path of a scope kept on the proc, not the BlockParam's own.
+        // (a scope that something captured after its call had returned is not reused either)
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static RubyBlockScope TakeReusableBlockScope(MutableTuple locals, BlockParam/*!*/ blockParam,
+        private static RubyBlockScope TakeReusableProcScope(MutableTuple locals, BlockParam/*!*/ blockParam,
             object selfObject, InterpretedFrame interpretedFrame) {
 
-            // (a scope that something captured after its call had returned is not reused either)
-            var scope = blockParam.ReusableScope;
-            if (scope != null && !scope.IsCaptured) {
-                blockParam.TakeReusableScope();
+            // The block passes the locals TakeReusableLocals found on the proc's scope - which it
+            // checked just now - or a tuple of its own; one without a reusable tuple, null or a new one.
+            var proc = blockParam.Proc;
+            var scope = proc.ReusableScope;
+            if (scope != null && (locals != null && scope.Locals == locals || IsReusableBlockScope(scope))) {
+                proc.TakeReusableScope();
             } else {
-                // The block passes the locals TakeReusableLocals found on the proc's scope - which it
-                // checked just now - or a tuple of its own; one without a reusable tuple, null or a new one.
-                var proc = blockParam.Proc;
-                scope = proc.ReusableScope;
-                if (scope != null && (locals != null && scope.Locals == locals || IsReusableBlockScope(scope))) {
-                    proc.TakeReusableScope();
-                } else {
-                    return null;
-                }
+                return null;
             }
 
             scope.Reinitialize(locals, blockParam, selfObject, interpretedFrame);
@@ -317,19 +322,20 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static MutableTuple TakeReusableLocals(BlockParam/*!*/ blockParam) {
-            if (!blockParam.MayHaveReusableScope && blockParam.Proc.ReusableScope == null) {
+            if (blockParam.MayHaveReusableScope) {
+                var scope = blockParam.ReusableScope;
+                if (scope != null && !scope.IsCaptured) {
+                    return scope.Locals;
+                }
+            } else if (blockParam.Proc.ReusableScope == null) {
                 return null;
             }
-            return GetReusableLocals(blockParam);
+            return GetReusableProcLocals(blockParam);
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
-        private static MutableTuple GetReusableLocals(BlockParam/*!*/ blockParam) {
-            var scope = blockParam.ReusableScope;
-            if (scope != null && !scope.IsCaptured) {
-                return scope.Locals;
-            }
-            scope = blockParam.Proc.ReusableScope;
+        private static MutableTuple GetReusableProcLocals(BlockParam/*!*/ blockParam) {
+            var scope = blockParam.Proc.ReusableScope;
             return (scope != null && IsReusableBlockScope(scope)) ? scope.Locals : null;
         }
 
