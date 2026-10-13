@@ -302,19 +302,19 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 return false;
             }
 
-            int[] offsets = match.GetGroupOffsets(0, true);
-            if (offsets == null) {
+            int matchStart, matchEnd;
+            if (!match.TryGetGroupByteOffsets(0, out matchStart, out matchEnd)) {
                 return false;
             }
 
-            int start = matchBase + offsets[0];
+            int start = matchBase + matchStart;
             if (anchored && start != _position) {
                 return false;
             }
 
             _match = match;
             _matchBase = matchBase;
-            return Matched(start, matchBase + offsets[1], advance);
+            return Matched(start, matchBase + matchEnd, advance);
         }
 
         private bool MatchLiteral(MutableString/*!*/ pattern, bool anchored, bool advance) {
@@ -392,7 +392,8 @@ namespace IronRuby.StandardLibrary.StringScanner {
                 return (named == null) ? null : self.ByteSlice(self._matchBase + named[0], named[1] - named[0]);
             }
 
-            int subgroup = Protocols.CastToFixnum(fixnumCast, index);
+            // An Integer index is the usual case; it converts to itself.
+            int subgroup = (index is int) ? (int)index : Protocols.CastToFixnum(fixnumCast, index);
             if (!self._matched) {
                 return null;
             }
@@ -407,8 +408,10 @@ namespace IronRuby.StandardLibrary.StringScanner {
             if (subgroup < 0 || subgroup >= count) {
                 return null;
             }
-            int[] offsets = self._match.GetGroupOffsets(subgroup, true);
-            return (offsets == null) ? null : self.ByteSlice(self._matchBase + offsets[0], offsets[1] - offsets[0]);
+            int start, end;
+            return self._match.TryGetGroupByteOffsets(subgroup, out start, out end)
+                ? self.ByteSlice(self._matchBase + start, end - start)
+                : null;
         }
 
         private static string GroupName(object index) {
