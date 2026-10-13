@@ -459,6 +459,12 @@ bench("strscan_tokens") do
   end
 end
 
+# a literal block handed to a library method that takes a BlockParam (ruby-bench send_cfunc_block)
+bench("block_literal_cfunc") do
+  a = []; i = 0; m = n(2_000_000)
+  while i < m; a.reverse_each { }; i += 1; end
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"

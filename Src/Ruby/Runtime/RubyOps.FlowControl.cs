@@ -26,13 +26,22 @@ namespace IronRuby.Runtime {
     public static partial class RubyOps {
         #region RFC Flags
 
+        /// <summary>
+        /// The flow-control frame of a call to a Ruby method with a block: a break from the block unwinds to it.
+        /// A literal block (ProcKind.Block) is a Proc made for this call alone, so the Proc itself is that frame -
+        /// active until LeaveMethodFrame - and becomes the block's converter. Any other block has been converted
+        /// already, so nothing can target this call: it shares one frame that is never active and never a converter.
+        /// </summary>
         [Emitted]
         public static RuntimeFlowControl/*!*/ CreateRfcForMethod(Proc proc) {
-            var result = new RuntimeFlowControl();
-            result._activeFlowControlScope = result;
-            result.InitializeRfc(proc);
-            return result;
+            if (proc != null && proc.Kind == ProcKind.Block) {
+                proc.ConvertAsFrame();
+                return proc;
+            }
+            return InactiveRfc;
         }
+
+        private static readonly RuntimeFlowControl/*!*/ InactiveRfc = new RuntimeFlowControl();
 
         [Emitted]
         public static void EnterLoop(RubyScope/*!*/ scope) {

@@ -50,7 +50,13 @@ namespace IronRuby.Builtins {
         Lambda
     }
 
-    public partial class Proc : IDuplicable {
+    /// <remarks>
+    /// A Proc is also a <see cref="RuntimeFlowControl"/>: a literal block passed to a call is a new Proc
+    /// that only that call converts, so the Proc itself stands for the converting frame (see
+    /// <see cref="RubyOps.CreateRfcForMethod"/> and <see cref="RubyOps.CreateBfcForLibraryMethod"/>)
+    /// instead of a separate RuntimeFlowControl object allocated for every such call.
+    /// </remarks>
+    public partial class Proc : RuntimeFlowControl, IDuplicable {
         // Self object captured by the block definition, if any.
         // Although we could load self from scope in Ruby defined blocks, we cannot do so when we don't have a scope.
         private readonly object _self;
@@ -61,20 +67,64 @@ namespace IronRuby.Builtins {
         private readonly BlockDispatcher/*!*/ _dispatcher;
 
         // TODO: can we remove _kind and use _method and Converter fields intead?
-        private ProcKind _kind;
-        private RubyLambdaMethodInfo _method;
+        // The ProcKind in the low bits, and SelfConverterFlag.
+        private int _kind;
+        private const int KindMask = 3;
 
-        // The frame that converted this block to a proc:
-        internal RuntimeFlowControl Converter { get; set; }
+        // The proc is its own converter: a call it was the literal block of converted it (see Converter).
+        private const int SelfConverterFlag = 4;
+
+        /// <summary>
+        /// The state few procs have, out of line: a Proc is allocated for every call with a literal block.
+        /// </summary>
+        private sealed class RareState {
+            public RubyLambdaMethodInfo Method;
+            public RefinementActivation RefinementOverride;
+            public string SymbolName;
+        }
+
+        private RareState _rare;
+
+        private RareState/*!*/ Rare {
+            get { return _rare ?? (_rare = new RareState()); }
+        }
+
+        /// <summary>
+        /// The frame that converted this block to a proc. No field of its own: a proc is only ever active as a
+        /// frame (RuntimeFlowControl) while it is its own converter, so the base class's field holds any other
+        /// converter, and SelfConverterFlag says the converter is this proc - active or not.
+        /// </summary>
+        internal RuntimeFlowControl Converter {
+            get {
+                var converter = _activeFlowControlScope;
+                return (converter != null) ? converter : ((_kind & SelfConverterFlag) != 0) ? this : null;
+            }
+            set {
+                if (value == this) {
+                    _kind |= SelfConverterFlag;
+                } else {
+                    _kind &= ~SelfConverterFlag;
+                    _activeFlowControlScope = value;
+                }
+            }
+        }
+
+        /// <summary>
+        /// The call this literal block is passed to converts it: the proc becomes that call's active frame.
+        /// </summary>
+        internal void ConvertAsFrame() {
+            _kind = (int)ProcKind.Proc | SelfConverterFlag;
+            _activeFlowControlScope = this;
+        }
 
         public ProcKind Kind {
-            get { return _kind; }
+            get { return (ProcKind)(_kind & KindMask); }
             // friend: RuntimeFlowControl
-            internal set { _kind = value; }
+            internal set { _kind = (_kind & ~KindMask) | (int)value; }
         }
 
         internal RubyLambdaMethodInfo Method {
-            get { return _method; }
+            get { var r = _rare; return (r != null) ? r.Method : null; }
         }
 
         public BlockDispatcher/*!*/ Dispatcher {
@@ -95,13 +145,19 @@ namespace IronRuby.Builtins {
         /// it is being defined in, and only for the duration of the block - which is a lexical extent that
         /// exists only at runtime, so it rides on the Proc rather than on a scope object.
         /// </summary>
-        internal RefinementActivation RefinementOverride;
+        internal RefinementActivation RefinementOverride {
+            get { var r = _rare; return (r != null) ? r.RefinementOverride : null; }
+            set { if (value != null || _rare != null) { Rare.RefinementOverride = value; } }
+        }
 
         /// <summary>
         /// The symbol this proc came from, for a proc Symbol#to_proc built; null otherwise.
         /// Proc#to_s prints it as "(&amp;:name)".
         /// </summary>
-        public string SymbolName { get; internal set; }
+        public string SymbolName {
+            get { var r = _rare; return (r != null) ? r.SymbolName : null; }
+            internal set { if (value != null || _rare != null) { Rare.SymbolName = value; } }
+        }
 
         public string SourcePath {
             get { return _dispatcher.SourcePath; }
@@ -116,7 +172,7 @@ namespace IronRuby.Builtins {
         internal Proc(ProcKind kind, object self, RubyScope/*!*/ scope, BlockDispatcher/*!*/ dispatcher) {
             Assert.NotNull(scope, dispatcher);
             Debug.Assert(dispatcher.Method != null);
-            _kind = kind;
+            _kind = (int)kind;
             _self = self;
             _scope = scope;
             _dispatcher = dispatcher;
@@ -142,7 +198,9 @@ namespace IronRuby.Builtins {
         public Proc/*!*/ ToLambda(RubyLambdaMethodInfo method) {
             Proc result = new Proc(this);
             result.Kind = ProcKind.Lambda;
-            result._method = method;
+            if (method != null) {
+                result.Rare.Method = method;
+            }
             return result;
         }
 
@@ -245,7 +303,7 @@ namespace IronRuby.Builtins {
             var blockParam = RubyOps.CreateBfcForProcCall(this);
             try {
                 // lambda calls are weird:
-                var result = (_kind == ProcKind.Lambda) ?
+                var result = (Kind == ProcKind.Lambda) ?
                     RubyOps.YieldNoAutoSplat1(arg1, procArg, _self, blockParam) :
                     RubyOps.Yield1(arg1, procArg, _self, blockParam);
 
@@ -434,7 +492,7 @@ namespace IronRuby.Builtins {
         #endregion
 
         public override string/*!*/ ToString() {
-            return String.Format("{0}: {1}:{2}", _kind, SourcePath ?? "(unknown)", SourceLine);
+            return String.Format("{0}: {1}:{2}", Kind, SourcePath ?? "(unknown)", SourceLine);
         }
     }
 }
