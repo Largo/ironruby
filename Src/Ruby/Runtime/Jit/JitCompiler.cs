@@ -87,6 +87,10 @@ namespace IronRuby.Runtime.Jit {
         // _canDeopt: the body contains an operation that can signal a deopt.
         private bool _pure = true;
         private bool _canDeopt;
+        // The body writes an instance variable. A write to a frozen object deopts (JitRuntime.SetIVar)
+        // so that the generic body raises the FrozenError from a real frame; it is always the first
+        // write that does, before anything observable, so the restart is safe whatever _pure says.
+        private bool _ivarWrite;
         private bool _selfCall;
         private int _nodes;
 
@@ -116,10 +120,13 @@ namespace IronRuby.Runtime.Jit {
             _self = Ast.Parameter(typeof(object), "#self");
             PushScope();
 
+            // The typed body's parameters are the generic delegate's: every mandatory one, then
+            // the optional ones, whose defaults the entry has already filled in (JitStub).
             var mandatory = ast.Parameters.Mandatory;
-            _paramNames = new string[mandatory.Length];
-            for (int i = 0; i < mandatory.Length; i++) {
-                var lv = mandatory[i] as LocalVariable;
+            var optional = ast.Parameters.Optional;
+            _paramNames = new string[mandatory.Length + optional.Length];
+            for (int i = 0; i < _paramNames.Length; i++) {
+                var lv = (i < mandatory.Length) ? mandatory[i] as LocalVariable : optional[i - mandatory.Length].Left as LocalVariable;
                 if (lv == null) { throw JitBailout.Instance; }
                 _paramNames[i] = lv.Name;
                 var p = Ast.Parameter(ClrType(paramTypes[i]), lv.Name);
@@ -380,7 +387,7 @@ namespace IronRuby.Runtime.Jit {
                     SelfCell = c._selfCell,
                     ReturnType = actual,
                     ParameterTypes = paramTypes,
-                    CanDeopt = c._canDeopt,
+                    CanDeopt = c._canDeopt || c._ivarWrite,
                     EmittedSelfCall = c._selfCall,
                 };
             }
@@ -398,6 +405,9 @@ namespace IronRuby.Runtime.Jit {
                 case 1: return typeof(Func<,,>).MakeGenericType(types);
                 case 2: return typeof(Func<,,,>).MakeGenericType(types);
                 case 3: return typeof(Func<,,,,>).MakeGenericType(types);
+                case 4: return typeof(Func<,,,,,>).MakeGenericType(types);
+                case 5: return typeof(Func<,,,,,,>).MakeGenericType(types);
+                case 6: return typeof(Func<,,,,,,,>).MakeGenericType(types);
                 default: return null;
             }
         }
@@ -409,7 +419,93 @@ namespace IronRuby.Runtime.Jit {
             if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
                 throw JitBailout.Instance;
             }
-            return EmitStatements(body.Statements, out type);
+            return EmitInitialIVars(body.Statements, out type) ?? EmitStatements(body.Statements, out type);
+        }
+
+        // ---- an initializer's opening run of `@x = v' --------------------------------------
+        // `def initialize(a, b) @a = a; @b = b; @n = 0 ...': a fresh object gets every one of these
+        // variables at once - one slot array, already in its final shape, published with one CAS -
+        // rather than one shape transition (and interlocked operation) per variable. Only for a run
+        // of writes of distinct variables whose values have no effect and read no instance variable
+        // (a parameter, a literal, self), so that doing all the stores together is the same as doing
+        // them one by one. Any object that is not a fresh RubyObject takes the writes one by one.
+
+        private const int MinInitialIVars = 2;
+
+        private MSA.Expression EmitInitialIVars(Statements statements, out JT type) {
+            type = JT.None;
+            if (_loop != null || statements == null) { return null; }
+
+            var run = new List<SimpleAssignmentExpression>();
+            var names = new List<string>();
+            foreach (var statement in statements) {
+                var assign = statement as SimpleAssignmentExpression;
+                var ivar = (assign != null && assign.Operation == null) ? assign.Left as InstanceVariable : null;
+                if (ivar == null || names.Contains(ivar.Name) || !IsInitialIVarValue(assign.Right)) { break; }
+                run.Add(assign);
+                names.Add(ivar.Name);
+            }
+            if (run.Count < MinInitialIVars) { return null; }
+
+            var site = JitRuntime.InitialIVarsSite.TryCreate(names.ToArray());
+            if (site == null) { return null; }
+
+            var temps = new MSA.ParameterExpression[run.Count];
+            var parts = new List<MSA.Expression>();
+            var stores = new List<MSA.Expression>();
+            var oneByOne = new List<MSA.Expression>();
+            var slots = Ast.Variable(typeof(object[]), "#slots");
+            for (int i = 0; i < run.Count; i++) {
+                ++_nodes;
+                JT vt;
+                var v = Emit(run[i].Right, out vt);
+                temps[i] = Ast.Variable(typeof(object), "#iv" + i);
+                parts.Add(Ast.Assign(temps[i], Coerce(v, vt, JT.Obj)));
+                stores.Add(Ast.Assign(Ast.ArrayAccess(slots, Ast.Constant(i + 1)), temps[i]));
+                oneByOne.Add(Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, temps[i], Ast.Constant(new InstanceVariableSite(names[i]))));
+            }
+            _pure = false;
+            _ivarWrite = true;
+
+            stores.Add(Ast.Call(JitRuntime.M("CommitInitialIVars"), _self, slots));
+            parts.Add(Ast.Assign(slots, Ast.Call(JitRuntime.M("BeginInitialIVars"), _self, Ast.Constant(site))));
+            parts.Add(Ast.IfThen(
+                Ast.Not(Ast.AndAlso(Ast.NotEqual(slots, Ast.Constant(null, typeof(object[]))), Ast.Block(typeof(bool), stores))),
+                Ast.Block(typeof(void), oneByOne)
+            ));
+
+            int rest = statements.Count - run.Count;
+            if (rest == 0) {
+                // the value of the last assignment is the method's
+                type = JT.Obj;
+                parts.Add(temps[run.Count - 1]);
+            } else {
+                int skip = run.Count;
+                JT t = JT.Obj;
+                int k = 0;
+                foreach (var statement in statements) {
+                    if (k++ < skip) { continue; }
+                    parts.Add(Emit(statement, out t));
+                }
+                type = t;
+            }
+
+            var variables = new List<MSA.ParameterExpression>(temps);
+            variables.Add(slots);
+            return Ast.Block(ClrType(type), variables, parts);
+        }
+
+        /// <summary>A value an opening run of instance variable writes may have: see EmitInitialIVars.</summary>
+        private bool IsInitialIVarValue(RExpr/*!*/ value) {
+            if (value is SelfReference) { return true; }
+            var literal = value as Literal;
+            if (literal != null) {
+                object v = literal.Value;
+                return v == null || v is bool || v is int || v is long || v is double;
+            }
+            // Nothing before the run assigns a local, so a parameter still holds its argument.
+            var local = value as LocalVariable;
+            return local != null && local.DefinitionLexicalDepth == _scopeDepth && Array.IndexOf(_paramNames, local.Name) >= 0;
         }
 
         private MSA.Expression/*!*/ EmitStatements(Statements statements, out JT type) {
@@ -525,6 +621,9 @@ namespace IronRuby.Runtime.Jit {
             var ret = node as ReturnStatement;
             if (ret != null) { return EmitReturn(ret, out type); }
 
+            var arrayLiteral = node as ArrayConstructor;
+            if (arrayLiteral != null) { return EmitArrayLiteral(arrayLiteral, out type); }
+
             var body = node as Body;
             if (body != null) {
                 if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
@@ -534,6 +633,26 @@ namespace IronRuby.Runtime.Jit {
             }
 
             throw Bail("node: " + node.GetType().Name);
+        }
+
+        /// <summary>
+        /// `[a, b]': a new Array of boxed values, made by the helper the generic body calls. Building
+        /// one has no effect anything could observe, so it is no obstacle to a deopt. A splat (or
+        /// anything else Emit does not know) among the elements bails as usual.
+        /// </summary>
+        internal const int MaxArrayLiteral = 5;
+
+        private MSA.Expression/*!*/ EmitArrayLiteral(ArrayConstructor/*!*/ node, out JT type) {
+            var items = node.Arguments.Expressions;
+            if (items.Length > MaxArrayLiteral) { throw Bail("array literal of " + items.Length); }
+            var values = new List<MSA.Expression>(items.Length);
+            foreach (var item in items) {
+                JT t;
+                var e = Emit(item, out t);
+                values.Add(Coerce(e, t, JT.Obj));
+            }
+            type = JT.Obj;
+            return IronRuby.Compiler.Methods.MakeArrayOpCall(values);
         }
 
         private MSA.Expression/*!*/ EmitLiteral(Literal/*!*/ literal, out JT type) {
@@ -573,6 +692,7 @@ namespace IronRuby.Runtime.Jit {
                 JT vt;
                 var v = Emit(node.Right, out vt);
                 _pure = false;      // an ivar write is observable, so the body may not deopt
+                _ivarWrite = true;
                 type = JT.Obj;
                 return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), Ast.Constant(new InstanceVariableSite(ivarTarget.Name)));
             }
@@ -816,7 +936,12 @@ namespace IronRuby.Runtime.Jit {
                 // A long leaves through the representation funnel: a value that fits in an Int32
                 // IS an Int32, which is what #hash, #eql? and Hash keys are defined on.
                 if (from == JT.Lng) { return Ast.Call(JitRuntime.M("NarrowLong"), e); }
-                // Fixnum is a boxed int, Float a boxed double, true/false boxed bools.
+                // Fixnum is a boxed int, Float a boxed double, true/false boxed bools. A literal
+                // is boxed once, here, as the generic body does, rather than on every evaluation
+                // (`@count = 0' in an initializer would otherwise allocate per object).
+                var constant = e as MSA.ConstantExpression;
+                if (constant != null) { return Ast.Constant(constant.Value, typeof(object)); }
+                if (from == JT.Bool) { return Ast.Call(typeof(Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers).GetMethod("BooleanToObject"), e); }
                 return Ast.Convert(e, typeof(object));
             }
             throw JitBailout.Instance;
@@ -1106,10 +1231,15 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>The node kind that said no, for the histogram.</summary>
         private string _rejectedBy;
 
+        // Locals read anywhere other than straight into an instance variable (`@a = a'), or
+        // assigned. A parameter not in here is only ever stored, so it is best carried boxed:
+        // unboxing it on entry would only mean boxing it again for the store.
+        private readonly HashSet<string>/*!*/ _otherUses = new HashSet<string>();
+
         private JitScreen(MethodDeclaration/*!*/ ast) {
             _scopeDepth = ast.DefinedScope.Depth;
             _methodName = ast.Name;
-            _arity = ast.Parameters.Mandatory.Length;
+            _arity = ast.Parameters.Mandatory.Length + ast.Parameters.Optional.Length;
         }
 
         /// <summary>
@@ -1117,7 +1247,17 @@ namespace IronRuby.Runtime.Jit {
         /// this body. <paramref name="rejectedBy"/> names the node kind that decided it.
         /// </summary>
         internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, out string rejectedBy) {
+            HashSet<string> otherUses;
+            return CanEverCompile(ast, out rejectedBy, out otherUses);
+        }
+
+        /// <summary>
+        /// <paramref name="otherUses"/>: the locals the body reads other than as the value of an
+        /// instance variable assignment, or assigns.
+        /// </summary>
+        internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, out string rejectedBy, out HashSet<string> otherUses) {
             var s = new JitScreen(ast);
+            otherUses = s._otherUses;
             bool ok;
             try {
                 ok = s.WalkBody(ast.Body);
@@ -1195,6 +1335,7 @@ namespace IronRuby.Runtime.Jit {
             if (local != null) {
                 // A local from an enclosing scope is never read from a typed body. (Emit also
                 // bails on a read before any assignment, which is a flow property: say yes.)
+                _otherUses.Add(local.Name);
                 return local.DefinitionLexicalDepth == _scopeDepth || No(node);
             }
 
@@ -1207,10 +1348,14 @@ namespace IronRuby.Runtime.Jit {
 
                 var ivarTarget = assign.Left as InstanceVariable;
                 if (ivarTarget != null) {
-                    return (op == null) ? Walk(assign.Right) : No(node);
+                    if (op != null) { return No(node); }
+                    var stored = assign.Right as LocalVariable;
+                    if (stored != null && stored.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
+                    return Walk(assign.Right);
                 }
                 var target = assign.Left as LocalVariable;
                 if (target == null || target.DefinitionLexicalDepth != _scopeDepth) { return No(node); }
+                _otherUses.Add(target.Name);
                 return (op != null) ? WalkOperand(assign.Right) : Walk(assign.Right);
             }
 
@@ -1277,6 +1422,16 @@ namespace IronRuby.Runtime.Jit {
                 if (retArgs == null || retArgs.Expressions.Length == 0) { return true; }
                 if (retArgs.Expressions.Length != 1) { return No(node); }
                 return Walk(retArgs.Expressions[0]);
+            }
+
+            var arrayLiteral = node as ArrayConstructor;
+            if (arrayLiteral != null) {
+                var items = arrayLiteral.Arguments.Expressions;
+                if (items.Length > JitCompiler.MaxArrayLiteral) { return No(node); }
+                foreach (var item in items) {
+                    if (!Walk(item)) { return false; }
+                }
+                return true;
             }
 
             // break/next are only emitted in loop mode, which a method body never is, so they

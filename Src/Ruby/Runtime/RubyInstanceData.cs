@@ -275,7 +275,7 @@ namespace IronRuby.Runtime {
             return Math.Max(capacity, needed);
         }
 
-        private static void UpdateCapacityHint(RubyClass hintClass, int count) {
+        internal static void UpdateCapacityHint(RubyClass hintClass, int count) {
             if (hintClass != null && count > hintClass.InstanceVariableCapacity && count <= MaxCapacityHint) {
                 // racy but benign: a lost update only costs a later object a move
                 hintClass.InstanceVariableCapacity = count;

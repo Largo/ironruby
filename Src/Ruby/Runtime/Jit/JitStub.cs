@@ -43,13 +43,27 @@ namespace IronRuby.Runtime.Jit {
 
     internal abstract class JitStub {
         internal const int Threshold = 40;
-        internal const int MaxArity = 3;
+        internal const int MaxArity = 6;
+        internal const string EntryNamePrefix = "jitentry$";
+
+        // What a typed body's call evaluates to in the entry when it deopted.
+        private static readonly object Deopted = new object();
 
         protected readonly MethodDeclaration/*!*/ _ast;
         protected readonly RubyContext/*!*/ _context;
         protected readonly RubyModule/*!*/ _declaringModule;
         protected readonly Delegate/*!*/ _generic;
         protected readonly int _arity;
+
+        // Optional parameters (after the mandatory ones, as in the generic delegate) have a literal
+        // default; a call that omits one passes RubyOps.DefaultArgument in its place, which the
+        // entry and the profiler replace with the value. _hasDefault is null with no optionals.
+        private bool[] _hasDefault;
+        private object[] _defaults;
+
+        // Parameters the body only ever stores into an instance variable: kept as the boxed
+        // objects they arrived as, whatever their type (JitScreen's otherUses).
+        private bool[] _storedOnly;
 
         // profiling feedback
         private int _calls;
@@ -75,6 +89,9 @@ namespace IronRuby.Runtime.Jit {
             if (_givenUp) { return; }
 
             for (int i = 0; i < _arity; i++) {
+                if (_hasDefault != null && _hasDefault[i] && args[i] == RubyOps.DefaultArgument) {
+                    args[i] = _defaults[i];
+                }
                 int k = (args[i] is int) ? 1 : (args[i] is double) ? 2 : (args[i] is long) ? 4 : 3;
                 if (_argKind[i] == 0) {
                     _argKind[i] = k;
@@ -156,6 +173,7 @@ namespace IronRuby.Runtime.Jit {
 
             var types = new JT[_arity];
             for (int i = 0; i < _arity; i++) {
+                if (_storedOnly != null && _storedOnly[i]) { types[i] = JT.Obj; continue; }
                 switch (_argKind[i]) {
                     case 1: types[i] = JT.Int; break;
                     case 2: types[i] = JT.Dbl; break;
@@ -222,6 +240,25 @@ namespace IronRuby.Runtime.Jit {
                 args[i] = Ast.Parameter(typeof(object), "a" + i);
             }
 
+            // What the typed body sees of each argument: an omitted optional one is its default.
+            // The generic body is still handed the arguments as they came.
+            var values = new MSA.ParameterExpression[_arity];
+            var defaulted = new List<MSA.ParameterExpression>();
+            var fillDefaults = new List<MSA.Expression>();
+            for (int i = 0; i < _arity; i++) {
+                if (_hasDefault != null && _hasDefault[i]) {
+                    values[i] = Ast.Variable(typeof(object), "v" + i);
+                    defaulted.Add(values[i]);
+                    fillDefaults.Add(Ast.Assign(values[i], Ast.Condition(
+                        Ast.ReferenceEqual(args[i], Ast.Field(null, typeof(RubyOps).GetField("DefaultArgument"))),
+                        Ast.Constant(_defaults[i], typeof(object)),
+                        args[i]
+                    )));
+                } else {
+                    values[i] = args[i];
+                }
+            }
+
             MSA.Expression test = null;
             if (pinnedClass != null) {
                 test = And(test, Ast.ReferenceEqual(
@@ -230,11 +267,11 @@ namespace IronRuby.Runtime.Jit {
             }
             for (int i = 0; i < _arity; i++) {
                 switch (code.ParameterTypes[i]) {
-                    case JT.Int: test = And(test, Ast.TypeIs(args[i], typeof(int))); break;
-                    case JT.Dbl: test = And(test, Ast.TypeIs(args[i], typeof(double))); break;
+                    case JT.Int: test = And(test, Ast.TypeIs(values[i], typeof(int))); break;
+                    case JT.Dbl: test = And(test, Ast.TypeIs(values[i], typeof(double))); break;
                     // An Integer parameter carried as a long accepts either representation: a
                     // value in Int32 range arrives as an Int32 and only a larger one as an Int64.
-                    case JT.Lng: test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), args[i])); break;
+                    case JT.Lng: test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), values[i])); break;
                 }
             }
 
@@ -242,10 +279,10 @@ namespace IronRuby.Runtime.Jit {
             typedArgs[0] = self;
             for (int i = 0; i < _arity; i++) {
                 switch (code.ParameterTypes[i]) {
-                    case JT.Int: typedArgs[i + 1] = Ast.Unbox(args[i], typeof(int)); break;
-                    case JT.Dbl: typedArgs[i + 1] = Ast.Unbox(args[i], typeof(double)); break;
-                    case JT.Lng: typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), args[i]); break;
-                    default: typedArgs[i + 1] = args[i]; break;
+                    case JT.Int: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(int)); break;
+                    case JT.Dbl: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(double)); break;
+                    case JT.Lng: typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), values[i]); break;
+                    default: typedArgs[i + 1] = values[i]; break;
                 }
             }
 
@@ -259,11 +296,25 @@ namespace IronRuby.Runtime.Jit {
             }
 
             if (code.CanDeopt) {
-                fast = Ast.TryCatch(fast,
-                    Ast.Catch(typeof(JitDeoptException), GenericCall(self, blk, args)));
+                // The generic body runs after the handler, not inside it: an exception it raises
+                // from within a catch block would leave the frames outside this one out of its
+                // backtrace.
+                var result = Ast.Variable(typeof(object), "#result");
+                var deopted = Ast.Constant(Deopted, typeof(object));
+                fast = Ast.Block(typeof(object), new[] { result },
+                    Ast.TryCatch(
+                        Ast.Assign(result, fast),
+                        Ast.Catch(typeof(JitDeoptException), Ast.Assign(result, deopted))
+                    ),
+                    Ast.Condition(Ast.ReferenceEqual(result, deopted), GenericCall(self, blk, args), result, typeof(object))
+                );
             }
 
             MSA.Expression body = (test != null) ? Ast.Condition(test, fast, GenericCall(self, blk, args), typeof(object)) : fast;
+            if (defaulted.Count > 0) {
+                fillDefaults.Add(body);
+                body = Ast.Block(typeof(object), defaulted, fillDefaults);
+            }
 
             // A stale version fails this guard on every later call; the stub takes the entry down
             // (JitStub.VersionChanged) and this one call runs the generic body.
@@ -281,7 +332,7 @@ namespace IronRuby.Runtime.Jit {
             all[0] = self;
             all[1] = blk;
             Array.Copy(args, 0, all, 2, _arity);
-            return Ast.Lambda(_generic.GetType(), body, "jitentry$" + _ast.Name, all);
+            return Ast.Lambda(_generic.GetType(), body, EntryNamePrefix + _ast.Name, all);
         }
 
         private static MSA.Expression/*!*/ And(MSA.Expression left, MSA.Expression/*!*/ right) {
@@ -308,11 +359,31 @@ namespace IronRuby.Runtime.Jit {
             JitRuntime.HookStats();
 
             var ps = ast.Parameters;
-            if (ps.Optional.Length != 0 || ps.Unsplat != null || ps.Block != null || ast.UsesBlock) { return generic; }
-            int arity = ps.Mandatory.Length;
+            if (ps.Unsplat != null || ps.Block != null || ast.UsesBlock) { return generic; }
+            int mandatoryCount = ps.Mandatory.Length;
+            int arity = mandatoryCount + ps.Optional.Length;
             if (arity > MaxArity) { return generic; }
-            for (int i = 0; i < arity; i++) {
+            for (int i = 0; i < mandatoryCount; i++) {
                 if (!(ps.Mandatory[i] is LocalVariable)) { return generic; }
+            }
+
+            // An optional parameter is taken when its default is a literal the typed body could
+            // have produced itself - nil, true, false, a Fixnum or a Float: evaluating it has no
+            // effect and cannot see the other parameters, so the entry may fill it in up front.
+            bool[] hasDefault = null;
+            object[] defaults = null;
+            if (ps.Optional.Length > 0) {
+                hasDefault = new bool[arity];
+                defaults = new object[arity];
+                for (int i = 0; i < ps.Optional.Length; i++) {
+                    var opt = ps.Optional[i];
+                    var literal = opt.Right as Literal;
+                    if (!(opt.Left is LocalVariable) || literal == null) { return generic; }
+                    object v = literal.Value;
+                    if (!(v == null || v is bool || v is int || v is double)) { return generic; }
+                    hasDefault[mandatoryCount + i] = true;
+                    defaults[mandatoryCount + i] = v;
+                }
             }
             // Tracing and coverage need the real frame.
             if (context.RubyOptions.EnableTracing || context.RubyOptions.Profile) { return generic; }
@@ -322,9 +393,19 @@ namespace IronRuby.Runtime.Jit {
             // into call site rules, so a method declined later still pays one extra indirect
             // call on every call for the life of the process.
             string rejectedBy;
-            if (!JitScreen.CanEverCompile(ast, out rejectedBy)) {
+            HashSet<string> otherUses;
+            if (!JitScreen.CanEverCompile(ast, out rejectedBy, out otherUses)) {
                 JitRuntime.RecordScreenRejection(rejectedBy);
                 return generic;
+            }
+
+            bool[] storedOnly = null;
+            for (int i = 0; i < arity; i++) {
+                var lv = (LocalVariable)((i < mandatoryCount) ? ps.Mandatory[i] : ps.Optional[i - mandatoryCount].Left);
+                if (!otherUses.Contains(lv.Name)) {
+                    if (storedOnly == null) { storedOnly = new bool[arity]; }
+                    storedOnly[i] = true;
+                }
             }
 
             JitStub stub;
@@ -332,8 +413,14 @@ namespace IronRuby.Runtime.Jit {
                 case 0: stub = new JitStub0(ast, context, declaringModule, generic); break;
                 case 1: stub = new JitStub1(ast, context, declaringModule, generic); break;
                 case 2: stub = new JitStub2(ast, context, declaringModule, generic); break;
-                default: stub = new JitStub3(ast, context, declaringModule, generic); break;
+                case 3: stub = new JitStub3(ast, context, declaringModule, generic); break;
+                case 4: stub = new JitStub4(ast, context, declaringModule, generic); break;
+                case 5: stub = new JitStub5(ast, context, declaringModule, generic); break;
+                default: stub = new JitStub6(ast, context, declaringModule, generic); break;
             }
+            stub._hasDefault = hasDefault;
+            stub._defaults = defaults;
+            stub._storedOnly = storedOnly;
             return stub.Trampoline;
         }
 
@@ -432,6 +519,75 @@ namespace IronRuby.Runtime.Jit {
             Profile(self, new[] { a0, a1, a2 });
             f = _fast;
             return (f != null) ? f(self, block, a0, a1, a2) : _gen(self, block, a0, a1, a2);
+        }
+    }
+
+    internal sealed class JitStub4 : JitStub {
+        private volatile Func<object, Proc, object, object, object, object, object> _fast;
+        private readonly Func<object, Proc, object, object, object, object, object>/*!*/ _gen;
+        private readonly Func<object, Proc, object, object, object, object, object>/*!*/ _tramp;
+
+        internal JitStub4(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
+            : base(ast, context, m, generic, 4) {
+            _gen = (Func<object, Proc, object, object, object, object, object>)generic;
+            _tramp = Call;
+        }
+
+        internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
+        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object>)entry; }
+
+        private object Call(object self, Proc block, object a0, object a1, object a2, object a3) {
+            var f = _fast;
+            if (f != null) { return f(self, block, a0, a1, a2, a3); }
+            Profile(self, new[] { a0, a1, a2, a3 });
+            f = _fast;
+            return (f != null) ? f(self, block, a0, a1, a2, a3) : _gen(self, block, a0, a1, a2, a3);
+        }
+    }
+
+    internal sealed class JitStub5 : JitStub {
+        private volatile Func<object, Proc, object, object, object, object, object, object> _fast;
+        private readonly Func<object, Proc, object, object, object, object, object, object>/*!*/ _gen;
+        private readonly Func<object, Proc, object, object, object, object, object, object>/*!*/ _tramp;
+
+        internal JitStub5(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
+            : base(ast, context, m, generic, 5) {
+            _gen = (Func<object, Proc, object, object, object, object, object, object>)generic;
+            _tramp = Call;
+        }
+
+        internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
+        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object, object>)entry; }
+
+        private object Call(object self, Proc block, object a0, object a1, object a2, object a3, object a4) {
+            var f = _fast;
+            if (f != null) { return f(self, block, a0, a1, a2, a3, a4); }
+            Profile(self, new[] { a0, a1, a2, a3, a4 });
+            f = _fast;
+            return (f != null) ? f(self, block, a0, a1, a2, a3, a4) : _gen(self, block, a0, a1, a2, a3, a4);
+        }
+    }
+
+    internal sealed class JitStub6 : JitStub {
+        private volatile Func<object, Proc, object, object, object, object, object, object, object> _fast;
+        private readonly Func<object, Proc, object, object, object, object, object, object, object>/*!*/ _gen;
+        private readonly Func<object, Proc, object, object, object, object, object, object, object>/*!*/ _tramp;
+
+        internal JitStub6(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
+            : base(ast, context, m, generic, 6) {
+            _gen = (Func<object, Proc, object, object, object, object, object, object, object>)generic;
+            _tramp = Call;
+        }
+
+        internal override Delegate/*!*/ Trampoline { get { return _tramp; } }
+        protected override void Install(Delegate entry) { _fast = (Func<object, Proc, object, object, object, object, object, object, object>)entry; }
+
+        private object Call(object self, Proc block, object a0, object a1, object a2, object a3, object a4, object a5) {
+            var f = _fast;
+            if (f != null) { return f(self, block, a0, a1, a2, a3, a4, a5); }
+            Profile(self, new[] { a0, a1, a2, a3, a4, a5 });
+            f = _fast;
+            return (f != null) ? f(self, block, a0, a1, a2, a3, a4, a5) : _gen(self, block, a0, a1, a2, a3, a4, a5);
         }
     }
 

@@ -561,6 +561,13 @@ namespace IronRuby.Runtime {
                 return false;
             }
 
+            // The entry of a JIT-specialized method (JitStub.BuildEntry): its fast path raises
+            // nothing, and its slow path calls the method's generic body, which is the frame that
+            // stands for the method.
+            if (method.DeclaringType == null && method.Name.StartsWith(Jit.JitStub.EntryNamePrefix, StringComparison.Ordinal)) {
+                return false;
+            }
+
             Type type = method.DeclaringType;
             if (type != null) {
                 if (type.Assembly == typeof(RubyOps).Assembly || type.Namespace != null && 

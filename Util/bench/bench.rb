@@ -465,6 +465,17 @@ bench("block_literal_cfunc") do
   while i < m; a.reverse_each { }; i += 1; end
 end
 
+class NewTarget
+  def initialize(left = nil, right = nil)
+    @left = left; @right = right; @i = 0; @j = 0
+  end
+end
+
+bench("object_new_init") do
+  i = 0; m = n(2_000_000); x = nil
+  while i < m; x = NewTarget.new(x, nil); x = nil if i % 64 == 0; i += 1; end
+end
+
 name = ARGV[0]
 unless BENCH.key?(name)
   if name == "--list"
