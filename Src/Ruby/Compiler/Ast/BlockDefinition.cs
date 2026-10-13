@@ -251,7 +251,9 @@ namespace IronRuby.Compiler.Ast {
 
             // A body that needs its scope but defines no closure over it can reuse the scope of the
             // previous call of the block, unless something captured that (see RubyScope.IsCaptured).
-            bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
+            // A nested block literal is a Proc over the scope on every call: nothing to reuse.
+            bool reuseScope = lazyScope == null && !hasNestedReturn && !gen.CurrentBlock.HasNestedBlock &&
+                !gen.TraceEnabled && !gen.CompilerOptions.IsEval;
 
             body = gen.Traceable
                 ? new TraceReturnExpression(lazyScope ?? scopeVariable, gen.AddReturnTarget(body), TraceEvents.BReturn | TraceEvents.Return, gen.SourcePath, Location.End.Line)
