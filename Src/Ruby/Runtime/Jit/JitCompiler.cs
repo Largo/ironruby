@@ -87,6 +87,10 @@ namespace IronRuby.Runtime.Jit {
         // _canDeopt: the body contains an operation that can signal a deopt.
         private bool _pure = true;
         private bool _canDeopt;
+        // The body writes an instance variable. A write to a frozen object deopts (JitRuntime.SetIVar)
+        // so that the generic body raises the FrozenError from a real frame; it is always the first
+        // write that does, before anything observable, so the restart is safe whatever _pure says.
+        private bool _ivarWrite;
         private bool _selfCall;
         private int _nodes;
 
@@ -116,10 +120,13 @@ namespace IronRuby.Runtime.Jit {
             _self = Ast.Parameter(typeof(object), "#self");
             PushScope();
 
+            // The typed body's parameters are the generic delegate's: every mandatory one, then
+            // the optional ones, whose defaults the entry has already filled in (JitStub).
             var mandatory = ast.Parameters.Mandatory;
-            _paramNames = new string[mandatory.Length];
-            for (int i = 0; i < mandatory.Length; i++) {
-                var lv = mandatory[i] as LocalVariable;
+            var optional = ast.Parameters.Optional;
+            _paramNames = new string[mandatory.Length + optional.Length];
+            for (int i = 0; i < _paramNames.Length; i++) {
+                var lv = (i < mandatory.Length) ? mandatory[i] as LocalVariable : optional[i - mandatory.Length].Left as LocalVariable;
                 if (lv == null) { throw JitBailout.Instance; }
                 _paramNames[i] = lv.Name;
                 var p = Ast.Parameter(ClrType(paramTypes[i]), lv.Name);
@@ -380,7 +387,7 @@ namespace IronRuby.Runtime.Jit {
                     SelfCell = c._selfCell,
                     ReturnType = actual,
                     ParameterTypes = paramTypes,
-                    CanDeopt = c._canDeopt,
+                    CanDeopt = c._canDeopt || c._ivarWrite,
                     EmittedSelfCall = c._selfCall,
                 };
             }
@@ -398,6 +405,9 @@ namespace IronRuby.Runtime.Jit {
                 case 1: return typeof(Func<,,>).MakeGenericType(types);
                 case 2: return typeof(Func<,,,>).MakeGenericType(types);
                 case 3: return typeof(Func<,,,,>).MakeGenericType(types);
+                case 4: return typeof(Func<,,,,,>).MakeGenericType(types);
+                case 5: return typeof(Func<,,,,,,>).MakeGenericType(types);
+                case 6: return typeof(Func<,,,,,,,>).MakeGenericType(types);
                 default: return null;
             }
         }
@@ -573,6 +583,7 @@ namespace IronRuby.Runtime.Jit {
                 JT vt;
                 var v = Emit(node.Right, out vt);
                 _pure = false;      // an ivar write is observable, so the body may not deopt
+                _ivarWrite = true;
                 type = JT.Obj;
                 return Ast.Call(JitRuntime.M("SetIVar"), Ast.Constant(_context), _self, Coerce(v, vt, JT.Obj), Ast.Constant(new InstanceVariableSite(ivarTarget.Name)));
             }
@@ -816,7 +827,12 @@ namespace IronRuby.Runtime.Jit {
                 // A long leaves through the representation funnel: a value that fits in an Int32
                 // IS an Int32, which is what #hash, #eql? and Hash keys are defined on.
                 if (from == JT.Lng) { return Ast.Call(JitRuntime.M("NarrowLong"), e); }
-                // Fixnum is a boxed int, Float a boxed double, true/false boxed bools.
+                // Fixnum is a boxed int, Float a boxed double, true/false boxed bools. A literal
+                // is boxed once, here, as the generic body does, rather than on every evaluation
+                // (`@count = 0' in an initializer would otherwise allocate per object).
+                var constant = e as MSA.ConstantExpression;
+                if (constant != null) { return Ast.Constant(constant.Value, typeof(object)); }
+                if (from == JT.Bool) { return Ast.Call(typeof(Microsoft.Scripting.Runtime.ScriptingRuntimeHelpers).GetMethod("BooleanToObject"), e); }
                 return Ast.Convert(e, typeof(object));
             }
             throw JitBailout.Instance;
@@ -1106,10 +1122,15 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>The node kind that said no, for the histogram.</summary>
         private string _rejectedBy;
 
+        // Locals read anywhere other than straight into an instance variable (`@a = a'), or
+        // assigned. A parameter not in here is only ever stored, so it is best carried boxed:
+        // unboxing it on entry would only mean boxing it again for the store.
+        private readonly HashSet<string>/*!*/ _otherUses = new HashSet<string>();
+
         private JitScreen(MethodDeclaration/*!*/ ast) {
             _scopeDepth = ast.DefinedScope.Depth;
             _methodName = ast.Name;
-            _arity = ast.Parameters.Mandatory.Length;
+            _arity = ast.Parameters.Mandatory.Length + ast.Parameters.Optional.Length;
         }
 
         /// <summary>
@@ -1117,7 +1138,17 @@ namespace IronRuby.Runtime.Jit {
         /// this body. <paramref name="rejectedBy"/> names the node kind that decided it.
         /// </summary>
         internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, out string rejectedBy) {
+            HashSet<string> otherUses;
+            return CanEverCompile(ast, out rejectedBy, out otherUses);
+        }
+
+        /// <summary>
+        /// <paramref name="otherUses"/>: the locals the body reads other than as the value of an
+        /// instance variable assignment, or assigns.
+        /// </summary>
+        internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, out string rejectedBy, out HashSet<string> otherUses) {
             var s = new JitScreen(ast);
+            otherUses = s._otherUses;
             bool ok;
             try {
                 ok = s.WalkBody(ast.Body);
@@ -1195,6 +1226,7 @@ namespace IronRuby.Runtime.Jit {
             if (local != null) {
                 // A local from an enclosing scope is never read from a typed body. (Emit also
                 // bails on a read before any assignment, which is a flow property: say yes.)
+                _otherUses.Add(local.Name);
                 return local.DefinitionLexicalDepth == _scopeDepth || No(node);
             }
 
@@ -1207,10 +1239,14 @@ namespace IronRuby.Runtime.Jit {
 
                 var ivarTarget = assign.Left as InstanceVariable;
                 if (ivarTarget != null) {
-                    return (op == null) ? Walk(assign.Right) : No(node);
+                    if (op != null) { return No(node); }
+                    var stored = assign.Right as LocalVariable;
+                    if (stored != null && stored.DefinitionLexicalDepth == _scopeDepth) { ++_nodes; return true; }
+                    return Walk(assign.Right);
                 }
                 var target = assign.Left as LocalVariable;
                 if (target == null || target.DefinitionLexicalDepth != _scopeDepth) { return No(node); }
+                _otherUses.Add(target.Name);
                 return (op != null) ? WalkOperand(assign.Right) : Walk(assign.Right);
             }
 

@@ -325,7 +325,20 @@ namespace IronRuby.Runtime.Jit {
         }
 
         public static object SetIVar(RubyContext/*!*/ context, object self, object value, InstanceVariableSite/*!*/ site) {
-            return RubyOps.WriteInstanceVariable(context, self, value, site);
+            var obj = self as RubyObject;
+            if (obj != null) {
+                var data = obj._instanceData ?? RubyOps.GetInstanceData(ref obj._instanceData);
+                if (!data._frozen && data.TrySetCached(site.Cache, value, obj)) {
+                    return value;
+                }
+            }
+            // A frozen receiver raises FrozenError, and a typed body has no frame to raise it from:
+            // let the generic body run instead (see JitCompiler._ivarWrite).
+            if (context.IsObjectFrozen(self)) {
+                throw Deopt();
+            }
+            context.SetInstanceVariable(self, value, site);
+            return value;
         }
 
         // An instance variable used as a numeric operand of an outlined loop (JitCompiler.NumericIVar):
