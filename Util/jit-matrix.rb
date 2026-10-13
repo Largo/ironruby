@@ -554,6 +554,47 @@ kt('kw initialize unknown') { KwIvars.new(x: 1, w: 1) }
 kt('kw initialize of a frozen object') { o = KwIvars.new(x: 1).freeze; o.send(:initialize, x: 2) }
 kt('kw initialize via super') { KwIvarsSub.new(x: 3).pair }
 
+# A receiverless keyword call goes straight into the specialized body when it can
+# (JitKeywordCall): what it resolves to has to follow the receiver's class.
+class KwCaller
+  def sp_kw_scale(x, by: 2)
+    x * by
+  end
+  private :sp_kw_scale
+
+  def go(x)
+    sp_kw_scale(x, by: 3)
+  end
+
+  def go_missing(x)
+    sp_kw_not_here(x, by: 3)
+  end
+
+  def method_missing(name, *args, **kw)
+    [name, args, kw]
+  end
+end
+class KwCallerSub < KwCaller
+  def sp_kw_scale(x, by: 2)
+    [:sub, x, by]
+  end
+end
+
+kc = KwCaller.new
+warm { |i| kc.go(i) }
+kt('kw call into a private method') { kc.go(5) }
+kt('kw call, a Float') { kc.go(0.5) }
+kt('kw call, overflow') { kc.go(2**62) }
+kt('kw call, a String') { kc.go('ab') }
+kt('kw call, overridden in a subclass') { KwCallerSub.new.go(5) }
+kt('kw call, the superclass again') { kc.go(5) }
+kt('kw call to method_missing') { kc.go_missing(1) }
+def kc.sp_kw_scale(x, by: 2)
+  :singleton
+end
+kt('kw call, a singleton method') { kc.go(5) }
+kt('kw call, another instance') { KwCaller.new.go(5) }
+
 def sp_kw_add(left:, right:)
   left - right
 end
