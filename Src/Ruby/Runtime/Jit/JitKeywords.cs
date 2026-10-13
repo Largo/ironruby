@@ -1,0 +1,184 @@
+/* ****************************************************************************
+ *
+ * -X:JIT - an experimental ZJIT-style method JIT for IronRuby.
+ *
+ * Keyword parameters.
+ *
+ * PrismAstBridge.LowerKeywords turns `def m(a, k:, j: 1)' into `def m(a, ?kw? = {})' plus a
+ * prologue that binds the keyword locals out of that hash:
+ *
+ *   ?kw? ||= {}
+ *   raise ArgumentError, ... if KeywordArgumentsTest(a)             # separation checks
+ *   raise ArgumentError, ... unless KeywordArgumentsTest(?kw?)
+ *   unless KeywordArgumentsMatch(?kw?, [:k, :j], 1, false)          # missing / unknown
+ *     ...word the ArgumentError the slow way...
+ *   end
+ *   k = GetKeywordArgument(?kw?, :k, 0)
+ *   j = (v = GetKeywordArgument(?kw?, :j, 1)) == DefaultArgument ? 1 : v
+ *   <the method's own statements>
+ *
+ * This class recognizes exactly that shape. A recognized method is specialized with the
+ * keyword locals as typed parameters of its own, after the positional ones, and the entry
+ * stub reads them out of the hash - the very helpers the prologue uses - after checking that
+ * the prologue would have bound them without raising. Any call the prologue would complain
+ * about (a missing or unknown keyword, a Hash passed positionally, keywords landing in the
+ * last positional) fails that check and runs the generic body, which raises the error MRI
+ * raises. A default that is not a plain literal (it could have side effects, or depend on
+ * another parameter), and **rest, are not recognized: such a method is never wrapped.
+ *
+ * ***************************************************************************/
+
+using System;
+using System.Collections.Generic;
+using IronRuby.Builtins;
+using IronRuby.Compiler.Ast;
+
+namespace IronRuby.Runtime.Jit {
+    using RExpr = IronRuby.Compiler.Ast.Expression;
+    using MethodDeclaration = IronRuby.Compiler.Ast.MethodDefinition;
+
+    internal sealed class JitKeywords {
+        internal const int MaxKeywords = 6;
+
+        // How many leading statements of the body are the prologue; the typed body starts after them.
+        internal int PrologueLength;
+
+        // KeywordArgumentsMatch's arguments: required names first, then the optional ones.
+        internal RubySymbol/*!*/[]/*!*/ MatchNames;
+        internal int RequiredCount;
+
+        // Per keyword, in declaration order: its local, its symbol, its position, its default.
+        internal string/*!*/[]/*!*/ LocalNames;
+        internal RubySymbol/*!*/[]/*!*/ Symbols;
+        internal int[]/*!*/ Positions;
+        internal object[]/*!*/ Defaults;
+
+        internal int Count { get { return LocalNames.Length; } }
+
+        /// <summary>
+        /// The keyword signature of a method whose parameters are mandatory positionals plus
+        /// keywords lowered by LowerKeywords, or null if the method is anything else.
+        /// </summary>
+        internal static JitKeywords TryRecognize(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context) {
+            var ps = ast.Parameters;
+            if (ps.Optional.Length != 1 || ps.Unsplat != null || ps.Block != null) { return null; }
+            var kwVar = ps.Optional[0].Left as LocalVariable;
+            if (kwVar == null || kwVar.Name != "?kw?") { return null; }
+
+            var body = ast.Body;
+            if (body == null || body.Statements == null) { return null; }
+            var statements = body.Statements;
+            int n = statements.Count;
+            int i = 0;
+
+            // ?kw? ||= {}
+            if (i >= n) { return null; }
+            var reset = statements[i] as SimpleAssignmentExpression;
+            if (reset == null || reset.Operation != "||" || !IsVar(reset.Left, kwVar) || !(reset.Right is HashConstructor)) { return null; }
+            i++;
+
+            // The separation checks: an if/unless on KeywordArgumentsTest whose body only raises.
+            while (i < n) {
+                var ifExpr = statements[i] as IfExpression;
+                if (ifExpr != null && ifExpr.Condition is KeywordArgumentsTest &&
+                    (ifExpr.ElseIfClauses == null || ifExpr.ElseIfClauses.Count == 0)) {
+                    i++;
+                    continue;
+                }
+                var unlessExpr = statements[i] as UnlessExpression;
+                if (unlessExpr != null && unlessExpr.ElseClause == null) {
+                    var test = unlessExpr.Condition as KeywordArgumentsTest;
+                    if (test != null && IsVar(test.Value, kwVar)) {
+                        i++;
+                        continue;
+                    }
+                }
+                break;
+            }
+
+            // unless KeywordArgumentsMatch(?kw?, names, required, false) ... end
+            if (i >= n) { return null; }
+            var matchStmt = statements[i] as UnlessExpression;
+            if (matchStmt == null || matchStmt.ElseClause != null) { return null; }
+            var match = matchStmt.Condition as KeywordParameterRead;
+            if (match == null || !match.IsMatch || match.AcceptsRest || !IsVar(match.Keywords, kwVar)) { return null; }
+            i++;
+
+            var names = match.Names;
+            if (names.Length == 0 || names.Length > MaxKeywords) { return null; }
+
+            var result = new JitKeywords();
+            result.RequiredCount = match.RequiredCountOrPosition;
+            result.MatchNames = new RubySymbol[names.Length];
+            for (int j = 0; j < names.Length; j++) {
+                result.MatchNames[j] = context.CreateSymbol(names[j], match.Encoding);
+            }
+
+            // k = <read>, one per declared keyword, in declaration order
+            var locals = new List<string>();
+            var symbols = new List<RubySymbol>();
+            var positions = new List<int>();
+            var defaults = new List<object>();
+            while (i < n) {
+                var bind = statements[i] as SimpleAssignmentExpression;
+                if (bind == null || bind.Operation != null) { break; }
+                var read = bind.Right as KeywordParameterRead;
+                if (read == null || !read.IsValue || !IsVar(read.Keywords, kwVar)) { break; }
+                var local = bind.Left as LocalVariable;
+                if (local == null || local.DefinitionLexicalDepth != ast.DefinedScope.Depth) { return null; }
+                if (read.RequiredCountOrPosition != locals.Count) { return null; }
+
+                object defaultValue = null;
+                if (read.DefaultValue != null) {
+                    // A literal is the same value every time and evaluating it does nothing.
+                    var literal = read.DefaultValue as Literal;
+                    if (literal == null) { return null; }
+                    object v = literal.Value;
+                    if (!(v == null || v is int || v is double || v is bool)) { return null; }
+                    defaultValue = v;
+                }
+
+                locals.Add(local.Name);
+                symbols.Add(context.CreateSymbol(read.Names[0], read.Encoding));
+                positions.Add(read.RequiredCountOrPosition);
+                defaults.Add(defaultValue);
+                i++;
+            }
+            if (locals.Count != names.Length) { return null; }
+
+            // every name Match checks is one a binding reads, and vice versa
+            for (int j = 0; j < names.Length; j++) {
+                if (!symbols.Contains(result.MatchNames[j])) { return null; }
+            }
+
+            result.PrologueLength = i;
+            result.LocalNames = locals.ToArray();
+            result.Symbols = symbols.ToArray();
+            result.Positions = positions.ToArray();
+            result.Defaults = defaults.ToArray();
+            return result;
+        }
+
+        private static bool IsVar(RExpr node, LocalVariable/*!*/ kwVar) {
+            var lv = node as LocalVariable;
+            return lv != null && lv.Name == kwVar.Name && lv.DefinitionLexicalDepth == kwVar.DefinitionLexicalDepth;
+        }
+
+        /// <summary>
+        /// True when the prologue would bind every keyword from <paramref name="kw"/> without
+        /// raising: it is the hash a keyword call made (or the call passed no keywords at all),
+        /// it has every required keyword and no other.
+        /// </summary>
+        internal bool Matches(object kw) {
+            if (kw == RubyOps.DefaultArgument) { return RequiredCount == 0; }
+            var hash = kw as Hash;
+            return hash != null && hash.IsKeywordArguments && hash.HasKeywords(MatchNames, RequiredCount, false);
+        }
+
+        /// <summary>What the prologue binds keyword <paramref name="index"/> to, given <see cref="Matches"/>.</summary>
+        internal object Value(object kw, int index) {
+            object v = RubyOps.GetKeywordArgument(kw, Symbols[index], Positions[index]);
+            return (v == RubyOps.DefaultArgument) ? Defaults[index] : v;
+        }
+    }
+}

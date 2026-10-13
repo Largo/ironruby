@@ -59,6 +59,15 @@ namespace IronRuby.Compiler.Ast {
             get { return _defaultValue; }
         }
 
+        // What the method JIT (Runtime/Jit/JitKeywords.cs) needs to recognize a keyword prologue.
+        internal bool IsMatch { get { return _kind == ReadKind.Match; } }
+        internal bool IsValue { get { return _kind == ReadKind.Value; } }
+        internal string/*!*/[]/*!*/ Names { get { return _names; } }
+        internal RubyEncoding/*!*/ Encoding { get { return _encoding; } }
+        // Match: how many of the names are required; Value: where the keyword is declared
+        internal int RequiredCountOrPosition { get { return _requiredCount; } }
+        internal bool AcceptsRest { get { return _acceptsRest; } }
+
         private KeywordParameterRead(ReadKind kind, Expression/*!*/ keywords, string/*!*/[]/*!*/ names, RubyEncoding/*!*/ encoding,
             int requiredCount, bool acceptsRest, Expression defaultValue, SourceSpan location)
             : base(location) {

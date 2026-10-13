@@ -50,6 +50,11 @@ namespace IronRuby.Runtime.Jit {
         protected readonly RubyModule/*!*/ _declaringModule;
         protected readonly Delegate/*!*/ _generic;
         protected readonly int _arity;
+        // A method with keyword parameters (see JitKeywords): its last delegate parameter is the
+        // keyword hash, and the typed body takes the keyword values instead, after the positionals.
+        protected readonly JitKeywords _keywords;
+        private readonly int _positional;     // delegate parameters that are positional parameters
+        private readonly int _typedCount;     // parameters of the typed body
 
         // profiling feedback
         private int _calls;
@@ -58,13 +63,17 @@ namespace IronRuby.Runtime.Jit {
         private bool _polymorphicReceiver;
         private volatile bool _givenUp;
 
-        protected JitStub(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule, Delegate/*!*/ generic, int arity) {
+        protected JitStub(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, RubyModule/*!*/ declaringModule, Delegate/*!*/ generic, int arity,
+            JitKeywords keywords) {
             _ast = ast;
             _context = context;
             _declaringModule = declaringModule;
             _generic = generic;
             _arity = arity;
-            _argKind = new int[arity];
+            _keywords = keywords;
+            _positional = (keywords != null) ? arity - 1 : arity;
+            _typedCount = (keywords != null) ? _positional + keywords.Count : arity;
+            _argKind = new int[_typedCount];
         }
 
         protected abstract void Install(Delegate/*!*/ entry);
@@ -74,16 +83,17 @@ namespace IronRuby.Runtime.Jit {
         protected void Profile(object self, object[] args) {
             if (_givenUp) { return; }
 
-            for (int i = 0; i < _arity; i++) {
-                int k = (args[i] is int) ? 1 : (args[i] is double) ? 2 : (args[i] is long) ? 4 : 3;
-                if (_argKind[i] == 0) {
-                    _argKind[i] = k;
-                } else if (_argKind[i] != k) {
-                    // int and long are one Ruby class seen in two representations, so a
-                    // parameter that has been both is still an Integer: carry it as a long.
-                    bool bothIntegral = (k == 1 || k == 4) && (_argKind[i] == 1 || _argKind[i] == 4);
-                    _argKind[i] = bothIntegral ? 4 : 3;
+            if (_keywords != null) {
+                // what the prologue binds the keywords to, if it binds them at all
+                object kw = args[_positional];
+                if (_keywords.Matches(kw)) {
+                    for (int j = 0; j < _keywords.Count; j++) {
+                        Observe(_positional + j, _keywords.Value(kw, j));
+                    }
                 }
+            }
+            for (int i = 0; i < _positional; i++) {
+                Observe(i, args[i]);
             }
 
             RubyClass cls = JitRuntime.ClassOf(_context, self);
@@ -98,6 +108,18 @@ namespace IronRuby.Runtime.Jit {
                 }
             } catch (Exception) {
                 GiveUp();
+            }
+        }
+
+        private void Observe(int i, object arg) {
+            int k = (arg is int) ? 1 : (arg is double) ? 2 : (arg is long) ? 4 : 3;
+            if (_argKind[i] == 0) {
+                _argKind[i] = k;
+            } else if (_argKind[i] != k) {
+                // int and long are one Ruby class seen in two representations, so a
+                // parameter that has been both is still an Integer: carry it as a long.
+                bool bothIntegral = (k == 1 || k == 4) && (_argKind[i] == 1 || _argKind[i] == 4);
+                _argKind[i] = bothIntegral ? 4 : 3;
             }
         }
 
@@ -154,8 +176,8 @@ namespace IronRuby.Runtime.Jit {
         private bool TrySpecialize() {
             if (JitRuntime.Disabled || _context.HasRefinements) { return false; }
 
-            var types = new JT[_arity];
-            for (int i = 0; i < _arity; i++) {
+            var types = new JT[_typedCount];
+            for (int i = 0; i < _typedCount; i++) {
                 switch (_argKind[i]) {
                     case 1: types[i] = JT.Int; break;
                     case 2: types[i] = JT.Dbl; break;
@@ -165,7 +187,7 @@ namespace IronRuby.Runtime.Jit {
             }
 
             long start = Stopwatch.GetTimestamp();
-            var code = JitCompiler.TryCompile(_ast, _context, types);
+            var code = JitCompiler.TryCompile(_ast, _context, types, _keywords);
             if (code == null) { return false; }
 
             bool needsClassGuard = code.EmittedSelfCall;
@@ -228,24 +250,49 @@ namespace IronRuby.Runtime.Jit {
                     Ast.Call(JitRuntime.M("ClassOf"), Ast.Constant(_context), self),
                     Ast.Constant(pinnedClass, typeof(RubyClass))));
             }
-            for (int i = 0; i < _arity; i++) {
-                switch (code.ParameterTypes[i]) {
-                    case JT.Int: test = And(test, Ast.TypeIs(args[i], typeof(int))); break;
-                    case JT.Dbl: test = And(test, Ast.TypeIs(args[i], typeof(double))); break;
-                    // An Integer parameter carried as a long accepts either representation: a
-                    // value in Int32 range arrives as an Int32 and only a larger one as an Int64.
-                    case JT.Lng: test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), args[i])); break;
+
+            // The values the typed parameters are made of: the positional arguments, then - for a
+            // method with keywords - what the prologue would bind each keyword to.
+            var values = new MSA.Expression[_typedCount];
+            for (int i = 0; i < _positional; i++) {
+                values[i] = args[i];
+            }
+            MSA.ParameterExpression[] keywordValues = null;
+            if (_keywords != null) {
+                MSA.Expression kw = args[_positional];
+                // the separation check on the last positional: `m("a" => 1)' gave it the keywords
+                if (_positional > 0 && code.ParameterTypes[_positional - 1] == JT.Obj) {
+                    test = And(test, Ast.Not(Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), args[_positional - 1])));
+                }
+                test = And(test, Ast.Call(JitRuntime.M("KeywordsMatch"), Ast.Constant(_keywords, typeof(object)), kw));
+                keywordValues = new MSA.ParameterExpression[_keywords.Count];
+                for (int j = 0; j < keywordValues.Length; j++) {
+                    var v = keywordValues[j] = Ast.Variable(typeof(object), "kw" + j);
+                    values[_positional + j] = v;
+                    test = And(test, Ast.Block(
+                        Ast.Assign(v, Ast.Call(JitRuntime.M("KeywordValue"), Ast.Constant(_keywords, typeof(object)), kw, Ast.Constant(j))),
+                        Ast.Constant(true)));
                 }
             }
 
-            var typedArgs = new MSA.Expression[_arity + 1];
-            typedArgs[0] = self;
-            for (int i = 0; i < _arity; i++) {
+            for (int i = 0; i < _typedCount; i++) {
                 switch (code.ParameterTypes[i]) {
-                    case JT.Int: typedArgs[i + 1] = Ast.Unbox(args[i], typeof(int)); break;
-                    case JT.Dbl: typedArgs[i + 1] = Ast.Unbox(args[i], typeof(double)); break;
-                    case JT.Lng: typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), args[i]); break;
-                    default: typedArgs[i + 1] = args[i]; break;
+                    case JT.Int: test = And(test, Ast.TypeIs(values[i], typeof(int))); break;
+                    case JT.Dbl: test = And(test, Ast.TypeIs(values[i], typeof(double))); break;
+                    // An Integer parameter carried as a long accepts either representation: a
+                    // value in Int32 range arrives as an Int32 and only a larger one as an Int64.
+                    case JT.Lng: test = And(test, Ast.Call(JitRuntime.M("IsIntegral"), values[i])); break;
+                }
+            }
+
+            var typedArgs = new MSA.Expression[_typedCount + 1];
+            typedArgs[0] = self;
+            for (int i = 0; i < _typedCount; i++) {
+                switch (code.ParameterTypes[i]) {
+                    case JT.Int: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(int)); break;
+                    case JT.Dbl: typedArgs[i + 1] = Ast.Unbox(values[i], typeof(double)); break;
+                    case JT.Lng: typedArgs[i + 1] = Ast.Call(JitRuntime.M("ToLong"), values[i]); break;
+                    default: typedArgs[i + 1] = values[i]; break;
                 }
             }
 
@@ -264,6 +311,9 @@ namespace IronRuby.Runtime.Jit {
             }
 
             MSA.Expression body = (test != null) ? Ast.Condition(test, fast, GenericCall(self, blk, args), typeof(object)) : fast;
+            if (keywordValues != null) {
+                body = Ast.Block(typeof(object), keywordValues, body);
+            }
 
             // A stale version fails this guard on every later call; the stub takes the entry down
             // (JitStub.VersionChanged) and this one call runs the generic body.
@@ -308,10 +358,13 @@ namespace IronRuby.Runtime.Jit {
             JitRuntime.HookStats();
 
             var ps = ast.Parameters;
-            if (ps.Optional.Length != 0 || ps.Unsplat != null || ps.Block != null || ast.UsesBlock) { return generic; }
-            int arity = ps.Mandatory.Length;
+            if (ps.Unsplat != null || ps.Block != null || ast.UsesBlock) { return generic; }
+            // Keyword parameters arrive in one trailing optional parameter; nothing else optional is taken.
+            JitKeywords keywords = null;
+            if (ps.Optional.Length != 0 && (keywords = JitKeywords.TryRecognize(ast, context)) == null) { return generic; }
+            int arity = ps.Mandatory.Length + ps.Optional.Length;
             if (arity > MaxArity) { return generic; }
-            for (int i = 0; i < arity; i++) {
+            for (int i = 0; i < ps.Mandatory.Length; i++) {
                 if (!(ps.Mandatory[i] is LocalVariable)) { return generic; }
             }
             // Tracing and coverage need the real frame.
@@ -322,17 +375,17 @@ namespace IronRuby.Runtime.Jit {
             // into call site rules, so a method declined later still pays one extra indirect
             // call on every call for the life of the process.
             string rejectedBy;
-            if (!JitScreen.CanEverCompile(ast, out rejectedBy)) {
+            if (!JitScreen.CanEverCompile(ast, keywords, out rejectedBy)) {
                 JitRuntime.RecordScreenRejection(rejectedBy);
                 return generic;
             }
 
             JitStub stub;
             switch (arity) {
-                case 0: stub = new JitStub0(ast, context, declaringModule, generic); break;
-                case 1: stub = new JitStub1(ast, context, declaringModule, generic); break;
-                case 2: stub = new JitStub2(ast, context, declaringModule, generic); break;
-                default: stub = new JitStub3(ast, context, declaringModule, generic); break;
+                case 0: stub = new JitStub0(ast, context, declaringModule, generic, keywords); break;
+                case 1: stub = new JitStub1(ast, context, declaringModule, generic, keywords); break;
+                case 2: stub = new JitStub2(ast, context, declaringModule, generic, keywords); break;
+                default: stub = new JitStub3(ast, context, declaringModule, generic, keywords); break;
             }
             return stub.Trampoline;
         }
@@ -348,8 +401,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object>/*!*/ _gen;
         private readonly Func<object, Proc, object>/*!*/ _tramp;
 
-        internal JitStub0(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 0) {
+        internal JitStub0(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 0, keywords) {
             _gen = (Func<object, Proc, object>)generic;
             _tramp = Call;
         }
@@ -371,8 +424,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object>/*!*/ _tramp;
 
-        internal JitStub1(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 1) {
+        internal JitStub1(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 1, keywords) {
             _gen = (Func<object, Proc, object, object>)generic;
             _tramp = Call;
         }
@@ -394,8 +447,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object>/*!*/ _tramp;
 
-        internal JitStub2(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 2) {
+        internal JitStub2(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 2, keywords) {
             _gen = (Func<object, Proc, object, object, object>)generic;
             _tramp = Call;
         }
@@ -417,8 +470,8 @@ namespace IronRuby.Runtime.Jit {
         private readonly Func<object, Proc, object, object, object, object>/*!*/ _gen;
         private readonly Func<object, Proc, object, object, object, object>/*!*/ _tramp;
 
-        internal JitStub3(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic)
-            : base(ast, context, m, generic, 3) {
+        internal JitStub3(MethodDeclaration ast, RubyContext context, RubyModule m, Delegate generic, JitKeywords keywords)
+            : base(ast, context, m, generic, 3, keywords) {
             _gen = (Func<object, Proc, object, object, object, object>)generic;
             _tramp = Call;
         }

@@ -311,6 +311,18 @@ namespace IronRuby.Runtime.Jit {
             return Deopt();
         }
 
+        // ---- keyword parameters (see JitKeywords) ---------------------------------------
+
+        /// <summary>The entry guard of a method with keywords: the prologue would bind them without raising.</summary>
+        public static bool KeywordsMatch(object/*!*/ keywords, object kw) {
+            return ((JitKeywords)keywords).Matches(kw);
+        }
+
+        /// <summary>The value the prologue binds keyword number <paramref name="index"/> to.</summary>
+        public static object KeywordValue(object/*!*/ keywords, object kw, int index) {
+            return ((JitKeywords)keywords).Value(kw, index);
+        }
+
         public static RubyClass/*!*/ ClassOf(RubyContext/*!*/ context, object self) {
             IRubyObject obj = self as IRubyObject;
             return obj != null ? obj.ImmediateClass : context.GetImmediateClassOf(self);

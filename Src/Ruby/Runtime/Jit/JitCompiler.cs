@@ -108,23 +108,36 @@ namespace IronRuby.Runtime.Jit {
             return JitBailout.Instance;
         }
 
-        private JitCompiler(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes) {
+        // A method with keyword parameters: its keyword locals are typed parameters too, after the
+        // positional ones, and the body starts after the prologue that binds them (JitKeywords).
+        private readonly JitKeywords _keywords;
+
+        private JitCompiler(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords) {
             _ast = ast;
             _context = context;
             _paramTypes = paramTypes;
+            _keywords = keywords;
             _scopeDepth = ast.DefinedScope.Depth;
             _self = Ast.Parameter(typeof(object), "#self");
             PushScope();
 
             var mandatory = ast.Parameters.Mandatory;
-            _paramNames = new string[mandatory.Length];
-            for (int i = 0; i < mandatory.Length; i++) {
-                var lv = mandatory[i] as LocalVariable;
-                if (lv == null) { throw JitBailout.Instance; }
-                _paramNames[i] = lv.Name;
-                var p = Ast.Parameter(ClrType(paramTypes[i]), lv.Name);
-                _vars[0].Add(lv.Name, p);
-                _types[0].Add(lv.Name, paramTypes[i]);
+            _paramNames = new string[paramTypes.Length];
+            if (paramTypes.Length != mandatory.Length + (keywords != null ? keywords.Count : 0)) { throw JitBailout.Instance; }
+            for (int i = 0; i < paramTypes.Length; i++) {
+                string name;
+                if (i < mandatory.Length) {
+                    var lv = mandatory[i] as LocalVariable;
+                    if (lv == null) { throw JitBailout.Instance; }
+                    name = lv.Name;
+                } else {
+                    name = keywords.LocalNames[i - mandatory.Length];
+                }
+                if (_vars[0].ContainsKey(name)) { throw JitBailout.Instance; }
+                _paramNames[i] = name;
+                var p = Ast.Parameter(ClrType(paramTypes[i]), name);
+                _vars[0].Add(name, p);
+                _types[0].Add(name, paramTypes[i]);
             }
         }
 
@@ -315,13 +328,17 @@ namespace IronRuby.Runtime.Jit {
         /// cannot be specialized.
         /// </summary>
         internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes) {
+            return TryCompile(ast, context, paramTypes, null);
+        }
+
+        internal static JitCode TryCompile(MethodDeclaration/*!*/ ast, RubyContext/*!*/ context, JT[]/*!*/ paramTypes, JitKeywords keywords) {
             // The self-recursive call needs the method's return type before the body has been
             // typed. Guess, compile, and re-run once if the guess was wrong.
             // Rounds: each retry widens the guess (Int -> Lng -> Dbl/Obj), so the lattice bounds
             // how many there can be; a guess that does not settle is rejected.
             JT guess = JT.None;
             for (int round = 0; round < 5; round++) {
-                var c = new JitCompiler(ast, context, paramTypes);
+                var c = new JitCompiler(ast, context, paramTypes, keywords);
                 c._firstRound = (guess == JT.None);
                 c._selfReturn = c._firstRound ? JT.Int : guess;
                 c._selfDelegateType = DelegateType(paramTypes, c._selfReturn);
@@ -398,7 +415,8 @@ namespace IronRuby.Runtime.Jit {
                 case 1: return typeof(Func<,,>).MakeGenericType(types);
                 case 2: return typeof(Func<,,,>).MakeGenericType(types);
                 case 3: return typeof(Func<,,,,>).MakeGenericType(types);
-                default: return null;
+                // positionals plus keywords (JitStub.MaxArity - 1 + JitKeywords.MaxKeywords)
+                default: return (ps.Length <= 14) ? Ast.GetFuncType(types) : null;
             }
         }
 
@@ -409,7 +427,25 @@ namespace IronRuby.Runtime.Jit {
             if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
                 throw JitBailout.Instance;
             }
+            if (_keywords != null) {
+                // the keyword prologue is what the entry did; the parameters hold its result
+                return EmitStatements(body.Statements, _keywords.PrologueLength, out type);
+            }
             return EmitStatements(body.Statements, out type);
+        }
+
+        private MSA.Expression/*!*/ EmitStatements(Statements/*!*/ statements, int start, out JT type) {
+            int count = statements.Count - start;
+            if (count <= 0) {
+                type = JT.Obj;
+                return Ast.Constant(null, typeof(object));
+            }
+            var parts = new List<MSA.Expression>(count);
+            type = JT.None;
+            for (int i = start; i < statements.Count; i++) {
+                parts.Add(Emit(statements[i], out type));
+            }
+            return (parts.Count == 1) ? parts[0] : Ast.Block(ClrType(type), parts);
         }
 
         private MSA.Expression/*!*/ EmitStatements(Statements statements, out JT type) {
@@ -851,7 +887,7 @@ namespace IronRuby.Runtime.Jit {
 
             // Self-recursion: `fib(n - 1)' inside `def fib'. Sound because the entry stub pins
             // the receiver class and the global method version, so no override can slip in.
-            if (_ast != null && node.Target == null && !node.IsVariableCall && node.MethodName == _ast.Name && argc == _paramNames.Length) {
+            if (_ast != null && _keywords == null && node.Target == null && !node.IsVariableCall && node.MethodName == _ast.Name && argc == _paramNames.Length) {
                 var callArgs = new MSA.Expression[argc + 1];
                 callArgs[0] = _self;
                 for (int i = 0; i < argc; i++) {
@@ -1106,10 +1142,14 @@ namespace IronRuby.Runtime.Jit {
         /// <summary>The node kind that said no, for the histogram.</summary>
         private string _rejectedBy;
 
-        private JitScreen(MethodDeclaration/*!*/ ast) {
+        private readonly JitKeywords _keywords;
+
+        private JitScreen(MethodDeclaration/*!*/ ast, JitKeywords keywords) {
             _scopeDepth = ast.DefinedScope.Depth;
             _methodName = ast.Name;
-            _arity = ast.Parameters.Mandatory.Length;
+            // a method with keywords is never called directly from its typed body (EmitCall)
+            _arity = (keywords != null) ? -1 : ast.Parameters.Mandatory.Length;
+            _keywords = keywords;
         }
 
         /// <summary>
@@ -1117,10 +1157,14 @@ namespace IronRuby.Runtime.Jit {
         /// this body. <paramref name="rejectedBy"/> names the node kind that decided it.
         /// </summary>
         internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, out string rejectedBy) {
-            var s = new JitScreen(ast);
+            return CanEverCompile(ast, null, out rejectedBy);
+        }
+
+        internal static bool CanEverCompile(MethodDeclaration/*!*/ ast, JitKeywords keywords, out string rejectedBy) {
+            var s = new JitScreen(ast, keywords);
             bool ok;
             try {
-                ok = s.WalkBody(ast.Body);
+                ok = (keywords != null) ? s.WalkMethodBody(ast.Body, keywords.PrologueLength) : s.WalkBody(ast.Body);
             } catch (Exception) {
                 // A screen that throws must not take the process down with it; it just means the
                 // method is not wrapped.
@@ -1142,6 +1186,17 @@ namespace IronRuby.Runtime.Jit {
                 return No(body);
             }
             return WalkStatements(body.Statements);
+        }
+
+        /// <summary>Mirrors JitCompiler.EmitBody of a method with keywords: the prologue is not emitted.</summary>
+        private bool WalkMethodBody(Body/*!*/ body, int prologueLength) {
+            if (body.RescueClauses != null || body.ElseStatements != null || body.EnsureStatements != null) {
+                return No(body);
+            }
+            for (int i = prologueLength; i < body.Statements.Count; i++) {
+                if (!Walk(body.Statements[i])) { return false; }
+            }
+            return true;
         }
 
         private bool WalkStatements(Statements statements) {
