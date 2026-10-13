@@ -74,8 +74,9 @@ namespace IronRuby.Builtins {
         // The proc is its own converter: a call it was the literal block of converted it (see Converter).
         private const int SelfConverterFlag = 4;
 
-        // A single call of the proc (a yield or Proc#call) has finished (see KeepReusableScope).
-        private const int CalledFlag = 8;
+        // How many single calls of the proc (a yield or Proc#call) have finished, up to two (see KeepReusableScope).
+        private const int CallCountUnit = 8;
+        private const int CallCountMask = 3 * CallCountUnit;
 
         /// <summary>
         /// The state few procs have, out of line: a Proc is allocated for every call with a literal block.
@@ -147,16 +148,17 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
-        /// Whether a single call of the proc that has finished keeps its scope for the next call: not on the first
-        /// call, which most often is the only one - a literal block is a new Proc for every call it is passed to.
-        /// The flag is only ever set: the kind and converter bits are written before the proc's first call.
+        /// Whether a single call of the proc that has finished keeps its scope for the next call: from the third
+        /// call on. A literal block is a new Proc for every call it is passed to and most are called once or twice,
+        /// where keeping a scope (and the rare state that holds it) would not pay off. The count only ever goes
+        /// up: the kind and converter bits are written before the proc's first call.
         /// </summary>
         internal bool KeepReusableScope() {
             int kind = _kind;
-            if ((kind & CalledFlag) != 0) {
+            if ((kind & CallCountMask) == 2 * CallCountUnit) {
                 return true;
             }
-            _kind = kind | CalledFlag;
+            _kind = kind + CallCountUnit;
             return false;
         }
 

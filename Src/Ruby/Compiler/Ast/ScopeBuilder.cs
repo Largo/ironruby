@@ -234,8 +234,14 @@ namespace IronRuby.Compiler.Ast {
             if (!HasReusableLocals) {
                 return MakeLocalsStorage();
             }
+            // (the type test only when there is a tuple to reuse: a block called once has none)
+            var reusable = DefineHiddenVariable("#reusable", typeof(MutableTuple));
             return Ast.Assign(_localsTuple, Ast.Coalesce(
-                Ast.TypeAs(Methods.TakeReusableLocals.OpCall(blockParameter), _localsTuple.Type),
+                Ast.Condition(
+                    Ast.Equal(Ast.Assign(reusable, Methods.TakeReusableLocals.OpCall(blockParameter)), AstUtils.Constant(null)),
+                    AstUtils.Constant(null, _localsTuple.Type),
+                    Ast.TypeAs(reusable, _localsTuple.Type)
+                ),
                 Ast.New(_localsTuple.Type)
             ));
         }

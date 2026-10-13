@@ -135,6 +135,11 @@ namespace IronRuby.Runtime {
             get { return ((_flow & 3) == (int)BlockReturnReason.Undefined) ? (RubyBlockScope)_targetFrame : null; }
         }
 
+        // False if there is no ReusableScope; a quick test for the common case.
+        internal bool MayHaveReusableScope {
+            get { return _targetFrame != null; }
+        }
+
         // The scope is taken for a call of the block (it was the ReusableScope).
         internal void TakeReusableScope() {
             _targetFrame = null;

@@ -1347,7 +1347,7 @@ var closureScope = scope as RubyClosureScope;
     public sealed class RubyBlockScope : RubyClosureScope {
         private BlockParam/*!*/ _blockFlowControl;
 
-        // The thread that made the scope, the only one that may reuse it (see RubyOps.CreateReusableBlockScope).
+        // The thread whose call kept the scope on its proc, the only one that may reuse it (see RubyOps.CreateReusableBlockScope).
         internal int OwnerThreadId;
 
         // The block a thread runs keeps its own $~ and $_, as MRI's thread root frame does; any
@@ -1425,6 +1425,8 @@ var closureScope = scope as RubyClosureScope;
             CurrentMatch = null;
             LastInputLine = null;
             _blockFlowControl = null;
+            // the thread that ran the call, the only one that may reuse it
+            OwnerThreadId = Environment.CurrentManagedThreadId;
             proc.ReusableScope = this;
         }
     }
