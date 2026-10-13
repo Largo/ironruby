@@ -264,14 +264,25 @@ namespace IronRuby.Runtime.Jit {
                 if (_positional > 0 && code.ParameterTypes[_positional - 1] == JT.Obj) {
                     test = And(test, Ast.Not(Ast.Call(typeof(RubyOps).GetMethod("IsKeywordArgumentsHash"), args[_positional - 1])));
                 }
-                test = And(test, Ast.Call(JitRuntime.M("KeywordsMatch"), Ast.Constant(_keywords, typeof(object)), kw));
                 keywordValues = new MSA.ParameterExpression[_keywords.Count];
                 for (int j = 0; j < keywordValues.Length; j++) {
-                    var v = keywordValues[j] = Ast.Variable(typeof(object), "kw" + j);
-                    values[_positional + j] = v;
-                    test = And(test, Ast.Block(
-                        Ast.Assign(v, Ast.Call(JitRuntime.M("KeywordValue"), Ast.Constant(_keywords, typeof(object)), kw, Ast.Constant(j))),
-                        Ast.Constant(true)));
+                    values[_positional + j] = keywordValues[j] = Ast.Variable(typeof(object), "kw" + j);
+                }
+                var info = Ast.Constant(_keywords, typeof(object));
+                if (keywordValues.Length <= 3) {
+                    // match and bind in one call, the values coming back through out parameters
+                    var readArgs = new MSA.Expression[keywordValues.Length + 2];
+                    readArgs[0] = info;
+                    readArgs[1] = kw;
+                    Array.Copy(keywordValues, 0, readArgs, 2, keywordValues.Length);
+                    test = And(test, Ast.Call(JitRuntime.M("KeywordsRead" + keywordValues.Length), readArgs));
+                } else {
+                    test = And(test, Ast.Call(JitRuntime.M("KeywordsMatch"), info, kw));
+                    for (int j = 0; j < keywordValues.Length; j++) {
+                        test = And(test, Ast.Block(
+                            Ast.Assign(keywordValues[j], Ast.Call(JitRuntime.M("KeywordValue"), info, kw, Ast.Constant(j))),
+                            Ast.Constant(true)));
+                    }
                 }
             }
 

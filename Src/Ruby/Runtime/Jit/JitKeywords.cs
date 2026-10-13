@@ -52,6 +52,7 @@ namespace IronRuby.Runtime.Jit {
         internal RubySymbol/*!*/[]/*!*/ Symbols;
         internal int[]/*!*/ Positions;
         internal object[]/*!*/ Defaults;
+        internal bool[]/*!*/ Required;
 
         internal int Count { get { return LocalNames.Length; } }
 
@@ -119,6 +120,7 @@ namespace IronRuby.Runtime.Jit {
             var symbols = new List<RubySymbol>();
             var positions = new List<int>();
             var defaults = new List<object>();
+            var required = new List<bool>();
             while (i < n) {
                 var bind = statements[i] as SimpleAssignmentExpression;
                 if (bind == null || bind.Operation != null) { break; }
@@ -142,6 +144,7 @@ namespace IronRuby.Runtime.Jit {
                 symbols.Add(context.CreateSymbol(read.Names[0], read.Encoding));
                 positions.Add(read.RequiredCountOrPosition);
                 defaults.Add(defaultValue);
+                required.Add(read.DefaultValue == null);
                 i++;
             }
             if (locals.Count != names.Length) { return null; }
@@ -156,6 +159,7 @@ namespace IronRuby.Runtime.Jit {
             result.Symbols = symbols.ToArray();
             result.Positions = positions.ToArray();
             result.Defaults = defaults.ToArray();
+            result.Required = required.ToArray();
             return result;
         }
 
@@ -179,6 +183,69 @@ namespace IronRuby.Runtime.Jit {
         internal object Value(object kw, int index) {
             object v = RubyOps.GetKeywordArgument(kw, Symbols[index], Positions[index]);
             return (v == RubyOps.DefaultArgument) ? Defaults[index] : v;
+        }
+
+        // ---- Matches and Value in one go: what a specialized entry calls ----------------------
+        //
+        // A keyword call's hash is small, and Hash.TryGetValueByIdentity scans a small hash for the
+        // Symbol rather than probing for it (8 entries, Hash.IdentityScanLimit). Looking each declared
+        // keyword up once both binds it and counts the keys that are declared ones, so the hash has
+        // no key the method does not know exactly when that count is all the keys it has - which is
+        // what Matches answers with a scan of its own. Anything else takes the two steps above.
+
+        private const int ScanLimit = 8;
+
+        private bool Bind(Hash/*!*/ hash, int index, ref int found, out object value) {
+            if (hash.TryGetValueByIdentity(Symbols[index], Positions[index], out value)) {
+                found++;
+                return true;
+            }
+            value = Defaults[index];
+            return !Required[index];
+        }
+
+        private static Hash SmallKeywordHash(object kw) {
+            var hash = kw as Hash;
+            return (hash != null && hash.IsKeywordArguments && hash.Count <= ScanLimit) ? hash : null;
+        }
+
+        internal bool Read(object kw, out object v0) {
+            var hash = SmallKeywordHash(kw);
+            if (hash != null) {
+                int found = 0;
+                return Bind(hash, 0, ref found, out v0) && found == hash.Count;
+            }
+            bool ok = Matches(kw);
+            v0 = ok ? Value(kw, 0) : null;
+            return ok;
+        }
+
+        internal bool Read(object kw, out object v0, out object v1) {
+            var hash = SmallKeywordHash(kw);
+            if (hash != null) {
+                int found = 0;
+                v1 = null;
+                return Bind(hash, 0, ref found, out v0) && Bind(hash, 1, ref found, out v1) && found == hash.Count;
+            }
+            bool ok = Matches(kw);
+            v0 = ok ? Value(kw, 0) : null;
+            v1 = ok ? Value(kw, 1) : null;
+            return ok;
+        }
+
+        internal bool Read(object kw, out object v0, out object v1, out object v2) {
+            var hash = SmallKeywordHash(kw);
+            if (hash != null) {
+                int found = 0;
+                v1 = v2 = null;
+                return Bind(hash, 0, ref found, out v0) && Bind(hash, 1, ref found, out v1) && Bind(hash, 2, ref found, out v2) &&
+                    found == hash.Count;
+            }
+            bool ok = Matches(kw);
+            v0 = ok ? Value(kw, 0) : null;
+            v1 = ok ? Value(kw, 1) : null;
+            v2 = ok ? Value(kw, 2) : null;
+            return ok;
         }
     }
 }

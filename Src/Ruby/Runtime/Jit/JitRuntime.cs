@@ -323,6 +323,20 @@ namespace IronRuby.Runtime.Jit {
             return ((JitKeywords)keywords).Value(kw, index);
         }
 
+        // KeywordsMatch and KeywordValue in one call, for a method with up to three keywords.
+
+        public static bool KeywordsRead1(object/*!*/ keywords, object kw, out object v0) {
+            return ((JitKeywords)keywords).Read(kw, out v0);
+        }
+
+        public static bool KeywordsRead2(object/*!*/ keywords, object kw, out object v0, out object v1) {
+            return ((JitKeywords)keywords).Read(kw, out v0, out v1);
+        }
+
+        public static bool KeywordsRead3(object/*!*/ keywords, object kw, out object v0, out object v1, out object v2) {
+            return ((JitKeywords)keywords).Read(kw, out v0, out v1, out v2);
+        }
+
         public static RubyClass/*!*/ ClassOf(RubyContext/*!*/ context, object self) {
             IRubyObject obj = self as IRubyObject;
             return obj != null ? obj.ImmediateClass : context.GetImmediateClassOf(self);
