@@ -1349,7 +1349,7 @@ namespace IronRuby.Prism {
                         NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
                         Flags = LoadVarUInt(),
                         OpeningLoc = LoadOptionalLocation(),
-                        ValueLoc = LoadOptionalLocation(),
+                        ContentLoc = LoadLocation(),
                         ClosingLoc = LoadOptionalLocation(),
                         Unescaped = LoadStringBytes(),
                     };

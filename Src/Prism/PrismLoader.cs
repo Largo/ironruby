@@ -74,6 +74,15 @@ namespace IronRuby.Prism {
             uint commentCount = LoadVarUInt();
             for (uint i = 0; i < commentCount; i++) { LoadByte(); LoadLocation(); }
 
+            // Comment attachments: node id, comment count, then each comment's index. The
+            // options never ask for attach_comments, so this is empty, but the count is there.
+            uint attachedNodeCount = LoadVarUInt();
+            for (uint i = 0; i < attachedNodeCount; i++) {
+                LoadVarUInt();
+                uint attachedCount = LoadVarUInt();
+                for (uint j = 0; j < attachedCount; j++) LoadVarUInt();
+            }
+
             uint magicCommentCount = LoadVarUInt();
             for (uint i = 0; i < magicCommentCount; i++) { LoadLocation(); LoadLocation(); }
 

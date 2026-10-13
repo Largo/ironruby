@@ -32,7 +32,7 @@ env:
   # Unlike CI, which follows prism's main branch, a release is built from the prism
   # revision Src/Prism/Generated was generated from (Src/Prism/README.md), the one the
   # vendored Ruby half of prism in Src/StdLib belongs to.
-  PRISM_REF: c53699f7f20f6b6aa4704216fbfecec897fe419a
+  PRISM_REF: cd76b0d130a6f0311d168a69618197f15a912c69
 
 jobs:
   package:
