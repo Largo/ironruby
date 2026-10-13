@@ -93,17 +93,16 @@ namespace IronRuby.Runtime {
     public sealed partial class BlockParam {
         // -- in --
         private readonly Proc/*!*/ _proc;
-        // the enums are kept in bytes: a BlockParam is allocated for every call of a library method with a block
-        private readonly byte _callerKind;
+        // The small state is packed into bytes, which keeps a BlockParam at 48 bytes: one is allocated for every
+        // call of a library method with a block, and for every yield and Proc#call.
+        // bit 0: BlockCallerKind.Call; bit 1: the library method call taking this BlockParam is a proc converter.
+        private readonly byte _callerFlags;
+        private const int CallFlag = 1;
+        private const int LibProcConverterFlag = 2;
 
         // filled by module_eval: if not null than method definition uses the module
         private RubyModule _methodLookupModule;
         
-        // Is the library method call taking this BlockParam a proc converter?
-        // Used only for BlockParams that are passed to library method calls.
-        // Friend: RubyOps
-        internal readonly bool _isLibProcConverter;
-
         // the thread the call taking the block runs on; a break cannot reach that call from another.
         // 0 for a yield or a Proc#call, which run the block on the thread that made the BlockParam.
         private readonly int _threadId;
@@ -112,20 +111,22 @@ namespace IronRuby.Runtime {
         public bool IsThreadRoot { get; set; }
         
         // -- out --
-        private byte _returnReason;
+        // bits 0-1: BlockReturnReason; bits 2-3: the ProcKind of the block that set it
+        private byte _flow;
         private RuntimeFlowControl _targetFrame;
-        private byte _sourceProcKind;
 
-        internal BlockCallerKind CallerKind { get { return (BlockCallerKind)_callerKind; } }
+        internal BlockCallerKind CallerKind { get { return (_callerFlags & CallFlag) != 0 ? BlockCallerKind.Call : BlockCallerKind.Yield; } }
 
         // True while a lambda called through Proc#call (or as a define_method body) is running, so
         // a return in a block nested in it can unwind to that call.
         internal bool IsActiveLambdaCall;
-        internal ProcKind SourceProcKind { get { return (ProcKind)_sourceProcKind; } }
-        internal BlockReturnReason ReturnReason { get { return (BlockReturnReason)_returnReason; } set { _returnReason = (byte)value; } }
+        internal ProcKind SourceProcKind { get { return (ProcKind)(_flow >> 2); } }
+        internal BlockReturnReason ReturnReason { get { return (BlockReturnReason)(_flow & 3); } set { _flow = (byte)((_flow & ~3) | (int)value); } }
         internal RuntimeFlowControl TargetFrame { get { return _targetFrame; } }
         internal RubyModule MethodLookupModule { get { return _methodLookupModule; } set { _methodLookupModule = value; } }
-        internal bool IsLibProcConverter { get { return _isLibProcConverter; } }
+        // Is the library method call taking this BlockParam a proc converter?
+        // Used only for BlockParams that are passed to library method calls.
+        internal bool IsLibProcConverter { get { return (_callerFlags & LibProcConverterFlag) != 0; } }
 
         /// <summary>
         /// True if the library method got a literal block rather than a Proc object passed with &amp;:
@@ -136,7 +137,7 @@ namespace IronRuby.Runtime {
         /// </summary>
         public bool IsLiteralBlock {
             get {
-                if (_isLibProcConverter) {
+                if (IsLibProcConverter) {
                     return true;
                 }
                 // a call that converted a literal block stands for its frame by that Proc (see CreateRfcForMethod):
@@ -163,24 +164,22 @@ namespace IronRuby.Runtime {
         // friend: RubyOps
         internal BlockParam(Proc/*!*/ proc, BlockCallerKind callerKind, bool isLibProcConverter) {
             _threadId = Environment.CurrentManagedThreadId;
-            _callerKind = (byte)callerKind;
+            _callerFlags = (byte)((callerKind == BlockCallerKind.Call ? CallFlag : 0) | (isLibProcConverter ? LibProcConverterFlag : 0));
             _proc = proc;
-            _isLibProcConverter = isLibProcConverter;
         }
 
         // A BlockParam that is only ever used on the thread creating it, for the duration of a call:
         // a yield or a Proc#call. There the thread check in Break always passes, so skip it.
         internal BlockParam(Proc/*!*/ proc, BlockCallerKind callerKind) {
-            _callerKind = (byte)callerKind;
+            _callerFlags = (byte)(callerKind == BlockCallerKind.Call ? CallFlag : 0);
             _proc = proc;
         }
 
         internal void SetFlowControl(BlockReturnReason reason, RuntimeFlowControl targetFrame, ProcKind sourceProcKind) {
             Debug.Assert((reason == BlockReturnReason.Break) == (targetFrame != null));
 
-            _returnReason = (byte)reason;
+            _flow = (byte)((int)reason | ((int)sourceProcKind << 2));
             _targetFrame = targetFrame;
-            _sourceProcKind = (byte)sourceProcKind;
         }
 
         internal object GetUnwinderResult(EvalUnwinder/*!*/ unwinder) {
@@ -200,12 +199,12 @@ namespace IronRuby.Runtime {
         /// </remarks>
         internal bool BlockJumped(object returnValue) {
             // the block finished normally (no break/return/retry), which is what nearly every yield does:
-            if (_returnReason == (byte)BlockReturnReason.Undefined) {
+            if ((_flow & 3) == (int)BlockReturnReason.Undefined) {
                 return false;
             }
 
             // if this method is a proc converter then the current frame is Proc.Converter, otherwise it is not available:
-            return RubyOps.MethodYieldRfc(_isLibProcConverter ? _proc.Converter : null, this, returnValue);
+            return RubyOps.MethodYieldRfc(IsLibProcConverter ? _proc.Converter : null, this, returnValue);
         }
 
         public bool Returning(object returnValue, out object result) {
@@ -224,7 +223,7 @@ namespace IronRuby.Runtime {
             if (yieldedBlock.ReturnReason == BlockReturnReason.Break) {
                 return Break(returnValue);
             } else {
-                _returnReason = (byte)yieldedBlock.ReturnReason;
+                ReturnReason = yieldedBlock.ReturnReason;
                 return returnValue;
             }
         }
@@ -370,7 +369,7 @@ namespace IronRuby.Runtime {
         [Emitted] 
         public static void LeaveProcConverter(BlockParam/*!*/ bfc) {
             Debug.Assert(bfc.Proc != null);
-            if (bfc._isLibProcConverter) {
+            if (bfc.IsLibProcConverter) {
                 Debug.Assert(bfc.Proc.Converter != null);
                 bfc.Proc.Converter.LeaveMethod();
             }
