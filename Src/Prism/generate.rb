@@ -97,6 +97,16 @@ nodes.each do |node|
   (node["fields"] || []).each do |field|
     nodes_cs << "        public #{cs_type(field)} #{field_name(node, field)};\n"
   end
+  if node.fetch("name") == "DefNode"
+    nodes_cs << <<-CS
+        // Set by a loader asked for lazy method bodies: Body is null and the body is still in the
+        // serialized buffer, for PrismLoader.LoadDeferredBody; BodyContents is what the body holds
+        // (PrismLoader.Contents* bits).
+        public IronRuby.Prism.PrismLoader DeferredBodyLoader;
+        public int DeferredBodyOffset;
+        public uint BodyContents;
+    CS
+  end
   nodes_cs << "    }\n\n"
 end
 nodes_cs << "}\n"
@@ -121,7 +131,34 @@ loader_cs << <<~CS
 CS
 nodes.each_with_index do |node, index|
   loader_cs << "                case #{index + 1}: {\n"
-  loader_cs << "                    LoadRawUInt32();\n" if node.fetch("name") == "DefNode"
+  if node.fetch("name") == "DefNode"
+    # The body can be left in the buffer (lazy method bodies): everything else is read as usual.
+    fields = node["fields"]
+    body_index = fields.index { |f| f.fetch("name") == "body" }
+    loader_cs << "                    LoadRawUInt32();\n"
+    loader_cs << "                    var def = new DefNode {\n"
+    loader_cs << "                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,\n"
+    loader_cs << "                        Flags = LoadVarUInt(),\n"
+    fields[0...body_index].each do |field|
+      loader_cs << "                        #{field_name(node, field)} = #{cs_reader(field)},\n"
+    end
+    loader_cs << "                    };\n"
+    loader_cs << "                    if (_lazyDefBodies) {\n"
+    loader_cs << "                        def.DeferredBodyLoader = this;\n"
+    loader_cs << "                        def.DeferredBodyOffset = _pos;\n"
+    loader_cs << "                        _contents = 0;\n"
+    loader_cs << "                        SkimOptionalNode();\n"
+    loader_cs << "                        def.BodyContents = _contents;\n"
+    loader_cs << "                    } else {\n"
+    loader_cs << "                        def.Body = LoadOptionalNode();\n"
+    loader_cs << "                    }\n"
+    fields[(body_index + 1)..].each do |field|
+      loader_cs << "                    def.#{field_name(node, field)} = #{cs_reader(field)};\n"
+    end
+    loader_cs << "                    return def;\n"
+    loader_cs << "                }\n"
+    next
+  end
   loader_cs << "                    return new #{node.fetch("name")} {\n"
   loader_cs << "                        NodeId = nodeId, StartOffset = location.Start, Length = location.Length,\n"
   loader_cs << "                        Flags = LoadVarUInt(),\n"
@@ -129,6 +166,72 @@ nodes.each_with_index do |node, index|
     loader_cs << "                        #{field_name(node, field)} = #{cs_reader(field)},\n"
   end
   loader_cs << "                    };\n"
+  loader_cs << "                }\n"
+end
+loader_cs << <<~CS
+                default:
+                    throw new System.InvalidOperationException("Unknown prism node type: " + type);
+            }
+        }
+
+        // Reads past a node without building it, noting in _contents what the bridge has to see
+        // at parse time (see PrismLoader.Contents*). Mirrors LoadNode field for field.
+        private void SkimNode() {
+            byte type = LoadByte();
+            LoadVarUInt(); // node id
+            LoadLocation();
+            switch (type) {
+CS
+
+def cs_skimmer(field)
+  case field.fetch("type")
+  when "node" then "SkimNode();"
+  when "node?" then "SkimOptionalNode();"
+  when "node[]" then "SkimNodeList();"
+  when "string" then "SkipString();"
+  when "constant", "constant?", "uint32" then "LoadVarUInt();"
+  when "constant[]" then "SkipVarUIntList();"
+  when "location" then "LoadLocation();"
+  when "location?" then "LoadOptionalLocation();"
+  when "uint8" then "_pos++;"
+  when "integer" then "LoadInteger();"
+  when "double" then "_pos += 8;"
+  end
+end
+
+# what the bridge must not put off: bridged later, these would warn (or fail) late
+eager_nodes = %w[DefinedNode SingletonClassNode ClassNode ModuleNode]
+nodes.each_with_index do |node, index|
+  name = node.fetch("name")
+  fields = node["fields"] || []
+  loader_cs << "                case #{index + 1}: {\n"
+  loader_cs << "                    _pos += 4;\n" if name == "DefNode"
+  loader_cs << "                    LoadVarUInt(); // flags\n"
+  loader_cs << "                    _contents |= ContentsEager;\n" if eager_nodes.include?(name)
+  loader_cs << "                    _contents |= ContentsUsesBlock;\n" if name == "YieldNode"
+  saved = false
+  fields.each do |field|
+    fname = field.fetch("name")
+    if name == "DefNode" && fname == "parameters"
+      # a nested method's use of its block is its own; what forces the outer one eager is not
+      loader_cs << "                    uint outer = _contents;\n"
+      loader_cs << "                    _contents = 0;\n"
+      saved = true
+    end
+    if (name == "SuperNode" || name == "ForwardingSuperNode") && fname == "block"
+      # super with no block of its own passes the method's block on
+      loader_cs << "                    if (_buffer[_pos] == 0) _contents |= ContentsUsesBlock;\n"
+    end
+    if (name == "RegularExpressionNode" || name == "MatchLastLineNode") && fname == "unescaped"
+      loader_cs << "                    SkipRegexpSource();\n"
+      next
+    end
+    loader_cs << "                    #{cs_skimmer(field)}\n"
+    if name == "DefNode" && fname == "body"
+      loader_cs << "                    _contents = outer | (_contents & ContentsEager);\n"
+    end
+  end
+  loader_cs << "                    return;\n"
   loader_cs << "                }\n"
 end
 loader_cs << <<~CS

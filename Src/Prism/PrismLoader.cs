@@ -42,13 +42,55 @@ namespace IronRuby.Prism {
         private uint _cpoolBase;
         private string[] _constants;
 
-        private PrismLoader(byte[]/*!*/ buffer) {
+        // Lazy method bodies: a DefNode's body is skimmed rather than built (prism prefixes each
+        // DefNode with its length for this) and loaded from the buffer when it is asked for.
+        private readonly bool _lazyDefBodies;
+
+        // What the body being skimmed holds, as Contents* bits.
+        private uint _contents;
+
+        /// <summary>The method uses its block: a yield, or a super that passes the block on.</summary>
+        public const uint ContentsUsesBlock = 1;
+
+        /// <summary>
+        /// Something the AST bridge reports while it maps it - a warning or an error that belongs to
+        /// parse time - so a body holding it is not put off: `defined?' (void-context warning), a
+        /// regexp literal that may draw a nested-quantifier warning, `class << x' (yield in it is an
+        /// error), class and module.
+        /// </summary>
+        public const uint ContentsEager = 2;
+
+        private PrismLoader(byte[]/*!*/ buffer, bool lazyDefBodies) {
             _buffer = buffer;
+            _lazyDefBodies = lazyDefBodies;
         }
 
         public static PrismParseResult/*!*/ LoadParse(byte[]/*!*/ serialized) {
-            var loader = new PrismLoader(serialized);
+            return LoadParse(serialized, false);
+        }
+
+        /// <summary>
+        /// With <paramref name="lazyDefBodies"/> every DefNode comes back with a null Body and its
+        /// DeferredBodyLoader set: <see cref="LoadDeferredBody"/> builds the body when it is needed.
+        /// </summary>
+        public static PrismParseResult/*!*/ LoadParse(byte[]/*!*/ serialized, bool lazyDefBodies) {
+            var loader = new PrismLoader(serialized, lazyDefBodies);
             return loader.Load();
+        }
+
+        /// <summary>
+        /// Builds the body a lazy load left in the buffer. Safe to call from any thread.
+        /// </summary>
+        public PmNode LoadDeferredBody(DefNode/*!*/ node) {
+            lock (this) {
+                int saved = _pos;
+                _pos = node.DeferredBodyOffset;
+                try {
+                    return LoadOptionalNode();
+                } finally {
+                    _pos = saved;
+                }
+            }
         }
 
         private PrismParseResult/*!*/ Load() {
@@ -209,6 +251,56 @@ namespace IronRuby.Prism {
                 result = _constants[index] = Encoding.UTF8.GetString(_buffer, start, length);
             }
             return result;
+        }
+
+        // ---- skimming (see SkimNode) ----
+
+        private void SkimOptionalNode() {
+            if (_buffer[_pos] == 0) {
+                _pos++;
+                return;
+            }
+            SkimNode();
+        }
+
+        private void SkimNodeList() {
+            uint count = LoadVarUInt();
+            for (uint i = 0; i < count; i++) SkimNode();
+        }
+
+        private void SkipString() {
+            int length = (int)LoadVarUInt();
+            _pos += length;
+        }
+
+        private void SkipVarUIntList() {
+            uint count = LoadVarUInt();
+            for (uint i = 0; i < count; i++) LoadVarUInt();
+        }
+
+        /// <summary>
+        /// A regexp literal's source. RegexpTransformer only warns about a quantifier applied directly
+        /// to another, which takes two quantifier characters in a row; extended mode lets whitespace or a
+        /// comment sit between them, and non-ASCII bytes may be whitespace, so any of those counts too.
+        /// </summary>
+        private void SkipRegexpSource() {
+            int length = (int)LoadVarUInt();
+            int end = _pos + length;
+            for (int i = _pos; i < end; i++) {
+                byte c = _buffer[i];
+                if (c == (byte)'#' || c == (byte)' ' || (c >= 9 && c <= 13) || c >= 0x80) {
+                    _contents |= ContentsEager;
+                    break;
+                }
+                if ((c == (byte)'?' || c == (byte)'*' || c == (byte)'+' || c == (byte)'}') && i + 1 < end) {
+                    byte d = _buffer[i + 1];
+                    if (d == (byte)'?' || d == (byte)'*' || d == (byte)'+' || d == (byte)'{') {
+                        _contents |= ContentsEager;
+                        break;
+                    }
+                }
+            }
+            _pos = end;
         }
 
         private BigInteger LoadInteger() {

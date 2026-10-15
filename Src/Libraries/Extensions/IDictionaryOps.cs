@@ -251,12 +251,42 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_pair")]
         public static object Each(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
+                bool yieldPair = IsPairYieldOptimizable(block);
+
+                // A Ruby Hash: keys and values come out of one pass over its entries, and each value
+                // is used as is while the block leaves the hash alone; once it mutates it, the rest is
+                // looked up as below. That is the same answer without hashing every key a second
+                // time - which, for a key of a Ruby class, was a #hash and an #eql? call per entry.
+                var hash = self as Hash;
+                if (hash != null) {
+                    int count = hash.Count;
+                    object[] hashKeys = new object[count];
+                    object[] hashValues = new object[count];
+                    hash.CopyKeysAndValues(hashKeys, hashValues);
+                    int stamp = hash.MutationStamp;
+                    for (int i = 0; i < count; i++) {
+                        object key = hashKeys[i];
+                        object value;
+                        if (hash.MutationStamp == stamp) {
+                            value = hashValues[i];
+                        } else if (!hash.TryGetValue(key, out value)) {
+                            // deleted by the block before its turn came: MRI skips it
+                            continue;
+                        }
+                        object result;
+                        if (yieldPair
+                            ? block.Yield(CustomStringDictionary.ObjToNull(key), value, out result)
+                            : block.Yield(MakeArray(key, value), out result)) {
+                            return result;
+                        }
+                    }
+                    return self;
+                }
+
                 // Must make a copy of the Keys array so that we can iterate over a static set of keys. Remember
                 // that the block can modify the hash, hence the need for a copy of the keys
                 object[] keys = new object[self.Count];
                 self.Keys.CopyTo(keys, 0);
-
-                bool yieldPair = IsPairYieldOptimizable(block);
 
                 // TODO: what are all the scenarios where the block can mutate the hash? can it remove keys? if so, what happens?
                 for (int i = 0; i < keys.Length; i++) {

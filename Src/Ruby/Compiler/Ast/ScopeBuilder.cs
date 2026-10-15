@@ -110,6 +110,15 @@ namespace IronRuby.Compiler.Ast {
             get { return _lexicalScope.Depth; }
         }
 
+        // whether anything in the scope reads an outer scope's locals (see GetClosure)
+        internal bool HasClosures {
+            get { return _closures != null; }
+        }
+
+        internal MSA.ParameterExpression/*!*/ LocalsTupleVariable {
+            get { return _localsTuple; }
+        }
+
         internal ScopeBuilder Parent {
             get { return _parent; }
         }
@@ -208,6 +217,52 @@ namespace IronRuby.Compiler.Ast {
             }
 
             return result;
+        }
+
+        /// <summary>
+        /// Whether a block that reuses its scope (see RubyOps.TakeReusableBlockScope) reuses the
+        /// scope's locals tuple too: one of up to 8 locals, cleared when the call finishes.
+        /// </summary>
+        internal bool HasReusableLocals {
+            get {
+                int count = LiftedVisibleVariableCount;
+                return count > 0 && count <= 8 && _parameters == null;
+            }
+        }
+
+        /// <summary>
+        /// Takes the scope the last call of the block kept (into <paramref name="reusableScope"/>, null if there is
+        /// none) and then makes the locals storage: the taken scope's tuple, if the block reuses it, or a new one.
+        /// A tuple is only ever reused together with the scope it came from.
+        /// </summary>
+        public MSA.Expression/*!*/ MakeReusableLocalsStorage(MSA.Expression/*!*/ blockParameter, MSA.ParameterExpression/*!*/ reusableScope) {
+            var take = Ast.Assign(reusableScope, Methods.TakeReusableBlockScope.OpCall(blockParameter));
+            if (!HasReusableLocals) {
+                return Ast.Block(take, MakeLocalsStorage());
+            }
+            // (the type test only when there is a tuple to reuse: a block called once has none)
+            return Ast.Block(
+                take,
+                Ast.Assign(_localsTuple, Ast.Coalesce(
+                    Ast.Condition(
+                        Ast.Equal(reusableScope, AstUtils.Constant(null)),
+                        AstUtils.Constant(null, _localsTuple.Type),
+                        Ast.TypeAs(Methods.GetReusableLocals.OpCall(reusableScope), _localsTuple.Type)
+                    ),
+                    Ast.New(_localsTuple.Type)
+                ))
+            );
+        }
+
+        public MSA.Expression/*!*/ MakeClearLocals() {
+            Debug.Assert(HasReusableLocals);
+            int count = LiftedVisibleVariableCount;
+            var result = new AstExpressions(count + 1);
+            for (int i = 0; i < count; i++) {
+                result.Add(Ast.Assign(GetVariableAccessor(_localsTuple, i), AstUtils.Constant(null)));
+            }
+            result.Add(AstUtils.Empty());
+            return Ast.Block(result);
         }
 
         public MSA.Expression/*!*/ GetVariableNamesExpression() {

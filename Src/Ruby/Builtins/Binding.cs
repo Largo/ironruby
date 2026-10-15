@@ -61,6 +61,7 @@ namespace IronRuby.Builtins {
 
         public Binding(RubyScope/*!*/ localScope, object self) {
             Assert.NotNull(localScope);
+            localScope.MarkCaptured();
             _localScope = localScope;
             _self = self;
         }

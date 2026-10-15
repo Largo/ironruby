@@ -3100,12 +3100,14 @@ namespace IronRuby.Builtins {
         [RubyMethod("gsub")]
         public static object ReplaceAll(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
             MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+            scope.MarkCaptured();
             return new Enumerator((_, block) => BlockReplaceAll(tosConversion, scope, block, self, pattern));
         }
 
         [RubyMethod("gsub!")]
         public static object ReplaceAllInPlace(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
             MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
+            scope.MarkCaptured();
             return new Enumerator((_, block) => BlockReplaceInPlace(tosConversion, scope, block, self, pattern, true));
         }
 

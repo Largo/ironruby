@@ -444,22 +444,31 @@ namespace IronRuby.Prism {
                 }
                 case 45: {
                     LoadRawUInt32();
-                    return new DefNode {
+                    var def = new DefNode {
                         NodeId = nodeId, StartOffset = location.Start, Length = location.Length,
                         Flags = LoadVarUInt(),
                         Name = LoadConstant(),
                         NameLoc = LoadLocation(),
                         Receiver = LoadOptionalNode(),
                         Parameters = LoadOptionalNode(),
-                        Body = LoadOptionalNode(),
-                        Locals = LoadConstantList(),
-                        DefKeywordLoc = LoadLocation(),
-                        OperatorLoc = LoadOptionalLocation(),
-                        LparenLoc = LoadOptionalLocation(),
-                        RparenLoc = LoadOptionalLocation(),
-                        EqualLoc = LoadOptionalLocation(),
-                        EndKeywordLoc = LoadOptionalLocation(),
                     };
+                    if (_lazyDefBodies) {
+                        def.DeferredBodyLoader = this;
+                        def.DeferredBodyOffset = _pos;
+                        _contents = 0;
+                        SkimOptionalNode();
+                        def.BodyContents = _contents;
+                    } else {
+                        def.Body = LoadOptionalNode();
+                    }
+                    def.Locals = LoadConstantList();
+                    def.DefKeywordLoc = LoadLocation();
+                    def.OperatorLoc = LoadOptionalLocation();
+                    def.LparenLoc = LoadOptionalLocation();
+                    def.RparenLoc = LoadOptionalLocation();
+                    def.EqualLoc = LoadOptionalLocation();
+                    def.EndKeywordLoc = LoadOptionalLocation();
+                    return def;
                 }
                 case 46: {
                     return new DefinedNode {
@@ -1431,6 +1440,1144 @@ namespace IronRuby.Prism {
                         Arguments = LoadOptionalNode(),
                         RparenLoc = LoadOptionalLocation(),
                     };
+                }
+        default:
+            throw new System.InvalidOperationException("Unknown prism node type: " + type);
+    }
+}
+
+// Reads past a node without building it, noting in _contents what the bridge has to see
+// at parse time (see PrismLoader.Contents*). Mirrors LoadNode field for field.
+private void SkimNode() {
+    byte type = LoadByte();
+    LoadVarUInt(); // node id
+    LoadLocation();
+    switch (type) {
+                case 1: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 2: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 3: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 4: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 5: {
+                    LoadVarUInt(); // flags
+                    SkimNodeList();
+                    return;
+                }
+                case 6: {
+                    LoadVarUInt(); // flags
+                    SkimNodeList();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 7: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    SkimNodeList();
+                    SkimOptionalNode();
+                    SkimNodeList();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 8: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 9: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadLocation();
+                    return;
+                }
+                case 10: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 11: {
+                    LoadVarUInt(); // flags
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 12: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadLocation();
+                    return;
+                }
+                case 13: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 14: {
+                    LoadVarUInt(); // flags
+                    SkipVarUIntList();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 15: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 16: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    SkimNodeList();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 17: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadLocation();
+                    return;
+                }
+                case 18: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 19: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    LoadVarUInt();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 20: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 21: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 22: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    LoadLocation();
+                    LoadVarUInt();
+                    LoadLocation();
+                    return;
+                }
+                case 23: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 24: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    SkimNodeList();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 25: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    SkimNodeList();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 26: {
+                    LoadVarUInt(); // flags
+                    _contents |= ContentsEager;
+                    SkipVarUIntList();
+                    LoadLocation();
+                    SkimNode();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadVarUInt();
+                    return;
+                }
+                case 27: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 28: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    LoadVarUInt();
+                    return;
+                }
+                case 29: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 30: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 31: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 32: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 33: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 34: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    LoadVarUInt();
+                    return;
+                }
+                case 35: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 36: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 37: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 38: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    LoadLocation();
+                    SkimNode();
+                    LoadVarUInt();
+                    return;
+                }
+                case 39: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 40: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 41: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 42: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 43: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 44: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 45: {
+                    _pos += 4;
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    uint outer = _contents;
+                    _contents = 0;
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    _contents = outer | (_contents & ContentsEager);
+                    SkipVarUIntList();
+                    LoadLocation();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 46: {
+                    LoadVarUInt(); // flags
+                    _contents |= ContentsEager;
+                    LoadOptionalLocation();
+                    SkimNode();
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 47: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 48: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    return;
+                }
+                case 49: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 50: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    return;
+                }
+                case 51: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    return;
+                }
+                case 52: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 53: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    SkimNode();
+                    SkimNodeList();
+                    SkimNode();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 54: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    return;
+                }
+                case 55: {
+                    LoadVarUInt(); // flags
+                    _pos += 8;
+                    return;
+                }
+                case 56: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadLocation();
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 57: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 58: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 59: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    if (_buffer[_pos] == 0) _contents |= ContentsUsesBlock;
+                    SkimOptionalNode();
+                    return;
+                }
+                case 60: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 61: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    LoadVarUInt();
+                    return;
+                }
+                case 62: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 63: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 64: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 65: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 66: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimNodeList();
+                    LoadLocation();
+                    return;
+                }
+                case 67: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    SkimNodeList();
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 68: {
+                    LoadVarUInt(); // flags
+                    LoadOptionalLocation();
+                    SkimNode();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 69: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    return;
+                }
+                case 70: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    return;
+                }
+                case 71: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 72: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 73: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 74: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 75: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 76: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 77: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 78: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    LoadVarUInt();
+                    return;
+                }
+                case 79: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 80: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 81: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 82: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 83: {
+                    LoadVarUInt(); // flags
+                    LoadInteger();
+                    return;
+                }
+                case 84: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimNodeList();
+                    LoadLocation();
+                    return;
+                }
+                case 85: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimNodeList();
+                    LoadLocation();
+                    return;
+                }
+                case 86: {
+                    LoadVarUInt(); // flags
+                    LoadOptionalLocation();
+                    SkimNodeList();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 87: {
+                    LoadVarUInt(); // flags
+                    LoadOptionalLocation();
+                    SkimNodeList();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 88: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimNodeList();
+                    LoadLocation();
+                    return;
+                }
+                case 89: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 90: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 91: {
+                    LoadVarUInt(); // flags
+                    SkimNodeList();
+                    return;
+                }
+                case 92: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 93: {
+                    LoadVarUInt(); // flags
+                    SkipVarUIntList();
+                    LoadLocation();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 94: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    return;
+                }
+                case 95: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    return;
+                }
+                case 96: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    return;
+                }
+                case 97: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    return;
+                }
+                case 98: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    return;
+                }
+                case 99: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 100: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadLocation();
+                    LoadLocation();
+                    SkipRegexpSource();
+                    return;
+                }
+                case 101: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 102: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 103: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNodeList();
+                    return;
+                }
+                case 104: {
+                    LoadVarUInt(); // flags
+                    _contents |= ContentsEager;
+                    SkipVarUIntList();
+                    LoadLocation();
+                    SkimNode();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadVarUInt();
+                    return;
+                }
+                case 105: {
+                    LoadVarUInt(); // flags
+                    SkimNodeList();
+                    SkimOptionalNode();
+                    SkimNodeList();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 106: {
+                    LoadVarUInt(); // flags
+                    SkimNodeList();
+                    SkimOptionalNode();
+                    SkimNodeList();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 107: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadLocation();
+                    return;
+                }
+                case 108: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 109: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 110: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 111: {
+                    LoadVarUInt(); // flags
+                    _pos++;
+                    return;
+                }
+                case 112: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 113: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 114: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 115: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 116: {
+                    LoadVarUInt(); // flags
+                    SkimNodeList();
+                    SkimNodeList();
+                    SkimOptionalNode();
+                    SkimNodeList();
+                    SkimNodeList();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 117: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 118: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    LoadLocation();
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 119: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    LoadLocation();
+                    return;
+                }
+                case 120: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 121: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    LoadLocation();
+                    LoadLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 122: {
+                    LoadVarUInt(); // flags
+                    SkipVarUIntList();
+                    SkimNode();
+                    return;
+                }
+                case 123: {
+                    LoadVarUInt(); // flags
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    return;
+                }
+                case 124: {
+                    LoadVarUInt(); // flags
+                    LoadInteger();
+                    LoadInteger();
+                    return;
+                }
+                case 125: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 126: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadLocation();
+                    LoadLocation();
+                    SkipRegexpSource();
+                    return;
+                }
+                case 127: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadLocation();
+                    return;
+                }
+                case 128: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    return;
+                }
+                case 129: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    LoadLocation();
+                    SkimNode();
+                    return;
+                }
+                case 130: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimNodeList();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 131: {
+                    LoadVarUInt(); // flags
+                    LoadVarUInt();
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    return;
+                }
+                case 132: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 133: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 134: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 135: {
+                    LoadVarUInt(); // flags
+                    SkimNode();
+                    return;
+                }
+                case 136: {
+                    LoadVarUInt(); // flags
+                    _contents |= ContentsEager;
+                    SkipVarUIntList();
+                    LoadLocation();
+                    LoadLocation();
+                    SkimNode();
+                    SkimOptionalNode();
+                    LoadLocation();
+                    return;
+                }
+                case 137: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 138: {
+                    LoadVarUInt(); // flags
+                    SkipString();
+                    return;
+                }
+                case 139: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 140: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 141: {
+                    LoadVarUInt(); // flags
+                    SkimNodeList();
+                    return;
+                }
+                case 142: {
+                    LoadVarUInt(); // flags
+                    LoadOptionalLocation();
+                    LoadLocation();
+                    LoadOptionalLocation();
+                    SkipString();
+                    return;
+                }
+                case 143: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    if (_buffer[_pos] == 0) _contents |= ContentsUsesBlock;
+                    SkimOptionalNode();
+                    return;
+                }
+                case 144: {
+                    LoadVarUInt(); // flags
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    SkipString();
+                    return;
+                }
+                case 145: {
+                    LoadVarUInt(); // flags
+                    return;
+                }
+                case 146: {
+                    LoadVarUInt(); // flags
+                    SkimNodeList();
+                    LoadLocation();
+                    return;
+                }
+                case 147: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimNode();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    return;
+                }
+                case 148: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    SkimNode();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 149: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    SkimNodeList();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 150: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadOptionalLocation();
+                    LoadOptionalLocation();
+                    SkimNode();
+                    SkimOptionalNode();
+                    return;
+                }
+                case 151: {
+                    LoadVarUInt(); // flags
+                    LoadLocation();
+                    LoadLocation();
+                    LoadLocation();
+                    SkipString();
+                    return;
+                }
+                case 152: {
+                    LoadVarUInt(); // flags
+                    _contents |= ContentsUsesBlock;
+                    LoadLocation();
+                    LoadOptionalLocation();
+                    SkimOptionalNode();
+                    LoadOptionalLocation();
+                    return;
                 }
               default:
                   throw new System.InvalidOperationException("Unknown prism node type: " + type);

@@ -99,7 +99,8 @@ namespace IronRuby.Builtins {
         /// One frozen string, answered again every time: MRI's nil.to_s is a single object, and
         /// a spec checks that two calls hand back the very same one.
         /// </summary>
-        private static readonly MutableString/*!*/ _EmptyString = MutableString.CreateEmpty().Freeze();
+        // US-ASCII, as MRI's nil.to_s is
+        private static readonly MutableString/*!*/ _EmptyString = MutableString.Create(String.Empty, RubyEncoding.Ascii).Freeze();
 
         [RubyMethodAttribute("to_s")]
         public static MutableString/*!*/ ToString(object self) {

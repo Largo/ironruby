@@ -55,6 +55,11 @@ namespace IronRuby.Builtins {
         // #string answers the same frozen String every time it is called, so it is made once.
         private MutableString _frozenInput;
 
+        // GroupCount, worked out once per match: it is asked for by every group access, and
+        // telling a hidden group from a Ruby one parses group names. Zero means not known yet
+        // (there is always group 0).
+        private int _groupCount;
+
         public MutableString/*!*/ OriginalString { get { return _originalString; } }
 
         public RubyRegex Regexp { get { return _regexp; } }
@@ -77,12 +82,16 @@ namespace IronRuby.Builtins {
         /// </summary>
         public int GroupCount { 
             get {
+                int count = _groupCount;
+                if (count > 0) {
+                    return count;
+                }
                 var groups = _match.Groups;
-                int count = groups.Count;
+                count = groups.Count;
                 while (count > 1 && IsHiddenGroup(groups[count - 1])) {
                     count--;
                 }
-                return count;
+                return _groupCount = count;
             } 
         }
 
@@ -166,6 +175,7 @@ namespace IronRuby.Builtins {
         
         public void InitializeFrom(MatchData/*!*/ other) {
             _match = other._match;
+            _groupCount = 0;
             _originalString = other._originalString;
             _encodedInput = other._encodedInput;
             _encoding = other._encoding;
@@ -282,6 +292,26 @@ namespace IronRuby.Builtins {
         public int[] GetGroupOffsets(int groupIndex, bool inBytes) {
             RequireExistingGroup(groupIndex);
             return OffsetsOf(_match.Groups[groupIndex], inBytes);
+        }
+
+        /// <summary>
+        /// What <see cref="GetGroupOffsets(int, bool)"/> answers in bytes, without an array: false
+        /// when the group did not take part in the match. For a scanner that asks for an offset
+        /// pair on every token.
+        /// </summary>
+        public bool TryGetGroupByteOffsets(int groupIndex, out int start, out int end) {
+            if (groupIndex != 0) { // group 0 always exists
+                RequireExistingGroup(groupIndex);
+            }
+            // group 0 is the Match itself, which spares the group collection
+            Group group = (groupIndex == 0) ? _match : _match.Groups[groupIndex];
+            if (!group.Success) {
+                start = end = 0;
+                return false;
+            }
+            start = ToByteIndex(group.Index);
+            end = ToByteIndex(group.Index + group.Length);
+            return true;
         }
 
         public int[] GetGroupOffsets(string/*!*/ name, bool inBytes) {

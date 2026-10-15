@@ -162,6 +162,9 @@ namespace IronRuby.Runtime {
             _path = path;
             _line = line;
             _scope = scope;
+            if (scope != null) {
+                scope.MarkCaptured();
+            }
             _cachedSite = null;
         }
 
