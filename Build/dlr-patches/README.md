@@ -21,3 +21,9 @@ the apply step instead of with a confusing CS1061 deep inside IronRuby.
 `aot/` holds patches for the ahead-of-time/NativeAOT prototype (`Util/aot`). CI does not apply
 them (the loop above takes this directory's `*.patch` only); `Util/aot/NativeAot/make-dlr-copy.sh`
 applies them to a private copy of the DLR.
+
+`wasm/` holds the patches the browser build (`wasm/build.sh`) applies on top of those to its own
+copy of the DLR (`../dlr-wasm`): `0001-browser-posix-file-system.patch` (browser-wasm reports
+`PlatformID.Other`, but its emscripten file system is POSIX: `/` paths, case-sensitive) and
+`0002-compile-synchronously-without-threads.patch` (no background thread to compile hot
+interpreted code on, so it is compiled synchronously when it crosses the threshold).

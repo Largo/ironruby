@@ -63,7 +63,7 @@ namespace IronRuby.Runtime {
             : this(context) {
             // Compiled trace: contains frames starting with the throw site up to the first filter/catch that the exception was caught by:
             StackTrace throwSiteTrace = GetClrStackTrace(exception, _needsClrFileInfo);
-            _interpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+            _interpretedFrames = (IList<InterpretedFrameInfo>)InterpretedFrame.GetExceptionStackTrace(exception) ?? (ClrStackAvailable ? null : CurrentInterpretedFrames());
             AddExceptionBacktrace(throwSiteTrace, catchSiteTrace, isCatchSiteInterpreted);
         }
 
@@ -73,7 +73,60 @@ namespace IronRuby.Runtime {
             AddExceptionBacktrace(captured.ThrowSiteTrace, captured.CatchSiteTrace, captured.IsCatchSiteInterpreted);
         }
 
+        /// <summary>
+        /// False where a CLR stack walk sees no frames at all: .NET on WebAssembly with the assemblies
+        /// AOT-compiled (wasm code carries no unwind information). Backtraces are then made of the
+        /// interpreter's own frame chain alone, so frames of compiled code (the method JIT, lambdas the
+        /// interpreter compiled) and of library methods are missing from them.
+        /// IR_INTERPRETED_BACKTRACES=1 asks for the same anywhere, to test it.
+        /// </summary>
+        internal static readonly bool ClrStackAvailable =
+            new StackTrace(false).FrameCount > 0 && Environment.GetEnvironmentVariable("IR_INTERPRETED_BACKTRACES") != "1";
+
+        private static IList<InterpretedFrameInfo> CurrentInterpretedFrames() {
+            var frame = InterpretedFrame.CurrentFrame.Value;
+            return frame != null ? new List<InterpretedFrameInfo>(frame.GetStackTraceDebugInfo()) : null;
+        }
+
+        // The interpreted-frames-only backtrace (see ClrStackAvailable), innermost first.
+        private void AddInterpretedBacktrace(IList<InterpretedFrameInfo> frames, int skipFrames) {
+            if (frames == null) {
+                return;
+            }
+            foreach (var info in frames) {
+                string methodName = info.MethodName;
+                string file = info.DebugInfo != null ? info.DebugInfo.FileName : null;
+                int line = info.DebugInfo != null ? info.DebugInfo.StartLine : 0;
+                if (methodName == InterpretedCallSiteName || !TryParseRubyMethodName(ref methodName, ref file, ref line)) {
+                    continue;
+                }
+                if (!_keepInternalFrames && IsInternalFile(file)) {
+                    if (IsInternalMethodFrame(methodName)) {
+                        _deferredMethodNames.Add(methodName);
+                    }
+                    continue;
+                }
+                foreach (var deferred in _deferredMethodNames) {
+                    if (skipFrames == 0) {
+                        _trace.Add(MutableString.Create(FormatFrame(file, line, deferred), _encoding));
+                    } else {
+                        skipFrames--;
+                    }
+                }
+                _deferredMethodNames.Clear();
+                if (skipFrames == 0) {
+                    _trace.Add(MutableString.Create(FormatFrame(file, line, methodName), _encoding));
+                } else {
+                    skipFrames--;
+                }
+            }
+        }
+
         private void AddExceptionBacktrace(StackTrace/*!*/ throwSiteTrace, StackTrace catchSiteTrace, bool isCatchSiteInterpreted) {
+            if (!ClrStackAvailable) {
+                AddInterpretedBacktrace(_interpretedFrames, 0);
+                return;
+            }
             AddBacktrace(throwSiteTrace.GetFrames(), 0, false);
 
             // Compiled trace: contains frames above and including the first Ruby filter/catch site that the exception was caught by:
@@ -108,6 +161,10 @@ namespace IronRuby.Runtime {
                 ThrowSiteTrace = GetClrStackTrace(exception, NeedsClrFileInfo(context));
                 // the interpreter's frames are saved on the exception once, and raise clears them:
                 InterpretedFrames = InterpretedFrame.GetExceptionStackTrace(exception);
+                if (InterpretedFrames == null && !ClrStackAvailable) {
+                    // raised and rescued within compiled code: where the rescue is is all there is
+                    InterpretedFrames = CurrentInterpretedFrames();
+                }
                 CatchSiteTrace = catchSiteTrace;
                 IsCatchSiteInterpreted = isCatchSiteInterpreted;
             }
@@ -124,6 +181,10 @@ namespace IronRuby.Runtime {
         internal RubyStackTraceBuilder(RubyContext/*!*/ context, int skipFrames, bool keepInternalFrames)
             : this(context) {
             _keepInternalFrames = keepInternalFrames;
+            if (!ClrStackAvailable) {
+                AddInterpretedBacktrace(CurrentInterpretedFrames(), skipFrames);
+                return;
+            }
             var trace = GetClrStackTrace(null, _needsClrFileInfo);
 
             _interpretedFrames = InterpretedFrame.CurrentFrame.Value != null ?

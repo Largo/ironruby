@@ -23,7 +23,9 @@ namespace IronRuby.Builtins {
     internal static class Posix {
         internal static readonly bool IsAvailable =
             System.IO.Path.DirectorySeparatorChar == '/' &&
-            !RuntimeInformation.IsOSPlatform(OSPlatform.OSX);
+            !RuntimeInformation.IsOSPlatform(OSPlatform.OSX) &&
+            // browser-wasm: there is no libc to P/Invoke (the managed fallbacks are used)
+            !OperatingSystem.IsBrowser();
 
         #region errno numbers
 

@@ -777,8 +777,9 @@ namespace IronRuby.Runtime {
 
         [System.Diagnostics.CodeAnalysis.SuppressMessage("Microsoft.Security", "CA2122:DoNotIndirectlyExposeMethodsWithLinkDemands")]
         private void TrySetCurrentProcessVariables() {
-            Process process = Process.GetCurrentProcess();
-            DefineGlobalVariableNoLock(Symbols.CurrentProcessId, new ReadOnlyGlobalVariableInfo(process.Id));
+            // the browser (wasm) has no process to ask; Environment.ProcessId answers there too
+            int pid = OperatingSystem.IsBrowser() ? Environment.ProcessId : Process.GetCurrentProcess().Id;
+            DefineGlobalVariableNoLock(Symbols.CurrentProcessId, new ReadOnlyGlobalVariableInfo(pid));
         }
 
         private void InitializeGlobalConstants() {
@@ -902,7 +903,8 @@ namespace IronRuby.Runtime {
                     return MakeWindowsPlatformName();
 
                 default:
-                    return "unknown";
+                    // browser-wasm reports PlatformID.Other
+                    return OperatingSystem.IsBrowser() ? "wasm32-browser" : "unknown";
             }
         }
 
