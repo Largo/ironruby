@@ -105,7 +105,7 @@ package. Pure managed code works. P/Invoke into native libraries does not.
   precompressed files (`Content-Encoding: br`, as `test/serve.mjs` does, or nginx `gzip_static` /
   `brotli_static`) sends about 13.5 MB brotli or 20 MB gzip. Uncompressed it is about 63 MB. No
   `.pdb` files are published.
-- `stdlib.zip` (about 4 MB, stored): unpacked into the in-memory file system at boot.
+- `stdlib.zip` (about 5.4 MB, stored): unpacked into the in-memory file system at boot.
   `/ironruby/stdlib` holds the IronRuby, 4.0 and 1.9.1 libraries without what needs processes,
   sockets or RubyGems (rubygems, bundler, irb, rdoc, webrick, drb, puma, ffi, ...).
   `/ironruby/stdlib/bundled-gems` holds the pure-Ruby bundled gems (ostruct, prime, csv, matrix,
