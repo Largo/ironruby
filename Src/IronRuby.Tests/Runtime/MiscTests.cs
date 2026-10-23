@@ -868,6 +868,49 @@ end
         }
 
         /// <summary>
+        /// Process.spawn redirected to File::NULL, and Process.kill. On Windows File::NULL was "/dev/null",
+        /// so the redirect failed with an ENOENT that named the program; Process.kill P/Invoked libc's
+        /// kill() and raised DllNotFoundException. The child reads a pipe nobody writes to, so it runs
+        /// until it is killed. File::NULL and Process.spawn are the prelude's (ruby4.rb), which needs prism.
+        /// </summary>
+        [Options(Prism = true)]
+        public void Process_SpawnKill1() {
+            TestOutput(@"
+require 'ruby4'
+windows = File::ALT_SEPARATOR == '\\'
+p File::NULL == (windows ? 'NUL' : '/dev/null'), IO::NULL == File::NULL
+
+command = windows ? ['cmd.exe', '/c', 'more'] : ['cat']
+r, w = IO.pipe
+pid = Process.spawn(*(command + [{:in => r, :out => File::NULL, :err => File::NULL}]))
+r.close
+p Process.kill(0, pid), Process.kill(:KILL, pid)
+p Process.wait(pid) == pid
+w.close
+begin
+  Process.kill(0, pid)
+rescue Errno::ESRCH
+  p :gone
+end
+
+# a redirection that cannot be opened is what the error names (Windows; posix_spawn cannot tell)
+begin
+  Process.spawn(*(command + [{:out => 'no/such/dir/out.txt'}]))
+rescue Errno::ENOENT => e
+  p(!windows || e.message.include?('no/such/dir/out.txt'))
+end
+", @"
+true
+true
+1
+1
+true
+:gone
+true
+");
+        }
+
+        /// <summary>
         /// Zlib's streams and checksums. Windows has no libz; there they run on the zlib .NET ships
         /// (ClrZlib), so everything here holds on both: input CRuby compressed, round trips, and
         /// the values libz keeps in the z_stream (total_in, total_out, adler) rather than bytes a

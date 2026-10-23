@@ -186,6 +186,9 @@ namespace IronRuby.Builtins {
         /// to the prelude, which knows how to turn it into the right class.
         /// </summary>
         internal static int Kill(int pid, int signal) {
+            if (RubyProcess.IsWindows) {
+                return WindowsSpawn.Kill(pid, signal);
+            }
             if (SysKill(pid, signal) == 0) {
                 return 0;
             }

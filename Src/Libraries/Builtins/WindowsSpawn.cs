@@ -143,6 +143,15 @@ namespace IronRuby.Builtins {
         private static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr security,
             uint creation, uint flags, IntPtr template);
 
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern IntPtr OpenProcess(uint access, bool inheritHandle, int processId);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool TerminateProcess(IntPtr handle, uint exitCode);
+
+        [DllImport("kernel32", SetLastError = true)]
+        private static extern bool GenerateConsoleCtrlEvent(uint ctrlEvent, int processGroupId);
+
         #endregion
 
         #region children
@@ -173,6 +182,12 @@ namespace IronRuby.Builtins {
                     return true;
                 }
                 return false;
+            }
+        }
+
+        private static bool TryGetChild(int pid, out IntPtr handle) {
+            lock (_children) {
+                return _children.TryGetValue(pid, out handle);
             }
         }
 
@@ -438,10 +453,12 @@ namespace IronRuby.Builtins {
                         break;
 
                     default: {
-                        IntPtr opened = OpenFile(ToStr(action[2]), ToInt(action[3]));
+                        string path = ToStr(action[2]);
+                        IntPtr opened = OpenFile(path, ToInt(action[3]));
                         if (opened == new IntPtr(-1)) {
-                            plan.Error = -Errno(Marshal.GetLastWin32Error());
-                            return plan;
+                            int error = Marshal.GetLastWin32Error();
+                            plan.Dispose();
+                            throw RedirectionError(error, path);
                         }
                         plan.Opened.Add(opened);
                         Assign(plan, target, opened);
@@ -502,6 +519,19 @@ namespace IronRuby.Builtins {
 
             return CreateFileW(path, access, FILE_SHARE_READ_WRITE_DELETE, IntPtr.Zero, creation,
                 FILE_ATTRIBUTE_NORMAL, IntPtr.Zero);
+        }
+
+        /// <summary>
+        /// MRI opens a redirection's file in the parent before it starts the child, so a file that
+        /// cannot be opened is what the error names. Handing back only -errno made the prelude name
+        /// the program instead: `out: "C:/no/dir/x"` read as "No such file or directory - ruby.exe".
+        /// </summary>
+        private static Exception/*!*/ RedirectionError(int win32Error, string/*!*/ path) {
+            switch (Errno(win32Error)) {
+                case ENOENT: return new FileNotFoundException(path);
+                case EACCES: return Directory.Exists(path) ? RubyExceptions.CreateEISDIR(path) : new UnauthorizedAccessException(path);
+                default: return new InvalidError(path);
+            }
         }
 
         private static int Errno(int win32Error) {
@@ -594,6 +624,75 @@ namespace IronRuby.Builtins {
             CloseHandle(handle);
             Environment.Exit(unchecked((int)code));
             return 0;   // not reached
+        }
+
+        #endregion
+
+        #region kill
+
+        private const int SIGINT = 2;
+        private const int SIGKILL = 9;
+        private const int EPERM = 1;
+        private const int ESRCH = 3;
+        private const uint STILL_ACTIVE = 259;
+        private const uint PROCESS_TERMINATE = 0x0001;
+        private const uint PROCESS_QUERY_INFORMATION = 0x0400;
+        private const int ERROR_INVALID_PARAMETER = 87;
+        private const uint CTRL_C_EVENT = 0;
+        private const uint CTRL_BREAK_EVENT = 1;
+
+        /// <summary>
+        /// kill(2) as MRI's win32 kill() does it, since there is no kill(2) to call - the libc one
+        /// Process.kill used to P/Invoke is not there (DllNotFoundException). Returns 0, or -errno.
+        /// KILL is TerminateProcess (with exit code 0, as in MRI), 0 asks whether the process still
+        /// runs, INT is a console Ctrl+C - Ctrl+Break for a pid, which has to be a process group
+        /// (spawn's pgroup: true). Windows has no other signals to send: EINVAL, as in MRI.
+        /// </summary>
+        internal static int Kill(int pid, int signal) {
+            if (pid < 0 || (pid == 0 && signal != SIGINT)) {
+                return -EINVAL;
+            }
+
+            switch (signal) {
+                case SIGINT:
+                    // a console's Ctrl+C cannot be aimed at one process group, so a pid gets Ctrl+Break
+                    if (!GenerateConsoleCtrlEvent(pid != 0 ? CTRL_BREAK_EVENT : CTRL_C_EVENT, pid)) {
+                        int error = Marshal.GetLastWin32Error();
+                        return -(error == 0 ? EPERM : Errno(error));
+                    }
+                    return 0;
+
+                case 0:
+                case SIGKILL:
+                    IntPtr handle;
+                    bool child = TryGetChild(pid, out handle);
+                    if (!child) {
+                        handle = OpenProcess(PROCESS_TERMINATE | PROCESS_QUERY_INFORMATION, false, pid);
+                        if (handle == IntPtr.Zero) {
+                            return (Marshal.GetLastWin32Error() == ERROR_INVALID_PARAMETER) ? -ESRCH : -EPERM;
+                        }
+                    }
+                    try {
+                        uint status;
+                        if (!GetExitCodeProcess(handle, out status)) {
+                            return -Errno(Marshal.GetLastWin32Error());
+                        }
+                        if (status != STILL_ACTIVE) {
+                            return -ESRCH;
+                        }
+                        if (signal == SIGKILL && !TerminateProcess(handle, 0)) {
+                            return -EPERM;
+                        }
+                        return 0;
+                    } finally {
+                        if (!child) {
+                            CloseHandle(handle);
+                        }
+                    }
+
+                default:
+                    return -EINVAL;
+            }
         }
 
         #endregion
