@@ -702,6 +702,7 @@ namespace IronRuby.Tests {
                 Time_DumpLoadedZone1,
                 Time_MachineZone1,
                 Time_OlsonZone1,
+                Zlib_Streams1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,

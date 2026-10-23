@@ -867,6 +867,119 @@ end
         }
 
         /// <summary>
+        /// Zlib's streams and checksums. Windows has no libz; there they run on the zlib .NET ships
+        /// (ClrZlib), so everything here holds on both: input CRuby compressed, round trips, and
+        /// the values libz keeps in the z_stream (total_in, total_out, adler) rather than bytes a
+        /// particular compressor produces.
+        /// </summary>
+        public void Zlib_Streams1() {
+            TestOutput(@"
+load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Zlib'
+
+hex = lambda { |s| [s].pack('H*') }
+text = 'hello hello hello hello'
+
+# from CRuby: Zlib::Deflate.deflate(text), and Zlib.gzip(text)
+p Zlib::Inflate.inflate(hex['789ccb48cdc9c957c8402701680308b1'])
+p Zlib.gunzip(hex['1f8b0800486adb6a0003cb48cdc9c957c8402701e3513d8d17000000'])
+
+# fed a few bytes at a time, as a PNG decoder does
+data = 'IronRuby zlib ' * 2000
+z = Zlib::Deflate.deflate(data)
+inf = Zlib::Inflate.new
+out = ''
+z.bytes.each_slice(7) { |s| out << inf.inflate(s.pack('C*')) }
+out << inf.finish
+p [out == data, inf.finished?, inf.total_in == z.bytesize, inf.total_out, inf.adler == Zlib.adler32(data)]
+inf.close
+
+d = Zlib::Deflate.new
+d << data[0, 10000]
+d << data[10000..-1]
+z = d.finish
+p [d.total_in, d.total_out == z.bytesize, d.adler == Zlib.adler32(data), Zlib::Inflate.inflate(z) == data]
+d.close
+
+p Zlib.gunzip(Zlib.gzip(data)) == data
+raw = Zlib::Deflate.new(Zlib::BEST_SPEED, -Zlib::MAX_WBITS).deflate(data, Zlib::FINISH)
+p Zlib::Inflate.new(-Zlib::MAX_WBITS).inflate(raw) == data
+p Zlib::Inflate.new(Zlib::MAX_WBITS + 32).inflate(Zlib.gzip(data)) == data
+
+# a stream reset is a fresh one
+d = Zlib::Deflate.new
+d.deflate('discarded', Zlib::SYNC_FLUSH)
+d.reset
+z = d.deflate(text, Zlib::FINISH)
+p [Zlib::Inflate.inflate(z), d.total_in]
+
+# deflated with the preset dictionary 'hello': inflate asks for it by its adler32
+inf = Zlib::Inflate.new
+begin
+  inf.inflate(hex['78bb062c0215cb00110ae5f9453929001a0b045d'])
+rescue Zlib::NeedDict
+  p [:need_dict, inf.adler == Zlib.adler32('hello')]
+end
+
+p [Zlib.crc32(text), Zlib.adler32(text), Zlib.crc32, Zlib.adler32, Zlib.crc32('lo', Zlib.crc32('hel'))]
+p [Zlib.crc32_combine(Zlib.crc32('hel'), Zlib.crc32('lo'), 2) == Zlib.crc32('hello'),
+   Zlib.adler32_combine(Zlib.adler32('hel'), Zlib.adler32('lo'), 2) == Zlib.adler32('hello')]
+p Zlib.crc_table.size, Zlib.crc_table[1], Zlib.crc_table[255]
+
+begin
+  Zlib::Inflate.inflate('not zlib')
+rescue Zlib::DataError => e
+  p e.message
+end
+
+# deflateParams refuses bad values and leaves the stream as it was
+d = Zlib::Deflate.new
+begin
+  d.params(99, 0)
+rescue Zlib::StreamError
+  p :refused
+end
+p Zlib::Inflate.inflate(d.deflate(text, Zlib::FINISH)) == text
+
+# the parameters a stream already has are no change, even after data (the default level is 6)
+d = Zlib::Deflate.new
+d << text
+d.params(6, Zlib::DEFAULT_STRATEGY)
+p Zlib::Inflate.inflate(d.finish) == text
+
+# deflate's guess at what the data is
+d = Zlib::Deflate.new
+d.deflate(text, Zlib::FINISH)
+p d.data_type == Zlib::TEXT
+
+# inflate detecting the wrapper keeps adler at 1 until it has read a whole gzip header
+inf = Zlib::Inflate.new(Zlib::MAX_WBITS + 32)
+inf.inflate(Zlib.gzip(text)[0, 5])
+p inf.adler
+", @"
+""hello hello hello hello""
+""hello hello hello hello""
+[true, true, true, 28000, true]
+[28000, true, true, true]
+true
+true
+true
+[""hello hello hello hello"", 23]
+[:need_dict, true]
+[2369606115, 1745029297, 0, 1, 907060870]
+[true, true]
+256
+1996959894
+755167117
+""incorrect header check""
+:refused
+true
+true
+true
+1
+");
+        }
+
+        /// <summary>
         /// Time._load hands a dumped zone name to the class's find_timezone. As in MRI, a StandardError from the
         /// lookup leaves the name and anything else goes through; only bytes that are not a time are a TypeError.
         /// </summary>
