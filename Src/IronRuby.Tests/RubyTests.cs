@@ -704,6 +704,7 @@ namespace IronRuby.Tests {
                 Time_OlsonZone1,
                 Zlib_Streams1,
                 Process_SpawnKill1,
+                Json_ControlCharacters1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,
