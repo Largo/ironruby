@@ -700,6 +700,8 @@ namespace IronRuby.Tests {
                 Scenario_MainSingleton,
                 Time_LoadZone1,
                 Time_DumpLoadedZone1,
+                Time_MachineZone1,
+                Time_OlsonZone1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,

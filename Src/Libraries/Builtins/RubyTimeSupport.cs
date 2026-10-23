@@ -476,13 +476,19 @@ namespace IronRuby.Builtins {
 
     /// <summary>
     /// A time zone as Ruby sees it. Backed by the zoneinfo file when one exists, because that
-    /// carries the DST transitions and the POSIX abbreviations that Ruby reports; otherwise a
-    /// plain fixed offset parsed out of a POSIX TZ string.
+    /// carries the DST transitions and the POSIX abbreviations that Ruby reports; where there is
+    /// none (Windows) by .NET's TimeZoneInfo, which has the same transitions but no abbreviations;
+    /// otherwise a plain fixed offset parsed out of a POSIX TZ string.
     /// </summary>
     public sealed class RubyTimeZone {
-        private readonly TzFile _file;          // null for a fixed-offset zone
+        private readonly TzFile _file;          // null unless the zone has a zoneinfo file
+        private readonly TimeZoneInfo _system;  // null unless the zone is a .NET one without a zoneinfo file
         private readonly long _fixedOffset;     // seconds east of UTC
         private readonly string/*!*/ _name;
+
+        // the range of seconds since the epoch a DateTimeOffset can hold
+        private const long MinSystemSeconds = -62135596800L;
+        private const long MaxSystemSeconds = 253402300799L;
 
         public static readonly RubyTimeZone/*!*/ Utc = new RubyTimeZone(null, 0, "UTC");
 
@@ -490,6 +496,12 @@ namespace IronRuby.Builtins {
             _file = file;
             _fixedOffset = fixedOffset;
             _name = name;
+        }
+
+        private RubyTimeZone(TimeZoneInfo/*!*/ system) {
+            _system = system;
+            _fixedOffset = (long)system.BaseUtcOffset.TotalSeconds;
+            _name = system.Id;
         }
 
         internal static RubyTimeZone/*!*/ MakeFixed(long offsetSeconds, string/*!*/ name) {
@@ -504,7 +516,19 @@ namespace IronRuby.Builtins {
 
         internal static RubyTimeZone FromId(string/*!*/ id) {
             TzFile file = TzFile.TryLoad(id);
-            return (file != null) ? new RubyTimeZone(file, 0, id) : null;
+            if (file != null) {
+                return new RubyTimeZone(file, 0, id);
+            }
+
+            // No zoneinfo file (Windows): .NET knows the Olson names too. Only an Area/City name is
+            // looked up, so that a POSIX TZ string such as "EST5EDT" or "UTC" keeps its own meaning.
+            if (id.IndexOf('/') > 0) {
+                TimeZoneInfo system;
+                if (TimeZoneInfo.TryFindSystemTimeZoneById(id, out system)) {
+                    return new RubyTimeZone(system);
+                }
+            }
+            return null;
         }
 
         /// <summary>The machine's zone, used when TZ is unset.</summary>
@@ -513,12 +537,23 @@ namespace IronRuby.Builtins {
             if (file != null) {
                 return new RubyTimeZone(file, 0, System.TimeZoneInfo.Local.Id);
             }
-            var local = System.TimeZoneInfo.Local;
-            return MakeFixed((long)local.BaseUtcOffset.TotalSeconds, local.StandardName);
+            // Windows: the zone's DST rules are in TimeZoneInfo.Local; its base offset alone would
+            // put every summer time an hour off.
+            return new RubyTimeZone(System.TimeZoneInfo.Local);
+        }
+
+        private static DateTimeOffset ToSystemInstant(long unixSeconds) {
+            return DateTimeOffset.FromUnixTimeSeconds(Math.Max(MinSystemSeconds, Math.Min(MaxSystemSeconds, unixSeconds)));
         }
 
         internal long GetOffset(long unixSeconds) {
-            return (_file != null) ? _file.GetOffset(unixSeconds) : _fixedOffset;
+            if (_file != null) {
+                return _file.GetOffset(unixSeconds);
+            }
+            if (_system != null) {
+                return (long)_system.GetUtcOffset(ToSystemInstant(unixSeconds)).TotalSeconds;
+            }
+            return _fixedOffset;
         }
 
         /// <summary>
@@ -529,13 +564,13 @@ namespace IronRuby.Builtins {
         /// never occurs (the clocks went forward) is taken with the offset from before the change.
         /// </summary>
         internal long GetOffsetForWallClock(long wallSeconds, bool preferDst = false) {
-            if (_file == null) {
+            if (_file == null && _system == null) {
                 return _fixedOffset;
             }
-            long before = _file.GetOffset(wallSeconds - 86400);
-            long after = _file.GetOffset(wallSeconds + 86400);
-            bool beforeFits = _file.GetOffset(wallSeconds - before) == before;
-            bool afterFits = _file.GetOffset(wallSeconds - after) == after;
+            long before = GetOffset(wallSeconds - 86400);
+            long after = GetOffset(wallSeconds + 86400);
+            bool beforeFits = GetOffset(wallSeconds - before) == before;
+            bool afterFits = GetOffset(wallSeconds - after) == after;
             if (beforeFits && afterFits) {
                 return preferDst ? Math.Max(before, after) : Math.Min(before, after);
             }
@@ -546,9 +581,9 @@ namespace IronRuby.Builtins {
                 return before;
             }
             // neither fits: a gap, or more than one change within the day
-            long guess = _file.GetOffset(wallSeconds);
-            long second = _file.GetOffset(wallSeconds - guess);
-            return (_file.GetOffset(wallSeconds - second) == second) ? second : before;
+            long guess = GetOffset(wallSeconds);
+            long second = GetOffset(wallSeconds - guess);
+            return (GetOffset(wallSeconds - second) == second) ? second : before;
         }
 
         internal string/*!*/ GetAbbreviation(long unixSeconds) {
@@ -558,10 +593,16 @@ namespace IronRuby.Builtins {
                     return result;
                 }
             }
+            // A TimeZoneInfo zone is named by its id, summer and winter alike, as CRuby on Windows names
+            // it ("W. Europe Standard Time"): StandardName and DaylightName are in the language of the
+            // Windows installation, and Ruby takes a zone name to be ASCII.
             return _name;
         }
 
         internal bool IsDaylightSavingTime(long unixSeconds) {
+            if (_system != null) {
+                return _system.IsDaylightSavingTime(ToSystemInstant(unixSeconds));
+            }
             return _file != null && _file.IsDaylightSavingTime(unixSeconds);
         }
 
