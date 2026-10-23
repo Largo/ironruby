@@ -554,9 +554,9 @@ namespace IronRuby.Tests {
                 ClrToString1,
                 ClrHashEquals4,
                 ClrTypeVariance1,
-                // TODO: fails with /noadaptive
-                // ClrValueTypes1,
+                ClrValueTypes1,
                 ClrValueTypes2,
+                ClrValueTypes3,
                 HostingDefaultOptions1,
                 Interactive1,
                 Interactive2,
