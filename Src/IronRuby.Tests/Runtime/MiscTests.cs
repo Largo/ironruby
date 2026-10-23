@@ -911,6 +911,38 @@ true
         }
 
         /// <summary>
+        /// A raw control character (U+0000-U+001F) inside a JSON string is a ParserError, as in the json gem;
+        /// JSON.parse took a model's answer with a literal line break in a value as it was. The gem's
+        /// allow_control_characters option (2.18.0) lets them through.
+        /// </summary>
+        public void Json_ControlCharacters1() {
+            TestOutput(@"
+load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Json'
+
+[10, 9, 1, 0, 31].each do |code|
+  src = '{""k"": ""a' + code.chr + 'b""}'
+  begin
+    JSON.parse(src)
+    p [code, :accepted]
+  rescue JSON::ParserError => e
+    p [code, e.message.start_with?('invalid ASCII control character in string')]
+  end
+end
+p JSON.parse('[""a' + 10.chr + 'b""]', :allow_control_characters => true)
+# an escaped one, and DEL, are fine
+p JSON.parse('[""a\nb"", ""' + 127.chr + '""]') == ['a' + 10.chr + 'b', 127.chr]
+", @"
+[10, true]
+[9, true]
+[1, true]
+[0, true]
+[31, true]
+[""a\nb""]
+true
+");
+        }
+
+        /// <summary>
         /// Zlib's streams and checksums. Windows has no libz; there they run on the zlib .NET ships
         /// (ClrZlib), so everything here holds on both: input CRuby compressed, round trips, and
         /// the values libz keeps in the z_stream (total_in, total_out, adler) rather than bytes a
