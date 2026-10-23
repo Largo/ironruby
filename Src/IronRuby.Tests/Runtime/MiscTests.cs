@@ -814,6 +814,59 @@ puts ArrayList
         }
 
         /// <summary>
+        /// With TZ unset the zone is the machine's, daylight saving time included. Windows has no /etc/localtime,
+        /// and the zone used to be TimeZoneInfo.Local's base offset alone, so Time.now, Time.local and File.mtime
+        /// were an hour off all summer. Compared with .NET's own answer, so it holds in any machine zone. The zone's
+        /// name, which on Windows is in the installation's language and need not be ASCII, survives Marshal.
+        /// </summary>
+        public void Time_MachineZone1() {
+            TestOutput(@"
+ENV.delete('TZ')
+local = System::TimeZoneInfo.Local
+# 2026-01-15 and 2026-07-15, 10:00 UTC
+[1768471200, 1784109600].each do |s|
+  t = Time.at(s)
+  expected = local.GetUtcOffset(System::DateTimeOffset.FromUnixTimeSeconds(s)).TotalSeconds.to_i
+  dst = local.IsDaylightSavingTime(System::DateTimeOffset.FromUnixTimeSeconds(s))
+  w = Time.local(t.year, t.month, t.day, t.hour, t.min, t.sec)
+  p [t.utc_offset == expected, t.isdst == dst, w.to_i == s, w.utc_offset == expected]
+end
+p Time.now.utc_offset == local.GetUtcOffset(System::DateTimeOffset.UtcNow).TotalSeconds.to_i
+
+t = Time.at(1784109600)
+p Marshal.load(Marshal.dump(t)).zone == t.zone
+", @"
+[true, true, true, true]
+[true, true, true, true]
+true
+true
+");
+        }
+
+        /// <summary>
+        /// An Olson TZ name resolves on Windows too, where there is no zoneinfo file to read it from.
+        /// </summary>
+        public void Time_OlsonZone1() {
+            TestOutput(@"
+saved = ENV['TZ']
+begin
+  ENV['TZ'] = 'Europe/Zurich'
+  w = Time.at(1768471200)  # 2026-01-15 10:00 UTC
+  s = Time.at(1784109600)  # 2026-07-15 10:00 UTC
+  p [w.hour, w.utc_offset, w.isdst], [s.hour, s.utc_offset, s.isdst]
+  p Time.local(2026, 7, 15, 12).to_i, Time.local(2026, 1, 15, 11).to_i
+ensure
+  ENV['TZ'] = saved
+end
+", @"
+[11, 3600, false]
+[12, 7200, true]
+1784109600
+1768471200
+");
+        }
+
+        /// <summary>
         /// Time._load hands a dumped zone name to the class's find_timezone. As in MRI, a StandardError from the
         /// lookup leaves the name and anything else goes through; only bytes that are not a time are a TypeError.
         /// </summary>
