@@ -711,6 +711,7 @@ namespace IronRuby.Tests {
                 Numeric_BignumExponent1,
                 Float_Eql1,
                 ComparisonError_AnonymousClass1,
+                Array_FlattenNil1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,

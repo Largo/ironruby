@@ -3917,7 +3917,7 @@ class String
   def undump
     s = self
     forced = nil
-    if (m = /\A(".*")\.force_encoding\("([^"]+)"\)\z/m.match(s))
+    if (m = /\A(".*")(?:\.dup)?\.force_encoding\("([^"]+)"\)\z/m.match(s))
       s = m[1]
       forced = m[2]
     end
@@ -3942,6 +3942,7 @@ class String
       end
     end
     out = +""
+    unicode_escape = false
     i = 0
     while i < body.length
       c = body[i]
@@ -3971,6 +3972,7 @@ class String
           out << hex.to_i(16).chr
           i += 2
         when "u"
+          unicode_escape = true
           if body[i + 1] == "{"
             close = body.index("}", i + 1)
             ::Kernel.raise(::RuntimeError, "invalid Unicode escape") unless close
@@ -3990,6 +3992,11 @@ class String
         out << c
       end
       i += 1
+    end
+    # #dump writes \u escapes only for a Unicode string it does not need to re-encode,
+    # so the two forms never meet in its output.
+    if forced && unicode_escape
+      ::Kernel.raise(::RuntimeError, "dumped string contained Unicode escape but used force_encoding")
     end
     # Without a .force_encoding(...) suffix the answer carries the receiver's
     # own encoding, not UTF-8.
@@ -6404,6 +6411,7 @@ end
 class Enumerator
   class Yielder
     def initialize(&block)
+      ::Kernel.raise(::LocalJumpError, "no block given") unless block
       @block = block
     end
 
@@ -6421,6 +6429,11 @@ class Enumerator
       @block.call(*args)
     end
 
+    # MRI's yielder has no instance variables to show.
+    def inspect
+      to_s
+    end
+
     # Lets a yielder stand in for a block: `Enumerator.new { |y| ary.each(&y) }`.
     def to_proc
       yielder = self
@@ -6433,17 +6446,32 @@ class Enumerator
     # hides it from `super`, which would find Object#initialize and silently
     # leave the enumerator with no target. __enum_init__ is the way back in.
     def initialize(*args, &block)
-      if block
-        # Enumerator.new(size = nil) { |yielder| ... }
-        @generator = block
-        @__size__ = args[0] unless args.empty?
-      else
-        # Ruby 3.0 removed Enumerator.new(obj, meth, *args); only the block form
-        # is left. __enum_init__ is still how the prelude builds one internally.
+      # Ruby 3.0 removed Enumerator.new(obj, meth, *args); only the block form
+      # Enumerator.new(size = nil) { |yielder| ... } is left (__enum_init__ is
+      # still how the prelude builds one internally).  MRI asks for the block
+      # before it counts the arguments.
+      unless block
+        ::Kernel.raise(::ArgumentError, "tried to create Proc object without a block")
+      end
+      if args.size > 1
         ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
       end
+      @generator = block
+      @__size__ = ::Enumerator.__feasible_size__(args[0]) unless args.empty?
       @__initialized__ = true
       self
+    end
+
+    # convert_to_feasible_size_value: nil, a callable and Float::INFINITY stand,
+    # anything else has to be an Integer.
+    def self.__feasible_size__(value)
+      return value if value.nil? || value.respond_to?(:call)
+      return value if value.is_a?(::Float) && value == ::Float::INFINITY
+      return value if value.is_a?(::Integer)
+      unless value.respond_to?(:to_int)
+        ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+      end
+      value.to_int
     end
 
     # Ruby 1.9: extra arguments are appended to the ones the enumerator was built
@@ -6452,6 +6480,17 @@ class Enumerator
     # with the caller's frame - String#scan sets $~ there - and hands the rest to this.
     def __ir_each_impl__(*args, &block)
       unless args.empty?
+        if @generator
+          # Enumerator.new { |y, *extra| }: the arguments follow the yielder.  (Such an
+          # enumerator still carries an empty built-in target, so this comes first.)
+          generator = @generator
+          size = @__size__
+          unless block
+            return ::Enumerator.new(size) { |y| generator.call(y, *args) }
+              .__set_inspect__(nil, :each, args, "#<Enumerator::Generator:#{'0x%07x' % (generator.object_id * 2)}>")
+          end
+          return generator.call(Yielder.new(&block), *args)
+        end
         target = __enum_target__
         if target
           receiver, method, initial = target
@@ -6489,8 +6528,11 @@ class Enumerator
   end
   private :__index_offset__
 
-  def with_index(offset = 0)
-    offset = __index_offset__(offset)
+  def with_index(*args)
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    offset = __index_offset__(args[0])
     unless block_given?
       # yield [value, index] pairs, lazily, via the generator form above
       source = self
@@ -6498,7 +6540,7 @@ class Enumerator
       return Enumerator.new(n) { |y|
         i = offset
         source.each { |*a| y << [a.size <= 1 ? a.first : a, i]; i += 1 }
-      }
+      }.__set_inspect__(self, :with_index, args)
     end
     i = offset
     each do |*args|
@@ -6516,7 +6558,9 @@ class Enumerator
     unless args.empty?
       ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0)")
     end
-    with_index(0, &block)
+    result = with_index(0, &block)
+    result.__set_inspect__(self, :each_with_index) if !block && result.is_a?(::Enumerator)
+    result
   end
 
   def with_object(memo)
@@ -6524,6 +6568,7 @@ class Enumerator
       source = self
       n = source.size
       return Enumerator.new(n) { |y| source.each { |*a| y << [a.size <= 1 ? a.first : a, memo] } }
+        .__set_inspect__(self, :with_object, [memo])
     end
     each do |*args|
       yield(args.size <= 1 ? args.first : args, memo)
@@ -6683,15 +6728,44 @@ class Enumerator
   end
   private :__int_step_size__
 
+  # What #inspect shows for an enumerator the prelude built from a generator
+  # (with_index, a lazy chain, produce): the receiver, the method and its
+  # arguments, as MRI shows them.  recv_text stands in for recv.inspect.
+  def __set_inspect__(recv, meth, args = [], recv_text = nil)
+    @__inspect__ = [recv, meth, args, recv_text]
+    self
+  end
+
+  def __inspect_detail__(recv, meth, args, recv_text = nil)
+    text = recv_text || recv.inspect
+    return text if meth.nil?
+    text = "#{text}:#{meth}"
+    text += "(#{args.map { |a| a.inspect }.join(', ')})" unless args.nil? || args.empty?
+    text
+  end
+  private :__inspect_detail__
+
   def inspect
+    if (info = @__inspect__)
+      return "#<#{self.class}: #{__inspect_detail__(*info)}>"
+    end
     target = (@generator ? nil : __enum_target__)
-    return "#<#{self.class}: #{@generator ? 'generator' : '...'}>" unless target
+    unless target
+      if @generator
+        return "#<#{self.class}: #<Enumerator::Generator:#{'0x%07x' % (@generator.object_id * 2)}>:each>"
+      end
+      # A C#-built enumerator over a delegate keeps only its size descriptor,
+      # which for these names the method it came from.
+      info = __enum_size_info__
+      if info && [:cycle, :permutation, :combination].include?(info[1])
+        return "#<#{self.class}: #{__inspect_detail__(info[0], info[1], info[2].nil? ? [] : [info[2]])}>"
+      end
+      return "#<#{self.class}: ...>"
+    end
     recv, meth, args = target
     # Enumerator.allocate never got a receiver.
     return "#<#{self.class}: uninitialized>" if recv.nil? && meth == :each && args.empty?
-    detail = "#{recv.inspect}:#{meth}"
-    detail += "(#{args.map { |a| a.inspect }.join(', ')})" unless args.empty?
-    "#<#{self.class}: #{detail}>"
+    "#<#{self.class}: #{__inspect_detail__(recv, meth, args)}>"
   end
   alias_method :to_s, :inspect
 
@@ -6816,6 +6890,7 @@ class Enumerator
       end
       @generator = lambda { |y, *args| obj.each(*args) { |*values| block.call(y, *values) } }
       @__size__ = size
+      __set_inspect__(obj, :each)
       self
     end
 
@@ -6869,7 +6944,7 @@ class Enumerator
     # Back to an ordinary Enumerator over the same elements.
     def eager
       source = self
-      ::Enumerator.new(@__size__) { |y| source.each { |*values| y.yield(*values) } }
+      ::Enumerator.new(@__size__) { |y| source.each { |*values| y.yield(*values) } }.__set_inspect__(self, :each)
     end
 
     def size
@@ -6879,6 +6954,9 @@ class Enumerator
     end
 
     def inspect
+      if (info = @__inspect__)
+        return "#<#{self.class}: #{__inspect_detail__(*info)}>"
+      end
       return "#<#{self.class}: uninitialized>" if @generator.nil?
       "#<#{self.class}: ...>"
     end
@@ -6887,7 +6965,7 @@ class Enumerator
     def map(&block)
       __need_block__("map", block)
       source = self
-      __chain__(size) { |y| source.each { |*values| y << block.call(*values) } }
+      __chain__(size) { |y| source.each { |*values| y << block.call(*values) } }.__set_inspect__(self, :map)
     end
     alias_method :collect, :map
 
@@ -6909,7 +6987,7 @@ class Enumerator
             y << result
           end
         end
-      end
+      end.__set_inspect__(self, :flat_map)
     end
     alias_method :collect_concat, :flat_map
 
@@ -6917,6 +6995,7 @@ class Enumerator
       __need_block__("select", block)
       source = self
       __chain__ { |y| source.each { |*values| item = __value__(values); y << item if block.call(item) } }
+        .__set_inspect__(self, :select)
     end
     alias_method :filter, :select
     alias_method :find_all, :select
@@ -6948,7 +7027,7 @@ class Enumerator
           next if __ir_case_match__(pattern, value, block || caller_frame) == invert
           y << (block ? block.call(value) : value)
         end
-      end
+      end.__set_inspect__(self, invert ? :grep_v : :grep, [pattern])
     end
     private :__ir_lazy_grep_impl__
 
@@ -7227,7 +7306,8 @@ class Enumerator
     def __eager_method__(name)
       ancestors = ::Enumerator::Lazy.ancestors
       return nil unless ::Enumerator::Lazy.instance_methods(false).include?(name)
-      ancestors[1..-1].each do |mod|
+      # Past Lazy itself (and whatever is prepended to it) to the eager definition.
+      ancestors[(ancestors.index(::Enumerator::Lazy) + 1)..-1].each do |mod|
         return mod.instance_method(name) if mod.instance_methods(false).include?(name)
       end
       nil
@@ -7319,6 +7399,27 @@ class Enumerator
     end
     private :__to_int__
   end
+
+  # Each lazy chain method records itself for #inspect:
+  # #<Enumerator::Lazy: #<Enumerator::Lazy: 1..3>:map>.  grep and grep_v, which
+  # need the caller's frame, record themselves in __ir_lazy_grep_impl__.
+  module LazyInspect
+    # map, flat_map and select record themselves: their aliases (collect, filter, ...)
+    # have to stay the very same method.
+    [:reject, :filter_map, :compact, :uniq, :take, :take_while, :drop, :drop_while, :with_index,
+     :each_with_index, :with_object, :zip, :chunk, :chunk_while,
+     :slice_when, :slice_before, :slice_after, :each_slice, :each_cons, :cycle].each do |name|
+      define_method(name) do |*args, &block|
+        result = super(*args, &block)
+        if result.is_a?(::Enumerator::Lazy) && !result.equal?(self)
+          result.__set_inspect__(self, name, name == :with_index && args.empty? ? [0] : args)
+        end
+        result
+      end
+    end
+  end
+  private_constant :LazyInspect
+  Lazy.prepend(LazyInspect)
 
   # --- Enumerator::Chain -------------------------------------------------
   class Chain < Enumerator
@@ -7472,7 +7573,7 @@ class Enumerator
 
   def self.product(*enums, **options, &block)
     unless options.empty?
-      ::Kernel.raise(::ArgumentError, "unknown keywords: #{options.keys.map { |k| k.inspect }.join(', ')}")
+      ::Kernel.raise(::ArgumentError, "unknown keyword#{'s' if options.size > 1}: #{options.keys.map { |k| k.inspect }.join(', ')}")
     end
     product = Product.new(*enums)
     return product unless block
@@ -7489,18 +7590,19 @@ class Enumerator
     end
     unknown = options.keys - [:size]
     unless unknown.empty?
-      ::Kernel.raise(::ArgumentError, "unknown keywords: #{unknown.map { |k| k.inspect }.join(', ')}")
+      ::Kernel.raise(::ArgumentError, "unknown keyword#{'s' if unknown.size > 1}: #{unknown.map { |k| k.inspect }.join(', ')}")
     end
     has_initial = !args.empty?
     initial = args[0]
     size = options.key?(:size) ? options[:size] : ::Float::INFINITY
-    Enumerator.new(size) do |y|
+    enum = Enumerator.new(size) do |y|
       value = has_initial ? initial : block.call(nil)
       loop do
         y << value
         value = block.call(value)
       end
     end
+    enum.__set_inspect__(nil, :each, [], "#<Enumerator::Producer:#{'0x%07x' % (block.object_id * 2)}>")
   end unless respond_to?(:produce)
 end
 
@@ -7532,6 +7634,7 @@ module Enumerable
     n = (size if respond_to?(:size))
     n = nil unless n.is_a?(::Numeric)
     ::Enumerator::Lazy.__raw__(n) { |y, *args| source.each(*args) { |*values| y.yield(*values) } }
+      .__set_inspect__(self, nil)
   end unless method_defined?(:lazy)
 end
 
@@ -13109,7 +13212,7 @@ class Struct
       given = args[0] || {}
       unknown = given.keys - names
       unless unknown.empty?
-        raise ArgumentError, "unknown keywords: #{unknown.join(', ')}"
+        raise ArgumentError, "unknown keyword#{'s' if unknown.size > 1}: #{unknown.join(', ')}"
       end
       __struct_initialize__(*names.map { |name| given[name] })
     else

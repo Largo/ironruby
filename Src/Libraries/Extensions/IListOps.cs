@@ -1526,6 +1526,17 @@ namespace IronRuby.Builtins {
             return Flatten(tryToAry, self, maxDepth, CreateResultArray(allocateStorage, self));
         }
 
+        /// <summary>flatten(nil) flattens all the way down, like flatten with no argument.</summary>
+        [RubyMethod("flatten")]
+        public static IList/*!*/ Flatten(UnaryOpStorage/*!*/ allocateStorage, ConversionStorage<IList>/*!*/ tryToAry, IList/*!*/ self, DynamicNull maxDepth) {
+            return Flatten(allocateStorage, tryToAry, self, -1);
+        }
+
+        [RubyMethod("flatten!")]
+        public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, DynamicNull maxDepth) {
+            return FlattenInPlace(tryToAry, self, -1);
+        }
+
         [RubyMethod("flatten!")]
         public static IList FlattenInPlace(ConversionStorage<IList>/*!*/ tryToAry, RubyArray/*!*/ self, [DefaultProtocol, DefaultParameterValue(-1)] int maxDepth) {
             self.RequireNotFrozen();

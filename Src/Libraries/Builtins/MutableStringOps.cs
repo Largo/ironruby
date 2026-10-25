@@ -1706,7 +1706,7 @@ namespace IronRuby.Builtins {
                 // MRI escapes its *bytes* and appends the call that puts the encoding back.
                 var bytes = MutableString.CreateBinary(self.ToByteArray());
                 string quoted = GetQuotedStringRepresentation(bytes, true, '"')
-                    + ".force_encoding(\"" + self.Encoding.Name + "\")";
+                    + ".dup.force_encoding(\"" + self.Encoding.Name + "\")";
                 return MutableString.Create(quoted, RubyEncoding.Ascii).TaintBy(self);
             }
 
@@ -3418,7 +3418,7 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Delete(MutableString/*!*/ self, 
             [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ strs) {
             if (strs.Length == 0) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments");
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
             }
             RequireValidEncoding(self);
             return InternalDelete(self, strs);
@@ -3430,7 +3430,7 @@ namespace IronRuby.Builtins {
             self.RequireNotFrozen();
 
             if (strs.Length == 0) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments");
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
             }
             return InternalDeleteInPlace(self, strs);
         }
@@ -3469,7 +3469,7 @@ namespace IronRuby.Builtins {
         public static object Count(RubyContext/*!*/ context, MutableString/*!*/ self, 
             [DefaultProtocol, NotNullItems]params MutableString/*!*/[]/*!*/ strs) {
             if (strs.Length == 0) {
-                throw RubyExceptions.CreateArgumentError("wrong number of arguments");
+                throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 0, expected 1+)");
             }
             return InternalCount(self, strs);
         }
@@ -3665,9 +3665,12 @@ namespace IronRuby.Builtins {
 
         public static int GetIndexOfRightmostAlphaNumericCharacter(MutableString/*!*/ str, int index) {
             bool unicode = str.Encoding.IsUnicodeEncoding;
+            // A binary string has no letters outside ASCII: "a\xFF".succ is "b\xFF", the
+            // 0xFF byte is not a (Latin-1 letter) to be stepped.
+            bool binary = str.Encoding == RubyEncoding.Binary;
             for (int i = index; i >= 0; --i) {
                 char c = str.GetChar(i);
-                if (unicode ? IsSuccDigit(c) || IsSuccAlpha(c) : Char.IsLetterOrDigit(c))
+                if (unicode ? IsSuccDigit(c) || IsSuccAlpha(c) : (!binary || c < 0x80) && Char.IsLetterOrDigit(c))
                     return i;
             }
 
@@ -4526,6 +4529,10 @@ namespace IronRuby.Builtins {
         internal static MutableString/*!*/ Translate(MutableString/*!*/ src, MutableString/*!*/ from, MutableString/*!*/ to, 
             bool inplace, bool squeeze, out bool anyCharacterMaps) {
             Assert.NotNull(src, from, to);
+
+            // MRI checks the receiver before looking at the character sets, so even
+            // "\xFF".tr("", "") is an ArgumentError.
+            RequireValidEncoding(src);
 
             if (from.IsEmpty) {
                 anyCharacterMaps = false;

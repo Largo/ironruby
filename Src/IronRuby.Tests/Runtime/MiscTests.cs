@@ -1071,5 +1071,22 @@ comparison of String with 1 failed
 comparison of Integer with String failed
 ");
         }
+
+        public void Array_FlattenNil1() {
+            TestOutput(@"
+p [1, [2, [3]]].flatten(nil), [1, [2, [3]]].flatten(1.5), [1, [2]].flatten!(nil), [1].flatten!(nil)
+begin; ""\xFF"".tr('', ''); rescue ArgumentError => e; p e.message; end
+begin; ""\xFF"".tr('a', 'b'); rescue ArgumentError => e; p e.message; end
+p ""\xFF"".force_encoding('BINARY').tr('a', 'b').bytes
+", @"
+[1, 2, 3]
+[1, 2, [3]]
+[1, 2]
+nil
+""invalid byte sequence in UTF-8""
+""invalid byte sequence in UTF-8""
+[255]
+");
+        }
     }
 }
