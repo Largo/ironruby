@@ -60,6 +60,14 @@ namespace IronRuby.Runtime.Calls {
             return new MemberInfo[] { _ruleGenerator.GetMethodInfo() };
         }
 
+        /// <summary>
+        /// A rule generator binds whatever arguments arrive - Class#new, Kernel#send, IO.open -
+        /// so its arity is -1, as MRI's is for those; Class#allocate alone takes nothing.
+        /// </summary>
+        public override int GetArity() {
+            return _ruleGenerator.GetMethodInfo().Name == "InstanceAllocator" ? 0 : -1;
+        }
+
         public override RubyMemberInfo TrySelectOverload(Type/*!*/[]/*!*/ parameterTypes) {
             return this;
         }

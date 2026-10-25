@@ -2701,6 +2701,42 @@ true
 false
 ");
         }
+    
+        /// <summary>
+        /// A call site that forwards a block argument (&amp;b) is first bound with b nil, which
+        /// picks a library overload without a block. The rule has to test for that, or the same
+        /// site keeps ignoring the block once a real one arrives - x.count(&amp;b) counted every
+        /// element whatever the block said.
+        /// </summary>
+        public void BlockArgument_NilThenProc1() {
+            TestOutput(@"
+def c(x, &b)
+  x.count(&b)
+end
+p c([1, 2, 3])
+p(c([1, 2, 3]) { |v| v > 1 })
+def e(x, &b)
+  x.each(&b)
+end
+p e([1]).class
+p(e([1]) { |v| }.class)
+def i(x, &b)
+  x.inject(&b)
+end
+p((i([1, 2]) rescue :no_block))
+p(i([1, 2]) { |s, v| s + v })
+p((1..10).count)
+p((1..3).count { |v| v > 1 })
+", @"
+3
+2
+Enumerator
+Array
+:no_block
+3
+10
+2
+");
+        }
     }
 }
-

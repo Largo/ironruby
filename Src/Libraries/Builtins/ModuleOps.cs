@@ -1617,10 +1617,16 @@ namespace IronRuby.Builtins {
 
         internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes,
             IEnumerable<string> foreignMembers) {
+            return GetMethods(self, inherited, attributes, foreignMembers, false);
+        }
+
+        // objectMethods: see RubyModule.ForEachMember
+        internal static RubyArray/*!*/ GetMethods(RubyModule/*!*/ self, bool inherited, RubyMethodAttributes attributes,
+            IEnumerable<string> foreignMembers, bool objectMethods) {
 
             var result = new RubyArray();
             using (self.Context.ClassHierarchyLocker()) {
-                self.ForEachMember(inherited, attributes, foreignMembers, (name, module, member) => {
+                self.ForEachMember(inherited, attributes, foreignMembers, objectMethods, (name, module, member) => {
                     if (member.IsInteropMember && (module.Restrictions & ModuleRestrictions.NoNameMapping) == 0 && RubyUtils.HasMangledName(name)) {
                         if (Tokenizer.IsMethodName(name) || Tokenizer.IsOperatorName(name)) {
                             result.Add(new ClrName(name));
@@ -1635,7 +1641,7 @@ namespace IronRuby.Builtins {
             // is listed after the refinement's own methods.
             if (inherited && self.IsRefinement) {
                 var seen = new HashSet<object>(result);
-                foreach (object name in GetMethods(self.RefinedModule, true, attributes, foreignMembers)) {
+                foreach (object name in GetMethods(self.RefinedModule, true, attributes, foreignMembers, objectMethods)) {
                     if (seen.Add(name)) {
                         result.Add(name);
                     }

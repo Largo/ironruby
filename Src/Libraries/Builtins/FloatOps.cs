@@ -96,6 +96,19 @@ namespace IronRuby.Builtins {
         public const int ROUNDS = 1;
 
         #endregion
+
+        #region -@
+
+        /// <summary>
+        /// Numeric#-@ computes 0 - self, which is 0.0 for -0.0 and 0.0 alike; a Float negates
+        /// its sign bit, so that -(0.0) is -0.0 and 1 / -x is -Infinity, as in MRI.
+        /// </summary>
+        [RubyMethod("-@")]
+        public static double UnaryMinus(double self) {
+            return -self;
+        }
+
+        #endregion
     }
 }
  

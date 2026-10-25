@@ -53,6 +53,11 @@ namespace IronRuby.Builtins {
 
         private bool _comparesByIdentity;
 
+        // MRI's RHASH_ITER_LEV: how many Hash#each-style iterations are running over this hash.
+        // Entries may be deleted and values replaced from inside an iteration, but adding a key
+        // is a RuntimeError, because the table could be rebuilt under the iterator.
+        private int _iterationLevel;
+
         /// <summary>
         /// True if Hash#compare_by_identity has been called on this hash.
         /// </summary>
@@ -234,6 +239,19 @@ namespace IronRuby.Builtins {
 
         private void Mutate() {
             RequireNotFrozen();
+        }
+
+        public bool IsIterating {
+            get { return _iterationLevel > 0; }
+        }
+
+        /// <summary>Marks the start of an iteration; pair with <see cref="EndIteration"/> in a finally.</summary>
+        public void BeginIteration() {
+            _iterationLevel++;
+        }
+
+        public void EndIteration() {
+            _iterationLevel--;
         }
 
         public bool IsTainted {

@@ -14,6 +14,7 @@
  * ***************************************************************************/
 
 using System;
+using System.Text;
 using System.Runtime.CompilerServices;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
@@ -250,6 +251,10 @@ namespace IronRuby.Builtins {
                 result.Append("(*)");
             } else if (signature != null) {
                 result.Append(signature.ToParameterListString());
+            } else {
+                // a library method or an attribute accessor: MRI prints the parameter list
+                // from #parameters, "_" standing for a required parameter with no name
+                result.Append(FormatParameterArray(info.GetRubyParameterArray()));
             }
 
             var location = isMissingMethod ? null : GetSourceLocation(info);
@@ -262,6 +267,36 @@ namespace IronRuby.Builtins {
 
             result.Append('>');
             return result; 
+        }
+
+        private static string/*!*/ FormatParameterArray(RubyArray/*!*/ parameters) {
+            var result = new StringBuilder("(");
+            foreach (object item in parameters) {
+                var parameter = item as RubyArray;
+                if (parameter == null || parameter.Count == 0) {
+                    continue;
+                }
+                string kind = parameter[0].ToString();
+                string name = parameter.Count > 1 ? parameter[1].ToString() : null;
+                string text;
+                switch (kind) {
+                    case "req": text = name ?? "_"; break;
+                    case "opt": text = (name ?? "_") + "=..."; break;
+                    case "rest": text = "*" + (name == "*" ? null : name); break;
+                    case "keyreq": text = (name ?? "_") + ":"; break;
+                    case "key": text = (name ?? "_") + ": ..."; break;
+                    case "keyrest": text = "**" + (name == "**" ? null : name); break;
+                    case "nokey": text = "**nil"; break;
+                    case "block": text = "&" + (name == "&" ? null : name); break;
+                    default: continue;
+                }
+                if (result.Length > 1) {
+                    result.Append(", ");
+                }
+                result.Append(text);
+            }
+            result.Append(')');
+            return result.ToString();
         }
 
         [RubyMethod("of")]

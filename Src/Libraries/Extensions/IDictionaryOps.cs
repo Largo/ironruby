@@ -218,15 +218,26 @@ namespace IronRuby.Builtins {
             // while iterating over it
             RubyArray keysToDelete = new RubyArray();
 
-            foreach (var pair in self) {
-                object result;
-                if (block.Yield(CustomStringDictionary.ObjToNull(pair.Key), pair.Value, out result)) {
-                    return result;
-                }
+            Hash hash = self as Hash;
+            if (hash != null) {
+                hash.BeginIteration();
+            }
+            try {
+                // over a snapshot: the block may delete from the hash (it may not add to it)
+                foreach (var pair in CopyKeyValuePairs(self)) {
+                    object result;
+                    if (block.Yield(CustomStringDictionary.ObjToNull(pair.Key), pair.Value, out result)) {
+                        return result;
+                    }
 
-                // Delete the key, unless 'false' or 'nil' is returned
-                if (RubyOps.IsTrue(result)) {
-                    keysToDelete.Add(pair.Key);
+                    // Delete the key, unless 'false' or 'nil' is returned
+                    if (RubyOps.IsTrue(result)) {
+                        keysToDelete.Add(pair.Key);
+                    }
+                }
+            } finally {
+                if (hash != null) {
+                    hash.EndIteration();
                 }
             }
 
@@ -251,20 +262,35 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_pair")]
         public static object Each(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // Must make a copy of the Keys array so that we can iterate over a static set of keys. Remember
-                // that the block can modify the hash, hence the need for a copy of the keys
+                // The block may change the hash, so iterate over a copy of the keys and look each
+                // value up when it is its turn: a value the block replaced is seen replaced, and a
+                // key the block deleted is skipped, as in MRI. Adding a key is what MRI forbids
+                // while a hash is being iterated, and the Hash itself raises for that.
                 object[] keys = new object[self.Count];
                 self.Keys.CopyTo(keys, 0);
 
                 bool yieldPair = IsPairYieldOptimizable(block);
 
-                // TODO: what are all the scenarios where the block can mutate the hash? can it remove keys? if so, what happens?
-                for (int i = 0; i < keys.Length; i++) {
-                    object result;
-                    if (yieldPair
-                        ? block.Yield(CustomStringDictionary.ObjToNull(keys[i]), self[keys[i]], out result)
-                        : block.Yield(MakeArray(keys[i], self[keys[i]]), out result)) {
-                        return result;
+                Hash hash = self as Hash;
+                if (hash != null) {
+                    hash.BeginIteration();
+                }
+                try {
+                    for (int i = 0; i < keys.Length; i++) {
+                        object value;
+                        if (!self.TryGetValue(keys[i], out value)) {
+                            continue;
+                        }
+                        object result;
+                        if (yieldPair
+                            ? block.Yield(CustomStringDictionary.ObjToNull(keys[i]), value, out result)
+                            : block.Yield(MakeArray(keys[i], value), out result)) {
+                            return result;
+                        }
+                    }
+                } finally {
+                    if (hash != null) {
+                        hash.EndIteration();
                     }
                 }
             }
@@ -295,16 +321,27 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_key")]
         public static object EachKey(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // Must make a copy of the Keys array so that we can iterate over a static set of keys. Remember
-                // that the block can modify the hash, hence the need for a copy of the keys
+                // See Each: a copy of the keys, deleted ones skipped, no new ones allowed.
                 object[] keys = new object[self.Count];
                 self.Keys.CopyTo(keys, 0);
 
-                // TODO: what are all the scenarios where the block can mutate the hash? can it remove keys? if so, what happens?
-                for (int i = 0; i < keys.Length; i++) {
-                    object result;
-                    if (block.Yield(CustomStringDictionary.ObjToNull(keys[i]), out result)) {
-                        return result;
+                Hash hash = self as Hash;
+                if (hash != null) {
+                    hash.BeginIteration();
+                }
+                try {
+                    for (int i = 0; i < keys.Length; i++) {
+                        if (!self.ContainsKey(keys[i])) {
+                            continue;
+                        }
+                        object result;
+                        if (block.Yield(CustomStringDictionary.ObjToNull(keys[i]), out result)) {
+                            return result;
+                        }
+                    }
+                } finally {
+                    if (hash != null) {
+                        hash.EndIteration();
                     }
                 }
             }
@@ -320,14 +357,28 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_value")]
         public static object EachValue(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // Ruby allows modifications while iterating thru the dictionary:
-                object[] values = new object[self.Count];
-                self.Values.CopyTo(values, 0);
+                // See Each: a copy of the keys, deleted ones skipped, no new ones allowed.
+                object[] keys = new object[self.Count];
+                self.Keys.CopyTo(keys, 0);
 
-                for (int i = 0; i < values.Length; i++) {
-                    object result;
-                    if (block.Yield(values[i], out result)) {
-                        return result;
+                Hash hash = self as Hash;
+                if (hash != null) {
+                    hash.BeginIteration();
+                }
+                try {
+                    for (int i = 0; i < keys.Length; i++) {
+                        object value;
+                        if (!self.TryGetValue(keys[i], out value)) {
+                            continue;
+                        }
+                        object result;
+                        if (block.Yield(value, out result)) {
+                            return result;
+                        }
+                    }
+                } finally {
+                    if (hash != null) {
+                        hash.EndIteration();
                     }
                 }
             }
@@ -494,15 +545,25 @@ namespace IronRuby.Builtins {
             // while iterating over it
             RubyArray keysToDelete = new RubyArray();
 
-            foreach (KeyValuePair<object,object> pair in self) {
-                object result;
-                if (block.Yield(CustomStringDictionary.ObjToNull(pair.Key), pair.Value, out result)) {
-                    return result;
-                }
+            Hash hash = self as Hash;
+            if (hash != null) {
+                hash.BeginIteration();
+            }
+            try {
+                foreach (KeyValuePair<object,object> pair in CopyKeyValuePairs(self)) {
+                    object result;
+                    if (block.Yield(CustomStringDictionary.ObjToNull(pair.Key), pair.Value, out result)) {
+                        return result;
+                    }
 
-                // Delete the key, unless 'false' or 'nil' is returned
-                if (RubyOps.IsTrue(result)) {
-                    keysToDelete.Add(pair.Key);
+                    // Delete the key, unless 'false' or 'nil' is returned
+                    if (RubyOps.IsTrue(result)) {
+                        keysToDelete.Add(pair.Key);
+                    }
+                }
+            } finally {
+                if (hash != null) {
+                    hash.EndIteration();
                 }
             }
 

@@ -1937,7 +1937,7 @@ namespace IronRuby.Builtins {
 
         private static RubyArray/*!*/ GetMethods(RubyContext/*!*/ context, object self, bool inherited, RubyMethodAttributes attributes) {
             RubyClass immediateClass = context.GetImmediateClassOf(self);
-            return ModuleOps.GetMethods(immediateClass, inherited, attributes);
+            return ModuleOps.GetMethods(immediateClass, inherited, attributes, null, true);
         }
 
         #endregion

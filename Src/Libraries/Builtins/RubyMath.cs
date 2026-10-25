@@ -13,6 +13,8 @@
  *
  * ***************************************************************************/
 
+using System;
+using System.Runtime.InteropServices;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using SM = System.Math;
@@ -36,6 +38,80 @@ namespace IronRuby.Builtins {
             }
             return result;
         }
+
+        #endregion
+
+        #region C library math
+
+        // MRI's Math.gamma, lgamma, erf and erfc are the C library's tgamma, lgamma_r, erf and
+        // erfc.  The DLR's MathUtils has series approximations of the four that are good to a few
+        // ulps, and a few ulps is a visible difference next to MRI on the same machine:
+        // Math.lgamma(3.0) was [0.6931471805599454, 1] here and [0.6931471805599453, 1] there.
+        // The C library is one call away on every platform .NET runs on - glibc's or musl's libm,
+        // macOS's libSystem, Windows' ucrtbase - so it is used when it can be found, and MathUtils
+        // stays as the fallback.
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        private delegate double UnaryFunction(double x);
+
+        private static readonly IntPtr _cMathLibrary = LoadCMathLibrary();
+        private static readonly UnaryFunction _tgamma = GetCMathFunction("tgamma");
+        private static readonly UnaryFunction _lgamma = GetCMathFunction("lgamma");
+        private static readonly UnaryFunction _erf = GetCMathFunction("erf");
+        private static readonly UnaryFunction _erfc = GetCMathFunction("erfc");
+
+        private static IntPtr LoadCMathLibrary() {
+            string[] names;
+            if (OperatingSystem.IsWindows()) {
+                names = new[] { "ucrtbase.dll" };
+            } else if (OperatingSystem.IsMacOS()) {
+                names = new[] { "/usr/lib/libSystem.dylib", "libSystem.dylib" };
+            } else {
+                names = new[] { "libm.so.6", "libm.so" };
+            }
+            foreach (string name in names) {
+                try {
+                    IntPtr handle;
+                    if (NativeLibrary.TryLoad(name, out handle)) {
+                        return handle;
+                    }
+                } catch (Exception) {
+                    // an unusual platform: the managed implementations serve
+                }
+            }
+            return IntPtr.Zero;
+        }
+
+        private static UnaryFunction GetCMathFunction(string/*!*/ name) {
+            if (_cMathLibrary == IntPtr.Zero) {
+                return null;
+            }
+            try {
+                IntPtr address;
+                if (NativeLibrary.TryGetExport(_cMathLibrary, name, out address)) {
+                    return Marshal.GetDelegateForFunctionPointer<UnaryFunction>(address);
+                }
+            } catch (Exception) {
+            }
+            return null;
+        }
+
+        // 0! .. 22!, each exact as a double, so that gamma(n) is _Factorials[n - 1]. MRI answers
+        // Math.gamma of a whole number from the same table rather than from tgamma, whose answer
+        // may be off by an ulp; 23! has more significant bits than a double holds, and the table
+        // stops where MRI's does.
+        private static readonly double[] _Factorials = {
+            1.0, 1.0, 2.0, 6.0, 24.0, 120.0, 720.0, 5040.0, 40320.0, 362880.0, 3628800.0,
+            39916800.0, 479001600.0, 6227020800.0, 87178291200.0, 1307674368000.0,
+            20922789888000.0, 355687428096000.0, 6402373705728000.0, 121645100408832000.0,
+            2432902008176640000.0, 51090942171709440000.0, 1124000727777607680000.0
+        };
+
+        // MRI, built against glibc, follows cbrt with one Newton step, because glibc's cbrt is
+        // not correctly rounded: cbrt(-27.0) is -3.0000000000000004 without it. Built against
+        // another C library it takes cbrt as it is. Math.Cbrt is the C library's cbrt.
+        private static readonly bool _GlibcCbrtCorrection =
+            OperatingSystem.IsLinux() &&
+            RuntimeInformation.RuntimeIdentifier.IndexOf("musl", StringComparison.OrdinalIgnoreCase) < 0;
 
         private static ushort Exponent(byte[] v) {
             return (ushort)((((ushort)(v[7] & 0x7F)) << (ushort)4) | (((ushort)(v[6] & 0xF0)) >> 4));
@@ -112,19 +188,23 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("cbrt", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("cbrt", RubyMethodAttributes.PublicSingleton)]
         public static double CubeRoot(object self, [DefaultProtocol]double x) {
-            return System.Math.Pow(x, 1.0 / 3.0);
+            double r = SM.Cbrt(x);
+            if (_GlibcCbrtCorrection && !Double.IsInfinity(r) && !Double.IsNaN(r) && !(x == 0.0 && r == 0.0)) {
+                r = (2.0 * r + (x / r / r)) / 3.0;
+            }
+            return r;
         }
 
         [RubyMethodAttribute("erf", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("erf", RubyMethodAttributes.PublicSingleton)]
         public static double Erf(object self, [DefaultProtocol]double x) {
-            return MathUtils.Erf(x);
+            return _erf != null ? _erf(x) : MathUtils.Erf(x);
         }
 
         [RubyMethodAttribute("erfc", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("erfc", RubyMethodAttributes.PublicSingleton)]
         public static double Erfc(object self, [DefaultProtocol]double x) {
-            return MathUtils.ErfComplement(x);
+            return _erfc != null ? _erfc(x) : MathUtils.ErfComplement(x);
         }
 
         [RubyMethodAttribute("exp", RubyMethodAttributes.PrivateInstance)]
@@ -136,7 +216,10 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("gamma", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("gamma", RubyMethodAttributes.PublicSingleton)]
         public static double Gamma(object self, [DefaultProtocol]double x) {
-            return DomainCheck(MathUtils.Gamma(x), "gamma");
+            if (x == SM.Floor(x) && x >= 1.0 && x <= _Factorials.Length) {
+                return _Factorials[(int)x - 1];
+            }
+            return DomainCheck(_tgamma != null ? _tgamma(x) : MathUtils.Gamma(x), "gamma");
         }
 
         [RubyMethodAttribute("hypot", RubyMethodAttributes.PrivateInstance)]
@@ -171,7 +254,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("lgamma", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("lgamma", RubyMethodAttributes.PublicSingleton)]
         public static double LogGamma(object self, [DefaultProtocol]double x) {
-            return DomainCheck(MathUtils.LogGamma(x), "lgamma");
+            return DomainCheck(_lgamma != null ? _lgamma(x) : MathUtils.LogGamma(x), "lgamma");
         }
         
         [RubyMethodAttribute("log", RubyMethodAttributes.PrivateInstance)]

@@ -916,5 +916,73 @@ true
 ""XST""
 ");
         }
+    
+        /// <summary>
+        /// MRI's dtoa settles a rounding it cannot tell from a tie in double arithmetic by the
+        /// parity of the last digit, whatever the exact binary value: "%.2f" % 2.675 is 2.68
+        /// although the double is below 2.675, and "%.1f" % 99.45 is 99.4 although it is above.
+        /// "%g" then keeps the trailing zero dtoa leaves on such a value. The exponent of a value
+        /// a few ulps below a power of ten is exact, not Math.Log10's rounding of it.
+        /// </summary>
+        public void Sprintf_MriTieRounding1() {
+            TestOutput(@"
+puts '%.2f' % 2.675, '%.1f' % 99.45, '%.1f' % 0.05, '%.0f' % 2.5, '%.0f' % 1.5
+puts '%.2e' % 2.675, '%.0e' % 0.95, '%.1g' % 0.095
+puts '%.5g' % 0.0676905, '%.5g' % 0.0676895, '%.2g' % 205.0, '%.2g' % 204.0
+puts '%.15e' % 999.9999999999999, '%.16e' % 1.0e-07
+puts '%.3f' % 1.0005, '%.2f' % 1.005, '%.1f' % 0.25, '%.17g' % 0.1, '%g' % 1234567.0, '%#.3g' % 1.0
+", @"
+2.68
+99.4
+0.1
+2
+2
+2.68e+00
+1e+00
+0.1
+0.067690
+0.06769
+2.0e+02
+2e+02
+9.999999999999999e+02
+9.9999999999999995e-08
+1.000
+1.00
+0.2
+0.10000000000000001
+1.23457e+06
+1.00
+");
+        }
+
+        /// <summary>Float#-@ negates the sign bit; Numeric#-@ (0 - x) lost it for 0.0.</summary>
+        public void Float_NegativeZero1() {
+            TestOutput(@"
+f = 0.0
+p(-f, 1.0 / -f, (-f).to_s, -(-f))
+", @"
+-0.0
+-Infinity
+""-0.0""
+0.0
+");
+        }
+
+        /// <summary>
+        /// Math.cbrt is the C library's cbrt with MRI's correction step, and Math.gamma of a
+        /// whole number comes from MRI's factorial table.
+        /// </summary>
+        public void Math_CLibrary1() {
+            TestOutput(@"
+p Math.cbrt(-27.0), Math.cbrt(27.0), Math.gamma(3.0), Math.gamma(23.0), Math.erf(0.0), Math.erfc(0.0)
+", @"
+-3.0
+3.0
+2.0
+1.1240007277776077e+21
+0.0
+1.0
+");
+        }
     }
 }

@@ -6598,9 +6598,11 @@ class Enumerator
     :select, :filter, :find_all, :select!, :filter!, :reject, :reject!,
     :keep_if, :delete_if, :sort_by, :min_by, :max_by, :group_by, :partition,
     :each_with_index, :each_with_object, :each_char, :each_byte, :each_codepoint,
-    :each_line, :find_index, :detect, :find, :take_while, :drop_while,
     :filter_map
   ].freeze
+  # Not in the list, and so of unknown size, as in MRI: #each_line (the lines are
+  # not counted until they are read), and the searches - #find_index, #find,
+  # #detect, #take_while, #drop_while - which answer one result, not one per element.
 
   def __size_from_target__(source, meth, args)
     case meth
@@ -6788,6 +6790,12 @@ class Enumerator
       generator = @generator
       lazy = Lazy.__raw__(@__size__) { |y| generator.call(y, *args) }
       block ? lazy.each(&block) : lazy
+    end
+
+    # Enumerator#+ chains eagerly; a lazy receiver stays lazy, as in MRI:
+    # (1..).lazy + [1] is an Enumerator::Lazy over an Enumerator::Chain.
+    def +(other)
+      Chain.new(self, other).lazy
     end
 
     # Builds a Lazy straight from a generator, bypassing #initialize.
@@ -9095,7 +9103,8 @@ module Math
   alias_method :__ir_lgamma__, :lgamma
   alias_method :__ir_erf__, :erf
   alias_method :__ir_erfc__, :erfc
-  module_function :__ir_gamma__, :__ir_lgamma__, :__ir_erf__, :__ir_erfc__
+  alias_method :__ir_cbrt__, :cbrt
+  module_function :__ir_gamma__, :__ir_lgamma__, :__ir_erf__, :__ir_erfc__, :__ir_cbrt__
 
   # MRI's rb_to_float: Numeric only. An object that merely answers #to_f is a
   # TypeError, and so is a String - Float("1") would work but Math.sqrt("1")
@@ -9190,9 +9199,9 @@ module Math
     ::System::Math.Exp(__flt__(x))
   end
 
-  # pow(x, 1/3.0) is NaN for every negative x; cbrt is defined there.
+  # The C# cbrt is the C library's, with the Newton step MRI adds on glibc.
   def cbrt(x)
-    ::System::Math.Cbrt(__flt__(x))
+    __ir_cbrt__(__flt__(x))
   end
 
   def sqrt(x)
@@ -9359,11 +9368,11 @@ module Math
     end
     if x < 0.0
       return [::Float::INFINITY, 1] if x == x.floor
-      # Reflection: |gamma(x)| = pi / (|sin(pi*x)| * gamma(1-x)), and the sign
-      # of gamma(x) is the sign of sin(pi*x) because gamma(1-x) > 0 there.
+      # The sign of gamma(x) is the sign of sin(pi*x): gamma(1-x) > 0 there, and
+      # |gamma(x)| = pi / (|sin(pi*x)| * gamma(1-x)). The magnitude is the C
+      # library's lgamma, as MRI's is (lgamma_r), with MathUtils' reflection behind it.
       s = ::System::Math.Sin(::Math::PI * x)
-      v = ::System::Math.Log(::Math::PI) - ::System::Math.Log(s.abs) - __ir_lgamma__(1.0 - x)
-      return [v, s < 0 ? -1 : 1]
+      return [__ir_lgamma__(x), s < 0 ? -1 : 1]
     end
     # MathUtils.LogGamma(1.0) is 4.4e-16 rather than 0.
     return [0.0, 1] if x == 1.0 || x == 2.0
@@ -12621,7 +12630,7 @@ class Hash
     unless proc.is_a?(Proc)
       converted = proc.respond_to?(:to_proc) ? proc.to_proc : nil
       unless converted.is_a?(Proc)
-        raise TypeError, "no implicit conversion of #{proc.class} into Proc"
+        raise TypeError, "wrong default_proc type #{proc.class} (expected Proc)"
       end
       proc = converted
     end
@@ -13731,6 +13740,18 @@ class Range
     super
   end
   alias_method :entries, :to_a
+end
+
+# An Encoding marshals by name, as in MRI: Marshal.dump(Encoding::UTF_8) loads
+# back as the same Encoding object.
+class Encoding
+  def _dump(limit)
+    name
+  end
+
+  def self._load(name)
+    find(name)
+  end
 end
 
 # Rebind ARGF to a real instance so ARGF.class is a class. Done at the very end

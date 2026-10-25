@@ -2824,6 +2824,11 @@ namespace IronRuby.Builtins {
         
         private static void LoadFloat_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             LoadIronRuby__Clr__Float_Instance(module);
+            DefineLibraryMethod(module, "-@", 0x51, 
+                0x00000000U, 
+                new Func<System.Double, System.Double>(IronRuby.Builtins.FloatOps.UnaryMinus)
+            );
+            
         }
         
         private static void LoadFloat_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
