@@ -59,6 +59,27 @@ module Kernel
 end
 
 class NoMatchingPatternError < StandardError; end
+class NoMatchingPatternError
+  # What a failed `=>` or `case/in` says after the subject, formatted as MRI formats
+  # it; the prism bridge records the reason of the test that failed last.
+  def self.__reason__(kind, *a)
+    case kind
+    when :eqq then "#{a[0].inspect} === #{a[1].inspect} does not return true"
+    when :length then "#{a[0].inspect} length mismatch (given #{a[1]}, expected #{a[2]}#{a[3] ? '+' : ''})"
+    when :deconstruct then "#{a[0].inspect} does not respond to #deconstruct"
+    when :deconstruct_keys then "#{a[0].inspect} does not respond to #deconstruct_keys"
+    when :empty then "#{a[0].inspect} is not empty"
+    when :rest then "rest of #{a[0].reject { |k, _| a[1].include?(k) }.inspect} is not empty"
+    when :find then "#{a[0].inspect} does not match to find pattern"
+    when :guard then "guard clause does not return true"
+    end
+  end
+
+  def self.__message__(subject, reason)
+    reason ? "#{subject.inspect}: #{reason}" : subject.inspect
+  end
+end
+
 class NoMatchingPatternKeyError < NoMatchingPatternError
   # KeyError's shape: the pattern's hash and the key it lacked, both optional.
   def initialize(message = nil, matchee: (no_matchee = true; nil), key: (no_key = true; nil))
@@ -13740,6 +13761,43 @@ class Range
     super
   end
   alias_method :entries, :to_a
+end
+
+class Fiber
+  # MRI answers nil for a fiber that has finished, [] for one not started, and
+  # the fiber's own frames otherwise. Only the running fiber's frames can be
+  # read here: a suspended fiber's are its thread's, and are not walked.
+  def backtrace(*args)
+    return nil unless alive?
+    return caller(*args) if equal?(Fiber.current)
+    []
+  end
+
+  def backtrace_locations(*args)
+    return nil unless alive?
+    return caller_locations(*args) if equal?(Fiber.current)
+    []
+  end
+end
+
+module GC
+  # The CLR does not say why it collected. The keys are MRI's, with the values a
+  # collection that nothing in particular triggered.
+  LATEST_GC_INFO = {
+    major_by: nil, need_major_by: nil, gc_by: :newobj, have_finalizer: false,
+    immediate_sweep: false, state: :none, weak_references_count: 0,
+    retained_weak_references_count: 0
+  }.freeze
+  private_constant :LATEST_GC_INFO
+
+  def self.latest_gc_info(key = nil)
+    case key
+    when nil then LATEST_GC_INFO.dup
+    when Symbol then LATEST_GC_INFO[key]
+    when Hash then key.merge!(LATEST_GC_INFO)
+    else raise TypeError, "non-hash or symbol given"
+    end
+  end
 end
 
 # An Encoding marshals by name, as in MRI: Marshal.dump(Encoding::UTF_8) loads

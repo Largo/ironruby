@@ -984,5 +984,24 @@ p Math.cbrt(-27.0), Math.cbrt(27.0), Math.gamma(3.0), Math.gamma(23.0), Math.erf
 1.0
 ");
         }
+    
+        /// <summary>
+        /// An Errno message built with the error's own text in it is not prefixed with that text
+        /// again: "No such file or directory - path", not "No such file or directory - No such
+        /// file or directory - path".
+        /// </summary>
+        public void Errno_MessageNotDoubled1() {
+            TestOutput(@"
+puts Errno::ENOENT.new.message
+puts Errno::ENOENT.new('x').message
+puts Errno::ENOENT.new('No such file or directory - x').message
+puts Errno::ENOENT.new('No such file or directory @ rb_sysopen - x').message
+", @"
+No such file or directory
+No such file or directory - x
+No such file or directory - x
+No such file or directory @ rb_sysopen - x
+");
+        }
     }
 }

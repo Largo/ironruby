@@ -390,7 +390,8 @@ namespace IronRuby.StandardLibrary.StringIO {
                 throw RubyExceptions.CreateEINVAL("negative length");
             }
             self.GetWritableContent().SetByteCount(length);
-            return lengthObj;
+            // MRI answers 0, whatever the length
+            return 0;
         }
 
         // MRI's strio_rewind does not check that the stream is open: a StringIO that a
@@ -583,7 +584,18 @@ namespace IronRuby.StandardLibrary.StringIO {
 
         [RubyMethod("write")]
         [RubyMethod("syswrite")]
+        public static int Write(StringIO/*!*/ self, DynamicNull value) {
+            // nil.to_s is "": nothing to write, as for IO#write(nil), but the stream must be writable
+            self.GetWritableContent();
+            return 0;
+        }
+
+        [RubyMethod("write")]
+        [RubyMethod("syswrite")]
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self, object obj) {
+            if (obj == null) {
+                return Write(self, (DynamicNull)null);
+            }
             return Write(self, Protocols.ConvertToString(tosConversion, obj));
         }
 
@@ -593,7 +605,7 @@ namespace IronRuby.StandardLibrary.StringIO {
         /// </summary>
         [RubyMethod("write")]
         public static int Write(ConversionStorage<MutableString>/*!*/ tosConversion, StringIO/*!*/ self,
-            object first, [NotNull]params object[]/*!*/ rest) {
+            object first, params object[]/*!*/ rest) {
 
             int written = Write(tosConversion, self, first);
             foreach (object value in rest) {

@@ -706,6 +706,7 @@ namespace IronRuby.Tests {
                 Sprintf_MriTieRounding1,
                 Float_NegativeZero1,
                 Math_CLibrary1,
+                Errno_MessageNotDoubled1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,

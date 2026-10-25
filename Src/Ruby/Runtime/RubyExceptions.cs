@@ -723,7 +723,18 @@ namespace IronRuby.Runtime {
 
         public static string/*!*/ MakeMessage(string message, string/*!*/ baseMessage) {
             Assert.NotNull(baseMessage);
-            return (message != null) ? String.Concat(baseMessage, " - ", message) : baseMessage;
+            if (message == null) {
+                return baseMessage;
+            }
+            // A message that already leads with the error's own text ("No such file or directory
+            // - path", as several callers build it) is complete: MRI never says it twice.
+            if (message.StartsWith(baseMessage, StringComparison.Ordinal)) {
+                string rest = message.Substring(baseMessage.Length);
+                if (rest.Length == 0 || rest.StartsWith(" - ", StringComparison.Ordinal) || rest.StartsWith(" @ ", StringComparison.Ordinal)) {
+                    return message;
+                }
+            }
+            return String.Concat(baseMessage, " - ", message);
         }
 
         public static string/*!*/ MakeMessage(ref MutableString message, string/*!*/ baseMessage) {

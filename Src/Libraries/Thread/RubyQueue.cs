@@ -30,6 +30,13 @@ namespace IronRuby.StandardLibrary.Threading {
     /// </summary>
     [RubyClass("Queue")]
     public class RubyQueue {
+
+        /// <summary>MRI's #&lt;Thread::Queue:0x...&gt;, rather than the CLR type name.</summary>
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, RubyQueue/*!*/ self) {
+            return RubyUtils.ObjectToMutableString(context, self);
+        }
         protected readonly Queue<object>/*!*/ _queue;
         protected int _waiting;
         protected bool _closed;

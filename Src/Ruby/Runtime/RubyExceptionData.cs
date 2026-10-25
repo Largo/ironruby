@@ -354,10 +354,17 @@ namespace IronRuby.Runtime {
                 }
             }
 
+            object message = instanceData.Message;
+            // Errno classes extend CLR exceptions of several roots (ExternalException,
+            // IOException, ...), so SystemCallError membership is decided on the Ruby side.
+            if (exceptionClass.IsSubclassOf(context.GetClass(typeof(System.Runtime.InteropServices.ExternalException)))) {
+                message = StripSystemCallErrorPrefix(exceptionClass, message);
+            }
+
             var site = exceptionClass.NewSite;
             Exception newException;
             try {
-                newException = site.Target(site, exceptionClass, instanceData.Message) as Exception;
+                newException = site.Target(site, exceptionClass, message) as Exception;
             } catch (Exception e) {
                 // MRI: this can lead to stack overflow:
                 return HandleException(context, e);
@@ -373,6 +380,39 @@ namespace IronRuby.Runtime {
             newInstanceData.Handled = true;
             newInstanceData._backtrace = instanceData._backtrace;
             return newException;
+        }
+
+        /// <summary>
+        /// A SystemCallError thrown from C# already says "&lt;strerror&gt; - &lt;detail&gt;"
+        /// (RubyExceptions.MakeMessage). The Ruby-level initialize it is about to be handed to -
+        /// the prelude's SystemCallError#initialize - builds that same form from the detail, so it
+        /// gets the detail alone, or the error would name itself twice: "No such file or directory
+        /// - No such file or directory - path". The class's strerror text is its Message constant.
+        /// </summary>
+        private static object StripSystemCallErrorPrefix(RubyClass/*!*/ exceptionClass, object message) {
+            var text = message as MutableString;
+            if (text == null) {
+                return message;
+            }
+            for (RubyClass c = exceptionClass; c != null; c = c.SuperClass) {
+                object constant;
+                if (c.TryGetConstant(null, "Message", out constant)) {
+                    var prefix = constant as MutableString;
+                    if (prefix == null) {
+                        return message;
+                    }
+                    string s = text.ConvertToString();
+                    string p = prefix.ConvertToString();
+                    if (s == p) {
+                        return null;
+                    }
+                    if (s.StartsWith(p + " - ", StringComparison.Ordinal)) {
+                        return MutableString.Create(s.Substring(p.Length + 3), text.Encoding);
+                    }
+                    return message;
+                }
+            }
+            return message;
         }
 
         // A handled exception used to leave a pending Thread.Abort behind when Thread#raise had delivered it
