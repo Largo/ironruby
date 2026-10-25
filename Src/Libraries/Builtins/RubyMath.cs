@@ -248,7 +248,7 @@ namespace IronRuby.Builtins {
         [RubyMethodAttribute("ldexp", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("ldexp", RubyMethodAttributes.PublicSingleton)]
         public static double Ldexp(object self, [DefaultProtocol]double x, [DefaultProtocol]IntegerValue y) {
-            return x * SM.Pow(2, y.IsFixnum ? (double)y.Fixnum : y.Bignum.ToFloat64());
+            return x * SM.Pow(2, y.IsFixnum ? (double)y.Fixnum : Protocols.ToDouble(y.Bignum));
         }
 
         [RubyMethodAttribute("lgamma", RubyMethodAttributes.PrivateInstance)]

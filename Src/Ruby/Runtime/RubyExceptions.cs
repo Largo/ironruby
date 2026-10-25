@@ -346,16 +346,17 @@ namespace IronRuby.Runtime {
             //   1 < nil   => "comparison of Integer with nil failed"
             //   1 < "a"   => "comparison of Integer with String failed"
             //   [1,:b].max => "comparison of Integer with :b failed"
-            string selfClass = MessageTypeName(context.GetClassOf(self).Name);
+            // An anonymous class has no name; MRI prints it the way #inspect does (#<Class:0x...>).
+            string selfClass = MessageTypeName(context.GetClassOf(self).GetNonNullName(context));
             string otherClass;
             if (other == null || other is bool || other is int || other is long || other is BigInteger || other is double || other is RubySymbol) {
                 try {
                     otherClass = context.Inspect(other).ToString();
                 } catch (Exception) {
-                    otherClass = MessageTypeName(context.GetClassOf(other).Name);
+                    otherClass = MessageTypeName(context.GetClassOf(other).GetNonNullName(context));
                 }
             } else {
-                otherClass = MessageTypeName(context.GetClassOf(other).Name);
+                otherClass = MessageTypeName(context.GetClassOf(other).GetNonNullName(context));
             }
             return CreateArgumentError("comparison of {0} with {1} failed", selfClass, otherClass);
         }

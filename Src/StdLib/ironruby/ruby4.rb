@@ -1483,6 +1483,15 @@ class String
 end
 
 module Comparable
+  # rb_cmperr: the right operand of a failed comparison is spelled by inspect when it
+  # is an immediate (nil, true, false, Integer, Float, Symbol) and by class otherwise.
+  def self.__cmp_operand__(x)
+    case x
+    when nil, true, false, ::Integer, ::Float, ::Symbol then x.inspect
+    else x.class
+    end
+  end
+
   # Comparable#clamp (2.4; range form 2.4, beginless/endless 2.7).
   def clamp(*args)
     case args.size
@@ -1503,19 +1512,22 @@ module Comparable
 
     unless min.nil? || max.nil?
       c = (min <=> max)
-      if c.nil? || c > 0
+      if c.nil?
+        # rb_cmpint: the operands are the bounds, not self
+        raise ArgumentError, "comparison of #{min.class} with #{::Comparable.__cmp_operand__(max)} failed"
+      elsif c > 0
         raise ArgumentError, "min argument must be less than or equal to max argument"
       end
     end
 
     unless min.nil?
       c = (self <=> min)
-      raise ArgumentError, "comparison of #{self.class} with #{min.inspect} failed" if c.nil?
+      raise ArgumentError, "comparison of #{self.class} with #{::Comparable.__cmp_operand__(min)} failed" if c.nil?
       return min if c < 0
     end
     unless max.nil?
       c = (self <=> max)
-      raise ArgumentError, "comparison of #{self.class} with #{max.inspect} failed" if c.nil?
+      raise ArgumentError, "comparison of #{self.class} with #{::Comparable.__cmp_operand__(max)} failed" if c.nil?
       return max if c > 0
     end
     self
@@ -4695,13 +4707,19 @@ class Complex
     end
   end
 
+  # rb_rational_canonicalize: an exact quotient that came out whole is an Integer,
+  # so (1+2i) / 2 is ((1/2)+1i) and (3+6i) / 3 is (1+2i).
+  def self.__canon_part__(x)
+    x.is_a?(::Rational) && x.denominator == 1 ? x.numerator : x
+  end
+
   def /(other)
     if other.is_a?(::Complex)
       d = other.abs2
-      ::Complex.__raw__((real * other.real + imag * other.imag).quo(d),
-                        (imag * other.real - real * other.imag).quo(d))
+      ::Complex.__raw__(::Complex.__canon_part__((real * other.real + imag * other.imag).quo(d)),
+                        ::Complex.__canon_part__((imag * other.real - real * other.imag).quo(d)))
     elsif __real_operand__(other)
-      ::Complex.__raw__(real.quo(other), imag.quo(other))
+      ::Complex.__raw__(::Complex.__canon_part__(real.quo(other)), ::Complex.__canon_part__(imag.quo(other)))
     else
       # f_divide passes id_quo on, so a coerced pair divides exactly.
       __coerce_bin__(other, :quo)
@@ -6634,7 +6652,8 @@ class Enumerator
       n = __source_count__(source)
       n ? [n - args[0].to_i + 1, 0].max : nil
     when :times
-      source
+      # a negative count yields nothing
+      source.is_a?(::Integer) && source < 0 ? 0 : source
     when :upto
       # String#upto also lands here, and its length is not arithmetic.
       source.is_a?(::Integer) ? __int_step_size__(source, args[0], :>) : nil

@@ -60,6 +60,7 @@ namespace IronRuby.Runtime {
 
         // if this is set to null we need to initialize it
         private object _message; 
+        private static readonly string _DefaultDivideByZeroMessage = new DivideByZeroException().Message;
         
         // can be set explicitly by the user (even to nil):
         private RubyArray _backtrace;
@@ -215,7 +216,13 @@ namespace IronRuby.Runtime {
                             return _message = GetDefaultMessage(immediateClass.NominalClass);
                         }
                     }
-                    _message = MutableString.Create(_visibleException.Message, RubyEncoding.UTF8);
+                    string clrMessage = _visibleException.Message;
+                    if (_visibleException is DivideByZeroException && clrMessage == _DefaultDivideByZeroMessage) {
+                        // Integer division by zero raises the CLR's own exception, whose message is
+                        // "Attempted to divide by zero."; MRI says "divided by 0".
+                        clrMessage = "divided by 0";
+                    }
+                    _message = MutableString.Create(clrMessage, RubyEncoding.UTF8);
                 }
                 return _message;
             }

@@ -108,6 +108,15 @@ namespace IronRuby.Builtins {
             return -self;
         }
 
+        /// <summary>
+        /// Float#eql? is true only for another Float of the same value. The CLR's Double.Equals,
+        /// which Object#eql? would otherwise use, considers NaN equal to itself; Ruby does not.
+        /// </summary>
+        [RubyMethod("eql?")]
+        public static bool Eql(double self, object other) {
+            return other is double && self == (double)other;
+        }
+
         #endregion
     }
 }

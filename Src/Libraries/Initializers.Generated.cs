@@ -2829,6 +2829,11 @@ namespace IronRuby.Builtins {
                 new Func<System.Double, System.Double>(IronRuby.Builtins.FloatOps.UnaryMinus)
             );
             
+            DefineLibraryMethod(module, "eql?", 0x51, 
+                0x00000000U, 
+                new Func<System.Double, System.Object, System.Boolean>(IronRuby.Builtins.FloatOps.Eql)
+            );
+            
         }
         
         private static void LoadFloat_Class(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -3898,13 +3903,14 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "**", 0x51, 
-                new[] { 0x00000004U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U}, 
+                new[] { 0x00000004U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000000U, 0x00000004U}, 
                 new Func<IronRuby.Runtime.RubyContext, System.Numerics.BigInteger, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
                 new Func<System.Numerics.BigInteger, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
                 new Func<System.Numerics.BigInteger, System.Double, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
                 new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
                 new Func<System.Int32, System.Int32, System.Object>(IronRuby.Builtins.ClrInteger.Power), 
-                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Power)
+                new Func<System.Int32, System.Double, System.Double>(IronRuby.Builtins.ClrInteger.Power), 
+                new Func<IronRuby.Runtime.RubyContext, System.Int32, System.Numerics.BigInteger, System.Object>(IronRuby.Builtins.ClrInteger.Power)
             );
             
             DefineLibraryMethod(module, "/", 0x51, 

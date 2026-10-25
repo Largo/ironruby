@@ -208,7 +208,7 @@ class Rational < Numeric
       den = @denominator * a.numerator
       Rational(num, den)
     elsif a.kind_of?(Integer)
-      raise ZeroDivisionError, "division by zero" if a == 0
+      raise ZeroDivisionError, "divided by 0" if a == 0
       self / Rational.new!(a, 1)
     elsif a.kind_of?(Float)
       Float(self) / a

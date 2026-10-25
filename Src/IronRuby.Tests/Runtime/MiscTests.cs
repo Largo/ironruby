@@ -1003,5 +1003,73 @@ No such file or directory - x
 No such file or directory @ rb_sysopen - x
 ");
         }
+
+        public void Numeric_BignumFloatOverflow1() {
+            TestOutput(@"
+x = 10**400
+p x * 1.0, x + 1.0, x - 1.0, x / 10.0, x.fdiv(10**399), x.fdiv(10**401) <= 1e309, (-x) * 1.0
+p x <=> 1e308, x > 1e308, x == 1.0 / 0
+", @"
+Infinity
+Infinity
+Infinity
+Infinity
+10.0
+true
+-Infinity
+1
+true
+false
+");
+        }
+
+        public void Numeric_BignumExponent1() {
+            TestOutput(@"
+p 1 ** (2**70), (-1) ** (2**70), (-1) ** (2**70 + 1), 0 ** (2**70)
+begin; 2 ** (2**70); rescue ArgumentError => e; p e.message; end
+begin; (2**70) ** (2**70); rescue ArgumentError => e; p e.message; end
+begin; 5 / 0; rescue ZeroDivisionError => e; p e.message; end
+begin; (2**70) % 0; rescue ZeroDivisionError => e; p e.message; end
+", @"
+1
+1
+-1
+0
+""exponent is too large""
+""exponent is too large""
+""divided by 0""
+""divided by 0""
+");
+        }
+
+        public void Float_Eql1() {
+            TestOutput(@"
+nan = 0.0 / 0.0
+p nan.eql?(nan), nan == nan, 1.0.eql?(1.0), 1.0.eql?(1), 1.0.eql?(1.5), 1.0.eql?(nil)
+", @"
+false
+false
+true
+false
+false
+false
+");
+        }
+
+        public void ComparisonError_AnonymousClass1() {
+            TestOutput(@"
+c = Class.new
+x = c.new
+begin; 1 < x; rescue ArgumentError => e; puts e.message.sub(/0x[0-9a-f]+/, 'ID'); end
+begin; 'a' < x; rescue ArgumentError => e; puts e.message.sub(/0x[0-9a-f]+/, 'ID'); end
+begin; 'a' < 1; rescue ArgumentError => e; puts e.message; end
+begin; 1 < 'a'; rescue ArgumentError => e; puts e.message; end
+", @"
+comparison of Integer with #<Class:ID> failed
+comparison of String with #<Class:ID> failed
+comparison of String with 1 failed
+comparison of Integer with String failed
+");
+        }
     }
 }
