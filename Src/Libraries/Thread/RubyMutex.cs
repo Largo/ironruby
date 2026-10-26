@@ -32,6 +32,13 @@ namespace IronRuby.StandardLibrary.Threading {
     /// </summary>
     [RubyClass("Mutex")]
     public class RubyMutex {
+
+        /// <summary>MRI's #&lt;Thread::Mutex:0x...&gt;, rather than the CLR type name.</summary>
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, RubyMutex/*!*/ self) {
+            return RubyUtils.ObjectToMutableString(context, self);
+        }
         private readonly object/*!*/ _syncRoot = new object();
         // The Ruby thread that holds the lock (the fiber group's owner) ...
         private Thread _owner;
@@ -204,13 +211,14 @@ namespace IronRuby.StandardLibrary.Threading {
             }
         }
 
+        // MRI: the seconds slept, rounded, when woken; nil when the timeout ran out.
         [RubyMethod("sleep")]
-        public static int Sleep(RubyMutex/*!*/ self) {
+        public static object Sleep(RubyMutex/*!*/ self) {
             return DoSleep(self, Double.NegativeInfinity);
         }
 
         [RubyMethod("sleep")]
-        public static int Sleep(RubyMutex/*!*/ self, object timeout) {
+        public static object Sleep(RubyContext/*!*/ context, RubyMutex/*!*/ self, object timeout) {
             double seconds;
             if (timeout == null) {
                 seconds = Double.NegativeInfinity;
@@ -219,12 +227,12 @@ namespace IronRuby.StandardLibrary.Threading {
             } else if (timeout is double) {
                 seconds = (double)timeout;
             } else {
-                throw RubyExceptions.CreateTypeError("can't convert {0} into time interval", timeout.GetType().Name);
+                throw RubyExceptions.CreateTypeError("can't convert {0} into time interval", context.GetClassDisplayName(timeout));
             }
             return DoSleep(self, seconds);
         }
 
-        private static int DoSleep(RubyMutex/*!*/ self, double seconds) {
+        private static object DoSleep(RubyMutex/*!*/ self, double seconds) {
             if (seconds < 0 && !Double.IsNegativeInfinity(seconds)) {
                 throw RubyExceptions.CreateArgumentError("time interval must not be negative");
             }
@@ -236,11 +244,17 @@ namespace IronRuby.StandardLibrary.Threading {
 
             Unlock(self);
             try {
+                var info = IronRuby.Builtins.ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
+                var watch = System.Diagnostics.Stopwatch.StartNew();
                 if (Double.IsNegativeInfinity(seconds)) {
-                    return IronRuby.Builtins.ThreadOps.SleepForLibrary(Timeout.Infinite);
+                    info.Sleep();
+                } else {
+                    double ms = seconds * 1000;
+                    if (!info.Sleep(ms > Int32.MaxValue ? Timeout.Infinite : (int)ms)) {
+                        return null;
+                    }
                 }
-                double ms = seconds * 1000;
-                return IronRuby.Builtins.ThreadOps.SleepForLibrary(ms > Int32.MaxValue ? Timeout.Infinite : (int)ms);
+                return (int)Math.Round(watch.Elapsed.TotalSeconds);
             } finally {
                 DoLock(self);
             }

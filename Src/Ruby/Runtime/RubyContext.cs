@@ -756,6 +756,7 @@ namespace IronRuby.Runtime {
             DefineGlobalVariableNoLock("VERBOSE", Runtime.GlobalVariables.Verbose);
             DefineGlobalVariableNoLock("-v", Runtime.GlobalVariables.Verbose);
             DefineGlobalVariableNoLock("-w", Runtime.GlobalVariables.Verbose);
+            DefineGlobalVariableNoLock("-W", Runtime.GlobalVariables.WarningLevel);
             DefineGlobalVariableNoLock("DEBUG", debug);
             DefineGlobalVariableNoLock("-d", debug);
 
@@ -2032,9 +2033,14 @@ namespace IronRuby.Runtime {
             }
 
             // MRI omits the owner for Object: "uninitialized constant Foo", but keeps it otherwise:
-            // "uninitialized constant Math::Nope".
+            // "uninitialized constant Math::Nope".  The test is on rb_class_real(owner), so the
+            // singleton class of a plain Object counts as Object.
+            RubyModule realOwner = owner;
+            while (realOwner is RubyClass && ((RubyClass)realOwner).IsSingletonClass && ((RubyClass)realOwner).SuperClass != null) {
+                realOwner = ((RubyClass)realOwner).SuperClass;
+            }
             throw RubyExceptions.WithNameAndReceiver(this, RubyExceptions.CreateNameError(
-                owner == ObjectClass
+                realOwner == ObjectClass
                     ? String.Format("uninitialized constant {0}", name)
                     : String.Format("uninitialized constant {0}::{1}", GetModuleDisplayName(owner), name)
             ), name, owner);
@@ -2051,7 +2057,10 @@ namespace IronRuby.Runtime {
         /// calling #new on it. Null when there is no such constant, or when what is there is not
         /// an exception class.
         /// </summary>
-        public Exception CreateLibraryException(RubyModule/*!*/ owner, string/*!*/ className, string/*!*/ message) {
+        /// <summary>
+        /// A null message leaves the exception with its class's default one (an Errno's strerror text).
+        /// </summary>
+        public Exception CreateLibraryException(RubyModule/*!*/ owner, string/*!*/ className, string message) {
             object exceptionClass;
             if (!owner.TryGetConstant(null, className, out exceptionClass)) {
                 return null;
@@ -2064,7 +2073,7 @@ namespace IronRuby.Runtime {
                     null
                 );
             }
-            return _exceptionFactory.Target(_exceptionFactory, exceptionClass, MutableString.Create(message, RubyEncoding.UTF8)) as Exception;
+            return _exceptionFactory.Target(_exceptionFactory, exceptionClass, message != null ? MutableString.Create(message, RubyEncoding.UTF8) : null) as Exception;
         }
 
         /// <summary>

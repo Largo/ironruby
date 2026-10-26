@@ -584,6 +584,10 @@ namespace IronRuby.Builtins {
                 if (NumericRounding.RoundUnderflows(self, ndigits)) {
                     return 0.0;
                 }
+                if (ndigits > 14) {
+                    // pow(10, ndigits) is not exact from here on; MRI rounds the exact value instead
+                    return NumericRounding.RoundByRational(self, ndigits, half);
+                }
 
                 double f = System.Math.Pow(10, ndigits);
                 if (Double.IsInfinity(f)) {
@@ -636,6 +640,15 @@ namespace IronRuby.Builtins {
                     return self;
                 }
 
+                // truncating is flooring a positive number and ceiling a negative one (MRI's flo_truncate)
+                bool flooring = (direction == RoundDirection.Flooring) || (direction == RoundDirection.Truncating && self > 0.0);
+
+                // MRI: a value that rounds away entirely towards zero is a positive 0.0, however
+                // small and negative it was; -1e-10.ceil(1) is 0.0, not -0.0.
+                if (NumericRounding.RoundUnderflows(self, nd) && (flooring ? self > 0.0 : self < 0.0)) {
+                    return 0.0;
+                }
+
                 double f = System.Math.Pow(10, nd);
                 if (Double.IsInfinity(f)) {
                     return self;
@@ -646,12 +659,23 @@ namespace IronRuby.Builtins {
                     return self;
                 }
 
-                switch (direction) {
-                    case RoundDirection.Flooring: x = System.Math.Floor(x); break;
-                    case RoundDirection.Ceiling: x = System.Math.Ceiling(x); break;
-                    default: x = System.Math.Truncate(x); break;
+                // MRI's rb_float_floor/ceil check the neighbouring result against the original,
+                // which repairs the cases where self * f landed on the wrong side of an integer.
+                double result;
+                if (flooring) {
+                    double mul = System.Math.Floor(x);
+                    result = (mul + 1) / f;
+                    if (result > self) {
+                        result = mul / f;
+                    }
+                } else {
+                    double mul = System.Math.Ceiling(x);
+                    result = (mul - 1) / f;
+                    if (result < self) {
+                        result = mul / f;
+                    }
                 }
-                return x / f;
+                return result;
             }
 
             double integral;

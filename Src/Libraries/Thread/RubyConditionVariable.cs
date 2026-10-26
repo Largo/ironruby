@@ -30,6 +30,13 @@ namespace IronRuby.StandardLibrary.Threading {
     /// </summary>
     [RubyClass("ConditionVariable")]
     public class RubyConditionVariable {
+
+        /// <summary>MRI's #&lt;Thread::ConditionVariable:0x...&gt;, rather than the CLR type name.</summary>
+        [RubyMethod("inspect")]
+        [RubyMethod("to_s")]
+        public static MutableString/*!*/ Inspect(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self) {
+            return RubyUtils.ObjectToMutableString(context, self);
+        }
         private readonly object/*!*/ _lock = new object();
         private readonly LinkedList<IronRuby.Builtins.ThreadOps.RubyThreadInfo>/*!*/ _waiters = new LinkedList<IronRuby.Builtins.ThreadOps.RubyThreadInfo>();
 
@@ -74,18 +81,18 @@ namespace IronRuby.StandardLibrary.Threading {
         public static object Wait(BinaryOpStorage/*!*/ sleepStorage, RubyContext/*!*/ context, RubyConditionVariable/*!*/ self,
             object mutex, [Optional]object timeout) {
 
+            // MRI answers what mutex.sleep answers: the seconds slept, or nil on a timeout
             var site = sleepStorage.GetCallSite("sleep", 1);
-            site.Target(site, mutex, timeout);
-            return self;
+            return site.Target(site, mutex, timeout);
         }
 
         [RubyMethod("wait")]
-        public static RubyConditionVariable/*!*/ Wait(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex) {
+        public static object Wait(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex) {
             return Wait(context, self, mutex, null);
         }
 
         [RubyMethod("wait")]
-        public static RubyConditionVariable/*!*/ Wait(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex, object timeout) {
+        public static object Wait(RubyContext/*!*/ context, RubyConditionVariable/*!*/ self, [NotNull]RubyMutex/*!*/ mutex, object timeout) {
             int ms = RubyQueue.GetTimeoutMilliseconds(context, timeout);
 
             var info = IronRuby.Builtins.ThreadOps.RubyThreadInfo.FromThread(Thread.CurrentThread);
@@ -94,12 +101,16 @@ namespace IronRuby.StandardLibrary.Threading {
                 node = self._waiters.AddLast(info);
             }
 
+            // MRI: the seconds slept, rounded, when signalled; nil when the timeout ran out
+            object result;
+            var watch = System.Diagnostics.Stopwatch.StartNew();
             RubyMutex.Unlock(mutex);
             try {
                 if (ms < 0) {
                     info.Sleep();
+                    result = (int)Math.Round(watch.Elapsed.TotalSeconds);
                 } else {
-                    info.Sleep(ms);
+                    result = info.Sleep(ms) ? (object)(int)Math.Round(watch.Elapsed.TotalSeconds) : null;
                 }
             } finally {
                 lock (self._lock) {
@@ -111,7 +122,7 @@ namespace IronRuby.StandardLibrary.Threading {
                 // if the thread was killed while it was waiting to get it back.
                 RubyMutex.DoLock(mutex, false);
             }
-            return self;
+            return result;
         }
 
         [RubyMethod("marshal_dump")]
