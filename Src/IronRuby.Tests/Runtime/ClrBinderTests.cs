@@ -294,6 +294,31 @@ TypeError
 ");
         }
 
+        public class BinderSignatures {
+            public static string Single(string firstName, int count = 1, params object[] rest) { return firstName; }
+            public static string Overloaded(int a) { return "int"; }
+            public static string Overloaded(string a, string b) { return "strings"; }
+            public void WithOut(string value, out int length) { length = value.Length; }
+        }
+
+        /// <summary>
+        /// Method#parameters names the parameters of a CLR method that is not overloaded.
+        /// </summary>
+        public void ClrMethodParameters1() {
+            Context.ObjectClass.SetConstant("S", Context.GetClass(typeof(BinderSignatures)));
+            TestOutput(@"
+p S.method(:Single).parameters
+p S.method(:single).arity
+p S.method(:Overloaded).parameters
+p S.instance_method(:WithOut).parameters
+", @"
+[[:req, :first_name], [:opt, :count], [:rest, :rest]]
+-2
+[[:req], [:rest]]
+[[:req, :value]]
+");
+        }
+
         public class BinderOut {
             public string Split(string value, out string head, out string tail) {
                 head = value.Substring(0, 1);
