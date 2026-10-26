@@ -26,6 +26,7 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {
@@ -93,8 +94,54 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        // Reinitialization. Called only from derived struct's initializer.
+        // Struct#initialize. The overwhelmingly common call - one positional value per member, the
+        // last of them not a Hash that could be keywords, on a class not built with keyword_init:
+        // true - stores the values right here, which is what keeps Point.new(1, 2) cheap. Every
+        // other call goes to Struct#__struct_initialize_slow__ in ruby4.rb with the positional
+        // arguments as one array and the keywords, if any, as a Hash - as a
+        // `def initialize(*args, **kwargs)' would have received them. The keywords arrive here as
+        // a flagged Hash after the positional values; a Hash passed as a value is not flagged, and
+        // stays a positional argument (MRI's rb_struct_initialize_m tells them apart the same way).
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static object Initialize(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ slowPath,
+            RubyStruct/*!*/ self, params object[]/*!*/ items) {
+
+            // MRI's rb_struct_modify comes first: re-initializing a frozen struct is a FrozenError
+            // before any of the arguments is looked at. A struct being constructed is never frozen.
+            if (self.IsFrozen) {
+                throw RubyExceptions.CreateObjectFrozenErrorFor(self, "Struct");
+            }
+
+            int count = self.ItemCount;
+            if (items.Length == count && (count == 0 || !(items[count - 1] is IronRuby.Builtins.Hash)) && !self.IsKeywordInit) {
+                self.SetValues(items);
+                return null;
+            }
+
+            int positional = items.Length;
+            Hash keywords = null;
+            if (positional > 0) {
+                var hash = items[positional - 1] as Hash;
+                if (hash != null && hash.IsKeywordArguments) {
+                    // a plain copy: the flag would make it the slow path's keywords again
+                    keywords = new Hash(hash);
+                    positional--;
+                }
+            }
+
+            // Without the prelude (the test harness runs the libraries alone) there is no slow path:
+            // store what was given, as the C# `def initialize(*args)' did.
+            if (!self.ImmediateClass.ResolveMethod("__struct_initialize_slow__", VisibilityContext.AllVisible).Found) {
+                self.SetValues(items);
+                return null;
+            }
+
+            var site = slowPath.GetCallSite("__struct_initialize_slow__", new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, new RubyArray(items, 0, positional), keywords);
+        }
+
+        // The plain store, for __struct_initialize_slow__.
+        [RubyMethod("__struct_initialize__", RubyMethodAttributes.PrivateInstance)]
         public static void Reinitialize(RubyStruct/*!*/ self, params object[]/*!*/ items) {
             // re-initializing a frozen struct is a FrozenError, as in MRI
             if (self.IsFrozen) {

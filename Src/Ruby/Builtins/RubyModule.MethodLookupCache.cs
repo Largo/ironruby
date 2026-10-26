@@ -89,15 +89,27 @@ namespace IronRuby.Builtins {
         /// All-visible lookup of <paramref name="name"/>, ignoring refinements. Lock-free once warm for a class.
         /// </summary>
         public CachedMethodLookup/*!*/ GetMethodLookup(string/*!*/ name) {
+            int version;
+            return GetMethodLookup(name, out version);
+        }
+
+        /// <summary>
+        /// <see cref="GetMethodLookup(string)"/>, and the method version the answer belongs to, for a caller
+        /// that keeps the answer itself (a call site's storage): it stays right while <see cref="Version"/>.Method
+        /// equals <paramref name="version"/>. -1 when the answer must not be kept.
+        /// </summary>
+        public CachedMethodLookup/*!*/ GetMethodLookup(string/*!*/ name, out int version) {
             var table = Volatile.Read(ref _methodLookups);
             CachedMethodLookup entry;
             if (table != null && table.Version == Version.Method && table.Entries.TryGetValue(name, out entry)) {
+                version = table.Version;
                 return entry;
             }
-            return FillMethodLookup(name);
+            return FillMethodLookup(name, out version);
         }
 
-        private CachedMethodLookup/*!*/ FillMethodLookup(string/*!*/ name) {
+        private CachedMethodLookup/*!*/ FillMethodLookup(string/*!*/ name, out int publishedVersion) {
+            publishedVersion = -1;
             using (Context.ClassHierarchyLocker()) {
                 int version = Version.Method;
                 var entry = ResolveMethodLookupNoLock(name);
@@ -125,6 +137,7 @@ namespace IronRuby.Builtins {
 
                 entries[name] = entry;
                 Volatile.Write(ref _methodLookups, new MethodLookupTable(version, entries));
+                publishedVersion = version;
                 return entry;
             }
         }

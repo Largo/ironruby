@@ -280,34 +280,65 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_pair")]
         public static object Each(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // The block may change the hash, so iterate over a copy of the keys and look each
-                // value up when it is its turn: a value the block replaced is seen replaced, and a
-                // key the block deleted is skipped, as in MRI. Adding a key is what MRI forbids
-                // while a hash is being iterated, and the Hash itself raises for that.
-                var pairs = CopyKeyValuePairs(self);
-
                 bool yieldPair = IsPairYieldOptimizable(block);
 
-                Hash hash = self as Hash;
+                // A Ruby Hash: keys and values come out of one pass over its entries, and each value
+                // is used as is while the block leaves the hash alone; once it mutates it, the rest is
+                // looked up as below. That is the same answer without hashing every key a second
+                // time - which, for a key of a Ruby class, was a #hash and an #eql? call per entry.
+                // Adding a key is what MRI forbids while a hash is being iterated, and the Hash
+                // itself raises for that between BeginIteration and EndIteration.
+                var hash = self as Hash;
                 if (hash != null) {
+                    int count = hash.Count;
+                    object[] hashKeys = new object[count];
+                    object[] hashValues = new object[count];
+                    hash.CopyKeysAndValues(hashKeys, hashValues);
+                    int stamp = hash.MutationStamp;
                     hash.BeginIteration();
-                }
-                try {
-                    for (int i = 0; i < pairs.Length; i++) {
-                        object value;
-                        if (!TryGetCurrentValue(self, pairs, i, out value)) {
-                            continue;
+                    try {
+                        for (int i = 0; i < count; i++) {
+                            object key = hashKeys[i];
+                            object value;
+                            if (hash.MutationStamp == stamp) {
+                                value = hashValues[i];
+                            } else if (!hash.TryGetValue(key, out value)) {
+                                if (hash.Count < count) {
+                                    // deleted by the block before its turn came: MRI skips it
+                                    continue;
+                                }
+                                // a key whose hash has drifted since it was stored, a Hash that is
+                                // its own key being the usual case: MRI walks the table and still
+                                // visits it
+                                value = hashValues[i];
+                            }
+                            object result;
+                            if (yieldPair
+                                ? block.Yield(CustomStringDictionary.ObjToNull(key), value, out result)
+                                : block.Yield(MakeArray(key, value), out result)) {
+                                return result;
+                            }
                         }
-                        object result;
-                        if (yieldPair
-                            ? block.Yield(CustomStringDictionary.ObjToNull(pairs[i].Key), value, out result)
-                            : block.Yield(MakeArray(pairs[i].Key, value), out result)) {
-                            return result;
-                        }
-                    }
-                } finally {
-                    if (hash != null) {
+                    } finally {
                         hash.EndIteration();
+                    }
+                    return self;
+                }
+
+                // Any other IDictionary: the block may change it, so iterate over a copy of the
+                // entries and look each value up when it is its turn: a value the block replaced is
+                // seen replaced, and a key the block deleted is skipped, as in MRI.
+                var pairs = CopyKeyValuePairs(self);
+                for (int i = 0; i < pairs.Length; i++) {
+                    object value;
+                    if (!TryGetCurrentValue(self, pairs, i, out value)) {
+                        continue;
+                    }
+                    object result;
+                    if (yieldPair
+                        ? block.Yield(CustomStringDictionary.ObjToNull(pairs[i].Key), value, out result)
+                        : block.Yield(MakeArray(pairs[i].Key, value), out result)) {
+                        return result;
                     }
                 }
             }

@@ -20,6 +20,7 @@ using MSA = Microsoft.Scripting.Ast;
 #endif
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
@@ -161,6 +162,19 @@ namespace IronRuby.Runtime {
         private readonly Dictionary<string/*!*/, GlobalVariable>/*!*/ _globalVariables;
         public object/*!*/ GlobalVariablesLock { get { return _globalVariables; } }
 
+        /// <summary>
+        /// Changes whenever a name starts or stops denoting a GlobalVariable object - a define,
+        /// an alias, a delete, the first assignment of a new global - but not when a value is
+        /// assigned. A GlobalVariableSite keeps the object it found until this moves.
+        /// Written under GlobalVariablesLock (or before any Ruby code runs).
+        /// </summary>
+        private volatile int _globalVariablesVersion = GlobalVariableSite.NextVersion();
+        internal int GlobalVariablesVersion { get { return _globalVariablesVersion; } }
+
+        private void GlobalVariablesChanged() {
+            _globalVariablesVersion = GlobalVariableSite.NextVersion();
+        }
+
         // not thread safe: use GlobalVariablesLock to synchronize access to the variables:
         public IEnumerable<KeyValuePair<string, GlobalVariable>>/*!*/ GlobalVariables {
             get { return _globalVariables; }
@@ -257,6 +271,11 @@ namespace IronRuby.Runtime {
         // Entries cannot be ever freed since anytime in future one may create a new object whose value has already been mapped to InstanceData.
         private readonly Dictionary<object, RubyInstanceData>/*!*/ _valueTypeInstanceData;
         private object/*!*/ ValueTypeInstanceDataLock { get { return _valueTypeInstanceData; } }
+
+        // The number of entries in _valueTypeInstanceData, published after each add. Entries are
+        // never removed, so zero means there is nothing to find: then a lookup - every
+        // `1.is_a?(Hash)` asks for the immediate class of an Integer - takes no lock.
+        private int _valueTypeInstanceDataCount;
 
         // not thread-safe: 
         private readonly RubyInstanceData/*!*/ _nilInstanceData = new RubyInstanceData(RubyUtils.NilObjectId);
@@ -812,6 +831,7 @@ namespace IronRuby.Runtime {
                 } else {
                     _globalVariables["-i"] = new GlobalVariableInfo(null);
                 }
+                GlobalVariablesChanged();
 
                 // Hash
                 // SCRIPT_LINES__
@@ -1036,6 +1056,7 @@ namespace IronRuby.Runtime {
         internal void ReplaceModuleInCacheNoLock(Type/*!*/ type, RubyModule/*!*/ module) {
             Assert.NotNull(type, module);
             _moduleCache[type] = module;
+            _classReadCache.TryRemove(type, out _);
         }
 
         internal void AddNamespaceToCacheNoLock(NamespaceTracker/*!*/ namespaceTracker, RubyModule/*!*/ module) {
@@ -1090,9 +1111,21 @@ namespace IronRuby.Runtime {
             }
         }
 
+        // Lock-free read side of GetOrCreateClass. Every call on an Integer, Float or other CLR value
+        // asks for its class (GetClassOf), and taking ModuleCacheLock for a dictionary probe each time
+        // was a third or more of numeric code. A CLR type's class, once created, is only replaced by
+        // ReplaceModuleInCacheNoLock, which evicts the type here; entries are written under the lock.
+        private readonly ConcurrentDictionary<Type, RubyClass>/*!*/ _classReadCache = new ConcurrentDictionary<Type, RubyClass>();
+
         internal RubyClass/*!*/ GetOrCreateClass(Type/*!*/ type) {
+            RubyClass result;
+            if (_classReadCache.TryGetValue(type, out result)) {
+                return result;
+            }
             lock (ModuleCacheLock) {
-                return GetOrCreateClassNoLock(type);
+                result = GetOrCreateClassNoLock(type);
+                _classReadCache[type] = result;
+                return result;
             }
         }
 
@@ -2119,6 +2152,9 @@ namespace IronRuby.Runtime {
 
             RubyInstanceData result;
             if (!RubyUtils.HasObjectState(obj) && !(obj is BigInteger)) {
+                if (Volatile.Read(ref _valueTypeInstanceDataCount) == 0) {
+                    return null;
+                }
                 lock (ValueTypeInstanceDataLock) {
                     _valueTypeInstanceData.TryGetValue(obj, out result);
                 }
@@ -2185,6 +2221,7 @@ namespace IronRuby.Runtime {
                 lock (ValueTypeInstanceDataLock) {
                     if (!_valueTypeInstanceData.TryGetValue(obj, out result)) {
                         _valueTypeInstanceData.Add(obj, result = new RubyInstanceData());
+                        Volatile.Write(ref _valueTypeInstanceDataCount, _valueTypeInstanceData.Count);
                     }
                 }
                 return result;
@@ -2508,12 +2545,14 @@ namespace IronRuby.Runtime {
         public void DefineGlobalVariable(string/*!*/ name, object value) {
             lock (GlobalVariablesLock) {
                 _globalVariables[name] = new GlobalVariableInfo(value);
+                GlobalVariablesChanged();
             }
         }
 
         public void DefineReadOnlyGlobalVariable(string/*!*/ name, object value) {
             lock (GlobalVariablesLock) {
                 _globalVariables[name] = new ReadOnlyGlobalVariableInfo(value);
+                GlobalVariablesChanged();
             }
         }
 
@@ -2521,15 +2560,18 @@ namespace IronRuby.Runtime {
             ContractUtils.RequiresNotNull(variable, "variable");
             lock (GlobalVariablesLock) {
                 _globalVariables[name] = variable;
+                GlobalVariablesChanged();
             }
         }
 
         internal void DefineGlobalVariableNoLock(string/*!*/ name, GlobalVariable/*!*/ variable) {
             _globalVariables[name] = variable;
+            GlobalVariablesChanged();
         }
 
         public bool DeleteGlobalVariable(string/*!*/ name) {
             lock (GlobalVariablesLock) {
+                GlobalVariablesChanged();
                 return _globalVariables.Remove(name);
             }
         }
@@ -2541,6 +2583,7 @@ namespace IronRuby.Runtime {
                     DefineGlobalVariableNoLock(oldName, existing = new GlobalVariableInfo(null, false));
                 }
                 _globalVariables[newName] = existing;
+                GlobalVariablesChanged();
             }
         }
 
@@ -2553,6 +2596,7 @@ namespace IronRuby.Runtime {
                     global.SetValue(this, scope, name, value);
                 } else {
                     _globalVariables[name] = new GlobalVariableInfo(value);
+                    GlobalVariablesChanged();
                 }
             }
 
@@ -2584,6 +2628,36 @@ namespace IronRuby.Runtime {
             }
         }
 
+        /// <summary>The variable the name denotes and the version of the name table it was found at.</summary>
+        internal bool TryGetGlobalVariable(string/*!*/ name, out GlobalVariable variable, out int version) {
+            lock (GlobalVariablesLock) {
+                version = _globalVariablesVersion;
+                return _globalVariables.TryGetValue(name, out variable);
+            }
+        }
+
+        /// <summary>
+        /// The value of a variable a GlobalVariableSite found: what TryGetGlobalVariable would
+        /// answer for its name, minus the lookup. An ordinary global is a field read; anything
+        /// else (a special or read-only variable, or one a library defined) keeps running under
+        /// the lock.
+        /// </summary>
+        internal object GetGlobalVariableValue(GlobalVariable/*!*/ variable, RubyScope scope) {
+            lock (GlobalVariablesLock) {
+                return variable.GetValue(this, scope);
+            }
+        }
+
+        /// <summary>
+        /// Runs the Kernel#trace_var handlers of a global that has just been assigned outside
+        /// SetGlobalVariable (which runs them itself).
+        /// </summary>
+        internal void GlobalVariableAssigned(RubyScope scope, string/*!*/ name, object value) {
+            if (_anyGlobalVariableTraced) {
+                FireGlobalVariableTraces(scope, name, value);
+            }
+        }
+
         #endregion
 
         #region Global Variables: Kernel#trace_var handlers (thread-safe)
@@ -2605,6 +2679,9 @@ namespace IronRuby.Runtime {
             public GlobalVariableTraceCommand(MutableString/*!*/ code, RubyScope scope, object self) {
                 Code = code;
                 Scope = scope;
+                if (scope != null) {
+                    scope.MarkCaptured();
+                }
                 Self = self;
             }
         }

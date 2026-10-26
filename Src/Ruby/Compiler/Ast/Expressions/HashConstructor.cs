@@ -20,8 +20,10 @@ using MSA = Microsoft.Scripting.Ast;
 #endif
 
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Utils;
+using AstUtils = Microsoft.Scripting.Ast.Utils;
 
 namespace IronRuby.Compiler.Ast {
     using Ast = Expression;
@@ -55,8 +57,38 @@ namespace IronRuby.Compiler.Ast {
         }
 
         internal override MSA.Expression/*!*/ TransformRead(AstGenerator/*!*/ gen) {
+            if (_isKeywordArguments && _maplets.Length <= 3 && HasSymbolLiteralKeys()) {
+                return TransformKeywordArguments(gen);
+            }
             var items = gen.TransformMapletsToExpressions(_maplets);
             return _isKeywordArguments ? gen.MakeKeywordArgumentsHashOpCall(items) : gen.MakeHashOpCall(items);
+        }
+
+        private bool HasSymbolLiteralKeys() {
+            foreach (var maplet in _maplets) {
+                if (!(maplet.Key is SymbolLiteral)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        // `f(a: x, b: y)`: the keyword hash is built by a helper of its own arity (keys and values
+        // still evaluated in order), see RubyOps.MakeKeywordArgumentsHash2.
+        private MSA.Expression/*!*/ TransformKeywordArguments(AstGenerator/*!*/ gen) {
+            var args = new ReadOnlyCollectionBuilder<MSA.Expression>(1 + 2 * _maplets.Length);
+            args.Add(gen.CurrentScopeVariable);
+            foreach (var maplet in _maplets) {
+                args.Add(AstUtils.Box(maplet.Key.TransformRead(gen)));
+                args.Add(AstUtils.Box(maplet.Value.TransformRead(gen)));
+            }
+            switch (_maplets.Length) {
+                // the default of the hidden keyword parameter: no keywords passed
+                case 0: return Methods.MakeKeywordArgumentsHash0.OpCall(gen.CurrentScopeVariable);
+                case 1: return Methods.MakeKeywordArgumentsHash1.OpCall(args);
+                case 2: return Methods.MakeKeywordArgumentsHash2.OpCall(args);
+                default: return Methods.MakeKeywordArgumentsHash3.OpCall(args);
+            }
         }
     }
 }

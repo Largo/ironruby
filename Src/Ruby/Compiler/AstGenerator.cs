@@ -341,6 +341,9 @@ namespace IronRuby.Compiler.Ast {
             // that return leaves it, so its body catches the LambdaUnwinder.
             public bool HasNestedReturn;
 
+            // A block literal (or lambda) is nested in this one: its Proc captures this block's scope.
+            public bool HasNestedBlock;
+
             public BlockScope(ScopeBuilder/*!*/ builder, MSA.Expression/*!*/ selfVariable, MSA.ParameterExpression/*!*/ runtimeScopeVariable,
                 MSA.Expression/*!*/ bfcVariable, MSA.LabelTarget/*!*/ redoLabel)
                 : base(builder, selfVariable, runtimeScopeVariable) {
@@ -604,6 +607,9 @@ namespace IronRuby.Compiler.Ast {
             Assert.NotNull(redoLabel);
 
             BlockScope block = new BlockScope(locals, selfVariable, runtimeScopeVariable, bfcVariable, redoLabel);
+            if (_currentBlock != null) {
+                _currentBlock.HasNestedBlock = true;
+            }
             block.Parent = _currentElement;
             block.ParentRescue = _currentRescue;
             block.ParentLoop = _currentLoop;

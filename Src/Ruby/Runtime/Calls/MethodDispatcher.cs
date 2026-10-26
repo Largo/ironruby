@@ -41,6 +41,29 @@ namespace IronRuby.Runtime.Calls {
 
         public abstract object/*!*/ CreateDelegate(bool isUntyped);
 
+        /// <summary>
+        /// The guard a precompiled dispatcher runs on every call: the receiver is a Ruby object
+        /// whose class has not had a method table change since the dispatcher was made.
+        /// RubyObject is the class of nearly every such receiver, and an exact type test is two
+        /// instructions inline, where the IRubyObject cast it saves is a call to the runtime's
+        /// interface-cast helper. Any other IRubyObject goes the old way.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal bool IsCurrentFor(object self) {
+            if (self != null) {
+                Type type = self.GetType();
+                if (type == typeof(RubyObject)) {
+                    return Unsafe.As<RubyObject>(self).ImmediateClass.Version.Method == Version;
+                }
+                // a class or module receiver - Foo.new, Math.sqrt, any class method:
+                if (type == typeof(RubyClass) || type == typeof(RubyModule)) {
+                    return Unsafe.As<RubyModule>(self).ImmediateClass.Version.Method == Version;
+                }
+            }
+            IRubyObject obj = self as IRubyObject;
+            return obj != null && obj.ImmediateClass.Version.Method == Version;
+        }
+
         internal static object CreateDispatcher(Type/*!*/ func, int mandatoryParamCount, bool hasScope, bool hasBlock, int version,
             Func<MethodDispatcher> parameterlessFactory, Type[] genericFactories) {
             Type[] funcArgs = func.GetGenericArguments();
@@ -102,6 +125,13 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal abstract void Initialize(Delegate/*!*/ method, int version);
+
+        /// <summary>
+        /// Points the dispatcher at the compiled form of the body it was made for (see
+        /// RubyMethodBody.RegisterDispatcher). Either delegate runs the same body, so a call racing
+        /// with this may use either one.
+        /// </summary>
+        internal abstract void SetMethod(Delegate/*!*/ method);
     }
 
     public abstract class MethodDispatcher<TRubyFunc> : MethodDispatcher {
@@ -111,6 +141,12 @@ namespace IronRuby.Runtime.Calls {
             Assert.NotNull(method);
             Method = (TRubyFunc)(object)method;
             Version = version;
+        }
+
+        internal override void SetMethod(Delegate/*!*/ method) {
+            if (method is TRubyFunc typed) {
+                Method = typed;
+            }
         }
     }
 
@@ -129,6 +165,27 @@ namespace IronRuby.Runtime.Calls {
         }
 
         internal abstract void Initialize(string/*!*/ name, int version);
+
+        /// <summary>
+        /// The receiver as an IRubyObject and its class, or null: an exact RubyObject is told apart
+        /// inline, without the interface cast (see MemberDispatcher.IsCurrentFor).
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static IRubyObject GetRubyObject(object self, out RubyClass cls) {
+            if (self != null && self.GetType() == typeof(RubyObject)) {
+                var obj = Unsafe.As<RubyObject>(self);
+                cls = obj.ImmediateClass;
+                return obj;
+            }
+            if (self != null && (self.GetType() == typeof(RubyClass) || self.GetType() == typeof(RubyModule))) {
+                var module = Unsafe.As<RubyModule>(self);
+                cls = module.ImmediateClass;
+                return module;
+            }
+            IRubyObject result = self as IRubyObject;
+            cls = (result != null) ? result.ImmediateClass : null;
+            return result;
+        }
     }
 
     public sealed class RubyObjectAttributeReaderDispatcherWithScope : AttributeDispatcher {
@@ -145,9 +202,10 @@ namespace IronRuby.Runtime.Calls {
         }
         
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
-                return RubyOps.ReadInstanceVariable(obj.ImmediateClass.Context, obj, Site);
+            RubyClass cls;
+            IRubyObject obj = GetRubyObject(self, out cls);
+            if (obj != null && cls.Version.Method == Version) {
+                return RubyOps.ReadInstanceVariable(cls.Context, obj, Site);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object, object>>)callSite).Update(callSite, scope, self);
             }
@@ -168,9 +226,10 @@ namespace IronRuby.Runtime.Calls {
         }
 
         public object Invoke<TScope>(CallSite/*!*/ callSite, TScope/*!*/ scope, object self, T0 arg0) {
-            IRubyObject obj = self as IRubyObject;
-            if (obj != null && obj.ImmediateClass.Version.Method == Version) {
-                return RubyOps.WriteInstanceVariable(obj.ImmediateClass.Context, obj, (object)arg0, Site);
+            RubyClass cls;
+            IRubyObject obj = GetRubyObject(self, out cls);
+            if (obj != null && cls.Version.Method == Version) {
+                return RubyOps.WriteInstanceVariable(cls.Context, obj, (object)arg0, Site);
             } else {
                 return ((CallSite<Func<CallSite, TScope, object, T0, object>>)callSite).Update(callSite, scope, self, arg0);
             }

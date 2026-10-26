@@ -212,6 +212,11 @@ namespace IronRuby.Builtins {
                 return;
             }
 
+            // a hook can keep the scope (TracePoint#binding): it is not reused for another block call
+            if (info.Scope != null) {
+                info.Scope.MarkCaptured();
+            }
+
             var tracePoints = _enabledTracePoints;
             Thread thread = null;
 

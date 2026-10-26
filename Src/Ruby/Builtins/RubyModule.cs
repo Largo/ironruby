@@ -91,13 +91,19 @@ namespace IronRuby.Builtins {
         // interlocked
         internal static int _globalMethodVersion = 0;
 
+        // interlocked; bumped only where a class's method version is (IncrementMethodVersion)
+        private static int _methodTableVersion = 0;
+
         /// <summary>
-        /// Read by JIT-compiled code as its one global guard: every method table change anywhere
-        /// bumps it, so a specialization that snapshots it is invalidated by any def, undef,
-        /// alias, include, extend or singleton-method definition.
+        /// Read by JIT-compiled code as its one global guard: every method table change that can
+        /// alter a resolution call sites depend on bumps it, so a specialization that snapshots it is
+        /// invalidated by any def, undef, alias, include, extend or singleton-method definition that
+        /// overrides something. Creating a class or module does not: a new module changes no existing
+        /// class's resolution, and Class.new, Struct.new or a fresh singleton class after a method
+        /// had been specialized would otherwise send that method down the generic path for good.
         /// </summary>
         public static int GlobalMethodVersion {
-            get { return System.Threading.Volatile.Read(ref _globalMethodVersion); }
+            get { return System.Threading.Volatile.Read(ref _methodTableVersion); }
         }
         internal static int _globalModuleId = 0;
 
@@ -986,6 +992,7 @@ namespace IronRuby.Builtins {
         private void IncrementMethodVersion() {
             if (IsClass) {
                 Version.Method = Interlocked.Increment(ref _globalMethodVersion);
+                Interlocked.Increment(ref _methodTableVersion);
             }
         }
 
@@ -2986,10 +2993,32 @@ namespace IronRuby.Builtins {
         }
 
         // thread-safe:
+        // thread-safe without the class hierarchy lock: is_a?, kind_of? and Module#=== call this on
+        // every check, and the lock plus the closure ForEachAncestor needs were most of their cost.
+        // The walk only reads _prepends and _mixins, which are replaced, never mutated in place, under
+        // the lock, and the superclass chain; an include/prepend running concurrently is seen or not,
+        // just as with the lock, which only orders this check before or after it.
         public bool HasAncestor(RubyModule/*!*/ module) {
-            using (Context.ClassHierarchyLocker()) {
-                return HasAncestorNoLock(module);
+            RubyClass cls = this as RubyClass;
+            if (cls == null) {
+                return IsDeclaredAncestor(module);
             }
+            for (RubyClass c = cls; c != null; c = c.SuperClass) {
+                if (c.IsDeclaredAncestor(module)) return true;
+            }
+            return false;
+        }
+
+        // The modules ForEachDeclaredAncestor visits, read without the lock (see HasAncestor).
+        private bool IsDeclaredAncestor(RubyModule/*!*/ module) {
+            if (this == module) return true;
+            foreach (RubyModule p in _prepends) {
+                if (p == module) return true;
+            }
+            foreach (RubyModule m in _mixins) {
+                if (m == module) return true;
+            }
+            return false;
         }
 
         public bool HasAncestorNoLock(RubyModule/*!*/ module) {

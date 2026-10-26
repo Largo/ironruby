@@ -233,15 +233,9 @@ namespace IronRuby.Builtins {
             throw RubyExceptions.CreateTypeError("{0}#allocate should return IList", cls.Name);
         }
 
-        internal static IEnumerable<Int32>/*!*/ ReverseEnumerateIndexes(IList/*!*/ collection) {
-            for (int originalSize = collection.Count, i = originalSize - 1; i >= 0; i--) {
-                yield return i;
-                if (collection.Count < originalSize) {
-                    i = originalSize - (originalSize - collection.Count);
-                    originalSize = collection.Count;
-                }
-            }
-        }
+        // The reverse walks below are MRI's (rb_ary_reverse_each, rb_ary_rindex): index Count - 1
+        // down to 0, and when the block has shrunk the array below the index just visited, on from
+        // its new end - elements appended meanwhile are not visited, and none is visited twice.
 
         #endregion
 
@@ -1134,6 +1128,18 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("each")]
         public static object Each([NotNull]BlockParam/*!*/ block, IList/*!*/ self) {
+            var array = self as RubyArray;
+            if (array != null) {
+                // the same loop, without an interface call for Count and the element every time round
+                for (int i = 0; i < array.Count; i++) {
+                    object result;
+                    if (block.Yield(array[i], out result)) {
+                        return result;
+                    }
+                }
+                return self;
+            }
+
             for (int i = 0; i < self.Count; i++) {
                 object result;
                 if (block.Yield(self[i], out result)) {
@@ -1142,6 +1148,60 @@ namespace IronRuby.Builtins {
             }
             return self;
         }
+
+        #region map, collect, select
+
+        // Array's own, as in MRI (rb_ary_collect, rb_ary_select): they walk the array rather than
+        // run Enumerable's versions, which call #each with a block of their own that yields to the
+        // given block - two block invocations and a packed argument array per element. Like MRI's,
+        // they do not call an #each that a subclass defines.
+
+        [RubyMethod("collect")]
+        [RubyMethod("map")]
+        public static Enumerator/*!*/ GetMapEnumerator(IList/*!*/ self) {
+            return new Enumerator(self, "map");
+        }
+
+        [RubyMethod("collect")]
+        [RubyMethod("map")]
+        public static object Map([NotNull]BlockParam/*!*/ collector, IList/*!*/ self) {
+            var result = new RubyArray(self.Count);
+            var array = self as RubyArray;
+            for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
+                object blockResult;
+                if (collector.Yield(array != null ? array[i] : self[i], out blockResult)) {
+                    return blockResult;
+                }
+                result.Add(blockResult);
+            }
+            return result;
+        }
+
+        [RubyMethod("filter")]
+        [RubyMethod("select")]
+        public static Enumerator/*!*/ GetSelectEnumerator(IList/*!*/ self) {
+            return new Enumerator(self, "select");
+        }
+
+        [RubyMethod("filter")]
+        [RubyMethod("select")]
+        public static object Select([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
+            var result = new RubyArray();
+            var array = self as RubyArray;
+            for (int i = 0; i < (array != null ? array.Count : self.Count); i++) {
+                object blockResult;
+                if (predicate.Yield(array != null ? array[i] : self[i], out blockResult)) {
+                    return blockResult;
+                }
+                if (Protocols.IsTrue(blockResult)) {
+                    // MRI adds the element as it is once the block has run (rb_ary_elt)
+                    result.Add(i < self.Count ? self[i] : null);
+                }
+            }
+            return result;
+        }
+
+        #endregion
 
         [RubyMethod("each_index")]
         public static Enumerator/*!*/ EachIndex(IList/*!*/ self) {
@@ -1169,10 +1229,14 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("reverse_each")]
         public static object ReverseEach([NotNull]BlockParam/*!*/ block, RubyArray/*!*/ self) {
-            foreach (int index in IListOps.ReverseEnumerateIndexes(self)) {
+            for (int i = self.Count; i-- > 0; ) {
                 object result;
-                if (block.Yield(self[index], out result)) {
+                if (block.Yield(self[i], out result)) {
                     return result;
+                }
+                int count = self.Count;
+                if (count < i) {
+                    i = count;
                 }
             }
             return self;
@@ -1654,7 +1718,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("rindex")]
         public static object ReverseIndex([NotNull]BlockParam/*!*/ predicate, IList/*!*/ self) {
-            foreach (int i in IListOps.ReverseEnumerateIndexes(self)) {
+            for (int i = self.Count; i-- > 0; ) {
                 object blockResult;
                 if (predicate.Yield(self[i], out blockResult)) {
                     return blockResult;
@@ -1662,6 +1726,10 @@ namespace IronRuby.Builtins {
 
                 if (Protocols.IsTrue(blockResult)) {
                     return ScriptingRuntimeHelpers.Int32ToObject(i);
+                }
+                int count = self.Count;
+                if (count < i) {
+                    i = count;
                 }
             }
             return null;
@@ -1673,9 +1741,13 @@ namespace IronRuby.Builtins {
                 equals.Context.ReportWarning("given block not used");
             } 
             
-            foreach (int i in IListOps.ReverseEnumerateIndexes(self)) {
+            for (int i = self.Count; i-- > 0; ) {
                 if (Protocols.IsEqual(equals, self[i], item)) {
                     return ScriptingRuntimeHelpers.Int32ToObject(i);
+                }
+                // an == that shrank the array below the next index ends the search, as in MRI
+                if (i > self.Count) {
+                    break;
                 }
             }
             return null;

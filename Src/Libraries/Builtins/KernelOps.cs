@@ -653,7 +653,7 @@ namespace IronRuby.Builtins {
             // An exception raised before whose backtrace was since set to nil gets a new one, as in
             // MRI. The interpreter keeps the frames of the first throw on the exception and would
             // hand those back again.
-            if (RubyExceptionData.GetInstance(exception).Backtrace == null) {
+            if (!RubyExceptionData.GetInstance(exception).HasBacktrace) {
                 exception.RemoveData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo));
             }
 
@@ -736,7 +736,7 @@ namespace IronRuby.Builtins {
             // An exception with no backtrace - new, or cleared by set_backtrace(nil) - gets one from
             // where it is raised now. The interpreter keeps the frames of the first throw on the
             // exception and would otherwise report those again.
-            if (RubyExceptionData.GetInstance(exception).Backtrace == null) {
+            if (!RubyExceptionData.GetInstance(exception).HasBacktrace) {
                 exception.SetData(typeof(Microsoft.Scripting.Interpreter.InterpretedFrameInfo), null);
             }
             return exception;
@@ -758,7 +758,10 @@ namespace IronRuby.Builtins {
                 return RubyExceptionData.InitializeException(new RuntimeError(message.ToClrString()), message);
             }
 
-            if (!Protocols.RespondTo(respondToStorage, obj, "exception")) {
+            // the symbol comes from the context's identifier cache: interning it anew was most of
+            // what this check cost
+            var respondTo = respondToStorage.GetCallSite();
+            if (!RubyOps.IsTrue(respondTo.Target(respondTo, obj, respondToStorage.Context.StringifyIdentifier("exception")))) {
                 throw RubyExceptions.CreateTypeError("exception class/object expected");
             }
 
@@ -1468,22 +1471,31 @@ namespace IronRuby.Builtins {
 
         // This method is a binder intrinsic and the behavior of the binder needs to be adjusted appropriately if changed.
         [RubyMethod("respond_to?")]
-        public static bool RespondTo(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ respondToMissingStorage,
+        public static bool RespondTo(RespondToCacheStorage/*!*/ respondToMissingStorage,
             RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName, [Optional]bool includePrivate) {
 
             var context = scope.RubyContext;
             RubyClass cls = context.GetImmediateClassOf(self);
 
             // A refinement active where #respond_to? was called counts, as it does for a call. Without
-            // one - nearly always - the answer comes from the class's lock-free method-lookup cache.
+            // one - nearly always - the answer comes from the class's lock-free method-lookup cache,
+            // and the site keeps it while the class's method version stays the same.
+            int version = -1;
             if (scope.GetActiveRefinements().IsEmpty) {
-                var lookup = cls.GetMethodLookup(methodName);
+                bool answer;
+                if (respondToMissingStorage.TryGetAnswer(cls, methodName, includePrivate, out answer)) {
+                    return answer;
+                }
+
+                var lookup = cls.GetMethodLookup(methodName, out version);
 
                 // Without include_private only *public* methods count; MRI has answered false for
                 // protected ones since 2.0. The visibility is the one at the name's entry point, so
                 // `public :m' re-exporting an inherited private m counts.
                 if (lookup.Found && (includePrivate || lookup.Visibility == RubyMethodVisibility.Public)) {
-                    return IsImplemented(lookup.Info);
+                    answer = IsImplemented(lookup.Info);
+                    respondToMissingStorage.SetAnswer(cls, version, methodName, includePrivate, answer);
+                    return answer;
                 }
             } else {
                 var visibility = includePrivate
@@ -1505,8 +1517,12 @@ namespace IronRuby.Builtins {
             // Kernel's own respond_to_missing? called: it answers false, and MRI's basic_obj_respond_to
             // skips it the same way (rb_method_basic_definition_p). Only the *lookup* is cached - a
             // user-defined respond_to_missing? is called every time.
-            var missing = cls.GetMethodLookup(Symbols.RespondToMissing);
+            int missingVersion;
+            var missing = cls.GetMethodLookup(Symbols.RespondToMissing, out missingVersion);
             if (!missing.Found || IsKernelRespondToMissing(missing.Info)) {
+                if (missingVersion == version) {
+                    respondToMissingStorage.SetAnswer(cls, version, methodName, includePrivate, false);
+                }
                 return false;
             }
 
@@ -1574,42 +1590,45 @@ namespace IronRuby.Builtins {
         // The name is converted here rather than by the binder, so that a bad one is reported
         // from inside public_send, as MRI's backtrace has it.
         [RubyMethod("public_send")]
-        public static object PublicSendMessage(ConversionStorage<string>/*!*/ stringCast, RubyScope/*!*/ scope, BlockParam block, object self,
-            object name, params object[]/*!*/ args) {
+        public static object PublicSendMessage(ConversionStorage<string>/*!*/ stringCast,
+            SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ sendStorage,
+            RubyScope/*!*/ scope, BlockParam block, object self, object name, params object[]/*!*/ args) {
 
             string methodName = Protocols.CastToSymbol(stringCast, name);
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>(
-                methodName, new RubyCallSignature(1,
-                    RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock | RubyCallFlags.IsInteropCall)
+            var site = GetSendSite(sendStorage, scope, methodName, new RubyCallSignature(1,
+                RubyCallFlags.HasScope | RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock | RubyCallFlags.IsInteropCall)
             );
             return site.Target(site, scope, self, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
         }
 
         // ARGS: 0
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object>>(
-                methodName, new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
             );
             return site.Target(site, scope, self);
         }
 
         // ARGS: 0&
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, object>>(
-                methodName, new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock)
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName) {
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(0, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock)
             );
             return site.Target(site, scope, self, block != null ? block.Proc : null);
         }
 
         // ARGS: 1
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
 
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object, object>>(
-                methodName, new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
             );
 
             return site.Target(site, scope, self, arg1);
@@ -1617,22 +1636,24 @@ namespace IronRuby.Builtins {
 
         // ARGS: 1&
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1) {
 
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, object, object>>(
-                methodName, new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock)
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock)
             );
             return site.Target(site, scope, self, block != null ? block.Proc : null, arg1);
         }
 
         // ARGS: 2
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
 
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object, object, object>>(
-                methodName, new RubyCallSignature(2, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(2, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
             );
 
             return site.Target(site, scope, self, arg1, arg2);
@@ -1640,22 +1661,24 @@ namespace IronRuby.Builtins {
 
         // ARGS: 2&
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2) {
 
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, object, object, object>>(
-                methodName, new RubyCallSignature(2, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock)
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(2, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock)
             );
             return site.Target(site, scope, self, block != null ? block.Proc : null, arg1, arg2);
         }
 
         // ARGS: 3
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
 
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, object, object, object, object>>(
-                methodName, new RubyCallSignature(3, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(3, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf)
             );
 
             return site.Target(site, scope, self, arg1, arg2, arg3);
@@ -1663,22 +1686,24 @@ namespace IronRuby.Builtins {
 
         // ARGS: 3&
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             object arg1, object arg2, object arg3) {
 
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>(
-                methodName, new RubyCallSignature(3, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock)
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(3, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasBlock)
             );
             return site.Target(site, scope, self, block != null ? block.Proc : null, arg1, arg2, arg3);
         }
 
         // ARGS: N
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, RubyArray, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
             
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, RubyArray, object>>(
-                methodName, new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument)
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument)
             );
 
             return site.Target(site, scope, self, RubyOps.MakeArrayN(args));
@@ -1686,23 +1711,39 @@ namespace IronRuby.Builtins {
 
         // ARGS: N&
         [RubyMethod("send")]
-        public static object SendMessage(RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
+        public static object SendMessage(SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>/*!*/ storage,
+            RubyScope/*!*/ scope, BlockParam block, object self, [DefaultProtocol, NotNull]string/*!*/ methodName,
             params object[]/*!*/ args) {
 
-            var site = scope.RubyContext.GetOrCreateSendSite<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>(
-                methodName, new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument |
+            var site = GetSendSite(storage, scope, methodName,
+                new RubyCallSignature(1, RubyCallFlags.HasScope | RubyCallFlags.HasImplicitSelf | RubyCallFlags.HasSplattedArgument |
                     RubyCallFlags.HasBlock)
             );
             return site.Target(site, scope, self, block != null ? block.Proc : null, RubyOps.MakeArrayN(args));
         }
 
+        // The site a send dispatches through: the send site's own (its storage), or - for a send made
+        // from library code, which has no site of its own - the context's shared one.
+        private static CallSite<TSiteFunc>/*!*/ GetSendSite<TSiteFunc>(SendSiteStorage<TSiteFunc> storage, RubyScope/*!*/ scope,
+            string/*!*/ methodName, RubyCallSignature signature) where TSiteFunc : class {
+
+            return (storage != null)
+                ? storage.GetCallSite(methodName, signature)
+                : scope.RubyContext.GetOrCreateSendSite<TSiteFunc>(methodName, signature);
+        }
+
         internal static object SendMessageOpt(RubyScope/*!*/ scope, BlockParam block, object self, string/*!*/ methodName, object[] args) {
             switch ((args != null ? args.Length : 0)) {
-                case 0: return SendMessage(scope, block, self, methodName);
-                case 1: return SendMessage(scope, block, self, methodName, args[0]);
-                case 2: return SendMessage(scope, block, self, methodName, args[0], args[1]);
-                case 3: return SendMessage(scope, block, self, methodName, args[0], args[1], args[2]);
-                default: return SendMessage(scope, block, self, methodName, args);
+                case 0: return SendMessage((SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object>>)null,
+                    scope, block, self, methodName);
+                case 1: return SendMessage((SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object>>)null,
+                    scope, block, self, methodName, args[0]);
+                case 2: return SendMessage((SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object>>)null,
+                    scope, block, self, methodName, args[0], args[1]);
+                case 3: return SendMessage((SendSiteStorage<Func<CallSite, RubyScope, object, Proc, object, object, object, object>>)null,
+                    scope, block, self, methodName, args[0], args[1], args[2]);
+                default: return SendMessage((SendSiteStorage<Func<CallSite, RubyScope, object, Proc, RubyArray, object>>)null,
+                    scope, block, self, methodName, args);
             }
         }
 

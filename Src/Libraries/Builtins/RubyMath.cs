@@ -14,7 +14,9 @@
  * ***************************************************************************/
 
 using System;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
 using SM = System.Math;
@@ -37,6 +39,28 @@ namespace IronRuby.Builtins {
                 throw new Errno.DomainError("Domain error - " + functionName);
             }
             return result;
+        }
+
+        // The fast path of the functions ruby4.rb used to define in Ruby: a Float or a Fixnum argument,
+        // in the function's domain. Anything else - a Bignum, a Rational, nil, a String, an object with
+        // #to_f - and every domain error go to the Ruby definitions (__ir_<name>__ in ruby4.rb), which do
+        // MRI's rb_to_float conversion and raise its errors.
+        private static bool TryGetDouble(object x, out double d) {
+            if (x is double) { d = (double)x; return true; }
+            if (x is int) { d = (int)x; return true; }
+            if (x is long) { d = (long)x; return true; }
+            d = 0.0;
+            return false;
+        }
+
+        private static object General(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, string/*!*/ name, object self, object x) {
+            var site = general.GetCallSite(name, new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, x);
+        }
+
+        private static object General(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ general, string/*!*/ name, object self, object x, object y) {
+            var site = general.GetCallSite(name, new RubyCallSignature(2, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, x, y);
         }
 
         #endregion
@@ -130,8 +154,13 @@ namespace IronRuby.Builtins {
 
         [RubyMethodAttribute("acos", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("acos", RubyMethodAttributes.PublicSingleton)]
-        public static double Acos(object self, [DefaultProtocol]double x) {
-            return DomainCheck(SM.Acos(x), "acos");
+        public static object Acos(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            if (TryGetDouble(x, out d)) {
+                if (double.IsNaN(d)) return d;
+                if (d >= -1.0 && d <= 1.0) return SM.Acos(d);
+            }
+            return General(general, "__ir_acos__", self, x);
         }
 
         [RubyMethodAttribute("acosh", RubyMethodAttributes.PrivateInstance)]
@@ -143,27 +172,39 @@ namespace IronRuby.Builtins {
 
         [RubyMethodAttribute("asin", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("asin", RubyMethodAttributes.PublicSingleton)]
-        public static double Asin(object self, [DefaultProtocol]double x) {
-            return DomainCheck(SM.Asin(x), "asin");
+        public static object Asin(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            if (TryGetDouble(x, out d)) {
+                if (double.IsNaN(d)) return d;
+                if (d >= -1.0 && d <= 1.0) return SM.Asin(d);
+            }
+            return General(general, "__ir_asin__", self, x);
         }
 
         [RubyMethodAttribute("asinh", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("asinh", RubyMethodAttributes.PublicSingleton)]
-        public static double Asinh(object self, [DefaultProtocol]double x) {
-            //ln(x + sqrt(x*x + 1))
-            return SM.Log(x + SM.Sqrt(x * x + 1));
+        public static object Asinh(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            return TryGetDouble(x, out d) ? (object)SM.Asinh(d) : General(general, "__ir_asinh__", self, x);
         }
 
         [RubyMethodAttribute("atan", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("atan", RubyMethodAttributes.PublicSingleton)]
-        public static double Atan(object self, [DefaultProtocol]double x) {
-            return SM.Atan(x);
+        public static object Atan(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            return TryGetDouble(x, out d) ? (object)SM.Atan(d) : General(general, "__ir_atan__", self, x);
         }
 
         [RubyMethodAttribute("atan2", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("atan2", RubyMethodAttributes.PublicSingleton)]
-        public static double Atan2(object self, [DefaultProtocol]double y, [DefaultProtocol]double x) {
-            return SM.Atan2(y, x);
+        public static object Atan2(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ general, object self, object y, object x) {
+            double dy, dx;
+            if (TryGetDouble(y, out dy) && TryGetDouble(x, out dx)) {
+                if (double.IsNaN(dy)) return dy;
+                if (double.IsNaN(dx)) return dx;
+                return SM.Atan2(dy, dx);
+            }
+            return General(general, "__ir_atan2__", self, y, x);
         }
         
         [RubyMethodAttribute("atanh", RubyMethodAttributes.PrivateInstance)]
@@ -175,22 +216,28 @@ namespace IronRuby.Builtins {
         
         [RubyMethodAttribute("cos", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("cos", RubyMethodAttributes.PublicSingleton)]
-        public static double Cos(object self, [DefaultProtocol]double x) {
-            return SM.Cos(x);
+        public static object Cos(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            return TryGetDouble(x, out d) ? (object)SM.Cos(d) : General(general, "__ir_cos__", self, x);
         }
 
         [RubyMethodAttribute("cosh", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("cosh", RubyMethodAttributes.PublicSingleton)]
-        public static double Cosh(object self, [DefaultProtocol]double x) {
-            return SM.Cosh(x);
+        public static object Cosh(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            return TryGetDouble(x, out d) ? (object)SM.Cosh(d) : General(general, "__ir_cosh__", self, x);
         }
 
         [RubyMethodAttribute("cbrt", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("cbrt", RubyMethodAttributes.PublicSingleton)]
-        public static double CubeRoot(object self, [DefaultProtocol]double x) {
-            double r = SM.Cbrt(x);
-            if (_GlibcCbrtCorrection && !Double.IsInfinity(r) && !Double.IsNaN(r) && !(x == 0.0 && r == 0.0)) {
-                r = (2.0 * r + (x / r / r)) / 3.0;
+        public static object CubeRoot(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            if (!TryGetDouble(x, out d)) {
+                return General(general, "__ir_cbrt__", self, x);
+            }
+            double r = SM.Cbrt(d);
+            if (_GlibcCbrtCorrection && !Double.IsInfinity(r) && !Double.IsNaN(r) && !(d == 0.0 && r == 0.0)) {
+                r = (2.0 * r + (d / r / r)) / 3.0;
             }
             return r;
         }
@@ -209,8 +256,9 @@ namespace IronRuby.Builtins {
 
         [RubyMethodAttribute("exp", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("exp", RubyMethodAttributes.PublicSingleton)]
-        public static double Exp(object self, [DefaultProtocol]double x) {
-            return SM.Exp(x);
+        public static object Exp(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            return TryGetDouble(x, out d) ? (object)SM.Exp(d) : General(general, "__ir_exp__", self, x);
         }
 
         [RubyMethodAttribute("gamma", RubyMethodAttributes.PrivateInstance)]
@@ -224,8 +272,21 @@ namespace IronRuby.Builtins {
 
         [RubyMethodAttribute("hypot", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("hypot", RubyMethodAttributes.PublicSingleton)]
-        public static double Hypot(object self, [DefaultProtocol]double x, [DefaultProtocol]double y) {
-            return DomainCheck(SM.Sqrt(x*x+y*y), "hypot");
+        public static object Hypot(CallSiteStorage<Func<CallSite, object, object, object, object>>/*!*/ general, object self, object x, object y) {
+            double dx, dy;
+            if (!TryGetDouble(x, out dx) || !TryGetDouble(y, out dy)) {
+                return General(general, "__ir_hypot__", self, x, y);
+            }
+            dx = SM.Abs(dx);
+            dy = SM.Abs(dy);
+            // an infinity wins over a NaN, which is what C's hypot() promises
+            if (double.IsInfinity(dx) || double.IsInfinity(dy)) return double.PositiveInfinity;
+            if (double.IsNaN(dx) || double.IsNaN(dy)) return double.NaN;
+            if (dx < dy) { double t = dx; dx = dy; dy = t; }
+            if (dy == 0.0) return dx;
+            // scaling by the larger operand keeps x*x from overflowing for x ~ 1e300
+            double r = dy / dx;
+            return dx * SM.Sqrt(1.0 + r * r);
         }
 
         [RubyMethodAttribute("frexp", RubyMethodAttributes.PrivateInstance)]
@@ -277,32 +338,42 @@ namespace IronRuby.Builtins {
 
         [RubyMethodAttribute("sin", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("sin", RubyMethodAttributes.PublicSingleton)]
-        public static double Sin(object self, [DefaultProtocol]double x) {
-            return SM.Sin(x);
+        public static object Sin(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            return TryGetDouble(x, out d) ? (object)SM.Sin(d) : General(general, "__ir_sin__", self, x);
         }
 
         [RubyMethodAttribute("sinh", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("sinh", RubyMethodAttributes.PublicSingleton)]
-        public static double Sinh(object self, [DefaultProtocol]double x) {
-            return SM.Sinh(x);
+        public static object Sinh(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            return TryGetDouble(x, out d) ? (object)SM.Sinh(d) : General(general, "__ir_sinh__", self, x);
         }
 
         [RubyMethodAttribute("sqrt", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("sqrt", RubyMethodAttributes.PublicSingleton)]
-        public static double Sqrt(object self, [DefaultProtocol]double x) {
-            return DomainCheck(SM.Sqrt(x), "sqrt");
+        public static object Sqrt(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            if (TryGetDouble(x, out d)) {
+                if (d > 0.0) return SM.Sqrt(d);
+                if (d == 0.0) return 0.0;       // sqrt(-0.0) is -0.0 in IEEE but 0.0 in MRI
+                if (double.IsNaN(d)) return d;
+            }
+            return General(general, "__ir_sqrt__", self, x);
         }
 
         [RubyMethodAttribute("tan", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("tan", RubyMethodAttributes.PublicSingleton)]
-        public static double Tan(object self, [DefaultProtocol]double x) {
-            return SM.Tan(x);
+        public static object Tan(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            return TryGetDouble(x, out d) ? (object)SM.Tan(d) : General(general, "__ir_tan__", self, x);
         }
 
         [RubyMethodAttribute("tanh", RubyMethodAttributes.PrivateInstance)]
         [RubyMethodAttribute("tanh", RubyMethodAttributes.PublicSingleton)]
-        public static double Tanh(object self, [DefaultProtocol]double x) {
-            return SM.Tanh(x);
+        public static object Tanh(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ general, object self, object x) {
+            double d;
+            return TryGetDouble(x, out d) ? (object)SM.Tanh(d) : General(general, "__ir_tanh__", self, x);
         }
 
         #endregion

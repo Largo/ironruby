@@ -216,6 +216,100 @@ namespace IronRuby.Builtins {
             return result;
         }
 
+        #region external iteration over an Array
+
+        /// <summary>
+        /// Where Enumerator#next is in an Array it walks without a fiber (see GetArrayCursor).
+        /// Held in an instance variable, so that a #dup shares it the way it would share the fiber.
+        /// </summary>
+        public sealed class ArrayCursor {
+            internal readonly RubyArray/*!*/ Array;
+            internal readonly System.Threading.Thread/*!*/ Thread;
+            internal int Index;
+
+            internal ArrayCursor(RubyArray/*!*/ array, System.Threading.Thread/*!*/ thread) {
+                Array = array;
+                Thread = thread;
+            }
+        }
+
+        /// <summary>
+        /// A cursor for an enumerator whose iteration is nothing but the built-in Array#each over an
+        /// Array (`ary.each`, `ary.to_enum`), or nil. Enumerator#next then steps through the Array by
+        /// index instead of suspending #each in a fiber - a thread of its own here. The two cannot be
+        /// told apart: Array#each runs no Ruby code between elements and re-reads the length before
+        /// each one, which is exactly what the cursor does, so an Array that grows or shrinks half
+        /// way through behaves the same, and #each's result (the Array) is StopIteration#result.
+        /// </summary>
+        [RubyMethod("__ir_array_cursor__", RubyMethodAttributes.PrivateInstance)]
+        public static ArrayCursor GetArrayCursor(RubyContext/*!*/ context, Enumerator/*!*/ self) {
+            var wrapper = self._impl as Wrapper;
+            RubyArray array;
+            if (wrapper == null || wrapper.TargetName != "each" || wrapper.TargetArguments.Length != 0 ||
+                (array = wrapper.TargetObject as RubyArray) == null) {
+                return null;
+            }
+
+            object generator;
+            if (context.TryGetInstanceVariable(self, "@generator", out generator) && generator != null) {
+                return null;
+            }
+
+            // Neither the enumerator's #each nor the Array's may have been replaced (redefined,
+            // aliased, overridden in a subclass or a singleton, prepended to, or removed).
+            if (!IsBuiltinMethod(context, self, "each", typeof(Enumerator), "EachFromCaller") ||
+                !IsBuiltinMethod(context, array, "each", typeof(IListOps), "Each")) {
+                return null;
+            }
+
+            return new ArrayCursor(array, RubyUtils.CurrentRubyThread);
+        }
+
+        private static bool IsBuiltinMethod(RubyContext/*!*/ context, object target, string/*!*/ name, Type/*!*/ declaringType, string/*!*/ clrName) {
+            var method = context.ResolveMethod(target, name, VisibilityContext.AllVisible);
+            if (!method.Found || !(method.Info is RubyLibraryMethodInfo)) {
+                return false;
+            }
+            var members = method.Info.GetMembers();
+            if (members.Length == 0) {
+                return false;
+            }
+            foreach (var member in members) {
+                if (member.DeclaringType != declaringType || member.Name != clrName) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        /// <summary>
+        /// The next element as a one-element Array (what the fiber would have yielded), nil at the
+        /// end, false when called from a thread other than the one that started the iteration -
+        /// where the fiber would raise FiberError.
+        /// </summary>
+        [RubyMethod("__ir_array_cursor_next__", RubyMethodAttributes.PrivateInstance)]
+        public static object ArrayCursorNext(Enumerator/*!*/ self, [NotNull]ArrayCursor/*!*/ cursor) {
+            if (cursor.Thread != RubyUtils.CurrentRubyThread) {
+                return ScriptingRuntimeHelpers.False;
+            }
+            RubyArray array = cursor.Array;
+            int index = cursor.Index;
+            if (index < array.Count) {
+                cursor.Index = index + 1;
+                RubyArray values = new RubyArray(1);
+                values.Add(array[index]);
+                return values;
+            }
+            return null;
+        }
+
+        [RubyMethod("__ir_array_cursor_source__", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ ArrayCursorSource(Enumerator/*!*/ self, [NotNull]ArrayCursor/*!*/ cursor) {
+            return cursor.Array;
+        }
+
+        #endregion
+
         // TODO: 1.9:
         // :each_with_index, :each_with_object, :with_index, :with_object, :next, :rewind
     }

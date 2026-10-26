@@ -311,6 +311,16 @@ namespace IronRuby.Runtime.Calls {
             _signature = new RubyCallSignature(_signature.ArgumentCount + 1, _signature.Flags);
         }
 
+        /// <summary>
+        /// The call #send makes: the method name dropped, and visibility ignored as for a call with implicit self.
+        /// </summary>
+        internal void RemoveSendMethodName() {
+            _args = ArrayUtils.RemoveAt(_args, GetSimpleArgumentIndex(0));
+            _copyArgsOnWrite = false;
+            _signature = new RubyCallSignature(_signature.ArgumentCount - 1,
+                (_signature.Flags & ~(RubyCallFlags.HasSourceBlock | RubyCallFlags.IsVariableCall)) | RubyCallFlags.HasImplicitSelf);
+        }
+
         internal void InsertMethodName(string/*!*/ methodName) {
             // insert the method name argument into the args
             object symbol = RubyContext.EncodeIdentifier(methodName);

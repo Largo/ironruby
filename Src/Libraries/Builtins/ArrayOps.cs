@@ -339,7 +339,9 @@ namespace IronRuby.Builtins {
             var context = comparisonStorage.Context;
 
             if (block == null) {
-                MergeSort(self, (x, y) => Protocols.Compare(comparisonStorage, x, y));
+                if (!TrySortWithoutDispatch(context, self)) {
+                    MergeSort(self, (x, y) => Protocols.Compare(comparisonStorage, x, y));
+                }
             } else {
                 object nonRefBreakResult = null;
                 try {
@@ -364,6 +366,146 @@ namespace IronRuby.Builtins {
             }
 
             return self;
+        }
+
+        /// <summary>
+        /// sort without a block over an array of only Strings, only Fixnums or only Floats (no NaN) - the
+        /// common case - compares the elements directly instead of dispatching #<=> for every pair, as
+        /// long as the class's #<=> is still the built-in one and no element is an instance of a
+        /// subclass or has a singleton class. The comparisons are the ones those #<=> make, so the
+        /// order is the same; anything else goes the general way.
+        /// </summary>
+        private static bool TrySortWithoutDispatch(RubyContext/*!*/ context, RubyArray/*!*/ self) {
+            int count = self.Count;
+            // (#<=> called from a C# sort ignores refinements, as rb_funcall does in MRI's sort)
+            if (count < 2) {
+                return false;
+            }
+
+            object first = self[0];
+            if (first != null && first.GetType() == typeof(MutableString)) {
+                var stringClass = context.GetClass(typeof(MutableString));
+                var keys = new StringKey[count];
+                for (int i = 0; i < count; i++) {
+                    object item = self[i];
+                    if (item == null || item.GetType() != typeof(MutableString) || context.GetImmediateClassOf(item) != stringClass) {
+                        return false;
+                    }
+                    keys[i] = new StringKey((MutableString)item);
+                }
+                if (!HasBuiltinComparison(stringClass)) {
+                    return false;
+                }
+                SortByKeys(self, keys);
+                return true;
+            }
+
+            if (first is int) {
+                var keys = new int[count];
+                for (int i = 0; i < count; i++) {
+                    object item = self[i];
+                    if (!(item is int)) {
+                        return false;
+                    }
+                    keys[i] = (int)item;
+                }
+                if (!HasBuiltinComparison(context.GetClassOf(first))) {
+                    return false;
+                }
+                SortByKeys(self, keys);
+                return true;
+            }
+
+            if (first is double) {
+                var keys = new double[count];
+                for (int i = 0; i < count; i++) {
+                    object item = self[i];
+                    if (!(item is double) || Double.IsNaN((double)item)) {
+                        return false;
+                    }
+                    keys[i] = (double)item;
+                }
+                if (!HasBuiltinComparison(context.GetClassOf(first))) {
+                    return false;
+                }
+                SortByKeys(self, keys);
+                return true;
+            }
+
+            return false;
+        }
+
+        // A struct, so that the generic sort below is compiled for it and calls MutableString.CompareTo
+        // directly; over the class itself it would share one body and dispatch every comparison.
+        private struct StringKey : IComparable<StringKey> {
+            private readonly MutableString/*!*/ _value;
+            public StringKey(MutableString/*!*/ value) { _value = value; }
+            public int CompareTo(StringKey other) { return _value.CompareTo(other._value); }
+        }
+
+        // The same stable merge sort as MergeSort, over keys of one type compared by their own CompareTo
+        // (what String#<=>, Integer#<=> and Float#<=> do for two of them), carrying the elements along.
+        private static void SortByKeys<TKey>(RubyArray/*!*/ self, TKey[]/*!*/ keys) where TKey : IComparable<TKey> {
+            int count = keys.Length;
+            object[] items = new object[count];
+            self.CopyTo(items, 0);
+            MergeSortKeys(keys, items, new TKey[count], new object[count], 0, count);
+            for (int i = 0; i < count; i++) {
+                self[i] = items[i];
+            }
+        }
+
+        private static void MergeSortKeys<TKey>(TKey[]/*!*/ keys, object[]/*!*/ items, TKey[]/*!*/ keyBuffer, object[]/*!*/ itemBuffer,
+            int start, int length) where TKey : IComparable<TKey> {
+
+            if (length <= 12) {
+                // insertion sort, stable: an element moves left only past strictly greater ones
+                for (int i = start + 1; i < start + length; i++) {
+                    TKey key = keys[i];
+                    object item = items[i];
+                    int j = i - 1;
+                    while (j >= start && key.CompareTo(keys[j]) < 0) {
+                        keys[j + 1] = keys[j];
+                        items[j + 1] = items[j];
+                        j--;
+                    }
+                    keys[j + 1] = key;
+                    items[j + 1] = item;
+                }
+                return;
+            }
+
+            int half = length / 2;
+            MergeSortKeys(keys, items, keyBuffer, itemBuffer, start, half);
+            MergeSortKeys(keys, items, keyBuffer, itemBuffer, start + half, length - half);
+
+            int left = start, right = start + half, target = start;
+            int leftEnd = start + half, rightEnd = start + length;
+            while (left < leftEnd && right < rightEnd) {
+                if (keys[right].CompareTo(keys[left]) < 0) {
+                    keyBuffer[target] = keys[right];
+                    itemBuffer[target++] = items[right++];
+                } else {
+                    keyBuffer[target] = keys[left];
+                    itemBuffer[target++] = items[left++];
+                }
+            }
+            while (left < leftEnd) {
+                keyBuffer[target] = keys[left];
+                itemBuffer[target++] = items[left++];
+            }
+            while (right < rightEnd) {
+                keyBuffer[target] = keys[right];
+                itemBuffer[target++] = items[right++];
+            }
+
+            Array.Copy(keyBuffer, start, keys, start, length);
+            Array.Copy(itemBuffer, start, items, start, length);
+        }
+
+        private static bool HasBuiltinComparison(RubyClass/*!*/ cls) {
+            var method = cls.ResolveMethod("<=>", VisibilityContext.AllVisible);
+            return method.Found && method.Info is RubyLibraryMethodInfo;
         }
 
         /// <summary>
