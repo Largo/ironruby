@@ -12929,7 +12929,16 @@ class Thread
   # started, has finished, or has never run Ruby code still answers nil.
   def backtrace(*args)
     if self == ::Thread.current
-      frames = ::Kernel.send(:caller, 1)
+      # MRI's first entry is the #backtrace frame itself, and a frame for a method
+      # implemented natively reports the call site rather than a place in the method.
+      # This one is written in Ruby, so that entry goes in by hand, at the caller's line.
+      # (Plain calls, not Kernel.send: a send of a literal name is a direct call that
+      # leaves no frame of its own, so nothing here may count on one.)
+      frames = caller(1)
+      unless frames.empty?
+        here = caller_locations(1, 1)[0]
+        frames = ["#{here.path}:#{here.lineno}:in 'Thread#backtrace'"] + frames
+      end
     else
       frames = __native_backtrace__
       # nil is MRI's answer for a thread that has finished.  A thread that is alive but has
@@ -12943,13 +12952,13 @@ class Thread
 
   def backtrace_locations(*args)
     if self == ::Thread.current
-      frames = ::Kernel.send(:caller_locations, 1)
+      frames = caller_locations(1)
       # MRI's first location is the #backtrace_locations frame itself, and a frame for a
       # method implemented natively reports the call site rather than a place in the
-      # method.  This one is written in Ruby, so say where it was called from by hand.
-      if frames.size > 1
-        frames = frames.dup
-        frames[0] = ::Thread::Backtrace::Location.new(frames[1].path, frames[1].lineno, "Thread#backtrace_locations")
+      # method.  This one is written in Ruby, so that location goes in by hand, at the
+      # caller's line (see #backtrace on why not through Kernel.send).
+      unless frames.empty?
+        frames = [::Thread::Backtrace::Location.new(frames[0].path, frames[0].lineno, "Thread#backtrace_locations")] + frames
       end
     else
       entries = __native_backtrace__
@@ -13000,7 +13009,9 @@ class Thread
   # what MRI's C implementation does and what the specs check.
   def self.each_caller_location
     ::Kernel.raise ::LocalJumpError, "no block given" unless block_given?
-    ::Kernel.send(:caller_locations, 3).each { |l| yield l }
+    # Two frames up: this method's own and the block's that called it (see Thread#backtrace
+    # on why not through Kernel.send).
+    caller_locations(2).each { |l| yield l }
     nil
   end unless respond_to?(:each_caller_location)
 
