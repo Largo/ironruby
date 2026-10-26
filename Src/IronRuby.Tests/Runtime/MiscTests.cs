@@ -814,6 +814,261 @@ puts ArrayList
         }
 
         /// <summary>
+        /// With TZ unset the zone is the machine's, daylight saving time included. Windows has no /etc/localtime,
+        /// and the zone used to be TimeZoneInfo.Local's base offset alone, so Time.now, Time.local and File.mtime
+        /// were an hour off all summer. Compared with .NET's own answer, so it holds in any machine zone. The zone's
+        /// name, which on Windows is in the installation's language and need not be ASCII, survives Marshal.
+        /// </summary>
+        public void Time_MachineZone1() {
+            TestOutput(@"
+ENV.delete('TZ')
+local = System::TimeZoneInfo.Local
+# 2026-01-15 and 2026-07-15, 10:00 UTC
+[1768471200, 1784109600].each do |s|
+  t = Time.at(s)
+  expected = local.GetUtcOffset(System::DateTimeOffset.FromUnixTimeSeconds(s)).TotalSeconds.to_i
+  dst = local.IsDaylightSavingTime(System::DateTimeOffset.FromUnixTimeSeconds(s))
+  w = Time.local(t.year, t.month, t.day, t.hour, t.min, t.sec)
+  p [t.utc_offset == expected, t.isdst == dst, w.to_i == s, w.utc_offset == expected]
+end
+p Time.now.utc_offset == local.GetUtcOffset(System::DateTimeOffset.UtcNow).TotalSeconds.to_i
+
+t = Time.at(1784109600)
+p Marshal.load(Marshal.dump(t)).zone == t.zone
+", @"
+[true, true, true, true]
+[true, true, true, true]
+true
+true
+");
+        }
+
+        /// <summary>
+        /// An Olson TZ name resolves on Windows too, where there is no zoneinfo file to read it from.
+        /// </summary>
+        public void Time_OlsonZone1() {
+            TestOutput(@"
+saved = ENV['TZ']
+begin
+  ENV['TZ'] = 'Europe/Zurich'
+  w = Time.at(1768471200)  # 2026-01-15 10:00 UTC
+  s = Time.at(1784109600)  # 2026-07-15 10:00 UTC
+  p [w.hour, w.utc_offset, w.isdst], [s.hour, s.utc_offset, s.isdst]
+  p Time.local(2026, 7, 15, 12).to_i, Time.local(2026, 1, 15, 11).to_i
+ensure
+  ENV['TZ'] = saved
+end
+", @"
+[11, 3600, false]
+[12, 7200, true]
+1784109600
+1768471200
+");
+        }
+
+        /// <summary>
+        /// Process.spawn redirected to File::NULL, and Process.kill. On Windows File::NULL was "/dev/null",
+        /// so the redirect failed with an ENOENT that named the program; Process.kill P/Invoked libc's
+        /// kill() and raised DllNotFoundException. The child reads a pipe nobody writes to, so it runs
+        /// until it is killed. File::NULL and Process.spawn are the prelude's (ruby4.rb), which needs prism.
+        /// </summary>
+        [Options(Prism = true)]
+        public void Process_SpawnKill1() {
+            TestOutput(@"
+require 'ruby4'
+windows = File::ALT_SEPARATOR == '\\'
+p File::NULL == (windows ? 'NUL' : '/dev/null'), IO::NULL == File::NULL
+
+command = windows ? ['cmd.exe', '/c', 'more'] : ['cat']
+r, w = IO.pipe
+pid = Process.spawn(*(command + [{:in => r, :out => File::NULL, :err => File::NULL}]))
+r.close
+p Process.kill(0, pid), Process.kill(:KILL, pid)
+p Process.wait(pid) == pid
+w.close
+begin
+  Process.kill(0, pid)
+rescue Errno::ESRCH
+  p :gone
+end
+
+# a redirection that cannot be opened is what the error names (Windows; posix_spawn cannot tell)
+begin
+  Process.spawn(*(command + [{:out => 'no/such/dir/out.txt'}]))
+rescue Errno::ENOENT => e
+  p(!windows || e.message.include?('no/such/dir/out.txt'))
+end
+
+# a signal the process sends itself from another thread runs its handler on the main thread
+# (Windows, where there is no kill(2) to deliver it; elsewhere the kernel does)
+if windows
+  got = nil
+  old = trap(:TERM) { got = :handled }
+  Thread.new { Process.kill(:TERM, Process.pid) }.join
+  20.times { break if got; sleep 0.05 }
+  trap(:TERM, old)
+  p got
+else
+  p :handled
+end
+", @"
+true
+true
+1
+1
+true
+:gone
+true
+:handled
+");
+        }
+
+        /// <summary>
+        /// A raw control character (U+0000-U+001F) inside a JSON string is a ParserError, as in the json gem;
+        /// JSON.parse took a document with a literal line break in a value as it was. The gem's
+        /// allow_control_characters option (2.18.0) lets them through.
+        /// </summary>
+        public void Json_ControlCharacters1() {
+            TestOutput(@"
+load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Json'
+
+[10, 9, 1, 0, 31].each do |code|
+  src = '{""k"": ""a' + code.chr + 'b""}'
+  begin
+    JSON.parse(src)
+    p [code, :accepted]
+  rescue JSON::ParserError => e
+    p [code, e.message.start_with?('invalid ASCII control character in string')]
+  end
+end
+p JSON.parse('[""a' + 10.chr + 'b""]', :allow_control_characters => true)
+# an escaped one, and DEL, are fine
+p JSON.parse('[""a\nb"", ""' + 127.chr + '""]') == ['a' + 10.chr + 'b', 127.chr]
+", @"
+[10, true]
+[9, true]
+[1, true]
+[0, true]
+[31, true]
+[""a\nb""]
+true
+");
+        }
+
+        /// <summary>
+        /// Zlib's streams and checksums. Windows has no libz; there they run on the zlib .NET ships
+        /// (ClrZlib), so everything here holds on both: input CRuby compressed, round trips, and
+        /// the values libz keeps in the z_stream (total_in, total_out, adler) rather than bytes a
+        /// particular compressor produces.
+        /// </summary>
+        public void Zlib_Streams1() {
+            TestOutput(@"
+load_assembly 'IronRuby.Libraries', 'IronRuby.StandardLibrary.Zlib'
+
+hex = lambda { |s| [s].pack('H*') }
+text = 'hello hello hello hello'
+
+# from CRuby: Zlib::Deflate.deflate(text), and Zlib.gzip(text)
+p Zlib::Inflate.inflate(hex['789ccb48cdc9c957c8402701680308b1'])
+p Zlib.gunzip(hex['1f8b0800486adb6a0003cb48cdc9c957c8402701e3513d8d17000000'])
+
+# fed a few bytes at a time, as a PNG decoder does
+data = 'IronRuby zlib ' * 2000
+z = Zlib::Deflate.deflate(data)
+inf = Zlib::Inflate.new
+out = ''
+z.bytes.each_slice(7) { |s| out << inf.inflate(s.pack('C*')) }
+out << inf.finish
+p [out == data, inf.finished?, inf.total_in == z.bytesize, inf.total_out, inf.adler == Zlib.adler32(data)]
+inf.close
+
+d = Zlib::Deflate.new
+d << data[0, 10000]
+d << data[10000..-1]
+z = d.finish
+p [d.total_in, d.total_out == z.bytesize, d.adler == Zlib.adler32(data), Zlib::Inflate.inflate(z) == data]
+d.close
+
+p Zlib.gunzip(Zlib.gzip(data)) == data
+raw = Zlib::Deflate.new(Zlib::BEST_SPEED, -Zlib::MAX_WBITS).deflate(data, Zlib::FINISH)
+p Zlib::Inflate.new(-Zlib::MAX_WBITS).inflate(raw) == data
+p Zlib::Inflate.new(Zlib::MAX_WBITS + 32).inflate(Zlib.gzip(data)) == data
+
+# a stream reset is a fresh one
+d = Zlib::Deflate.new
+d.deflate('discarded', Zlib::SYNC_FLUSH)
+d.reset
+z = d.deflate(text, Zlib::FINISH)
+p [Zlib::Inflate.inflate(z), d.total_in]
+
+# deflated with the preset dictionary 'hello': inflate asks for it by its adler32
+inf = Zlib::Inflate.new
+begin
+  inf.inflate(hex['78bb062c0215cb00110ae5f9453929001a0b045d'])
+rescue Zlib::NeedDict
+  p [:need_dict, inf.adler == Zlib.adler32('hello')]
+end
+
+p [Zlib.crc32(text), Zlib.adler32(text), Zlib.crc32, Zlib.adler32, Zlib.crc32('lo', Zlib.crc32('hel'))]
+p [Zlib.crc32_combine(Zlib.crc32('hel'), Zlib.crc32('lo'), 2) == Zlib.crc32('hello'),
+   Zlib.adler32_combine(Zlib.adler32('hel'), Zlib.adler32('lo'), 2) == Zlib.adler32('hello')]
+p Zlib.crc_table.size, Zlib.crc_table[1], Zlib.crc_table[255]
+
+begin
+  Zlib::Inflate.inflate('not zlib')
+rescue Zlib::DataError => e
+  p e.message
+end
+
+# deflateParams refuses bad values and leaves the stream as it was
+d = Zlib::Deflate.new
+begin
+  d.params(99, 0)
+rescue Zlib::StreamError
+  p :refused
+end
+p Zlib::Inflate.inflate(d.deflate(text, Zlib::FINISH)) == text
+
+# the parameters a stream already has are no change, even after data (the default level is 6)
+d = Zlib::Deflate.new
+d << text
+d.params(6, Zlib::DEFAULT_STRATEGY)
+p Zlib::Inflate.inflate(d.finish) == text
+
+# deflate's guess at what the data is
+d = Zlib::Deflate.new
+d.deflate(text, Zlib::FINISH)
+p d.data_type == Zlib::TEXT
+
+# inflate detecting the wrapper keeps adler at 1 until it has read a whole gzip header
+inf = Zlib::Inflate.new(Zlib::MAX_WBITS + 32)
+inf.inflate(Zlib.gzip(text)[0, 5])
+p inf.adler
+", @"
+""hello hello hello hello""
+""hello hello hello hello""
+[true, true, true, 28000, true]
+[28000, true, true, true]
+true
+true
+true
+[""hello hello hello hello"", 23]
+[:need_dict, true]
+[2369606115, 1745029297, 0, 1, 907060870]
+[true, true]
+256
+1996959894
+755167117
+""incorrect header check""
+:refused
+true
+true
+true
+1
+");
+        }
+
+        /// <summary>
         /// Time._load hands a dumped zone name to the class's find_timezone. As in MRI, a StandardError from the
         /// lookup leaves the name and anything else goes through; only bytes that are not a time are a TypeError.
         /// </summary>

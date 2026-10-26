@@ -2419,6 +2419,47 @@ add {0}[System.Int32,System.Int32]
             Assert(unboxed.Y == 4);
         }
 
+        // A struct built and filled in Ruby (OpenSSL::PKey fills RSAParameters this way). The stores used to
+        // go to a temporary copy once the call sites were compiled, so after ~32 calls every field read nil.
+        public void ClrValueTypes3() {
+            Context.ObjectClass.SetConstant("S2", Context.GetClass(typeof(S2)));
+            Context.ObjectClass.SetConstant("RSAParameters", Context.GetClass(typeof(System.Security.Cryptography.RSAParameters)));
+
+            AssertOutput(() => CompilerTest(@"
+def fill(i)
+  s = S2.new
+  s.X = i
+  s.Y = i + 1
+  s
+end
+
+def set_x(i)
+  s = S2.new(i, i)
+  s.SetX
+  s
+end
+
+def rsa(i)
+  p = RSAParameters.new
+  p.Modulus = System::Array[System::Byte].new(i + 1)
+  p
+end
+
+bad = (0...100).reject { |i| s = fill(i); s.X == i && s.Y == i + 1 }
+puts ""fill: #{bad.inspect}""
+
+bad = (0...100).reject { |i| set_x(i).X == 1 }
+puts ""set_x: #{bad.inspect}""
+
+bad = (0...100).reject { |i| m = rsa(i).Modulus; m && m.Length == i + 1 }
+puts ""rsa: #{bad.inspect}""
+"), @"
+fill: []
+set_x: []
+rsa: []
+");
+        }
+
         public class ClassWithValueTypeField1 {
             public S2 Value = new S2(1, 2);
         }
