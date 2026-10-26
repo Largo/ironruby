@@ -12190,12 +12190,17 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 new Action<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.Close)
             );
             
-            DefineLibraryMethod(module, "connect", 0x11, 
-                0x00010000U, 
-                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, IronRuby.Builtins.MutableString, System.Boolean, IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.Connect)
+            DefineLibraryMethod(module, "connect", 0x11,
+                0x00050000U,
+                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, IronRuby.Builtins.MutableString, System.Boolean, System.Int32, IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.Connect)
             );
-            
-            DefineLibraryMethod(module, "peer_cert", 0x11, 
+
+            DefineLibraryMethod(module, "matches_hostname?", 0x11,
+                0x00010002U,
+                new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, IronRuby.Builtins.MutableString, System.Boolean>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.MatchesHostname)
+            );
+
+            DefineLibraryMethod(module, "peer_cert", 0x11,
                 0x00000000U, 
                 new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.PeerCertificate)
             );
@@ -12214,12 +12219,32 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 0x00010000U, 
                 new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, System.Int32, IronRuby.Builtins.MutableString>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.Read)
             );
-            
-            DefineLibraryMethod(module, "write", 0x11, 
-                0x00010002U, 
+
+            DefineLibraryMethod(module, "read_timeout=", 0x11,
+                0x00010000U,
+                new Action<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, System.Int32>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.SetReadTimeout)
+            );
+
+            DefineLibraryMethod(module, "trust", 0x11,
+                0x00000002U,
+                new Action<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, System.Collections.IList, System.Boolean>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.Trust)
+            );
+
+            DefineLibraryMethod(module, "verify_callback=", 0x11,
+                0x00000000U,
+                new Action<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, IronRuby.Builtins.Proc>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.SetVerifyCallback)
+            );
+
+            DefineLibraryMethod(module, "write", 0x11,
+                0x00010002U,
                 new Func<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, IronRuby.Builtins.MutableString, System.Int32>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.Write)
             );
-            
+
+            DefineLibraryMethod(module, "write_timeout=", 0x11,
+                0x00010000U,
+                new Action<IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport, System.Int32>(IronRuby.StandardLibrary.OpenSsl.OpenSsl.SSL.Transport.SetWriteTimeout)
+            );
+
         }
         #endif
         

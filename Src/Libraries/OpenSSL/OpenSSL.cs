@@ -15,6 +15,7 @@
 #if FEATURE_CRYPTOGRAPHY
 
 using System;
+using System.Collections;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
@@ -23,6 +24,7 @@ using System.IO;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
+using System.Threading;
 using IronRuby.StandardLibrary.Sockets;
 using System.Text;
 using IronRuby.Builtins;
@@ -556,10 +558,26 @@ namespace IronRuby.StandardLibrary.OpenSsl {
         /// </summary>
         [RubyClass("Transport__")]
         public class Transport {
+            private RubyContext _context;
             private Socket _socket;
             private SslStream _ssl;
             private bool _verify;
             private string _hostname;
+            private int _readTimeout = Timeout.Infinite;
+            private int _writeTimeout = Timeout.Infinite;
+
+            // The context's own CAs (ca_file, ca_path, cert_store): the self-signed ones
+            // are the roots, the others may complete the chain.  Null means the system
+            // store's; _systemTrust says whether the system's count as well.
+            private X509Certificate2Collection _roots;
+            private X509Certificate2Collection _intermediates;
+            private bool _systemTrust = true;
+            private Proc _verifyCallback;
+            private Exception _callbackError;
+
+            // Why the connection cannot be used any more, once a read, a write or the
+            // handshake timed out: SslStream is in an undefined state after that.
+            private string _broken;
 
             [RubyConstructor]
             public static Transport/*!*/ Create(RubyClass/*!*/ self, [NotNull]object/*!*/ io) {
@@ -568,6 +586,7 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     throw RubyExceptions.CreateTypeError("SSLSocket needs a socket to run on");
                 }
                 var result = new Transport();
+                result._context = self.Context;
                 result._socket = socket.Socket;
                 // The Ruby socket layer leaves Socket.Blocking false and does its own
                 // polling; SslStream drives the socket itself and needs it blocking.
@@ -575,29 +594,168 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                 return result;
             }
 
+            /// <summary>
+            /// The CA certificates to check the server's chain against, as X509Certificate2s
+            /// (OpenSSL::X509::Certificate#__clr).  As in OpenSSL::X509::Store#verify, the
+            /// self-signed ones are trusted and the others only help build the chain.
+            /// system says whether the system's trust store counts as well, which it does
+            /// for a cert_store that had set_default_paths called on it.
+            /// </summary>
+            [RubyMethod("trust")]
+            public static void Trust(Transport/*!*/ self, [NotNull]IList/*!*/ certificates, bool system) {
+                var roots = new X509Certificate2Collection();
+                var intermediates = new X509Certificate2Collection();
+                foreach (object item in certificates) {
+                    var certificate = item as X509Certificate2;
+                    if (certificate == null) {
+                        throw RubyExceptions.CreateTypeError("trust anchors must be X509Certificate2s");
+                    }
+                    intermediates.Add(certificate);
+                    if (certificate.SubjectName.RawData.AsSpan().SequenceEqual(certificate.IssuerName.RawData)) {
+                        roots.Add(certificate);
+                    }
+                }
+                self._roots = roots;
+                self._intermediates = intermediates;
+                self._systemTrust = system;
+            }
+
+            /// <summary>
+            /// Called once with the chain and the SslPolicyErrors as an Integer when the
+            /// server's certificate has been checked; what it returns decides.
+            /// OpenSSL::SSL::SSLSocket runs SSLContext#verify_callback from it.
+            /// </summary>
+            [RubyMethod("verify_callback=")]
+            public static void SetVerifyCallback(Transport/*!*/ self, Proc callback) {
+                self._verifyCallback = callback;
+            }
+
             private bool Validate(object sender, X509Certificate certificate, X509Chain chain, SslPolicyErrors errors) {
-                return !_verify || errors == SslPolicyErrors.None;
+                if (!_verify) {
+                    return true;
+                }
+
+                // No SNI name means net/http connected to an IP address: it checks the
+                // name itself afterwards (SSLSocket#post_connection_check), as on MRI.
+                if (_hostname.Length == 0) {
+                    errors &= ~SslPolicyErrors.RemoteCertificateNameMismatch;
+                }
+
+                if (_roots != null && certificate != null) {
+                    var custom = new X509Chain();
+                    var policy = custom.ChainPolicy;
+                    policy.RevocationMode = X509RevocationMode.NoCheck;
+                    policy.TrustMode = X509ChainTrustMode.CustomRootTrust;
+                    policy.CustomTrustStore.AddRange(_roots);
+                    policy.ExtraStore.AddRange(_intermediates);
+                    // The intermediates the server sent.
+                    if (chain != null) {
+                        policy.ExtraStore.AddRange(chain.ChainPolicy.ExtraStore);
+                    }
+                    bool trusted = custom.Build(new X509Certificate2(certificate));
+                    if (_systemTrust && (errors & SslPolicyErrors.RemoteCertificateChainErrors) == 0) {
+                        trusted = true;
+                    } else {
+                        chain = custom;
+                    }
+                    errors = trusted
+                        ? errors & ~SslPolicyErrors.RemoteCertificateChainErrors
+                        : errors | SslPolicyErrors.RemoteCertificateChainErrors;
+                }
+
+                if (_verifyCallback == null) {
+                    return errors == SslPolicyErrors.None;
+                }
+
+                // SslStream runs this on whichever thread finished reading the server's
+                // certificate; an exception from Ruby code is carried back to #connect.
+                try {
+                    return RubyOps.IsTrue(_verifyCallback.Call(null, chain, (int)errors));
+                } catch (Exception error) {
+                    _callbackError = error;
+                    return false;
+                }
             }
 
             /// <summary>
             /// The client handshake.  hostname is the SNI name and the name the
             /// certificate is checked against; verify false accepts any certificate,
-            /// which is what OpenSSL::SSL::VERIFY_NONE means.
+            /// which is what OpenSSL::SSL::VERIFY_NONE means.  timeout is in
+            /// milliseconds, -1 for none; a handshake that takes longer raises
+            /// IO::TimeoutError.
             /// </summary>
             [RubyMethod("connect")]
             public static Transport/*!*/ Connect(Transport/*!*/ self,
-                [DefaultProtocol]MutableString hostname, bool verify) {
+                [DefaultProtocol]MutableString hostname, bool verify, [DefaultProtocol, DefaultParameterValue(-1)]int timeout) {
 
                 self._verify = verify;
                 self._hostname = hostname == null ? "" : hostname.ConvertToString();
+                self._callbackError = null;
+                self.CheckUsable();
+                bool timedOut = false;
                 try {
                     self._ssl = new SslStream(new NetworkStream(self._socket, false), false,
                         new RemoteCertificateValidationCallback(self.Validate));
-                    self._ssl.AuthenticateAsClient(self._hostname);
+                    self.ApplyTimeouts();
+                    var options = new SslClientAuthenticationOptions { TargetHost = self._hostname };
+                    // Socket.ReceiveTimeout does not bound the asynchronous reads of the
+                    // handshake; the token does, and cancels the read it is waiting in.
+                    using (var cancel = timeout < 0 ? new CancellationTokenSource() : new CancellationTokenSource(timeout)) {
+                        try {
+                            self._ssl.AuthenticateAsClientAsync(options, cancel.Token).GetAwaiter().GetResult();
+                        } catch (Exception) when (cancel.IsCancellationRequested) {
+                            // An OperationCanceledException, or an IOException from the cancelled read.
+                            timedOut = true;
+                        }
+                    }
                 } catch (Exception error) {
+                    if (self._callbackError != null) {
+                        throw self._callbackError;
+                    }
                     throw new SSLError(Unwrap(error).Message);
                 }
+                if (timedOut) {
+                    throw self.TimedOut("TLS handshake timed out after " + timeout + " ms");
+                }
                 return self;
+            }
+
+            /// <summary>Milliseconds a read may wait, -1 for ever.</summary>
+            [RubyMethod("read_timeout=")]
+            public static void SetReadTimeout(Transport/*!*/ self, [DefaultProtocol]int milliseconds) {
+                self._readTimeout = milliseconds < 0 ? Timeout.Infinite : Math.Max(milliseconds, 1);
+                self.ApplyTimeouts();
+            }
+
+            /// <summary>Milliseconds a write may wait, -1 for ever.</summary>
+            [RubyMethod("write_timeout=")]
+            public static void SetWriteTimeout(Transport/*!*/ self, [DefaultProtocol]int milliseconds) {
+                self._writeTimeout = milliseconds < 0 ? Timeout.Infinite : Math.Max(milliseconds, 1);
+                self.ApplyTimeouts();
+            }
+
+            // SslStream hands both to the NetworkStream under it, which sets
+            // Socket.ReceiveTimeout/SendTimeout: they bound each blocking call.
+            private void ApplyTimeouts() {
+                if (_ssl != null && _broken == null) {
+                    _ssl.ReadTimeout = _readTimeout;
+                    _ssl.WriteTimeout = _writeTimeout;
+                }
+            }
+
+            /// <summary>
+            /// Whether the server's certificate is valid for name, a host name or an IP
+            /// address: SSLSocket#post_connection_check.
+            /// </summary>
+            [RubyMethod("matches_hostname?")]
+            public static bool MatchesHostname(Transport/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ name) {
+                var certificate = self._ssl?.RemoteCertificate;
+                if (certificate == null) {
+                    return false;
+                }
+                using (var certificate2 = new X509Certificate2(certificate)) {
+                    return certificate2.MatchesHostname(name.ConvertToString(), true, true);
+                }
             }
 
             // An SslStream failure arrives wrapped in an AuthenticationException whose
@@ -607,8 +765,34 @@ namespace IronRuby.StandardLibrary.OpenSsl {
                     ? error.InnerException : error;
             }
 
+            // A blocking read or write that ran out of Socket.ReceiveTimeout/SendTimeout.
+            private static bool IsSocketTimeout(IOException/*!*/ error) {
+                var socketError = error.InnerException as SocketException;
+                return socketError != null && socketError.SocketErrorCode == SocketError.TimedOut;
+            }
+
+            // Marks the connection unusable and builds the IO::TimeoutError to raise.
+            private Exception/*!*/ TimedOut(string/*!*/ message) {
+                _broken = message;
+                object ioClass;
+                if (_context.ObjectClass.TryGetConstant(null, "IO", out ioClass) && ioClass is RubyModule) {
+                    var error = _context.CreateLibraryException((RubyModule)ioClass, "TimeoutError", message);
+                    if (error != null) {
+                        return error;
+                    }
+                }
+                return new SSLError(message);
+            }
+
+            private void CheckUsable() {
+                if (_broken != null) {
+                    throw new SSLError("SSL connection is unusable: " + _broken);
+                }
+            }
+
             private SslStream/*!*/ Stream {
                 get {
+                    CheckUsable();
                     if (_ssl == null) {
                         throw new SSLError("SSL session is not started yet");
                     }
@@ -621,9 +805,13 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             public static MutableString Read(Transport/*!*/ self, [DefaultProtocol]int length) {
                 byte[] buffer = new byte[length];
                 int read;
+                var stream = self.Stream;
                 try {
-                    read = self.Stream.Read(buffer, 0, length);
+                    read = stream.Read(buffer, 0, length);
                 } catch (IOException error) {
+                    if (IsSocketTimeout(error)) {
+                        throw self.TimedOut("read timed out after " + self._readTimeout + " ms");
+                    }
                     throw new SSLError(Unwrap(error).Message);
                 }
                 if (read == 0) {
@@ -636,10 +824,14 @@ namespace IronRuby.StandardLibrary.OpenSsl {
             [RubyMethod("write")]
             public static int Write(Transport/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ data) {
                 byte[] bytes = data.ConvertToBytes();
+                var stream = self.Stream;
                 try {
-                    self.Stream.Write(bytes, 0, bytes.Length);
-                    self.Stream.Flush();
+                    stream.Write(bytes, 0, bytes.Length);
+                    stream.Flush();
                 } catch (IOException error) {
+                    if (IsSocketTimeout(error)) {
+                        throw self.TimedOut("write timed out after " + self._writeTimeout + " ms");
+                    }
                     throw new SSLError(Unwrap(error).Message);
                 }
                 return bytes.Length;

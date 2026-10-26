@@ -1,7 +1,9 @@
 # net/http over TLS: diagnosis and proposed fix
 
-Status: diagnosed, not fixed. Measured on IronRuby 4.0.1, Windows 11, .NET 10.0.12,
-2026-10-23.
+Status: stage 1 below is implemented; stage 2 is not. Measured on IronRuby 4.0.1,
+Windows 11, .NET 10.0.12, 2026-10-23. The tables and "Why" describe the state before
+stage 1; afterwards `Util/net-http-tls-check.rb` reports no failures for https either,
+with or without `CA=1`.
 
 ## The suspicion
 
@@ -89,6 +91,27 @@ gives real non-blocking I/O.
    then `chain.Build`, plus the name check SslStream reported (`RemoteCertificateNameMismatch`).
    `verify_callback`, when set, is called with the result and an `X509StoreContext`
    holding the chain, and it has the last word, as in MRI.
+
+As built:
+
+- `Transport__#read_timeout=`/`#write_timeout=` (ms, -1 for none) and
+  `#connect(hostname, verify, timeout_ms)`, which runs `AuthenticateAsClientAsync` under a
+  `CancellationTokenSource`. A timeout raises `IO::TimeoutError` and marks the transport
+  broken; every later read or write raises `SSLError` ("SSL connection is unusable").
+- `Src/StdLib/ironruby/net/protocol.rb` loads upstream's file and prepends two modules:
+  `Net::Protocol#ssl_socket_connect` calls `SSLSocket#__connect(open_timeout)` and raises
+  `Net::OpenTimeout`; `Net::BufferedIO#rbuf_fill`/`#write0` set
+  `SSLSocket#__read_timeout=`/`#__write_timeout=` and raise `Net::ReadTimeout`/`Net::WriteTimeout`.
+- `Transport__#trust(certificates, system)`: the self-signed certificates from `ca_file`,
+  `ca_path` and `cert_store` are the roots, the others go in `ExtraStore`, as in
+  `X509::Store#verify`. `system` (a `cert_store` that had `set_default_paths` called) also
+  accepts a chain the system store trusts.
+- `Transport__#verify_callback=` gets the chain and the `SslPolicyErrors`; `SSLSocket` calls
+  `verify_callback` once per certificate, root first, with an `X509::StoreContext`. It runs on
+  the thread that finishes the handshake.
+- With no SNI name (net/http connecting to an IP address) the handshake ignores
+  `RemoteCertificateNameMismatch`, and `post_connection_check` checks the name against the
+  certificate (`X509Certificate2.MatchesHostname`, IP SANs included). Before, it checked nothing.
 
 Risk: small. Blocking I/O stays as it is, only bounded. What it does not give is real
 non-blocking `read_nonblock`, so `IO.select([ssl_socket])` still says "readable" only

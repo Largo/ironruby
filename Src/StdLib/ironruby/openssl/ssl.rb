@@ -7,11 +7,17 @@
 #     the socket itself and has no "would block" answer, so #connect_nonblock
 #     does the whole handshake and #read_nonblock / #write_nonblock block.
 #     They never return :wait_readable, which the callers (net/protocol's
-#     BufferedIO, net/http) treat as "the data is here", so they work.
-#   * the trust decisions are .NET's: the system trust store, and the
-#     certificate's own name check against the SNI hostname.  An
-#     SSLContext#cert_store, #ca_file or #verify_callback is not consulted --
-#     only #verify_mode, and only for VERIFY_NONE against everything else.
+#     BufferedIO, net/http) treat as "the data is here", so they work.  The
+#     timeouts those callers would apply while waiting are applied to the
+#     blocking calls instead: IronRuby's net/protocol
+#     (Src/StdLib/ironruby/net/protocol.rb) hands them to #__connect,
+#     #__read_timeout= and #__write_timeout=, and a call that runs out of time
+#     raises IO::TimeoutError and leaves the connection unusable.
+#   * the chain is built by .NET: against the system trust store, or, when the
+#     context has #ca_file, #ca_path or #cert_store, against the self-signed
+#     certificates in those (and the system store as well for a cert_store that
+#     had set_default_paths called on it).  #verify_callback is called for
+#     each certificate of the chain, root first, and has the last word.
 #   * server sockets (SSLServer, #accept) are not implemented.
 
 module OpenSSL
@@ -98,13 +104,28 @@ module OpenSSL
         @connected = false
         @eof = false
         @sync = true
+        @verify_result = OpenSSL::X509::V_OK
+        @read_timeout = @write_timeout = -1
       end
 
       def connect
+        __connect(nil)
+      end
+
+      # The handshake, given at most +timeout+ seconds (nil: no limit); running out
+      # raises IO::TimeoutError.  net/protocol's ssl_socket_connect calls this with
+      # open_timeout.
+      def __connect(timeout) # :nodoc:
         return self if @connected
         verify = @context.respond_to?(:verify_mode) &&
                  @context.verify_mode != OpenSSL::SSL::VERIFY_NONE
-        @transport.connect(@hostname.to_s, verify)
+        if verify
+          anchors, system = __trust_anchors
+          @transport.trust(anchors, system) unless anchors.nil?
+          callback = @context.respond_to?(:verify_callback) && @context.verify_callback
+          @transport.verify_callback = callback ? __verifier(callback) : nil
+        end
+        @transport.connect(@hostname.to_s, verify, __milliseconds(timeout))
         @connected = true
         self
       end
@@ -115,19 +136,34 @@ module OpenSSL
         connect
       end
 
+      # How long one read or write may wait, in seconds, nil for ever.  Not MRI API:
+      # IronRuby's net/protocol sets them from BufferedIO's read_timeout and
+      # write_timeout, which MRI applies while waiting for :wait_readable.
+      def __read_timeout=(seconds) # :nodoc:
+        milliseconds = __milliseconds(seconds)
+        @transport.read_timeout = @read_timeout = milliseconds unless milliseconds == @read_timeout
+      end
+
+      def __write_timeout=(seconds) # :nodoc:
+        milliseconds = __milliseconds(seconds)
+        @transport.write_timeout = @write_timeout = milliseconds unless milliseconds == @write_timeout
+      end
+
       def accept
         raise NotImplementedError,
               "OpenSSL::SSL::SSLSocket#accept is not implemented: .NET's SslStream server side is not wired up"
       end
       alias_method :accept_nonblock, :accept
 
-      # MRI checks the certificate against the hostname here; SslStream already
-      # did it during the handshake unless verification was off altogether.
+      # The certificate's names (subjectAltName DNS and IP entries, the common
+      # name failing those) against +hostname+, as MRI does.  net/http calls this
+      # for an IP address too, which gets no SNI name and so no check during the
+      # handshake.
       def post_connection_check(hostname)
         return true if @context.respond_to?(:verify_mode) &&
                        @context.verify_mode == OpenSSL::SSL::VERIFY_NONE
         raise SSLError, "hostname \"#{hostname}\" does not match the server certificate" unless
-          hostname.to_s.downcase == @hostname.to_s.downcase || @hostname.to_s.empty?
+          @transport.matches_hostname?(hostname.to_s)
         true
       end
 
@@ -161,8 +197,9 @@ module OpenSSL
         @transport.pending
       end
 
+      # V_OK unless a verify_callback accepted a certificate with an error.
       def verify_result
-        OpenSSL::X509::V_OK
+        @verify_result
       end
 
       def sysread(length, buffer = nil)
@@ -301,6 +338,68 @@ module OpenSSL
       def npn_protocol
         nil
       end
+
+      private
+
+      # Seconds as the transport's milliseconds: -1 for nil (no limit), and at least 1,
+      # since 0 would mean "no limit" to the socket underneath.
+      def __milliseconds(seconds)
+        return -1 if seconds.nil?
+        seconds = Float(seconds)
+        return -1 if seconds.infinite?
+        [[(seconds * 1000).ceil, 1].max, 0x7fffffff].min
+      end
+
+      # The certificates the context trusts in place of the system store, and whether
+      # the system store counts as well; nil when the context names no CAs.  As on
+      # MRI, ca_file and ca_path add to cert_store.
+      def __trust_anchors
+        ca_file = @context.respond_to?(:ca_file) ? @context.ca_file : nil
+        ca_path = @context.respond_to?(:ca_path) ? @context.ca_path : nil
+        store = @context.respond_to?(:cert_store) ? @context.cert_store : nil
+        return nil if ca_file.nil? && ca_path.nil? && store.nil?
+        anchors = OpenSSL::X509::Store.new
+        anchors.add_file(ca_file) unless ca_file.nil?
+        anchors.add_path(ca_path) unless ca_path.nil?
+        certificates = anchors.__certificates
+        system = false
+        if store.respond_to?(:__certificates)
+          certificates = store.__certificates + certificates
+          system = store.__default_paths?
+        end
+        [certificates.map(&:__clr).compact, system]
+      end
+
+      # The transport's callback for SSLContext#verify_callback.  MRI calls it once per
+      # certificate, from the root down to the server's own, with whether that
+      # certificate passed and an X509::StoreContext saying why not; the connection
+      # stands only if every call returns true.  .NET has checked the whole chain by
+      # the time this runs, so the per-certificate answer comes from its
+      # X509ChainElement statuses.  It runs on the thread that finished the handshake.
+      def __verifier(callback)
+        lambda do |chain, policy_errors|
+          elements = chain.nil? ? [] : chain.ChainElements.to_a
+          certificates = elements.map do |element|
+            OpenSSL::X509::Certificate.new(IronRubyOpenSSL__.bytes(element.Certificate.RawData))
+          end
+          errors = elements.map { |element| IronRubyOpenSSL__.x509_error(element.ChainElementStatus) }
+          # A chain that does not reach a trusted root says so on the chain, not on an element.
+          if policy_errors & 4 != 0 && errors.all? { |code, _| code == OpenSSL::X509::V_OK }
+            errors[-1] = IronRubyOpenSSL__.x509_error(chain.ChainStatus, true) unless errors.empty?
+          end
+          if policy_errors & 2 != 0 && !errors.empty? && errors[0][0] == OpenSSL::X509::V_OK
+            errors[0] = [OpenSSL::X509::V_ERR_HOSTNAME_MISMATCH, "hostname mismatch"]
+          end
+          accepted = true
+          (certificates.size - 1).downto(0) do |depth|
+            code, message = errors[depth]
+            context = OpenSSL::X509::StoreContext.__for_callback(certificates, depth, code, message)
+            accepted = false unless callback.call(code == OpenSSL::X509::V_OK, context)
+            @verify_result = context.error unless context.error == OpenSSL::X509::V_OK
+          end
+          accepted && !certificates.empty?
+        end
+      end
     end
 
     # MRI's SSLServer wraps a TCPServer; .NET's server-side SslStream is not
@@ -315,5 +414,6 @@ module OpenSSL
 
   module X509
     V_OK = 0 unless const_defined?(:V_OK, false)
+    V_ERR_HOSTNAME_MISMATCH = 62 unless const_defined?(:V_ERR_HOSTNAME_MISMATCH, false)
   end
 end

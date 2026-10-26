@@ -22,10 +22,10 @@ module OpenSSL
     VERIFY_FAIL_IF_NO_PEER_CERT = 2
     VERIFY_CLIENT_ONCE = 4
 
-    # The settings an SSLSocket is made with.  Only #verify_mode is acted on
-    # (see openssl/ssl.rb): the TLS behind SSLSocket is .NET's SslStream, which
-    # takes its trust anchors, protocol versions and cipher list from the
-    # platform rather than from a context object.
+    # The settings an SSLSocket is made with.  #verify_mode, #ca_file, #ca_path,
+    # #cert_store and #verify_callback are acted on (see openssl/ssl.rb); the
+    # TLS behind SSLSocket is .NET's SslStream, which takes protocol versions
+    # and the cipher list from the platform rather than from a context object.
     class SSLContext
       SESSION_CACHE_OFF = 0x0000
       SESSION_CACHE_CLIENT = 0x0001
@@ -855,6 +855,7 @@ module OpenSSL
         @error = nil
         @error_string = nil
         @chain = nil
+        @default_paths = false
       end
 
       def add_cert(certificate)
@@ -877,7 +878,10 @@ module OpenSSL
         self
       end
 
+      # Store#verify still trusts only the certificates added; an SSLSocket whose
+      # context has this store trusts the system's certificates as well.
       def set_default_paths
+        @default_paths = true
         self
       end
 
@@ -907,32 +911,69 @@ module OpenSSL
           @error = 0
           @error_string = "ok"
         else
-          @error, @error_string = __first_error(builder)
+          @error, @error_string = IronRubyOpenSSL__.x509_error(builder.ChainStatus, true)
         end
         result
       end
 
-      private
+      # What SSLSocket builds its trust anchors from.
+      def __certificates # :nodoc:
+        @certificates.dup
+      end
 
-      # X509Chain reports a set of flags; MRI reports the X509_V_ERR_* code of the
-      # first problem OpenSSL hit.  Only the codes these flags correspond to are
-      # mapped, in roughly the order OpenSSL would notice them.
-      def __first_error(builder)
-        builder.ChainStatus.to_a.each do |status|
-          case status.Status.to_s
-          when "NotTimeValid", "CtlNotTimeValid"
-            return [10, "certificate has expired"]
-          when "NotSignatureValid"
-            return [7, "certificate signature failure"]
-          when "UntrustedRoot", "ExplicitDistrust"
-            return [19, "self signed certificate in certificate chain"]
-          when "InvalidBasicConstraints"
-            return [24, "invalid CA certificate"]
-          end
-        end
-        [20, "unable to get local issuer certificate"]
+      def __default_paths? # :nodoc:
+        @default_paths
       end
     end
+
+    # What a verify_callback is handed: the chain, the certificate being looked at,
+    # and the error it has, if any.  Only SSLSocket makes these here; MRI's
+    # StoreContext.new(store, cert, chain).verify is not implemented.
+    class StoreContext
+      attr_reader :chain, :current_cert, :error_depth
+      attr_accessor :error, :error_string
+
+      def self.__for_callback(chain, depth, error, error_string) # :nodoc:
+        context = allocate
+        context.instance_variable_set(:@chain, chain)
+        context.instance_variable_set(:@current_cert, chain[depth])
+        context.instance_variable_set(:@error_depth, depth)
+        context.error = error
+        context.error_string = error_string
+        context
+      end
+
+      def initialize(*)
+        raise NotImplementedError, "OpenSSL::X509::StoreContext.new is not implemented; use Store#verify"
+      end
+    end
+  end
+end
+
+module IronRubyOpenSSL__ # :nodoc: all
+  # X509Chain reports a set of flags; MRI reports the X509_V_ERR_* code of the
+  # first problem OpenSSL hit.  Only the codes these flags correspond to are
+  # mapped, in roughly the order OpenSSL would notice them.  +statuses+ is an
+  # X509ChainStatus[]; with +failed+ the chain is known to be bad, so no flag
+  # still means "no trusted root".
+  def self.x509_error(statuses, failed = false)
+    statuses.to_a.each do |status|
+      case status.Status.to_s
+      when "NoError"
+        next
+      when "NotTimeValid", "CtlNotTimeValid"
+        return [10, "certificate has expired"]
+      when "NotSignatureValid"
+        return [7, "certificate signature failure"]
+      when "UntrustedRoot", "ExplicitDistrust"
+        return [19, "self signed certificate in certificate chain"]
+      when "InvalidBasicConstraints"
+        return [24, "invalid CA certificate"]
+      else
+        failed = true
+      end
+    end
+    failed ? [20, "unable to get local issuer certificate"] : [0, "ok"]
   end
 end
 
