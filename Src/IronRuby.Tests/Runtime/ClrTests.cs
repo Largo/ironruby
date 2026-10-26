@@ -2067,7 +2067,7 @@ p C[Float].ancestors[0..2]
 ", @"
 InteropTests::Generics1::C[Integer]
 InteropTests::Generics1::C[String]
-[InteropTests::Generics1::C[Float], InteropTests::Generics1::C[T], Object]
+[InteropTests::Generics1::C[Float], InteropTests::Generics1::C[T], IronRuby::Clr::PatternMatching]
 ");
 
             // It is possible to include a generic type definition into another class. It behaves like a Ruby module.
