@@ -575,6 +575,8 @@ namespace IronRuby.Tests {
                 ClrNameMangling2,
                 ClrNameMangling3,
                 ClrNameMangling4,
+                ClrClosedInterfaceExtensions1,
+                ClrClosedInterfaceExtensions2,
                 HostingDefaultOptions1,
                 Interactive1,
                 Interactive2,

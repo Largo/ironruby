@@ -1275,10 +1275,14 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // The extensions of the interfaces the type implements: those of a generic interface definition (IEnumerable<T>)
+            // are bound against the type, those of an instantiation (Sum(this IEnumerable<int>)) apply to every type that
+            // implements it - IsExtensionOf only accepts the instantiation itself.
             foreach (var mixin in Mixins) {
                 if (mixin._extensionMethods != null && mixin._extensionMethods.TryGetValue(name, out extensions)) {
                     foreach (var extension in extensions) {
-                        if (extension.IsExtensionOf(type)) {
+                        if (extension.IsExtensionOf(type) ||
+                            !extension.ExtendedType.ContainsGenericParameters && extension.ExtendedType.IsAssignableFrom(type)) {
                             yield return extension;
                         }
                     }
