@@ -544,13 +544,13 @@ Where the Windows errors are: `core/file` (113) and `core/filetest` (8) are syml
 `chmod`/`umask` and the other Unix file metadata; `core/process` (36 failures, 15 errors) is
 `fork`, process groups, uid/gid and signals; `library/win32ole` (114) and `library/readline`
 (25) are libraries IronRuby does not implement and whose specs only run on Windows;
-`library/zlib` (2 failures, 3 errors) is the zlib below. `core/objectspace` needs
+`library/zlib` (3 errors, and 2 failures on .NET 10) is the zlib below. `core/objectspace` needs
 `-X:ObjectSpace`, as on Linux.
 
 **`zlib`** on Windows runs on the zlib inside .NET itself (`System.IO.Compression.Native`:
 zlib-ng from .NET 9 on, Intel's zlib in .NET 8), since there is no libz to bind to. It
-inflates and deflates, gzip included, but its compressed bytes are that compressor's, not
-classic zlib's (the 2 `library/zlib` failures compare exact bytes), and what .NET does not
+inflates and deflates, gzip included, but its compressed bytes are that compressor's: zlib-ng's
+differ from classic zlib's (the 2 `library/zlib` failures on .NET 10 compare exact bytes), and what .NET does not
 export raises `NotImplementedError`: `set_dictionary`, `Deflate#params` once data has gone in,
 and `Inflate#sync_point?` (the 3 errors).
 
