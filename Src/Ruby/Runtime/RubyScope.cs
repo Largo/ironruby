@@ -1535,7 +1535,7 @@ var closureScope = scope as RubyClosureScope;
                         if (first && (path == "gem_prelude.rb" || path == "ruby4.rb")) {
                             context.Loader.LoadCorePrelude(globalScope, rubyGlobalScope.MainObject, path);
                         } else {
-                            context.Loader.LoadFile(globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8), LoadFlags.Require);
+                            RequireLibrary(context, globalScope, rubyGlobalScope.MainObject, MutableString.Create(path, RubyEncoding.UTF8));
                         }
                         first = false;
                     }
@@ -1545,6 +1545,22 @@ var closureScope = scope as RubyClosureScope;
             }
 
             return scope;
+        }
+
+        /// <summary>
+        /// -r library: MRI calls #require on main, so once the prelude has loaded RubyGems its #require
+        /// activates gems - ruby -r csv finds the bundled csv gem. Without RubyGems it is the builtin.
+        /// </summary>
+        private static void RequireLibrary(RubyContext/*!*/ context, Scope/*!*/ globalScope, object main, MutableString/*!*/ path) {
+            var method = context.ResolveMethod(main, "require", VisibilityContext.AllVisible).Info;
+            if (method == null || method is RubyLibraryMethodInfo) {
+                context.Loader.LoadFile(globalScope, main, path, LoadFlags.Require);
+            } else {
+                var site = CallSite<Func<CallSite, object, object, object>>.Create(
+                    RubyCallAction.Make(context, "require", RubyCallSignature.WithImplicitSelf(1))
+                );
+                site.Target(site, main, path);
+            }
         }
 
         internal static RubyTopLevelScope/*!*/ CreateHostedTopLevelScope(Scope/*!*/ globalScope, RubyContext/*!*/ context, bool bindGlobals) {
