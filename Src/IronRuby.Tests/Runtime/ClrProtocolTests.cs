@@ -482,5 +482,51 @@ false
         }
 
         #endregion
+
+        #region Hash patterns
+
+        /// <summary>
+        /// What a hash pattern passes to #deconstruct_keys, as MRI compiles it: the keys it names, or nil when it needs
+        /// every key - for a **rest or **nil, and for `in {}`, which only matches when there are no keys at all.
+        /// </summary>
+        [Options(Prism = true)]
+        public void HashPatternKeyList1() {
+            TestOutput(@"
+class Recorder
+  def deconstruct_keys(keys)
+    p keys
+    {a: 1, b: 2}
+  end
+end
+r = Recorder.new
+p((r in {}))
+p((r in {a: 1}))
+p((r in {a: 1, **nil}))
+p((r in {a: 1, **rest}))
+p((r in {a: 1, **}))
+p((r in {**rest}))
+p rest
+
+S = Struct.new(:a)
+p((S.new(1) in {}))
+", @"
+nil
+false
+[:a]
+true
+nil
+false
+nil
+true
+[:a]
+true
+nil
+true
+{:a=>1, :b=>2}
+false
+");
+        }
+
+        #endregion
     }
 }

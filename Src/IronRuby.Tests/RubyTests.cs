@@ -568,6 +568,7 @@ namespace IronRuby.Tests {
                 ClrTuplePatterns1,
                 ClrKeyValuePair1,
                 ClrKeyValuePairPatterns1,
+                HashPatternKeyList1,
                 HostingDefaultOptions1,
                 Interactive1,
                 Interactive2,
