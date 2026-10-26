@@ -857,5 +857,166 @@ nil
         }
 
         #endregion
+
+        #region Tasks and async streams
+
+        public static class ProtocolTasks1 {
+            public static int StreamsDisposed;
+
+            public static async System.Threading.Tasks.Task<int> AddLater(int a, int b) {
+                await System.Threading.Tasks.Task.Delay(1);
+                return a + b;
+            }
+
+            public static async System.Threading.Tasks.Task NothingLater() {
+                await System.Threading.Tasks.Task.Yield();
+            }
+
+            public static async System.Threading.Tasks.Task<int> FailLater() {
+                await System.Threading.Tasks.Task.Yield();
+                throw new InvalidOperationException("boom");
+            }
+
+            public static System.Threading.Tasks.Task<string> Done(string value) {
+                return System.Threading.Tasks.Task.FromResult(value);
+            }
+
+            public static System.Threading.Tasks.Task Cancelled() {
+                return System.Threading.Tasks.Task.FromCanceled(new System.Threading.CancellationToken(true));
+            }
+
+            public static System.Threading.Tasks.Task FailTwice() {
+                return System.Threading.Tasks.Task.WhenAll(
+                    System.Threading.Tasks.Task.Run(() => { throw new InvalidOperationException("a"); }),
+                    System.Threading.Tasks.Task.Run(() => { throw new ArgumentException("b"); })
+                );
+            }
+
+            public static System.Threading.Tasks.Task<int> Run(Func<int> f) {
+                return System.Threading.Tasks.Task.Run(f);
+            }
+
+            public static async IAsyncEnumerable<int> Stream(int count) {
+                try {
+                    for (int i = 0; i < count; i++) {
+                        await System.Threading.Tasks.Task.Yield();
+                        yield return i;
+                    }
+                } finally {
+                    StreamsDisposed++;
+                }
+            }
+
+            public static async IAsyncEnumerable<string> FailingStream() {
+                yield return "first";
+                await System.Threading.Tasks.Task.Yield();
+                throw new InvalidOperationException("stream failed");
+            }
+        }
+
+        /// <summary>
+        /// Task#value waits and returns the result, nil for a task without one (an async Task method returns an internal
+        /// Task&lt;VoidTaskResult&gt; subclass).
+        /// </summary>
+        public void ClrTaskValue1() {
+            Context.ObjectClass.SetConstant("T", Context.GetClass(typeof(ProtocolTasks1)));
+            TestOutput(@"
+t = T.add_later(2, 3)
+p t.value, t.Result, t.value
+p T.nothing_later.value, T.cancelled.is_completed
+p T.done('x').value
+p T.run(System::Func[Integer].new { 6 * 7 }).value
+p System::Threading::Tasks::Task.completed_task.value
+p T.add_later(1, 1).respond_to?(:value)
+", @"
+5
+5
+5
+nil
+true
+'x'
+42
+nil
+true
+");
+        }
+
+        /// <summary>
+        /// A failed task raises what it failed with, unwrapped from the AggregateException when there is just one;
+        /// a cancelled one raises its TaskCanceledException. Result keeps raising the AggregateException.
+        /// </summary>
+        public void ClrTaskValue2() {
+            Context.ObjectClass.SetConstant("T", Context.GetClass(typeof(ProtocolTasks1)));
+            TestOutput(@"
+begin
+  T.fail_later.value
+rescue => e
+  p e.class, e.message
+end
+begin
+  T.fail_later.Result
+rescue Exception => e
+  p e.class
+end
+p((T.cancelled.value rescue $!.class))
+begin
+  T.fail_twice.value
+rescue Exception => e
+  p e.class, e.inner_exceptions.count
+end
+begin
+  T.run(System::Func[Integer].new { raise IndexError, 'from ruby' }).value
+rescue IndexError => e
+  p e.class, e.message
+end
+", @"
+TypeError
+""boom""
+System::AggregateException
+System::Threading::Tasks::TaskCanceledException
+System::AggregateException
+2
+IndexError
+""from ruby""
+");
+        }
+
+        /// <summary>
+        /// An IAsyncEnumerable is Enumerable; its enumerator is disposed however the iteration ends.
+        /// </summary>
+        public void ClrAsyncEnumerable1() {
+            Context.ObjectClass.SetConstant("T", Context.GetClass(typeof(ProtocolTasks1)));
+            TestOutput(@"
+p T.stream(3).to_a, T.streams_disposed
+p T.stream(100).first(2), T.streams_disposed
+p T.stream(4).map { |x| x * 10 }, T.stream(5).select(&:odd?), T.stream(4).inject(:+), T.stream(3).include?(2)
+p T.stream(5).each_slice(2).to_a
+p T.stream(3).each.to_a
+r = []
+p T.stream(2).each { |x| r << x }.class == T.stream(0).class, r
+p T.stream(1).is_a?(Enumerable)
+p((T.failing_stream.to_a rescue [$!.class, $!.message]))
+x = []
+p((T.failing_stream.each { |s| x << s } rescue x))
+", @"
+[0, 1, 2]
+1
+[0, 1]
+2
+[0, 10, 20, 30]
+[1, 3]
+6
+true
+[[0, 1], [2, 3], [4]]
+[0, 1, 2]
+true
+[0, 1]
+true
+[TypeError, ""stream failed""]
+['first']
+");
+        }
+
+        #endregion
     }
 }

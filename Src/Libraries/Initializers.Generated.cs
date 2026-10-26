@@ -99,6 +99,7 @@ namespace IronRuby.Builtins {
             ExtendModule(typeof(System.Collections.Generic.KeyValuePair<,>), 0x00000000, LoadSystem__Collections__Generic__KeyValuePair_2_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Delegate), 0x00000000, null, LoadSystem__Delegate_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Runtime.CompilerServices.ITuple), 0x00000000, LoadSystem__Runtime__CompilerServices__ITuple_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendClass(typeof(System.Threading.Tasks.Task), 0x00000000, null, LoadSystem__Threading__Tasks__Task_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Type), 0x00000000, null, LoadSystem__Type_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalModule("Warning", typeof(IronRuby.Builtins.WarningOps), 0x0000000F, LoadWarning_Instance, LoadWarning_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             object def12 = DefineSingleton(Load__Singleton_EnvironmentSingletonOps_Instance, null, null, def62);
@@ -111,6 +112,7 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyClass, System.String, System.Char>(IronRuby.Builtins.CharOps.Create), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.Char>(IronRuby.Builtins.CharOps.Create)
             );
+            ExtendModule(typeof(System.Collections.Generic.IAsyncEnumerable<>), 0x00000000, LoadSystem__Collections__Generic__IAsyncEnumerable_1_Instance, null, null, def62);
             ExtendModule(typeof(System.Collections.Generic.IDictionary<System.Object, System.Object>), 0x00000000, LoadSystem__Collections__Generic__IDictionary_Instance, null, null, def62);
             ExtendModule(typeof(System.Collections.IEnumerable), 0x00000000, LoadSystem__Collections__IEnumerable_Instance, null, null, def62);
             ExtendModule(typeof(System.Collections.IList), 0x00000000, LoadSystem__Collections__IList_Instance, null, null, def62);
@@ -8877,6 +8879,14 @@ namespace IronRuby.Builtins {
             
         }
         
+        private static void LoadSystem__Collections__Generic__IAsyncEnumerable_1_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "each", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, System.Object, System.Object>(IronRuby.Builtins.IAsyncEnumerableOps.Each)
+            );
+            
+        }
+        
         private static void LoadSystem__Collections__Generic__IDictionary_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
             DefineLibraryMethod(module, "[]", 0x51, 
                 0x00000000U, 
@@ -9900,6 +9910,14 @@ namespace IronRuby.Builtins {
             module.HideMethod("clone");
             module.HideMethod("insert");
             module.HideMethod("split");
+        }
+        
+        private static void LoadSystem__Threading__Tasks__Task_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
+            DefineLibraryMethod(module, "value", 0x51, 
+                0x00000000U, 
+                new Func<System.Threading.Tasks.Task, System.Object>(IronRuby.Builtins.TaskOps.GetValue)
+            );
+            
         }
         
         private static void LoadSystem__Type_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
