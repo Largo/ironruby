@@ -728,6 +728,7 @@ namespace IronRuby.Tests {
                 Float_Format1,
                 Array_Struct_Misc1,
                 Hash_Range_Misc1,
+                Exception_Proc_Misc1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,

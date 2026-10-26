@@ -345,6 +345,8 @@ namespace IronRuby.Runtime.Calls {
             switch (BindToKernelMethodMissing(metaBuilder, args, methodName, methodMissing, incompatibleVisibility, isSuperCall)) {
                 case MethodMissingBinding.Custom:
                     Debug.Assert(!metaBuilder.Error);
+                    // a user-defined method_missing may call super: record how the call was made
+                    metaBuilder.AddInitialization(Methods.SetMethodMissingReason.OpCall(AstUtils.Constant(args.Signature.HasImplicitSelf)));
                     methodMissing.BuildMethodMissingCall(metaBuilder, args, methodName);
                     return true;
 
@@ -420,7 +422,8 @@ namespace IronRuby.Runtime.Calls {
                 Ast.NewArrayInit(typeof(object), simple),
                 splat != null ? AstUtils.Convert(splat, typeof(IList)) : (Expression)AstUtils.Constant(null, typeof(IList)),
                 rhs != null ? AstUtils.Box(rhs) : AstUtils.Constant(null),
-                AstUtils.Constant(rhs != null)
+                AstUtils.Constant(rhs != null),
+                AstUtils.Constant(args.Signature.HasImplicitSelf)
             );
         }
 

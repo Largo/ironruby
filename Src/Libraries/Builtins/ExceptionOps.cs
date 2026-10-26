@@ -190,11 +190,15 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("to_s")]
-        public static object StringRepresentation(ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
+        public static object StringRepresentation(ConversionStorage<MutableString>/*!*/ strTryCast, ConversionStorage<MutableString>/*!*/ tosConversion, Exception/*!*/ self) {
             object message = RubyExceptionData.GetInstance(self).Message;
-            // MRI applies String() to whatever was passed as the message, so
-            // `raise MyError, some_object` reports some_object.to_s.
-            return message is MutableString ? message : Protocols.ConvertToString(tosConversion, message);
+            if (message is MutableString) {
+                return message;
+            }
+            // MRI applies String() to whatever was passed as the message: #to_str when the
+            // object offers one, #to_s otherwise.
+            MutableString str = Protocols.TryCastToString(strTryCast, message);
+            return str ?? (object)Protocols.ConvertToString(tosConversion, message);
         }
 
         /// <summary>

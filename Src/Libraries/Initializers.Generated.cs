@@ -1758,7 +1758,7 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "to_s", 0x51, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
+                new Func<IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, System.Exception, System.Object>(IronRuby.Builtins.ExceptionOps.StringRepresentation)
             );
             
         }
@@ -4719,8 +4719,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "display", 0x51, 
-                0x00000000U, 
-                new Action<IronRuby.Runtime.BinaryOpStorage, System.Object>(IronRuby.Builtins.KernelOps.Display)
+                0x00000000U, 0x00000000U, 
+                new Action<IronRuby.Runtime.BinaryOpStorage, System.Object>(IronRuby.Builtins.KernelOps.Display), 
+                new Action<IronRuby.Runtime.BinaryOpStorage, System.Object, System.Object>(IronRuby.Builtins.KernelOps.Display)
             );
             
             DefineLibraryMethod(module, "dup", 0x51, 
@@ -6671,6 +6672,11 @@ namespace IronRuby.Builtins {
                 new Func<System.MissingMethodException, System.Object>(IronRuby.Builtins.NoMethodErrorOps.GetArguments)
             );
             
+            DefineLibraryMethod(module, "private_call?", 0x51, 
+                0x00000000U, 
+                new Func<System.MissingMethodException, System.Boolean>(IronRuby.Builtins.NoMethodErrorOps.IsPrivateCall)
+            );
+            
         }
         
         private static void LoadNumeric_Instance(IronRuby.Builtins.RubyModule/*!*/ module) {
@@ -7486,8 +7492,8 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "initialize_copy", 0x52, 
-                0x00000004U, 
-                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Range, IronRuby.Builtins.Range, IronRuby.Builtins.Range>(IronRuby.Builtins.RangeOps.InitializeCopy)
+                0x00000000U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Range, System.Object, IronRuby.Builtins.Range>(IronRuby.Builtins.RangeOps.InitializeCopy)
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 

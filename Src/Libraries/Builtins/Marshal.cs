@@ -547,6 +547,9 @@ namespace IronRuby.Builtins {
             }
 
             private void WriteClass(RubyClass/*!*/ obj) {
+                if (obj.IsSingletonClass) {
+                    throw RubyExceptions.CreateTypeError("singleton class can't be dumped");
+                }
                 WriteModuleDefinition((byte)'c', obj);
             }
 
@@ -1793,7 +1796,8 @@ namespace IronRuby.Builtins {
             /// variables or a singleton class is its own object.
             /// </summary>
             private MutableString/*!*/ Deduplicate(MutableString/*!*/ str) {
-                if (Context.HasInstanceVariables(str)) {
+                // only a plain String joins the table; an instance of a subclass keeps its class
+                if (Context.HasInstanceVariables(str) || str.GetType() != typeof(MutableString)) {
                     return str;
                 }
 
@@ -1907,6 +1911,8 @@ namespace IronRuby.Builtins {
                         var key = pair.Key as RubySymbol;
                         if (key != null && key.ToString() == "freeze") {
                             freeze = RubyOps.IsTrue(pair.Value);
+                        } else {
+                            throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(pair.Key));
                         }
                     }
                     continue;

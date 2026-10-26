@@ -1578,5 +1578,37 @@ nil..nil
 bad value for range
 ");
         }
+
+        public void Exception_Proc_Misc1() {
+            TestOutput(@"
+o = Object.new; def o.to_str; 'STR'; end
+puts RuntimeError.new(o).message
+begin; nope_epm1(); rescue NoMethodError => e; p [e.name, e.args, e.private_call?]; end
+begin; nil.nope; rescue NoMethodError => e; p e.private_call?; end
+begin; self.nope_epm1; rescue NoMethodError => e; p e.private_call?; end
+begin; Object.new.puts; rescue NoMethodError => e; p e.private_call?; end
+p NoMethodError.new('m', :n, [1], true).private_call?, NoMethodError.new('m').private_call?
+begin; Marshal.dump(Object.new.singleton_class); rescue TypeError => e; puts e.message; end
+begin; Marshal.load(Marshal.dump('a'), freeze: true, bogus: 1); rescue ArgumentError => e; puts e.message; end
+k = Class.new(String); Object.const_set(:StrSubEpm1, k); p Marshal.load(Marshal.dump(k.new('a')), freeze: true).class == k
+begin; Proc.new(1) { }; rescue ArgumentError => e; puts e.message; end
+p Class.new(Proc) { def initialize(x); @x = x; end }.new(1) { }.class.superclass
+1.display($stdout); puts
+", @"
+STR
+[:nope_epm1, [], true]
+false
+true
+false
+true
+false
+singleton class can't be dumped
+unknown keyword: :bogus
+true
+wrong number of arguments (given 1, expected 0)
+Proc
+1
+");
+        }
     }
 }

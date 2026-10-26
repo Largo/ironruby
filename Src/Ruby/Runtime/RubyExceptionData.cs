@@ -286,6 +286,15 @@ namespace IronRuby.Runtime {
         /// <summary>
         /// NoMethodError#args. MRI records the arguments of the failed call on the error.
         /// </summary>
+        // NoMethodError#private_call?: the call that went missing had an implicit receiver
+        // (or `self.`), so a private method would have been reachable.
+        private bool _privateCall;
+
+        public bool PrivateCall {
+            get { return _privateCall; }
+            set { _privateCall = value; }
+        }
+
         public object Arguments {
             get { return _arguments; }
             set { _arguments = value; }

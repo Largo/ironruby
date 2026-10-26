@@ -2554,6 +2554,11 @@ namespace IronRuby.Builtins {
             Protocols.Write(writeStorage, writeStorage.Context.StandardOutput, self);
         }
 
+        [RubyMethod("display")]
+        public static void Display(BinaryOpStorage/*!*/ writeStorage, object self, object port) {
+            Protocols.Write(writeStorage, port, self);
+        }
+
         [RubyMethod("warn", RubyMethodAttributes.PrivateInstance)]
         [RubyMethod("warn", RubyMethodAttributes.PublicSingleton)]
         public static void ReportWarning(BinaryOpStorage/*!*/ writeStorage, ConversionStorage<MutableString>/*!*/ tosConversion,

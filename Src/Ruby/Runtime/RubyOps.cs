@@ -2855,8 +2855,24 @@ namespace IronRuby.Runtime {
             return RubyExceptions.CreateMethodMissing(context, self, methodName);
         }
 
+        // MRI's method_missing_reason: whether the call that is about to reach a user-defined
+        // method_missing had an implicit receiver, read back by BasicObject#method_missing when
+        // that definition calls super, so that NoMethodError#private_call? can answer.
+        [ThreadStatic]
+        private static bool _methodMissingPrivateCall;
+
+        public static bool MethodMissingPrivateCall {
+            get { return _methodMissingPrivateCall; }
+            set { _methodMissingPrivateCall = value; }
+        }
+
         [Emitted]
-        public static Exception/*!*/ SetMissingMethodArguments(Exception/*!*/ error, object[]/*!*/ args, IList splat, object rhs, bool hasRhs) {
+        public static void SetMethodMissingReason(bool privateCall) {
+            _methodMissingPrivateCall = privateCall;
+        }
+
+        [Emitted]
+        public static Exception/*!*/ SetMissingMethodArguments(Exception/*!*/ error, object[]/*!*/ args, IList splat, object rhs, bool hasRhs, bool privateCall) {
             var list = new RubyArray(args);
             if (splat != null) {
                 list.AddRange(splat);
@@ -2864,7 +2880,9 @@ namespace IronRuby.Runtime {
             if (hasRhs) {
                 list.Add(rhs);
             }
-            RubyExceptionData.GetInstance(error).Arguments = list;
+            var data = RubyExceptionData.GetInstance(error);
+            data.Arguments = list;
+            data.PrivateCall = privateCall;
             return error;
         }
 

@@ -13539,6 +13539,7 @@ class Exception
 
   def full_message(highlight: Exception.to_tty?, order: :top, **options)
     Exception.send(:__check_highlight__, highlight)
+    highlight = false if highlight.nil?
     unless order == :top || order == :bottom
       raise ArgumentError, "expected :top or :bottom as order: #{order.inspect}"
     end
@@ -13558,7 +13559,8 @@ class Exception
   end
 
   def self.__check_highlight__(highlight)
-    unless highlight == true || highlight == false
+    # nil stands for false (MRI's rb_bool_expected with nil allowed)
+    unless highlight == true || highlight == false || highlight.nil?
       raise ArgumentError, "expected true or false as highlight: #{highlight.inspect}"
     end
   end

@@ -53,8 +53,12 @@ namespace IronRuby.Builtins {
         [RubyMethod("method_missing", RubyMethodAttributes.PrivateInstance)]
         [RubyStackTraceHidden]
         public static object MethodMissing(RubyContext/*!*/ context, object/*!*/ self, [NotNull]RubySymbol/*!*/ name, params object[]/*!*/ args) {
-            // the arguments of the call that found no method are what NoMethodError#args reports
-            throw NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
+            // the arguments of the call that found no method are what NoMethodError#args reports,
+            // and the way the call was made (implicit receiver or not) is what #private_call? reports
+            var error = NoMethodErrorOps.SetArguments(RubyExceptions.CreateMethodMissing(context, self, name.ToString()), args);
+            RubyExceptionData.GetInstance(error).PrivateCall = RubyOps.MethodMissingPrivateCall;
+            RubyOps.MethodMissingPrivateCall = false;
+            throw error;
         }
 
         #endregion

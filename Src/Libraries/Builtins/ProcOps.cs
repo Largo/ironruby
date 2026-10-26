@@ -382,6 +382,10 @@ namespace IronRuby.Builtins {
 
             var proc = block.Proc;
             if (ReferenceEquals(self.Context.GetClassOf(proc), self)) {
+                // Proc itself takes no arguments; a subclass hands them to its #initialize
+                if (args.Length > 0) {
+                    throw RubyExceptions.CreateArgumentError("wrong number of arguments (given {0}, expected 0)", args.Length);
+                }
                 return proc;
             }
 
