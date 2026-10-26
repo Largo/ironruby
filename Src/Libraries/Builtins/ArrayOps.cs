@@ -154,6 +154,17 @@ namespace IronRuby.Builtins {
             return self;
         }
 
+        // Array.new(nil) is a size that is not an Integer, not a missing array.
+        [RubyConstructor]
+        public static RubyArray/*!*/ CreateArray(RubyClass/*!*/ self, DynamicNull size) {
+            throw RubyExceptions.CreateImplicitConversionError("nil", "Integer");
+        }
+
+        [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static RubyArray/*!*/ Reinitialize(RubyArray/*!*/ self, DynamicNull size) {
+            throw RubyExceptions.CreateImplicitConversionError("nil", "Integer");
+        }
+
         [RubyConstructor]
         public static RubyArray/*!*/ CreateArray(RubyClass/*!*/ self, [DefaultProtocol]int size, object value) {
             CheckArraySize(size); 

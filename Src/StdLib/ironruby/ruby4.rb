@@ -1252,13 +1252,17 @@ class Array
     replace(shuffle(random: random))
   end
 
-  def sample(count = nil, random: Random)
-    if count.nil?
+  def sample(*args, random: Random)
+    if args.size > 1
+      raise ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)"
+    end
+    if args.empty?
       return nil if empty?
       return self[__array_rand_index__(random, size)]
     end
 
-    count = __array_to_int__(count)
+    # an explicit nil is not "no count": sample(nil) is a TypeError
+    count = __array_to_int__(args[0])
     raise ArgumentError, "negative sample number" if count < 0
     total = size
     count = total if count > total
@@ -1604,7 +1608,7 @@ class Integer
   def digits(base = 10)
     unless base.is_a?(Integer)
       unless base.respond_to?(:to_int)
-        raise TypeError, "no implicit conversion of #{base.class} into Integer"
+        raise TypeError, "no implicit conversion of #{base.nil? ? 'nil' : base.class} into Integer"
       end
       base = base.to_int
     end
@@ -5921,12 +5925,17 @@ end
 class Array
   # ---- the sixteen Array methods spec/core/array gets NoMethodError for ----
 
-  def sample(n = nil, random: ::Kernel)
+  def sample(*args, random: ::Kernel)
     rng = random
-    if n.nil?
+    if args.size > 1
+      ::Kernel.raise(::ArgumentError, "wrong number of arguments (given #{args.size}, expected 0..1)")
+    end
+    if args.empty?
       return nil if empty?
       return self[__sample_index__(rng, size)]
     end
+    n = args[0]
+    ::Kernel.raise(::TypeError, "no implicit conversion of nil into Integer") if n.nil?
     n = ::Kernel.Integer(n)
     ::Kernel.raise(::ArgumentError, "negative sample number") if n < 0
     n = size if n > size
@@ -7994,9 +8003,24 @@ class MatchData
     result
   end unless method_defined?(:deconstruct_keys)
 
+  # Unlike #[], #match refuses an index or a name the match does not have.
   def match(n)
-    self[n.is_a?(::Integer) ? n : n.to_s]
+    if n.is_a?(::Integer)
+      ::Kernel.raise(::IndexError, "index #{n} out of matches") if n < 0 || n >= size
+      self[n]
+    else
+      name = n.to_s
+      unless names.include?(name)
+        ::Kernel.raise(::IndexError, "undefined group name reference: #{name}")
+      end
+      self[name]
+    end
   end unless method_defined?(:match)
+
+  # Equal matches (same string, pattern and offsets) hash alike.
+  def hash
+    [string, regexp, self.begin(0), self.end(0), to_a].hash
+  end unless method_defined?(:hash) && instance_method(:hash).owner == self
 
   def match_length(n)
     m = match(n)
@@ -8092,6 +8116,14 @@ class Symbol
   def match?(pattern, pos = 0)
     to_s.match?(pattern, pos)
   end unless method_defined?(:match?)
+
+  # A Symbol is already what a copy of it would be, and cannot be thawed.
+  def clone(freeze: nil)
+    unless freeze.nil? || freeze == true
+      ::Kernel.raise(::ArgumentError, "can't unfreeze Symbol")
+    end
+    self
+  end
 
 end
 
@@ -12361,8 +12393,6 @@ class IO
     self
   end unless method_defined?(:each_codepoint)
 
-  alias_method :codepoints, :each_codepoint unless method_defined?(:codepoints)
-
   # ---- descriptor flags ---------------------------------------------------
   #
   # There is no exec here to leak a descriptor into, and no way to unset
@@ -12392,6 +12422,7 @@ class IO
   end
 
   def binmode?
+    ::Kernel.raise(::IOError, "closed stream") if closed?
     return true if defined?(@__binmode__) && @__binmode__
     respond_to?(:__ir_binmode_p__, true) ? __ir_binmode_p__ : false
   end
@@ -12402,8 +12433,7 @@ class IO
   # but the checking is the part callers can observe.
   def advise(advice, offset = 0, len = 0)
     unless advice.is_a?(::Symbol)
-      ::Kernel.raise(::TypeError,
-                     "advice must be a Symbol: #{advice.nil? ? 'nil' : advice.inspect}")
+      ::Kernel.raise(::TypeError, "advice must be a Symbol")
     end
     unless %i[normal sequential random willneed dontneed noreuse].include?(advice)
       ::Kernel.raise(::NotImplementedError, "Unsupported advice: #{advice.inspect}")
@@ -12455,7 +12485,7 @@ class IO
   def __io_to_int__(value)
     return value if value.is_a?(::Integer)
     unless value.respond_to?(:to_int)
-      ::Kernel.raise(::TypeError, "no implicit conversion of #{value.class} into Integer")
+      ::Kernel.raise(::TypeError, "no implicit conversion of #{value.nil? ? 'nil' : value.class} into Integer")
     end
     value.to_int
   end
@@ -12465,7 +12495,7 @@ class IO
     maxlen = __io_to_int__(maxlen)
     offset = __io_to_int__(offset)
     ::Kernel.raise(::ArgumentError, "negative string size (or size too big)") if maxlen < 0
-    ::Kernel.raise(::Errno::EINVAL, "pread") if offset < 0
+    ::Kernel.raise(::Errno::EINVAL, (path if respond_to?(:path))) if offset < 0
     # A zero-length read touches neither the file nor the buffer, which is why an
     # offset past the end of the file is not an error either.
     return buffer || "".b if maxlen == 0

@@ -1407,6 +1407,10 @@ namespace IronRuby.Builtins {
                     case '\f':
                         escaped = 'f';
                         return i;
+
+                    case '\v':
+                        escaped = 'v';
+                        return i;
                 }
                 i++;
             }

@@ -1844,7 +1844,7 @@ namespace IronRuby.Builtins {
         private static MutableString DefaultSeparator(RubyContext/*!*/ context) {
             var separator = context.ItemSeparator;
             if (separator != null) {
-                context.ReportWarning("$, is set to non-nil value");
+                context.ReportDeprecationWarning("$, is set to non-nil value");
             }
             return separator;
         }

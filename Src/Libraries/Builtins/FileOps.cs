@@ -487,8 +487,9 @@ namespace IronRuby.Builtins {
 #if FEATURE_FILESYSTEM
         [RubyMethod("truncate", BuildConfig = "FEATURE_FILESYSTEM")]
         public static int Truncate(RubyFile/*!*/ self, [DefaultProtocol]int size) {
+            self.RequireWritable();
             if (size < 0) {
-                throw new InvalidError();
+                throw self.Path != null ? RubyExceptions.CreateEINVAL("Invalid argument - {0}", self.Path) : RubyExceptions.CreateEINVAL();
             }
 
             // ftruncate(2) leaves the file offset alone; Stream.SetLength pulls it back
@@ -501,10 +502,11 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("truncate", RubyMethodAttributes.PublicSingleton, BuildConfig = "FEATURE_FILESYSTEM")]
         public static int Truncate(ConversionStorage<MutableString>/*!*/ toPath, RubyClass/*!*/ self, object path, [DefaultProtocol]int size) {
+            string strPath = self.Context.DecodePath(Protocols.CastToPath(toPath, path));
             if (size < 0) {
-                throw new InvalidError();
+                throw RubyExceptions.CreateEINVAL("Invalid argument - {0}", strPath);
             }
-            using (RubyFile f = new RubyFile(self.Context, self.Context.DecodePath(Protocols.CastToPath(toPath, path)), IOMode.ReadWrite)) {
+            using (RubyFile f = new RubyFile(self.Context, strPath, IOMode.ReadWrite)) {
                 f.Length = size;
             }
             return 0;
@@ -522,8 +524,10 @@ namespace IronRuby.Builtins {
                 throw RubyExceptions.CreateENOENT();
             }
 
+            // MRI names both ends of a failed rename: "No such file or directory - (old, new)".
+            string paths = "(" + strOldPath + ", " + strNewPath + ")";
             if (!context.Platform.FileExists(strOldPath) && !context.Platform.DirectoryExists(strOldPath)) {
-                throw RubyExceptions.CreateENOENT("No such file or directory - {0}", oldPath);
+                throw RubyExceptions.CreateENOENT("No such file or directory - {0}", paths);
             }
 
             if (RubyUtils.ExpandPath(context.Platform, strOldPath) == RubyUtils.ExpandPath(context.Platform, strNewPath)) {
@@ -536,6 +540,10 @@ namespace IronRuby.Builtins {
 
             try {
                 context.Platform.MoveFileSystemEntry(strOldPath, strNewPath);
+            } catch (DirectoryNotFoundException e) {
+                throw RubyExceptions.CreateENOENT(e, "No such file or directory - {0}", paths);
+            } catch (FileNotFoundException e) {
+                throw RubyExceptions.CreateENOENT(e, "No such file or directory - {0}", paths);
             } catch (IOException e) {
                 throw Errno.CreateEACCES(e.Message, e);
             }
@@ -1154,7 +1162,8 @@ namespace IronRuby.Builtins {
 
             int errno;
             if (Posix.Link(strOld, strNew, out errno) != 0) {
-                throw Posix.Error(errno, errno == Posix.EEXIST ? strOld + " or " + strNew : strOld);
+                // MRI: an existing target is reported by its own path, anything else by both paths.
+                throw Posix.Error(errno, errno == Posix.EEXIST ? strNew : "(" + strOld + ", " + strNew + ")");
             }
             return 0;
         }
@@ -1169,7 +1178,7 @@ namespace IronRuby.Builtins {
 
             int errno;
             if (Posix.Symlink(strOld, strNew, out errno) != 0) {
-                throw Posix.Error(errno, errno == Posix.EEXIST ? strOld + " or " + strNew : strNew);
+                throw Posix.Error(errno, errno == Posix.EEXIST ? strNew : "(" + strOld + ", " + strNew + ")");
             }
             return 0;
         }
@@ -1490,13 +1499,19 @@ namespace IronRuby.Builtins {
 #endif
         [RubyMethod("inspect")]
         public static MutableString/*!*/ Inspect(RubyFile/*!*/ self) {
-            return MutableString.CreateMutable(self.Context.GetPathEncoding()).
+            var result = MutableString.CreateMutable(self.Context.GetPathEncoding()).
                 Append("#<").
                 Append(self.Context.GetClassOf(self).GetName(self.Context)).
-                Append(':').
-                Append(self.Path).
-                Append(self.Closed ? " (closed)" : "").
-                Append('>');
+                Append(':');
+            if (self.Path != null) {
+                result.Append(self.Path).Append(self.Closed ? " (closed)" : "");
+            } else if (self.Closed) {
+                // a File made from a descriptor has no path to show, only the descriptor
+                result.Append("(closed)");
+            } else {
+                result.Append("fd ").Append(self.GetFileDescriptor().ToString(CultureInfo.InvariantCulture));
+            }
+            return result.Append('>');
         }
 
         [RubyMethod("path")]

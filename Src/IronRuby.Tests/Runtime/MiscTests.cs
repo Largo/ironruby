@@ -1235,6 +1235,37 @@ uncaught throw :zz
 ");
         }
 
+        public void Io_Messages1() {
+            TestOutput(@"
+r, w = IO.pipe
+w.write(""ab\ncd\n\nef""); w.close
+p r.gets("""", nil), r.gets(nil, nil)
+begin; r.seek(0, 9); rescue SystemCallError => e; puts e.class; end
+begin; ""a"" * nil; rescue TypeError => e; puts e.message; end
+begin; Array.new(nil); rescue TypeError => e; puts e.message; end
+begin; File.open(""/nonexistent/x"", ""wb"", textmode: true); rescue ArgumentError => e; puts e.message; end
+begin; File.open(""/nonexistent/x"", ""rt"", textmode: true); rescue ArgumentError => e; puts e.message; end
+begin; File.open(""/nonexistent/x"", ""r"", invalid: :bogus); rescue ArgumentError => e; puts e.message; end
+begin; File.open(""/nonexistent/x"", ""r"", newline: :bogus); rescue ArgumentError => e; puts e.message; end
+print ""a"", nil, 1; puts
+$stdout.putc(""ab""); $stdout.putc(""""); puts
+begin; $stdout.putc(nil); rescue TypeError => e; puts e.message; end
+", @"
+""ab\ncd\n\n""
+""ef""
+Errno::EINVAL
+no implicit conversion of nil into Integer
+no implicit conversion of nil into Integer
+both textmode and binmode specified
+textmode specified twice
+unknown value for invalid character option
+unexpected value for newline option: bogus
+a1
+a
+no implicit conversion of nil into Integer
+");
+        }
+
         public void Enumerator_Copy1() {
             TestOutput(@"
 e = [1, 2].each

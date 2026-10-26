@@ -2024,7 +2024,10 @@ namespace IronRuby.Runtime {
         /// calling #new on it. Null when there is no such constant, or when what is there is not
         /// an exception class.
         /// </summary>
-        public Exception CreateLibraryException(RubyModule/*!*/ owner, string/*!*/ className, string/*!*/ message) {
+        /// <summary>
+        /// A null message leaves the exception with its class's default one (an Errno's strerror text).
+        /// </summary>
+        public Exception CreateLibraryException(RubyModule/*!*/ owner, string/*!*/ className, string message) {
             object exceptionClass;
             if (!owner.TryGetConstant(null, className, out exceptionClass)) {
                 return null;
@@ -2037,7 +2040,7 @@ namespace IronRuby.Runtime {
                     null
                 );
             }
-            return _exceptionFactory.Target(_exceptionFactory, exceptionClass, MutableString.Create(message, RubyEncoding.UTF8)) as Exception;
+            return _exceptionFactory.Target(_exceptionFactory, exceptionClass, message != null ? MutableString.Create(message, RubyEncoding.UTF8) : null) as Exception;
         }
 
         /// <summary>

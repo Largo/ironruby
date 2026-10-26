@@ -1216,30 +1216,65 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("[]=")]
-        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyContext/*!*/ context,
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
             MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [NotNull]object/*!*/ value) {
-            return ReplaceSubstring(stringCast, context, self, regex, 0, value);
+            return ReplaceSubstring(stringCast, scope, self, regex, 0, value);
         }
 
         // A String replacement gets its own three-argument overload so that the binder still
         // has a better match than "[]=(Fixnum, Fixnum, String)" for "str[/re/, n] = s".
         [RubyMethod("[]=")]
-        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyContext/*!*/ context,
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
             MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int groupIndex,
             [NotNull]MutableString/*!*/ value) {
-            return ReplaceSubstring(stringCast, context, self, regex, groupIndex, (object)value);
+            return ReplaceSubstring(stringCast, scope, self, regex, groupIndex, (object)value);
+        }
+
+        // str[/re/, "name"] = s and str[/re/, :name] = s: the capture named in the pattern.
+        [RubyMethod("[]=")]
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [NotNull]RubySymbol/*!*/ groupName, [NotNull]object/*!*/ value) {
+            return ReplaceSubstring(stringCast, scope, self, regex, groupName.ToString(), value);
         }
 
         [RubyMethod("[]=")]
-        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyContext/*!*/ context,
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [NotNull]MutableString/*!*/ groupName, [NotNull]object/*!*/ value) {
+            return ReplaceSubstring(stringCast, scope, self, regex, groupName.ToString(), value);
+        }
+
+        private static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
+            MutableString/*!*/ self, RubyRegex/*!*/ regex, string/*!*/ groupName, object/*!*/ value) {
+
+            MatchData match = MatchForReplacement(scope, regex, self);
+            if (!match.HasNamedGroup(groupName)) {
+                throw RubyExceptions.CreateIndexError("undefined group name reference: {0}", groupName);
+            }
+            if (!match.NamedGroupSuccess(groupName)) {
+                throw RubyExceptions.CreateIndexError("regexp group {0} not matched", groupName);
+            }
+
+            var replacement = value as MutableString ?? Protocols.CastToString(stringCast, value);
+            return ReplaceClrRange(self, match.GetNamedGroupStart(groupName), match.GetNamedGroupLength(groupName), replacement);
+        }
+
+        // The match of str[/re/] = s is a match like any other: it sets $~ (and its failure too).
+        private static MatchData/*!*/ MatchForReplacement(RubyScope/*!*/ scope, RubyRegex/*!*/ regex, MutableString/*!*/ self) {
+            MatchData match = RegexpOps.Match(scope, regex, self);
+            scope.GetInnerMostClosureScope().CurrentMatch = match;
+            if (match == null) {
+                throw RubyExceptions.CreateIndexError("regexp not matched");
+            }
+            return match;
+        }
+
+        [RubyMethod("[]=")]
+        public static MutableString ReplaceSubstring(ConversionStorage<MutableString>/*!*/ stringCast, RubyScope/*!*/ scope,
             MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ regex, [DefaultProtocol]int groupIndex, [NotNull]object/*!*/ value) {
 
             // MRI checks the match, and the capture index, before it asks the replacement for
             // #to_str - so the conversion is done by hand rather than by the binder.
-            MatchData match = regex.Match(self);
-            if (match == null) {
-                throw RubyExceptions.CreateIndexError("regexp not matched");
-            }
+            MatchData match = MatchForReplacement(scope, regex, self);
 
             if (groupIndex <= -match.GroupCount || groupIndex >= match.GroupCount) {
                 throw RubyExceptions.CreateIndexError("index {0} out of regexp", groupIndex);
@@ -3097,6 +3132,17 @@ namespace IronRuby.Builtins {
 
         // Ruby 1.9: with neither a replacement nor a block, #sub/#gsub and their in-place
         // forms answer an Enumerator that yields the matched substrings.
+        // sub with neither a replacement nor a block is MRI's arity error (gsub answers an enumerator).
+        [RubyMethod("sub")]
+        public static object ReplaceFirst(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]RubyRegex/*!*/ pattern) {
+            throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 2)");
+        }
+
+        [RubyMethod("sub")]
+        public static object ReplaceFirst(RubyScope/*!*/ scope, MutableString/*!*/ self, [NotNull]MutableString/*!*/ pattern) {
+            throw RubyExceptions.CreateArgumentError("wrong number of arguments (given 1, expected 2)");
+        }
+
         [RubyMethod("gsub")]
         public static object ReplaceAll(ConversionStorage<MutableString>/*!*/ tosConversion, RubyScope/*!*/ scope,
             MutableString/*!*/ self, [DefaultProtocol, NotNull]RubyRegex/*!*/ pattern) {
@@ -3993,7 +4039,7 @@ namespace IronRuby.Builtins {
                 if (defaultSeparator != null) {
                     // Splitting on $; is deprecated, and MRI says so where the value is used
                     // rather than only where it was set.
-                    stringCast.Context.ReportWarning("$; is set to non-nil value");
+                    stringCast.Context.ReportDeprecationWarning("$; is set to non-nil value");
                 }
 
                 RubyRegex regexSeparator = defaultSeparator as RubyRegex;

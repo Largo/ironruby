@@ -659,6 +659,8 @@ namespace IronRuby.StandardLibrary.StringIO {
                 throw new EOFError("end of file reached");
             }
 
+            // Only a read of so many bytes answers bytes; the rest of the string keeps its encoding.
+            buffer.ForceEncoding(content.Encoding);
             return buffer;
         }
 
@@ -1060,6 +1062,13 @@ namespace IronRuby.StandardLibrary.StringIO {
             // of the two: gets(">", 2) answers "th", not "this>".
             if (limit > 0 && position - oldPosition > limit) {
                 position = oldPosition + limit;
+                // MRI relaxes the limit while it would split a character, by 16 bytes at most:
+                // gets(1) on "é" answers "é". A UTF-8 continuation byte at the cut marks the split.
+                if (content.Encoding.StrictEncoding.CodePage == 65001) {
+                    for (int extra = 16; extra > 0 && position < length && (content.GetByte(position) & 0xC0) == 0x80; extra--) {
+                        position++;
+                    }
+                }
             }
 
             return content.GetSlice(oldPosition, position - oldPosition);
