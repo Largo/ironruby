@@ -33,6 +33,12 @@ namespace IronRuby.Builtins {
                 ImmediateClass = range.ImmediateClass.NominalClass;
             }
 
+            // Marshal.load of a Range subclass: the class travels in the SerializationInfo
+            protected Subclass(System.Runtime.Serialization.SerializationInfo/*!*/ info, System.Runtime.Serialization.StreamingContext context)
+                : base(info, context) {
+                ImmediateClass = (RubyClass)info.GetValue(RubyUtils.SerializationInfoClassKey, typeof(RubyClass));
+            }
+
             protected override Range/*!*/ Copy() {
                 return new Subclass(this);
             }

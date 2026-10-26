@@ -7482,7 +7482,12 @@ namespace IronRuby.Builtins {
             
             DefineLibraryMethod(module, "initialize", 0x52, 
                 0x00000000U, 
-                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyContext, IronRuby.Builtins.Range, System.Object, System.Object, System.Boolean, IronRuby.Builtins.Range>(IronRuby.Builtins.RangeOps.Reinitialize)
+                new Func<IronRuby.Runtime.BinaryOpStorage, IronRuby.Runtime.RubyContext, IronRuby.Builtins.Range, System.Object, System.Object, System.Boolean, System.Object>(IronRuby.Builtins.RangeOps.Reinitialize)
+            );
+            
+            DefineLibraryMethod(module, "initialize_copy", 0x52, 
+                0x00000004U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.Range, IronRuby.Builtins.Range, IronRuby.Builtins.Range>(IronRuby.Builtins.RangeOps.InitializeCopy)
             );
             
             DefineLibraryMethod(module, "inspect", 0x51, 

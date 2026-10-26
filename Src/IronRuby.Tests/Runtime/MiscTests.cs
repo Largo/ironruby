@@ -1539,5 +1539,44 @@ FrozenError
 #<struct a=#<struct #<Class:X>:...>>
 ");
         }
+
+        public void Hash_Range_Misc1() {
+            TestOutput(@"
+h = {}.compare_by_identity; h[1.5] = 1; h[2**40] = 2; h[2**70] = 3; h[0.0/0] = 4
+p h[1.5], h[2**40], h[2**70], h[0.0/0]
+h = { a: 1 }
+begin; h.each { h.replace({}) }; rescue RuntimeError => e; puts e.message; end
+begin; h.each { h.compare_by_identity }; rescue RuntimeError => e; puts e.message; end
+p((1..3).inspect.encoding, ('a'..'c').inspect.encoding, (nil..3).inspect)
+r = Range.allocate; p r.send(:initialize, 1, 2), r
+r = Range.allocate; r.send(:initialize_copy, 3..4); p r, r.frozen?
+begin; Range.allocate.send(:initialize_copy, 1); rescue TypeError => e; puts e.message; end
+p((1..3).dup.frozen?, Marshal.load(Marshal.dump(1..3)).frozen?)
+rsub = Class.new(Range); Object.const_set(:RangeSubMisc1, rsub); p Marshal.load(Marshal.dump(rsub.new(1, 2))).class == rsub
+p Marshal.load(""\x04\x08o:\nRange\x07:\texclF:\nbegini\x06""), Marshal.load(""\x04\x08o:\nRange\x00"")
+begin; Marshal.load(""\x04\x08o:\nRange\x08:\texclF:\nbegini\x06:\x08end\""\x06a""); rescue ArgumentError => e; puts e.message; end
+", @"
+1
+2
+nil
+nil
+can't replace hash during iteration
+compare_by_identity during iteration
+#<Encoding:US-ASCII>
+#<Encoding:UTF-8>
+""..3""
+nil
+1..2
+3..4
+false
+initialize_copy should take same class object
+false
+true
+true
+1..
+nil..nil
+bad value for range
+");
+        }
     }
 }

@@ -301,6 +301,10 @@ namespace IronRuby.Builtins {
                 self.RequireNotFrozen();
                 return self;
             }
+            self.RequireNotFrozen();
+            if (self.IsIterating) {
+                throw RubyExceptions.CreateRuntimeError("can't replace hash during iteration");
+            }
 
             Hash otherHash = other as Hash;
             if (otherHash != null) {

@@ -849,6 +849,19 @@ module Enumerable
 end
 
 class Range
+  # An Integer range is summed in closed form (MRI's range_sum): (1..2**70).sum does not
+  # walk 2**70 elements. Anything else, and the block form, goes through Enumerable#sum.
+  def sum(init = 0, &block)
+    from = self.begin
+    to = self.end
+    if !block && from.is_a?(::Integer) && to.is_a?(::Integer)
+      to -= 1 if exclude_end?
+      return init if to < from
+      return init + (from + to) * (to - from + 1) / 2
+    end
+    super
+  end
+
   # The number of elements the range iterates. MRI 3.4 only counts a range that
   # begins at an Integer; a Float beginning cannot be walked at all (1.0..2.0
   # has no elements to count), and a beginning that has #succ can be walked but
@@ -877,7 +890,7 @@ class Range
       range = self
       enum = ::Enumerator.new { |y| range.reverse_each { |x| y << x } }
       enum.__set_size__(lambda { range.__send__(:__reverse_each_size__) })
-      return enum
+      return enum.__set_inspect__(self, :reverse_each)
     end
     to = self.end
     raise TypeError, "can't iterate from NilClass" if to.nil?
@@ -928,6 +941,7 @@ class Range
         raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
         return first_without_count
       end
+      raise RangeError, "cannot get the first element of beginless range" if self.begin.nil?
       n = __to_count__(args[0])
       raise ArgumentError, "negative array size (or size too big)" if n < 0
       result = []
@@ -944,8 +958,9 @@ class Range
         raise RangeError, "cannot get the last element of endless range" if self.end.nil?
         return last_without_count
       end
+      raise RangeError, "cannot get the last element of endless range" if self.end.nil?
       n = __to_count__(args[0])
-      raise ArgumentError, "negative array size (or size too big)" if n < 0
+      raise ArgumentError, "negative array size" if n < 0
       to_a.last(n)
     end
 
@@ -6938,6 +6953,34 @@ class Enumerator
     nil
   end
 
+  # MRI refuses to copy an enumerator whose external iteration (#next, #peek) is under
+  # way; a fresh or finished one copies as a fresh enumerator.
+  alias_method :__enum_initialize_copy__, :initialize_copy
+  private :__enum_initialize_copy__
+
+  def initialize_copy(other)
+    if other.__send__(:__iter_in_progress__)
+      ::Kernel.raise(::TypeError, "can't copy execution context")
+    end
+    __enum_initialize_copy__(other)
+    @__fiber__ = nil
+    @__iter_done__ = false
+    @__iter_result__ = nil
+    @__iter_started__ = false
+    @__peeked__ = false
+    @__peek__ = nil
+    @__feed__ = nil
+    @__has_feed__ = false
+    self
+  end
+  private :initialize_copy
+
+  def __iter_in_progress__
+    fiber = @__fiber__
+    !fiber.nil? && fiber.alive? && !@__iter_done__ && (@__iter_started__ || @__peeked__)
+  end
+  private :__iter_in_progress__
+
   def rewind
     fiber = @__fiber__
     @__fiber__ = nil
@@ -7751,7 +7794,8 @@ module Kernel
     # class-level initializer is what to_enum used to reach through.
     enum = ::Enumerator.allocate
     enum.__send__(:__enum_init__, self, method, args)
-    enum.__set_size__(size_block) if size_block
+    # the size block is called with the enumerator's arguments (MRI: enum_size)
+    enum.__set_size__(args.empty? ? size_block : lambda { size_block.call(*args) }) if size_block
     enum
   end
   alias_method :enum_for, :to_enum
@@ -12940,9 +12984,12 @@ class Hash
       return nil
     end
     unless proc.is_a?(Proc)
-      converted = proc.respond_to?(:to_proc) ? proc.to_proc : nil
-      unless converted.is_a?(Proc)
+      unless proc.respond_to?(:to_proc)
         raise TypeError, "wrong default_proc type #{proc.class} (expected Proc)"
+      end
+      converted = proc.to_proc
+      unless converted.is_a?(Proc)
+        raise TypeError, "can't convert #{proc.class} to Proc (#{proc.class}#to_proc gives #{converted.class})"
       end
       proc = converted
     end
@@ -13045,6 +13092,8 @@ class Hash
     return true if equal?(other)
     return false unless other.is_a?(Hash)
     return false if size != other.size
+    # two non-empty hashes of different kinds (one compares by identity) are never eql
+    return false if size != 0 && compare_by_identity? != other.compare_by_identity?
     pairs = (Thread.current[:__hash_eql_pairs__] ||= [])
     entry = [object_id, other.object_id]
     return true if pairs.include?(entry)
@@ -13639,11 +13688,16 @@ class Range
   def include?(value)
     b = self.begin
     e = self.end
-    if __linear__(value) || __linear__(b) || __linear__(e) ||
-       __integerish__(b) || __integerish__(e)
+    # Only the endpoints decide (MRI's range_include_internal): a range of numbers or
+    # times compares, and a Range asked about is just a value that does not compare.
+    if __linear__(b) || __linear__(e) || __integerish__(b) || __integerish__(e)
+      return false if value.is_a?(::Range)
       return cover?(value)
     end
     return __string_include__(b, e, value) if b.is_a?(::String) && e.is_a?(::String)
+    # (nil..nil) covers every number and time; nothing else can be placed in it, and a
+    # range open at one end only cannot be walked
+    return true if b.nil? && e.nil? && __linear__(value)
     if b.nil? || e.nil?
       ::Kernel.raise(::TypeError, "cannot determine inclusion in beginless/endless ranges")
     end
@@ -13985,43 +14039,45 @@ class Range
   end
   private :__range_count__
 
+  # MRI's range_max: a block, a count, or an exclusive end that is not a number means
+  # Enumerable's walk (which a beginless range cannot do); otherwise the end answers, one
+  # less for an exclusive Integer end - and only an Integer begin may exclude it.
   def max(n = nil, &block)
     e = self.end
     raise RangeError, "cannot get the maximum of endless range" if e.nil?
     b = self.begin
 
-    if n
-      n = __range_count__(n)
-      # An Integer range can answer without walking: (0...2**64).max(2) must not enumerate.
-      if block.nil? && e.is_a?(Integer) && (b.nil? || b.is_a?(Integer))
-        last = exclude_end? ? e - 1 : e
-        return [] if b && b > last
-        count = b.nil? ? n : [n, last - b + 1].min
-        return Array.new(count) { |i| last - i }
+    if block || n || (exclude_end? && !e.is_a?(Numeric))
+      if n
+        n = __range_count__(n)
+        # An Integer range can answer without walking: (0...2**64).max(2) must not enumerate,
+        # and a beginless one (Ruby 4.0) counts down from its end.
+        if block.nil? && e.is_a?(Integer) && (b.nil? || b.is_a?(Integer))
+          last = exclude_end? ? e - 1 : e
+          return Array.new(n) { |i| last - i } if b.nil?
+          return [] if b > last
+          return Array.new([n, last - b + 1].min) { |i| last - i }
+        end
+        if b.nil?
+          raise TypeError, "cannot get the maximum of beginless range with non Integer end value"
+        end
+        # Otherwise enumerate, which is also what makes a Float/Array/Time range a TypeError.
+        return (block ? entries.sort(&block) : entries.sort).last(n).reverse
       end
-      # Otherwise enumerate, which is also what makes a Float/Array/Time range a TypeError.
-      return (block ? entries.sort(&block) : entries.sort).last(n).reverse
-    end
-
-    if b.nil?
-      if block
+      if b.nil?
         raise RangeError, "cannot get the maximum of beginless range with custom comparison method"
       end
-      if exclude_end?
-        raise TypeError, "cannot exclude non Integer end value" unless e.is_a?(Integer)
-        return e - 1
-      end
-      return e
+      return super(&block)
     end
 
-    return super(&block) if block || (exclude_end? && !b.is_a?(Numeric))
-
-    c = (b <=> e)
+    c = b.nil? ? -1 : (b <=> e)
     return nil if c.nil? || c > 0
 
     if exclude_end?
       raise TypeError, "cannot exclude non Integer end value" unless e.is_a?(Integer)
       return nil if c == 0
+      # (...1).max is 0 (Ruby 4.0); a begin that is not an Integer cannot exclude the end
+      raise TypeError, "cannot exclude end value with non Integer begin value" unless b.nil? || b.is_a?(Integer)
       return e - 1
     end
     e

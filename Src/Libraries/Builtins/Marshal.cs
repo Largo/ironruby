@@ -72,6 +72,12 @@ namespace IronRuby.Builtins {
                 get { return RubyUtils.GetCallSite(ref _marshalLoad, Context, "marshal_load", 1); }
             }
 
+            private CallSite<Func<CallSite, object, object, object>> _compare;
+
+            public CallSite<Func<CallSite, object, object, object>>/*!*/ Compare {
+                get { return RubyUtils.GetCallSite(ref _compare, Context, "<=>", 1); }
+            }
+
             public CallSite<Func<CallSite, object, MutableString, object>>/*!*/ Load {
                 get { return RubyUtils.GetCallSite(ref _load, Context, "_load", 1); }
             }
@@ -1253,9 +1259,20 @@ namespace IronRuby.Builtins {
                         string name = ReadIdentifier();
                         attributes[name] = ReadAnObject(false);
                     }
-                    return typeof(Exception).IsAssignableFrom(type)
-                        ? CreateException(theClass, attributes)
-                        : RubyUtils.CreateObject(theClass, attributes);
+                    if (typeof(Exception).IsAssignableFrom(type)) {
+                        return CreateException(theClass, attributes);
+                    }
+                    // MRI's range_loader: the two ends have to compare (begin <=> end not nil)
+                    object rangeBegin, rangeEnd;
+                    attributes.TryGetValue("begin", out rangeBegin);
+                    attributes.TryGetValue("end", out rangeEnd);
+                    if (rangeBegin != null && rangeEnd != null) {
+                        var compare = _sites.Compare;
+                        if (compare.Target(compare, rangeBegin, rangeEnd) == null) {
+                            throw RubyExceptions.CreateArgumentError("bad value for range");
+                        }
+                    }
+                    return RubyUtils.CreateObject(theClass, attributes);
                 }
 
                 // The object is in the link table before its instance variables are read, so one
