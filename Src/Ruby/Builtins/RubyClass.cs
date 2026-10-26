@@ -968,29 +968,90 @@ namespace IronRuby.Builtins {
                 string propertyName = name.Substring(0, name.Length - 1);
                 string altName = unmangleNames ? RubyUtils.TryUnmangleMethodName(propertyName) : null;
                 
-                // property setter:
-                if (TryGetClrProperty(type, bindingFlags, inherited, true, name, propertyName, altName, out method)) return true;
+                if (TryGetClrSetter(type, bindingFlags, inherited, name, propertyName, altName, out method)) return true;
 
-                // writeable field:
-                if (TryGetClrField(type, bindingFlags, inherited, true, propertyName, altName, out method)) return true;
+                string irregularName = unmangleNames ? GetIrregularlyMangledName(type, propertyName) : null;
+                if (irregularName != null && TryGetClrSetter(type, bindingFlags, inherited, name, propertyName, irregularName, out method)) return true;
             } else {
                 string altName = unmangleNames ? RubyUtils.TryUnmangleMethodName(name) : null;
 
-                // method:
-                if (TryGetClrMethod(type, bindingFlags, inherited, false, name, null, name, altName, out method)) return true;
-                
-                // getter:
-                if (TryGetClrProperty(type, bindingFlags, inherited, false, name, name, altName, out method)) return true;
+                if (TryGetClrGetter(type, bindingFlags, inherited, name, altName, out method)) return true;
 
-                // event:
-                if (TryGetClrEvent(type, bindingFlags, inherited, name, altName, out method)) return true;
-
-                // field:
-                if (TryGetClrField(type, bindingFlags, inherited, false, name, altName, out method)) return true;
+                string irregularName = unmangleNames ? GetIrregularlyMangledName(type, name) : null;
+                if (irregularName != null && TryGetClrGetter(type, bindingFlags, inherited, name, irregularName, out method)) return true;
             }
 
             method = null;
             return false;
+        }
+
+        private bool TryGetClrSetter(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, string/*!*/ name, string/*!*/ propertyName,
+            string altName, out RubyMemberInfo method) {
+
+            // property setter:
+            if (TryGetClrProperty(type, bindingFlags, inherited, true, name, propertyName, altName, out method)) return true;
+
+            // writeable field:
+            return TryGetClrField(type, bindingFlags, inherited, true, propertyName, altName, out method);
+        }
+
+        private bool TryGetClrGetter(Type/*!*/ type, BindingFlags bindingFlags, bool inherited, string/*!*/ name, string altName, 
+            out RubyMemberInfo method) {
+
+            // method:
+            if (TryGetClrMethod(type, bindingFlags, inherited, false, name, null, name, altName, out method)) return true;
+                
+            // getter:
+            if (TryGetClrProperty(type, bindingFlags, inherited, false, name, name, altName, out method)) return true;
+
+            // event:
+            if (TryGetClrEvent(type, bindingFlags, inherited, name, altName, out method)) return true;
+
+            // field:
+            return TryGetClrField(type, bindingFlags, inherited, false, name, altName, out method);
+        }
+
+        /// <summary>
+        /// { type -> { mangled name -> CLR member name } } for the members of the type whose names mangle to a name that
+        /// doesn't unmangle back to them.
+        /// </summary>
+        private static readonly ConditionalWeakTable<Type, Dictionary<string, string>> _irregularlyMangledNames = 
+            new ConditionalWeakTable<Type, Dictionary<string, string>>();
+
+        /// <summary>
+        /// Mangling is not one-to-one: JrConnect and JRConnect both mangle to jr_connect, which unmangles to JRConnect;
+        /// updateTransferData mangles to update_transfer_data, which unmangles to UpdateTransferData. #methods lists a CLR
+        /// member under its mangled name, so a member whose mangled name doesn't unmangle back to it is looked up through
+        /// this map. A member that the name does unmangle to wins.
+        /// </summary>
+        private static string GetIrregularlyMangledName(Type/*!*/ type, string/*!*/ rubyName) {
+            string result;
+            return RubyUtils.HasUnmangledName(rubyName) &&
+                _irregularlyMangledNames.GetValue(type, MakeIrregularlyMangledNames).TryGetValue(rubyName, out result) ? result : null;
+        }
+
+        private static Dictionary<string, string>/*!*/ MakeIrregularlyMangledNames(Type/*!*/ type) {
+            var names = new HashSet<string>();
+            const BindingFlags flags = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static | BindingFlags.FlattenHierarchy;
+            foreach (MemberInfo member in type.GetMembers(flags)) {
+                var method = member as MethodInfo;
+                if (method != null ? !method.IsSpecialName : member is PropertyInfo || member is FieldInfo || member is EventInfo) {
+                    names.Add(member.Name);
+                }
+            }
+
+            var result = new Dictionary<string, string>();
+            foreach (string name in names) {
+                string mangled, unmangled;
+                string existing;
+                if (RubyUtils.HasMangledName(name) && (mangled = RubyUtils.TryMangleName(name)) != null &&
+                    (unmangled = RubyUtils.TryUnmangleName(mangled)) != name && (unmangled == null || !names.Contains(unmangled)) &&
+                    // several members can mangle to the same name, pick one independently of reflection's order:
+                    (!result.TryGetValue(mangled, out existing) || String.CompareOrdinal(name, existing) < 0)) {
+                    result[mangled] = name;
+                }
+            }
+            return result;
         }
 
         protected override IEnumerable<string/*!*/>/*!*/ EnumerateClrMembers(Type/*!*/ type) {
@@ -1006,7 +1067,8 @@ namespace IronRuby.Builtins {
             foreach (MethodInfo method in type.GetDeclaredMethods()) {
                 if (IsVisible(method.Attributes, method.DeclaringType, false)) {
                     if (method.IsSpecialName) {
-                        var name = RubyUtils.MapOperator(method);
+                        // operators are invoked on instances (see TryGetClrMember), not on the class:
+                        var name = _isSingletonClass ? null : RubyUtils.MapOperator(method);
                         if (name != null) {
                             yield return name;
                         }

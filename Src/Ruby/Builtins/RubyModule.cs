@@ -2683,7 +2683,7 @@ namespace IronRuby.Builtins {
 
         private bool TryGetClrMember(string/*!*/ name, bool virtualLookup, out RubyMemberInfo method) {
             // Skip hidden CLR overloads.
-            // Skip lookup on types that are not visible, that are interfaces or generic type definitions.
+            // An interface exposes only its default methods, a generic type definition nothing (see GetDefaultInterfaceMethods).
             if (_typeTracker != null) {
                 // Note: Do not allow mangling for CLR virtual lookups - we want to match the overridden name exactly as is, 
                 // so that it corresponds to the base method call the override stub performs.
@@ -2771,7 +2771,9 @@ namespace IronRuby.Builtins {
                     continue;
                 }
 
-                if (dimName == clrName || dimName == altName) {
+                // the name the member is listed under (see RubyClass.GetIrregularlyMangledName):
+                if (dimName == clrName || dimName == altName ||
+                    unmangleNames && RubyUtils.HasMangledName(dimName) && RubyUtils.TryMangleName(dimName) == clrName) {
                     if (overloads == null) {
                         overloads = new List<OverloadInfo>();
                     }

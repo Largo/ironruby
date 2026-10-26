@@ -414,5 +414,169 @@ run 1
         }
 
         #endregion
+
+        #region Name mangling: what #methods lists is callable
+
+        public class IrregularNames {
+            public string JrConnect() => "JrConnect";
+            public string updateTransferData(int x) => "updateTransferData " + x;
+            public string CreateQrCode(string s) => "CreateQrCode " + s;
+            public string CreateQRCodeImage() => "CreateQRCodeImage";
+            public string QrValue { get; set; } = "v";
+            public string PyPy() => "PyPy";
+            public static string UTF8 => "UTF8";
+            public static string JrStatic() => "JrStatic";
+            public int Xx = 5;
+            public string IPAddress() => "IPAddress";
+            public string SHA() => "SHA";
+            public string SH() => "SH";
+            public string GetID() => "GetID";
+            public event Action OnJrEvent;
+            public void Fire() { OnJrEvent?.Invoke(); }
+            public virtual string JrVirtual() => "JrVirtual";
+            public string CallJrVirtual() => JrVirtual();
+            public static IrregularNames operator +(IrregularNames a, IrregularNames b) => a;
+        }
+
+        public class IrregularNamesSub : IrregularNames {
+            public string JrConnect(int x) => "JrConnect " + x;
+        }
+
+        public class CollidingNames {
+            public string CreateQRCode() => "CreateQRCode";
+            public string CreateQrCode() => "CreateQrCode";
+        }
+
+        /// <summary>
+        /// Mangling isn't one-to-one: JrConnect and JRConnect both mangle to jr_connect, which unmangles to JRConnect.
+        /// A member is callable by the name #methods lists it under.
+        /// </summary>
+        public void ClrNameMangling1() {
+            Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(IrregularNames)));
+            Context.ObjectClass.SetConstant("D", Context.GetClass(typeof(IrregularNamesSub)));
+            TestOutput(@"
+c = C.new
+puts c.jr_connect, c.update_transfer_data(1), c.create_qr_code('x'), c.create_qr_code_image
+puts c.qr_value
+c.qr_value = 'w'
+puts c.qr_value, c.py_py, C.ut_f8, C.jr_static, c.xx
+c.xx = 6
+puts c.xx, c.ip_address, c.SHA, c.sh, c.GetID
+c.on_jr_event { puts 'fired' }
+c.fire
+puts c.method(:jr_connect).call, c.respond_to?(:update_transfer_data), c.JrConnect
+puts D.new.jr_connect, D.new.jr_connect(2)
+
+class R < C
+  def jr_virtual; 'Ruby jr_virtual'; end
+end
+puts R.new.call_jr_virtual
+", @"
+JrConnect
+updateTransferData 1
+CreateQrCode x
+CreateQRCodeImage
+v
+w
+PyPy
+UTF8
+JrStatic
+5
+6
+IPAddress
+SHA
+SH
+GetID
+fired
+JrConnect
+true
+JrConnect
+JrConnect
+JrConnect 2
+Ruby jr_virtual
+");
+        }
+
+        /// <summary>
+        /// Every CLR name #methods lists, on an instance or on a class, answers respond_to? and can be called; operators
+        /// are listed for instances only, which is where they are invoked.
+        /// </summary>
+        public void ClrNameMangling2() {
+            Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(IrregularNames)));
+            TestOutput(@"
+def check(obj)
+  obj.methods.select { |m| m.is_a?(IronRuby::Clr::Name) }.reject { |m| obj.respond_to?(m.to_s) && obj.method(m.to_s) }.map(&:to_s)
+end
+
+p check(C.new), check(C)
+p check(System::Text::Encoding), check(System::Uri.new('http://x/')), check(System::DateTime), check(System::DateTime.new(1))
+p C.new.methods.include?(:+), C.methods.include?(:+)
+p C.new.methods.include?(:jr_connect), C.new.methods.include?(:update_transfer_data), C.methods.include?(:ut_f8)
+
+# a name is listed once, for the member a call reaches (List#Count, not Enumerable#count):
+l = System::Collections::Generic::List[Integer].new
+names = l.methods.map(&:to_s)
+p names.size == names.uniq.size, l.methods.find { |m| m == :count }.class
+", @"
+[]
+[]
+[]
+[]
+[]
+[]
+true
+false
+true
+true
+true
+true
+IronRuby::Clr::Name
+");
+        }
+
+        /// <summary>
+        /// When two members mangle to the same name, the one the name unmangles to wins.
+        /// </summary>
+        public void ClrNameMangling3() {
+            Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(CollidingNames)));
+            TestOutput(@"
+puts C.new.create_qr_code, C.new.CreateQrCode
+", @"
+CreateQRCode
+CreateQrCode
+");
+        }
+
+        /// <summary>
+        /// IronRuby::Clr::Name.mangle and unmangle keep their rules; mangle is not one-to-one.
+        /// </summary>
+        public void ClrNameMangling4() {
+            TestOutput(@"
+N = IronRuby::Clr::Name
+%w[JrConnect JRConnect updateTransferData CreateQRCode CreateQrCode IPAddress SHA SH Id ID GetID IPv6 Xx MyDB PyPy UTF8].each do |n|
+  m = N.mangle(n)
+  puts ""#{n} #{m.inspect} #{m ? N.unmangle(m).inspect : '-'}""
+end
+", @"
+JrConnect ""jr_connect"" ""JRConnect""
+JRConnect ""jr_connect"" ""JRConnect""
+updateTransferData ""update_transfer_data"" ""UpdateTransferData""
+CreateQRCode ""create_qr_code"" ""CreateQRCode""
+CreateQrCode ""create_qr_code"" ""CreateQRCode""
+IPAddress ""ip_address"" ""IPAddress""
+SHA nil -
+SH ""sh"" ""SH""
+Id ""id"" ""Id""
+ID nil -
+GetID nil -
+IPv6 ""i_pv6"" ""IPv6""
+Xx ""xx"" ""XX""
+MyDB ""my_db"" ""MyDB""
+PyPy ""py_py"" nil
+UTF8 ""ut_f8"" nil
+");
+        }
+
+        #endregion
     }
 }

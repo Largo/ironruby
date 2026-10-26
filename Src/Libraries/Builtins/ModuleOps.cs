@@ -1630,13 +1630,19 @@ namespace IronRuby.Builtins {
             IEnumerable<string> foreignMembers, bool objectMethods) {
 
             var result = new RubyArray();
+            // A CLR member is listed under its mangled name, which a Ruby method further up the ancestors (Enumerable#count
+            // behind List#Count) can share. Calls go to the first one, so only that one is listed.
+            var listed = new HashSet<string>();
             using (self.Context.ClassHierarchyLocker()) {
                 self.ForEachMember(inherited, attributes, foreignMembers, objectMethods, (name, module, member) => {
                     if (member.IsInteropMember && (module.Restrictions & ModuleRestrictions.NoNameMapping) == 0 && RubyUtils.HasMangledName(name)) {
                         if (Tokenizer.IsMethodName(name) || Tokenizer.IsOperatorName(name)) {
-                            result.Add(new ClrName(name));
+                            var clrName = new ClrName(name);
+                            if (listed.Add(clrName.MangledName)) {
+                                result.Add(clrName);
+                            }
                         }
-                    } else {
+                    } else if (listed.Add(name)) {
                         result.Add(self.Context.StringifyIdentifier(name));
                     }
                 });
