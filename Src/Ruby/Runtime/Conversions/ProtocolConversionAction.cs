@@ -828,6 +828,7 @@ namespace IronRuby.Runtime.Conversions {
     public sealed class ConvertToFixnumAction : ConvertToIntegerAction<ConvertToFixnumAction> {
         protected override string/*!*/ TargetTypeName { get { return "Integer"; } }
         protected override MethodInfo ConversionResultValidator { get { return Methods.ToFixnumValidator; } }
+
     }
 
     public sealed class ConvertToByteAction : ConvertToIntegerAction<ConvertToByteAction> {

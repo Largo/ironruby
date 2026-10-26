@@ -25,8 +25,8 @@ namespace IronRuby.Builtins {
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance | RubyMethodAttributes.Empty)]
         public static object Reinitialize(object self) {
             // takes no arguments: Object.new(1), and a `super` passing arguments up to here, are
-            // "wrong number of arguments (given 1, expected 0)" in MRI
-            return self;
+            // "wrong number of arguments (given 1, expected 0)" in MRI; answers nil, as MRI's does
+            return null;
         }
 
         [RubyConstant]

@@ -383,6 +383,16 @@ namespace IronRuby.Builtins {
             return Math.Pow(self, other);
         }
 
+        /// <summary>
+        /// A Bignum exponent: 0, 1 and -1 have an answer, anything else is too large to compute
+        /// (an ArgumentError, as in MRI 3.4 and later).  Without this overload the binder could
+        /// not choose between Bignum#** and the coercing fallback.
+        /// </summary>
+        [RubyMethod("**")]
+        public static object Power(RubyContext/*!*/ context, int self, [NotNull]BigInteger/*!*/ other) {
+            return Power(context, (BigInteger)self, other);
+        }
+
         #endregion
 
         #region +
@@ -474,7 +484,7 @@ namespace IronRuby.Builtins {
 
         [RubyMethod("fdiv", Compatibility = RubyCompatibility.Ruby19)]
         public static double FDiv([NotNull]BigInteger/*!*/ self, double other) {
-            return self.ToFloat64() / other;
+            return Protocols.ToDouble(self) / other;
         }
 
         /// <summary>

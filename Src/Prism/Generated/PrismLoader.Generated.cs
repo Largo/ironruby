@@ -2511,7 +2511,7 @@ private void SkimNode() {
                 case 144: {
                     LoadVarUInt(); // flags
                     LoadOptionalLocation();
-                    LoadOptionalLocation();
+                    LoadLocation();
                     LoadOptionalLocation();
                     SkipString();
                     return;

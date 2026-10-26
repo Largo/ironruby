@@ -985,7 +985,9 @@ namespace IronRuby.Builtins {
             if (value is MutableString) {
                 throw RubyExceptions.CreateTypeError("can't convert String into Float");
             }
-            return Protocols.CastToFloat(floatConversion, value);
+            double result = Protocols.CastToFloat(floatConversion, value);
+            // the CLR's NaN has its sign bit set; MRI packs the positive quiet NaN
+            return Double.IsNaN(result) ? BitConverter.Int64BitsToDouble(0x7FF8000000000000L) : result;
         }
         private static void WriteInteger(ConversionStorage<IntegerValue>/*!*/ integerConversion,
             Stream/*!*/ stream, RubyArray/*!*/ self, int i, int count, int width, bool swap) {

@@ -1066,8 +1066,8 @@ namespace IronRuby.Runtime {
         internal MutableString GetCurrentMatchLastGroup() {
             var match = _currentMatch;
             if (match != null) {
-                // TODO: cache the last successful group index?
-                for (int i = match.GroupCount - 1; i >= 0; i--) {
+                // the last capture group that matched; a pattern without groups has none ($+ is nil)
+                for (int i = match.GroupCount - 1; i >= 1; i--) {
                     MutableString result = match.GetGroupValue(i);
                     if (result != null) {
                         return result;
