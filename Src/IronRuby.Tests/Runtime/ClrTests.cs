@@ -928,7 +928,7 @@ f1
 f2
 f2
 !f2
-#<Method: System::Collections::Generic::List[IronRubyTests::ExtensionMethods2::X]#f3(_)>
+#<Method: System::Collections::Generic::List[IronRubyTests::ExtensionMethods2::X]#f3(t)>
 f3
 f3
 !f3
@@ -1073,7 +1073,7 @@ p Obj.method(:skip)
 "), @"
 #<Method: *C#foo(_, *)>
 #<Method: *C#bar(_, *)>
-#<Method: *C(*B)#middle(_)>
+#<Method: *C(*B)#middle(a)>
 #<Method: *C#skip(*)>
 ", OutputFlags.Match);
 
