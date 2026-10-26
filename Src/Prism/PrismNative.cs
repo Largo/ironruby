@@ -66,6 +66,24 @@ namespace IronRuby.Prism {
             System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(PrismNative).TypeHandle);
         }
 
+        // A source this short cannot nest deeply enough to need more native stack than the margin
+        // StackGuard.IsSufficient leaves.
+        private const int InlineSourceLimit = 128;
+
+        /// <summary>
+        /// Runs <paramref name="call"/>, a call into prism's parser for a source of <paramref name="sourceLength"/>
+        /// bytes, on a stack big enough for it. The parser is recursive C: it takes about half a KB of native
+        /// stack per level of nesting and accepts 10000 levels - some 5 MB, more than a .NET thread has (1.5 MB
+        /// by default, 1 MB for the main thread on Windows), and running out of it there kills the process. A
+        /// source too short to nest that deep is parsed right here; any other on StackGuard's large-stack thread.
+        /// </summary>
+        internal static T WithParserStack<T>(int sourceLength, Func<T>/*!*/ call) {
+            if (sourceLength <= InlineSourceLimit && IronRuby.Runtime.StackGuard.IsSufficient) {
+                return call();
+            }
+            return IronRuby.Runtime.StackGuard.RunOnLargeStack(call);
+        }
+
         // arena + parser + node lifecycle
         [DllImport(Lib)] internal static extern IntPtr pm_arena_new();
         [DllImport(Lib)] internal static extern void pm_arena_free(IntPtr arena);

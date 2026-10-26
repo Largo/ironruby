@@ -729,6 +729,9 @@ namespace IronRuby.Tests {
                 Array_Struct_Misc1,
                 Hash_Range_Misc1,
                 Exception_Proc_Misc1,
+                ManyLocals1,
+                ManyLocals2,
+                DeepNesting1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,

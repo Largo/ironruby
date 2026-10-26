@@ -54,6 +54,22 @@ not the other way round, so that the Ripper library can call in here.
   hash shorthand `{x:}`, `it` and numbered block params, lambdas
   (`->`, `.()`), `**` splats — verified byte-identical against CRuby 3.3
   output (and `it` runs here even though CRuby 3.3 rejects it).
+- **Deep nesting runs** as deep as prism accepts it (10000 levels; a call
+  chain like `a.b.c...` has no limit at all), on any thread, the 1 MB main
+  thread on Windows included. prism's parser is recursive C needing about
+  half a KB of native stack per level, so every source longer than 128
+  bytes is parsed on a long-lived thread with a 64 MB stack
+  (`PrismNative.WithParserStack`). The bridge, IronRuby's AST
+  transformation and the DLR's interpreter compiler and compiled-code
+  rewriter recurse per level, so each checks the stack and, when it is
+  nearly used up, carries on on a fresh thread (`IronRuby.Runtime.StackGuard`,
+  the DLR patch `Build/dlr-patches/0101-stack-guard.patch`); IronRuby's own
+  JIT leaves such a method interpreted. Nesting deeper than prism allows is
+  a "nesting too deep" SyntaxError, as in CRuby. What remains bounded by the
+  stack is running code whose calls nest as deeply (a block that calls a
+  block that calls a block...), and forced IL compilation
+  (`-X:CompilationThreshold 0`, `-X:NoAdaptiveCompilation`) of trees
+  thousands of levels deep, which reaches limits of IL and the JIT itself.
 - **100% of the bundled 1.9 stdlib maps through the bridge**
   (571/571 files in `ruby/1.9.1`, 39/39 in `ironruby/`; measure with
   `IronRuby.Prism --sweep <dir>`). Coverage includes rescue/ensure/retry,

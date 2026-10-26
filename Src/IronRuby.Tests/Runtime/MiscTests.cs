@@ -1610,5 +1610,96 @@ Proc
 1
 ");
         }
+
+        /// <summary>
+        /// A scope holds its locals in a MutableTuple, and one of more than MutableTuple.MaxSize (128) locals keeps
+        /// them in nested tuples. Those were never created: the first local stored into one threw a
+        /// NullReferenceException - in any scope, and in prism's pattern matching, whose temporaries are locals.
+        /// </summary>
+        public void ManyLocals1() {
+            var code = new System.Text.StringBuilder();
+            for (int i = 1; i <= 300; i++) code.Append("t" + i + " = " + i + "\n");
+            code.Append("p " + SumOfLocals("t", 300) + "\n");
+            code.Append("def many_locals1\n");
+            for (int i = 1; i <= 300; i++) code.Append("  m" + i + " = " + i + "\n");
+            // (every local is read: prism warns about one a method or a block assigns and never reads)
+            code.Append("  " + SumOfLocals("m", 300) + "\nend\np many_locals1\n");
+            code.Append("p [1].map { |z| ");
+            for (int i = 1; i <= 300; i++) code.Append("b" + i + " = " + i + "; ");
+            code.Append("z + " + SumOfLocals("b", 300) + " }\n");
+            code.Append("p eval('");
+            for (int i = 1; i <= 300; i++) code.Append("e" + i + " = " + i + "; ");
+            code.Append(SumOfLocals("e", 300) + "')\n");
+
+            TestOutput(code.ToString(), @"
+45150
+45150
+[45151]
+45150
+");
+        }
+
+        private static string/*!*/ SumOfLocals(string/*!*/ prefix, int count) {
+            var names = new string[count];
+            for (int i = 0; i < count; i++) names[i] = prefix + (i + 1);
+            return String.Join(" + ", names);
+        }
+
+        /// <summary>
+        /// A safe navigation call (a&amp;.b) is lowered to a temporary local each, so a chain of 200 needs a scope of more
+        /// than 128 locals (see ManyLocals1); the legacy parser cannot read the syntax.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ManyLocals2() {
+            TestOutput("p 1" + new System.Text.StringBuilder().Insert(0, "&.to_i", 200) + "\n", @"
+1
+");
+        }
+
+        /// <summary>
+        /// prism accepts nesting up to 10000 levels deep, and a chain of calls (a.b.c...) is a tree as deep as it is
+        /// long with no limit at all. prism's own parser, the bridge, IronRuby's AST transformation, the DLR's
+        /// interpreter compiler and its compiled-code rewriter all recurse once or more per level, and used to take
+        /// the process down with a stack overflow: each now carries on on a stack of its own (StackGuard). The code
+        /// runs on a thread with the 1 MB stack of a Windows main thread, so every one of those overflowed at these
+        /// depths before; lambdas and procs are made but not called, as calling them nests calls just as deep.
+        /// </summary>
+        [Options(Prism = true)]
+        public void DeepNesting1() {
+            Func<string, int, string> times = (str, n) => new System.Text.StringBuilder().Insert(0, str, n).ToString();
+            var code = new System.Text.StringBuilder();
+            code.Append("p 1" + times(" + (1", 500) + times(")", 500) + "\n");
+            code.Append("p " + times("[", 3000) + times("]", 3000) + ".flatten\n");
+            code.Append("x = " + times("-> { ", 1000) + "1" + times(" }", 1000) + "\np x.lambda?\n");
+            code.Append("x = " + times("proc { ", 1000) + "1" + times(" }", 1000) + "\np x.lambda?\n");
+            code.Append("p 1" + times(".to_i", 5000) + "\n");
+            code.Append("def deep_nesting1 = " + times("[", 1000) + times("]", 1000) + "\np deep_nesting1.flatten\n");
+            code.Append("module DeepNesting1; " + times("class C; ", 1500) + "X = 1; " + times("end; ", 1500) + "end\n");
+            code.Append("p DeepNesting1" + times("::C", 1500) + "::X\n");
+            code.Append("p " + times("begin; ", 500) + "1" + times("; rescue; end", 500) + "\n");
+
+            Exception error = null;
+            var thread = new System.Threading.Thread(() => {
+                try {
+                    TestOutput(code.ToString(), @"
+501
+[]
+true
+false
+1
+[]
+1
+1
+");
+                } catch (Exception e) {
+                    error = e;
+                }
+            }, 1024 * 1024);
+            thread.Start();
+            thread.Join();
+            if (error != null) {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(error).Throw();
+            }
+        }
     }
 }
