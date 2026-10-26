@@ -336,7 +336,9 @@ namespace IronRuby.Runtime.Calls {
                 }
 
                 bindingTarget = resolver.ResolveOverload(name, overloads, NarrowingLevel.None, NarrowingLevel.All);
-                if (bindingTarget.Success && (!withBlock || BlockBindsToDelegate(bindingTarget.Overload, args, byName && keywords != null, callConvention))) {
+                if (bindingTarget.Success
+                    && (!withBlock || BlockBindsToDelegate(bindingTarget.Overload, args, byName && keywords != null, callConvention))
+                    && (byName || keywords == null || KeywordsBindAsHash(bindingTarget.Overload, args, callConvention))) {
                     break;
                 }
 
@@ -354,7 +356,7 @@ namespace IronRuby.Runtime.Calls {
 
             if (keywords != null) {
                 // which keywords the call passes decided how they bind:
-                metaBuilder.AddRestriction(RubyOverloadResolver.MakeKeywordArgumentsTest(args, keywords));
+                resolver.AddKeywordArgumentsTest(metaBuilder, keywords);
             }
 
             bool calleeHasBlockParam = bindingTarget.Success && HasBlockParameter(bindingTarget.Overload);
@@ -362,29 +364,32 @@ namespace IronRuby.Runtime.Calls {
             // At runtime the BlockParam is created with a new RFC instance that identifies the library method frame as 
             // a proc-converter target of a method unwinder triggered by break from a block.
             if (args.Signature.HasBlock) {
-                if (resolver.PassesBlockAsArgument) {
-                    metaBuilder.AddRestriction(Ast.NotEqual(args.GetBlockExpression(), AstUtils.Constant(null)));
-                } else {
-                    if (blockAsArgument) {
-                        // a block of another arity might bind to a delegate parameter:
-                        metaBuilder.AddRestriction(Ast.AndAlso(
-                            Ast.NotEqual(args.GetBlockExpression(), AstUtils.Constant(null)),
-                            Ast.Equal(
-                                Methods.GetProcArity.OpCall(AstUtils.Convert(args.GetBlockExpression(), typeof(Proc))),
-                                AstUtils.Constant(args.GetBlock().Dispatcher.Arity)
-                            )
-                        ));
-                    }
+                if (blockAsArgument) {
+                    // Whether and where the block binds depends on its arity:
+                    metaBuilder.AddRestriction(Ast.AndAlso(
+                        Ast.NotEqual(args.GetBlockExpression(), AstUtils.Constant(null)),
+                        Ast.Equal(
+                            Methods.GetProcArity.OpCall(AstUtils.Convert(args.GetBlockExpression(), typeof(Proc))),
+                            AstUtils.Constant(args.GetBlock().Dispatcher.Arity)
+                        )
+                    ));
+                }
 
-                    if (calleeHasBlockParam) {
-                        metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
-                    } else if (args.GetMetaBlock().Value == null) {
-                        // The block argument was nil when this rule was built (x.count(&b) with b nil), and
-                        // that is why an overload without a BlockParam was chosen. The rule must say so:
-                        // without this test the same call site would keep that overload, and ignore the
-                        // block, once a real one came through it.
-                        metaBuilder.AddRestriction(Ast.Equal(args.GetBlockExpression(), AstUtils.Constant(null)));
+                if (resolver.PassesBlockAsArgument) {
+                    // The call is the block's flow-control frame, as for a library method that yields:
+                    // break in the block (called back through the delegate) ends the call.
+                    if (metaBuilder.BfcVariable == null) {
+                        metaBuilder.BfcVariable = metaBuilder.GetTemporary(typeof(BlockParam), "#bfc");
                     }
+                    metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+                } else if (calleeHasBlockParam) {
+                    metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+                } else if (args.GetMetaBlock().Value == null) {
+                    // The block argument was nil when this rule was built (x.count(&b) with b nil), and
+                    // that is why an overload without a BlockParam was chosen. The rule must say so:
+                    // without this test the same call site would keep that overload, and ignore the
+                    // block, once a real one came through it.
+                    metaBuilder.AddRestriction(Ast.Equal(args.GetBlockExpression(), AstUtils.Constant(null)));
                 }
             }
 
@@ -392,6 +397,28 @@ namespace IronRuby.Runtime.Calls {
             resolver.AddArgumentRestrictions(metaBuilder, bindingTarget);
             
             return bindingTarget;
+        }
+
+        /// <summary>
+        /// Keywords that do not bind by name may still be passed on as a positional Hash, the way Ruby
+        /// passes them to a method without keyword parameters - but only to a parameter that takes a
+        /// Hash as it is (Hash, IDictionary, Object, ...), not to one Ruby's conversion protocols would
+        /// try to turn it into an Integer or a String.
+        /// </summary>
+        private static bool KeywordsBindAsHash(OverloadInfo/*!*/ overload, CallArguments/*!*/ args, SelfCallConvention callConvention) {
+            int index = RubyOverloadResolver.GetHiddenParameterCount(overload, callConvention) + args.SimpleArgumentCount - 1
+                + (args.Signature.HasSplattedArgument ? args.GetSplattedArgument().Count : 0);
+
+            int last = overload.ParameterCount - 1;
+            Type type;
+            if (index >= last && last >= 0 && overload.IsParamArray(last)) {
+                type = overload.Parameters[last].ParameterType.GetElementType();
+            } else if (index <= last) {
+                type = overload.Parameters[index].ParameterType;
+            } else {
+                return false;
+            }
+            return type != null && type.IsAssignableFrom(typeof(Hash));
         }
 
         /// <summary>
@@ -419,11 +446,7 @@ namespace IronRuby.Runtime.Calls {
             RubyOverloadResolver resolver;
             var bindingTarget = ResolveOverload(metaBuilder, args, name, overloads, callConvention, implicitProtocolConversions, out resolver);
             if (bindingTarget.Success) {
-                // TODO: create a custom overload info:
-                if (ReferenceEquals(bindingTarget.Overload.ReflectionInfo, Methods.CreateDefaultInstance)) {
-                    Debug.Assert(args.TargetClass.TypeTracker.Type.IsValueType);
-                    metaBuilder.Result = Ast.New(args.TargetClass.TypeTracker.Type);
-                } else if (args.Signature.IsVirtualCall && bindingTarget.Overload.IsVirtual) {
+                if (args.Signature.IsVirtualCall && bindingTarget.Overload.IsVirtual) {
                     // Virtual methods that have been detached from the CLR type and 
                     // defined on the corresponding Ruby class or its subclass are not
                     // directly invoked from a dynamic virtual call to prevent recursion.

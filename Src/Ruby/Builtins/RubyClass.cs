@@ -1544,7 +1544,8 @@ namespace IronRuby.Builtins {
 
                     if (type.IsValueType) {
                         if (constructionOverloads.Length == 0 || GetConstructor(type) == null) {
-                            constructionOverloads = ArrayUtils.Append(constructionOverloads, new ReflectionOverloadInfo(Methods.CreateDefaultInstance));
+                            constructionOverloads = ArrayUtils.Append(constructionOverloads,
+                                new ReflectionOverloadInfo(RubyOps.CreateDefaultValueMethod.MakeGenericMethod(type)));
                         }
                     } else if (constructionOverloads.Length == 0) {
                         metaBuilder.SetError(Methods.MakeAllocatorUndefinedError.OpCall(Ast.Convert(args.TargetExpression, typeof(RubyClass))));

@@ -1,0 +1,411 @@
+/* ****************************************************************************
+ *
+ * How Ruby calls bind to CLR methods: keywords by name, blocks and Method
+ * objects as delegates, out parameters as Arrays, Arrays and Hashes as typed
+ * collections.
+ *
+ * This source code is subject to terms and conditions of the Apache License,
+ * Version 2.0. A copy of the license can be found in the License.html file at
+ * the root of this distribution.
+ *
+ * ***************************************************************************/
+
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace IronRuby.Tests {
+    public partial class Tests {
+        public class BinderNamed {
+            public static string Greet(string name, string greeting = "Hello", int times = 1) {
+                return String.Join(" ", System.Linq.Enumerable.Repeat(greeting + ", " + name, times));
+            }
+
+            public static string Abc(int a, int b = 2, int c = 3) { return a + "," + b + "," + c; }
+            public static string Abc(string s, int b = 2) { return "s:" + s + "," + b; }
+            public static string FirstLast(string firstName, string lastName) { return lastName + ", " + firstName; }
+            public static string Options(IDictionary<object, object> options) { return "options:" + options.Count; }
+            public static string Count(object value) { return "object"; }
+            public static string Format(string format, params object[] args) { return String.Format(format, args); }
+        }
+
+        public class BinderWidget {
+            public string Title { get; set; }
+            public int Width { get; set; }
+            public bool Visible;
+            public string Fixed { get { return "fixed"; } }
+
+            public BinderWidget() { }
+            public BinderWidget(string title) { Title = title; }
+
+            public override string ToString() { return Title + "/" + Width + "/" + Visible; }
+        }
+
+        public struct BinderPoint {
+            public int X { get; set; }
+            public int Y { get; set; }
+            public override string ToString() { return X + "," + Y; }
+        }
+
+        public struct BinderPoint2 {
+            public readonly int X, Y;
+            public BinderPoint2(int x, int y) { X = x; Y = y; }
+            public override string ToString() { return X + "," + Y; }
+        }
+
+        [Options(Prism = true)]
+        public void ClrKeywordArguments1() {
+            Context.ObjectClass.SetConstant("N", Context.GetClass(typeof(BinderNamed)));
+            TestOutput(@"
+puts N.greet('Bob')
+puts N.greet('Bob', greeting: 'Hi')
+puts N.greet('Bob', times: 2, greeting: 'Yo')
+puts N.greet(name: 'Ann')
+puts N.first_last(last_name: 'Doe', first_name: 'John')
+puts N.FirstLast(lastName: 'Roe', firstName: 'Jane')
+puts N.abc(1, c: 9)
+puts N.abc('x', b: 5)
+
+# different keywords at one call site:
+[{b: 7}, {c: 8}, {b: 1, c: 1}].each { |opts| puts N.abc(1, **opts) }
+opts = {greeting: 'Hey'}
+puts N.greet('Al', **opts)
+
+# keywords no parameter takes go to a parameter that takes a Hash as it is:
+puts N.options(a: 1, b: 2)
+puts N.count(a: 1)
+puts N.format('{0}', k: 1).class
+
+begin
+  N.abc(1, zz: 3)
+rescue ArgumentError => e
+  puts e.message
+end
+
+begin
+  N.abc(1, zz: 3, yy: 4)
+rescue ArgumentError => e
+  puts e.message
+end
+
+begin
+  N.greet('Bob', times: 'x')
+rescue TypeError => e
+  puts e.class
+end
+", @"
+Hello, Bob
+Hi, Bob
+Yo, Bob Yo, Bob
+Hello, Ann
+Doe, John
+Roe, Jane
+1,2,9
+s:x,5
+1,7,3
+1,2,8
+1,1,1
+Hey, Al
+options:2
+object
+System::String
+unknown keyword: :zz
+unknown keywords: :zz, :yy
+TypeError
+");
+        }
+
+        /// <summary>
+        /// Keywords passed to new set what no constructor parameter takes, like a C# object initializer.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrKeywordArguments2() {
+            Context.ObjectClass.SetConstant("W", Context.GetClass(typeof(BinderWidget)));
+            Context.ObjectClass.SetConstant("P", Context.GetClass(typeof(BinderPoint)));
+            Context.ObjectClass.SetConstant("P2", Context.GetClass(typeof(BinderPoint2)));
+            TestOutput(@"
+puts W.new(title: 't', width: 3, visible: true)
+puts W.new('u', width: 5)
+puts W.new(Title: 'v')
+
+class SubWidget < W; end
+puts SubWidget.new(title: 's', width: 1).inspect.include?('SubWidget')
+puts SubWidget.new(title: 's', width: 1).Title
+
+puts P.new(x: 1, y: 2)
+puts P.new
+puts P2.new(y: 4, x: 3)
+
+begin
+  W.new(fixed: 'x')
+rescue Exception
+  puts 'read-only'
+end
+", @"
+t/3/True
+u/5/False
+v/0/False
+true
+s
+1,2
+0,0
+3,4
+read-only
+");
+        }
+
+        public class BinderCallbacks {
+            public static int Run(Func<int> f) { return f(); }
+            public static int RunWith(int x, Func<int, int> f, int y = 0) { return f(x) + y; }
+            public static string Many(Action a) { a(); return "action"; }
+            public static string Many(Func<int> f) { return "func:" + f(); }
+            public static string Arity(Func<int, int> f) { return "one:" + f(10); }
+            public static string Arity(Func<int, int, int> f) { return "two:" + f(10, 20); }
+            public static object TakeObject(object o) { return o; }
+            public static string NoDelegate(int x) { return "no delegate " + x; }
+            public static void Loop(Action<int> each) { for (int i = 0; i < 5; i++) each(i); }
+            public static IEnumerable<int> Numbers(int count) { for (int i = 0; i < count; i++) yield return i; }
+            public static void Each(IEnumerable<int> items, Action<int> action) { foreach (var item in items) action(item); }
+        }
+
+        [Options(Prism = true)]
+        public void ClrBlockToDelegate1() {
+            Context.ObjectClass.SetConstant("CB", Context.GetClass(typeof(BinderCallbacks)));
+            TestOutput(@"
+include System::Collections::Generic
+
+list = List[Integer].new([3, 1, 4, 1, 5])
+r = []
+list.ForEach { |x| r << x }
+p r
+list.Sort { |a, b| b <=> a }
+p list.to_a
+p list.FindAll { |x| x > 3 }.to_a
+p list.ConvertAll { |x| x * 10 }.to_a
+puts list.Exists { it == 4 }
+list.RemoveAll { _1 == 1 }
+p list.to_a
+
+puts CB.run { 42 }
+puts CB.run_with(4, y: 5) { |x| x + 6 }
+
+# Action and Func both fit: the one that keeps the block's value
+puts CB.many { 1 }
+
+# the delegate whose parameters match the block's
+puts CB.arity { |a| a + 1 }
+puts CB.arity { |a, b| a + b }
+
+# a block with fewer parameters than the delegate passes ignores the rest
+r = []
+CB.loop { r << :x }
+p r.size
+
+# a block that fits no delegate parameter is unused, as for any method
+puts CB.no_delegate(1) { :unused }
+puts CB.take_object(:o) { :unused }
+
+# a Proc and a Method as explicit delegate arguments
+puts CB.run_with(1, proc { |x| x * 3 })
+def triple(x) = x * 3
+puts CB.run_with(2, method(:triple))
+", @"
+[3, 1, 4, 1, 5]
+[5, 4, 3, 1, 1]
+[5, 4]
+[50, 40, 30, 10, 10]
+true
+[5, 4, 3]
+42
+15
+func:1
+one:11
+two:30
+5
+no delegate 1
+o
+3
+6
+");
+        }
+
+        /// <summary>
+        /// break, next and exceptions in a block that a CLR method calls back as a delegate.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrBlockToDelegate2() {
+            Context.ObjectClass.SetConstant("CB", Context.GetClass(typeof(BinderCallbacks)));
+            TestOutput(@"
+r = []
+x = CB.loop { |i| break :stopped if i == 3; r << i }
+p r, x
+
+r = []
+CB.loop { |i| next if i.odd?; r << i }
+p r
+
+begin
+  CB.loop { |i| raise 'boom' if i == 2 }
+rescue => e
+  puts e.message
+end
+
+# a block of another arity at the same call site binds anew
+[proc { |a| a }, proc { |a, b| b }].each { |pr| puts CB.arity(&pr) }
+
+r = []
+CB.each(CB.numbers(3)) { |i| r << i }
+p r
+", @"
+[0, 1, 2]
+:stopped
+[0, 2, 4]
+boom
+one:10
+two:20
+[0, 1, 2]
+");
+        }
+
+        [Options(Prism = true)]
+        public void ClrMethodToDelegate1() {
+            Context.ObjectClass.SetConstant("CB", Context.GetClass(typeof(BinderCallbacks)));
+            TestOutput(@"
+def twice(x) = x * 2
+def add(a, b) = a + b
+def any(*args) = args.size
+
+puts CB.arity(method(:twice))
+puts CB.arity(method(:add))
+puts CB.run_with(1, method(:any))
+p CB.run_with(1, 2.method(:+))
+
+begin
+  CB.run(method(:twice))
+rescue TypeError => e
+  puts e.class
+end
+", @"
+one:20
+two:30
+1
+3
+TypeError
+");
+        }
+
+        public class BinderOut {
+            public string Split(string value, out string head, out string tail) {
+                head = value.Substring(0, 1);
+                tail = value.Substring(1);
+                return "split";
+            }
+
+            public void Swap(ref int a, ref int b) {
+                int t = a; a = b; b = t;
+            }
+        }
+
+        public class BinderPair {
+            public int Left { get; private set; }
+            public int Right { get; private set; }
+            public BinderPair(int left, int right) { Left = left; Right = right; }
+            public void Deconstruct(out int left, out int right) { left = Left; right = Right; }
+        }
+
+        /// <summary>
+        /// Out and ref parameters come back as a Ruby Array, so a C# Deconstruct method makes array patterns match.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrOutParameters1() {
+            Context.ObjectClass.SetConstant("O", Context.GetClass(typeof(BinderOut)));
+            Context.ObjectClass.SetConstant("Pair", Context.GetClass(typeof(BinderPair)));
+            TestOutput(@"
+r = O.new.split('abc')
+p r.class, r.size
+result, head, tail = r
+puts result, head, tail
+p O.new.swap(1, 2)
+
+p System::Int32.TryParse('12')
+ok, n = System::Int32.TryParse('x')
+p ok, n
+
+# array patterns match what #deconstruct returns if it is an Array
+d = Pair.new(1, 2).deconstruct
+p d, Array === d
+", @"
+Array
+3
+split
+a
+bc
+[2, 1]
+[true, 12]
+false
+0
+[1, 2]
+true
+");
+        }
+
+        public class BinderCollections {
+            public static int Sum(int[] items) { return items.Sum(); }
+            public static int SumAll(IEnumerable<int> items) { return items.Sum(); }
+            public static string Join(IList<string> items) { items.Add("!"); return String.Join("-", items); }
+            public static string ReadOnly(IReadOnlyList<double> items) { return items.Count + ":" + items[0]; }
+            public static string Keys(Dictionary<string, int> map) {
+                return String.Join(",", map.Keys.OrderBy(k => k, StringComparer.Ordinal)) + "=" + map.Values.Sum();
+            }
+            public static string Lookup(IReadOnlyDictionary<string, object> map) { return map.Count.ToString(); }
+        }
+
+        /// <summary>
+        /// A Ruby Array or Hash passed where a CLR method takes a typed collection is copied into one.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrCollectionArguments1() {
+            Context.ObjectClass.SetConstant("C", Context.GetClass(typeof(BinderCollections)));
+            TestOutput(@"
+puts C.sum([1, 2, 3])
+puts C.sum([])
+puts C.sum_all([4, 5])
+a = ['a', :b]
+puts C.join(a)
+p a
+puts C.read_only([1, 2.5])
+puts C.keys({'a' => 1, b: 2})
+puts C.lookup({x: 1, y: nil})
+puts System::Collections::Generic::List[Integer].new([7, 8]).Count
+
+class MyArray < Array; end
+puts C.sum(MyArray[1, 1])
+
+begin
+  C.sum([1, 'x'])
+rescue TypeError => e
+  puts e.class
+end
+
+begin
+  C.sum([2**80])
+rescue RangeError => e
+  puts e.class
+end
+", @"
+6
+0
+9
+a-b-!
+[""a"", :b]
+2:1
+a,b=3
+2
+2
+2
+TypeError
+RangeError
+");
+        }
+    }
+}

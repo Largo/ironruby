@@ -4330,8 +4330,10 @@ namespace IronRuby.Runtime {
             if (proc == null) {
                 throw RubyExceptions.NoBlockGiven();
             }
-            BlockParam bp = CreateBfcForProcCall(proc);
-            return proc.LocalScope.RubyContext.DelegateCreator.GetDelegate(bp, type);
+            // Each invocation calls the proc the way Proc#call does, with its own flow-control frame, so
+            // a break in a block passed to a CLR method as a delegate unwinds to that call, and a
+            // return in a lambda returns from the lambda.
+            return proc.LocalScope.RubyContext.DelegateCreator.GetDelegate(proc, type);
         }
 
         [Emitted]
@@ -4411,10 +4413,48 @@ namespace IronRuby.Runtime {
         public static void X(string marker) {
         }
         
-        [Emitted]
-        public static object CreateDefaultInstance() {
-            // nop (stub)
-            return null;
+        /// <summary>
+        /// The constructor of a value type that declares no parameterless one: T.new is default(T).
+        /// Instantiated for the type, it returns T, so keywords passed to new can set the new value's
+        /// fields and properties like those passed to a real constructor.
+        /// </summary>
+        public static T CreateDefaultValue<T>() where T : struct {
+            return default(T);
         }
+
+        internal static readonly MethodInfo/*!*/ CreateDefaultValueMethod = typeof(RubyOps).GetMethod(nameof(CreateDefaultValue));
+
+        // A Ruby Array or Hash passed where a CLR method takes a typed collection (see Converter.TryConvertToCollection):
+        // a copy, each item converted by the site the binder made for the item type.
+
+        public static T[]/*!*/ ConvertToVector<T>(IList/*!*/ list, CallSite<Func<CallSite, object, T>>/*!*/ itemConversion) {
+            var result = new T[list.Count];
+            for (int i = 0; i < result.Length; i++) {
+                result[i] = itemConversion.Target(itemConversion, list[i]);
+            }
+            return result;
+        }
+
+        public static List<T>/*!*/ ConvertToList<T>(IList/*!*/ list, CallSite<Func<CallSite, object, T>>/*!*/ itemConversion) {
+            var result = new List<T>(list.Count);
+            for (int i = 0; i < list.Count; i++) {
+                result.Add(itemConversion.Target(itemConversion, list[i]));
+            }
+            return result;
+        }
+
+        public static Dictionary<TKey, TValue>/*!*/ ConvertToDictionary<TKey, TValue>(IDictionary<object, object>/*!*/ hash,
+            CallSite<Func<CallSite, object, TKey>>/*!*/ keyConversion, CallSite<Func<CallSite, object, TValue>>/*!*/ valueConversion) {
+
+            var result = new Dictionary<TKey, TValue>(hash.Count);
+            foreach (var entry in hash) {
+                result[keyConversion.Target(keyConversion, entry.Key)] = valueConversion.Target(valueConversion, entry.Value);
+            }
+            return result;
+        }
+
+        internal static readonly MethodInfo/*!*/ ConvertToVectorMethod = typeof(RubyOps).GetMethod(nameof(ConvertToVector));
+        internal static readonly MethodInfo/*!*/ ConvertToListMethod = typeof(RubyOps).GetMethod(nameof(ConvertToList));
+        internal static readonly MethodInfo/*!*/ ConvertToDictionaryMethod = typeof(RubyOps).GetMethod(nameof(ConvertToDictionary));
     }
 }

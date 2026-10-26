@@ -23,6 +23,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Dynamic;
+using System.Collections;
+using System.Runtime.CompilerServices;
+using IronRuby.Builtins;
 using System.Reflection;
 using IronRuby.Compiler;
 using IronRuby.Runtime.Calls;
@@ -153,6 +156,10 @@ namespace IronRuby.Runtime.Conversions {
                 return Convertibility.AlwaysConvertible;
             }
 
+            if (implicitProtocolConversions && IsCollectionConversion(fromType, toType)) {
+                return Convertibility.AlwaysConvertible;
+            }
+
             if (toType == typeof(bool)) {
                 return Convertibility.AlwaysConvertible;
             }
@@ -182,6 +189,96 @@ namespace IronRuby.Runtime.Conversions {
 
             return Convertibility.NotConvertible;
         }
+
+        #region Ruby Array and Hash to typed CLR collections
+
+        // A CLR method that takes an int[], an IEnumerable<string> or a Dictionary<string, object> gets a
+        // copy of a Ruby Array or Hash, its items converted the way each would be converted as an argument.
+        // A Ruby Array already is an IList<object> and a Hash an IDictionary<object, object>; those pass as they are.
+
+        /// <summary>
+        /// The item type of a CLR collection a Ruby Array converts to: T[], IEnumerable&lt;T&gt;, ICollection&lt;T&gt;,
+        /// IList&lt;T&gt;, IReadOnlyCollection&lt;T&gt;, IReadOnlyList&lt;T&gt; or List&lt;T&gt;. Null for any other type.
+        /// </summary>
+        internal static Type GetListItemType(Type/*!*/ toType) {
+            Type itemType = null;
+            if (toType.IsSZArray) {
+                itemType = toType.GetElementType();
+            } else if (toType.IsGenericType) {
+                Type definition = toType.GetGenericTypeDefinition();
+                if (definition == typeof(IEnumerable<>) || definition == typeof(ICollection<>) || definition == typeof(IList<>) ||
+                    definition == typeof(IReadOnlyCollection<>) || definition == typeof(IReadOnlyList<>) || definition == typeof(List<>)) {
+                    itemType = toType.GetGenericArguments()[0];
+                }
+            }
+            return itemType != null && IsConvertibleItemType(itemType) ? itemType : null;
+        }
+
+        /// <summary>
+        /// The key and value types of a CLR dictionary a Ruby Hash converts to: IDictionary&lt;K, V&gt;,
+        /// IReadOnlyDictionary&lt;K, V&gt; or Dictionary&lt;K, V&gt;. Null for any other type.
+        /// </summary>
+        internal static Type[] GetDictionaryItemTypes(Type/*!*/ toType) {
+            if (toType.IsGenericType) {
+                Type definition = toType.GetGenericTypeDefinition();
+                if (definition == typeof(IDictionary<,>) || definition == typeof(IReadOnlyDictionary<,>) || definition == typeof(Dictionary<,>)) {
+                    Type[] types = toType.GetGenericArguments();
+                    if (IsConvertibleItemType(types[0]) && IsConvertibleItemType(types[1])) {
+                        return types;
+                    }
+                }
+            }
+            return null;
+        }
+
+        private static bool IsConvertibleItemType(Type/*!*/ type) {
+            return !type.ContainsGenericParameters && !type.IsByRef && !type.IsPointer && !type.IsByRefLike;
+        }
+
+        private static bool IsCollectionConversion(Type/*!*/ fromType, Type/*!*/ toType) {
+            return typeof(RubyArray).IsAssignableFrom(fromType) && GetListItemType(toType) != null
+                || typeof(Hash).IsAssignableFrom(fromType) && GetDictionaryItemTypes(toType) != null;
+        }
+
+        /// <summary>
+        /// Converts <paramref name="expr"/> holding a Ruby Array or Hash to a typed CLR collection, or returns null if
+        /// that is not a conversion the two types have (see <see cref="IsCollectionConversion"/>).
+        /// </summary>
+        internal static Expression TryConvertToCollection(Expression/*!*/ expr, Type/*!*/ fromType, Type/*!*/ toType, RubyContext/*!*/ context,
+            bool implicitProtocolConversions) {
+
+            if (!implicitProtocolConversions || !IsCollectionConversion(fromType, toType)) {
+                return null;
+            }
+
+            MethodInfo converter;
+            Expression[] args;
+            if (typeof(RubyArray).IsAssignableFrom(fromType)) {
+                Type itemType = GetListItemType(toType);
+                converter = (toType.IsArray ? RubyOps.ConvertToVectorMethod : RubyOps.ConvertToListMethod).MakeGenericMethod(itemType);
+                args = new[] {
+                    AstUtils.Convert(expr, typeof(IList)),
+                    MakeItemConversionSite(context, itemType, implicitProtocolConversions)
+                };
+            } else {
+                Type[] itemTypes = GetDictionaryItemTypes(toType);
+                converter = RubyOps.ConvertToDictionaryMethod.MakeGenericMethod(itemTypes);
+                args = new[] {
+                    AstUtils.Convert(expr, typeof(IDictionary<object, object>)),
+                    MakeItemConversionSite(context, itemTypes[0], implicitProtocolConversions),
+                    MakeItemConversionSite(context, itemTypes[1], implicitProtocolConversions)
+                };
+            }
+            return AstUtils.Convert(Ast.Call(converter, args), toType);
+        }
+
+        private static Expression/*!*/ MakeItemConversionSite(RubyContext/*!*/ context, Type/*!*/ itemType, bool implicitProtocolConversions) {
+            var siteType = typeof(CallSite<>).MakeGenericType(typeof(Func<,,>).MakeGenericType(typeof(CallSite), typeof(object), itemType));
+            var binder = ProtocolConversionAction.GetConversionAction(context, itemType, implicitProtocolConversions);
+            return AstUtils.Constant(siteType.GetMethod("Create", new[] { typeof(CallSiteBinder) }).Invoke(null, new object[] { binder }), siteType);
+        }
+
+        #endregion
 
         internal static Expression/*!*/ ConvertExpression(Expression/*!*/ expr, Type/*!*/ toType, RubyContext/*!*/ context, Expression/*!*/ contextExpression,
             bool implicitProtocolConversions) {
