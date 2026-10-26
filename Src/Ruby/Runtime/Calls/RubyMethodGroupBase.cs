@@ -306,22 +306,85 @@ namespace IronRuby.Runtime.Calls {
             IList<OverloadInfo>/*!*/ overloads, SelfCallConvention callConvention, bool implicitProtocolConversions, 
             out RubyOverloadResolver/*!*/ resolver) {
 
-            resolver = new RubyOverloadResolver(metaBuilder, args, callConvention, implicitProtocolConversions);
-            var bindingTarget = resolver.ResolveOverload(name, overloads, NarrowingLevel.None, NarrowingLevel.All);
+            // A CLR method (not a Ruby library method) binds keywords by name, and takes a block as its
+            // trailing delegate parameter. Either falls back to what Ruby does with a method that has no
+            // such parameter: the keywords become a positional Hash, the block goes unused.
+            Hash keywords = null;
+            bool blockAsArgument = false;
+            if (implicitProtocolConversions) {
+                keywords = RubyOverloadResolver.GetKeywordArguments(args);
+                blockAsArgument = RubyOverloadResolver.CanPassBlockAsArgument(args);
+            }
+
+            BindingTarget bindingTarget = null;
+            BindingTarget firstFailure = null;
+            RubyOverloadResolver firstFailedResolver = null;
+            resolver = null;
+            for (int attempt = 0; attempt < 4; attempt++) {
+                bool byName = (attempt & 2) == 0;
+                bool withBlock = (attempt & 1) == 0;
+                if (byName && keywords == null || withBlock && !blockAsArgument) {
+                    continue;
+                }
+
+                resolver = new RubyOverloadResolver(metaBuilder, args, callConvention, implicitProtocolConversions);
+                if (byName) {
+                    resolver.BindKeywordsByName(keywords, overloads);
+                }
+                if (withBlock) {
+                    resolver.PassBlockAsArgument();
+                }
+
+                bindingTarget = resolver.ResolveOverload(name, overloads, NarrowingLevel.None, NarrowingLevel.All);
+                if (bindingTarget.Success && (!withBlock || BlockBindsToDelegate(bindingTarget.Overload, args, byName && keywords != null, callConvention))) {
+                    break;
+                }
+
+                if (firstFailure == null && !withBlock) {
+                    firstFailure = bindingTarget;
+                    firstFailedResolver = resolver;
+                }
+                if (attempt == 3) {
+                    // Nothing binds: report why the keywords do not bind by name, if the call passes any,
+                    // or else why the arguments do not - a block that fits no delegate parameter is unused.
+                    bindingTarget = firstFailure;
+                    resolver = firstFailedResolver;
+                }
+            }
+
+            if (keywords != null) {
+                // which keywords the call passes decided how they bind:
+                metaBuilder.AddRestriction(RubyOverloadResolver.MakeKeywordArgumentsTest(args, keywords));
+            }
 
             bool calleeHasBlockParam = bindingTarget.Success && HasBlockParameter(bindingTarget.Overload);
             
             // At runtime the BlockParam is created with a new RFC instance that identifies the library method frame as 
             // a proc-converter target of a method unwinder triggered by break from a block.
             if (args.Signature.HasBlock) {
-                if (calleeHasBlockParam) {
-                    metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
-                } else if (args.GetMetaBlock().Value == null) {
-                    // The block argument was nil when this rule was built (x.count(&b) with b nil), and
-                    // that is why an overload without a BlockParam was chosen. The rule must say so:
-                    // without this test the same call site would keep that overload, and ignore the
-                    // block, once a real one came through it.
-                    metaBuilder.AddRestriction(Ast.Equal(args.GetBlockExpression(), AstUtils.Constant(null)));
+                if (resolver.PassesBlockAsArgument) {
+                    metaBuilder.AddRestriction(Ast.NotEqual(args.GetBlockExpression(), AstUtils.Constant(null)));
+                } else {
+                    if (blockAsArgument) {
+                        // a block of another arity might bind to a delegate parameter:
+                        metaBuilder.AddRestriction(Ast.AndAlso(
+                            Ast.NotEqual(args.GetBlockExpression(), AstUtils.Constant(null)),
+                            Ast.Equal(
+                                Methods.GetProcArity.OpCall(AstUtils.Convert(args.GetBlockExpression(), typeof(Proc))),
+                                AstUtils.Constant(args.GetBlock().Dispatcher.Arity)
+                            )
+                        ));
+                    }
+
+                    if (calleeHasBlockParam) {
+                        metaBuilder.ControlFlowBuilder = RuleControlFlowBuilder;
+                    } else if (args.GetMetaBlock().Value == null) {
+                        // The block argument was nil when this rule was built (x.count(&b) with b nil), and
+                        // that is why an overload without a BlockParam was chosen. The rule must say so:
+                        // without this test the same call site would keep that overload, and ignore the
+                        // block, once a real one came through it.
+                        metaBuilder.AddRestriction(Ast.Equal(args.GetBlockExpression(), AstUtils.Constant(null)));
+                    }
                 }
             }
 
@@ -329,6 +392,21 @@ namespace IronRuby.Runtime.Calls {
             resolver.AddArgumentRestrictions(metaBuilder, bindingTarget);
             
             return bindingTarget;
+        }
+
+        /// <summary>
+        /// True if the block, passed after the other positional arguments, landed on a parameter of a
+        /// delegate type - not on an Object or params parameter that happens to accept a Proc.
+        /// </summary>
+        private static bool BlockBindsToDelegate(OverloadInfo/*!*/ overload, CallArguments/*!*/ args, bool keywordsByName,
+            SelfCallConvention callConvention) {
+
+            int index = RubyOverloadResolver.GetHiddenParameterCount(overload, callConvention)
+                + args.SimpleArgumentCount - (keywordsByName ? 1 : 0);
+
+            return index < overload.ParameterCount
+                && !overload.IsParamArray(index)
+                && typeof(Delegate).IsAssignableFrom(overload.Parameters[index].ParameterType);
         }
 
         /// <summary>

@@ -61,6 +61,15 @@ namespace IronRuby.Runtime.Calls {
         // An optional list of assumptions upon arguments that were made during resolution.
         private List<Key<int, NarrowingLevel, Expression>> _argumentAssumptions;
 
+        // Keywords of a call to a CLR method that bind by name: to its parameters, and for a constructor
+        // also to the properties and fields of the new object. Null when the call passes no keywords or
+        // they are passed on as a positional Hash. _keywordNames holds the CLR name each keyword binds to.
+        private RubySymbol[] _keywordSymbols;
+        private string[] _keywordNames;
+
+        // The call's block goes to the method as its last positional argument, a parameter of a delegate type.
+        private bool _blockAsArgument;
+
         internal RubyContext/*!*/ Context {
             get { return _args.RubyContext; }
         }
@@ -85,7 +94,8 @@ namespace IronRuby.Runtime.Calls {
         #region Step 1: Special Parameters
 
         protected override bool AllowMemberInitialization(OverloadInfo method) {
-            return false;
+            // Widget.new(title: "x", width: 3) sets what no constructor parameter takes, like a C# object initializer.
+            return _keywordSymbols != null && method.IsConstructor;
         }
 
         /// <summary>
@@ -255,6 +265,158 @@ namespace IronRuby.Runtime.Calls {
 
         #endregion
 
+        #region Keywords and Blocks of CLR Method Calls
+
+        /// <summary>
+        /// The keywords a call passes, if they could bind to a CLR method by name: a trailing keyword
+        /// Hash with only Symbol keys, in a call without a splat. Null otherwise.
+        /// </summary>
+        internal static Hash GetKeywordArguments(CallArguments/*!*/ args) {
+            int count = args.SimpleArgumentCount;
+            if (count == 0 || args.Signature.HasSplattedArgument || args.Signature.HasRhsArgument) {
+                return null;
+            }
+
+            var keywords = args.GetSimpleArgument(count - 1) as Hash;
+            if (keywords == null || !keywords.IsKeywordArguments || keywords.Count == 0) {
+                return null;
+            }
+
+            foreach (var entry in keywords) {
+                if (!(entry.Key is RubySymbol)) {
+                    return null;
+                }
+            }
+            return keywords;
+        }
+
+        /// <summary>
+        /// Makes the keywords of the call bind by name, to parameters of <paramref name="overloads"/> or,
+        /// for a constructor, to writable properties and fields of the new object. A keyword names its
+        /// parameter or member either exactly or in the snake_case form IronRuby gives CLR names
+        /// (first_name: binds to firstName or FirstName).
+        /// </summary>
+        internal void BindKeywordsByName(Hash/*!*/ keywords, IList<OverloadInfo>/*!*/ overloads) {
+            var symbols = new RubySymbol[keywords.Count];
+            var names = new string[symbols.Length];
+            int i = 0;
+            foreach (var entry in keywords) {
+                var symbol = (RubySymbol)entry.Key;
+                symbols[i] = symbol;
+                names[i] = GetKeywordTarget(symbol.ToString(), overloads);
+                i++;
+            }
+            _keywordSymbols = symbols;
+            _keywordNames = names;
+        }
+
+        internal bool BindsKeywordsByName {
+            get { return _keywordSymbols != null; }
+        }
+
+        /// <summary>
+        /// The rule test for a call that passes <paramref name="keywords"/>: it passes exactly these
+        /// keywords, in any order. How keywords bind to a CLR method depends on their names.
+        /// </summary>
+        internal static Expression/*!*/ MakeKeywordArgumentsTest(CallArguments/*!*/ args, Hash/*!*/ keywords) {
+            var symbols = new RubySymbol[keywords.Count];
+            int i = 0;
+            foreach (var entry in keywords) {
+                symbols[i++] = (RubySymbol)entry.Key;
+            }
+
+            var expression = AstUtils.Box(args.GetSimpleArgumentExpression(args.SimpleArgumentCount - 1));
+            return Ast.AndAlso(
+                Methods.IsKeywordArgumentsHash.OpCall(expression),
+                Methods.KeywordArgumentsMatch.OpCall(expression, AstUtils.Constant(symbols), 
+                    AstUtils.Constant(symbols.Length), AstUtils.Constant(false))
+            );
+        }
+
+        private static string/*!*/ GetKeywordTarget(string/*!*/ keyword, IList<OverloadInfo>/*!*/ overloads) {
+            string mangledMatch = null;
+            foreach (var overload in overloads) {
+                foreach (var parameter in overload.Parameters) {
+                    string name = parameter.Name;
+                    if (name == null || IsInfrastructureType(parameter.ParameterType)) {
+                        continue;
+                    }
+                    if (name == keyword) {
+                        return name;
+                    }
+                    if (mangledMatch == null && RubyUtils.TryMangleName(name) == keyword) {
+                        mangledMatch = name;
+                    }
+                }
+            }
+
+            if (mangledMatch != null) {
+                return mangledMatch;
+            }
+
+            foreach (var overload in overloads) {
+                if (!overload.IsConstructor) {
+                    continue;
+                }
+                foreach (var member in overload.DeclaringType.GetMembers(BindingFlags.Public | BindingFlags.Instance)) {
+                    if ((member is PropertyInfo || member is FieldInfo) &&
+                        (member.Name == keyword || RubyUtils.TryMangleName(member.Name) == keyword)) {
+                        return member.Name;
+                    }
+                }
+            }
+
+            // binds to nothing; overload resolution reports it
+            return keyword;
+        }
+
+        private static bool IsInfrastructureType(Type/*!*/ type) {
+            return type == typeof(RubyClass) || type == typeof(RubyContext) || type == typeof(RubyScope) || type == typeof(BlockParam)
+                || type.IsSubclassOf(typeof(RubyCallSiteStorage));
+        }
+
+        protected override void GetNamedArguments(out IList<DynamicMetaObject> namedArgs, out IList<string> argNames) {
+            if (_keywordSymbols == null) {
+                base.GetNamedArguments(out namedArgs, out argNames);
+                return;
+            }
+
+            var keywords = _args.GetSimpleMetaArgument(_args.SimpleArgumentCount - 1);
+            var hash = (Hash)keywords.Value;
+            var result = new DynamicMetaObject[_keywordSymbols.Length];
+            for (int i = 0; i < result.Length; i++) {
+                object value;
+                hash.TryGetValue(_keywordSymbols[i], out value);
+                result[i] = DynamicMetaObject.Create(value, Methods.GetKeywordArgument.OpCall(
+                    AstUtils.Box(keywords.Expression), AstUtils.Constant(_keywordSymbols[i]), AstUtils.Constant(i)
+                ));
+            }
+
+            namedArgs = result;
+            argNames = _keywordNames;
+        }
+
+        /// <summary>
+        /// A CLR method called with a block takes it as its last argument if that is a delegate,
+        /// List#ForEach { |x| ... } as List#ForEach(Action), the way JRuby passes a block to a Java
+        /// method's trailing functional interface. Only for a block literal or a non-nil &amp;proc
+        /// in a call without a splat; whether an overload takes it is up to overload resolution.
+        /// </summary>
+        internal static bool CanPassBlockAsArgument(CallArguments/*!*/ args) {
+            return args.Signature.HasBlock && args.GetBlock() != null
+                && !args.Signature.HasSplattedArgument && !args.Signature.HasRhsArgument;
+        }
+
+        internal void PassBlockAsArgument() {
+            _blockAsArgument = true;
+        }
+
+        internal bool PassesBlockAsArgument {
+            get { return _blockAsArgument; }
+        }
+
+        #endregion
+
         #region Step 2: Actual Arguments
 
         private static readonly DynamicMetaObject NullMetaBlockParam =
@@ -274,7 +436,7 @@ namespace IronRuby.Runtime.Calls {
                 result.Add(_args.MetaTarget);
             }
 
-            if (_args.Signature.HasBlock) {
+            if (_args.Signature.HasBlock && !_blockAsArgument) {
                 if (_args.GetBlock() == null) {
                     // the user explicitly passed nil as a block arg:
                     result.Add(NullMetaBlockParam);
@@ -301,7 +463,8 @@ namespace IronRuby.Runtime.Calls {
 
             // hidden args: block, self
             int hidden = _callConvention == SelfCallConvention.NoSelf ? 1 : 2;
-            return CreateActualArguments(result, _metaBuilder, _args, hidden, preSplatLimit, postSplatLimit, out _lastSplattedArg, out _list, out _listVariable);
+            return CreateActualArguments(result, _metaBuilder, _args, hidden, preSplatLimit, postSplatLimit, out _lastSplattedArg, out _list, out _listVariable,
+                namedArgs, argNames, _keywordSymbols != null ? 1 : 0, _blockAsArgument ? _args.GetMetaBlock() : null);
         }
 
         public static IList<DynamicMetaObject/*!*/> NormalizeArguments(MetaObjectBuilder/*!*/ metaBuilder, CallArguments/*!*/ args, int minCount, int maxCount) {
@@ -328,12 +491,13 @@ namespace IronRuby.Runtime.Calls {
         }
 
         private static ActualArguments/*!*/ CreateActualArguments(List<DynamicMetaObject>/*!*/ normalized, MetaObjectBuilder/*!*/ metaBuilder,
-            CallArguments/*!*/ args, int hidden, int preSplatLimit, int postSplatLimit, out int lastSplattedArg, out IList list, out ParameterExpression listVariable) {
+            CallArguments/*!*/ args, int hidden, int preSplatLimit, int postSplatLimit, out int lastSplattedArg, out IList list, out ParameterExpression listVariable,
+            IList<DynamicMetaObject> namedArgs = null, IList<string> argNames = null, int keywordArgumentCount = 0, DynamicMetaObject blockArgument = null) {
 
             int firstSplattedArg, splatIndex, collapsedArgCount;
 
-            // simple arguments:
-            for (int i = 0; i < args.SimpleArgumentCount; i++) {
+            // simple arguments (a trailing keyword hash that binds by name is not one of them):
+            for (int i = 0; i < args.SimpleArgumentCount - keywordArgumentCount; i++) {
                 normalized.Add(args.GetSimpleMetaArgument(i));
             }
 
@@ -377,10 +541,15 @@ namespace IronRuby.Runtime.Calls {
                 normalized.Add(args.GetRhsMetaArgument());
             }
 
+            // the block, passed as the last positional argument (there is no splat nor rhs then):
+            if (blockArgument != null) {
+                normalized.Add(blockArgument);
+            }
+
             return new ActualArguments(
                 normalized.ToArray(),
-                DynamicMetaObject.EmptyMetaObjects,
-                ArrayUtils.EmptyStrings,
+                namedArgs ?? DynamicMetaObject.EmptyMetaObjects,
+                argNames ?? ArrayUtils.EmptyStrings,
                 hidden,
                 collapsedArgCount,
                 firstSplattedArg,
@@ -573,6 +742,16 @@ namespace IronRuby.Runtime.Calls {
             }
 
             return Converter.ConvertExpression(expr, toType, _args.RubyContext, _args.MetaContext.Expression, _implicitProtocolConversions);
+        }
+
+        /// <summary>
+        /// A method with out or ref parameters returns its result followed by their final values.
+        /// Hand them back as a Ruby Array rather than an object[], so they are what Ruby code
+        /// expects of a multi-value result: an Array to destructure, pattern match (a C#
+        /// Deconstruct(out ...) method serves as #deconstruct) or call Array methods on.
+        /// </summary>
+        protected override Expression/*!*/ GetByRefArrayExpression(Expression/*!*/ argumentArrayExpression) {
+            return Methods.MakeArrayN.OpCall(argumentArrayExpression);
         }
 
         protected override Expression/*!*/ GetSplattedExpression() {
