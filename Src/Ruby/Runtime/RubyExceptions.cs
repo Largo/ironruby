@@ -346,18 +346,35 @@ namespace IronRuby.Runtime {
             //   1 < nil   => "comparison of Integer with nil failed"
             //   1 < "a"   => "comparison of Integer with String failed"
             //   [1,:b].max => "comparison of Integer with :b failed"
-            string selfClass = MessageTypeName(context.GetClassOf(self).Name);
+            // An anonymous class has no name; MRI prints it the way #inspect does (#<Class:0x...>).
+            // the receiver is always named by class, so nil <=> 1 is "comparison of NilClass with 1 failed"
+            string selfClass = context.GetClassOf(self).GetNonNullName(context);
+            // An Integer is immediate in MRI only while it is a Fixnum (62 bits); a Bignum is
+            // spelled by class like any other object.
             string otherClass;
-            if (other == null || other is bool || other is int || other is long || other is BigInteger || other is double || other is RubySymbol) {
+            if (other == null || other is bool || other is int || other is double || other is RubySymbol
+                || (other is long && IsFixnumRange((long)other))
+                || (other is BigInteger && IsFixnumRange((BigInteger)other))) {
                 try {
                     otherClass = context.Inspect(other).ToString();
                 } catch (Exception) {
-                    otherClass = MessageTypeName(context.GetClassOf(other).Name);
+                    otherClass = MessageTypeName(context.GetClassOf(other).GetNonNullName(context));
                 }
             } else {
-                otherClass = MessageTypeName(context.GetClassOf(other).Name);
+                otherClass = MessageTypeName(context.GetClassOf(other).GetNonNullName(context));
             }
             return CreateArgumentError("comparison of {0} with {1} failed", selfClass, otherClass);
+        }
+
+        private static readonly BigInteger FixnumMax = BigInteger.Pow(2, 62) - 1;
+        private static readonly BigInteger FixnumMin = -BigInteger.Pow(2, 62);
+
+        private static bool IsFixnumRange(BigInteger value) {
+            return value >= FixnumMin && value <= FixnumMax;
+        }
+
+        private static bool IsFixnumRange(long value) {
+            return value >= -(1L << 62) && value <= (1L << 62) - 1;
         }
 
         #endregion
@@ -587,18 +604,24 @@ namespace IronRuby.Runtime {
                 return kind + (String.IsNullOrEmpty(moduleName) ? SafeInspect(context, obj) : moduleName);
             }
 
-            // An object that carries a singleton class is spelled by inspect (that is how MRI keeps
-            // "main" and "#<Object:0x...>" for objects with singleton methods).
+            // An object that carries a singleton class is spelled the way the default #to_s would
+            // (rb_any_to_s: "#<Object:0x...>"), whatever #inspect it defines; the top-level object
+            // is "main".
             RubyClass immediate = context.GetImmediateClassOf(obj);
             if (immediate != null && immediate.IsSingletonClass) {
-                return SafeInspect(context, obj);
+                var globalScope = context.MainGlobalScope;
+                if (globalScope != null && ReferenceEquals(globalScope.MainObject, obj)) {
+                    return "main";
+                }
+                return RubyUtils.ObjectToMutableString(context, obj).ToString();
             }
 
-            // GetClassDisplayName is empty for an anonymous class; MRI prints "#<Class:0x...>".
+            // An anonymous class has no name; MRI then shows how the class inspects
+            // ("#<Class:0x...>", or whatever inspect it defines).
             var cls = context.GetClassOf(obj);
             string className = RubyName(context, cls);
             if (String.IsNullOrEmpty(className)) {
-                className = RubyExceptionData.GetDefaultMessage(cls).ToString();
+                className = SafeInspect(context, cls);
             }
             return "an instance of " + MessageTypeName(className);
         }
@@ -717,13 +740,32 @@ namespace IronRuby.Runtime {
             return new EncodingCompatibilityError(FormatMessage("incompatible character encodings: {0} and {1}", encoding1.Name, encoding2.Name));
         }
 
+        /// <summary>
+        /// MRI's rb_must_asciicompat: a string that is to be read as a number (or a format) has to
+        /// be in an ASCII-compatible encoding.
+        /// </summary>
+        public static Exception/*!*/ CreateAsciiIncompatibleEncodingError(RubyEncoding/*!*/ encoding) {
+            return new EncodingCompatibilityError(FormatMessage("ASCII incompatible encoding: {0}", encoding.Name));
+        }
+
         #region Errno
 
         // TODO: initialize errno property
 
         public static string/*!*/ MakeMessage(string message, string/*!*/ baseMessage) {
             Assert.NotNull(baseMessage);
-            return (message != null) ? String.Concat(baseMessage, " - ", message) : baseMessage;
+            if (message == null) {
+                return baseMessage;
+            }
+            // A message that already leads with the error's own text ("No such file or directory
+            // - path", as several callers build it) is complete: MRI never says it twice.
+            if (message.StartsWith(baseMessage, StringComparison.Ordinal)) {
+                string rest = message.Substring(baseMessage.Length);
+                if (rest.Length == 0 || rest.StartsWith(" - ", StringComparison.Ordinal) || rest.StartsWith(" @ ", StringComparison.Ordinal)) {
+                    return message;
+                }
+            }
+            return String.Concat(baseMessage, " - ", message);
         }
 
         public static string/*!*/ MakeMessage(ref MutableString message, string/*!*/ baseMessage) {

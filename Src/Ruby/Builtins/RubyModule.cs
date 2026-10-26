@@ -2756,6 +2756,17 @@ namespace IronRuby.Builtins {
         /// </remarks>
         public void ForEachMember(bool inherited, RubyMethodAttributes attributes, IEnumerable<string> foreignMembers, 
             Action<string/*!*/, RubyModule/*!*/, RubyMemberInfo/*!*/>/*!*/ action) {
+            ForEachMember(inherited, attributes, foreignMembers, false, action);
+        }
+
+        /// <param name="objectMethods">
+        /// Kernel#public_methods(false) and its private and protected siblings, as against
+        /// Module#instance_methods(false): MRI lists the object's singleton class, whatever is
+        /// mixed into it, and the object's class itself - but not modules prepended to that
+        /// class, nor anything above it.
+        /// </param>
+        public void ForEachMember(bool inherited, RubyMethodAttributes attributes, IEnumerable<string> foreignMembers, bool objectMethods,
+            Action<string/*!*/, RubyModule/*!*/, RubyMemberInfo/*!*/>/*!*/ action) {
 
             Context.RequiresClassHierarchyLock();
 
@@ -2789,7 +2800,24 @@ namespace IronRuby.Builtins {
                 }
             }
 
+            // The modules prepended to the object's class, which Kernel#public_methods(false) does
+            // not list although they precede the class in the walk: everything the first class
+            // that is not a singleton declares as an ancestor (its included modules come after it,
+            // where the walk has stopped).
+            HashSet<RubyModule> firstClassOwned = null;
+            if (instanceMethods && !inherited && objectMethods) {
+                for (RubyClass c = this as RubyClass; c != null; c = c.SuperClass) {
+                    if (!c.IsSingletonClass) {
+                        firstClassOwned = new HashSet<RubyModule>();
+                        RubyClass owner = c;
+                        c.ForEachDeclaredAncestor((m) => { if (!ReferenceEquals(m, owner)) firstClassOwned.Add(m); return false; });
+                        break;
+                    }
+                }
+            }
+
             bool stop = false;
+            bool seenSelf = false;
             ForEachInstanceMethod(true, delegate(RubyModule/*!*/ module, string name, RubyMemberInfo member) {
 
                 if (member == null) {
@@ -2800,7 +2828,20 @@ namespace IronRuby.Builtins {
                     }
 
                     if (instanceMethods) {
-                        stop = !inherited && (!IsClass || module.IsClass && !module.IsSingletonClass);
+                        // instance_methods(false) lists what the module itself defines: not what
+                        // a module prepended to it defines (those come first in the walk), and
+                        // for a singleton class not the class behind it.
+                        if (!inherited) {
+                            if (objectMethods) {
+                                // through the singleton classes, up to and including the object's class
+                                stop = module.IsClass && !module.IsSingletonClass;
+                            } else {
+                                if (seenSelf) {
+                                    return true;
+                                }
+                                seenSelf = ReferenceEquals(module, this);
+                            }
+                        }
                     } else if (singletonMethods) {
                         if (!inherited && module != this || classOwned.Contains(module)) {
                             return true;
@@ -2810,6 +2851,12 @@ namespace IronRuby.Builtins {
                     }
 
                 } else if (!visited.ContainsKey(name)) {
+                    if (instanceMethods && !inherited && (objectMethods ? firstClassOwned != null && firstClassOwned.Contains(module) : !ReferenceEquals(module, this))) {
+                        // a prepended module's member: not this module's, and it must not hide
+                        // the one this module defines under the same name
+                        return false;
+                    }
+
                     // yield the member only if it has the right visibility:
                     if (!member.IsUndefined && !member.IsHidden && (((RubyMethodAttributes)member.Visibility & attributes) != 0)) {
                         action(name, module, member);

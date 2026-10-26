@@ -363,10 +363,30 @@ namespace IronRuby.Builtins {
             try {
                 stream.Seek(offset, origin);
             } catch (IOException) {
-                throw RubyExceptions.CreateEINVAL();
+                throw CreateSeekError();
             } catch (ObjectDisposedException) {
                 throw RubyExceptions.CreateEBADF();
             }
+        }
+
+        // The whence of a seek, or MRI's EINVAL (naming the file) for anything else.
+        public SeekOrigin CheckSeekOrigin(int whence) {
+            switch (whence) {
+                case SEEK_SET: return SeekOrigin.Begin;
+                case SEEK_END: return SeekOrigin.End;
+                case SEEK_CUR: return SeekOrigin.Current;
+                default: throw CreateSeekError();
+            }
+        }
+
+        // MRI names the file in a failed seek ("Invalid argument @ rb_io_seek - path");
+        // a stream without a path (a pipe, a socket) gets the bare message.
+        private Exception/*!*/ CreateSeekError() {
+            var file = this as RubyFile;
+            if (file != null && file.Path != null) {
+                return RubyExceptions.CreateEINVAL("Invalid argument - {0}", file.Path);
+            }
+            return RubyExceptions.CreateEINVAL();
         }
 
         [DllImport("libc", EntryPoint = "lseek", SetLastError = true)]
@@ -398,13 +418,13 @@ namespace IronRuby.Builtins {
                 if (Marshal.GetLastWin32Error() == ESPIPE) {
                     object errno;
                     if (_context.ObjectClass.TryGetConstant(null, "Errno", out errno) && errno is RubyModule) {
-                        var error = _context.CreateLibraryException((RubyModule)errno, "ESPIPE", "Illegal seek");
+                        var error = _context.CreateLibraryException((RubyModule)errno, "ESPIPE", null);
                         if (error != null) {
                             throw error;
                         }
                     }
                 }
-                throw RubyExceptions.CreateEINVAL();
+                throw CreateSeekError();
             }
             return true;
         }
