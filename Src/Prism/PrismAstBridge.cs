@@ -1374,6 +1374,15 @@ namespace IronRuby.Prism {
         }
 
         private Expression/*!*/ SafeNavigation(Pm.CallNode/*!*/ node, SourceSpan span) {
+            // self&.m: self is never nil, and the call keeps the right of `self.m` to reach a
+            // private method - a temporary standing in for self would lose it
+            if (node.Receiver is Pm.SelfNode) {
+                return HasFlag(node, Pm.CallNodeFlags.AttributeWrite)
+                    ? AttributeWrite(node, new SelfReference(span), node.Name, span)
+                    : new MethodCall(new SelfReference(span), node.Name,
+                        node.Arguments != null ? BuildArguments(node.Arguments) : null, OptionalBlock(node.Block), span);
+            }
+
             // recv&.m(args)  =>  (?safeN? = recv).nil? ? nil : ?safeN?.m(args)
             return SafeGuard(node.Receiver, temp =>
                 HasFlag(node, Pm.CallNodeFlags.AttributeWrite)

@@ -1235,6 +1235,25 @@ uncaught throw :zz
 ");
         }
 
+        public void Reflection_Misc1() {
+            TestOutput(@"
+class RBase; def self.cm; end; def priv; end; private :priv; def prot; end; protected :prot; end
+class RSub < RBase; end
+puts RSub.method(:cm).inspect.sub(/ \S+:\d+>/, '>'), RBase.method(:cm).inspect.sub(/ \S+:\d+>/, '>')
+begin; RBase.public_instance_method(:priv); rescue NameError => e; puts e.message; end
+begin; RBase.public_instance_method(:prot); rescue NameError => e; puts e.message; end
+begin; RBase.public_instance_method(:nope); rescue NameError => e; puts e.message; end
+p BasicObject.instance_method(:initialize).bind_call(Object.new)
+", @"
+#<Method: RSub(RBase).cm()>
+#<Method: RBase.cm()>
+method `priv' for class `RBase' is private
+method `prot' for class `RBase' is protected
+undefined method `nope' for class `RBase'
+nil
+");
+        }
+
         public void Thread_JoinSelf1() {
             TestOutput(@"
 t = Thread.new { Thread.current.join rescue $!.message }; puts t.value

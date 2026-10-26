@@ -2403,27 +2403,17 @@ module Kernel
     # `freeze: false` on an already-frozen receiver falls back to #dup, which
     # differs from #clone only in that it does not carry over the singleton
     # class.
-    def clone(opts = nil)
-      freeze_opt = nil
-      if opts.is_a?(Hash)
-        extra = opts.keys - [:freeze]
-        unless extra.empty?
-          raise ArgumentError, "unknown keyword: #{extra.first.inspect}"
-        end
-        freeze_opt = opts[:freeze]
-        unless freeze_opt.nil? || freeze_opt == true || freeze_opt == false
-          # Fixnum/Bignum are still distinct classes here; MRI says Integer.
-          name = freeze_opt.class.to_s
-          name = "Integer" if name == "Fixnum" || name == "Bignum"
-          raise ArgumentError, "unexpected value for freeze: #{name}"
-        end
-      elsif !opts.nil?
-        raise TypeError, "no implicit conversion of #{opts.class} into Hash"
+    def clone(freeze: nil)
+      unless freeze.nil? || freeze == true || freeze == false
+        # Fixnum/Bignum are still distinct classes here; MRI says Integer.
+        name = freeze.class.to_s
+        name = "Integer" if name == "Fixnum" || name == "Bignum"
+        raise ArgumentError, "unexpected value for freeze: #{name}"
       end
 
       # A freeze: value that was actually given is handed on to #initialize_clone, and
       # decides whether the copy is frozen; without one the copy follows the original.
-      freeze_opt.nil? ? clone_without_options : __ir_clone_with_freeze__(freeze_opt)
+      freeze.nil? ? clone_without_options : __ir_clone_with_freeze__(freeze)
     end
   end
 end
@@ -14320,6 +14310,11 @@ class Encoding
       convpath == other.convpath
     end
   end
+end
+
+# A Method comes from #method, an UnboundMethod from #instance_method or #unbind.
+[::Method, ::UnboundMethod].each do |klass|
+  klass.singleton_class.send(:undef_method, :new) if klass.respond_to?(:new)
 end
 
 # Gem compatibility patches (see the file for the policy on adding one).

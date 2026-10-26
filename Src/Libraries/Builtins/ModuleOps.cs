@@ -1737,8 +1737,14 @@ namespace IronRuby.Builtins {
             [DefaultProtocol, NotNull]string/*!*/ methodName) {
 
             RubyMemberInfo method = self.ResolveMethodWithRefinements(methodName, VisibilityContext.AllVisible, scope).Info;
-            if (method == null || method.Visibility != RubyMethodVisibility.Public) {
+            if (method == null) {
                 throw RubyExceptions.CreateUndefinedMethodError(self, methodName);
+            }
+            if (method.Visibility != RubyMethodVisibility.Public) {
+                // the method is there, just not public - which is what MRI says
+                throw RubyExceptions.CreateNameError("method `{0}' for {1} `{2}' is {3}", methodName,
+                    self.IsClass ? "class" : "module", self.GetDisplayName(scope.RubyContext, false),
+                    method.Visibility == RubyMethodVisibility.Private ? "private" : "protected");
             }
 
             return GetInstanceMethod(scope, self, methodName);

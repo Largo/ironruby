@@ -218,9 +218,19 @@ namespace IronRuby.Builtins {
             if (targetModule != null && declaringSingleton != null && declaringSingleton.IsSingletonClass) {
                 var attached = declaringSingleton.SingletonClassOf;
                 var attachedModule = attached as RubyModule;
-                result.Append(attachedModule != null
-                    ? attachedModule.GetDisplayName(context, false)
-                    : context.Inspect(attached));
+                // a class method looked up on a subclass: Sub(Base).cm
+                var targetSingleton = targetModule as RubyClass;
+                var targetAttached = (targetSingleton != null && targetSingleton.IsSingletonClass) ? targetSingleton.SingletonClassOf as RubyModule : null;
+                if (attachedModule != null && targetAttached != null && !ReferenceEquals(targetAttached, attachedModule)) {
+                    result.Append(targetAttached.GetDisplayName(context, false));
+                    result.Append('(');
+                    result.Append(attachedModule.GetDisplayName(context, false));
+                    result.Append(')');
+                } else {
+                    result.Append(attachedModule != null
+                        ? attachedModule.GetDisplayName(context, false)
+                        : context.Inspect(attached));
+                }
                 result.Append('.');
             } else {
                 RubyModule origin = targetModule ?? declaringModule;
