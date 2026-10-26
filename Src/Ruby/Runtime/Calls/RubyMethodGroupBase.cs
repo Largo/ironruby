@@ -342,6 +342,12 @@ namespace IronRuby.Runtime.Calls {
                     break;
                 }
 
+                // A block that fits several delegate overloads equally (Sum(Func<T, int>), Sum(Func<T, double>), ...) is
+                // not dropped for an overload that takes none, which would ignore it without a word: that is an error.
+                if (withBlock && bindingTarget.Result == BindingResult.AmbiguousMatch) {
+                    break;
+                }
+
                 if (firstFailure == null && !withBlock) {
                     firstFailure = bindingTarget;
                     firstFailedResolver = resolver;

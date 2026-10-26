@@ -1052,6 +1052,10 @@ namespace IronRuby.Runtime.Calls {
                 outerComma = ", ";
             }
 
+            if (_blockAsArgument) {
+                sb.Append(" - the block fits more than one of them; pass the delegate itself, e.g. System::Func[...].new { ... }");
+            }
+
             return Methods.MakeAmbiguousMatchError.OpCall(AstUtils.Constant(sb.ToString()));
         }
 

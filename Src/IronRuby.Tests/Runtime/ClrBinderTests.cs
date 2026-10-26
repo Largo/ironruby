@@ -165,6 +165,9 @@ read-only
             public static string NoDelegate(int x) { return "no delegate " + x; }
             public static void Loop(Action<int> each) { for (int i = 0; i < 5; i++) each(i); }
             public static IEnumerable<int> Numbers(int count) { for (int i = 0; i < count; i++) yield return i; }
+            public static string Pick() { return "none"; }
+            public static string Pick(Func<int, int> f) { return "int"; }
+            public static string Pick(Func<int, double> f) { return "double"; }
             public static void Each(IEnumerable<int> items, Action<int> action) { foreach (var item in items) action(item); }
         }
 
@@ -256,6 +259,15 @@ end
 r = []
 CB.each(CB.numbers(3)) { |i| r << i }
 p r
+
+# a block that fits two delegate overloads equally is an error, not silently dropped for Pick()
+puts CB.pick
+begin
+  CB.pick { |x| x }
+rescue => e
+  puts e.message.include?('pass the delegate itself')
+end
+puts CB.pick(System::Func[Integer, Integer].new { |x| x })
 ", @"
 [0, 1, 2]
 :stopped
@@ -264,6 +276,9 @@ boom
 one:10
 two:20
 [0, 1, 2]
+none
+true
+int
 ");
         }
 
