@@ -485,6 +485,37 @@ false
 
         #region Hash patterns
 
+        public record ProtocolPoint1(int X, int Y);
+
+        public record ProtocolPerson1(string FirstName, int Age) {
+            public string Nick { get; init; }
+        }
+
+        public class ProtocolShape1 {
+            public static int Count = 1;
+            public string Name { get; set; }
+            public int Sides;
+            public int this[int index] { get { return index; } }
+            public int WriteOnly { set { } }
+            private int Hidden { get { return 0; } }
+            internal int Internal { get { return 0; } }
+        }
+
+        public class ProtocolShapeDerived1 : ProtocolShape1 {
+            public new string Name { get { return "derived"; } }
+        }
+
+        public class ProtocolThrows1 {
+            public int Ok { get { return 1; } }
+            public int Bad { get { throw new InvalidOperationException("bad getter"); } }
+        }
+
+        public struct ProtocolMoney1 {
+            public decimal Amount;
+            public string Currency;
+            public ProtocolMoney1(decimal amount, string currency) { Amount = amount; Currency = currency; }
+        }
+
         /// <summary>
         /// What a hash pattern passes to #deconstruct_keys, as MRI compiles it: the keys it names, or nil when it needs
         /// every key - for a **rest or **nil, and for `in {}`, which only matches when there are no keys at all.
@@ -524,6 +555,162 @@ nil
 true
 {:a=>1, :b=>2}
 false
+");
+        }
+
+        private void DefineHashPatternTypes() {
+            Context.ObjectClass.SetConstant("Point", Context.GetClass(typeof(ProtocolPoint1)));
+            Context.ObjectClass.SetConstant("Person", Context.GetClass(typeof(ProtocolPerson1)));
+            Context.ObjectClass.SetConstant("Shape", Context.GetClass(typeof(ProtocolShape1)));
+            Context.ObjectClass.SetConstant("Derived", Context.GetClass(typeof(ProtocolShapeDerived1)));
+            Context.ObjectClass.SetConstant("Throws", Context.GetClass(typeof(ProtocolThrows1)));
+            Context.ObjectClass.SetConstant("Money", Context.GetClass(typeof(ProtocolMoney1)));
+        }
+
+        /// <summary>
+        /// A hash pattern matches a CLR object's public readable instance properties and fields, by CLR name or by
+        /// Ruby (mangled) name.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrHashPatterns1() {
+            DefineHashPatternTypes();
+            TestOutput(@"
+pt = Point.new(1, 2)
+case pt
+in {X: 1, Y: y} then p y
+end
+case pt
+in {x:, y:} then p [x, y]
+end
+case Person.new('Ann', 30)
+in {first_name: String => n, age: Integer => a} then p [n, a]
+end
+case Person.new('Ann', 30)
+in {FirstName: 'Ann', nick: nil} then p :clr_name
+end
+case Money.new(System::Decimal.new(5), 'CHF')
+in {currency: 'CHF', amount:} then p amount.to_s
+end
+Point.new(5, 6) => {Y: yy}
+p yy
+
+case pt
+in Point(x: 1, y:) then p [:const, y]
+end
+p((pt in {z: 1}))
+p((pt in {x: 2}))
+p((pt in {}))
+p((pt in {x: 1, **nil}))
+case pt
+in {x: 1, **rest} then p rest
+end
+p((Object.new in {a: 1}))
+p((1 in {a: 1}))
+", @"
+2
+[1, 2]
+[""Ann"", 30]
+:clr_name
+""5""
+6
+[:const, 2]
+false
+false
+false
+false
+{:y=>2}
+false
+false
+");
+        }
+
+        /// <summary>
+        /// deconstruct_keys follows Struct#deconstruct_keys: nil gives every member under its Ruby name, an Array the
+        /// members it names (keyed as asked), anything else is a TypeError. Indexers, static, non-public and write-only
+        /// members are not part of it; a member hidden by `new' is reported once, with the derived class's value.
+        /// </summary>
+        public void ClrHashPatternKeys1() {
+            DefineHashPatternTypes();
+            TestOutput(@"
+pt = Point.new(1, 2)
+p pt.deconstruct_keys(nil)
+p pt.deconstruct_keys([:x, :Y, :z, 3, 'x'])
+p pt.deconstruct_keys([])
+p((pt.deconstruct_keys(1) rescue $!))
+p((pt.deconstruct_keys(:x) rescue $!))
+
+p Person.new('Ann', 30).deconstruct_keys(nil)
+
+s = Shape.new
+s.name = 'tri'
+s.sides = 3
+p s.deconstruct_keys(nil)
+p s.deconstruct_keys([:hidden, :internal, :write_only, :count, :item, :Item])
+p Derived.new.deconstruct_keys(nil), Derived.new.deconstruct_keys([:name])
+
+p Throws.new.deconstruct_keys([:ok])
+p((Throws.new.deconstruct_keys([:bad]) rescue [$!.class, $!.message]))
+p((Throws.new.deconstruct_keys(nil) rescue $!.message))
+", @"
+{:x=>1, :y=>2}
+{:x=>1, :Y=>2, ""x""=>1}
+{}
+#<TypeError: wrong argument type Integer (expected Array or nil)>
+#<TypeError: wrong argument type Symbol (expected Array or nil)>
+{:first_name=>""Ann"", :age=>30, :nick=>nil}
+{:name=>""tri"", :sides=>3}
+{}
+{:name=>""derived"", :sides=>0}
+{:name=>""derived""}
+{:ok=>1}
+[TypeError, ""bad getter""]
+""bad getter""
+");
+        }
+
+        /// <summary>
+        /// Only CLR classes that no library defines get #deconstruct_keys this way: Ruby objects and the built-in
+        /// classes do not, and a Ruby definition (in the class or in a module included into it) takes precedence.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrHashPatternScope1() {
+            DefineHashPatternTypes();
+            TestOutput(@"
+require 'ruby4'
+p [Object.new, 'x', 1, 1.5, [], :s, nil, true, 1..2, System::Char.new('c'), Struct.new(:a).new(1), {}].map { |x| x.respond_to?(:deconstruct_keys) }
+p Point.new(1, 2).respond_to?(:deconstruct_keys), Point.ancestors.include?(IronRuby::Clr::PatternMatching)
+p Point.instance_method(:deconstruct_keys).owner
+
+class RubyShape < Shape
+  attr_accessor :extra
+end
+r = RubyShape.new
+r.name = 'sub'
+r.extra = 1
+p r.deconstruct_keys([:name, :extra])
+
+module MyKeys
+  def deconstruct_keys(keys)
+    { x: :mine }
+  end
+end
+Point.send(:include, MyKeys)
+p Point.new(1, 2).deconstruct_keys(nil)
+
+class Shape
+  def deconstruct_keys(keys)
+    { name: :reopened }
+  end
+end
+p Shape.new.deconstruct_keys(nil)
+", @"
+[false, false, false, false, false, false, false, false, false, false, true, true]
+true
+true
+IronRuby::Clr::PatternMatching
+{name: ""sub""}
+{x: :mine}
+{name: :reopened}
 ");
         }
 

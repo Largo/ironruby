@@ -1240,6 +1240,15 @@ namespace IronRuby.Runtime {
                 modules.Add(GetOrCreateModuleNoLock(iface));
             }
 
+            // Hash patterns match a CLR object's public members. Last, so that an interface or a generic type
+            // definition can define its own #deconstruct_keys; a subclass finds the module on its base class.
+            // An abstract class has no instances of its own, and leaving it out keeps the library classes that
+            // derive from one (System::Char from ValueType, ...) as they are.
+            RubyModule patternMatching;
+            if (!type.IsAbstract && TryGetModuleNoLock(typeof(ClrPatternMatching), out patternMatching)) {
+                modules.Add(patternMatching);
+            }
+
             return modules.Count > 0 ? modules.ToArray() : null;
         }
 
