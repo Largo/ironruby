@@ -192,7 +192,19 @@ namespace IronRuby.Builtins {
                     case '\r': text.Append("\\r"); break;
                     case '\f': text.Append("\\f"); break;
                     case '\v': text.Append("\\v"); break;
-                    default: text.Append(c); break;
+                    case '\a': text.Append("\\a"); break;
+                    case '\b': text.Append("\\b"); break;
+                    case (char)27: text.Append("\\e"); break;
+                    case '"': text.Append("\\\""); break;
+                    case '\\': text.Append("\\\\"); break;
+                    default:
+                        // the other control characters the way #inspect spells them
+                        if (c < 0x20 || c == 0x7f) {
+                            text.Append("\\u").Append(((int)c).ToString("X4", System.Globalization.CultureInfo.InvariantCulture));
+                        } else {
+                            text.Append(c);
+                        }
+                        break;
                 }
             }
             return RubyExceptions.CreateArgumentError("invalid value for Integer(): \"{0}\"", text.ToString());

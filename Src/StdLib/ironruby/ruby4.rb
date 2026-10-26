@@ -2955,15 +2955,18 @@ module Kernel
     def Integer(arg, base = nil, exception: true)
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
-        if arg.nil?
-          raise ::TypeError, "can't convert nil into Integer"
-        end
-
+        # a base goes with a String, and that is checked before anything else - Integer(nil, 8)
+        # is this error, not the nil one
         if base && !arg.is_a?(::String) && !arg.respond_to?(:to_str)
           raise ::ArgumentError, "base specified for non string value"
         end
 
+        if arg.nil?
+          raise ::TypeError, "can't convert nil into Integer"
+        end
+
         if arg.is_a?(::String)
+          __ir_check_numeric_string__(arg)
           next base ? __ir_Integer__(arg, base) : __ir_Integer__(arg)
         end
 
@@ -2990,6 +2993,7 @@ module Kernel
           unless text.is_a?(::String)
             raise ::TypeError, "can't convert #{arg.class} into Integer"
           end
+          __ir_check_numeric_string__(text)
           next base ? __ir_Integer__(text, base) : __ir_Integer__(text)
         end
 
@@ -3017,6 +3021,7 @@ module Kernel
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         raise ::TypeError, "can't convert nil into Float" if arg.nil?
+        __ir_check_numeric_string__(arg, "Float") if ::String === arg
         if ::Kernel === arg && !(::Integer === arg || ::Float === arg || ::Rational === arg ||
             ::String === arg || true.equal?(arg) || false.equal?(arg)) && arg.respond_to?(:to_f, true)
           # MRI hands back the very Float #to_f returned (the same NaN, say), so the
@@ -3032,11 +3037,26 @@ module Kernel
     module_function :Float
   end
 
-  # exception: false suppresses a conversion *failure* only - an exception the
-  # object's own #to_int or #to_f raises still comes through.
+  # A String has to be readable as a number at all: ASCII-compatible, no NUL.
+  def __ir_check_numeric_string__(text, what = "Integer")
+    unless text.encoding.ascii_compatible?
+      raise ::ArgumentError, "ASCII incompatible encoding: #{text.encoding}"
+    end
+    if text.include?("\0")
+      raise ::ArgumentError, "string for #{what} contains null byte" if what == "Float"
+    end
+  end
+  private :__ir_check_numeric_string__
+  module_function :__ir_check_numeric_string__
+
+  # exception: false answers nil for a conversion failure - and, as MRI's rb_protect
+  # around the object's own #to_i/#to_f does, for an error raised by that method too.
   def __numeric_conversion__(exception)
     yield
   rescue ::TypeError, ::ArgumentError, ::FloatDomainError, ::RangeError
+    raise if exception
+    nil
+  rescue ::StandardError
     raise if exception
     nil
   end
@@ -14130,17 +14150,20 @@ module Kernel
   # answering something that is not a String, is a TypeError rather than a NoMethodError
   # or a silently wrong result.
   def String(object)
-    return object if object.is_a?(::String)
-    if object.respond_to?(:to_str)
+    return object if ::String === object
+    # a BasicObject has neither respond_to? nor to_s: only its #to_s (through method_missing) can help
+    basic = !(::Kernel === object)
+    if !basic && object.respond_to?(:to_str)
       converted = object.to_str
       return converted if converted.is_a?(::String)
     end
     # rb_check_funcall: a user-defined respond_to? can veto the call; otherwise a missing
     # #to_s still goes to method_missing, and only a NoMethodError for it means "cannot".
-    no_conversion = "can't convert #{object.nil? ? 'nil' : object.class} into String"
-    custom_respond_to = !object.method(:respond_to?).owner.equal?(::Kernel)
+    class_name = basic ? (class << object; self; end).superclass : (object.nil? ? 'nil' : object.class)
+    no_conversion = "can't convert #{class_name} into String"
+    custom_respond_to = !basic && !object.method(:respond_to?).owner.equal?(::Kernel)
     ::Kernel.raise(::TypeError, no_conversion) if custom_respond_to && !object.respond_to?(:to_s, true)
-    if ::Kernel.instance_method(:respond_to?).bind_call(object, :to_s, true)
+    if !basic && ::Kernel.instance_method(:respond_to?).bind_call(object, :to_s, true)
       converted = object.__send__(:to_s)
     else
       begin

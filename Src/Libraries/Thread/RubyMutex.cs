@@ -218,7 +218,7 @@ namespace IronRuby.StandardLibrary.Threading {
         }
 
         [RubyMethod("sleep")]
-        public static object Sleep(RubyMutex/*!*/ self, object timeout) {
+        public static object Sleep(RubyContext/*!*/ context, RubyMutex/*!*/ self, object timeout) {
             double seconds;
             if (timeout == null) {
                 seconds = Double.NegativeInfinity;
@@ -227,7 +227,7 @@ namespace IronRuby.StandardLibrary.Threading {
             } else if (timeout is double) {
                 seconds = (double)timeout;
             } else {
-                throw RubyExceptions.CreateTypeError("can't convert {0} into time interval", timeout.GetType().Name);
+                throw RubyExceptions.CreateTypeError("can't convert {0} into time interval", context.GetClassDisplayName(timeout));
             }
             return DoSleep(self, seconds);
         }

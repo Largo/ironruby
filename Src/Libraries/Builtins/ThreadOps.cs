@@ -559,8 +559,9 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("join")]
-        public static Thread/*!*/ Join(Thread/*!*/ self) {
+        public static Thread/*!*/ Join(RubyContext/*!*/ context, Thread/*!*/ self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+            RequireOtherThread(context, self);
 
             JoinWithSafePoints(self, Timeout.Infinite);
 
@@ -579,7 +580,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("join")]
         public static Thread Join(RubyContext/*!*/ context, Thread/*!*/ self, object timeout) {
             if (timeout == null) {
-                return Join(self);
+                return Join(context, self);
             }
             // MRI's time-interval conversion, not Float(): a String is a TypeError here rather
             // than the ArgumentError that Float("bar") would raise.
@@ -593,11 +594,23 @@ namespace IronRuby.Builtins {
             } else {
                 throw RubyExceptions.CreateImplicitConversionError(context.GetClassDisplayName(timeout), "Float");
             }
-            return Join(self, seconds);
+            return Join(context, self, seconds);
         }
 
-        public static Thread/*!*/ Join(Thread/*!*/ self, double seconds) {
+        // A thread cannot wait for itself, it would never wake up; and nothing waits for the main
+        // thread, whose end is the end of the program.
+        private static void RequireOtherThread(RubyContext/*!*/ context, Thread/*!*/ self) {
+            if (ReferenceEquals(self, Thread.CurrentThread)) {
+                throw new ThreadError("Target thread must not be current thread");
+            }
+            if (ReferenceEquals(self, context.MainThread)) {
+                throw new ThreadError("Target thread must not be main thread");
+            }
+        }
+
+        public static Thread/*!*/ Join(RubyContext/*!*/ context, Thread/*!*/ self, double seconds) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
+            RequireOtherThread(context, self);
 
             if (!(self.ThreadState == ThreadState.AbortRequested || self.ThreadState == ThreadState.Aborted)) {
                 double ms = seconds * 1000;
@@ -863,8 +876,8 @@ namespace IronRuby.Builtins {
         }
 
         [RubyMethod("value")]
-        public static object Value(Thread/*!*/ self) {
-            Join(self);
+        public static object Value(RubyContext/*!*/ context, Thread/*!*/ self) {
+            Join(context, self);
             return RubyThreadInfo.FromThread(self).Result;
         }
 
@@ -901,13 +914,11 @@ namespace IronRuby.Builtins {
             }
         }
 
-        [RubyMethod("critical", RubyMethodAttributes.PublicSingleton)] // Compatibility <= RubyCompatibility.Ruby18
         public static bool Critical(RubyContext/*!*/ context, object self) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
             return context.CriticalThread != null;
         }
 
-        [RubyMethod("critical=", RubyMethodAttributes.PublicSingleton)]
         public static void Critical(RubyContext/*!*/ context, object self, bool value) {
             RubyThreadInfo.RegisterThread(Thread.CurrentThread);
             SetCritical(context, value);

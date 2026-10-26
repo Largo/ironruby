@@ -1235,6 +1235,24 @@ uncaught throw :zz
 ");
         }
 
+        public void Thread_JoinSelf1() {
+            TestOutput(@"
+t = Thread.new { Thread.current.join rescue $!.message }; puts t.value
+t = Thread.new { Thread.main.join(0) rescue $!.message }; puts t.value
+t = Thread.new { Thread.current.value rescue $!.message }; puts t.value
+begin; Thread.current.join; rescue ThreadError => e; puts e.message; end
+puts ThreadGroup.new.inspect.sub(/0x\h+/, 'X')
+p Thread.respond_to?(:critical)
+", @"
+Target thread must not be current thread
+Target thread must not be main thread
+Target thread must not be current thread
+Target thread must not be current thread
+#<ThreadGroup:X>
+false
+");
+        }
+
         public void Hash_SelfKey1() {
             TestOutput(@"
 h = { b: 1 }; h[h] = 2
