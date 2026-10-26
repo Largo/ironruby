@@ -535,8 +535,15 @@ module Gem
   #
   # Prepended rather than reopened: rubygems/installer.rb is loaded long after
   # this file and would overwrite a plain definition.
-
-  class Installer; end
+  #
+  # And prepended only once that file has created the class (const_added below),
+  # however it gets there - Gem's autoload or one of the plain requires of
+  # rubygems/installer scattered through RubyGems and Bundler.  Reopening
+  # Gem::Installer here would trigger the autoload at boot, and with it the
+  # whole installer stack - package, the tar readers, the extension builders,
+  # security and the openssl it requires - which is a third of the cost of
+  # `require "rubygems"`, and which CRuby does not load until something
+  # actually installs a gem.
 
   module IronRubyNoExtensionBuild # :nodoc:
     def build_extensions
@@ -548,7 +555,13 @@ module Gem
     end
   end
 
-  Installer.prepend(IronRubyNoExtensionBuild)
+  def self.const_added(name) # :nodoc:
+    super
+    # Registering an autoload fires this too; only a real class is prepended to.
+    Installer.prepend(IronRubyNoExtensionBuild) if name == :Installer && !autoload?(:Installer)
+  end
+
+  Installer.prepend(IronRubyNoExtensionBuild) if const_defined?(:Installer, false) && !autoload?(:Installer)
 
   class BasicSpecification; end
 

@@ -808,6 +808,13 @@ namespace IronRuby.Runtime {
             sourcePath = null;
             sourceLine = 0;
 
+            // Nothing but the core prelude is running, and its frames are not in a backtrace: the
+            // walk below would come back empty, after ~1ms, for each of the prelude's const_set calls
+            // (Errno and Encoding make hundreds).
+            if (context.Loader.IsLoadingCorePrelude) {
+                return false;
+            }
+
             RubyArray trace;
             try {
                 trace = RubyExceptionData.CreateBacktrace(context, 0);
@@ -1315,6 +1322,9 @@ namespace IronRuby.Runtime {
         public static object Evaluate(MutableString/*!*/ code, RubyScope/*!*/ targetScope, object self, RubyModule module,
             RubyModule lexicalConstantModule, MutableString file, int line) {
             Assert.NotNull(code, targetScope);
+
+            // the code can make a Proc, Binding or method over the scope (a block scope is then not reused)
+            targetScope.MarkCaptured();
 
             RubyContext context = targetScope.RubyContext;
             RubyMethodScope methodScope = targetScope.GetInnerMostMethodScope();

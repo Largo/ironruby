@@ -400,6 +400,212 @@ warm { |i| no_splat_return(i) }
 t('return of a splat') { no_splat_return(4) }
 t('return from inside a hot loop (OSR)') { [no_osr_return(100000), no_osr_return(10)] }
 
+# ---------------------------------------------------------------- 8b. keyword parameters
+
+# Like t, but an ArgumentError's message is part of the answer: a keyword method's entry hands
+# every call the prologue would complain about to the generic body, and the wording of the
+# complaint is what shows that it did. (The few probes that use t instead are arity errors
+# IronRuby words differently from CRuby with the JIT off as well: MRI appends the required
+# keywords to them.)
+def kt(label)
+  print label.ljust(56), ' => '
+  begin
+    v = yield
+    puts "#{v.inspect} (#{v.class})"
+  rescue ArgumentError => e
+    puts "ArgumentError: #{e.message}"
+  rescue Exception => e
+    puts e.class
+  end
+end
+
+def sp_kw_add(left:, right:)
+  left + right
+end
+
+def sp_kw_opt(a: 1, b: 2.5)
+  a * b
+end
+
+def sp_kw_mixed(x, k:, j: 10)
+  x - k * j
+end
+
+def sp_kw_obj(a, k: nil)
+  k
+end
+
+def sp_kw_ret(n:, m: 0)
+  return 0 if n < m
+  n * 2
+end
+
+def sp_kw_assign(a:, b: 1)
+  a = a + b
+  a * 2
+end
+
+def no_kw_rest(a:, **rest)
+  a + rest.size
+end
+
+def no_kw_default_expr(a:, b: a + 1)
+  a + b
+end
+
+def no_kw_default_string(a:, b: "s")
+  a
+end
+
+puts
+puts '--- 8b. keyword parameters ---'
+warm { |i| sp_kw_add(left: i, right: 1) }
+kt('kw add') { sp_kw_add(left: 2, right: 3) }
+kt('kw add, keywords in the other order') { sp_kw_add(right: 3, left: 20) }
+kt('kw add Int32 max + 1') { sp_kw_add(left: 2**31 - 1, right: 1) }
+kt('kw add Int64 max + 1') { sp_kw_add(left: 2**63 - 1, right: 1) }
+kt('kw add Float') { sp_kw_add(left: 1.5, right: 1) }
+kt('kw add String') { sp_kw_add(left: 'a', right: 'b') }
+kt('kw add nil') { sp_kw_add(left: nil, right: 1) }
+kt('kw add missing one') { sp_kw_add(left: 1) }
+kt('kw add missing both') { sp_kw_add }
+kt('kw add unknown') { sp_kw_add(left: 1, right: 2, up: 3) }
+kt('kw add two unknown') { sp_kw_add(left: 1, right: 2, up: 3, down: 4) }
+kt('kw add missing and unknown') { sp_kw_add(left: 1, up: 3) }
+kt('kw add positional Hash') { sp_kw_add({ left: 1, right: 2 }) rescue $!.class }
+kt('kw add String key') { sp_kw_add(left: 1, right: 2, 'x' => 3) }
+kt('kw add **hash') { h = { left: 4, right: 5 }; [sp_kw_add(**h), h] }
+kt('kw add **hash + literal') { h = { left: 4 }; [sp_kw_add(**h, right: 6), h] }
+kt('kw add **{} extra') { sp_kw_add(left: 1, right: 2, **{}) }
+kt('kw add **hash with a default proc') { h = Hash.new { 99 }; h[:left] = 1; sp_kw_add(**h, right: 2) }
+kt('kw add via send') { send(:sp_kw_add, left: 7, right: 8) }
+kt('kw add via Method#call') { method(:sp_kw_add).call(left: 7, right: 9) }
+kt('kw add via public_send splat') { a = [{ left: 1, right: 1 }]; sp_kw_add(*a) rescue $!.class }
+warm { |i| sp_kw_add(left: i * 0.5, right: 0.25) }
+kt('kw add re-profiled on Float') { sp_kw_add(left: 1.5, right: 0.25) }
+kt('kw add re-profiled on Float, Integer') { sp_kw_add(left: 1, right: 2) }
+
+warm { |i| sp_kw_opt(a: i) }
+kt('kw opt none') { sp_kw_opt }
+kt('kw opt a') { sp_kw_opt(a: 4) }
+kt('kw opt b') { sp_kw_opt(b: 3) }
+kt('kw opt both') { sp_kw_opt(b: 2, a: 7) }
+kt('kw opt a Float') { sp_kw_opt(a: 0.5) }
+kt('kw opt a nil') { sp_kw_opt(a: nil) }
+kt('kw opt unknown') { sp_kw_opt(c: 1) }
+kt('kw opt positional') { sp_kw_opt(1) }
+kt('kw opt positional Hash') { sp_kw_opt({ a: 1 }) }
+kt('kw opt nil') { sp_kw_opt(nil) }
+warm { |i| sp_kw_opt }
+kt('kw opt hot without keywords') { sp_kw_opt }
+kt('kw opt hot without keywords, given one') { sp_kw_opt(b: 4) }
+
+warm { |i| sp_kw_mixed(i, k: 2) }
+kt('kw mixed') { sp_kw_mixed(5, k: 1) }
+kt('kw mixed with optional') { sp_kw_mixed(5, k: 1, j: 2) }
+t('kw mixed missing positional') { sp_kw_mixed(k: 1) }
+kt('kw mixed missing keyword') { sp_kw_mixed(5) }
+t('kw mixed extra positional') { sp_kw_mixed(5, 6, k: 1) }
+t('kw mixed positional Hash') { sp_kw_mixed(5, { k: 1 }) }
+t('kw mixed nil for the keywords') { sp_kw_mixed(5, nil) }
+kt('kw mixed overflow') { sp_kw_mixed(-2**62, k: 2**62, j: 2) }
+
+warm { |i| sp_kw_obj('x', k: i) }
+kt('kw obj') { sp_kw_obj('y', k: 5) }
+kt('kw obj no keyword') { sp_kw_obj('y') }
+kt('kw obj string-keyed hash') { sp_kw_obj('a' => 1) }
+kt('kw obj hash and keyword') { sp_kw_obj({ 'a' => 1 }, k: 2) }
+
+warm { |i| sp_kw_ret(n: i - 60) }
+kt('kw return') { [sp_kw_ret(n: -1), sp_kw_ret(n: 4), sp_kw_ret(n: 4, m: 5)] }
+warm { |i| sp_kw_assign(a: i) }
+kt('kw local reassigned') { [sp_kw_assign(a: 3), sp_kw_assign(a: 3, b: 4)] }
+
+warm { |i| no_kw_rest(a: i, z: 1) }
+kt('kw **rest') { [no_kw_rest(a: 1), no_kw_rest(a: 1, b: 2, c: 3)] }
+warm { |i| no_kw_default_expr(a: i) }
+kt('kw default reads a parameter') { [no_kw_default_expr(a: 1), no_kw_default_expr(a: 1, b: 5)] }
+warm { |i| no_kw_default_string(a: i) }
+kt('kw String default') { no_kw_default_string(a: 1) }
+
+# A keyword initializer: an instance variable store is a typed body too.
+class KwIvars
+  def initialize(x:, y: 0)
+    @x = x
+    @y = y
+  end
+
+  def pair
+    [@x, @y]
+  end
+end
+class KwIvarsSub < KwIvars
+  def initialize(x:, z: 5)
+    super(x: x, y: z)
+  end
+end
+
+warm { |i| KwIvars.new(x: i) }
+kt('kw initialize') { KwIvars.new(x: 1, y: 2).pair }
+kt('kw initialize with the default') { KwIvars.new(x: 1).pair }
+kt('kw initialize with Float and String') { KwIvars.new(x: 1.5, y: 'b').pair }
+kt('kw initialize missing') { KwIvars.new(y: 1) }
+kt('kw initialize unknown') { KwIvars.new(x: 1, w: 1) }
+kt('kw initialize of a frozen object') { o = KwIvars.new(x: 1).freeze; o.send(:initialize, x: 2) }
+kt('kw initialize via super') { KwIvarsSub.new(x: 3).pair }
+
+# A receiverless keyword call goes straight into the specialized body when it can
+# (JitKeywordCall): what it resolves to has to follow the receiver's class.
+class KwCaller
+  def sp_kw_scale(x, by: 2)
+    x * by
+  end
+  private :sp_kw_scale
+
+  def go(x)
+    sp_kw_scale(x, by: 3)
+  end
+
+  def go_missing(x)
+    sp_kw_not_here(x, by: 3)
+  end
+
+  def method_missing(name, *args, **kw)
+    [name, args, kw]
+  end
+end
+class KwCallerSub < KwCaller
+  def sp_kw_scale(x, by: 2)
+    [:sub, x, by]
+  end
+end
+
+kc = KwCaller.new
+warm { |i| kc.go(i) }
+kt('kw call into a private method') { kc.go(5) }
+kt('kw call, a Float') { kc.go(0.5) }
+kt('kw call, overflow') { kc.go(2**62) }
+kt('kw call, a String') { kc.go('ab') }
+kt('kw call, overridden in a subclass') { KwCallerSub.new.go(5) }
+kt('kw call, the superclass again') { kc.go(5) }
+kt('kw call to method_missing') { kc.go_missing(1) }
+def kc.sp_kw_scale(x, by: 2)
+  :singleton
+end
+kt('kw call, a singleton method') { kc.go(5) }
+kt('kw call, another instance') { KwCaller.new.go(5) }
+
+def sp_kw_add(left:, right:)
+  left - right
+end
+kt('kw add redefined') { sp_kw_add(left: 2, right: 3) }
+warm { |i| sp_kw_add(left: i, right: 1) }
+kt('kw add redefined, hot again') { sp_kw_add(left: 2, right: 3) }
+def sp_kw_add(left:, right: 100)
+  left + right
+end
+kt('kw add redefined with a default') { sp_kw_add(left: 2) }
+
 # ---------------------------------------------------------------- 8. Integer#+ redefined
 
 def sp_plus(a, b)

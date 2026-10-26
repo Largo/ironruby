@@ -79,6 +79,21 @@ namespace IronRuby.Compiler.Ast {
             _parameters = parameters ?? Parameters.Empty;
         }
 
+        /// <summary>
+        /// A method whose body the front end builds when it is first asked for - normally when the method
+        /// is first called. Building it adds the body's locals to <paramref name="definedScope"/>.
+        /// </summary>
+        public MethodDefinition(LexicalScope/*!*/ definedScope, Expression target, string/*!*/ name, Parameters parameters,
+            Func<Body>/*!*/ bodyFactory, SourceSpan location)
+            : base(definedScope, bodyFactory, location) {
+            Assert.NotNull(name);
+            Debug.Assert(parameters == null || parameters.Unsplat == null || parameters.Unsplat is LocalVariable);
+
+            _target = target;
+            _name = name;
+            _parameters = parameters ?? Parameters.Empty;
+        }
+
         private ScopeBuilder/*!*/ DefineLocals(out AstParameters/*!*/ parameters) {
             // Method signature:
             // <self>, &<block>, <leading-mandatory>, <trailing-mandatory>, <optional>, *<unsplat>
@@ -156,8 +171,19 @@ namespace IronRuby.Compiler.Ast {
 
         internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, RubyScope/*!*/ declaringScope, RubyModule/*!*/ declaringModule,
             StrongBox<RefinementActivation> definitionRefinements) {
-            return TransformBody(gen, Ast.Constant(declaringScope, typeof(RubyScope)), Ast.Constant(declaringModule, typeof(RubyModule)),
+            return TransformBody(gen, ExactConstant(declaringScope, typeof(RubyScope)), ExactConstant(declaringModule, typeof(RubyModule)),
                 QualifyFrameLabel(_name, declaringModule), definitionRefinements);
+        }
+
+        /// <summary>
+        /// A compiled lambda keeps its object constants in an object[] and casts each one back on
+        /// every load. Typed as their base class the declaring scope (a top-level, module or method
+        /// scope) and module (a class, mostly) miss the inline exact-type check and go to the
+        /// runtime's class-cast helper, twice per call of the method; typed as what they are, the
+        /// cast is one compare, and the up-cast to the parameter type is free.
+        /// </summary>
+        private static MSA.Expression/*!*/ ExactConstant(object/*!*/ value, Type/*!*/ type) {
+            return AstUtils.Convert(Ast.Constant(value, value.GetType()), type);
         }
 
         /// <summary>
@@ -168,6 +194,9 @@ namespace IronRuby.Compiler.Ast {
         internal MSA.LambdaExpression/*!*/ TransformBody(AstGenerator/*!*/ gen, MSA.Expression/*!*/ declaringScope, MSA.Expression/*!*/ declaringModule,
             string/*!*/ frameLabel, StrongBox<RefinementActivation> definitionRefinements) {
             string encodedName = RubyStackTraceBuilder.EncodeMethodName(frameLabel, gen.SourcePath, Location, gen.DebugMode);
+
+            // a body built on demand adds its locals to the scope: build it before they are allocated
+            Body methodBody = Body;
 
             AstParameters parameters;
             ScopeBuilder scope = DefineLocals(out parameters);
@@ -232,7 +261,7 @@ namespace IronRuby.Compiler.Ast {
             // see RubyScope.GetActiveRefinements:
             MSA.Expression recordRefinements = (definitionRefinements != null)
                 ? (MSA.Expression)Ast.Assign(
-                    Ast.Field(scopeVariable, typeof(RubyMethodScope).GetField("DefinitionRefinements")),
+                    Ast.Property(scopeVariable, typeof(RubyMethodScope).GetProperty("DefinitionRefinements")),
                     Ast.Constant(definitionRefinements, typeof(StrongBox<RefinementActivation>)))
                 : AstUtils.Empty();
 
@@ -251,7 +280,7 @@ namespace IronRuby.Compiler.Ast {
                 profileStart,
                 _parameters.TransformOptionalsInitialization(gen),
                 traceCall,
-                Body.TransformResult(gen, ResultOperation.Return)
+                methodBody.TransformResult(gen, ResultOperation.Return)
             ).Filter(unwinder = Ast.Parameter(typeof(Exception), "#u"), Methods.IsMethodUnwinderTargetFrame.OpCall(scopeVariable, unwinder),
                 Ast.Return(gen.ReturnLabel, Methods.GetMethodUnwinderReturnValue.OpCall(unwinder))
             ).Finally(  

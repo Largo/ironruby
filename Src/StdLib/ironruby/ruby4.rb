@@ -91,7 +91,7 @@ module Kernel
     return to_enum(:yield_self) { 1 } unless block
     yield self
   end unless method_defined?(:yield_self)
-  alias_method :then, :yield_self unless method_defined?(:then)
+  alias :then :yield_self unless method_defined?(:then)
 
   # Written in Ruby, as MRI's is (<internal:kernel>): its frame is reported with its caller's
   # location, and it has a source_location.
@@ -298,7 +298,7 @@ module Enumerable
     compensating ? acc + compensation : acc
   end unless method_defined?(:sum)
 
-  alias_method :filter, :select unless method_defined?(:filter)
+  alias :filter :select unless method_defined?(:filter)
 
   # A `yield` with several values is one element, packed into an Array; a yield
   # with none is nil. Everything below goes through this so that
@@ -321,7 +321,7 @@ module Enumerable
   end unless method_defined?(:each_entry)
 
   unless method_defined?(:each_with_index_without_args)
-    alias_method :each_with_index_without_args, :each_with_index
+    alias :each_with_index_without_args :each_with_index
 
     def each_with_index(*args, &block)
       return to_enum(:each_with_index, *args) { size if respond_to?(:size) } unless block
@@ -339,10 +339,10 @@ module Enumerable
   # The built-ins only know the block form, and because they are defined on
   # Enumerable they shadow rather than extend, so wrap them.
   unless method_defined?(:all_without_pattern?)
-    alias_method :all_without_pattern?, :all?
-    alias_method :any_without_pattern?, :any?
-    alias_method :none_without_pattern?, :none?
-    alias_method :one_without_pattern?, :one?
+    alias :all_without_pattern? :all?
+    alias :any_without_pattern? :any?
+    alias :none_without_pattern? :none?
+    alias :one_without_pattern? :one?
 
     def __check_pattern_args__(args, block = nil)
       if args.size > 1
@@ -398,7 +398,7 @@ module Enumerable
   # inspecting the object rather than by naming its class - and takes at most
   # two arguments. A block alongside a method name is never called.
   unless method_defined?(:inject_without_name_check)
-    alias_method :inject_without_name_check, :inject
+    alias :inject_without_name_check :inject
 
     def inject(*args, &block)
       if args.size > 2
@@ -421,13 +421,13 @@ module Enumerable
       end
       inject_without_name_check(*args, &block)
     end
-    alias_method :reduce, :inject
+    alias :reduce :inject
   end
 
   # min/max also grew an `n` form.
   unless method_defined?(:min_without_count)
-    alias_method :min_without_count, :min
-    alias_method :max_without_count, :max
+    alias :min_without_count :min
+    alias :max_without_count :max
 
     def min(*args, &block)
       n = args.empty? ? nil : __count_arg__(args[0])
@@ -549,7 +549,7 @@ module Enumerable
     end
     result
   end unless method_defined?(:flat_map)
-  alias_method :collect_concat, :flat_map unless method_defined?(:collect_concat)
+  alias :collect_concat :flat_map unless method_defined?(:collect_concat)
 
   def uniq
     seen = {}
@@ -723,7 +723,7 @@ module Enumerable
   # #sort_by has to walk the receiver exactly once - the block may be expensive
   # or have side effects - which the decorate/sort/undecorate helper does.
   unless method_defined?(:sort_by_without_enumerator)
-    alias_method :sort_by_without_enumerator, :sort_by
+    alias :sort_by_without_enumerator :sort_by
 
     def sort_by(&block)
       return to_enum(:sort_by) { size if respond_to?(:size) } unless block
@@ -734,8 +734,8 @@ module Enumerable
   # Neither of these can know how long the answer will be without running the
   # block, so their Enumerators report no size even when the receiver has one.
   unless method_defined?(:take_while_without_enumerator)
-    alias_method :take_while_without_enumerator, :take_while
-    alias_method :drop_while_without_enumerator, :drop_while
+    alias :take_while_without_enumerator :take_while
+    alias :drop_while_without_enumerator :drop_while
 
     def take_while(&block)
       return to_enum(:take_while) { nil } unless block
@@ -751,8 +751,8 @@ module Enumerable
   # Both return the receiver when they are given a block (they returned nil),
   # and both reject a slice size that cannot produce any slice at all.
   unless method_defined?(:each_cons_without_self)
-    alias_method :each_cons_without_self, :each_cons
-    alias_method :each_slice_without_self, :each_slice
+    alias :each_cons_without_self :each_cons
+    alias :each_slice_without_self :each_slice
 
     def __slice_size__(n, message)
       size = n
@@ -782,7 +782,7 @@ module Enumerable
   # otherwise iterated with #each - a Range or a lazy Enumerator zips fine.
   # Only something that can do neither is an error.
   unless method_defined?(:zip_without_conversion)
-    alias_method :zip_without_conversion, :zip
+    alias :zip_without_conversion :zip
 
     def __zip_source__(other)
       return other if other.is_a?(Array)
@@ -894,8 +894,8 @@ class Range
   # are defined on Range they hide Enumerable#first(n) rather than falling
   # through to it - so `(0..Float::INFINITY).first(3)` was an ArgumentError.
   unless method_defined?(:first_without_count)
-    alias_method :first_without_count, :first
-    alias_method :last_without_count, :last
+    alias :first_without_count :first
+    alias :last_without_count :last
 
     def first(*args)
       if args.empty?
@@ -1323,10 +1323,10 @@ class Array
 
   public
 
-  alias_method :filter, :select unless method_defined?(:filter)
-  alias_method :filter!, :select! if method_defined?(:select!) && !method_defined?(:filter!)
-  alias_method :append, :push unless method_defined?(:append)
-  alias_method :prepend, :unshift unless method_defined?(:prepend)
+  alias :filter :select unless method_defined?(:filter)
+  alias :filter! :select! if method_defined?(:select!) && !method_defined?(:filter!)
+  alias :append :push unless method_defined?(:append)
+  alias :prepend :unshift unless method_defined?(:prepend)
 end
 
 class Hash
@@ -1432,7 +1432,7 @@ class Hash
     # method_defined? is true and Hash would be left returning the wrong class.
   end unless instance_methods(false).include?(:compact)
 
-  alias_method :filter, :select unless method_defined?(:filter)
+  alias :filter :select unless method_defined?(:filter)
 end
 
 class String
@@ -1506,7 +1506,7 @@ module Math
   class DomainError < StandardError; end unless const_defined?(:DomainError)
 
   class << self
-    alias_method :__ir_frexp__, :frexp
+    alias :__ir_frexp__ :frexp
 
     # frexp answered the magnitude for a negative argument - Math.frexp(-0.5)
     # came back [0.5, 0] where MRI says [-0.5, 0] - and 0.0 came back with the
@@ -1653,7 +1653,7 @@ class IO
   # Keyword arguments and a Hash in the last positional slot are different things,
   # and only a Ruby-level signature can tell them apart: the library method behind
   # this one takes options as an ordinary parameter and so sees them as the same.
-  alias_method :__ir_initialize__, :initialize
+  alias :__ir_initialize__ :initialize
   private :__ir_initialize__
 
   def initialize(*args, **opts)
@@ -1665,7 +1665,7 @@ class IO
   end
 
   class << self
-    alias_method :__ir_new__, :new
+    alias :__ir_new__ :new
 
     # IO.open is the form that takes a block; IO.new ignores one and says so.
     def new(*args, **opts, &block)
@@ -1678,7 +1678,7 @@ class IO
 end
 
 class File
-  alias_method :__ir_initialize__, :initialize
+  alias :__ir_initialize__ :initialize
   private :__ir_initialize__
 
   # File takes a permission argument between the mode and the options.
@@ -1819,7 +1819,7 @@ class IO
   # they return :wait_readable / :wait_writable / nil.  net/protocol drives its
   # read buffer through this form.
   unless method_defined?(:__read_nonblock_raising__)
-    alias_method :__read_nonblock_raising__, :read_nonblock
+    alias :__read_nonblock_raising__ :read_nonblock
 
     def read_nonblock(len, buf = nil, exception: true)
       unless exception == true || exception == false
@@ -1846,7 +1846,7 @@ class IO
   end
 
   unless method_defined?(:__write_nonblock_raising__)
-    alias_method :__write_nonblock_raising__, :write_nonblock
+    alias :__write_nonblock_raising__ :write_nonblock
 
     def write_nonblock(buf, exception: true)
       unless exception == true || exception == false
@@ -2132,7 +2132,7 @@ end
 class Array
   # 1.9 added the count form of shift; the bundled core only has the no-arg one
   unless (begin; [1].shift(1); true; rescue ArgumentError; false; end)
-    alias_method :shift_without_count, :shift
+    alias :shift_without_count :shift
 
     def shift(*args)
       if args.size > 1
@@ -2170,7 +2170,7 @@ end
 class Module
   # (method_defined? and its public_/private_/protected_ forms take `inherit' natively.)
   unless (begin; Module.const_defined?(:Module, true); true; rescue ArgumentError; false; end)
-    alias_method :const_defined_without_inherit?, :const_defined?
+    alias :const_defined_without_inherit? :const_defined?
 
     def const_defined?(name, inherit = true)
       return const_defined_without_inherit?(name) if inherit
@@ -2179,7 +2179,7 @@ class Module
   end
 
   unless (begin; Module.const_get(:Module, true); true; rescue ArgumentError; false; end)
-    alias_method :const_get_without_inherit, :const_get
+    alias :const_get_without_inherit :const_get
 
     def const_get(name, inherit = true)
       return const_get_without_inherit(name) if inherit
@@ -2281,29 +2281,145 @@ class Encoding
     end
   end
 
-  begin
-    Encoding.name_list.each { |__n__| __add__.call(__n__) }
-  rescue StandardError
-  end
+  # What those loops make of the names depends on nothing but the names the runtime
+  # knows and the constants Encoding starts out with, yet working it out - a few
+  # regexp matches, a gsub and two blocks for each of some 300 names - is a tenth of a
+  # second of every start. So the outcome is written down here, as name=CONSTANT in
+  # the order the loops set them, for the runtime this file ships with; it was taken
+  # from the loops themselves. A runtime that knows other names, or starts out with
+  # other constants, takes the loops as before - a stale table costs time, nothing more.
+  __known__ = %i[
+    ANSI_X3_4_1968 ASCII ASCII_8BIT Big5 BIG5 BINARY CESU_8 CP50221 CP874 Emacs_Mule EMACS_MULE
+    EUC_JP ISO_2022_JP ISO_8859_15 ISO_8859_9 ISO2022_JP ISO8859_15 ISO8859_9 KOI8_R Shift_JIS
+    SHIFT_JIS TIS_620 US_ASCII UTF_16 UTF_16BE UTF_16LE UTF_32 UTF_32BE UTF_32LE UTF_7 UTF_8
+    Windows_874 WINDOWS_874 Converter CompatibilityError ConverterNotFoundError
+    InvalidByteSequenceError UndefinedConversionError
+  ]
+  __names__ = <<~'NAMES'.split
+    ASCII-8BIT UTF-8 US-ASCII Windows-31J EUC-JP UTF-16 UTF-32 UTF-16BE UTF-16LE UTF-32BE UTF-32LE
+    CESU-8 TIS-620 Emacs-Mule GB2312 EUC-KR GB18030 ISO-2022-JP CP50221 Shift_JIS UTF8-MAC CP51932
+    eucJP-ms stateless-ISO-2022-JP ISO-2022-JP-2 GB12345 EUC-TW GB1988 ISO-8859-10 ISO-8859-14
+    ISO-8859-16 IBM860 IBM861 ibm880 IBM862 IBM863 GBK IBM864 IBM865 IBM866 KOI8-U IBM037 IBM869
+    ibm500 macIceland ibm01140 ibm01141 ibm01142 ibm273 ibm01143 ibm01144 ibm01145 Windows-1250
+    ibm01146 Windows-1251 ibm01147 macRoman Windows-1252 IBM720 ibm277 ibm01148 MacJapanese
+    Windows-1253 IBM437 ibm278 ibm01149 x-mac-chinesetrad Windows-1254 Windows-1255 johab
+    Windows-1256 x-mac-arabic Windows-1257 x-mac-hebrew Windows-1258 macGreek macCyrillic ibm00924
+    ISO-8859-2 ISO-8859-3 ISO-8859-4 ISO-8859-5 ISO-8859-6 ibm870 ISO-8859-7 ISO-8859-8 ISO-8859-9
+    macTurkish macCroatian Windows-874 cp875 ibm420 CP949 ibm423 ibm424 ibm280 ibm01047 ibm284
+    ibm285 macRomania CP20932 macUkraine x-europa IBM737 x-ia5 Big5 x-cp20936 x-ia5-german
+    x-ia5-swedish x-ia5-norwegian KOI8-R IBM775 ISO-8859-13 ibm290 ISO-8859-15 x-chinese-cns
+    asmo-708 ibm297 macThai x-cp20001 ibm905 x-chinese-eten x-ebcdic-koreanextended x-cp20003
+    x-cp20004 x-cp20005 CP850 ibm-thai IBM852 ibm871 macCentEuro IBM855 cp1025 x-cp20949 IBM857
+    ibm00858 x-cp20261 ibm1026 x-cp20269 ISO-8859-1 UTF-7 646 ASCII ANSI_X3.4-1968 BINARY CP437
+    CP737 CP775 CP857 CP860 CP861 CP862 CP863 CP864 CP865 CP866 CP869 CP874 CP878 CP932 CP936 CP720
+    EUC-CN eucCN MacJapan ebcdic-cp-us CP950 CP951 CP1258 CP1252 CP1250 CP1256 CP1251 CP1253 CP1255
+    CP1254 CP1257 CP65000 CP65001 IBM850 eucJP eucKR eucTW ISO2022-JP ISO2022-JP2 ISO8859-1
+    ISO8859-2 ISO8859-3 ISO8859-4 ISO8859-5 ISO8859-6 ISO8859-7 ISO8859-8 ISO8859-9 ISO8859-10
+    ISO8859-11 ISO8859-13 ISO8859-14 ISO8859-15 ISO8859-16 SJIS PCK euc-jp-ms csWindows31J
+    UTF-8-MAC UTF-8-HFS UCS-2BE UCS-4BE UCS-4LE locale external filesystem
+  NAMES
+  __table__ = <<~'TABLE'.split
+    Windows-31J=Windows_31J Windows-31J=WINDOWS_31J GB2312=GB2312 EUC-KR=EUC_KR GB18030=GB18030
+    UTF8-MAC=UTF8_MAC CP51932=CP51932 eucJP-ms=EucJP_ms eucJP-ms=EUCJP_MS
+    stateless-ISO-2022-JP=Stateless_ISO_2022_JP stateless-ISO-2022-JP=STATELESS_ISO_2022_JP
+    ISO-2022-JP-2=ISO_2022_JP_2 GB12345=GB12345 EUC-TW=EUC_TW GB1988=GB1988 ISO-8859-10=ISO_8859_10
+    ISO-8859-14=ISO_8859_14 ISO-8859-16=ISO_8859_16 IBM860=IBM860 IBM861=IBM861 ibm880=Ibm880
+    ibm880=IBM880 IBM862=IBM862 IBM863=IBM863 GBK=GBK IBM864=IBM864 IBM865=IBM865 IBM866=IBM866
+    KOI8-U=KOI8_U IBM037=IBM037 IBM869=IBM869 ibm500=Ibm500 ibm500=IBM500 macIceland=MacIceland
+    macIceland=MACICELAND ibm01140=Ibm01140 ibm01140=IBM01140 ibm01141=Ibm01141 ibm01141=IBM01141
+    ibm01142=Ibm01142 ibm01142=IBM01142 ibm273=Ibm273 ibm273=IBM273 ibm01143=Ibm01143
+    ibm01143=IBM01143 ibm01144=Ibm01144 ibm01144=IBM01144 ibm01145=Ibm01145 ibm01145=IBM01145
+    Windows-1250=Windows_1250 Windows-1250=WINDOWS_1250 ibm01146=Ibm01146 ibm01146=IBM01146
+    Windows-1251=Windows_1251 Windows-1251=WINDOWS_1251 ibm01147=Ibm01147 ibm01147=IBM01147
+    macRoman=MacRoman macRoman=MACROMAN Windows-1252=Windows_1252 Windows-1252=WINDOWS_1252
+    IBM720=IBM720 ibm277=Ibm277 ibm277=IBM277 ibm01148=Ibm01148 ibm01148=IBM01148
+    MacJapanese=MacJapanese MacJapanese=MACJAPANESE Windows-1253=Windows_1253
+    Windows-1253=WINDOWS_1253 IBM437=IBM437 ibm278=Ibm278 ibm278=IBM278 ibm01149=Ibm01149
+    ibm01149=IBM01149 x-mac-chinesetrad=X_mac_chinesetrad x-mac-chinesetrad=X_MAC_CHINESETRAD
+    Windows-1254=Windows_1254 Windows-1254=WINDOWS_1254 Windows-1255=Windows_1255
+    Windows-1255=WINDOWS_1255 johab=Johab johab=JOHAB Windows-1256=Windows_1256
+    Windows-1256=WINDOWS_1256 x-mac-arabic=X_mac_arabic x-mac-arabic=X_MAC_ARABIC
+    Windows-1257=Windows_1257 Windows-1257=WINDOWS_1257 x-mac-hebrew=X_mac_hebrew
+    x-mac-hebrew=X_MAC_HEBREW Windows-1258=Windows_1258 Windows-1258=WINDOWS_1258 macGreek=MacGreek
+    macGreek=MACGREEK macCyrillic=MacCyrillic macCyrillic=MACCYRILLIC ibm00924=Ibm00924
+    ibm00924=IBM00924 ISO-8859-2=ISO_8859_2 ISO-8859-3=ISO_8859_3 ISO-8859-4=ISO_8859_4
+    ISO-8859-5=ISO_8859_5 ISO-8859-6=ISO_8859_6 ibm870=Ibm870 ibm870=IBM870 ISO-8859-7=ISO_8859_7
+    ISO-8859-8=ISO_8859_8 macTurkish=MacTurkish macTurkish=MACTURKISH macCroatian=MacCroatian
+    macCroatian=MACCROATIAN cp875=Cp875 cp875=CP875 ibm420=Ibm420 ibm420=IBM420 CP949=CP949
+    ibm423=Ibm423 ibm423=IBM423 ibm424=Ibm424 ibm424=IBM424 ibm280=Ibm280 ibm280=IBM280
+    ibm01047=Ibm01047 ibm01047=IBM01047 ibm284=Ibm284 ibm284=IBM284 ibm285=Ibm285 ibm285=IBM285
+    macRomania=MacRomania macRomania=MACROMANIA CP20932=CP20932 macUkraine=MacUkraine
+    macUkraine=MACUKRAINE x-europa=X_europa x-europa=X_EUROPA IBM737=IBM737 x-ia5=X_ia5 x-ia5=X_IA5
+    x-cp20936=X_cp20936 x-cp20936=X_CP20936 x-ia5-german=X_ia5_german x-ia5-german=X_IA5_GERMAN
+    x-ia5-swedish=X_ia5_swedish x-ia5-swedish=X_IA5_SWEDISH x-ia5-norwegian=X_ia5_norwegian
+    x-ia5-norwegian=X_IA5_NORWEGIAN IBM775=IBM775 ISO-8859-13=ISO_8859_13 ibm290=Ibm290
+    ibm290=IBM290 x-chinese-cns=X_chinese_cns x-chinese-cns=X_CHINESE_CNS asmo-708=Asmo_708
+    asmo-708=ASMO_708 ibm297=Ibm297 ibm297=IBM297 macThai=MacThai macThai=MACTHAI
+    x-cp20001=X_cp20001 x-cp20001=X_CP20001 ibm905=Ibm905 ibm905=IBM905
+    x-chinese-eten=X_chinese_eten x-chinese-eten=X_CHINESE_ETEN
+    x-ebcdic-koreanextended=X_ebcdic_koreanextended x-ebcdic-koreanextended=X_EBCDIC_KOREANEXTENDED
+    x-cp20003=X_cp20003 x-cp20003=X_CP20003 x-cp20004=X_cp20004 x-cp20004=X_CP20004
+    x-cp20005=X_cp20005 x-cp20005=X_CP20005 CP850=CP850 ibm-thai=Ibm_thai ibm-thai=IBM_THAI
+    IBM852=IBM852 ibm871=Ibm871 ibm871=IBM871 macCentEuro=MacCentEuro macCentEuro=MACCENTEURO
+    IBM855=IBM855 cp1025=Cp1025 cp1025=CP1025 x-cp20949=X_cp20949 x-cp20949=X_CP20949 IBM857=IBM857
+    ibm00858=Ibm00858 ibm00858=IBM00858 x-cp20261=X_cp20261 x-cp20261=X_CP20261 ibm1026=Ibm1026
+    ibm1026=IBM1026 x-cp20269=X_cp20269 x-cp20269=X_CP20269 ISO-8859-1=ISO_8859_1 CP437=CP437
+    CP737=CP737 CP775=CP775 CP857=CP857 CP860=CP860 CP861=CP861 CP862=CP862 CP863=CP863 CP864=CP864
+    CP865=CP865 CP866=CP866 CP869=CP869 CP878=CP878 CP932=CP932 CP936=CP936 CP720=CP720
+    EUC-CN=EUC_CN eucCN=EucCN eucCN=EUCCN MacJapan=MacJapan MacJapan=MACJAPAN
+    ebcdic-cp-us=Ebcdic_cp_us ebcdic-cp-us=EBCDIC_CP_US CP950=CP950 CP951=CP951 CP1258=CP1258
+    CP1252=CP1252 CP1250=CP1250 CP1256=CP1256 CP1251=CP1251 CP1253=CP1253 CP1255=CP1255
+    CP1254=CP1254 CP1257=CP1257 CP65000=CP65000 CP65001=CP65001 IBM850=IBM850 eucJP=EucJP
+    eucJP=EUCJP eucKR=EucKR eucKR=EUCKR eucTW=EucTW eucTW=EUCTW ISO2022-JP2=ISO2022_JP2
+    ISO8859-1=ISO8859_1 ISO8859-2=ISO8859_2 ISO8859-3=ISO8859_3 ISO8859-4=ISO8859_4
+    ISO8859-5=ISO8859_5 ISO8859-6=ISO8859_6 ISO8859-7=ISO8859_7 ISO8859-8=ISO8859_8
+    ISO8859-10=ISO8859_10 ISO8859-11=ISO8859_11 ISO8859-13=ISO8859_13 ISO8859-14=ISO8859_14
+    ISO8859-16=ISO8859_16 SJIS=SJIS PCK=PCK euc-jp-ms=Euc_jp_ms euc-jp-ms=EUC_JP_MS
+    csWindows31J=CsWindows31J csWindows31J=CSWINDOWS31J UTF-8-MAC=UTF_8_MAC UTF-8-HFS=UTF_8_HFS
+    UCS-2BE=UCS_2BE UCS-4BE=UCS_4BE UCS-4LE=UCS_4LE locale=Locale locale=LOCALE external=External
+    external=EXTERNAL filesystem=Filesystem filesystem=FILESYSTEM ISO-8859-11=ISO_8859_11
+    CP852=CP852 CP855=CP855
+  TABLE
 
-  # Names CRuby knows that are missing from (or spelled differently in) the
-  # runtime's own name list. Unsupported ones are silently skipped.
-  %w[
-    ISO-8859-1 ISO-8859-2 ISO-8859-3 ISO-8859-4 ISO-8859-5 ISO-8859-6
-    ISO-8859-7 ISO-8859-8 ISO-8859-9 ISO-8859-10 ISO-8859-11 ISO-8859-13
-    ISO-8859-14 ISO-8859-15 ISO-8859-16
-    Windows-31J Windows-874
-    Windows-1250 Windows-1251 Windows-1252 Windows-1253 Windows-1254
-    Windows-1255 Windows-1256 Windows-1257 Windows-1258
-    CP437 CP737 CP775 CP850 CP852 CP855 CP857 CP860 CP861 CP862 CP863
-    CP864 CP865 CP866 CP869 CP932 CP936 CP949 CP950 CP1252
-    IBM437 IBM737 IBM775 IBM852 IBM857 IBM861 IBM862 IBM866 IBM869
-    KOI8-R KOI8-U GB18030 GBK Big5 EUC-JP EUC-KR EUC-CN
-    macRoman macCentEuro macCroatian macCyrillic macGreek macIceland
-    macRomania macThai macTurkish macUkraine
-    ASCII-8BIT BINARY US-ASCII UTF-8 UTF-16 UTF-32 UTF-16BE UTF-16LE
-    UTF-32BE UTF-32LE Shift_JIS SJIS
-  ].each { |__n__| __add__.call(__n__) }
+  if (begin; constants(false) == __known__ && Encoding.name_list == __names__; rescue StandardError; false; end)
+    __table__.each do |__entry__|
+      __name__, __c__ = __entry__.split("=", 2)
+      __enc__ = begin
+                  Encoding.find(__name__)
+                rescue StandardError
+                  nil
+                end
+      next unless __enc__.is_a?(Encoding)
+      begin
+        const_set(__c__, __enc__)
+      rescue StandardError
+      end
+    end
+  else
+    begin
+      Encoding.name_list.each { |__n__| __add__.call(__n__) }
+    rescue StandardError
+    end
+
+    # Names CRuby knows that are missing from (or spelled differently in) the
+    # runtime's own name list. Unsupported ones are silently skipped.
+    %w[
+      ISO-8859-1 ISO-8859-2 ISO-8859-3 ISO-8859-4 ISO-8859-5 ISO-8859-6
+      ISO-8859-7 ISO-8859-8 ISO-8859-9 ISO-8859-10 ISO-8859-11 ISO-8859-13
+      ISO-8859-14 ISO-8859-15 ISO-8859-16
+      Windows-31J Windows-874
+      Windows-1250 Windows-1251 Windows-1252 Windows-1253 Windows-1254
+      Windows-1255 Windows-1256 Windows-1257 Windows-1258
+      CP437 CP737 CP775 CP850 CP852 CP855 CP857 CP860 CP861 CP862 CP863
+      CP864 CP865 CP866 CP869 CP932 CP936 CP949 CP950 CP1252
+      IBM437 IBM737 IBM775 IBM852 IBM857 IBM861 IBM862 IBM866 IBM869
+      KOI8-R KOI8-U GB18030 GBK Big5 EUC-JP EUC-KR EUC-CN
+      macRoman macCentEuro macCroatian macCyrillic macGreek macIceland
+      macRomania macThai macTurkish macUkraine
+      ASCII-8BIT BINARY US-ASCII UTF-8 UTF-16 UTF-32 UTF-16BE UTF-16LE
+      UTF-32BE UTF-32LE Shift_JIS SJIS
+    ].each { |__n__| __add__.call(__n__) }
+  end
 end
 
 # --------------------------------------------------------------------------
@@ -2358,7 +2474,7 @@ $LOAD_PATH.delete('.') if defined?($LOAD_PATH) && $LOAD_PATH.is_a?(Array)
 # argument-less #clone and refuse clone(freeze: false).
 module Kernel
   unless (begin; Object.new.clone(:freeze => nil); true; rescue ArgumentError; false; end)
-    alias_method :clone_without_options, :clone
+    alias :clone_without_options :clone
 
     # `clone(freeze: nil)` is the default (copy the frozen state), `freeze: true`
     # always freezes, `freeze: false` never does. The runtime's #clone always
@@ -2397,9 +2513,10 @@ end
 # .NET has no coroutines, so every Fiber is backed by a dedicated thread plus a
 # one-slot mailbox. Thread.new marks CLR threads IsBackground, so an abandoned
 # fiber can never keep the process alive. Exactly one fiber of a group ever
-# runs: switching means "post to the target's mailbox, then block on my own",
-# which is the SemaphoreSlim handshake spelled with Queue (Queue is a
-# Monitor-based blocking queue here, so the wait is a real kernel wait).
+# runs: switching means "post to the target's mailbox, then block on my own".
+# The mailbox is a C# FiberMailbox (Src/Libraries/Builtins/ThreadOps.Fiber.cs),
+# which spins for a few microseconds before it falls back to a Monitor wait, so
+# a quick resume / Fiber.yield round trip does not cost two kernel wake-ups.
 #
 # resume / Fiber.yield / transfer / kill / raise / storage / scheduler follow
 # MRI, including the rule that a fiber which was entered by #transfer returns,
@@ -2430,9 +2547,10 @@ unless defined?(Fiber)
       ::Kernel.raise(cls, msg)
     end
 
+    # A C# FiberMailbox (Src/Libraries/Builtins/ThreadOps.Fiber.cs): a one-slot handoff
+    # whose take spins briefly before it blocks.
     def self.__mailbox__
-      require 'thread' unless defined?(::Queue)
-      ::Queue.new
+      ::Thread.__fiber_mailbox__
     end
 
     # Storage keys are Symbols; anything with #to_str (but not #to_sym) is
@@ -2473,23 +2591,28 @@ unless defined?(Fiber)
 
     # ---- the root fiber of a thread --------------------------------------
 
+    # Thread.__fiber_current__ is a thread-static copy of Thread.current[:__ir_fiber_current__]
+    # (a fiber never leaves its CLR thread); __fiber_current_set__ writes both.
     def self.current
-      Thread.current[:__ir_fiber_current__] || __root__
+      ::Thread.__fiber_current__ || __root__
     end
 
     def self.__root__
       t = Thread.current
-      f = t[:__ir_fiber_root__]
+      f = t[:__ir_fiber_current__]
       unless f
-        f = allocate
-        f.__init_root__
-        # A thread's root fiber starts with the storage of the fiber that created the
-        # thread; Thread.new leaves that fiber here for us.
-        parent = t[:__ir_fiber_parent__]
-        f.__inherit_storage__(parent) if parent
-        t[:__ir_fiber_root__] = f
-        t[:__ir_fiber_current__] = f
+        f = t[:__ir_fiber_root__]
+        unless f
+          f = allocate
+          f.__init_root__
+          # A thread's root fiber starts with the storage of the fiber that created the
+          # thread; Thread.new leaves that fiber here for us.
+          parent = t[:__ir_fiber_parent__]
+          f.__inherit_storage__(parent) if parent
+          t[:__ir_fiber_root__] = f
+        end
       end
+      ::Thread.__fiber_current_set__(f)
       f
     end
 
@@ -2552,7 +2675,7 @@ unless defined?(Fiber)
     def __set_status__(s); @status = s; end
     def __set_blocking__(b); @blocking = b; end
     def __set_transferred__; @transferred = true; end
-    def __post__(msg); @mailbox.push(msg); end
+    def __post__(msg); ::Thread.__fiber_post__(@mailbox, msg); end
     def __scheduler_get__; @scheduler; end
     def __scheduler_set__(s); @scheduler = s; end
 
@@ -2588,7 +2711,7 @@ unless defined?(Fiber)
       @location ? "#<Fiber:0x#{id} #{@location} (#{state})>" : "#<Fiber:0x#{id} (#{state})>"
     end
 
-    alias_method :to_s, :inspect
+    alias :to_s :inspect
 
     def storage
       unless Fiber.current.equal?(self)
@@ -2754,22 +2877,31 @@ unless defined?(Fiber)
       cur.__act__(cur.__await__)
     end
 
+    # A fiber runs on a thread of its own: one whose last fiber has finished if one is
+    # parked (Thread.__fiber_reuse__, ThreadOps.Fiber.cs), a new one otherwise. A thread
+    # goes back to the pool when its fiber is done (Thread.__fiber_park__), clean of that
+    # fiber's locals, and ends when nobody wants it for a while.
     def __start__
       return self if @thread
       fiber = self
-      owner = @root_fiber.__thread__
-      @thread = Thread.new do
-        Thread.current[:__ir_fiber_current__] = fiber
-        # Ruby ownership (Mutex, deadlock detection) is per thread, not per fiber
-        Thread.__set_fiber_owner__(owner) if owner
-        fiber.__run__
+      @thread = ::Thread.__fiber_reuse__(fiber) || Thread.new do
+        while fiber
+          ::Thread.__fiber_current_set__(fiber)
+          # Ruby ownership (Mutex, deadlock detection) is per thread, not per fiber
+          owner = fiber.__root_fiber__.__thread__
+          Thread.__set_fiber_owner__(owner) if owner
+          fiber.__run__
+          fiber = nil
+          fiber = ::Thread.__fiber_park__
+        end
       end
       self
     end
 
+    # Takes the next message and makes this CLR thread the one that runs on behalf of the
+    # group's owner (Thread.__set_fiber_owner__).
     def __await__
-      msg = @mailbox.pop
-      Thread.__set_fiber_owner__(@root_fiber.__thread__)
+      msg = ::Thread.__fiber_take__(@mailbox, @root_fiber.__thread__)
       @status = :resumed
       msg
     end
@@ -2860,6 +2992,9 @@ unless defined?(Fiber)
       # The program has ended and this fiber was killed with its thread: the
       # fiber that resumed it is suspended, and stays that way (as in MRI).
       return if ::Thread.__terminating__
+      # What the end of this thread does for the mutexes the fiber still holds,
+      # done before the fiber we hand control to can run and lock.
+      ::Thread.__fiber_release_locks__
       target = @prev
       if target
         @prev = nil
@@ -2912,10 +3047,16 @@ module Kernel
   # String is parsed, and anything else is asked for #to_int, then #to_i, with
   # #to_str consulted first when the object offers one.
   if private_method_defined?(:Integer) || method_defined?(:Integer)
-    alias_method :__ir_Integer__, :Integer
+    alias :__ir_Integer__ :Integer
     private :__ir_Integer__
 
     def Integer(arg, base = nil, exception: true)
+      # The common case - a String, no base, failures raised - is what the block below
+      # does first anyway; going straight there skips the block and its rescue frame,
+      # which cost many times the parse itself.
+      if base.nil? && true.equal?(exception) && !arg.nil? && arg.is_a?(::String)
+        return __ir_Integer__(arg)
+      end
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         if arg.nil?
@@ -2973,10 +3114,14 @@ module Kernel
   end
 
   if private_method_defined?(:Float) || method_defined?(:Float)
-    alias_method :__ir_Float__, :Float
+    alias :__ir_Float__ :Float
     private :__ir_Float__
 
     def Float(arg, exception: true)
+      # A String with failures raised goes to the C# parser below in any case; see Integer.
+      if true.equal?(exception) && !arg.nil? && ::String === arg
+        return __ir_Float__(arg)
+      end
       exception = ::Kernel.__opts_exception__(exception)
       __numeric_conversion__(exception) do
         raise ::TypeError, "can't convert nil into Float" if arg.nil?
@@ -3038,7 +3183,7 @@ end
 # process for ever - spec/core/kernel/sleep_spec.rb stops dead there.
 module Kernel
   if private_method_defined?(:sleep) || method_defined?(:sleep)
-    alias_method :__ir_sleep__, :sleep
+    alias :__ir_sleep__ :sleep
     private :__ir_sleep__
 
     def sleep(*args)
@@ -3082,7 +3227,7 @@ end
 # ordinary code use.
 class Float
   unless instance_method(:round).arity == -1
-    alias_method :__ir_round__, :round
+    alias :__ir_round__ :round
 
     def round(ndigits = 0)
       n = ndigits.to_int
@@ -3128,7 +3273,7 @@ end
 
 class Integer
   unless instance_method(:round).arity == -1
-    alias_method :__ir_round__, :round
+    alias :__ir_round__ :round
 
     def round(ndigits = 0)
       n = ndigits.to_int
@@ -3185,7 +3330,7 @@ class Numeric
   def modulo(other)
     self - other * div(other)
   end
-  alias_method :%, :modulo
+  alias :% :modulo
 
   def divmod(other)
     [div(other), modulo(other)]
@@ -3223,8 +3368,8 @@ class Numeric
   def arg
     self < 0 ? ::Math::PI : 0
   end
-  alias_method :angle, :arg
-  alias_method :phase, :arg
+  alias :angle :arg
+  alias :phase :arg
 
   # A number is already what a copy of it would be.
   def clone(freeze: nil)
@@ -3246,8 +3391,8 @@ class Float
     return self if nan?
     (self < 0 || (zero? && (1.0 / self) < 0)) ? ::Math::PI : 0
   end
-  alias_method :angle, :arg
-  alias_method :phase, :arg
+  alias :angle :arg
+  alias :phase :arg
 end
 
 if defined?(Rational) && Rational.instance_method(:round).arity == 0
@@ -3420,7 +3565,7 @@ module Kernel
   # The built-in warn takes exactly one message and no keywords; 2.5 added
   # multiple messages plus uplevel:, and 3.0 added category:.
   if private_method_defined?(:warn) && instance_method(:warn).arity == 1
-    alias_method :__ir_warn__, :warn
+    alias :__ir_warn__ :warn
     private :__ir_warn__
 
     def warn(*messages, **options)
@@ -4067,9 +4212,9 @@ class String
   end
   private :__selected__
 
-  alias_method :__ir_strip__, :strip
-  alias_method :__ir_lstrip__, :lstrip
-  alias_method :__ir_rstrip__, :rstrip
+  alias :__ir_strip__ :strip
+  alias :__ir_lstrip__ :lstrip
+  alias :__ir_rstrip__ :rstrip
   private :__ir_strip__, :__ir_lstrip__, :__ir_rstrip__
 
   # #count is asked once per character, so the selectors are converted up front:
@@ -4320,19 +4465,19 @@ class Numeric
     to_f / other
   end unless method_defined?(:fdiv)
 
-  alias_method :magnitude, :abs unless method_defined?(:magnitude)
+  alias :magnitude :abs unless method_defined?(:magnitude)
 
   # #imag and #imaginary are one method in MRI, and so are Float#quo and Float#fdiv.
-  alias_method :imaginary, :imag if method_defined?(:imag)
+  alias :imaginary :imag if method_defined?(:imag)
 end
 
 class Float
-  alias_method :quo, :fdiv
+  alias :quo :fdiv
 end
 
 class Rational
-  alias_method :magnitude, :abs
-  alias_method :quo, :/
+  alias :magnitude :abs
+  alias :quo :/
 end
 
 class Float
@@ -4438,12 +4583,12 @@ class Numeric
   def imaginary
     0
   end unless method_defined?(:imaginary)
-  alias_method :imag, :imaginary unless method_defined?(:imag)
+  alias :imag :imaginary unless method_defined?(:imag)
 
   def conjugate
     self
   end unless method_defined?(:conjugate)
-  alias_method :conj, :conjugate unless method_defined?(:conj)
+  alias :conj :conjugate unless method_defined?(:conj)
 
   def abs2
     self * self
@@ -4452,13 +4597,13 @@ class Numeric
   def rectangular
     [self, 0]
   end unless method_defined?(:rectangular)
-  alias_method :rect, :rectangular unless method_defined?(:rect)
+  alias :rect :rectangular unless method_defined?(:rect)
 
   def arg
     self < 0 ? Math::PI : 0
   end unless method_defined?(:arg)
-  alias_method :angle, :arg unless method_defined?(:angle)
-  alias_method :phase, :arg unless method_defined?(:phase)
+  alias :angle :arg unless method_defined?(:angle)
+  alias :phase :arg unless method_defined?(:phase)
 
   def polar
     [abs, arg]
@@ -4528,7 +4673,7 @@ class Complex
   # One method under two names, which is what `Complex.instance_method(:imag) ==
   # Complex.instance_method(:imaginary)` compares - a second method that called the
   # first answered the same number but was not the same method.
-  alias_method :imaginary, :imag
+  alias :imaginary :imag
 
   def finite?
     real.finite? && imag.finite?
@@ -4541,7 +4686,7 @@ class Complex
   def rectangular
     [real, imag]
   end
-  alias_method :rect, :rectangular
+  alias :rect :rectangular
 end
 
 # The rest of Complex, on top of 1.8's complex.rb.
@@ -4605,7 +4750,7 @@ class Complex
     __canon__(real, imag)
   end
   class << self
-    alias_method :rect, :rectangular
+    alias :rect :rectangular
   end
 
   def self.polar(abs, arg = 0)
@@ -4686,7 +4831,7 @@ class Complex
       __coerce_bin__(other, :quo)
     end
   end
-  alias_method :quo, :/
+  alias :quo :/
 
   def fdiv(other)
     if other.is_a?(::Complex)
@@ -4766,7 +4911,7 @@ class Complex
       ::Math.hypot(r, i)
     end
   end
-  alias_method :magnitude, :abs
+  alias :magnitude :abs
 
   def abs2
     real * real + imag * imag
@@ -4775,8 +4920,8 @@ class Complex
   def arg
     ::Math.atan2(imag, real)
   end
-  alias_method :angle, :arg
-  alias_method :phase, :arg
+  alias :angle :arg
+  alias :phase :arg
 
   def polar
     [abs, arg]
@@ -4785,7 +4930,7 @@ class Complex
   def conjugate
     ::Complex.__raw__(real, -imag)
   end
-  alias_method :conj, :conjugate
+  alias :conj :conjugate
 
   def ==(other)
     if other.is_a?(::Complex)
@@ -5233,7 +5378,7 @@ end
 class Rational
   # rational18's Rational.reduce still builds instances behind our back, so the
   # freeze goes on #initialize rather than only on the constructors below.
-  alias_method :__ir_rational_init__, :initialize
+  alias :__ir_rational_init__ :initialize
   def initialize(num, den)
     __ir_rational_init__(num, den)
     freeze
@@ -5582,7 +5727,7 @@ class << Dir
   end
 
   unless respond_to?(:__clr_foreach__, true)
-    alias_method :__clr_foreach__, :foreach
+    alias :__clr_foreach__ :foreach
     private :__clr_foreach__
 
     def foreach(path, *args, &block)
@@ -5603,7 +5748,7 @@ end
 # #each_child and #chdir, and an Enumerator from #each when no block is given.
 class Dir
   unless method_defined?(:__clr_each__)
-    alias_method :__clr_each__, :each
+    alias :__clr_each__ :each
     private :__clr_each__
 
     def each(&block)
@@ -5724,14 +5869,19 @@ module Errno
   ERRNO_TABLE.each do |errno, (name, message)|
     if const_defined?(name, false)
       klass = const_get(name)
+      # const_defined? without the second argument would find the enclosing Errno
+      # module through the lexical scope, so restrict the lookup to the class.
+      klass.const_set(:Errno, errno) unless klass.const_defined?(:Errno, false)
+      klass.const_set(:Message, message) unless klass.const_defined?(:Message, false)
     else
       klass = Class.new(SystemCallError)
       const_set(name, klass)
+      # A class made just now has no constants of its own, so there is nothing to ask it
+      # first - and asking is not free: every class is a new receiver for these call
+      # sites, so each question binds a rule of its own.
+      klass.const_set(:Errno, errno)
+      klass.const_set(:Message, message)
     end
-    # const_defined? without the second argument would find the enclosing Errno
-    # module through the lexical scope, so restrict the lookup to the class.
-    klass.const_set(:Errno, errno) unless klass.const_defined?(:Errno, false)
-    klass.const_set(:Message, message) unless klass.const_defined?(:Message, false)
     ERRNO_CLASSES[errno] ||= klass
   end
 
@@ -6006,7 +6156,7 @@ class Array
     size == before ? nil : self
   end unless method_defined?(:select!)
 
-  alias_method :filter!, :select! unless method_defined?(:filter!)
+  alias :filter! :select! unless method_defined?(:filter!)
 
   def keep_if(&block)
     return ::Enumerator.new { |y| each { |x| y << x } } unless block
@@ -6039,8 +6189,8 @@ class Array
   # #uniq and #uniq! compare the block's result, not the element itself; the
   # core versions ignore the block entirely, so they are kept for the no-block
   # case and wrapped here.
-  alias_method :__uniq_without_block__, :uniq
-  alias_method :__uniq_in_place_without_block__, :uniq!
+  alias :__uniq_without_block__ :uniq
+  alias :__uniq_in_place_without_block__ :uniq!
 
   def uniq(&block)
     return __uniq_without_block__ unless block
@@ -6071,7 +6221,7 @@ class Array
   # #zip takes anything that responds to #each, not just arrays: an Enumerator
   # (including an infinite one, which is why this reads lazily and stops at the
   # receiver's size) or any object with #each.
-  alias_method :__zip_arrays__, :zip
+  alias :__zip_arrays__ :zip
 
   def zip(*others, &block)
     length = size
@@ -6251,7 +6401,7 @@ module GC
   end
 
   class << self
-    alias_method :garbage_collect, :start
+    alias :garbage_collect :start
   end
 
   def self.total_time
@@ -6493,7 +6643,7 @@ class Enumerator
   end unless method_defined?(:with_object)
   # Same story as #each_with_index: Enumerable's version would shadow this one,
   # and the specs check that the two really are the same method.
-  alias_method :each_with_object, :with_object
+  alias :each_with_object :with_object
 
   # --- #size -----------------------------------------------------------
   # MRI gives every enumerator a size function: an Integer, a Proc, or nil when
@@ -6651,7 +6801,7 @@ class Enumerator
     detail += "(#{args.map { |a| a.inspect }.join(', ')})" unless args.empty?
     "#<#{self.class}: #{detail}>"
   end
-  alias_method :to_s, :inspect
+  alias :to_s :inspect
 
   # --- external iteration ------------------------------------------------
   # #next has to suspend `each` half way through, which needs a coroutine.
@@ -6683,6 +6833,14 @@ class Enumerator
   def __iter_advance__
     return if @__peeked__
     __iter_stop__ if @__iter_done__
+    # The built-in Array#each over an Array needs no fiber: a cursor walks it by
+    # index the way #each would (Enumerator#__ir_array_cursor__ says when).
+    cursor = @__iter_cursor__
+    if cursor.nil? && @__fiber__.nil?
+      cursor = @__iter_cursor__ = __ir_array_cursor__
+      @__iter_started__ = false
+    end
+    return __iter_cursor_advance__(cursor) if cursor
     fiber = __iter_fiber__
     fed = nil
     # A fed value is what the suspended yield returns, so it waits while the
@@ -6711,6 +6869,27 @@ class Enumerator
     end
   end
   private :__iter_advance__
+
+  def __iter_cursor_advance__(cursor)
+    values = __ir_array_cursor_next__(cursor)
+    # false: the iteration belongs to another thread, as a fiber would
+    ::Kernel.raise(::FiberError, "fiber called across threads") if values.equal?(false)
+    if @__iter_started__
+      @__feed__ = nil
+      @__has_feed__ = false
+    end
+    @__iter_started__ = true
+    if values
+      @__peek__ = values
+      @__peeked__ = true
+    else
+      @__iter_done__ = true
+      @__iter_result__ = __ir_array_cursor_source__(cursor)
+      @__iter_cursor__ = nil
+      __iter_stop__
+    end
+  end
+  private :__iter_cursor_advance__
 
   def next_values
     __iter_advance__
@@ -6746,6 +6925,7 @@ class Enumerator
   def rewind
     fiber = @__fiber__
     @__fiber__ = nil
+    @__iter_cursor__ = nil
     @__iter_done__ = false
     @__iter_result__ = nil
     @__peeked__ = false
@@ -6834,14 +7014,14 @@ class Enumerator
       return "#<#{self.class}: uninitialized>" if @generator.nil?
       "#<#{self.class}: ...>"
     end
-    alias_method :to_s, :inspect
+    alias :to_s :inspect
 
     def map(&block)
       __need_block__("map", block)
       source = self
       __chain__(size) { |y| source.each { |*values| y << block.call(*values) } }
     end
-    alias_method :collect, :map
+    alias :collect :map
 
     def flat_map(&block)
       __need_block__("flat_map", block)
@@ -6863,15 +7043,15 @@ class Enumerator
         end
       end
     end
-    alias_method :collect_concat, :flat_map
+    alias :collect_concat :flat_map
 
     def select(&block)
       __need_block__("select", block)
       source = self
       __chain__ { |y| source.each { |*values| item = __value__(values); y << item if block.call(item) } }
     end
-    alias_method :filter, :select
-    alias_method :find_all, :select
+    alias :filter :select
+    alias :find_all :select
 
     def filter_map(&block)
       __need_block__("filter_map", block)
@@ -6904,8 +7084,8 @@ class Enumerator
     end
     private :__ir_lazy_grep_impl__
 
-    alias_method :grep, :__ir_lazy_grep__
-    alias_method :grep_v, :__ir_lazy_grep_v__
+    alias :grep :__ir_lazy_grep__
+    alias :grep_v :__ir_lazy_grep_v__
     public :grep, :grep_v
 
     def compact
@@ -7029,7 +7209,7 @@ class Enumerator
         source.each { |*values| y << [values.size <= 1 ? values[0] : values, memo] }
       end
     end
-    alias_method :each_with_object, :with_object
+    alias :each_with_object :with_object
 
     def zip(*others, &block)
       # Only the block form falls back to the eager Enumerable#zip. Everything
@@ -7204,7 +7384,7 @@ class Enumerator
         end
       end
     end
-    alias_method :enum_for, :to_enum
+    alias :enum_for :to_enum
 
     def first(n = nil)
       if n.nil?
@@ -7313,7 +7493,7 @@ class Enumerator
       return "#<Enumerator::Chain: uninitialized>" if @__enums__.nil?
       "#<Enumerator::Chain: #{@__enums__.inspect}>"
     end
-    alias_method :to_s, :inspect
+    alias :to_s :inspect
 
     def +(other)
       Chain.new(self, other)
@@ -7409,7 +7589,7 @@ class Enumerator
         ::Thread.current[:__enumerator_product_inspect__] = nil if seen.empty?
       end
     end
-    alias_method :to_s, :inspect
+    alias :to_s :inspect
 
     def __check_frozen__
       return unless frozen?
@@ -7511,7 +7691,7 @@ module Kernel
     enum.__set_size__(size_block) if size_block
     enum
   end
-  alias_method :enum_for, :to_enum
+  alias :enum_for :to_enum
 
   # The C# Kernel#loop does not know about StopIteration, which is what makes
   # `loop { e.next }` terminate instead of blowing up.
@@ -7563,7 +7743,7 @@ class String
   # #chars and #bytes build the Array in C# (MutableStringOps); only #lines is still
   # an Enumerator there.
   unless "a".lines.is_a?(Array)
-    alias_method :lines_enumerator, :lines
+    alias :lines_enumerator :lines
 
     def lines(*args, &block)
       return lines_enumerator(*args, &block) if block
@@ -7582,7 +7762,7 @@ end
 # splitter so encodings and the String-instances-for-subclasses rule keep
 # working; only the grouping and the trimming are redone.
 class String
-  alias_method :__ir_each_line__, :each_line
+  alias :__ir_each_line__ :each_line
 
   def each_line(*args, chomp: false, &block)
     lines = __ir_split_lines__(args, chomp)
@@ -7694,7 +7874,7 @@ end
 class Hash
   # the core raises IndexError; Ruby 1.9 introduced KeyError for this
   unless (begin; {}.fetch(:missing); rescue KeyError; true; rescue IndexError; false; end)
-    alias_method :fetch_raising_index_error, :fetch
+    alias :fetch_raising_index_error :fetch
 
     def fetch(key, *default, &block)
       return fetch_raising_index_error(key, *default, &block) if !default.empty? || block
@@ -7733,7 +7913,7 @@ class Hash
       stack.pop
     end
   end
-  alias_method :to_s, :inspect
+  alias :to_s :inspect
 end
 
 # Mutex/Queue/SizedQueue/ConditionVariable needed `require "thread"` in 1.9; they
@@ -7762,7 +7942,7 @@ end
 # three plain CLR methods added to MatchData.cs; everything else is built on
 # top of them and of #string, which is the subject the offsets refer to.
 class MatchData
-  alias_method :__ir_index__, :[]
+  alias :__ir_index__ :[]
 
   def [](*args)
     if args.size == 1
@@ -7807,7 +7987,7 @@ class MatchData
 
   # #deconstruct is not merely equivalent to #captures, it is the same method:
   # MatchData.instance_method(:deconstruct) == MatchData.instance_method(:captures).
-  alias_method :deconstruct, :captures unless method_defined?(:deconstruct)
+  alias :deconstruct :captures unless method_defined?(:deconstruct)
 
   def deconstruct_keys(keys)
     all = names
@@ -7841,7 +8021,7 @@ class MatchData
     m && m.length
   end unless method_defined?(:match_length)
 
-  alias_method :__ir_values_at__, :values_at
+  alias :__ir_values_at__ :values_at
 
   # Ranges, names and Integers can be mixed. Array#values_at already has the
   # Range rules - nil fill past the end, RangeError for a start that is negative
@@ -7947,12 +8127,12 @@ class String
     __ir_fstring__
   end unless method_defined?(:-@)
 
-  alias_method :dedup, :-@
+  alias :dedup :-@
 
   # The C# #upto is Range#each in disguise, which loses the numeric-sequence
   # case ("8".upto("11")), the exclusive-end argument, the "stop is shorter than
   # self" cut-off and the type and encoding checks.
-  alias_method :__ir_upto__, :upto
+  alias :__ir_upto__ :upto
   private :__ir_upto__
 
   def upto(stop, exclusive = false, &block)
@@ -8162,7 +8342,7 @@ class Enumerator
 
     # Only Range#step, Range#% and Numeric#step make one: .new is undefined and .allocate refuses.
     class << self
-      alias_method :__allocate__, :allocate
+      alias :__allocate__ :allocate
       private :__allocate__
       undef_method :new
 
@@ -8222,8 +8402,8 @@ class Enumerator
       __arith_each__ { |v| result << v }
       result
     end
-    alias_method :entries, :to_a
-    alias_method :force, :to_a
+    alias :entries :to_a
+    alias :force :to_a
 
     def size
       return ::Float::INFINITY if @end.nil? && @step != 0
@@ -8240,7 +8420,7 @@ class Enumerator
         self.begin == other.begin && self.end == other.end &&
         step == other.step && exclude_end? == other.exclude_end?
     end
-    alias_method :eql?, :==
+    alias :eql? :==
 
     def hash
       [self.begin, self.end, step, exclude_end?].hash
@@ -8250,7 +8430,7 @@ class Enumerator
       return @inspect_str if @inspect_str
       "((#{@source.inspect}).%(#{@step.inspect}))"
     end
-    alias_method :to_s, :inspect
+    alias :to_s :inspect
   end
 end
 
@@ -8303,7 +8483,7 @@ class Data
             instance
           end
 
-          alias_method :[], :new
+          alias :[] :new
 
           def inspect
             ::Module.instance_method(:to_s).bind(self).call
@@ -8481,7 +8661,7 @@ class Data
       stack.pop
     end
   end
-  alias_method :inspect, :to_s
+  alias :inspect :to_s
 
   private
 
@@ -8580,7 +8760,7 @@ class ARGFClass
     __stream__
     @current_path || "-"
   end
-  alias_method :path, :filename
+  alias :path :filename
 
   def to_io
     file
@@ -8589,12 +8769,12 @@ class ARGFClass
   def to_s
     "ARGF"
   end
-  alias_method :inspect, :to_s
+  alias :inspect :to_s
 
   def fileno
     file.fileno
   end
-  alias_method :to_i, :fileno
+  alias :to_i :fileno
 
   def binmode
     @binmode = true
@@ -8633,7 +8813,7 @@ class ARGFClass
     end
     s.nil? || s.eof?
   end
-  alias_method :eof, :eof?
+  alias :eof :eof?
 
   def gets(*args)
     loop do
@@ -8666,7 +8846,7 @@ class ARGFClass
     end
     self
   end
-  alias_method :each, :each_line
+  alias :each :each_line
 
   def readlines(*args)
     result = []
@@ -8675,7 +8855,7 @@ class ARGFClass
     end
     result
   end
-  alias_method :to_a, :readlines
+  alias :to_a :readlines
 
   def read(length = nil, buffer = nil)
     result = +""
@@ -8728,19 +8908,19 @@ class ARGFClass
     end
     self
   end
-  alias_method :chars, :each_char
+  alias :chars :each_char
 
   def each_byte
     return ::Enumerator.new { |y| each_byte { |b| y << b } } unless block_given?
     each_char { |c| c.each_byte { |b| yield b } }
     self
   end
-  alias_method :bytes, :each_byte
+  alias :bytes :each_byte
 
   def pos
     file.pos
   end
-  alias_method :tell, :pos
+  alias :tell :pos
 
   def pos=(value)
     file.pos = value
@@ -8805,8 +8985,8 @@ class << ENV
   private :__env_check_name__
 
   unless respond_to?(:__clr_store__, true)
-    alias_method :__clr_store__, :[]=
-    alias_method :__clr_fetch__, :[]
+    alias :__clr_store__ :[]=
+    alias :__clr_fetch__ :[]
     private :__clr_store__
     private :__clr_fetch__
 
@@ -8823,7 +9003,7 @@ class << ENV
       value
     end
 
-    alias_method :store, :[]=
+    alias :store :[]=
   end
 
   def [](name)
@@ -8875,7 +9055,7 @@ class << ENV
     to_hash.each(&block)
     self
   end
-  alias_method :each_pair, :each
+  alias :each_pair :each
 
   def each_key
     return to_enum(:each_key) { size } unless block_given?
@@ -8915,9 +9095,9 @@ class << ENV
     return to_enum(:select) { size } unless block
     to_hash.select(&block)
   end
-  alias_method :filter, :select
+  alias :filter :select
 
-  alias_method :member?, :include?
+  alias :member? :include?
 
   # Pairs are applied one at a time and in order, so a bad pair leaves everything
   # before it in place -- which is what MRI's own specs pin down.
@@ -8934,7 +9114,7 @@ class << ENV
     self
   end
 
-  alias_method :update, :merge!
+  alias :update :merge!
 
   # replace is all-or-nothing: everything is converted and checked before the first
   # variable is touched, so a TypeError halfway through leaves ENV untouched.
@@ -8981,7 +9161,7 @@ class << ENV
     changed ? self : nil
   end unless respond_to?(:select!)
 
-  alias_method :filter!, :select! unless respond_to?(:filter!)
+  alias :filter! :select! unless respond_to?(:filter!)
 
   # MRI keeps the objects it was handed as the result keys, not their #to_str.
   def slice(*keys)
@@ -9020,7 +9200,7 @@ class << ENV
     to_hash.each_value { |v| return true if v == value }
     false
   end
-  alias_method :has_value?, :value?
+  alias :has_value? :value?
 
   def to_h(&block)
     to_hash.to_h(&block)
@@ -9091,10 +9271,10 @@ end
 module Math
   class DomainError < StandardError; end unless const_defined?(:DomainError, false)
 
-  alias_method :__ir_gamma__, :gamma
-  alias_method :__ir_lgamma__, :lgamma
-  alias_method :__ir_erf__, :erf
-  alias_method :__ir_erfc__, :erfc
+  alias :__ir_gamma__ :gamma
+  alias :__ir_lgamma__ :lgamma
+  alias :__ir_erf__ :erf
+  alias :__ir_erfc__ :erfc
   module_function :__ir_gamma__, :__ir_lgamma__, :__ir_erf__, :__ir_erfc__
 
   # MRI's rb_to_float: Numeric only. An object that merely answers #to_f is a
@@ -9116,25 +9296,25 @@ module Math
   module_function :__flt__, :__dom__
   private_class_method :__flt__, :__dom__
 
-  def acos(x)
+  def __ir_acos__(x)
     x = __flt__(x)
     return x if x.nan?
     __dom__("acos") if x < -1.0 || x > 1.0
     ::System::Math.Acos(x)
   end
 
-  def asin(x)
+  def __ir_asin__(x)
     x = __flt__(x)
     return x if x.nan?
     __dom__("asin") if x < -1.0 || x > 1.0
     ::System::Math.Asin(x)
   end
 
-  def atan(x)
+  def __ir_atan__(x)
     ::System::Math.Atan(__flt__(x))
   end
 
-  def atan2(y, x)
+  def __ir_atan2__(y, x)
     y = __flt__(y)
     x = __flt__(x)
     return y if y.nan?
@@ -9149,7 +9329,7 @@ module Math
     ::System::Math.Acosh(x)
   end
 
-  def asinh(x)
+  def __ir_asinh__(x)
     ::System::Math.Asinh(__flt__(x))
   end
 
@@ -9162,40 +9342,40 @@ module Math
     ::System::Math.Atanh(x)
   end
 
-  def cos(x)
+  def __ir_cos__(x)
     ::System::Math.Cos(__flt__(x))
   end
 
-  def sin(x)
+  def __ir_sin__(x)
     ::System::Math.Sin(__flt__(x))
   end
 
-  def tan(x)
+  def __ir_tan__(x)
     ::System::Math.Tan(__flt__(x))
   end
 
-  def cosh(x)
+  def __ir_cosh__(x)
     ::System::Math.Cosh(__flt__(x))
   end
 
-  def sinh(x)
+  def __ir_sinh__(x)
     ::System::Math.Sinh(__flt__(x))
   end
 
-  def tanh(x)
+  def __ir_tanh__(x)
     ::System::Math.Tanh(__flt__(x))
   end
 
-  def exp(x)
+  def __ir_exp__(x)
     ::System::Math.Exp(__flt__(x))
   end
 
   # pow(x, 1/3.0) is NaN for every negative x; cbrt is defined there.
-  def cbrt(x)
+  def __ir_cbrt__(x)
     ::System::Math.Cbrt(__flt__(x))
   end
 
-  def sqrt(x)
+  def __ir_sqrt__(x)
     x = __flt__(x)
     return x if x.nan?
     __dom__("sqrt") if x < 0.0
@@ -9291,7 +9471,7 @@ module Math
     __ir_erfc__(__flt__(x))
   end
 
-  def hypot(x, y)
+  def __ir_hypot__(x, y)
     x = __flt__(x).abs
     y = __flt__(y).abs
     # An infinity wins over a NaN, which is what C's hypot() promises.
@@ -9378,10 +9558,20 @@ module Math
   end
 
   module_function :frexp
-  module_function :acos, :acosh, :asin, :asinh, :atan, :atan2, :atanh, :cbrt,
-                  :cos, :cosh, :erf, :erfc, :exp, :expm1, :gamma, :hypot,
-                  :ldexp, :lgamma, :log, :log10, :log1p, :log2, :sin, :sinh,
-                  :sqrt, :tan, :tanh
+  module_function :acosh, :atanh, :erf, :erfc, :expm1, :gamma,
+                  :ldexp, :lgamma, :log, :log10, :log1p, :log2
+  # complex18.rb (the 1.9 Complex still loaded at boot) redefined most of these to return
+  # Complex numbers and kept the C# originals as name!. Put the C# methods - RubyMath, whose
+  # Float/Fixnum fast path falls back to the __ir_<name>__ definitions above - back in place.
+  %i[acos asin atan atan2 cos sin tan cosh sinh tanh asinh exp sqrt].each do |name|
+    bang = :"#{name}!"
+    alias_method name, bang if private_method_defined?(bang) || method_defined?(bang)
+  end
+  module_function :acos, :asin, :atan, :atan2, :cos, :sin, :tan, :cosh, :sinh, :tanh, :asinh, :exp, :cbrt,
+                  :sqrt, :hypot
+  # The Float/Fixnum fast path of these is C# (RubyMath); their general Ruby half:
+  module_function :__ir_acos__, :__ir_asin__, :__ir_atan__, :__ir_atan2__, :__ir_cos__, :__ir_sin__, :__ir_tan__, :__ir_cosh__, :__ir_sinh__, :__ir_tanh__, :__ir_asinh__, :__ir_exp__, :__ir_cbrt__, :__ir_sqrt__, :__ir_hypot__
+  private_class_method :__ir_acos__, :__ir_asin__, :__ir_atan__, :__ir_atan2__, :__ir_cos__, :__ir_sin__, :__ir_tan__, :__ir_cosh__, :__ir_sinh__, :__ir_tanh__, :__ir_asinh__, :__ir_exp__, :__ir_cbrt__, :__ir_sqrt__, :__ir_hypot__
 end
 
 # `ruby2_keywords' written at the top level is Object.ruby2_keywords. MRI defines it on
@@ -10023,7 +10213,7 @@ module Process
   # The CLR half of kill hands back -errno rather than throwing, for the same reason.
   class << self
     unless method_defined?(:__clr_kill__) || private_method_defined?(:__clr_kill__)
-      alias_method :__clr_kill__, :kill
+      alias :__clr_kill__ :kill
 
       def kill(signal, *pids)
         Process.__check__(__clr_kill__(signal, *pids))
@@ -10236,8 +10426,8 @@ module Process
   # Not four methods that call one another: MRI defines two and aliases them, and a spec
   # compares Process.method(:waitpid) with Process.method(:wait).
   class << self
-    alias_method :waitpid, :wait
-    alias_method :waitpid2, :wait2
+    alias :waitpid :wait
+    alias :waitpid2 :wait2
   end
 
   def self.waitall
@@ -10651,7 +10841,7 @@ module Kernel
   # includes every Float below 1 -- means "give me a Float" rather than an error.
   # The builtin only ever understood a positive Integer.
   unless private_method_defined?(:__ir_rand__)
-    alias_method :__ir_rand__, :rand
+    alias :__ir_rand__ :rand
     private :__ir_rand__
 
     # rb_f_rand draws from the same default generator as Random.rand, which is
@@ -10736,8 +10926,8 @@ module ObjectSpace
     def key?(key)
       @table.key?(Key.new(key))
     end
-    alias_method :member?, :key?
-    alias_method :include?, :key?
+    alias :member? :key?
+    alias :include? :key?
 
     def clear
       @table.clear
@@ -11291,7 +11481,7 @@ class IO
       result.force_encoding(encoding) if result.respond_to?(:force_encoding)
       result
     end
-    alias_method :to_str, :get_string
+    alias :to_str :get_string
 
     # The write goes into the allocation in place, so a String-backed buffer and
     # every slice sharing the allocation see it.
@@ -11545,7 +11735,7 @@ class IO
   # Same for IO.read: the text form is tagged with the encoding asked for,
   # the length form is bytes. IO.binread stays binary, which is its whole job.
   class << self
-    alias_method :__ir_class_read__, :read
+    alias :__ir_class_read__ :read
     private :__ir_class_read__
 
     # IO.read opens the file itself, so mode:, encoding: and :open_args all get
@@ -11608,7 +11798,7 @@ class IO
   # read with no length answers text in the stream's external encoding; read
   # with a length answers bytes, and is ASCII-8BIT. The C# read always handed
   # back ASCII-8BIT, so File.read(path, encoding: "utf-8") came out binary.
-  alias_method :__ir_read__, :read
+  alias :__ir_read__ :read
   private :__ir_read__
 
   def read(*args)
@@ -11630,7 +11820,7 @@ class IO
   # set_encoding takes "external:internal" in one string as well as the two
   # separately; the C# one only understood a single encoding name and answered
   # "unknown encoding name - utf-8:ISO-8859-1".
-  alias_method :__ir_set_encoding__, :set_encoding
+  alias :__ir_set_encoding__ :set_encoding
 
   def set_encoding(*args, **opts)
     args = args + [opts] unless opts.empty?
@@ -11729,7 +11919,7 @@ class IO
   # a socket, the standard streams. On this platform it has nothing to do but
   # say "these are bytes", so record that and set the external encoding, rather
   # than throwing a CLR exception at anything that is not a File.
-  alias_method :__ir_binmode__, :binmode
+  alias :__ir_binmode__ :binmode
 
   def binmode
     ::Kernel.raise(::IOError, "closed stream") if closed?
@@ -11826,7 +12016,7 @@ class IO
   end
   private :__encode_for_write__
 
-  alias_method :__ir_write__, :write
+  alias :__ir_write__ :write
 
   def write(*args)
     total = 0
@@ -11885,7 +12075,7 @@ class IO
   # #gets and #readline do chomp: and the transcoding in the built-ins (IoOps.cs):
   # they set $_ for their caller, and a Ruby wrapper would set its own instead.
 
-  alias_method :__ir_readlines__, :readlines
+  alias :__ir_readlines__ :readlines
 
   def readlines(*args, **opts)
     args, chomp = __take_chomp__(args, opts)
@@ -11893,7 +12083,7 @@ class IO
     chomp ? lines.map { |l| __chomp_line__(l, args) } : lines
   end
 
-  alias_method :__ir_each_line__, :each_line
+  alias :__ir_each_line__ :each_line
 
   def each_line(*args, **opts, &block)
     args, chomp = __take_chomp__(args, opts)
@@ -11909,12 +12099,12 @@ class IO
   # #each is #each_line under another name, so it is aliased rather than defined to
   # call it: the two are one method in MRI and a spec compares them.
   if method_defined?(:each)
-    alias_method :__ir_each__, :each
-    alias_method :each, :each_line
+    alias :__ir_each__ :each
+    alias :each :each_line
   end
 
   class << self
-    alias_method :__ir_class_readlines__, :readlines
+    alias :__ir_class_readlines__ :readlines
 
     # IO.readlines and IO.foreach are the instance methods on a stream opened for
     # the occasion, which is how the mode: and encoding options in the trailing
@@ -11983,7 +12173,7 @@ class IO
     # pair, closes both afterwards and answers what the block answered. The
     # built-in took no arguments at all and gave the pair back from the block
     # form instead of the block's value.
-    alias_method :__ir_pipe__, :pipe
+    alias :__ir_pipe__ :pipe
 
     def pipe(*args)
       options = args.last.is_a?(::Hash) ? args.pop : nil
@@ -12067,7 +12257,7 @@ class IO
   # answered a one-character String since 1.9, reading as many bytes as the
   # character needs.
   if instance_method(:getc).arity == 0
-    alias_method :__ir_getc__, :getc
+    alias :__ir_getc__ :getc
     private :__ir_getc__
 
     def getc
@@ -12100,14 +12290,14 @@ class IO
   end
   private :__seek_whence__
 
-  alias_method :__ir_seek__, :seek
+  alias :__ir_seek__ :seek
   private :__ir_seek__
 
   def seek(amount, whence = 0)
     __ir_seek__(amount, __seek_whence__(whence))
   end
 
-  alias_method :__ir_sysseek__, :sysseek
+  alias :__ir_sysseek__ :sysseek
   private :__ir_sysseek__
 
   def sysseek(amount, whence = 0)
@@ -12137,7 +12327,7 @@ class IO
   # ungetc takes a String as well as a codepoint, and a codepoint is a character
   # in the stream's external encoding rather than a single byte. The built-in only
   # ever pushed one byte back.
-  alias_method :__ir_ungetc__, :ungetc
+  alias :__ir_ungetc__ :ungetc
   private :__ir_ungetc__
 
   def ungetc(value)
@@ -12190,7 +12380,7 @@ class IO
     self
   end unless method_defined?(:each_codepoint)
 
-  alias_method :codepoints, :each_codepoint unless method_defined?(:codepoints)
+  alias :codepoints :each_codepoint unless method_defined?(:codepoints)
 
   # ---- descriptor flags ---------------------------------------------------
   #
@@ -12216,7 +12406,7 @@ class IO
   # because the built-in binmode throws on one. Fall back to the flag that
   # the binmode above records.
   if method_defined?(:binmode?)
-    alias_method :__ir_binmode_p__, :binmode?
+    alias :__ir_binmode_p__ :binmode?
     private :__ir_binmode_p__
   end
 
@@ -12277,7 +12467,7 @@ class IO
     end
   end unless method_defined?(:path)
 
-  alias_method :to_path, :path unless method_defined?(:to_path)
+  alias :to_path :path unless method_defined?(:to_path)
 
   # Positional read/write, done by saving and restoring the file position since
   # there is no pread/pwrite underneath.
@@ -12633,8 +12823,8 @@ class Hash
   end unless method_defined?(:default_proc=)
 
   # Hash#merge/#merge! take any number of hashes since 2.6 (zero included).
-  alias_method :__merge_one__, :merge
-  alias_method :__update_one__, :merge!
+  alias :__merge_one__ :merge
+  alias :__update_one__ :merge!
 
   def merge(*others, &block)
     result = dup
@@ -12647,16 +12837,16 @@ class Hash
     others.each { |other| __update_one__(other, &block) }
     self
   end
-  alias_method :update, :merge!
+  alias :update :merge!
 
   # CRuby's #filter/#filter! are genuine aliases of #select/#select!, and
   # Hash#select is not Enumerable#select, so re-alias them here.
-  alias_method :filter, :select
-  alias_method :filter!, :select!
+  alias :filter :select
+  alias :filter! :select!
 
   # #delete_if / #keep_if / #reject / #reject! return an Enumerator when called
   # without a block; the 1.9 core raised LocalJumpError instead.
-  alias_method :__delete_if_block__, :delete_if
+  alias :__delete_if_block__ :delete_if
   def delete_if(&block)
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen? && block
     return to_enum(:delete_if) unless block
@@ -12669,7 +12859,7 @@ class Hash
     delete_if { |k, v| !block.call(k, v) }
   end
 
-  alias_method :__reject_bang_block__, :reject!
+  alias :__reject_bang_block__ :reject!
   def reject!(&block)
     return to_enum(:reject!) unless block
     raise FrozenError.new("can't modify frozen Hash: #{inspect}", receiver: self) if frozen?
@@ -12974,7 +13164,7 @@ class Struct
   end
 
   # #each / #each_pair / #select return an Enumerator when no block is given.
-  alias_method :__struct_each__, :each
+  alias :__struct_each__ :each
   def each(&block)
     return to_enum(:each) unless block
     __struct_each__(&block)
@@ -12989,13 +13179,13 @@ class Struct
     self
   end
 
-  alias_method :deconstruct, :to_a
-  alias_method :filter, :select
+  alias :deconstruct :to_a
+  alias :filter :select
 end
 
 # Struct.new(..., keyword_init: true) (2.5) and StructClass#keyword_init? (3.1).
 class << Struct
-  alias_method :__struct_new__, :new
+  alias :__struct_new__ :new
 
   def new(*args, &block)
     keyword_init = nil
@@ -13027,9 +13217,10 @@ class << Struct
 end
 
 class Struct
-  alias_method :__struct_initialize__, :initialize
-
-  def initialize(*args)
+  # Struct#initialize is RubyStructOps.Initialize: it stores one positional value per member
+  # itself and hands every other call here, the arguments in one array. __struct_initialize__
+  # is the plain store.
+  def __struct_initialize_slow__(args)
     # self.class.members, not members: a struct may have a member called "members"
     klass = self.class
     names = klass.members
@@ -13070,7 +13261,7 @@ class Struct
       __struct_initialize__(*values)
     end
   end
-  private :initialize
+  private :__struct_initialize_slow__
 end
 
 # --------------------------------------------------------------------------
@@ -13094,7 +13285,7 @@ class Exception
   # locations either, which is MRI's answer as well. The one case where there are real
   # Locations to begin with is `raise Klass, message, caller_locations`: set_backtrace
   # was handed them, so they are kept as they are.
-  alias_method :__core_set_backtrace__, :set_backtrace
+  alias :__core_set_backtrace__ :set_backtrace
 
   def set_backtrace(value)
     if ::Array === value && !value.empty? &&
@@ -13318,7 +13509,7 @@ class Range
     each { |x| return true if x == value }
     false
   end
-  alias_method :member?, :include?
+  alias :member? :include?
 
   def __linear__(x)
     x.is_a?(::Numeric) || x.is_a?(::Time)
@@ -13395,7 +13586,7 @@ class Range
   # and MRI searches those too - bisecting the interval rather than the
   # integers in it.
   if method_defined?(:bsearch)
-    alias_method :__ir_bsearch__, :bsearch
+    alias :__ir_bsearch__ :bsearch
     private :__ir_bsearch__
   end
 
@@ -13730,7 +13921,7 @@ class Range
     raise RangeError, "cannot convert endless range to an array" if self.end.nil?
     super
   end
-  alias_method :entries, :to_a
+  alias :entries :to_a
 end
 
 # Rebind ARGF to a real instance so ARGF.class is a class. Done at the very end

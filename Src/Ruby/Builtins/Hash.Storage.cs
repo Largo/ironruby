@@ -89,6 +89,9 @@ namespace IronRuby.Builtins {
         /// </summary>
         private int _start;
         private int _version;
+        // Changes with every mutation, an overwrite of an existing key's value included (which
+        // _version leaves alone, so that enumerators don't fail on it). See MutationStamp.
+        private int _stamp;
         private IEqualityComparer<object>/*!*/ _comparer;
 
         private KeyCollection _keys;
@@ -250,6 +253,29 @@ namespace IronRuby.Builtins {
             LinkBuckets();
         }
 
+        /// <summary>
+        /// Builds the bucket array of a hash whose entries were laid out without one (see
+        /// <c>AppendUnlinked</c>), on the first operation that probes. The entry array is already
+        /// prime-sized and the multiplier set, and the array is published only once every entry is
+        /// linked, so a reader racing with this sees either no buckets (and links its own, writing
+        /// the same chains) or complete ones.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private int[]/*!*/ LinkPendingBuckets() {
+            Entry[] entries = _entries;
+            var buckets = new int[entries.Length];
+            for (int i = _start; i < _count; i++) {
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext) {
+                    int bucket = (int)FastMod((uint)e.HashCode, (uint)buckets.Length, _fastModMultiplier);
+                    e.Next = buckets[bucket] - 1;
+                    buckets[bucket] = i + 1;
+                }
+            }
+            System.Threading.Volatile.Write(ref _buckets, buckets);
+            return buckets;
+        }
+
         private void LinkBuckets() {
             int[] buckets = _buckets;
             Entry[] entries = _entries;
@@ -318,7 +344,8 @@ namespace IronRuby.Builtins {
             if (entries != null) {
                 IEqualityComparer<object> comparer = _comparer;
                 int hashCode = comparer.GetHashCode(key);
-                int i = _buckets[BucketIndex(hashCode)] - 1;
+                int[] buckets = _buckets ?? LinkPendingBuckets();
+                int i = buckets[(int)FastMod((uint)hashCode, (uint)buckets.Length, _fastModMultiplier)] - 1;
                 int collisions = 0;
                 while ((uint)i < (uint)entries.Length) {
                     ref Entry e = ref entries[i];
@@ -411,7 +438,11 @@ namespace IronRuby.Builtins {
                 throw new ArgumentNullException("key");
             }
             if (_buckets == null) {
-                Initialize(0);
+                if (_entries == null) {
+                    Initialize(0);
+                } else {
+                    LinkPendingBuckets();
+                }
             }
 
             IEqualityComparer<object> comparer = _comparer;
@@ -426,6 +457,7 @@ namespace IronRuby.Builtins {
                 if (existing.HashCode == hashCode && comparer.Equals(existing.Key, key)) {
                     if (behavior == InsertOverwrite) {
                         existing.Value = value;
+                        _stamp++;
                         return false;
                     }
                     if (behavior == InsertThrow) {
@@ -455,6 +487,7 @@ namespace IronRuby.Builtins {
             b = index + 1;
             _liveCount++;
             _version++;
+            _stamp++;
             return true;
         }
 
@@ -476,8 +509,11 @@ namespace IronRuby.Builtins {
                 throw new ArgumentNullException("key");
             }
             if (_buckets == null) {
-                value = null;
-                return false;
+                if (_entries == null) {
+                    value = null;
+                    return false;
+                }
+                LinkPendingBuckets();
             }
 
             IEqualityComparer<object> comparer = _comparer;
@@ -503,6 +539,7 @@ namespace IronRuby.Builtins {
                     found.Value = null;
                     _liveCount--;
                     _version++;
+                    _stamp++;
                     // Removing the newest entry needs no tombstone at all; dropping it (and any
                     // tombstones it was sitting on) keeps push/pop patterns from growing the
                     // entry array. Removing the oldest one moves the enumeration start instead,
@@ -543,13 +580,16 @@ namespace IronRuby.Builtins {
 
         public void Clear() {
             if (_count > 0) {
-                Array.Clear(_buckets, 0, _buckets.Length);
+                if (_buckets != null) {
+                    Array.Clear(_buckets, 0, _buckets.Length);
+                }
                 Array.Clear(_entries, 0, _count);
                 _count = 0;
                 _liveCount = 0;
                 _start = 0;
             }
             _version++;
+            _stamp++;
         }
 
         #endregion
@@ -609,6 +649,28 @@ namespace IronRuby.Builtins {
                 return Remove(item.Key);
             }
             return false;
+        }
+
+        /// <summary>
+        /// Changes with every mutation of the hash, value overwrites included: an iteration that
+        /// took a snapshot of the entries can use it for as long as this stays the same.
+        /// </summary>
+        public int MutationStamp {
+            get { return _stamp; }
+        }
+
+        /// <summary>Keys and values in insertion order, in one pass over the entries.</summary>
+        public void CopyKeysAndValues(object[]/*!*/ keys, object[]/*!*/ values) {
+            Entry[] entries = _entries;
+            int count = _count;
+            int index = 0;
+            for (int i = _start; i < count; i++) {
+                ref Entry e = ref entries[i];
+                if (e.Next != TombstoneNext) {
+                    keys[index] = e.Key;
+                    values[index++] = e.Value;
+                }
+            }
         }
 
         public void CopyTo(KeyValuePair<object, object>[]/*!*/ array, int index) {

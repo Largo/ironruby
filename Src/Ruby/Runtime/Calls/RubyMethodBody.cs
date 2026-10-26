@@ -106,6 +106,7 @@ namespace IronRuby.Runtime.Calls {
                         _singletonLexicalModules = GetObjectSingletonLexicalModules(declaringScope);
                         _delegateModule = declaringModule;
                         _delegate = primary = Compile(declaringScope, declaringModule);
+                        WatchLightCompilation(primary);
                     }
                 }
             }
@@ -153,6 +154,70 @@ namespace IronRuby.Runtime.Calls {
             return primary;
         }
 
+        #region Compiled-body forwarding
+
+        // The primary delegate starts out as the light compiler's interpreted LightLambda, which goes
+        // on standing in front of the IL it compiles after a few dozen calls: every call through it is
+        // one more delegate hop plus a cast of the compiled delegate. Precompiled dispatchers made
+        // while the body was interpreted are recorded here and pointed at the compiled delegate when
+        // it arrives; later binds get it from GetDelegate. Rules already built keep the LightLambda,
+        // which forwards correctly - just not as cheaply.
+        private Delegate _interpretedDelegate;
+        private List<MethodDispatcher> _interpretedDispatchers;
+        private Delegate _compiledFrom, _compiledTo;
+
+        private void WatchLightCompilation(Delegate/*!*/ primary) {
+            var light = primary.Target as Microsoft.Scripting.Interpreter.LightLambda;
+            if (light != null) {
+                _interpretedDelegate = primary;
+                light.Compile += (sender, e) => OnLightCompiled(primary, e.Compiled);
+            }
+        }
+
+        private void OnLightCompiled(Delegate/*!*/ interpreted, Delegate/*!*/ compiled) {
+            List<MethodDispatcher> dispatchers;
+            lock (this) {
+                if (_delegate != interpreted || compiled.GetType() != interpreted.GetType()) {
+                    return;
+                }
+                _delegate = compiled;
+                _interpretedDelegate = null;
+                _compiledFrom = interpreted;
+                _compiledTo = compiled;
+                dispatchers = _interpretedDispatchers;
+                _interpretedDispatchers = null;
+            }
+            if (dispatchers != null) {
+                foreach (var dispatcher in dispatchers) {
+                    dispatcher.SetMethod(compiled);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Called for each dispatcher made over <paramref name="method"/>, a delegate GetDelegate returned.
+        /// </summary>
+        internal void RegisterDispatcher(MethodDispatcher/*!*/ dispatcher, Delegate/*!*/ method) {
+            Delegate compiled;
+            lock (this) {
+                if (method == _interpretedDelegate) {
+                    if (_interpretedDispatchers == null) {
+                        _interpretedDispatchers = new List<MethodDispatcher>();
+                    }
+                    _interpretedDispatchers.Add(dispatcher);
+                    return;
+                }
+                if (method != _compiledFrom) {
+                    return;
+                }
+                compiled = _compiledTo;
+            }
+            // compiled between GetDelegate and here:
+            dispatcher.SetMethod(compiled);
+        }
+
+        #endregion
+
         private Delegate _moduleFunctionDelegate;
 
         // The refinements that were active where the body was last defined for a module, which is
@@ -181,6 +246,9 @@ namespace IronRuby.Runtime.Calls {
                     _singletonLexicalModules = null;
                     _lexicalVariants = null;
                     _moduleFunctionDelegate = null;
+                    _interpretedDelegate = null;
+                    _interpretedDispatchers = null;
+                    _compiledFrom = _compiledTo = null;
                 }
                 GetDefinitionRefinementsNoLock(declaringModule).Value = refinements;
             }

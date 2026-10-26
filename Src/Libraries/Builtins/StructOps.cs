@@ -26,6 +26,7 @@ using Microsoft.Scripting;
 using Microsoft.Scripting.Runtime;
 using Microsoft.Scripting.Utils;
 using IronRuby.Runtime;
+using IronRuby.Runtime.Calls;
 using System.Runtime.CompilerServices;
 
 namespace IronRuby.Builtins {
@@ -93,8 +94,27 @@ namespace IronRuby.Builtins {
             return result;
         }
 
-        // Reinitialization. Called only from derived struct's initializer.
+        // Struct#initialize. The overwhelmingly common call - one positional value per member, the
+        // last of them not a Hash that could be keywords, on a class not built with keyword_init:
+        // true - stores the values right here, which is what keeps Point.new(1, 2) cheap. Every
+        // other call goes to Struct#__struct_initialize_slow__ in ruby4.rb with the arguments as
+        // one array, as a `def initialize(*args)' would have received them.
         [RubyMethod("initialize", RubyMethodAttributes.PrivateInstance)]
+        public static object Initialize(CallSiteStorage<Func<CallSite, object, object, object>>/*!*/ slowPath,
+            RubyStruct/*!*/ self, params object[]/*!*/ items) {
+
+            int count = self.ItemCount;
+            if (items.Length == count && (count == 0 || !(items[count - 1] is IronRuby.Builtins.Hash)) && !self.IsKeywordInit) {
+                self.SetValues(items);
+                return null;
+            }
+
+            var site = slowPath.GetCallSite("__struct_initialize_slow__", new RubyCallSignature(1, RubyCallFlags.HasImplicitSelf));
+            return site.Target(site, self, RubyOps.NormalizeRestArgument(new RubyArray(items), false));
+        }
+
+        // The plain store, for __struct_initialize_slow__.
+        [RubyMethod("__struct_initialize__", RubyMethodAttributes.PrivateInstance)]
         public static void Reinitialize(RubyStruct/*!*/ self, params object[]/*!*/ items) {
             self.SetValues(items);
         }

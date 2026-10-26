@@ -324,6 +324,29 @@ bench("fiber_switch") do
   while i < m; f.resume; i += 1; end
 end
 
+# Enumerator#next over an Array, over a generator block, and Fiber creation.
+bench("enum_next_array") do
+  a = Array.new(1_000) { |k| k }
+  e = a.each
+  i = 0; m = n(100_000)
+  while i < m
+    e.next
+    i += 1
+    e.rewind if i % 1_000 == 0
+  end
+end
+
+bench("enum_next_gen") do
+  e = Enumerator.new { |y| k = 0; loop { y << k; k += 1 } }
+  i = 0; m = n(50_000)
+  while i < m; e.next; i += 1; end
+end
+
+bench("fiber_new") do
+  i = 0; m = n(5_000)
+  while i < m; Fiber.new { i }.resume; i += 1; end
+end
+
 bench("proc_new_call") do
   i = 0; m = n(500_000)
   while i < m; (proc { |x| x }).call(i); i += 1; end
@@ -389,6 +412,100 @@ bench("string_build") do
     s = +""
     200.times { |k| s << "x#{k}" }
   end
+end
+
+bench("map_loop") do
+  a = (0...1000).to_a; r = n(2_000)
+  r.times { a.map { |x| x + 1 } }
+end
+
+bench("select_loop") do
+  a = (0...1000).to_a; r = n(2_000)
+  r.times { a.select { |x| x > 500 } }
+end
+
+bench("any_loop") do
+  a = (0...1000).to_a; r = n(2_000)
+  r.times { a.any? { |x| x > 5000 } }
+end
+
+class CallTarget
+  def yield_upto(k)
+    i = 0
+    while i < k; yield i; i += 1; end
+  end
+end
+
+bench("yield_loop") do
+  o = CallTarget.new; s = 0; r = n(2_000)
+  r.times { o.yield_upto(1000) { |x| s += x } }
+end
+
+# A tokenizer's inner loop: StringScanner scan/skip with Regexps and Strings, group access.
+bench("strscan_tokens") do
+  require "strscan"
+  src = (%q({"name": "Team \\"A\\"", "score": [1, 22.5, -3e2], "ok": true, "x": null}, ) * 200).b
+  r = n(60)
+  r.times do
+    s = StringScanner.new(src)
+    until s.eos?
+      if s.skip(/\s+/) then next
+      elsif s.scan(/"((?:[^"\\]|\\.)*)"/n) then s[1]
+      elsif s.scan(/-?\d+(\.\d+)?([eE][-+]?\d+)?/) then (s[1] || s[2]) ? Float(s[0]) : Integer(s[0])
+      elsif s.skip("true") || s.skip("null") then nil
+      else s.getch
+      end
+    end
+  end
+end
+
+# a literal block handed to a library method that takes a BlockParam (ruby-bench send_cfunc_block)
+bench("block_literal_cfunc") do
+  a = []; i = 0; m = n(2_000_000)
+  while i < m; a.reverse_each { }; i += 1; end
+end
+
+class NewTarget
+  def initialize(left = nil, right = nil)
+    @left = left; @right = right; @i = 0; @j = 0
+  end
+end
+
+bench("object_new_init") do
+  i = 0; m = n(2_000_000); x = nil
+  while i < m; x = NewTarget.new(x, nil); x = nil if i % 64 == 0; i += 1; end
+end
+
+# ---------------- keyword parameters ----------------
+
+class KwPoint
+  def initialize(x:, y: 0)
+    @x = x
+    @y = y
+  end
+end
+
+bench("new_kwargs") do
+  i = 0; m = n(1_000_000)
+  while i < m; KwPoint.new(x: i, y: 2); i += 1; end
+end
+
+# ---------------- single-call blocks whose body makes a call ----------------
+
+class YieldOnce
+  def one(x); yield x; end
+end
+
+# a Ruby method yielding once to a new literal block (block scope reuse must cost it nothing)
+bench("yield_once_call") do
+  o = YieldOnce.new; i = 0; m = n(2_000_000)
+  while i < m; o.one(i) { |y| y * 2 }; i += 1; end
+end
+
+# a library method calling a new literal block once
+bench("then_call") do
+  i = 0; m = n(2_000_000)
+  while i < m; i.then { |y| y * 2 }; i += 1; end
 end
 
 name = ARGV[0]

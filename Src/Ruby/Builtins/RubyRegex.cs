@@ -28,6 +28,9 @@ namespace IronRuby.Builtins {
         // 1.9: correctly encoded, switched to characters 
         // 1.8: k-coded binary data, if _options specify encoding, or raw binary data otherwise.
         private MutableString/*!*/ _pattern;
+        // HasNonAsciiEscape(_pattern) - the pattern is frozen, so it is worked out once: -1 not yet,
+        // 0 none, 1 a byte escape, 2 a \u escape. Encoding and IsFixedEncoding ask on every match.
+        private int _nonAsciiEscape = -1;
         private RubyRegexOptions _options;
         private bool _hasGAnchor;
 
@@ -49,6 +52,11 @@ namespace IronRuby.Builtins {
         // Cached against the regex it was derived from, so it follows _cachedRegex's own lifetime.
         private Regex _cachedAnchoredRegex;
         private Regex _cachedAnchoredSource;
+
+        // How many matches _cachedRegex and _cachedAnchoredRegex have run while still interpreted.
+        // A regex that keeps being used is rebuilt with RegexOptions.Compiled (see TierUp).
+        private int _cachedRegexUses;
+        private int _cachedAnchoredUses;
 
         // Ruby 1.8: match operations use KCODE encoding so we need to remember the one for which we have cached CLR Regex.
         private RubyRegexOptions _cachedKCode;
@@ -160,6 +168,7 @@ namespace IronRuby.Builtins {
             _options = options & ~RubyRegexOptions.Once;
             _cachedRegex = null;
             _cachedAstralRegex = null;
+            _nonAsciiEscape = -1;
 
             RubyEncoding encoding = RubyEncoding.GetRegexEncoding(options);
             if (encoding != null) {
@@ -225,6 +234,15 @@ namespace IronRuby.Builtins {
         /// a whole pair.
         /// </summary>
         private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput, out bool astral) {
+            return Transform(ref encoding, input, start, out strInput, out astral, true);
+        }
+
+        /// <summary>
+        /// <paramref name="countUse"/> is false when the caller is not going to match with the
+        /// regex it gets back (MatchWindow, which derives an anchored one from it), so that only
+        /// the regex that actually runs works its way up to being compiled.
+        /// </summary>
+        private Regex/*!*/ Transform(ref RubyEncoding encoding, MutableString/*!*/ input, int start, out string strInput, out bool astral, bool countUse) {
             ContractUtils.RequiresNotNull(input, "input");
 
             RequireMatchableEncoding(input);
@@ -285,7 +303,7 @@ namespace IronRuby.Builtins {
                 astral = input.HasSurrogatePairs();
             }
 
-            return astral ? TransformAstralPattern(encoding, kc) : TransformPattern(encoding, kc);
+            return astral ? TransformAstralPattern(encoding, kc) : TransformPattern(encoding, kc, countUse);
         }
 
         private Regex/*!*/ TransformAstralPattern(RubyEncoding encoding, RubyRegexOptions kc) {
@@ -315,11 +333,19 @@ namespace IronRuby.Builtins {
         }
 
         private Regex/*!*/ TransformPattern(RubyEncoding encoding, RubyRegexOptions kc) {
+            return TransformPattern(encoding, kc, false);
+        }
+
+        private Regex/*!*/ TransformPattern(RubyEncoding encoding, RubyRegexOptions kc, bool countUse) {
             // We can reuse cached CLR regex if it was created for the same k-coding and the
             // same timeout:
             TimeSpan timeout = EffectiveTimeout;
-            if (_cachedRegex != null && kc == _cachedKCode && timeout == _cachedTimeout) {
-                return _cachedRegex;
+            Regex cached = _cachedRegex;
+            if (cached != null && kc == _cachedKCode && timeout == _cachedTimeout) {
+                if (countUse && (cached.Options & RegexOptions.Compiled) == 0 && ++_cachedRegexUses >= CompileThreshold) {
+                    _cachedRegex = cached = TierUp(cached);
+                }
+                return cached;
             }
 
             string pattern = GetClrPatternSource(encoding, kc);
@@ -333,8 +359,30 @@ namespace IronRuby.Builtins {
 
             _cachedTimeout = timeout;
             _cachedKCode = kc;
+            _cachedRegexUses = 0;
             _cachedRegex = result;
             return result;
+        }
+
+        /// <summary>
+        /// Matches a regex runs before it is compiled. The CLR interprets a Regex unless told to
+        /// compile it, and compiling costs a millisecond or more - about what the compiled code
+        /// then saves over ten thousand matches of a typical pattern - so only a regex that has
+        /// already shown it is hot pays for it: one in a loop over a large input, a tokenizer's.
+        /// </summary>
+        private const int CompileThreshold = 10000;
+
+        /// <summary>
+        /// The same CLR regex compiled to IL. Compiled and interpreted regexes are the same
+        /// engine and the same pattern tree and match identically; only the speed differs. If it
+        /// cannot be built for any reason, the interpreted one is kept.
+        /// </summary>
+        private static Regex/*!*/ TierUp(Regex/*!*/ regex) {
+            try {
+                return new Regex(regex.ToString(), regex.Options | RegexOptions.Compiled, regex.MatchTimeout);
+            } catch (Exception) {
+                return regex;
+            }
         }
 
         /// <summary>
@@ -435,14 +483,14 @@ namespace IronRuby.Builtins {
                     // above 7 bits without /n is "invalid multibyte escape" in MRI; we don't raise,
                     // and the pattern's own encoding is as good an answer as any.)
                     bool isUnicode;
-                    if (HasNonAsciiEscape(_pattern, out isUnicode)) {
+                    if (PatternHasNonAsciiEscape(out isUnicode)) {
                         return isUnicode ? RubyEncoding.UTF8 : _pattern.Encoding;
                     }
 
                     return RubyEncoding.Ascii;
                 }
 
-                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !HasNonAsciiEscape(_pattern)) {
+                if (encodingOptions == RubyRegexOptions.FIXED && _pattern.IsAscii() && !PatternHasNonAsciiEscape(out _)) {
                     return RubyEncoding.Ascii;
                 }
 
@@ -570,6 +618,16 @@ namespace IronRuby.Builtins {
         /// written with byte escapes would silently lose its encoding when unioned with a plain
         /// ASCII string.
         /// </summary>
+        private bool PatternHasNonAsciiEscape(out bool isUnicode) {
+            int cached = _nonAsciiEscape;
+            if (cached < 0) {
+                cached = HasNonAsciiEscape(_pattern, out isUnicode) ? (isUnicode ? 2 : 1) : 0;
+                _nonAsciiEscape = cached;
+            }
+            isUnicode = cached == 2;
+            return cached != 0;
+        }
+
         public static bool HasNonAsciiEscape(MutableString/*!*/ pattern) {
             bool isUnicode;
             return HasNonAsciiEscape(pattern, out isUnicode);
@@ -656,7 +714,8 @@ namespace IronRuby.Builtins {
                     // /n on its own says nothing - /abc/n matches any ASCII compatible string. It
                     // pins the encoding only once the pattern really compiles to non-ASCII bytes,
                     // which it does for a byte escape as much as for a literal non-ASCII character.
-                    return !_pattern.IsAscii() || HasNonAsciiEscape(_pattern);
+                    bool isUnicode;
+                    return !_pattern.IsAscii() || PatternHasNonAsciiEscape(out isUnicode);
                 }
 
                 return (_options & (RubyRegexOptions.EUC | RubyRegexOptions.SJIS | RubyRegexOptions.UTF8 | RubyRegexOptions.FixedEncoding)) != 0
@@ -894,7 +953,7 @@ namespace IronRuby.Builtins {
             string str;
             RubyEncoding kcode = null;
             bool astral;
-            Regex regex = Transform(ref kcode, input, 0, out str, out astral);
+            Regex regex = Transform(ref kcode, input, 0, out str, out astral, !anchored);
 
             // Under a k-coding the offsets are bytes, and "start" only indexes the converted
             // string directly when that coding spells every character in one byte - which the
@@ -902,7 +961,7 @@ namespace IronRuby.Builtins {
             int offset = 0;
             if (kcode != null && !kcode.IsSingleByteCharacterSet) {
                 kcode = null;
-                regex = Transform(ref kcode, input, start, out str, out astral);
+                regex = Transform(ref kcode, input, start, out str, out astral, !anchored);
                 offset = (start < 0) ? start + input.GetByteCount() : start;
                 start = 0;
             }
@@ -926,6 +985,103 @@ namespace IronRuby.Builtins {
         }
 
         /// <summary>
+        /// A match MatchWindowBounds found, whose MatchData has not been made yet. Most scanning
+        /// operations only want to know where the match is, and building the CLR Match with its
+        /// groups and the MatchData around it costs more than finding the match does.
+        /// <see cref="Complete"/> makes the MatchData MatchWindow would have made, by running the
+        /// same CLR regex over the same immutable text again - so a later change to the subject
+        /// does not change the groups, as it does not in MRI either.
+        /// </summary>
+        public struct PendingMatch {
+            internal RubyRegex _owner;
+            internal Regex _regex;
+            internal MutableString _input;
+            internal string _text;
+            internal RubyEncoding _kcode;
+            internal int _start;
+            internal MatchData _data;
+
+            public bool IsEmpty {
+                get { return _owner == null; }
+            }
+
+            public MatchData/*!*/ Complete() {
+                if (_data != null) {
+                    return _data;
+                }
+                Match match = _regex.Match(_text, _start, _text.Length - _start);
+                Debug.Assert(match.Success);
+                return MatchData.Create(match, _input, false, _text, _kcode, 0, _owner, false);
+            }
+        }
+
+        /// <summary>
+        /// MatchWindow without a frozen copy of the input, answering the byte offsets of the whole
+        /// match and a <see cref="PendingMatch"/> for its groups. Where one CLR character stands
+        /// for one byte of the input - a binary or single-byte k-coding, or a subject whose
+        /// characters are all single bytes - the match is found without building any match
+        /// objects at all; anything else goes through MatchWindow.
+        /// </summary>
+        public bool MatchWindowBounds(MutableString/*!*/ input, int start, bool anchored,
+            out int matchStart, out int matchEnd, out PendingMatch pending) {
+
+            matchStart = matchEnd = 0;
+            pending = default(PendingMatch);
+
+            string str;
+            RubyEncoding kcode = null;
+            bool astral;
+            Regex regex = Transform(ref kcode, input, 0, out str, out astral, !anchored);
+
+            bool bytesAreChars = (kcode != null) ? kcode.IsSingleByteCharacterSet : input.DetectSingleByteCharacters();
+            if (astral || !bytesAreChars) {
+                MatchData data = MatchWindow(input, start, anchored, false);
+                if (data == null || !data.TryGetGroupByteOffsets(0, out matchStart, out matchEnd)) {
+                    return false;
+                }
+                pending._owner = this;
+                pending._data = data;
+                return true;
+            }
+
+            if (str == null) {
+                return false;
+            }
+            if (start < 0) {
+                start += str.Length;
+            }
+            if (start < 0 || start > str.Length) {
+                return false;
+            }
+
+            if (anchored) {
+                regex = AnchorAtSearchStart(regex);
+            }
+
+            // A span cut at "start" is the window Match(str, start, length) searches: \A, ^, \G
+            // and lookbehind all stop at its first character.
+            foreach (ValueMatch match in regex.EnumerateMatches(str.AsSpan(start))) {
+                int clrStart = start + match.Index;
+                // MatchData's offsets: the CLR offset is the byte offset, capped at the subject
+                matchStart = Math.Min(clrStart, str.Length);
+                matchEnd = Math.Min(clrStart + match.Length, str.Length);
+                if (kcode == null) {
+                    int byteCount = input.GetByteCount();
+                    matchStart = Math.Min(matchStart, byteCount);
+                    matchEnd = Math.Min(matchEnd, byteCount);
+                }
+                pending._owner = this;
+                pending._regex = regex;
+                pending._input = input;
+                pending._text = str;
+                pending._kcode = kcode;
+                pending._start = start;
+                return true;
+            }
+            return false;
+        }
+
+        /// <summary>
         /// The same pattern with a \G in front of it, which in a forward CLR match stands for the
         /// position the search was told to start at. The body goes in a non-capturing group so that
         /// a top-level alternation still binds inside the anchor, and group numbers do not move.
@@ -938,8 +1094,12 @@ namespace IronRuby.Builtins {
         /// the caller falls back to searching: slower, never wrong.
         /// </summary>
         private Regex/*!*/ AnchorAtSearchStart(Regex/*!*/ regex) {
-            if (_cachedAnchoredSource == regex && _cachedAnchoredRegex != null) {
-                return _cachedAnchoredRegex;
+            Regex cached = _cachedAnchoredRegex;
+            if (_cachedAnchoredSource == regex && cached != null) {
+                if ((cached.Options & RegexOptions.Compiled) == 0 && ++_cachedAnchoredUses >= CompileThreshold) {
+                    _cachedAnchoredRegex = cached = TierUp(cached);
+                }
+                return cached;
             }
 
             Regex result;
@@ -954,6 +1114,7 @@ namespace IronRuby.Builtins {
             }
 
             _cachedAnchoredSource = regex;
+            _cachedAnchoredUses = 0;
             _cachedAnchoredRegex = result;
             return result;
         }
@@ -1080,7 +1241,24 @@ namespace IronRuby.Builtins {
             RubyEncoding kcode = null;
             bool astral;
             Regex regex = Transform(ref kcode, input, 0, out str, out astral);
-            IList<Match> matches = astral ? MatchesOverPairs(regex, str) : (IList<Match>)regex.Matches(str);
+            IList<Match> matches;
+            if (astral) {
+                matches = MatchesOverPairs(regex, str);
+            } else {
+                // Match and NextMatch are what Regex.Matches is defined as; asking for the first
+                // one directly answers "no match" - the usual outcome of a #gsub over a short
+                // string - without the collection.
+                Match match = regex.Match(str);
+                if (!match.Success) {
+                    return Array.Empty<MatchData>();
+                }
+                var list = new List<Match>();
+                do {
+                    list.Add(match);
+                    match = match.NextMatch();
+                } while (match.Success);
+                matches = list;
+            }
 
             var result = new MatchData[matches.Count];
             if (result.Length > 0 && inputMayMutate) {

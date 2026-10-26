@@ -238,9 +238,105 @@ namespace IronRuby.Runtime {
             return scope;
         }
 
-        // TracePoint hooks; emitted code only calls them when TracePoint.ActiveEvents has the event.
+        /// <summary>
+        /// The entry of a block whose body never uses its scope (see BlockDefinition.IsScopeFreeBody):
+        /// the safe point, and the scope only if a TracePoint wants the call event. Null otherwise; a
+        /// TracePoint hook enabled later makes it then (<see cref="CreateBlockScopeLazy"/>).
+        /// </summary>
+        [Emitted]
+        public static RubyBlockScope CreateBlockScopeIfTraced(MutableTuple locals, string[] variableNames,
+            BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
+
+            RubyUtils.SafePoint();
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {
+                var scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
+                TracePoint.OnBlockCall(scope);
+                return scope;
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The first step of the entry of a block whose body needs its scope but does not define a closure
+        /// over it: the safe point, then the scope the last finished call through this BlockParam left there
+        /// (each, map, times, a yield in a loop; see BlockParam.ParkScope) unless something captured it, or null.
+        /// The scope comes off the BlockParam here, after the safe point (which can run a trap handler or a
+        /// finalizer) and together with its locals tuple: a call that starts in between finds nothing kept and
+        /// makes a scope and tuple of its own, and a call that does not finish normally keeps nothing.
+        /// The block reuses the scope's tuple (see <see cref="GetReusableLocals"/>) and hands the scope to
+        /// <see cref="CreateReusableBlockScope"/>; <see cref="LeaveReusableBlockScope"/> parks it again.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static RubyBlockScope TakeReusableBlockScope(BlockParam/*!*/ blockParam) {
+            // Block entry too: `n.times { }` and `each { }` loop in C#, where no back edge is emitted.
+            RubyUtils.SafePoint();
+
+            if (blockParam.MayHaveReusableScope) {
+                var scope = blockParam.ReusableScope;
+                if (scope != null && !scope.IsCaptured) {
+                    blockParam.TakeReusableScope();
+                    return scope;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// The locals tuple of a scope <see cref="TakeReusableBlockScope"/> took, for the block to reuse (the
+        /// last call cleared it); null if it took none.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static MutableTuple GetReusableLocals(RubyBlockScope reusable) {
+            return (reusable != null) ? reusable._locals : null;
+        }
+
+        /// <summary>
+        /// The scope of a block call that <see cref="TakeReusableBlockScope"/> began: the scope it took, made the
+        /// scope of this call, or a new one.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static RubyBlockScope/*!*/ CreateReusableBlockScope(MutableTuple locals, string[] variableNames,
+            BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame, RubyBlockScope reusable) {
+
+            RubyBlockScope scope;
+            if (reusable != null) {
+                scope = reusable;
+                scope.Reinitialize(locals, blockParam, selfObject, interpretedFrame);
+            } else {
+                scope = new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
+            }
+
+            if ((TracePoint.ActiveEvents & (int)(TraceEvents.BCall | TraceEvents.Call)) != 0) {
+                scope.MarkCaptured();
+                TracePoint.OnBlockCall(scope);
+            }
+            return scope;
+        }
+
+        /// <summary>
+        /// The normal exit of a block that made its scope by <see cref="CreateReusableBlockScope"/>.
+        /// An exception leaving the body skips this, and the scope is simply not reused. True if the
+        /// scope was kept on the BlockParam, with its locals tuple when <paramref name="keepLocals"/>: the
+        /// block then clears the tuple, so that the next call finds its locals nil. The first call through
+        /// a BlockParam keeps nothing (see BlockParam.ParkScope): a block called once pays no more than a flag.
+        /// </summary>
+        [Emitted, MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool LeaveReusableBlockScope(RubyBlockScope/*!*/ scope, bool keepLocals) {
+            return scope.BlockFlowControl.ParkScope(scope);
+        }
 
         [Emitted]
+        public static RubyBlockScope/*!*/ CreateBlockScopeLazy(MutableTuple locals, string[] variableNames,
+            BlockParam/*!*/ blockParam, object selfObject, InterpretedFrame interpretedFrame) {
+            return new RubyBlockScope(locals, variableNames ?? ArrayUtils.EmptyStrings, blockParam, selfObject, interpretedFrame);
+        }
+
+        // TracePoint hooks; emitted code only calls them when TracePoint.ActiveEvents has the event.
+
+        // Emitted behind a test of TracePoint.ActiveEvents in front of every statement: kept out of
+        // line, the never-taken branch is one call; inlined, it was a few hundred bytes of machine
+        // code per statement in every compiled method body.
+        [Emitted, MethodImpl(MethodImplOptions.NoInlining)]
         public static void TraceLineEvent(RubyScope scope, string path, int line) {
             // objspace's allocation tracing forces this event on and takes the allocation site of
             // every object created by the statement from here.
@@ -438,11 +534,11 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static Proc InstantiateBlock(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
-            return (dispatcher.Method != null) ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
+            return dispatcher.HasMethod ? new Proc(ProcKind.Block, self, scope, dispatcher) : null;
         }
         [Emitted]
         public static Proc InstantiateLambda(RubyScope/*!*/ scope, object self, BlockDispatcher/*!*/ dispatcher) {
-            return (dispatcher.Method != null) ? new Proc(ProcKind.Lambda, self, scope, dispatcher) : null;
+            return dispatcher.HasMethod ? new Proc(ProcKind.Lambda, self, scope, dispatcher) : null;
         }
 
         [Emitted]
@@ -513,9 +609,19 @@ namespace IronRuby.Runtime {
         /// only the positional arguments against a lambda, and `|**nil|` refuses keywords in a
         /// proc as well as in a lambda.
         /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static void RequireLambdaArity(Proc/*!*/ proc, int argCount, object lastArg) {
+            // A plain block takes any arguments - the common case, so it does not make the call:
+            // only a lambda, or a signature with keywords or **nil, has anything to check.
+            if (proc.Kind == ProcKind.Lambda || proc.Dispatcher.ChecksKeywords) {
+                CheckLambdaArity(proc, argCount, lastArg);
+            }
+        }
+
+        private static void CheckLambdaArity(Proc/*!*/ proc, int argCount, object lastArg) {
             var signature = proc.Dispatcher.ParameterSignature;
-            if (signature != null && (signature.TakesKeywords || signature.RefusesKeywords)) {
+            // = signature != null && (signature.TakesKeywords || signature.RefusesKeywords), cached
+            if (proc.Dispatcher.ChecksKeywords) {
                 var keywords = argCount > 0 ? lastArg as Hash : null;
                 if (keywords != null && !keywords.IsKeywordArguments) {
                     keywords = null;
@@ -1578,6 +1684,36 @@ namespace IronRuby.Runtime {
         /// is only emitted for argument hashes that actually contain a `**` splat.
         /// The result is fed to the ordinary splatting machinery, so it is either [] or [hash].
         /// </summary>
+        /// <summary>
+        /// `f(k: v, **h)`: h's entries added to the keyword hash being built for the call - the
+        /// call's own, so it is filled in place - which is returned; nil adds nothing. Null if h is
+        /// anything else: that goes through Hash#merge, for #to_hash.
+        /// </summary>
+        [Emitted]
+        public static object MergeKeywordSplat(RubyScope/*!*/ scope, object keywords, object splatted) {
+            if (splatted == null) {
+                return keywords;
+            }
+            var source = splatted as Hash;
+            var target = keywords as Hash;
+            if (source == null || target == null) {
+                return null;
+            }
+            foreach (var entry in source) {
+                RubyUtils.SetHashElement(scope.RubyContext, target, entry.Key, entry.Value);
+            }
+            return target;
+        }
+
+        /// <summary>
+        /// `f(**h)` with h a Hash or nil: what <see cref="SplatKeywordHash"/> makes of it. Null for
+        /// anything else, which the call site first converts with #to_hash (by way of Hash#merge).
+        /// </summary>
+        [Emitted]
+        public static RubyArray SplatKeywordHashIfHash(RubyScope/*!*/ scope, object hash) {
+            return (hash == null || hash is Hash) ? SplatKeywordHash(scope, hash) : null;
+        }
+
         [Emitted]
         public static RubyArray/*!*/ SplatKeywordHash(RubyScope/*!*/ scope, object hash) {
             // `f(**nil)` passes no keywords at all
@@ -1608,47 +1744,35 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray1(object item1) {
-            RubyArray result = new RubyArray(1);
-            result.Add(item1);
-            return result;
+            return new RubyArray(new object[] { item1, null, null, null }, 0, 1);
         }
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray2(object item1, object item2) {
-            RubyArray result = new RubyArray(2);
-            result.Add(item1);
-            result.Add(item2);
-            return result;
+            return new RubyArray(new object[] { item1, item2, null, null }, 0, 2);
         }
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray3(object item1, object item2, object item3) {
-            RubyArray result = new RubyArray(3);
-            result.Add(item1);
-            result.Add(item2);
-            result.Add(item3);
-            return result;
+            return new RubyArray(new object[] { item1, item2, item3, null }, 0, 3);
         }
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray4(object item1, object item2, object item3, object item4) {
-            RubyArray result = new RubyArray(4);
-            result.Add(item1);
-            result.Add(item2);
-            result.Add(item3);
-            result.Add(item4);
-            return result;
+            return new RubyArray(new object[] { item1, item2, item3, item4 }, 0, 4);
         }
 
         [Emitted]
         public static RubyArray/*!*/ MakeArray5(object item1, object item2, object item3, object item4, object item5) {
-            RubyArray result = new RubyArray(5);
-            result.Add(item1);
-            result.Add(item2);
-            result.Add(item3);
-            result.Add(item4);
-            result.Add(item5);
-            return result;
+            return new RubyArray(new object[] { item1, item2, item3, item4, item5 }, 0, 5);
+        }
+
+        // The elements of an array literal of more than five, in an array built for it alone
+        // (ReflectionCache.MakeArrayOpCall): the Array takes it over instead of copying it.
+        [Emitted]
+        public static RubyArray/*!*/ MakeArrayOwned(object[]/*!*/ items) {
+            Debug.Assert(items.Length >= Utils.MinListSize);
+            return new RubyArray(items, 0, items.Length);
         }
 
         [Emitted]
@@ -1691,11 +1815,162 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        // `f(a: x)`, `f(a: x, b: y)` and `f(a: x, b: y, c: z)` with Symbol literals for keys, the
+        // usual keyword call: no item array to allocate, and none of the conversions
+        // SetHashElement applies to a String or nil key. A repeated key keeps the last value, as
+        // in MRI (and SetHashElements).
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash1(RubyScope/*!*/ scope, object key1, object value1) {
+            var result = Hash.CreateKeywordArguments(scope.RubyContext.EqualityComparer, 1);
+            result.AppendUnlinked(key1, value1);
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash2(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2) {
+            var result = Hash.CreateKeywordArguments(scope.RubyContext.EqualityComparer, 2);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            return result;
+        }
+
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordArgumentsHash3(RubyScope/*!*/ scope, object key1, object value1, object key2, object value2,
+            object key3, object value3) {
+            var result = Hash.CreateKeywordArguments(scope.RubyContext.EqualityComparer, 3);
+            result.AppendUnlinked(key1, value1);
+            result.AppendUnlinked(key2, value2);
+            result.AppendUnlinked(key3, value3);
+            return result;
+        }
+
         /// <summary>True for the hash a call site built out of keyword syntax.</summary>
         [Emitted]
         public static bool IsKeywordArgumentsHash(object obj) {
             var hash = obj as Hash;
             return hash != null && hash.IsKeywordArguments;
+        }
+
+        // The keyword-parameter prologue (see PrismAstBridge.BindKeywordsFrom) reads the hash a
+        // keyword call passed with the helpers below rather than with Ruby-level Hash calls. MRI
+        // binds keywords without dispatching to Hash methods either, so a redefined Hash#[] or
+        // Hash#key? has no say in it. The hash is the one the call site built (or a copy of a
+        // splatted one), so it is a plain Hash with the default comparer.
+
+        /// <summary>
+        /// True when <paramref name="keywords"/> holds every required keyword - the first
+        /// <paramref name="requiredCount"/> of <paramref name="names"/> - and, unless the method
+        /// takes **rest, no keyword it does not declare. False means the prologue has an
+        /// ArgumentError to word, which it does the slow way.
+        /// </summary>
+        [Emitted]
+        public static bool KeywordArgumentsMatch(object keywords, RubySymbol/*!*/[]/*!*/ names, int requiredCount, bool acceptsRest) {
+            var hash = keywords as Hash;
+            return hash != null && hash.HasKeywords(names, requiredCount, acceptsRest);
+        }
+
+        /// <summary>
+        /// The value the call passed for keyword <paramref name="name"/>, or
+        /// <see cref="DefaultArgument"/> if it passed none. <paramref name="position"/> is where the
+        /// method declares the keyword, which is where a call usually puts it too.
+        /// </summary>
+        [Emitted]
+        public static object GetKeywordArgument(object keywords, RubySymbol/*!*/ name, int position) {
+            var hash = keywords as Hash;
+            object value;
+            return (hash != null && hash.TryGetValueByIdentity(name, position, out value)) ? value : DefaultArgument;
+        }
+
+        // A signature that mixes keywords with optional, rest or post positionals is lowered to a
+        // single splat that its prologue takes apart (PrismAstBridge.LowerGeneralParameters) with
+        // the helpers below rather than with Ruby-level Array calls. The splat is the array the
+        // call made for this call - or, for a block that auto-splats an Array argument, a copy of
+        // it (see AutoSplatArgument) - so consuming it changes nothing anyone else can see.
+
+        /// <summary>The arguments as they arrived, kept aside for a parameterless `super`.</summary>
+        [Emitted]
+        public static RubyArray/*!*/ CopySplatArguments(object args) {
+            return new RubyArray((RubyArray)args);
+        }
+
+        /// <summary>
+        /// Takes the hash a keyword call passed off the end of the arguments, or makes an empty one
+        /// if the call passed no keywords.
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ PopKeywordArguments(RubyScope/*!*/ scope, object args) {
+            var list = (RubyArray)args;
+            int last = list.Count - 1;
+            if (last >= 0 && IsKeywordArgumentsHash(list[last])) {
+                return (Hash)list.TakeLast();
+            }
+            return MakeHash0(scope);
+        }
+
+        /// <summary>A block's single Array argument, which it auto-splats.</summary>
+        [Emitted]
+        public static bool IsAutoSplatArgument(object args) {
+            var list = (RubyArray)args;
+            return list.Count == 1 && list[0] is RubyArray;
+        }
+
+        /// <summary>
+        /// The arguments a block that auto-splats its single Array argument binds: a copy of the
+        /// array, which the prologue consumes - the caller's array is left as it was.
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ AutoSplatArgument(object args) {
+            return new RubyArray((RubyArray)((RubyArray)args)[0]);
+        }
+
+        /// <summary>
+        /// The arity check of a method or lambda whose positionals are in the splat. A negative
+        /// <paramref name="maximum"/> means a rest parameter took the cap off.
+        /// </summary>
+        [Emitted]
+        public static void CheckSplatArity(object args, int minimum, int maximum) {
+            int count = ((RubyArray)args).Count;
+            if (count < minimum || (maximum >= 0 && count > maximum)) {
+                var inv = System.Globalization.CultureInfo.InvariantCulture;
+                throw (minimum == maximum) ? MakeWrongNumberOfArgumentsError(count, minimum)
+                    : MakeWrongNumberOfArgumentsErrorN(count, minimum.ToString(inv) + (maximum < 0 ? "+" : ".." + maximum.ToString(inv)));
+            }
+        }
+
+        /// <summary>The next positional argument; nil if there is none left (a block's).</summary>
+        [Emitted]
+        public static object ShiftSplatArgument(object args) {
+            return ((RubyArray)args).TakeFirst();
+        }
+
+        /// <summary>
+        /// The argument of an optional parameter: the next one if the <paramref name="postCount"/>
+        /// post parameters leave one, <see cref="DefaultArgument"/> otherwise.
+        /// </summary>
+        [Emitted]
+        public static object ShiftOptionalSplatArgument(object args, int postCount) {
+            var list = (RubyArray)args;
+            return (list.Count <= postCount) ? DefaultArgument : list.TakeFirst();
+        }
+
+        /// <summary>
+        /// What the rest parameter takes: everything the <paramref name="postCount"/> post parameters
+        /// leave - nothing if a block was given too few arguments to fill even those.
+        /// </summary>
+        [Emitted]
+        public static RubyArray/*!*/ ShiftRestSplatArguments(object args, int postCount) {
+            var list = (RubyArray)args;
+            return list.TakeFirst(Math.Max(0, list.Count - postCount));
+        }
+
+        /// <summary>
+        /// The **rest parameter: a new hash with whatever the call passed beyond the declared
+        /// <paramref name="names"/>. It is a copy, so the method may change it freely.
+        /// </summary>
+        [Emitted]
+        public static Hash/*!*/ MakeKeywordRest(object keywords, RubySymbol/*!*/[]/*!*/ names) {
+            return ((Hash)keywords).CopyWithoutKeywords(names);
         }
 
         /// <summary>
@@ -2023,6 +2298,57 @@ namespace IronRuby.Runtime {
             return value;
         }
 
+        /// <summary>
+        /// GetGlobalVariable through the site's cached variable: an ordinary global is one
+        /// version check and a field read, with no lookup and no lock.
+        /// </summary>
+        [Emitted]
+        public static object GetCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
+            var context = scope.RubyContext;
+            var variable = site.GetVariable(context);
+            var plain = variable as GlobalVariableInfo;
+            if (plain != null) {
+                return plain.Value;
+            }
+            return (variable != null) ? context.GetGlobalVariableValue(variable, scope) : null;
+        }
+
+        /// <summary>ReadGlobalVariable through the site's cached variable.</summary>
+        [Emitted]
+        public static object ReadCachedGlobalVariable(RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
+            var context = scope.RubyContext;
+            var variable = site.GetVariable(context);
+            var plain = variable as GlobalVariableInfo;
+            if (plain != null) {
+                return plain.Value;
+            }
+            if (variable != null) {
+                return context.GetGlobalVariableValue(variable, scope);
+            }
+            if (context.Verbose is bool && (bool)context.Verbose) {
+                context.ReportWarning(String.Format("global variable '${0}' not initialized", site.Name), true);
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// SetGlobalVariable through the site's cached variable. An ordinary global is assigned
+        /// in place; everything else - a new global, a special or read-only one - takes the
+        /// general path, which validates and creates.
+        /// </summary>
+        [Emitted]
+        public static object SetCachedGlobalVariable(object value, RubyScope/*!*/ scope, GlobalVariableSite/*!*/ site) {
+            var context = scope.RubyContext;
+            var plain = site.GetVariable(context) as GlobalVariableInfo;
+            if (plain != null) {
+                plain.Assign(value);
+                context.GlobalVariableAssigned(scope, site.Name, value);
+            } else {
+                context.SetGlobalVariable(scope, site.Name, value);
+            }
+            return value;
+        }
+
         [Emitted]
         public static bool IsDefinedGlobalVariable(RubyScope/*!*/ scope, string/*!*/ name) {
             GlobalVariable variable;
@@ -2249,14 +2575,26 @@ namespace IronRuby.Runtime {
             return result;
         }
 
+        // A literal without substitutions is built once and cached in its site's box, so every
+        // later evaluation only reads the box. The construction is split off: the delegate it
+        // makes captures the parameters, and a closure over parameters is allocated on entry to
+        // the method that declares them - on every evaluation, even one that never needs it.
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexB(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
+            return regexpCache.Value ?? CreateRegexBWorker(bytes, encoding, options, regexpCache);
+        }
+
+        private static RubyRegex/*!*/ CreateRegexBWorker(byte[]/*!*/ bytes, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
             Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringB(bytes, encoding), options); };
             return CreateRegexWorker(options, regexpCache, true, createRegex);
         }
 
         [Emitted]
         public static RubyRegex/*!*/ CreateRegexL(string/*!*/ str1, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
+            return regexpCache.Value ?? CreateRegexLWorker(str1, encoding, options, regexpCache);
+        }
+
+        private static RubyRegex/*!*/ CreateRegexLWorker(string/*!*/ str1, RubyEncoding/*!*/ encoding, RubyRegexOptions options, StrongBox<RubyRegex> regexpCache) {
             Func<RubyRegex> createRegex = delegate { return new RubyRegex(CreateMutableStringL(str1, encoding), options); };
             return CreateRegexWorker(options, regexpCache, true, createRegex);
         }
@@ -2418,17 +2756,42 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringMM(MutableString str1, MutableString str2, RubyEncoding/*!*/ encoding) {
-            return MutableString.CreateInternal(str1, encoding).Append(str2);
+            var result = MutableString.CreateInternal(str1, encoding);
+            AppendInterpolatedPart(result, str2);
+            return result;
+        }
+
+        /// <summary>
+        /// MRI's rb_str_concat_literals: append, and a result that is still US-ASCII takes the encoding
+        /// of the first part that is not - "#{1}a" in a UTF-8 file is UTF-8, "#{y}#{bin}" is binary.
+        /// </summary>
+        private static void AppendInterpolatedPart(MutableString/*!*/ result, MutableString part) {
+            if (part != null) {
+                result.Append(part);
+                if (part.Encoding != RubyEncoding.Ascii && result.Encoding == RubyEncoding.Ascii) {
+                    result.ForceEncoding(part.Encoding);
+                }
+            }
         }
 
         // TODO: we should emit Append calls directly, and not create an array first
         [Emitted]
         public static MutableString/*!*/ CreateMutableStringN(MutableString/*!*/[]/*!*/ parts) {
             Debug.Assert(parts.Length > 0);
-            var result = MutableString.CreateMutable(RubyEncoding.Ascii);
+            // room for all of it up front rather than a regrowth per part (a part counts its
+            // characters or its bytes, whichever it holds, which is what a capacity hint needs)
+            int capacity = 0;
+            for (int i = 0; i < parts.Length; i++) {
+                if (parts[i] != null) {
+                    capacity += parts[i].Length;
+                }
+            }
+            // MRI's rb_str_concat_literals starts from the first part's encoding: "a#{1}b" in a UTF-8
+            // file is UTF-8, though every part is ASCII and the Integer's is US-ASCII
+            var result = MutableString.CreateMutable(capacity, (parts[0] != null) ? parts[0].Encoding : RubyEncoding.Ascii);
 
             for (int i = 0; i < parts.Length; i++) {
-                result.Append(parts[i]);
+                AppendInterpolatedPart(result, parts[i]);
             }
 
             return result;
@@ -2519,7 +2882,11 @@ namespace IronRuby.Runtime {
         /// </summary>
         [Emitted]
         public static bool FilterBlockException(RubyScope/*!*/ scope, Exception/*!*/ exception) {
-            RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
+            // Flow control (throw/catch, retry, Thread#kill) is never seen by Ruby code, so it needs no
+            // backtrace. One that escaped anyway would still get one at the top level.
+            if (!(exception is StackUnwinder)) {
+                RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
+            }
             return false;
         }
 
@@ -2589,7 +2956,10 @@ namespace IronRuby.Runtime {
         public static bool IsMethodUnwinderTargetFrame(RubyScope/*!*/ scope, Exception/*!*/ exception) {
             var unwinder = exception as MethodUnwinder;
             if (unwinder == null) {
-                RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
+                // see FilterBlockException
+                if (!(exception is StackUnwinder)) {
+                    RubyExceptionData.GetInstance(exception).CaptureExceptionTrace(scope);
+                }
                 return false;
             } else {
                 return unwinder.TargetFrame == scope.FlowControlScope;
@@ -2603,7 +2973,10 @@ namespace IronRuby.Runtime {
 
         [Emitted]
         public static void LeaveMethodFrame(RuntimeFlowControl/*!*/ rfc) {
-            rfc.LeaveMethod();
+            // no write to a frame that is not active: CreateRfcForMethod's shared inactive frame stays untouched
+            if (rfc._activeFlowControlScope != null) {
+                rfc.LeaveMethod();
+            }
         }
         
         /// <summary>
