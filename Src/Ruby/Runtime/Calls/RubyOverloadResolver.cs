@@ -455,12 +455,11 @@ namespace IronRuby.Runtime.Calls {
         /// <summary>
         /// A CLR method called with a block takes it as its last argument if that is a delegate,
         /// List#ForEach { |x| ... } as List#ForEach(Action), the way JRuby passes a block to a Java
-        /// method's trailing functional interface. Only for a block literal or a non-nil &amp;proc
-        /// in a call without a splat; whether an overload takes it is up to overload resolution.
+        /// method's trailing functional interface. Only for a block literal or a non-nil &amp;proc;
+        /// whether an overload takes it is up to overload resolution.
         /// </summary>
         internal static bool CanPassBlockAsArgument(CallArguments/*!*/ args) {
-            return args.Signature.HasBlock && args.GetBlock() != null
-                && !args.Signature.HasSplattedArgument && !args.Signature.HasRhsArgument;
+            return args.Signature.HasBlock && args.GetBlock() != null && !args.Signature.HasRhsArgument;
         }
 
         internal void PassBlockAsArgument() {
@@ -587,7 +586,8 @@ namespace IronRuby.Runtime.Calls {
                 // skip items that are not needed for overload resolution
                 splatIndex = normalized.Count;
 
-                i = Math.Max(i, listLength - (postSplatLimit - (args.Signature.HasRhsArgument ? 1 : 0)));
+                // the rhs and a block passed as an argument follow the splat:
+                i = Math.Max(i, listLength - (postSplatLimit - (args.Signature.HasRhsArgument ? 1 : 0) - (blockArgument != null ? 1 : 0)));
                 while (i < listLength) {
                     normalized.Add(MakeSplattedItem(list, listVariable, i));
                     i++;
@@ -607,7 +607,7 @@ namespace IronRuby.Runtime.Calls {
                 normalized.Add(args.GetRhsMetaArgument());
             }
 
-            // the block, passed as the last positional argument (there is no splat nor rhs then):
+            // the block, passed as the last positional argument (there is no rhs then):
             if (blockArgument != null) {
                 normalized.Add(blockArgument);
             }
@@ -706,6 +706,11 @@ namespace IronRuby.Runtime.Calls {
             return invoke != null && invoke.ReturnType != typeof(void);
         }
 
+        private static bool DelegateReturns(Type/*!*/ delegateType, Type/*!*/ returnType) {
+            MethodInfo invoke = delegateType.GetMethod("Invoke");
+            return invoke != null && invoke.ReturnType == returnType;
+        }
+
         private static int DelegateArity(Type/*!*/ delegateType) {
             MethodInfo invoke = delegateType.GetMethod("Invoke");
             return invoke != null ? invoke.GetParameters().Length : -1;
@@ -779,6 +784,16 @@ namespace IronRuby.Runtime.Calls {
                     bool oneReturns = DelegateReturnsValue(typeOne), twoReturns = DelegateReturnsValue(typeTwo);
                     if (oneReturns != twoReturns) {
                         return oneReturns ? Candidate.One : Candidate.Two;
+                    }
+
+                    // What a block returns is not known until it runs, so of delegates returning a value the one
+                    // that takes any value is safe (Task.Run(Func<TResult>) with TResult = Object, not
+                    // Task.Run(Func<Task<TResult>>), which a block returning 42 could not satisfy):
+                    if (oneReturns && twoReturns) {
+                        bool oneAny = DelegateReturns(typeOne, typeof(object)), twoAny = DelegateReturns(typeTwo, typeof(object));
+                        if (oneAny != twoAny) {
+                            return oneAny ? Candidate.One : Candidate.Two;
+                        }
                     }
                 }
             }

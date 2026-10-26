@@ -1095,7 +1095,12 @@ namespace IronRuby.Runtime {
                 candidate = candidate.Substring(0, dot);
             }
 
-            return TryLoadPlatformAssembly("netstandard") && ns.ContainsKey(name);
+            // The netstandard facade forwards the whole .NET Standard surface. Only for the BCL's own
+            // namespaces, though: a namespace included into Object (include Modern) has every top-level
+            // constant looked up in it, and a miss there is no reason to load a hundred assemblies.
+            return (nsName == "System" || nsName.StartsWith("System.", StringComparison.Ordinal) ||
+                    nsName == "Microsoft" || nsName.StartsWith("Microsoft.", StringComparison.Ordinal))
+                && TryLoadPlatformAssembly("netstandard") && ns.ContainsKey(name);
         }
 
         // Loads a platform assembly that has not been tried yet. Returns true if it is now loaded.
@@ -1352,7 +1357,16 @@ namespace IronRuby.Runtime {
         // Value is null if the namepsace has been activated.
         private Dictionary<string, List<IEnumerable<ExtensionMethodInfo>>> _availableExtensions;
 
+        // Assemblies whose extension methods have been registered (or are queued to be, in _potentialExtensionAssemblies).
+        private readonly HashSet<Assembly>/*!*/ _extensionAssemblies = new HashSet<Assembly>();
+
         private void AddExtensionAssembly(Assembly/*!*/ assembly) {
+            lock (ExtensionsLock) {
+                if (!_extensionAssemblies.Add(assembly)) {
+                    return;
+                }
+            }
+
             if (_potentialExtensionAssemblies != null) {
                 lock (ExtensionsLock) {
                     if (_potentialExtensionAssemblies != null) {
@@ -1397,6 +1411,23 @@ namespace IronRuby.Runtime {
 
         public void ActivateExtensions(string/*!*/ @namespace) {
             ContractUtils.RequiresNotNull(@namespace, "namespace");
+
+            // The types of a namespace can be known through a facade's type forwarders (netstandard, System.Xml),
+            // which loads the assemblies that define them without them ever being reported loaded: their extension
+            // methods (System.Linq.Enumerable's) would never be seen. Look at where the namespace's types really live.
+            NamespaceTracker tracker = _namespaces;
+            foreach (string part in @namespace.Length > 0 ? @namespace.Split('.') : ArrayUtils.EmptyStrings) {
+                MemberTracker member;
+                tracker = (tracker != null && tracker.TryGetValue(part, out member)) ? member as NamespaceTracker : null;
+            }
+            if (tracker != null) {
+                foreach (var member in tracker) {
+                    var typeTracker = member.Value as TypeTracker;
+                    if (typeTracker != null && !(typeTracker is TypeGroup)) {
+                        AddExtensionAssembly(typeTracker.Type.Assembly);
+                    }
+                }
+            }
 
             Assembly[] assemblies = null;
             if (_potentialExtensionAssemblies != null) {

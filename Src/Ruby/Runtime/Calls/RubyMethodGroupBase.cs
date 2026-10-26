@@ -429,7 +429,8 @@ namespace IronRuby.Runtime.Calls {
             SelfCallConvention callConvention) {
 
             int index = RubyOverloadResolver.GetHiddenParameterCount(overload, callConvention)
-                + args.SimpleArgumentCount - (keywordsByName ? 1 : 0);
+                + args.SimpleArgumentCount + (args.Signature.HasSplattedArgument ? args.GetSplattedArgument().Count : 0)
+                - (keywordsByName ? 1 : 0);
 
             return index < overload.ParameterCount
                 && !overload.IsParamArray(index)
