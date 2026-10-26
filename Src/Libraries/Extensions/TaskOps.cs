@@ -30,6 +30,7 @@ namespace IronRuby.Builtins {
     /// internal Task&lt;T&gt; subclasses an async method returns.
     /// </summary>
     [RubyClass(Extends = typeof(Task), Restrictions = ModuleRestrictions.None)]
+    [Includes(typeof(IAsyncResult), typeof(IDisposable))] // a library class does not get the CLR interfaces mixed in by itself
     public static class TaskOps {
         // task type -> its Result getter, null for a task that has no result
         private static readonly ConcurrentDictionary<Type, Func<Task, object>>/*!*/ _resultGetters =

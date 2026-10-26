@@ -65,6 +65,7 @@ p((D.adder.call(1) rescue $!))
 p((D.adder.call(1, 2, 3) rescue $!))
 p((dbl.call('x') rescue $!.class))
 p dbl.respond_to?(:call), dbl.method(:call).call(4)
+p dbl.is_a?(System::ICloneable), System::Delegate.include?(System::Runtime::Serialization::ISerializable)
 ", @"
 10
 10
@@ -82,6 +83,8 @@ empty
 TypeError
 true
 8
+true
+true
 ");
         }
 
@@ -928,6 +931,7 @@ p T.done('x').value
 p T.run(System::Func[Integer].new { 6 * 7 }).value
 p System::Threading::Tasks::Task.completed_task.value
 p T.add_later(1, 1).respond_to?(:value)
+p T.done('x').is_a?(System::IDisposable), System::Threading::Tasks::Task[0].include?(System::IAsyncResult)
 ", @"
 5
 5
@@ -937,6 +941,8 @@ true
 'x'
 42
 nil
+true
+true
 true
 ");
         }

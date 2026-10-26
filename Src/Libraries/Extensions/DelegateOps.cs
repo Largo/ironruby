@@ -18,6 +18,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using System.Runtime.Serialization;
 using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting.Runtime;
@@ -32,6 +33,7 @@ namespace IronRuby.Builtins {
     /// call to #invoke gives them.
     /// </summary>
     [RubyClass(Extends = typeof(Delegate), Restrictions = ModuleRestrictions.None)]
+    [Includes(typeof(ICloneable), typeof(ISerializable))] // a library class does not get the CLR interfaces mixed in by itself
     public static class DelegateOps {
         private static readonly RubyCallSignature InvokeSignature =
             new RubyCallSignature(0, RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock);

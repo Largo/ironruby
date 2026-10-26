@@ -62,6 +62,10 @@ namespace IronRuby.Builtins {
                 LoadModule_Instance, LoadModule_Class, null,
                 LoadClass_Instance, LoadClass_Class, null
             );
+            IronRuby.Builtins.RubyModule moduleRef0 = GetModule(typeof(System.ICloneable));
+            IronRuby.Builtins.RubyModule moduleRef1 = GetModule(typeof(System.Runtime.Serialization.ISerializable));
+            IronRuby.Builtins.RubyModule moduleRef2 = GetModule(typeof(System.IAsyncResult));
+            IronRuby.Builtins.RubyModule moduleRef3 = GetModule(typeof(System.IDisposable));
             
             
             // Skipped primitive: __MainSingleton
@@ -97,9 +101,9 @@ namespace IronRuby.Builtins {
             DefineGlobalModule("Signal", typeof(IronRuby.Builtins.Signal), 0x0000000F, null, LoadSignal_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendClass(typeof(System.Collections.DictionaryEntry), 0x00000000, null, LoadSystem__Collections__DictionaryEntry_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             ExtendModule(typeof(System.Collections.Generic.KeyValuePair<,>), 0x00000000, LoadSystem__Collections__Generic__KeyValuePair_2_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            ExtendClass(typeof(System.Delegate), 0x00000000, null, LoadSystem__Delegate_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendClass(typeof(System.Delegate), 0x00000000, null, LoadSystem__Delegate_Instance, null, null, new IronRuby.Builtins.RubyModule[] {moduleRef0, moduleRef1});
             ExtendModule(typeof(System.Runtime.CompilerServices.ITuple), 0x00000000, LoadSystem__Runtime__CompilerServices__ITuple_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
-            ExtendClass(typeof(System.Threading.Tasks.Task), 0x00000000, null, LoadSystem__Threading__Tasks__Task_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
+            ExtendClass(typeof(System.Threading.Tasks.Task), 0x00000000, null, LoadSystem__Threading__Tasks__Task_Instance, null, null, new IronRuby.Builtins.RubyModule[] {moduleRef2, moduleRef3});
             ExtendClass(typeof(System.Type), 0x00000000, null, LoadSystem__Type_Instance, null, null, IronRuby.Builtins.RubyModule.EmptyArray);
             DefineGlobalModule("Warning", typeof(IronRuby.Builtins.WarningOps), 0x0000000F, LoadWarning_Instance, LoadWarning_Class, null, IronRuby.Builtins.RubyModule.EmptyArray);
             object def12 = DefineSingleton(Load__Singleton_EnvironmentSingletonOps_Instance, null, null, def62);
