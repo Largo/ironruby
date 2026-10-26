@@ -347,7 +347,9 @@ namespace IronRuby.Builtins {
                 var splatSite = splatStorage.GetCallSite("call",
                     new RubyCallSignature(0, RubyCallFlags.HasSplattedArgument | RubyCallFlags.HasBlock));
                 object intermediate = splatSite.Target(splatSite, other, procArg, unsplat);
-                return self.Call(null, intermediate);
+                // through #call, so a lambda's arity is checked against the one value it gets
+                var site = callStorage.GetCallSite("call", 1);
+                return site.Target(site, self, intermediate);
             });
         }
 

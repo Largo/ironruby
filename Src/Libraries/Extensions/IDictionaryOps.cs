@@ -62,7 +62,7 @@ namespace IronRuby.Builtins {
         }
 
         // Copies key,value pairs into an array. Needed for iteration over the hash while mutating it.
-        private static IEnumerable<KeyValuePair<object, object>> CopyKeyValuePairs(IDictionary<object, object>/*!*/ dict) {
+        private static KeyValuePair<object, object>[]/*!*/ CopyKeyValuePairs(IDictionary<object, object>/*!*/ dict) {
             KeyValuePair<object, object>[] pairs = new KeyValuePair<object, object>[dict.Count];
             dict.CopyTo(pairs, 0);
             return pairs;
@@ -252,6 +252,24 @@ namespace IronRuby.Builtins {
 
         #region each, each_pair, each_key, each_value
 
+        /// <summary>
+        /// The value an entry of the snapshot has now. A key that is not found was deleted by the
+        /// block - or it is a key whose hash has drifted since it was stored, a Hash that is its
+        /// own key being the usual case; MRI still visits such an entry, since it walks the table.
+        /// The block may not add entries, so the count can only have dropped if something was
+        /// deleted: while it has not, the entry is still there and its snapshot value stands.
+        /// </summary>
+        private static bool TryGetCurrentValue(IDictionary<object, object>/*!*/ self, KeyValuePair<object, object>[]/*!*/ snapshot, int index, out object value) {
+            if (self.TryGetValue(snapshot[index].Key, out value)) {
+                return true;
+            }
+            if (self.Count < snapshot.Length) {
+                return false;
+            }
+            value = snapshot[index].Value;
+            return true;
+        }
+
         [RubyMethod("each")]
         [RubyMethod("each_pair")]
         public static Enumerator/*!*/ Each(RubyContext/*!*/ context, IDictionary<object, object>/*!*/ self) {
@@ -266,8 +284,7 @@ namespace IronRuby.Builtins {
                 // value up when it is its turn: a value the block replaced is seen replaced, and a
                 // key the block deleted is skipped, as in MRI. Adding a key is what MRI forbids
                 // while a hash is being iterated, and the Hash itself raises for that.
-                object[] keys = new object[self.Count];
-                self.Keys.CopyTo(keys, 0);
+                var pairs = CopyKeyValuePairs(self);
 
                 bool yieldPair = IsPairYieldOptimizable(block);
 
@@ -276,15 +293,15 @@ namespace IronRuby.Builtins {
                     hash.BeginIteration();
                 }
                 try {
-                    for (int i = 0; i < keys.Length; i++) {
+                    for (int i = 0; i < pairs.Length; i++) {
                         object value;
-                        if (!self.TryGetValue(keys[i], out value)) {
+                        if (!TryGetCurrentValue(self, pairs, i, out value)) {
                             continue;
                         }
                         object result;
                         if (yieldPair
-                            ? block.Yield(CustomStringDictionary.ObjToNull(keys[i]), value, out result)
-                            : block.Yield(MakeArray(keys[i], value), out result)) {
+                            ? block.Yield(CustomStringDictionary.ObjToNull(pairs[i].Key), value, out result)
+                            : block.Yield(MakeArray(pairs[i].Key, value), out result)) {
                             return result;
                         }
                     }
@@ -321,21 +338,21 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_key")]
         public static object EachKey(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // See Each: a copy of the keys, deleted ones skipped, no new ones allowed.
-                object[] keys = new object[self.Count];
-                self.Keys.CopyTo(keys, 0);
+                // See Each: a copy of the entries, deleted ones skipped, no new ones allowed.
+                var pairs = CopyKeyValuePairs(self);
 
                 Hash hash = self as Hash;
                 if (hash != null) {
                     hash.BeginIteration();
                 }
                 try {
-                    for (int i = 0; i < keys.Length; i++) {
-                        if (!self.ContainsKey(keys[i])) {
+                    for (int i = 0; i < pairs.Length; i++) {
+                        object value;
+                        if (!TryGetCurrentValue(self, pairs, i, out value)) {
                             continue;
                         }
                         object result;
-                        if (block.Yield(CustomStringDictionary.ObjToNull(keys[i]), out result)) {
+                        if (block.Yield(CustomStringDictionary.ObjToNull(pairs[i].Key), out result)) {
                             return result;
                         }
                     }
@@ -357,18 +374,17 @@ namespace IronRuby.Builtins {
         [RubyMethod("each_value")]
         public static object EachValue(RubyContext/*!*/ context, [NotNull]BlockParam/*!*/ block, IDictionary<object, object>/*!*/ self) {
             if (self.Count > 0) {
-                // See Each: a copy of the keys, deleted ones skipped, no new ones allowed.
-                object[] keys = new object[self.Count];
-                self.Keys.CopyTo(keys, 0);
+                // See Each: a copy of the entries, deleted ones skipped, no new ones allowed.
+                var pairs = CopyKeyValuePairs(self);
 
                 Hash hash = self as Hash;
                 if (hash != null) {
                     hash.BeginIteration();
                 }
                 try {
-                    for (int i = 0; i < keys.Length; i++) {
+                    for (int i = 0; i < pairs.Length; i++) {
                         object value;
-                        if (!self.TryGetValue(keys[i], out value)) {
+                        if (!TryGetCurrentValue(self, pairs, i, out value)) {
                             continue;
                         }
                         object result;
@@ -434,16 +450,6 @@ namespace IronRuby.Builtins {
                 }
             }
             return false;
-        }
-
-        [RubyMethod("index")]
-        public static object Index(BinaryOpStorage/*!*/ equals, IDictionary<object, object>/*!*/ self, object value) {
-            foreach (KeyValuePair<object, object> pair in self) {
-                if (Protocols.IsEqual(equals, pair.Value, value)) {
-                    return CustomStringDictionary.ObjToNull(pair.Key);
-                }
-            }
-            return null;
         }
 
         [RubyMethod("invert")]

@@ -1235,6 +1235,34 @@ uncaught throw :zz
 ");
         }
 
+        public void Hash_SelfKey1() {
+            TestOutput(@"
+h = { b: 1 }; h[h] = 2
+h.each { |k, v| puts ""#{k.equal?(h)} #{v}"" }
+h.each_key { |k| puts k.equal?(h) }
+h.each_value { |v| puts v }
+h2 = { a: 1, b: 2 }
+h2.each { |k, v| h2.delete(:b) if k == :a; puts k }
+p({}.respond_to?(:index))
+begin; (lambda { |x, y| [x, y] } << proc { |x| [x, x] }).call(3); rescue ArgumentError => e; puts e.message; end
+p((proc { |x, y| [x, y] } << proc { |x| [x, x] }).call(3))
+p :upcase.to_proc.equal?(:upcase.to_proc), :upcase.to_proc.call('a')
+", @"
+false 1
+true 2
+false
+true
+1
+2
+a
+false
+wrong number of arguments (given 1, expected 2)
+[3, 3]
+true
+""A""
+");
+        }
+
         public void Marshal_Misc1() {
             TestOutput(@"
 o = Object.new; o.instance_variable_set(:@a, o)
