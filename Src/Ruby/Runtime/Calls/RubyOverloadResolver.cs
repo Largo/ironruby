@@ -859,6 +859,7 @@ namespace IronRuby.Runtime.Calls {
 
             return Converter.TryConvertToCollection(expr, restrictedType ?? expr.Type, toType, _args.RubyContext, _implicitProtocolConversions)
                 ?? Converter.TryConvertTypeGroup(expr, restrictedType ?? expr.Type, toType, _args.MetaContext.Expression)
+                ?? Converter.TryConvertRange(expr, restrictedType ?? expr.Type, toType)
                 ?? Converter.ConvertExpression(expr, toType, _args.RubyContext, _args.MetaContext.Expression, _implicitProtocolConversions);
         }
 

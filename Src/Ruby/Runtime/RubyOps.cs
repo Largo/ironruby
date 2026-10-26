@@ -4466,6 +4466,43 @@ namespace IronRuby.Runtime {
             return context.GetModule(type);
         }
 
+        /// <summary>
+        /// A Ruby index passed for a System.Index: a negative one counts from the end, -1 is ^1.
+        /// </summary>
+        public static System.Index ConvertToIndex(int index) {
+            return index < 0 ? System.Index.FromEnd(-index) : System.Index.FromStart(index);
+        }
+
+        /// <summary>
+        /// A Ruby Range of Integers passed for a System.Range. Ruby's end is inclusive unless the range excludes it,
+        /// and either end may be nil (beginless, endless): 1..3 is 1..4, 1...-1 is 1..^1, -3..-1 is ^3..^0.
+        /// </summary>
+        public static System.Range ConvertToRange(Range/*!*/ range) {
+            System.Index start = range.Begin == null ? System.Index.Start : ConvertToIndex(GetRangeEndpoint(range.Begin));
+            System.Index end;
+            if (range.End == null) {
+                end = System.Index.End;
+            } else {
+                int last = GetRangeEndpoint(range.End);
+                if (range.ExcludeEnd) {
+                    end = ConvertToIndex(last);
+                } else {
+                    end = last >= 0 ? System.Index.FromStart(last + 1) : System.Index.FromEnd(-last - 1);
+                }
+            }
+            return new System.Range(start, end);
+        }
+
+        private static int GetRangeEndpoint(object value) {
+            if (value is int) {
+                return (int)value;
+            }
+            throw RubyExceptions.CreateTypeError(String.Format("no implicit conversion of {0} into System::Range (Integer endpoints expected)",
+                value == null ? "nil" : value.GetType().Name));
+        }
+
+        internal static readonly MethodInfo/*!*/ ConvertToIndexMethod = typeof(RubyOps).GetMethod(nameof(ConvertToIndex));
+        internal static readonly MethodInfo/*!*/ ConvertToRangeMethod = typeof(RubyOps).GetMethod(nameof(ConvertToRange));
         internal static readonly MethodInfo/*!*/ ConvertTypeGroupToModuleMethod = typeof(RubyOps).GetMethod(nameof(ConvertTypeGroupToModule));
         internal static readonly MethodInfo/*!*/ ConvertToVectorMethod = typeof(RubyOps).GetMethod(nameof(ConvertToVector));
         internal static readonly MethodInfo/*!*/ ConvertToListMethod = typeof(RubyOps).GetMethod(nameof(ConvertToList));

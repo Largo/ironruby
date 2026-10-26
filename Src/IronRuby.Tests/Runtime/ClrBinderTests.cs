@@ -411,6 +411,46 @@ nil
 ");
         }
 
+        public static class BinderRanges {
+            public static string Slice(string s, Range range) { return s[range]; }
+            public static char At(string s, Index index) { return s[index]; }
+            public static int[] Take(int[] items, Range range) { return items[range]; }
+        }
+
+        /// <summary>
+        /// A Ruby Range of Integers passes for a System.Range and a negative index for one counted from the end,
+        /// with Ruby's meaning: an inclusive end unless excluded, -1 the last element.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrRangeIndexArguments1() {
+            Context.ObjectClass.SetConstant("R", Context.GetClass(typeof(BinderRanges)));
+            TestOutput(@"
+['1..3', '1...3', '2..', '-3..-1', '1...-1', '0..0'].each do |s|
+  r = eval(s)
+  puts R.slice('hello', r) == 'hello'[r]
+end
+puts R.at('hello', -1)
+puts R.at('hello', 0)
+p R.take([1, 2, 3, 4], 1..2).to_a
+begin
+  R.slice('hello', 1.5..2)
+rescue TypeError
+  puts 'TypeError'
+end
+", @"
+true
+true
+true
+true
+true
+true
+o
+h
+[2, 3]
+TypeError
+");
+        }
+
         public class BinderOut {
             public string Split(string value, out string head, out string tail) {
                 head = value.Substring(0, 1);

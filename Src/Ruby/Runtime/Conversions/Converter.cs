@@ -26,6 +26,7 @@ using System.Dynamic;
 using System.Collections;
 using System.Runtime.CompilerServices;
 using IronRuby.Builtins;
+using Range = IronRuby.Builtins.Range;
 using System.Reflection;
 using IronRuby.Compiler;
 using IronRuby.Runtime.Calls;
@@ -162,6 +163,10 @@ namespace IronRuby.Runtime.Conversions {
             }
 
             if (IsTypeGroupConversion(fromType, toType)) {
+                return Convertibility.AlwaysConvertible;
+            }
+
+            if (fromType == typeof(Range) && toType == typeof(System.Range)) {
                 return Convertibility.AlwaysConvertible;
             }
 
@@ -307,6 +312,16 @@ namespace IronRuby.Runtime.Conversions {
 
         #endregion
 
+        /// <summary>
+        /// A Ruby Range of Integers passed for a System.Range: 1..3 is 1..4, -3..-1 is ^3..^0, 2.. is 2..^0.
+        /// </summary>
+        internal static Expression TryConvertRange(Expression/*!*/ expr, Type/*!*/ fromType, Type/*!*/ toType) {
+            if (fromType != typeof(Range) || toType != typeof(System.Range)) {
+                return null;
+            }
+            return Ast.Call(RubyOps.ConvertToRangeMethod, AstUtils.Convert(expr, typeof(Range)));
+        }
+
         internal static Expression/*!*/ ConvertExpression(Expression/*!*/ expr, Type/*!*/ toType, RubyContext/*!*/ context, Expression/*!*/ contextExpression,
             bool implicitProtocolConversions) {
 
@@ -318,6 +333,11 @@ namespace IronRuby.Runtime.Conversions {
 
         internal static Expression ImplicitConvert(Expression/*!*/ expr, Type/*!*/ fromType, Type/*!*/ toType) {
             expr = AstUtils.Convert(expr, fromType);
+
+            // Index's own implicit conversion rejects a negative int; a Ruby index counts from the end (-1 is ^1):
+            if (fromType == typeof(int) && toType == typeof(System.Index)) {
+                return Ast.Call(RubyOps.ConvertToIndexMethod, expr);
+            }
 
             if (toType.IsAssignableFrom(fromType)) {
                 return AstUtils.Convert(expr, toType);
