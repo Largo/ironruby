@@ -122,6 +122,7 @@ namespace IronRuby.Prism {
                     case "local": return PrismNative.pm_string_query_local(p, n, encodingName);
                     case "constant": return PrismNative.pm_string_query_constant(p, n, encodingName);
                     case "method_name": return PrismNative.pm_string_query_method_name(p, n, encodingName);
+                    case "keyword": return PrismNative.pm_string_query_keyword(p, n, encodingName);
                     default: throw new ArgumentException("unknown query: " + kind, nameof(kind));
                 }
             } finally {

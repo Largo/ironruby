@@ -92,15 +92,16 @@ namespace IronRuby.Prism {
         // 1 plain, 2 bold, 3 color.
         [DllImport(Lib)] internal static extern sbyte pm_serialize_parse_errors_format(IntPtr buffer, IntPtr source, nuint size, IntPtr data, int formatType);
 
-        // The prism library's own version string ("1.9.0"), which is what the Ruby
+        // The prism library's own version string ("2.0.0"), which is what the Ruby
         // library reports as Prism::VERSION.
         [DllImport(Lib, CharSet = CharSet.Ansi)] internal static extern IntPtr pm_version();
 
         // Whether a string would lex as a local variable name / a constant name / a
-        // method name.  Returns pm_string_query_t: -1 error, 0 false, 1 true.
+        // method name / a keyword.  Returns pm_string_query_t: -1 error, 0 false, 1 true.
         [DllImport(Lib, CharSet = CharSet.Ansi)] internal static extern int pm_string_query_local(IntPtr source, nuint length, string encodingName);
         [DllImport(Lib, CharSet = CharSet.Ansi)] internal static extern int pm_string_query_constant(IntPtr source, nuint length, string encodingName);
         [DllImport(Lib, CharSet = CharSet.Ansi)] internal static extern int pm_string_query_method_name(IntPtr source, nuint length, string encodingName);
+        [DllImport(Lib, CharSet = CharSet.Ansi)] internal static extern int pm_string_query_keyword(IntPtr source, nuint length, string encodingName);
 
         // diagnostics
         [DllImport(Lib)] internal static extern int pm_parser_start_line(IntPtr parser);
