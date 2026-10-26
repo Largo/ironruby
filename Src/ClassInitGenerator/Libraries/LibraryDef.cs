@@ -912,7 +912,7 @@ internal class LibraryDef {
         Array.Sort(worklist, delegate(ModuleDef x, ModuleDef y) {
             // if the dependency order is the same, fall back to the type name
             if (x.DependencyOrder == y.DependencyOrder) {
-                return x.QualifiedName.CompareTo(y.QualifiedName);
+                return CompareNames(x, y);
             }
             return x.DependencyOrder - y.DependencyOrder;
         });
@@ -1109,11 +1109,18 @@ internal class LibraryDef {
         }
     }
 
+    // Array.Sort is not stable, and a generic type definition has the Ruby name of its non-generic namesake
+    // (System::IComparable): the id breaks the tie so that the output does not depend on what else is defined.
+    private static int CompareNames(ModuleDef/*!*/ x, ModuleDef/*!*/ y) {
+        int result = x.QualifiedName.CompareTo(y.QualifiedName);
+        return (result != 0) ? result : String.CompareOrdinal(x.Id, y.Id);
+    }
+
     private void GenerateTraitInitializations(IDictionary<Type, ModuleDef>/*!*/ traitDefs) {
         // Sort the items before we generate them to improve diff quality
         ModuleDef[] worklist = new ModuleDef[traitDefs.Count];
         traitDefs.Values.CopyTo(worklist, 0);
-        Array.Sort(worklist, (x, y) => x.QualifiedName.CompareTo(y.QualifiedName));
+        Array.Sort(worklist, CompareNames);
 
         foreach (ModuleDef moduleDef in worklist) {
             GenerateTraitInitialization(moduleDef);

@@ -114,8 +114,8 @@ namespace IronRuby.Builtins {
             ExtendModule(typeof(System.Collections.Generic.IDictionary<System.Object, System.Object>), 0x00000000, LoadSystem__Collections__Generic__IDictionary_Instance, null, null, def62);
             ExtendModule(typeof(System.Collections.IEnumerable), 0x00000000, LoadSystem__Collections__IEnumerable_Instance, null, null, def62);
             ExtendModule(typeof(System.Collections.IList), 0x00000000, LoadSystem__Collections__IList_Instance, null, null, def62);
-            ExtendModule(typeof(System.IComparable<>), 0x00000000, LoadSystem__IComparable_1_Instance, null, null, def68);
             ExtendModule(typeof(System.IComparable), 0x00000000, LoadSystem__IComparable_Instance, null, null, def68);
+            ExtendModule(typeof(System.IComparable<>), 0x00000000, LoadSystem__IComparable_1_Instance, null, null, def68);
             ExtendClass(typeof(System.String), 0x00000000, null, LoadSystem__String_Instance, null, null, new IronRuby.Builtins.RubyModule[] {def7, def62, def68}, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, System.String>(IronRuby.Builtins.ClrStringOps.Create), 
                 new Func<IronRuby.Builtins.RubyClass, System.Char, System.Int32, System.String>(IronRuby.Builtins.ClrStringOps.Create), 
