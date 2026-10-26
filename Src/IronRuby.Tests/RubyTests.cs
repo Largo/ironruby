@@ -563,6 +563,7 @@ namespace IronRuby.Tests {
                 ClrDelegateSignature1,
                 ClrDelegateToProc1,
                 ClrDelegateCompose1,
+                ClrTypeGroupForwarding1,
                 HostingDefaultOptions1,
                 Interactive1,
                 Interactive2,

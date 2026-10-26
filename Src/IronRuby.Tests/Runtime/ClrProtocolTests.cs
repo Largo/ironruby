@@ -195,5 +195,81 @@ true
         }
 
         #endregion
+
+        #region Type groups
+
+        public class ProtocolGroupHost1 {
+            public class Box {
+                public static int Total;
+                public static string Label { get; set; }
+                public static int Twice(int x) { return x * 2; }
+                public static int Apply(Func<int, int> f, int x) { return f(x); }
+            }
+
+            public class Box<T> {
+                public static string Kind() { return typeof(T).Name; }
+            }
+
+            public class Pair<T> { }
+            public class Pair<T, U> { }
+        }
+
+        /// <summary>
+        /// A constant naming both a type and its generic namesakes is a TypeGroup; calls the group does not
+        /// define itself go on to the non-generic type.
+        /// </summary>
+        public void ClrTypeGroupForwarding1() {
+            Context.ObjectClass.SetConstant("H", Context.GetClass(typeof(ProtocolGroupHost1)));
+            TestOutput(@"
+B = H::Box
+p B.class
+p B.twice(21), B.Twice(1), B.apply(System::Func[Integer, Integer].new { |x| x + 1 }, 1)
+p B.respond_to?(:twice), B.respond_to?(:Twice), B.respond_to?(:nope)
+p B.method(:twice).call(4)
+
+B.total = 5
+B.label = 'x'
+p B.total, B.label
+
+NB = B[0]
+def NB.with_block
+  yield 3
+end
+p B.with_block { |x| x * 2 }
+
+# the group's own methods are not forwarded
+p B.count, B[Integer].kind
+
+p((B.nope rescue $!))
+p((B.nope(1, 2) rescue [$!.class, $!.name, $!.args]))
+p((H::Pair.nope rescue $!))
+p H::Pair.respond_to?(:nope)
+
+p System::Tuple.create(1, 2).item2
+p System::Threading::Tasks::Task.from_result(5).result
+", @"
+Microsoft::Scripting::Actions::TypeGroup
+42
+2
+2
+true
+true
+false
+8
+5
+'x'
+6
+2
+'Int32'
+#<NoMethodError: undefined method `nope' for an instance of Microsoft::Scripting::Actions::TypeGroup>
+[NoMethodError, :nope, [1, 2]]
+#<NoMethodError: undefined method `nope' for an instance of Microsoft::Scripting::Actions::TypeGroup>
+false
+2
+5
+");
+        }
+
+        #endregion
     }
 }

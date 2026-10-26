@@ -6085,6 +6085,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Runtime.RubyContext, Microsoft.Scripting.Actions.TypeGroup, IronRuby.Builtins.MutableString>(IronRuby.Builtins.TypeGroupOps.Inspect)
             );
             
+            DefineLibraryMethod(module, "method_missing", 0x52, 
+                0x80000008U, 
+                new Func<IronRuby.Runtime.RubyContext, IronRuby.Runtime.BlockParam, Microsoft.Scripting.Actions.TypeGroup, IronRuby.Builtins.RubySymbol, System.Object[], System.Object>(IronRuby.Builtins.TypeGroupOps.MethodMissing)
+            );
+            
             DefineLibraryMethod(module, "name", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, Microsoft.Scripting.Actions.TypeGroup, IronRuby.Builtins.MutableString>(IronRuby.Builtins.TypeGroupOps.GetName)
@@ -6100,6 +6105,11 @@ namespace IronRuby.Builtins {
                 0x80000004U, 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, Microsoft.Scripting.Actions.TypeGroup, System.Object[], IronRuby.Builtins.RubyModule>(IronRuby.Builtins.TypeGroupOps.Of), 
                 new Func<IronRuby.Runtime.RubyContext, Microsoft.Scripting.Actions.TypeGroup, System.Int32, IronRuby.Builtins.RubyModule>(IronRuby.Builtins.TypeGroupOps.Of)
+            );
+            
+            DefineLibraryMethod(module, "respond_to_missing?", 0x52, 
+                0x00020004U, 
+                new Func<IronRuby.Runtime.RubyContext, Microsoft.Scripting.Actions.TypeGroup, System.String, System.Object, System.Boolean>(IronRuby.Builtins.TypeGroupOps.RespondToMissing)
             );
             
             DefineLibraryMethod(module, "superclass", 0x51, 
