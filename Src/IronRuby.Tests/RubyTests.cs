@@ -566,6 +566,7 @@ namespace IronRuby.Tests {
                 ClrMethodToDelegate1,
                 ClrMethodParameters1,
                 ClrTypeGroupAsModule1,
+                ClrGenericDelegateInference1,
                 ClrOutParameters1,
                 ClrCollectionArguments1,
                 ClrPlatformAssemblies1,

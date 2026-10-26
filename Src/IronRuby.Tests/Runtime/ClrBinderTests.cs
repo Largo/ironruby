@@ -354,6 +354,48 @@ TypeError
 ");
         }
 
+        public static class BinderGenerics {
+            public static List<T> Filter<T>(IEnumerable<T> items, Func<T, bool> predicate) { return items.Where(predicate).ToList(); }
+            public static List<TResult> Map<T, TResult>(IEnumerable<T> items, Func<T, TResult> selector) { return items.Select(selector).ToList(); }
+            public static T Apply<T>(Func<T, T> f) { return f(default(T)); }
+            public static string TypeOf<T>(IEnumerable<T> items, Action<T> each) { foreach (var item in items) each(item); return typeof(T).Name; }
+        }
+
+        /// <summary>
+        /// A block passed for a delegate whose parameters use a type parameter leaves the type parameter to the other
+        /// arguments: Filter&lt;T&gt;(List&lt;int&gt;, Func&lt;T, bool&gt;) infers T = int, not Object.
+        /// </summary>
+        [Options(Prism = true)]
+        public void ClrGenericDelegateInference1() {
+            Context.ObjectClass.SetConstant("G", Context.GetClass(typeof(BinderGenerics)));
+            TestOutput(@"
+list = System::Collections::Generic::List[Integer].new([3, 1, 4])
+p G.filter(list) { |x| x > 1 }.to_a
+p G.filter(list, ->(x) { x > 3 }).to_a
+p G.map(list) { |x| x.to_s * 2 }.to_a
+r = []
+puts G.type_of(list) { |x| r << x }
+p r
+p G.apply { |x| x }
+
+load_assembly 'System.Linq'
+using_clr_extensions System::Linq
+p list.where { it > 1 }.to_a
+p list.order_by { -it }.to_a
+p list.Select(->(x, i) { x * i }).to_a
+", @"
+[3, 4]
+[4]
+[""33"", ""11"", ""44""]
+Int32
+[3, 1, 4]
+nil
+[3, 4]
+[4, 3, 1]
+[0, 1, 8]
+");
+        }
+
         public class BinderOut {
             public string Split(string value, out string head, out string tail) {
                 head = value.Substring(0, 1);
