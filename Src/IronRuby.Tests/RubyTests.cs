@@ -720,6 +720,8 @@ namespace IronRuby.Tests {
                 Backtrace_RaiseInRescue1,
                 Enumerator_Copy1,
                 Io_Messages1,
+                Encoding_Misc1,
+                Marshal_Misc1,
 
                 Scenario_RubyThreads1,
                 Scenario_YieldCodeGen,

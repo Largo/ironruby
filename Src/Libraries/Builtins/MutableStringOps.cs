@@ -1091,16 +1091,31 @@ namespace IronRuby.Builtins {
             if (str.IsEmpty) {
                 throw RubyExceptions.CreateArgumentError("empty string");
             }
+
             char c1 = str.GetChar(0);
             if (!Char.IsSurrogate(c1)) {
-                return (int)c1;
+                return NativeCode(str.Encoding, new[] { c1 }, c1);
             }
 
             char c2;
             if (Tokenizer.IsHighSurrogate(c1) && str.GetCharCount() > 1 && Tokenizer.IsLowSurrogate(c2 = str.GetChar(1))) {
-                return Tokenizer.ToCodePoint(c1, c2);
+                return NativeCode(str.Encoding, new[] { c1, c2 }, Tokenizer.ToCodePoint(c1, c2));
             }
             throw RubyExceptions.CreateArgumentError("invalid byte sequence in {0}", str.Encoding);
+        }
+
+        // In an encoding that is not Unicode the ordinal is the character's own code, the bytes
+        // read as a big-endian number: "\x81\x40" in Shift_JIS is 0x8140, not U+3000, and
+        // "\x80" in Windows-1252 is 0x80, not U+20AC.
+        private static int NativeCode(RubyEncoding/*!*/ encoding, char[]/*!*/ character, int codepoint) {
+            if (encoding.IsUnicodeEncoding || ReferenceEquals(encoding, RubyEncoding.Binary) || encoding.IsDummy) {
+                return codepoint;
+            }
+            int code = 0;
+            foreach (byte b in encoding.StrictEncoding.GetBytes(character)) {
+                code = (code << 8) | b;
+            }
+            return code;
         }
 
         #endregion
@@ -1393,6 +1408,12 @@ namespace IronRuby.Builtins {
 
             CaseMappingOptions flags = ParseCaseOptions(options, foldingAllowed);
 
+            // Only the ASCII-only mapping takes bytes that are not valid in the encoding.
+            if ((flags & CaseMappingOptions.Ascii) == 0 && !ReferenceEquals(self.Encoding, RubyEncoding.Binary)
+                && !self.Encoding.IsDummy && self.ContainsInvalidCharacters()) {
+                throw RubyExceptions.CreateArgumentError("input string invalid");
+            }
+
             string source = TryDecodeForCaseMapping(self);
             if (source != null) {
                 return MutableString.Create(UnicodeCaseMapping.Apply(source, kind, flags), self.Encoding).TaintBy(self);
@@ -1478,13 +1499,19 @@ namespace IronRuby.Builtins {
 
         // MRI answers nil rather than raising when the argument is not a String, and also when
         // the two encodings are not compatible.
+        // casecmp answers nil for strings whose encodings are not compatible: different
+        // encodings are fine while one side is ASCII-only, but only in ASCII-compatible encodings.
+        private static bool AreComparableEncodings(MutableString/*!*/ self, MutableString/*!*/ other) {
+            if (self.Encoding.Equals(other.Encoding) || self.IsEmpty || other.IsEmpty) {
+                return true;
+            }
+            return self.Encoding.IsAsciiIdentity && other.Encoding.IsAsciiIdentity && (self.IsAscii() || other.IsAscii());
+        }
+
         [RubyMethod("casecmp")]
         public static object Casecmp(ConversionStorage<MutableString>/*!*/ stringTryCast, MutableString/*!*/ self, object other) {
             MutableString str = (other is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, other);
-            if (str == null) {
-                return null;
-            }
-            if (!self.Encoding.Equals(str.Encoding) && !(self.IsAscii() || str.IsAscii())) {
+            if (str == null || !AreComparableEncodings(self, str)) {
                 return null;
             }
             return ScriptingRuntimeHelpers.Int32ToObject(Casecmp(self, str));
@@ -1493,10 +1520,7 @@ namespace IronRuby.Builtins {
         [RubyMethod("casecmp?")]
         public static object CasecmpQ(ConversionStorage<MutableString>/*!*/ stringTryCast, MutableString/*!*/ self, object other) {
             MutableString str = (other is RubySymbol) ? null : Protocols.TryCastToString(stringTryCast, other);
-            if (str == null) {
-                return null;
-            }
-            if (!self.Encoding.Equals(str.Encoding) && !(self.IsAscii() || str.IsAscii())) {
+            if (str == null || !AreComparableEncodings(self, str)) {
                 return null;
             }
             return ScriptingRuntimeHelpers.BooleanToObject(FoldForComparison(self) == FoldForComparison(str));
@@ -2187,7 +2211,8 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            if (fromEncoding == Missing.Value) {
+            if (fromEncoding == Missing.Value || fromEncoding == null) {
+                // encode(to, nil): a nil source encoding is no source encoding
                 from = self.Encoding;
             } else {
                 from = fromEncoding as RubyEncoding;
@@ -2466,6 +2491,10 @@ namespace IronRuby.Builtins {
             }
 
             if (to.IsDummy) {
+                // an empty string gets no byte order mark
+                if (result.IsEmpty) {
+                    return MutableString.CreateBinary(to);
+                }
                 return MutableString.CreateBinary(to.StrictEncoding.GetBytes(result.ConvertToString()), to);
             }
 

@@ -994,6 +994,11 @@ namespace IronRuby.Builtins {
                 new Func<IronRuby.Builtins.RubyEncoding, System.Boolean>(IronRuby.Builtins.RubyEncodingOps.IsDummy)
             );
             
+            DefineLibraryMethod(module, "frozen?", 0x51, 
+                0x00000000U, 
+                new Func<IronRuby.Builtins.RubyEncoding, System.Boolean>(IronRuby.Builtins.RubyEncodingOps.IsFrozen)
+            );
+            
             DefineLibraryMethod(module, "inspect", 0x51, 
                 0x00000000U, 
                 new Func<IronRuby.Runtime.RubyContext, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.MutableString>(IronRuby.Builtins.RubyEncodingOps.Inspect)
@@ -1068,8 +1073,9 @@ namespace IronRuby.Builtins {
             );
             
             DefineLibraryMethod(module, "find", 0x61, 
-                0x00000002U, 0x00000002U, 0x00010002U, 
+                0x00000002U, 0x00000000U, 0x00000002U, 0x00010002U, 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubyEncoding, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetEncoding), 
+                new Func<IronRuby.Builtins.RubyClass, Microsoft.Scripting.Runtime.DynamicNull, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetEncoding), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.RubySymbol, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetEncoding), 
                 new Func<IronRuby.Builtins.RubyClass, IronRuby.Builtins.MutableString, IronRuby.Builtins.RubyEncoding>(IronRuby.Builtins.RubyEncodingOps.GetEncoding)
             );
@@ -5503,14 +5509,14 @@ namespace IronRuby.Builtins {
                 0x00000008U, 0x00000008U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
                 new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
-                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load)
+                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load)
             );
             
             DefineLibraryMethod(module, "restore", 0x61, 
                 0x00000008U, 0x00000008U, 0x00000000U, 
                 new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.MutableString, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
                 new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, IronRuby.Builtins.RubyIO, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load), 
-                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load)
+                new Func<IronRuby.Builtins.RubyMarshal.ReaderSites, IronRuby.Runtime.RespondToStorage, IronRuby.Runtime.ConversionStorage<IronRuby.Builtins.MutableString>, IronRuby.Runtime.RubyScope, IronRuby.Builtins.RubyModule, System.Object, System.Object, System.Object, System.Object>(IronRuby.Builtins.RubyMarshal.Load)
             );
             
         }

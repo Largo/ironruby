@@ -1235,6 +1235,87 @@ uncaught throw :zz
 ");
         }
 
+        public void Marshal_Misc1() {
+            TestOutput(@"
+o = Object.new; o.instance_variable_set(:@a, o)
+x = Marshal.load(Marshal.dump(o)); p x.instance_variable_get(:@a).equal?(x)
+S = Struct.new(:a)
+p Marshal.dump(S).bytes
+begin; Marshal.dump(Class.new.new); rescue TypeError => e; puts e.message.sub(/0x\h+/, 'X'); end
+begin; Marshal.dump(Class.new(String).new('a')); rescue TypeError => e; puts e.message.sub(/0x\h+/, 'X'); end
+class Foo; def marshal_dump; self; end; end
+begin; Marshal.dump(Foo.new); rescue RuntimeError => e; puts e.message; end
+class Bar; def respond_to?(m, p = false); m == :marshal_dump ? true : super; end; def method_missing(m, *a); m == :marshal_dump ? 1 : super; end; end
+p Marshal.dump(Bar.new).bytes
+p Marshal.load(""\x04\x08f\x071e""), Marshal.load(""\x04\x08f\x06a""), Marshal.load(""\x04\x08/\x06ai\x00"").options
+begin; Marshal.load(""\x04\x08[\xffi\x06""); rescue ArgumentError => e; puts e.message; end
+p Marshal.load(Marshal.dump(/a/n)).options, Marshal.dump(/a/n).bytes[6]
+cb = Object.new; def cb.call(x); x.is_a?(String) ? x.upcase : x; end
+p Marshal.load(Marshal.dump([1, 'a']), cb)
+src = Object.new; def src.to_str; ""\x04\x08i\x06""; end
+p Marshal.load(src)
+rd = Object.new; def rd.read(n); ''; end
+begin; Marshal.load(rd); rescue TypeError => e; puts e.message; end
+begin; Marshal.load(""\x04\x08u:\x0bString\x06a""); rescue TypeError => e; puts e.message; end
+begin; Marshal.load(""\x04\x08c\x0fComparable""); rescue ArgumentError => e; puts e.message; end
+p [0.0 / 0].pack('e').bytes, [1].pack('C', buffer: nil).bytes
+begin; [1].pack('C', bogus: 1); rescue ArgumentError => e; puts e.message; end
+", @"
+true
+[4, 8, 99, 6, 83]
+can't dump anonymous class #<Class:X>
+can't dump anonymous class #<Class:X>
+Foo#marshal_dump returned same class instance
+[4, 8, 85, 58, 8, 66, 97, 114, 105, 6]
+1.0
+0.0
+33
+negative array size (or size too big)
+32
+32
+[1, ""A""]
+1
+instance of IO needed
+class String needs to have method `_load'
+Comparable does not refer to class
+[0, 0, 192, 127]
+[1]
+unknown keyword: :bogus
+");
+        }
+
+        public void Encoding_Misc1() {
+            TestOutput(@"
+s = ""a\xffb"".reverse
+p s.bytes, s.inspect, s.dump
+p ""\x81\x40"".force_encoding(""Shift_JIS"").ord, 0x80.chr(""Windows-1252"").ord, ""\xe9"".force_encoding(""ISO-8859-1"").ord
+p ""a"".casecmp(""A"".encode(""UTF-16LE"")), """".casecmp("""".encode(""UTF-16LE"")), ""a"".casecmp?(""A"")
+begin; ""a\xffb"".upcase; rescue ArgumentError => e; puts e.message; end
+p ""a\xffb"".upcase(:ascii).bytes
+begin; Encoding.find(nil); rescue TypeError => e; puts e.message; end
+p Encoding::UTF_8.frozen?, """".encode(""UTF-16"").bytes, ""a"".encode(""UTF-16"").bytes, ""\u00e9"".encode(""UTF-8"", nil)
+begin; Time.now.strftime(""%Y"".encode(""UTF-16LE"")); rescue ArgumentError => e; puts e.message; end
+", @"
+[98, 255, 97]
+""\""b\\xFFa\""""
+""\""b\\xFFa\""""
+33088
+128
+233
+nil
+0
+true
+input string invalid
+[65, 255, 66]
+no implicit conversion of nil into String
+true
+[]
+[254, 255, 0, 97]
+""é""
+format should have ASCII compatible encoding
+");
+        }
+
         public void Io_Messages1() {
             TestOutput(@"
 r, w = IO.pipe

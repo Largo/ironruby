@@ -270,14 +270,26 @@ namespace IronRuby.Builtins {
             RubyArray/*!*/ self, [DefaultProtocol, NotNull]MutableString/*!*/ format,
             [DefaultParameterValue(null), DefaultProtocol]IDictionary<object, object> options) {
 
+            RubyContext context = integerConversion.Context;
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", format.Encoding.Name);
+            }
+
             MutableString buffer = null;
             if (options != null) {
-                object value;
-                if (options.TryGetValue(integerConversion.Context.CreateAsciiSymbol("buffer"), out value)) {
-                    buffer = value as MutableString;
+                foreach (var option in options) {
+                    var key = option.Key as RubySymbol;
+                    if (key == null || key.ToString() != "buffer") {
+                        throw RubyExceptions.CreateArgumentError("unknown keyword: {0}", context.Inspect(option.Key));
+                    }
+                    // buffer: nil is no buffer
+                    if (option.Value == null) {
+                        continue;
+                    }
+                    buffer = option.Value as MutableString;
                     if (buffer == null) {
                         throw RubyExceptions.CreateTypeError("buffer must be String, not {0}",
-                            integerConversion.Context.GetClassDisplayName(value));
+                            context.GetClassDisplayName(option.Value));
                     }
                     buffer.RequireNotFrozen();
                 }

@@ -2649,6 +2649,9 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ Sprintf(StringFormatterSiteStorage/*!*/ storage,
             object self, [DefaultProtocol, NotNull]MutableString/*!*/ format, params object[]/*!*/ args) {
 
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("ASCII incompatible encoding: {0}", format.Encoding.Name);
+            }
             return new StringFormatter(storage, format.ConvertToString(), format.Encoding, args).Format();
         }
 

@@ -3515,11 +3515,9 @@ module Kernel
       # MRI's `exc == rb_mWarning' escape hatch: a Warning#warn override that calls super
       # lands back here, and routing on would recurse forever.
       if equal?(::Warning)
-        # The built-in always appends a newline of its own, so drop the last one.
-        # By bytes, not by characters: a message is allowed to hold bytes that are
-        # invalid in its encoding, and slicing it as characters raises on those.
-        raw = text.end_with?("\n") ? text.byteslice(0, text.bytesize - 1) : text
-        __ir_warn__(raw)
+        # Straight to $stderr, as rb_write_error_str does: the built-in warn would route
+        # back through Warning.warn, which is the override this hatch exists to bypass.
+        $stderr.write(text)
         return nil
       end
 
@@ -4035,11 +4033,9 @@ class String
     # String, not the receiver's class: since Ruby 3.0 only #dup, #clone and #+@ carry a
     # String subclass over to the result.
     return __ir_plain_copy__ if valid_encoding?
-    default = encoding == ::Encoding::UTF_8 ? "�" : "?"
+    default = __ir_scrub_default__
     replacement = __ir_scrub_replacement__(replacement) unless replacement.nil?
-    if replacement && !replacement.valid_encoding?
-      ::Kernel.raise(::ArgumentError, "replacement must be valid byte sequence '#{replacement.inspect}'")
-    end
+    __ir_check_scrub_replacement__(replacement) if replacement
     out = +""
     out.force_encoding(encoding) if out.respond_to?(:force_encoding)
     # A run of bad bytes that is the start of a character which simply ran out of input -
@@ -4048,14 +4044,14 @@ class String
     pending = nil
     flush = lambda do
       next if pending.nil?
-      out << (block ? __ir_scrub_replacement__(block.call(pending)) : (replacement || default))
+      out << (block ? __ir_check_scrub_replacement__(__ir_scrub_replacement__(block.call(pending))) : (replacement || default))
       pending = nil
     end
     each_char do |ch|
       if ch.valid_encoding?
         flush.call
         out << ch
-      elsif pending && __ir_starts_character__(pending)
+      elsif pending && __ir_starts_character__(pending + ch)
         pending += ch
       else
         flush.call
@@ -4066,18 +4062,61 @@ class String
     out
   end unless method_defined?(:scrub)
 
+  # The replacement character of the encoding: U+FFFD where there is one, "?" elsewhere.
+  def __ir_scrub_default__
+    case encoding
+    when ::Encoding::UTF_8 then "�"
+    when ::Encoding::UTF_16LE, ::Encoding::UTF_16BE, ::Encoding::UTF_32LE, ::Encoding::UTF_32BE
+      "�".encode(encoding)
+    else
+      "?".dup.force_encoding(encoding)
+    end
+  end
+  private :__ir_scrub_default__
+
+  # A replacement has to be valid itself and usable in this string's encoding.
+  def __ir_check_scrub_replacement__(replacement)
+    unless replacement.valid_encoding?
+      ::Kernel.raise(::ArgumentError, "replacement must be valid byte sequence '#{replacement.inspect}'")
+    end
+    if ::Encoding.compatible?(self, replacement).nil? && replacement.encoding != encoding
+      ::Kernel.raise(::Encoding::CompatibilityError,
+                     "incompatible character encodings: #{encoding} and #{replacement.encoding}")
+    end
+    replacement
+  end
+  private :__ir_check_scrub_replacement__
+
   # True when the bytes could be the beginning of a character in this encoding that ran
-  # out of input, as opposed to something that can never begin one.
+  # out of input, as opposed to something that can never begin one. A run of bad bytes
+  # is one replacement only while it stays such a beginning: "\xE3\x81" is one, but
+  # "\xFF\xFE" and "\xED\xA0\x80" (an encoded surrogate) are one per byte.
   def __ir_starts_character__(bytes)
     return false if bytes.empty?
     lead = bytes.getbyte(0)
     case encoding
     when ::Encoding::UTF_8
-      expected = if lead >= 0xF0 then 4 elsif lead >= 0xE0 then 3 elsif lead >= 0xC2 then 2 else 0 end
+      expected = if lead >= 0xF0 && lead <= 0xF4 then 4
+                 elsif lead >= 0xE0 && lead <= 0xEF then 3
+                 elsif lead >= 0xC2 && lead <= 0xDF then 2
+                 else 0
+                 end
       return false if expected == 0 || bytes.bytesize >= expected
-      (1...bytes.bytesize).all? { |i| (bytes.getbyte(i) & 0xC0) == 0x80 }
+      (1...bytes.bytesize).all? do |i|
+        b = bytes.getbyte(i)
+        next false unless (b & 0xC0) == 0x80
+        next true unless i == 1
+        case lead
+        when 0xE0 then b >= 0xA0
+        when 0xED then b <= 0x9F
+        when 0xF0 then b >= 0x90
+        when 0xF4 then b <= 0x8F
+        else true
+        end
+      end
     when ::Encoding::UTF_16LE, ::Encoding::UTF_16BE, ::Encoding::UTF_32LE, ::Encoding::UTF_32BE
-      bytes.bytesize < 4
+      # a code unit, or the first half of a surrogate pair, that ran out of input
+      bytes.bytesize <= 4
     else
       false
     end
@@ -14244,6 +14283,21 @@ Object.autoload :MonitorMixin, "monitor"
 # for it.  See Src/StdLib/ironruby/error_highlight.rb for what IronRuby's copy
 # can and cannot do.
 Object.autoload :ErrorHighlight, "error_highlight"
+
+class Encoding
+  class << self
+    # Encodings are the runtime's own; there is no Encoding.new.
+    undef_method :new if method_defined?(:new)
+  end
+
+  class Converter
+    # Two converters are equal when they would do the same conversion.
+    def ==(other)
+      return nil unless other.is_a?(::Encoding::Converter)
+      convpath == other.convpath
+    end
+  end
+end
 
 # Gem compatibility patches (see the file for the policy on adding one).
 require "ironruby/gem_compat"

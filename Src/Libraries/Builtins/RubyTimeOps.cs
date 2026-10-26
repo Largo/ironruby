@@ -1777,6 +1777,9 @@ namespace IronRuby.Builtins {
         public static MutableString/*!*/ FormatTime(RubyContext/*!*/ context, RubyTime/*!*/ self,
             [DefaultProtocol, NotNull]MutableString/*!*/ format) {
 
+            if (!format.Encoding.IsAsciiIdentity) {
+                throw RubyExceptions.CreateArgumentError("format should have ASCII compatible encoding");
+            }
             MutableString result = MutableString.CreateMutable(format.Encoding);
             Strftime.Format(context, result, self, format.ConvertToString(), 0);
             return result;
