@@ -25,6 +25,7 @@ using IronRuby.Runtime;
 using IronRuby.Runtime.Calls;
 using Microsoft.Scripting;
 using Microsoft.Scripting.Actions;
+using Microsoft.Scripting.Actions.Calls;
 using Microsoft.Scripting.Utils;
 using Microsoft.Scripting.Runtime;
 
@@ -2098,10 +2099,8 @@ namespace IronRuby.Builtins {
             Context.RequiresClassHierarchyLock();
 
             ForEachAncestor(inherited, delegate(RubyModule/*!*/ module) {
-
-                // Skip CLR modules (methods declared on CLR modules have already been looked for in the class).
-                // If 'this' is a CLR module, we want to visit all mixed-in methods.
-                if (module.IsClrModule && !this.IsClrModule) return false;
+                // CLR modules are visited like any other: method lookup finds the methods libraries define on an
+                // interface module, and the default interface methods, so listing them has to as well.
 
                 // notification that we entered the module (it could have no method):
                 if (action(module, null, null)) return true;
@@ -2685,13 +2684,15 @@ namespace IronRuby.Builtins {
         private bool TryGetClrMember(string/*!*/ name, bool virtualLookup, out RubyMemberInfo method) {
             // Skip hidden CLR overloads.
             // Skip lookup on types that are not visible, that are interfaces or generic type definitions.
-            if (_typeTracker != null && !IsModuleType(_typeTracker.Type)) {
+            if (_typeTracker != null) {
                 // Note: Do not allow mangling for CLR virtual lookups - we want to match the overridden name exactly as is, 
                 // so that it corresponds to the base method call the override stub performs.
                 bool mapNames = (Restrictions & ModuleRestrictions.NoNameMapping) == 0;
                 bool unmangleNames = !virtualLookup && mapNames;
 
-                if (TryGetClrMember(_typeTracker.Type, name, mapNames, unmangleNames, out method)) {
+                if (IsModuleType(_typeTracker.Type) ?
+                    TryGetDefaultInterfaceMember(name, unmangleNames, out method) :
+                    TryGetClrMember(_typeTracker.Type, name, mapNames, unmangleNames, out method)) {
                     _methods.Add(name, method);
                     return true;
                 }
@@ -2699,6 +2700,104 @@ namespace IronRuby.Builtins {
 
             method = null;
             return false;
+        }
+
+        // The public instance members of an interface and its base interfaces that have a default implementation (C# 8),
+        // or an empty array.
+        private MethodInfo[] _defaultInterfaceMethods;
+
+        private MethodInfo/*!*/[]/*!*/ GetDefaultInterfaceMethods() {
+            if (_defaultInterfaceMethods == null) {
+                Type type = _typeTracker.Type;
+                var result = new List<MethodInfo>();
+                // A generic definition's methods cannot be called, only those of its instantiations. The base interfaces
+                // are searched too: an interface module does not include the modules of the interfaces it extends.
+                if (type.IsInterface && !type.ContainsGenericParameters) {
+                    AddDefaultInterfaceMethods(result, type);
+                    foreach (Type baseInterface in type.GetInterfaces()) {
+                        AddDefaultInterfaceMethods(result, baseInterface);
+                    }
+                }
+                _defaultInterfaceMethods = result.ToArray();
+            }
+            return _defaultInterfaceMethods;
+        }
+
+        private static void AddDefaultInterfaceMethods(List<MethodInfo>/*!*/ result, Type/*!*/ interfaceType) {
+            foreach (MethodInfo method in interfaceType.GetMethods(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly)) {
+                if (method.IsAbstract || method.ContainsGenericParameters) {
+                    continue;
+                }
+
+                // a member that hides one of the same signature in a base interface wins over it:
+                int hidden = result.FindIndex((existing) => existing.Name == method.Name && 
+                    ReflectionUtils.GetParameterTypes(existing.GetParameters()).ValueEquals(ReflectionUtils.GetParameterTypes(method.GetParameters())));
+
+                if (hidden < 0) {
+                    result.Add(method);
+                } else if (result[hidden].DeclaringType.IsAssignableFrom(method.DeclaringType)) {
+                    result[hidden] = method;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Abstract interface members are metadata: an object exposes its implementation of them through its class.
+        /// A default interface method has a body of its own, which is all a class implementing the interface without
+        /// overriding the member has (and all a Ruby class including it has), so it is callable from the interface module.
+        /// The call dispatches through the interface: an implementation, if there is one, still wins.
+        /// </summary>
+        private bool TryGetDefaultInterfaceMember(string/*!*/ name, bool unmangleNames, out RubyMemberInfo method) {
+            method = null;
+            var defaults = GetDefaultInterfaceMethods();
+            if (defaults.Length == 0 || name.Length == 0) {
+                return false;
+            }
+
+            // a method, a property getter or a property setter:
+            bool isSetter = name.Length > 1 && name.LastCharacter() == '=';
+            string clrName = isSetter ? name.Substring(0, name.Length - 1) : name;
+            string altName = unmangleNames ? RubyUtils.TryUnmangleMethodName(clrName) : null;
+
+            List<OverloadInfo> overloads = null;
+            foreach (var dim in defaults) {
+                string dimName = dim.Name;
+                if (dim.IsSpecialName) {
+                    if (!dimName.StartsWith(isSetter ? "set_" : "get_", StringComparison.Ordinal)) {
+                        continue;
+                    }
+                    dimName = dimName.Substring(4);
+                } else if (isSetter) {
+                    continue;
+                }
+
+                if (dimName == clrName || dimName == altName) {
+                    if (overloads == null) {
+                        overloads = new List<OverloadInfo>();
+                    }
+                    overloads.Add(new ReflectionOverloadInfo(dim));
+                }
+            }
+
+            if (overloads == null) {
+                return false;
+            }
+
+            // an attached CLR member: virtual sites forward to the default body rather than call it through the interface
+            method = new RubyOverloadGroupInfo(overloads.ToArray(), this, null, false);
+            return true;
+        }
+
+        internal IEnumerable<string/*!*/>/*!*/ EnumerateDefaultInterfaceMembers() {
+            foreach (var dim in GetDefaultInterfaceMethods()) {
+                if (!dim.IsSpecialName) {
+                    yield return dim.Name;
+                } else if (dim.Name.StartsWith("get_", StringComparison.Ordinal)) {
+                    yield return dim.Name.Substring(4);
+                } else if (dim.Name.StartsWith("set_", StringComparison.Ordinal)) {
+                    yield return dim.Name.Substring(4) + "=";
+                }
+            }
         }
 
         protected virtual bool TryGetClrMember(Type/*!*/ type, string/*!*/ name, bool mapNames, bool unmangleNames, out RubyMemberInfo method) {
@@ -2721,9 +2820,9 @@ namespace IronRuby.Builtins {
                 }
             }
 
-            // CLR members (do not include interface members - they are not callable methods, just metadata):
-            if (_typeTracker != null && !IsModuleType(_typeTracker.Type)) {
-                foreach (string name in EnumerateClrMembers(_typeTracker.Type)) {
+            // CLR members (do not include abstract interface members - they are not callable methods, just metadata):
+            if (_typeTracker != null) {
+                foreach (string name in IsModuleType(_typeTracker.Type) ? EnumerateDefaultInterfaceMembers() : EnumerateClrMembers(_typeTracker.Type)) {
                     if (action(this, name, RubyMemberInfo.InteropMember)) {
                         return true;
                     }
